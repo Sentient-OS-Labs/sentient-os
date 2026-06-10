@@ -1,0 +1,27 @@
+# macOS
+.DS_Store
+
+# Xcode — per-user state (never commit; machine-specific noise)
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Xcode / build output
+DerivedData/
+build/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager
+.build/
+.swiftpm/
+# (Package.resolved is deliberately COMMITTED — everyone resolves identical deps.)
+
+# On-device model weights (3.66 GB; bundled locally for dev, downloaded by users — never committed)
+*.litertlm
+
+# 🔒 Secrets — the Anthropic API key (dev hardcode until the claude -p migration). NEVER commit (public repo).
+Secrets.swift
