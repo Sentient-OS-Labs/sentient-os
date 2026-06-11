@@ -95,7 +95,7 @@ actor VaultGenerator {
             return try await generateAgentic(summaries: summaries, resume: nil, onProgress: onProgress)
         }
         #if DEBUG
-        print("VaultGenerator: Claude Code unavailable → direct-API fallback")
+        Log("VaultGenerator: Claude Code unavailable → direct-API fallback")
         #endif
         return try await generateDirect(summaries: summaries, effort: effort,
                                         maxTokens: maxTokens, onProgress: onProgress)
