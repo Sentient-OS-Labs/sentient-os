@@ -15,6 +15,7 @@
 //    SENTIENT_SELFTEST=whatsapp "<app>/Contents/MacOS/Sentient OS macOS"
 //  Env knobs:
 //    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "notes" | "files"  (model dump) ·
+//                          "tokens"  (WhatsApp window token-cost measurement, model) ·
 //                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "claudecli"
 //                          | "vault" | "skipping" | "skipcensus"  (no model)
 //    SENTIENT_SELFTEST_N   item count (default 6)
@@ -273,6 +274,106 @@ enum SelfTest {
             let matched = all.filter { c in want.contains { c.name.lowercased().contains($0) } }
             emit("chat filter → \(matched.count) matched: \(matched.map(\.name).joined(separator: " · "))\n")
             return Set(matched.map(\.id))
+        }
+
+        // Token-budget calibration (mode "tokens"): REAL WhatsApp windows through the REAL chat
+        // prompts on the REAL engine, with LiteRT-LM's benchmark instrumentation reporting the
+        // EXACT prefill token count per window. Answers "how many tokens does a full window
+        // actually cost?" — the datum behind ChatWindowing.maxWindowBytes. Two synthetic
+        // empty-window runs first isolate the fixed prompt-template overhead per flavour, so we
+        // can report a pure conversation-bytes → conversation-tokens ratio. STATS ONLY in the
+        // log — chat names + sizes, never message content.
+        if mode == "tokens" {
+            let source = WhatsAppSource(chatJIDs: chatFilter((try? WhatsAppSource().listChats()) ?? []))
+            let candidates: [Candidate]
+            do { candidates = try source.scan(since: nil) }
+            catch { emit("scan FAILED: \(error)"); return }
+            emit("windows in backlog: \(candidates.count) · current byte budget: \(ChatWindowing.maxWindowBytes)\n")
+            guard !candidates.isEmpty else { return }
+
+            let engine = Engine(modelPath: modelPath, maxNumTokens: 16384, collectStats: true)
+            do { try await engine.load() }
+            catch { emit("engine load FAILED: \(error)"); return }
+
+            // Fixed template overhead per prompt flavour (instructions + chat scaffolding, zero
+            // conversation bytes). Window tokens = prefill − overhead[flavour].
+            var overhead: [String: Int] = [:]
+            for flavour in ["0", "1"] {
+                let cand = Candidate(id: "calibration", kind: .whatsapp, signature: "0",
+                                     metadata: ["isGroup": flavour, "windowText": ""])
+                let prompt = Triage.prompt(for: Artifact(candidate: cand, text: ""), currentDate: Date())
+                do {
+                    let r = try await engine.generate(prompt: prompt)
+                    overhead[flavour] = r.prefillTokens
+                    emit("template overhead \(flavour == "1" ? "(group)" : "(DM)   "): \(r.prefillTokens.map(String.init) ?? "??") tokens · \(prompt.utf8.count) prompt bytes")
+                } catch { emit("calibration \(flavour) FAILED: \(error)") }
+            }
+            emit("")
+
+            // Even-stride sample across the whole backlog → a mix of chats, ages, and languages.
+            // (count == 6 is the harness default — treat it as "unset" and take a bigger sample.)
+            let n = min(count == 6 ? 24 : count, candidates.count)
+            let step = max(1, candidates.count / n)
+            let sample = (0..<n).map { candidates[min($0 * step, candidates.count - 1)] }
+
+            struct Row { let winBytes, winTokens, prefill, decode: Int
+                         let ratio, pTPS, dTPS, secs: Double }
+            var rows: [Row] = []
+            func pad(_ s: String, _ w: Int) -> String {
+                s.count >= w ? s : s.padding(toLength: w, withPad: " ", startingAt: 0)
+            }
+            emit(pad("chat", 26) + " msgs   bytes  prefill  win-tok  B/tok  decode")
+            for (i, cand) in sample.enumerated() {
+                do {
+                    let artifact = try source.load(cand)
+                    let prompt = Triage.prompt(for: artifact, currentDate: Date())
+                    let r = try await engine.generate(prompt: prompt)
+                    guard let prefill = r.prefillTokens, prefill > 0 else {
+                        emit("ITEM \(i + 1): no benchmark info — skipped"); continue
+                    }
+                    let winBytes = (cand.metadata["windowText"] ?? "").utf8.count
+                    let winTokens = max(1, prefill - (overhead[cand.metadata["isGroup"] ?? "0"] ?? 0))
+                    let row = Row(winBytes: winBytes, winTokens: winTokens, prefill: prefill,
+                                  decode: r.decodeTokens ?? 0,
+                                  ratio: Double(winBytes) / Double(winTokens),
+                                  pTPS: r.prefillTokensPerSecond ?? 0,
+                                  dTPS: r.decodeTokensPerSecond ?? 0, secs: r.totalTime)
+                    rows.append(row)
+                    let name = String((cand.metadata["name"] ?? "?").prefix(21))
+                        + (cand.metadata["isGroup"] == "1" ? " [g]" : "")
+                    emit(pad(name, 26)
+                         + String(format: " %4d %7d %8d %8d %6.2f %7d",
+                                  Int(cand.signature) ?? 0, winBytes, prefill, winTokens, row.ratio, row.decode))
+                } catch { emit("ITEM \(i + 1) FAILED: \(error)") }
+            }
+            await engine.unload()
+            guard !rows.isEmpty else { emit("no measurements."); return }
+
+            func med(_ v: [Double]) -> Double { let s = v.sorted(); return s[s.count / 2] }
+            let ratios = rows.map(\.ratio)
+            let minR = ratios.min()!, medR = med(ratios), maxR = ratios.max()!
+            let meanFill = rows.map { Double($0.prefill) }.reduce(0, +) / Double(rows.count)
+            let meanDecode = rows.map { Double($0.decode) }.reduce(0, +) / Double(rows.count)
+            let meanSecs = rows.map(\.secs).reduce(0, +) / Double(rows.count)
+            emit("""
+
+            ===== AGGREGATE (\(rows.count) windows) =====
+            conversation bytes/token   min \(String(format: "%.2f", minR)) · median \(String(format: "%.2f", medR)) · max \(String(format: "%.2f", maxR))
+            mean prefill               \(Int(meanFill)) tokens (\(String(format: "%.1f", 100 * meanFill / 16_384))% of the 16,384 context)
+            mean decode                \(Int(meanDecode)) tokens · mean wall-clock \(String(format: "%.1f", meanSecs))s/window
+            mean prefill / decode toks-per-sec   \(Int(rows.map(\.pTPS).reduce(0, +) / Double(rows.count))) · \(Int(rows.map(\.dTPS).reduce(0, +) / Double(rows.count)))
+
+            ===== WHAT-IF byte budgets (worst-case = min ratio, expected = median) =====
+            """)
+            let groupOverhead = Double(overhead["1"] ?? 0)
+            for budget in [5_000, 10_000, 15_000, 20_000, 25_000, 30_000] {
+                let worst = Double(budget) / minR + groupOverhead
+                let typical = Double(budget) / medR + groupOverhead
+                emit(String(format: "  %6d bytes → prefill ~%5.0f typical · ~%5.0f worst-case  (%4.1f%% / %4.1f%% of 16,384)",
+                            budget, typical, worst, 100 * typical / 16_384, 100 * worst / 16_384))
+            }
+            emit("\n# done → \(outPath)")
+            return
         }
 
         // 1) Build the source + scan candidates.
