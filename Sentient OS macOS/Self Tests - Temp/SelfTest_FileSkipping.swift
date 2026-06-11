@@ -115,7 +115,7 @@ enum SelfTestFileSkipping {
         let screensRoot = base.appendingPathComponent("screens")
         check("per-dir cap 300 (350 screenshots → 300)", expected: 300,
               actual: counts(FilesSource(root: screensRoot, label: "S", perDirectoryCap: 300))["shots"] ?? 0)
-        check("per-dir cap 100 — the Downloads number", expected: 100,
+        check("per-dir cap honors a custom value (100)", expected: 100,
               actual: counts(FilesSource(root: screensRoot, label: "S", perDirectoryCap: 100))["shots"] ?? 0)
 
         // ── Root 4: age cutoff (2 fresh + 3 two-year-old files) ─────────────────

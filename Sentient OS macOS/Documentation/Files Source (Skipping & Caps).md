@@ -38,9 +38,9 @@ Applied newest-first (by creation date) after the walk, in `scan()`:
 
 - **Age cutoff** — Downloads only: files older than **1 year** are dropped (old downloads are
   noise; old Desktop/Documents files can be keepers). `FilesSource.maxAge`.
-- **Per-directory cap** — **100 for Downloads, 300 for every other root**; any one directory
-  contributes at most that many (newest win). The blunt backstop for bulk dumps the heuristics
-  miss. `FileRoot.perDirectoryCap`.
+- **Per-directory cap** — **300, every root** (raised from 100 for Downloads, June 11 — downloads
+  are high-signal: tickets, receipts, PDFs); any one directory contributes at most that many
+  (newest win). The blunt backstop for bulk dumps the heuristics miss. `FilesSource.perDirectoryCap`.
 - **Per-root cap** — newest **1,000** per root, every root. `FilesSource.perRootCap`.
 
 `FileRoot.source` builds the correctly-configured `FilesSource` for each root — use it instead of
@@ -61,5 +61,7 @@ SENTIENT_SELFTEST=skipcensus "<app>/Contents/MacOS/Sentient OS"   # read-only re
                                                                   # every pruned dir + reason, top contributors
 ```
 
-June 10 census on Aryaman's Mac: Downloads 218 subtrees pruned (an ML dataset + course repos)
-→ 124 candidates; Desktop screenshots capped at 300; the Documents Obsidian vault fully kept.
+June 11 census on Aryaman's Mac (waterfall: 21,364 raw whitelisted files in Downloads → 5,286
+after pruning → 551 after the 1-year cutoff → 324 after caps; Desktop 19,216 → 582 → 375):
+218 Downloads subtrees pruned (an ML dataset + course repos); Desktop screenshots capped at 300;
+the Documents Obsidian vault fully kept.

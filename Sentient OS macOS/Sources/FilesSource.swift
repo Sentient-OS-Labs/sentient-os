@@ -14,7 +14,7 @@
 //
 //  Skipping & caps (see Documentation/Files Source (Skipping & Caps).md): code repos and
 //  machine-generated datasets are pruned at the walk level (`pruneReason`), and `scan` bounds
-//  every run — newest 1,000 per root, 100/300 per directory, 1-year age cutoff for Downloads.
+//  every run — newest 1,000 per root, 300 per directory, 1-year age cutoff for Downloads.
 //
 
 import Foundation
@@ -176,9 +176,9 @@ struct FilesSource: DataSource, Sendable {
             let candidate = Candidate(id: "file:\(url.path)", kind: .file, signature: signature, metadata: meta)
             rows.append((candidate, created?.timeIntervalSince1970 ?? mtime))
         }
-        // Newest first, then the caps (connector-limits decision, June 10):
+        // Newest first, then the caps (connector-limits decision, June 10–11):
         //  • optional age cutoff (Downloads: 1 year — downloads age into junk; keepers elsewhere don't)
-        //  • per-directory cap (Downloads 100 / others 300) — the bulk-dump backstop
+        //  • per-directory cap (300, every root) — the bulk-dump backstop
         //  • per-root cap (newest 1,000, every root)
         let cutoff = maxAge.map { Date().timeIntervalSince1970 - $0 }
         var perDir: [String: Int] = [:]
@@ -326,14 +326,14 @@ enum FileRoot: Hashable, Identifiable {
         }
     }
 
-    /// Connector limits (decision June 10): Downloads is the junk accumulator — tighter caps,
-    /// plus a 1-year age cutoff (old downloads are noise; old Desktop/Documents files can be keepers).
-    var perDirectoryCap: Int { self == .downloads ? 100 : 300 }
+    /// Connector limits (June 10–11): 1,000/root + 300/dir everywhere (the FilesSource defaults);
+    /// Downloads additionally gets a 1-year age cutoff (old downloads are noise; old
+    /// Desktop/Documents files can be keepers).
     var maxAge: TimeInterval? { self == .downloads ? 365 * 24 * 3_600 : nil }
 
     /// The fully configured source for this root (nil if the system folder can't be resolved).
     var source: FilesSource? {
-        url.map { FilesSource(root: $0, label: label, perDirectoryCap: perDirectoryCap, maxAge: maxAge) }
+        url.map { FilesSource(root: $0, label: label, maxAge: maxAge) }
     }
 
     /// The three standard folders, in display order.
