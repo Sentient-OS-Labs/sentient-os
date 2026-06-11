@@ -245,8 +245,8 @@ enum SelfTest {
                 let gen = VaultGenerator()
                 let onP: @Sendable (VaultGenerator.Progress) -> Void = { p in
                     switch p {
-                    case .receiving(let c): if c % 15_000 < 1_600 { print("  …received \(c) chars") }
-                    case .writing(let n):   print("  …\(n) notes written")
+                    case .receiving(let c): if c % 15_000 < 1_600 { Log("  …received \(c) chars") }
+                    case .writing(let n):   Log("  …\(n) notes written")
                     default: break
                     }
                 }

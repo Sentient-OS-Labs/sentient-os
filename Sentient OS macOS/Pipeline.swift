@@ -91,7 +91,7 @@ actor Pipeline {
                 )
                 let outcome = Triage.decide(result.text)
                 #if DEBUG
-                print("• \(cand.metadata["displayPath"] ?? cand.id)\n  → \(outcome.verdict) | \(result.text.replacingOccurrences(of: "\n", with: " "))")
+                Log("• \(cand.metadata["displayPath"] ?? cand.id)\n  → \(outcome.verdict) | \(result.text.replacingOccurrences(of: "\n", with: " "))")
                 #endif
                 try await store.save(artifact: artifact, verdict: outcome.verdict, summary: outcome.draft)
 
@@ -116,7 +116,7 @@ actor Pipeline {
                 if consecutiveFailures >= failuresBeforeReload {
                     guard reloadsWithoutProgress < maxReloadsWithoutProgress else {
                         #if DEBUG
-                        print("⛔️ Engine not recovering after \(reloadsWithoutProgress) reloads — stopping this pass.")
+                        Log("⛔️ Engine not recovering after \(reloadsWithoutProgress) reloads — stopping this pass.")
                         #endif
                         break   // reloading isn't helping — stop hammering a dead engine
                     }
