@@ -14,7 +14,8 @@
 //  Invoke (after building):
 //    SENTIENT_SELFTEST=whatsapp "<app>/Contents/MacOS/Sentient OS macOS"
 //  Env knobs:
-//    SENTIENT_SELFTEST     "whatsapp" | "files"   (which source)
+//    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "files"  (model dump) ·
+//                          "parse" | "chats" | "imchats" | "imdecode" | "claudecli" | "vault"  (no model)
 //    SENTIENT_SELFTEST_N   item count (default 6)
 //    SENTIENT_SELFTEST_OUT output file (default <tmp>/sentient-selftest.txt)
 //    SENTIENT_MODEL_PATH   override the dev model path
@@ -97,15 +98,51 @@ enum SelfTest {
             return
         }
 
-        // Chat-list mode: deterministic, no model — verify WhatsAppSource.listChats() enumeration.
-        if mode == "chats" {
+        // Chat-list modes: deterministic, no model — verify listChats() enumeration (and, for
+        // iMessage, that names resolved instead of raw +1415… handles).
+        if mode == "chats" || mode == "imchats" {
             do {
-                let list = try WhatsAppSource().listChats()
-                emit("active chats in the last \(WhatsAppSource.lookbackDays) days: \(list.count)\n")
+                let list = mode == "chats" ? try WhatsAppSource().listChats()
+                                           : try iMessageSource().listChats()
+                emit("active chats in the last \(ChatWindowing.lookbackDays) days: \(list.count)\n")
                 for c in list.prefix(count > 6 ? count : 20) {
                     emit("  [\(c.isGroup ? "group" : "DM  ")] \(c.name)  —  \(c.messageCount) msgs · last \(c.lastActive)")
                 }
             } catch { emit("listChats FAILED: \(error)") }
+            return
+        }
+
+        // iMessage decode-rate validation: deterministic, no model, STATS ONLY (no message
+        // content) — proves the typedstream heuristic on this Mac's real chat.db. Rows carrying
+        // BOTH plain text and a blob are ground truth: the decoded blob must equal the text.
+        if mode == "imdecode" {
+            do {
+                let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: iMessageSource().dbPath)
+                defer { try? FileManager.default.removeItem(at: tempDir) }
+                let reader = try SQLiteReader(path: dbURL.path)
+                let floorNS = Int64(ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate * 1e9)
+                var ok = 0, fail = 0, match = 0, mismatch = 0, checked = 0, plainOnly = 0, empty = 0
+                try reader.forEachRow("""
+                    SELECT text, attributedBody FROM message
+                    WHERE date >= \(floorNS) AND associated_message_type = 0 AND item_type = 0
+                    """) { r in
+                    let text = r.text(0)
+                    guard let blob = r.blob(1) else {
+                        if text?.isEmpty == false { plainOnly += 1 } else { empty += 1 }
+                        return
+                    }
+                    guard let decoded = iMessageSource.typedstreamText(blob) else { fail += 1; return }
+                    ok += 1
+                    if let text, !text.isEmpty {
+                        checked += 1
+                        if decoded == text { match += 1 } else { mismatch += 1 }
+                    }
+                }
+                emit("last \(ChatWindowing.lookbackDays) days · blob rows: \(ok) decoded / \(fail) failed (\(String(format: "%.2f", 100.0 * Double(ok) / Double(max(ok + fail, 1))))%)")
+                emit("plain-text-only rows: \(plainOnly) · no-body rows skipped: \(empty)")
+                emit("ground truth (rows with text AND blob): \(match) match / \(mismatch) mismatch of \(checked)")
+                emit(fail == 0 && mismatch == 0 ? "✅ decode clean" : "⚠️ inspect failures before trusting windows")
+            } catch { emit("imdecode FAILED: \(error)") }
             return
         }
 
@@ -152,29 +189,34 @@ enum SelfTest {
             return
         }
 
+        // Optional chat filter for the chat-source dumps: SENTIENT_SELFTEST_CHATS = name
+        // substrings joined by "|". Returns the matched chat ids, or nil for "all chats".
+        func chatFilter(_ all: [ChatInfo]) -> Set<String>? {
+            let want = (ProcessInfo.processInfo.environment["SENTIENT_SELFTEST_CHATS"] ?? "")
+                .split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+            guard !want.isEmpty else { return nil }
+            let matched = all.filter { c in want.contains { c.name.lowercased().contains($0) } }
+            emit("chat filter → \(matched.count) matched: \(matched.map(\.name).joined(separator: " · "))\n")
+            return Set(matched.map(\.id))
+        }
+
         // 1) Build the source + scan candidates.
         let source: any DataSource
         let maxTokens: Int
         switch mode {
         case "whatsapp":
-            // Optional chat filter: SENTIENT_SELFTEST_CHATS = name substrings joined by "|".
-            let want = (ProcessInfo.processInfo.environment["SENTIENT_SELFTEST_CHATS"] ?? "")
-                .split(separator: "|").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
-            var jids: Set<String>? = nil
-            if !want.isEmpty {
-                let all = (try? WhatsAppSource().listChats()) ?? []
-                let matched = all.filter { c in want.contains { c.name.lowercased().contains($0) } }
-                jids = Set(matched.map(\.jid))
-                emit("chat filter → \(matched.count) matched: \(matched.map(\.name).joined(separator: " · "))\n")
-            }
-            source = WhatsAppSource(chatJIDs: jids); maxTokens = 16384
+            source = WhatsAppSource(chatJIDs: chatFilter((try? WhatsAppSource().listChats()) ?? []))
+            maxTokens = 16384
+        case "imessage":
+            source = iMessageSource(chatGUIDs: chatFilter((try? iMessageSource().listChats()) ?? []))
+            maxTokens = 16384
         case "files":
             guard let dl = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
                 emit("could not locate ~/Downloads"); return
             }
             source = FilesSource(root: dl, label: "Downloads"); maxTokens = 4096
         default:
-            emit("unknown mode '\(mode)' (use whatsapp | files)"); return
+            emit("unknown mode '\(mode)' (use whatsapp | imessage | files)"); return
         }
 
         let candidates: [Candidate]
