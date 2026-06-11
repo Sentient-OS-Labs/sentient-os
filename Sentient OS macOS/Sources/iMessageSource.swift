@@ -132,21 +132,28 @@ struct iMessageSource: DataSource, Sendable {
         let chats = try Self.chats(reader)
         let contacts = AddressBookNames.loadMap()
 
-        // Messages within the limits (90-day floor AND newest-200k cap — the inner newest-first
-        // LIMIT applies the cap across ALL chats; the outer ORDER restores per-chat ascending
-        // iteration), decoded text ?? typedstream, grouped per chat.
+        // Opt-in filtering happens INSIDE the capped query: the newest-`maxMessages` budget
+        // must be spent on the chats we'll actually analyze, not eaten by busy non-opted ones.
+        let analyzedROWIDs = chats.values
+            .filter { chatGUIDs == nil || chatGUIDs!.contains($0.guid) }
+            .map(\.rowid)
+        guard !analyzedROWIDs.isEmpty else { return [] }
+
+        // Messages within the limits (90-day floor AND newest-`maxMessages` cap over the
+        // analyzed chats; the outer ORDER restores per-chat ascending iteration), decoded
+        // text ?? typedstream, grouped per chat.
         var byChat: [Int64: [ChatMessage]] = [:]
         try reader.forEachRow("""
-            SELECT m.ROWID, m.date, m.is_from_me, m.text, m.attributedBody, cmj.chat_id, h.id
-            FROM (SELECT ROWID, date, is_from_me, text, attributedBody, handle_id FROM message
+            SELECT m.ROWID, m.date, m.is_from_me, m.text, m.attributedBody, m.chat_id, h.id
+            FROM (SELECT message.ROWID, date, is_from_me, text, attributedBody, handle_id, cmj.chat_id
+                  FROM message JOIN chat_message_join cmj ON cmj.message_id = message.ROWID
                   WHERE date >= \(Self.floorNS) AND \(Self.messageFilter)
+                        AND cmj.chat_id IN (\(analyzedROWIDs.sorted().map(String.init).joined(separator: ",")))
                   ORDER BY date DESC LIMIT \(ChatWindowing.maxMessages)) m
-            JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
             LEFT JOIN handle h ON h.ROWID = m.handle_id
-            ORDER BY cmj.chat_id, m.ROWID
+            ORDER BY m.chat_id, m.ROWID
             """) { r in
             guard let chat = chats[r.int(5)] else { return }
-            if let only = chatGUIDs, !only.contains(chat.guid) { return }   // opt-in filter
 
             let body = r.text(3) ?? r.blob(4).flatMap(Self.typedstreamText)
             guard let body, !body.trimmingCharacters(in: .whitespaces).isEmpty else { return }

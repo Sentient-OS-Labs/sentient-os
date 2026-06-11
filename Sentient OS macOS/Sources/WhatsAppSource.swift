@@ -49,17 +49,23 @@ struct WhatsAppSource: DataSource, Sendable {
     /// WhatsApp itself does ("Aditya, Ondrej & 2 others"). ZISACTIVE excludes members who LEFT,
     /// so a shrunk group is named after who's actually in it now. Saved contact names are
     /// preferred, but [MEASURED] they're often empty STRINGS (not NULL) — the self-set profile
-    /// push-name (ZWAPROFILEPUSHNAME, joined by member JID) is the reliable fallback, and it's
-    /// what WhatsApp's own chat list shows.
-    private static func activeMemberNames(_ reader: SQLiteReader) throws -> [Int64: [String]] {
+    /// push-name (ZWAPROFILEPUSHNAME, by member JID) is the reliable fallback, and it's what
+    /// WhatsApp's own chat list shows. Two flat queries + a dict (no SQL join): no dependence
+    /// on an index existing, and duplicate ZJID rows can't duplicate members. Non-throwing by
+    /// design — names are a nicety; a schema oddity must degrade to "Group chat", never kill
+    /// the connector.
+    private static func activeMemberNames(_ reader: SQLiteReader) -> [Int64: [String]] {
+        var push: [String: String] = [:]
+        try? reader.forEachRow("SELECT ZJID, ZPUSHNAME FROM ZWAPROFILEPUSHNAME") { r in
+            if let jid = r.text(0), let name = r.text(1) { push[jid] = name }
+        }
         var out: [Int64: [String]] = [:]
-        try reader.forEachRow("""
-            SELECT gm.ZCHATSESSION, gm.ZCONTACTNAME, gm.ZFIRSTNAME, pn.ZPUSHNAME
-            FROM ZWAGROUPMEMBER gm
-            LEFT JOIN ZWAPROFILEPUSHNAME pn ON pn.ZJID = gm.ZMEMBERJID
-            WHERE gm.ZISACTIVE = 1
+        try? reader.forEachRow("""
+            SELECT ZCHATSESSION, ZCONTACTNAME, ZFIRSTNAME, ZMEMBERJID
+            FROM ZWAGROUPMEMBER WHERE ZISACTIVE = 1
             """) { r in
-            if let n = cleanName(r.text(1)) ?? cleanName(r.text(2)) ?? cleanName(r.text(3)) {
+            let pushName = r.text(3).flatMap { push[$0] }
+            if let n = cleanName(r.text(1)) ?? cleanName(r.text(2)) ?? cleanName(pushName) {
                 out[r.int(0), default: []].append(n)
             }
         }
@@ -74,7 +80,7 @@ struct WhatsAppSource: DataSource, Sendable {
         let reader = try SQLiteReader(path: dbURL.path)
 
         let floor = ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate
-        let members = try Self.activeMemberNames(reader)
+        let members = Self.activeMemberNames(reader)
         var out: [ChatInfo] = []
         try reader.forEachRow("""
             SELECT s.ZCONTACTJID, s.ZPARTNERNAME, COUNT(m.Z_PK), MAX(m.ZMESSAGEDATE), s.Z_PK
@@ -118,7 +124,7 @@ struct WhatsAppSource: DataSource, Sendable {
         // Chat sessions → name + DM/group. The session filter here also drops community noise
         // from scan itself — so a stale opted-in JID (or the self-test's all-chats mode) can
         // never window an excluded session.
-        let members = try Self.activeMemberNames(reader)
+        let members = Self.activeMemberNames(reader)
         var chats: [Int64: Chat] = [:]
         try reader.forEachRow("SELECT s.Z_PK, s.ZPARTNERNAME, s.ZCONTACTJID FROM ZWACHATSESSION s WHERE \(Self.sessionFilter)") { r in
             let jid = r.text(2) ?? ""
@@ -127,9 +133,17 @@ struct WhatsAppSource: DataSource, Sendable {
                                    isGroup: jid.hasSuffix("@g.us"))
         }
 
-        // Text messages within the limits (90-day floor AND newest-`maxMessages` cap — the inner
-        // newest-first LIMIT applies the cap across ALL chats; the outer ORDER restores
-        // per-chat ascending iteration), oldest → newest per chat.
+        // Opt-in + session filtering happen INSIDE the capped query: the newest-`maxMessages`
+        // budget must be spent on chats we'll actually analyze — otherwise a community-heavy
+        // or busy non-opted chat eats the cap for nothing.
+        let analyzedPKs = chats.values
+            .filter { chatJIDs == nil || chatJIDs!.contains($0.jid) }
+            .map(\.pk)
+        guard !analyzedPKs.isEmpty else { return [] }
+
+        // Text messages within the limits (90-day floor AND newest-`maxMessages` cap over the
+        // analyzed chats; the outer ORDER restores per-chat ascending iteration), oldest →
+        // newest per chat.
         let floor = ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate
         var byChat: [Int64: [ChatMessage]] = [:]
         // LEFT JOIN the group-member row (indexed on Z_PK → near-free) so senders without a
@@ -138,12 +152,12 @@ struct WhatsAppSource: DataSource, Sendable {
             SELECT m.Z_PK, m.ZMESSAGEDATE, m.ZISFROMME, m.ZTEXT, m.ZPUSHNAME, m.ZCHATSESSION, gm.ZCONTACTNAME, gm.ZFIRSTNAME
             FROM (SELECT * FROM ZWAMESSAGE
                   WHERE ZTEXT IS NOT NULL AND length(ZTEXT) > 0 AND ZMESSAGEDATE >= \(floor)
+                        AND ZCHATSESSION IN (\(analyzedPKs.sorted().map(String.init).joined(separator: ",")))
                   ORDER BY ZMESSAGEDATE DESC LIMIT \(ChatWindowing.maxMessages)) m
             LEFT JOIN ZWAGROUPMEMBER gm ON m.ZGROUPMEMBER = gm.Z_PK
             ORDER BY m.ZCHATSESSION, m.Z_PK
             """) { r in
             guard let chat = chats[r.int(5)] else { return }
-            if let only = chatJIDs, !only.contains(chat.jid) { return }   // opt-in filter
             let isFromMe = r.int(2) == 1
             byChat[r.int(5), default: []].append(ChatMessage(
                 id: r.int(0),
