@@ -12,7 +12,7 @@
 //    ChatWindowing.format(...)   — frames a window for the model (chat name, group/DM,
 //                                  "you sent N of M" participation anchor, per-message senders)
 //  Limits (TODO plan): chat connectors read the last `lookbackDays` 90 days OR the newest
-//  `maxMessages` 200k messages per connector — whichever cuts first.
+//  `maxMessages` 100k messages per connector — whichever cuts first.
 //
 
 import Foundation
@@ -41,7 +41,7 @@ struct ChatInfo: Sendable, Identifiable {
 enum ChatWindowing {
     // MARK: Limits — shared by every chat connector
     static let lookbackDays = 90
-    static let maxMessages = 200_000       // newest-first cap, summed across the connector's chats
+    static let maxMessages = 100_000       // newest-first cap, summed across the connector's chats
 
     // We size a window by its UTF-8 BYTE count, NOT chars (and NOT a chars→tokens guess). A
     // byte-level tokenizer emits at most ONE token per byte, so bytes are a HARD upper bound on
