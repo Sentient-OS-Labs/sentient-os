@@ -27,7 +27,7 @@ triage routing. Needs Full Disk Access.
 - **Group vs DM:** `chat.style` 43 = group, 45 = DM. Opt-in key = `chat.guid` (stable).
   Sender per message via `handle.id` (E.164 phone or email — chat.db stores **no names**, hence
   AddressBookNames). Unnamed groups get a participant roll-up name ("Alex, Sam & 2 others").
-- **Limits (TODO plan):** 90-day floor AND newest-200k cap per connector, both in SQL — inner
+- **Limits (TODO plan):** 90-day floor AND newest-100k cap per connector, both in SQL — inner
   `ORDER BY date DESC LIMIT` subquery applies the cap across all chats, outer ORDER restores
   per-chat ascending iteration.
 
