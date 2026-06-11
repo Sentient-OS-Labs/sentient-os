@@ -21,9 +21,15 @@ import LiteRTLM
 actor Engine {
 
     /// Result of a single generation. Sendable so it can hop back to the MainActor.
+    /// Token stats are populated only when the engine was created with `collectStats: true`
+    /// (LiteRT-LM benchmark instrumentation; prefillTokens = the EXACT tokenized prompt size).
     struct Result: Sendable {
         let text: String
         let totalTime: TimeInterval
+        var prefillTokens: Int? = nil
+        var decodeTokens: Int? = nil
+        var prefillTokensPerSecond: Double? = nil
+        var decodeTokensPerSecond: Double? = nil
     }
 
     enum EngineError: Error, CustomStringConvertible {
@@ -40,11 +46,16 @@ actor Engine {
 
     private let modelPath: String
     private let maxNumTokens: Int
+    private let collectStats: Bool
     private var native: LiteRTLM.Engine?
 
-    init(modelPath: String, maxNumTokens: Int = 4096) {
+    /// `collectStats` turns on LiteRT-LM's benchmark instrumentation (must be decided before
+    /// `load()`) so every `Result` carries exact prefill/decode token counts — used by the
+    /// token-budget self-test; leave off in production.
+    init(modelPath: String, maxNumTokens: Int = 4096, collectStats: Bool = false) {
         self.modelPath = modelPath
         self.maxNumTokens = maxNumTokens
+        self.collectStats = collectStats
     }
 
     var isLoaded: Bool { native != nil }
@@ -58,6 +69,7 @@ actor Engine {
         ExperimentalFlags.optIntoExperimentalAPIs()
         ExperimentalFlags.enableSpeculativeDecoding = true   // MTP — Gemma 4 draft heads baked in (~2-3× decode)
         ExperimentalFlags.visualTokenBudget = 560            // Gemma 4 vision detail tier (70/140/280/560/1120)
+        ExperimentalFlags.enableBenchmark = collectStats     // token-count instrumentation (self-test only)
 
         let config = try EngineConfig(
             modelPath: modelPath,
@@ -113,7 +125,14 @@ actor Engine {
 
         let start = Date()
         let response = try await conversation.sendMessage(Message(contents: contents))
-        return Result(text: response.toString, totalTime: Date().timeIntervalSince(start))
+        var result = Result(text: response.toString, totalTime: Date().timeIntervalSince(start))
+        if collectStats, let info = try? conversation.getBenchmarkInfo() {
+            result.prefillTokens = info.lastPrefillTokenCount
+            result.decodeTokens = info.lastDecodeTokenCount
+            result.prefillTokensPerSecond = info.lastPrefillTokensPerSecond
+            result.decodeTokensPerSecond = info.lastDecodeTokensPerSecond
+        }
+        return result
     }
 
     /// Writable scratch dir for LiteRT-LM's shader/compilation cache.

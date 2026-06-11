@@ -47,9 +47,16 @@ enum ChatWindowing {
     // byte-level tokenizer emits at most ONE token per byte, so bytes are a HARD upper bound on
     // tokens — a window can never overflow the model's token budget, even for emoji / CJK /
     // multilingual chats where characters wildly under-count tokens. (That mismatch is what made
-    // the model "go quiet": a 26k-char window tokenized to 18.6k tokens, >2× the 8,192 budget.)
-    // ~5,000 bytes ⇒ ≤ ~5k tokens, leaving comfortable room for the prompt + reply inside 8,192.
-    static let maxWindowBytes = 5_000
+    // the model "go quiet": a 26k-char window tokenized to 18.6k tokens, >2× an 8,192 budget.)
+    //
+    // 12,000 is sized from measurement (June 11 `tokens` self-test, 24 real windows across 14
+    // chats): real chat runs ~2.4 bytes/token (min 2.05), so a full window is ~5k tokens typical
+    // — and even the adversarial worst case (1 token/byte) fits the chat engine's 16,384
+    // maxNumTokens with room for the group prompt template (1,567 tokens measured) + reply.
+    // The old 5,000 left ~83% of the context empty and paid that fixed template cost once per
+    // ~30 messages. Quality, not token math, is the gate on raising this further — more
+    // speakers per window = more attribution risk for a 4B judge.
+    static let maxWindowBytes = 12_000
     static let maxMessageChars = 1_000     // cap a single pasted-essay message so it can't dominate a window
 
     /// The 90-day floor as a Date (sources convert to their own epoch/units for SQL).
