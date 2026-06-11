@@ -72,6 +72,9 @@ enum SelfTestFileSkipping {
         let ob  = dir("prune/obsidian");  touch(dir("prune/obsidian/.obsidian"), "app.json")
         touch(ob, "package.json")   // stray manifest — the .obsidian exemption must win
         for i in 1...5 { touch(ob, "journal \(i).md") }
+        let lg  = dir("prune/logseq-graph"); _ = dir("prune/logseq-graph/logseq")
+        touch(dir("prune/logseq-graph/.git"), "HEAD")   // git-synced Logseq graph — exemption must win
+        for i in 1...4 { touch(lg, "page \(i).md") }
         let xc  = dir("prune/xcode");     _ = dir("prune/xcode/Foo.xcodeproj"); touch(xc, "README.md")
         let den = dir("prune/density")
         for i in 1...12 { touch(den, "module\(i).py") }
@@ -88,8 +91,9 @@ enum SelfTestFileSkipping {
         check("package.json repo pruned",          expected: 0,   actual: p["npm-app"] ?? 0)
         check("Makefile repo pruned (new manifest)", expected: 0, actual: p["make-tool"] ?? 0)
         check(".git + code pruned",                expected: 0,   actual: p["git-code"] ?? 0)
-        check(".git markdown-only repo KEPT",      expected: 6,   actual: p["git-notes"] ?? 0)
+        check(".git markdown-only repo pruned too (June 11)", expected: 0, actual: p["git-notes"] ?? 0)
         check(".obsidian beats stray manifest",    expected: 5,   actual: p["obsidian"] ?? 0)
+        check("logseq marker beats .git",          expected: 4,   actual: p["logseq-graph"] ?? 0)
         check(".xcodeproj sibling pruned",         expected: 0,   actual: p["xcode"] ?? 0)
         check("code-density (no manifest) pruned", expected: 0,   actual: p["density"] ?? 0)
         check("120× chunk_NNNN.txt dataset pruned", expected: 0,  actual: p["dataset-txt"] ?? 0)

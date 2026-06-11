@@ -15,15 +15,19 @@ One directory listing is read per directory; every rule runs against it. First m
 | noindex | dir name ends `.noindex` | `Cache.noindex` |
 | name blocklist | dep/build/cache/dataset names | `node_modules`, `venv`, `dist`, `datasets`, `checkpoints` |
 | never-index marker | `.metadata_never_index` present | Spotlight opt-outs |
-| **Obsidian exemption** | `.obsidian` present → **never prune** (overrides everything below) | personal vaults, even with a stray `package.json` |
+| **vault exemption** | `.obsidian` or `logseq` present → **never prune** (overrides everything below) | personal vaults — even git-synced, even with a stray `package.json` |
+| **`.git`** | `.git` present → prune, period (decision June 11 — a 38-repo survey found zero notes repos; git notes journals are ~1% and have the escape hatch below) | every cloned/own repo |
 | manifest | a known project manifest present | `package.json`, `Cargo.toml`, `Makefile`, `CMakeLists.txt`, `pyproject.toml`… |
 | project bundle | any `*.xcodeproj` / `*.sln` entry | Xcode/VS project folders |
 | code-density | ≥10 extensioned entries, majority source-code extensions | manifest-less script folders |
-| `.git` + code | `.git` present AND (any code file OR a classic code dir like `src`/`tests`) | cloned repos. Markdown-only git repos (notes vaults) pass |
 | **dataset** | ≥100 files of one extension, ≥90% homogeneous, ≥80% machine-generated names (`chunk_0001`, pure numbers, hashes, UUIDs) | scraped corpora, ML datasets. **Skipped entirely** — no sampling (decision June 10) |
 
 **Screenshots & camera rolls are exempt from the dataset rule** (`Screenshot…`, `IMG_…`, `DSC…`
 prefixes): they're personal gold — the per-directory cap bounds their volume instead.
+
+**The escape hatch (by construction):** `pruneReason` only runs on *subdirectories* — a root the
+user explicitly added in Sources is never itself prune-checked. Anyone whose plain git notes repo
+gets skipped can add that folder as a custom root and it walks fine.
 
 Hidden dirs and bundle *contents* are already excluded by the enumerator options
 (`.skipsHiddenFiles`, `.skipsPackageDescendants`).

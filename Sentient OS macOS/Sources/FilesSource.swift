@@ -55,9 +55,7 @@ struct FilesSource: DataSource, Sendable {
         "site-packages", "dataset", "datasets", "corpus", "checkpoints",
     ]
 
-    /// Hard "this is a code project" manifests — if present, skip the WHOLE folder. Deliberately
-    /// NOT `.git` alone: Obsidian vaults & personal note repos are git repos full of markdown we
-    /// WANT (`.git` only prunes alongside code signals — see `pruneReason`).
+    /// Hard "this is a code project" manifests — if present, skip the WHOLE folder.
     private static let projectManifests: Set<String> = [
         "package.json", "Cargo.toml", "go.mod", "Package.swift", "pom.xml",
         "build.gradle", "build.gradle.kts", "composer.json", "Gemfile",
@@ -73,11 +71,6 @@ struct FilesSource: DataSource, Sendable {
         "dart", "vue", "svelte", "sql", "pl", "r",
     ]
 
-    /// Classic code-project directory names — with `.git` present, any of these confirms "repo".
-    private static let codeDirNames: Set<String> = [
-        "src", "lib", "tests", "test", "spec", "include", "cmd", "pkg", "sources", "bin",
-    ]
-
     /// Why this directory's whole subtree is skipped — nil means walk in. Reads the directory
     /// listing ONCE and runs every check against it. `.app`/`.xcodeproj` bundle *descendants* +
     /// hidden dirs are already excluded by the enumerator options; this prunes at the parent.
@@ -90,7 +83,13 @@ struct FilesSource: DataSource, Sendable {
         guard let listing = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
         let names = Set(listing)
         if names.contains(".metadata_never_index") { return "never-index marker" }
-        if names.contains(".obsidian") { return nil }   // Obsidian vault — always keep, no further checks
+        // Obsidian/Logseq vaults — always keep, no further checks (even git-synced ones).
+        if names.contains(".obsidian") || names.contains("logseq") { return nil }
+
+        // Any other git repo is a code project (decision June 11 — surveyed 38 repos across the
+        // standard folders: zero were notes). The 1% who git-sync a plain markdown journal have a
+        // working escape hatch: explicitly added roots are never themselves prune-checked.
+        if names.contains(".git") { return ".git" }
 
         if let manifest = projectManifests.first(where: { names.contains($0) }) { return "manifest: \(manifest)" }
         if let bundle = listing.first(where: { $0.hasSuffix(".xcodeproj") || $0.hasSuffix(".sln") }) {
@@ -104,12 +103,6 @@ struct FilesSource: DataSource, Sendable {
         }
         let codeCount = exts.count(where: { codeExtensions.contains($0) })
         if exts.count >= 10, codeCount * 2 >= exts.count { return "code-density \(codeCount)/\(exts.count)" }
-
-        // Bare repo: .git + any code file or a classic code dir (markdown-only git repos pass).
-        let lowered = Set(listing.map { $0.lowercased() })
-        if names.contains(".git"), codeCount > 0 || !codeDirNames.isDisjoint(with: lowered) {
-            return ".git + code"
-        }
 
         // Dataset: ≥100 files of one extension, ≥90% homogeneous, ≥80% machine-generated names.
         // Skipped ENTIRELY (decision June 10) — a sampled dataset still pollutes the vault.
