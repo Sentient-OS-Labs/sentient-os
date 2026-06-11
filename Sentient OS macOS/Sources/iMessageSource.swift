@@ -107,7 +107,7 @@ struct iMessageSource: DataSource, Sendable {
             if !explicit.isEmpty {
                 name = explicit
             } else if isGroup {
-                name = groupName(of: (members[r.int(0)] ?? []).map { resolved($0, contacts) })
+                name = ChatWindowing.groupName(of: (members[r.int(0)] ?? []).map { resolved($0, contacts) })
             } else {
                 name = resolved(identifier, contacts)
             }
@@ -120,16 +120,6 @@ struct iMessageSource: DataSource, Sendable {
     /// unlike WhatsApp's LID blobs there's nothing opaque to hide).
     private static func resolved(_ handle: String, _ contacts: [String: String]) -> String {
         AddressBookNames.resolve(handle, in: contacts) ?? handle
-    }
-
-    /// "Alex, Sam & 2 others" for groups without an explicit name.
-    private static func groupName(of participants: [String]) -> String {
-        switch participants.count {
-        case 0:  return "Group chat"
-        case 1:  return participants[0]
-        case 2:  return "\(participants[0]) & \(participants[1])"
-        default: return "\(participants[0]), \(participants[1]) & \(participants.count - 2) others"
-        }
     }
 
     // MARK: Scan — copy → query → decode → window → delete

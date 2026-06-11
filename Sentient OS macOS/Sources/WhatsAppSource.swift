@@ -36,12 +36,35 @@ struct WhatsAppSource: DataSource, Sendable {
     /// real conversations; the per-chat opt-in gates them anyway).
     /// ⚠️ The IS NOT NULL inside the subquery is load-bearing: one NULL there and SQL's
     /// NOT IN semantics silently hide EVERY group.
+    /// (The row-side IS NOT NULL matters too: an unnamed group's NULL ZPARTNERNAME would make
+    /// the whole NOT(...) evaluate NULL and silently hide the group.)
     private static let sessionFilter = """
         s.ZSESSIONTYPE IN (0, 1)
-            AND NOT (s.ZSESSIONTYPE = 1 AND s.ZPARTNERNAME IN
+            AND NOT (s.ZSESSIONTYPE = 1 AND s.ZPARTNERNAME IS NOT NULL AND s.ZPARTNERNAME IN
                 (SELECT ZPARTNERNAME FROM ZWACHATSESSION
                  WHERE ZSESSIONTYPE = 4 AND ZPARTNERNAME IS NOT NULL))
         """
+
+    /// Active group members with usable names, per chat session — names unnamed groups the way
+    /// WhatsApp itself does ("Aditya, Ondrej & 2 others"). ZISACTIVE excludes members who LEFT,
+    /// so a shrunk group is named after who's actually in it now. Saved contact names are
+    /// preferred, but [MEASURED] they're often empty STRINGS (not NULL) — the self-set profile
+    /// push-name (ZWAPROFILEPUSHNAME, joined by member JID) is the reliable fallback, and it's
+    /// what WhatsApp's own chat list shows.
+    private static func activeMemberNames(_ reader: SQLiteReader) throws -> [Int64: [String]] {
+        var out: [Int64: [String]] = [:]
+        try reader.forEachRow("""
+            SELECT gm.ZCHATSESSION, gm.ZCONTACTNAME, gm.ZFIRSTNAME, pn.ZPUSHNAME
+            FROM ZWAGROUPMEMBER gm
+            LEFT JOIN ZWAPROFILEPUSHNAME pn ON pn.ZJID = gm.ZMEMBERJID
+            WHERE gm.ZISACTIVE = 1
+            """) { r in
+            if let n = cleanName(r.text(1)) ?? cleanName(r.text(2)) ?? cleanName(r.text(3)) {
+                out[r.int(0), default: []].append(n)
+            }
+        }
+        return out
+    }
 
     /// Active chats (text messages within the lookback) for the picker — newest first, with counts.
     /// Its own WAL-safe copy → query → delete.
@@ -51,9 +74,10 @@ struct WhatsAppSource: DataSource, Sendable {
         let reader = try SQLiteReader(path: dbURL.path)
 
         let floor = ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate
+        let members = try Self.activeMemberNames(reader)
         var out: [ChatInfo] = []
         try reader.forEachRow("""
-            SELECT s.ZCONTACTJID, s.ZPARTNERNAME, COUNT(m.Z_PK), MAX(m.ZMESSAGEDATE)
+            SELECT s.ZCONTACTJID, s.ZPARTNERNAME, COUNT(m.Z_PK), MAX(m.ZMESSAGEDATE), s.Z_PK
             FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON m.ZCHATSESSION = s.Z_PK
             WHERE m.ZTEXT IS NOT NULL AND length(m.ZTEXT) > 0 AND m.ZMESSAGEDATE >= \(floor)
               AND \(Self.sessionFilter)
@@ -63,7 +87,7 @@ struct WhatsAppSource: DataSource, Sendable {
             let jid = r.text(0) ?? ""
             guard !jid.isEmpty else { return }
             out.append(ChatInfo(id: jid,
-                                name: Self.displayName(r.text(1), jid: jid),
+                                name: Self.displayName(r.text(1), jid: jid, members: members[r.int(4)]),
                                 isGroup: jid.hasSuffix("@g.us"),
                                 messageCount: Int(r.int(2)),
                                 lastActive: Date(timeIntervalSinceReferenceDate: r.double(3))))
@@ -94,11 +118,12 @@ struct WhatsAppSource: DataSource, Sendable {
         // Chat sessions → name + DM/group. The session filter here also drops community noise
         // from scan itself — so a stale opted-in JID (or the self-test's all-chats mode) can
         // never window an excluded session.
+        let members = try Self.activeMemberNames(reader)
         var chats: [Int64: Chat] = [:]
         try reader.forEachRow("SELECT s.Z_PK, s.ZPARTNERNAME, s.ZCONTACTJID FROM ZWACHATSESSION s WHERE \(Self.sessionFilter)") { r in
             let jid = r.text(2) ?? ""
             chats[r.int(0)] = Chat(pk: r.int(0), jid: jid,
-                                   name: Self.displayName(r.text(1), jid: jid),
+                                   name: Self.displayName(r.text(1), jid: jid, members: members[r.int(0)]),
                                    isGroup: jid.hasSuffix("@g.us"))
         }
 
@@ -176,10 +201,12 @@ struct WhatsAppSource: DataSource, Sendable {
     /// Phone/handle from a JID like "14155551234@s.whatsapp.net" → "14155551234" (chat-name fallback only).
     private static func handle(_ jid: String) -> String { String(jid.prefix { $0 != "@" }) }
 
-    /// Chat display name: validated partner name → phone handle — but NEVER an opaque @lid
-    /// identifier (a privacy-mode chat without a saved name shows a clean generic instead).
-    private static func displayName(_ partnerName: String?, jid: String) -> String {
+    /// Chat display name: validated partner name → participant roll-up for unnamed groups
+    /// ("Aditya & Ondrej", like WhatsApp itself) → phone handle — but NEVER an opaque @lid
+    /// identifier or a raw group JID (a chat we can't name shows a clean generic instead).
+    private static func displayName(_ partnerName: String?, jid: String, members: [String]?) -> String {
         if let n = cleanName(partnerName) { return n }
+        if jid.hasSuffix("@g.us") { return ChatWindowing.groupName(of: members ?? []) }
         if jid.isEmpty || jid.hasSuffix("@lid") { return "Unknown chat" }
         return handle(jid)
     }
