@@ -15,7 +15,8 @@
 //    SENTIENT_SELFTEST=whatsapp "<app>/Contents/MacOS/Sentient OS macOS"
 //  Env knobs:
 //    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "notes" | "files"  (model dump) ·
-//                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "claudecli" | "vault"  (no model)
+//                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "claudecli"
+//                          | "vault" | "skipping" | "skipcensus"  (no model)
 //    SENTIENT_SELFTEST_N   item count (default 6)
 //    SENTIENT_SELFTEST_OUT output file (default <tmp>/sentient-selftest.txt)
 //    SENTIENT_MODEL_PATH   override the dev model path
@@ -77,6 +78,11 @@ enum SelfTest {
             }
             return
         }
+
+        // File-skipping modes: deterministic, no model — fixture assertions ("skipping") and a
+        // read-only census of the real standard folders ("skipcensus"). See SelfTest_FileSkipping.swift.
+        if mode == "skipping" { SelfTestFileSkipping.synthetic(emit: emit); return }
+        if mode == "skipcensus" { SelfTestFileSkipping.census(emit: emit); return }
 
         // ClaudeCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
         // claude -p spine (binary → env → stdin → JSON envelope). Verifies the compute waterfall's
@@ -282,10 +288,10 @@ enum SelfTest {
         case "notes":
             source = NotesSource(); maxTokens = 4096
         case "files":
-            guard let dl = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            guard let files = FileRoot.downloads.source else {
                 emit("could not locate ~/Downloads"); return
             }
-            source = FilesSource(root: dl, label: "Downloads"); maxTokens = 4096
+            source = files; maxTokens = 4096
         default:
             emit("unknown mode '\(mode)' (use whatsapp | imessage | notes | files)"); return
         }
