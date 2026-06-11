@@ -31,6 +31,7 @@ struct RootView: View {
     @AppStorage("dbg.whatsapp.chats") private var selectedChatsCSV = ""  // opt-in chat JIDs, comma-joined
     @AppStorage("dbg.run.imessage")  private var runIMessage = false   // is iMessage active this run (chip lit)
     @AppStorage("dbg.imessage.chats") private var selectedIMessageChatsCSV = ""  // opt-in chat GUIDs, comma-joined
+    @AppStorage("dbg.run.notes")     private var runNotes = false      // Apple Notes (no picker — all notes, capped)
     @State private var customRoots: [URL] = []
     @State private var showChatPicker = false
     @State private var showIMessagePicker = false
@@ -58,6 +59,7 @@ struct RootView: View {
         if runIMessage && fdaGranted && !selectedIMessageGUIDs.isEmpty {
             s.append(.imessage(chatGUIDs: selectedIMessageGUIDs))
         }
+        if runNotes && fdaGranted { s.append(.notes) }
         return s
         #else
         return FileRoot.standard.map { .files($0) }
@@ -232,6 +234,7 @@ struct RootView: View {
                                count: selectedIMessageGUIDs.count,
                                turnOff: { runIMessage = false },
                                openPicker: { showIMessagePicker = true })
+                notesChip
             }
             .frame(maxWidth: 420)
 
@@ -240,11 +243,31 @@ struct RootView: View {
                     .font(.caption2).foregroundStyle(Theme.faint)
             }
             if !fdaGranted {
-                Text("WhatsApp & iMessage need Full Disk Access — grant it in More Options below.")
+                Text("WhatsApp, iMessage & Apple Notes need Full Disk Access — grant it in More Options below.")
                     .font(.caption2).foregroundStyle(Theme.faint)
             }
         }
         .onAppear { fdaGranted = Permissions.hasFullDiskAccess() }
+    }
+
+    /// Apple Notes chip — a plain FDA-gated toggle (no picker: all notes go in, capped inside
+    /// the source). Same look as the chat chips, minus the count.
+    private var notesChip: some View {
+        let on = runNotes && fdaGranted
+        return HStack(spacing: 6) {
+            Image(systemName: on ? "checkmark.circle.fill" : "note.text").font(.system(size: 11))
+            Text("Apple Notes").font(.caption.weight(.medium)).lineLimit(1)
+        }
+        .foregroundStyle(on ? .black : (fdaGranted ? Theme.secondary : Theme.faint))
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 11).padding(.vertical, 6)
+        .background(on ? Theme.accent : Color.white.opacity(0.06), in: Capsule())
+        .overlay(Capsule().strokeBorder(on ? .clear : Theme.stroke, lineWidth: 1))
+        .contentShape(Capsule())
+        .onTapGesture {
+            guard fdaGranted else { return }
+            runNotes.toggle()
+        }
     }
 
     /// A chat-DB source chip (WhatsApp / iMessage). Tap when OFF → opens that source's chat

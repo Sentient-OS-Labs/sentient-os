@@ -18,11 +18,14 @@ enum Triage {
 
     // MARK: Prompt
 
-    /// Dispatches to a source-flavored prompt: a file judges one document; chat sources judge a
-    /// CONVERSATION WINDOW — with a dedicated, far stricter prompt for GROUP chats (attribution is
-    /// the hard part). All emit the SAME JSON contract, so parse()/decide() are shared & unchanged.
+    /// Dispatches to a source-flavored prompt: a file judges one document (Apple Notes ride the
+    /// same path — a note IS a document the user wrote); chat sources judge a CONVERSATION
+    /// WINDOW — with a dedicated, far stricter prompt for GROUP chats (attribution is the hard
+    /// part). All emit the SAME JSON contract, so parse()/decide() are shared & unchanged.
     static func prompt(for artifact: Artifact, currentDate: Date) -> String {
-        if artifact.kind == .file { return filePrompt(for: artifact, currentDate: currentDate) }
+        if artifact.kind == .file || artifact.kind == .notes {
+            return filePrompt(for: artifact, currentDate: currentDate)
+        }
         return artifact.metadata["isGroup"] == "1"
             ? groupChatPrompt(for: artifact, currentDate: currentDate)
             : chatPrompt(for: artifact, currentDate: currentDate)

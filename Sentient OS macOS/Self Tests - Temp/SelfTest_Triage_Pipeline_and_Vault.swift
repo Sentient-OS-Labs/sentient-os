@@ -14,8 +14,8 @@
 //  Invoke (after building):
 //    SENTIENT_SELFTEST=whatsapp "<app>/Contents/MacOS/Sentient OS macOS"
 //  Env knobs:
-//    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "files"  (model dump) ·
-//                          "parse" | "chats" | "imchats" | "imdecode" | "claudecli" | "vault"  (no model)
+//    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "notes" | "files"  (model dump) ·
+//                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "claudecli" | "vault"  (no model)
 //    SENTIENT_SELFTEST_N   item count (default 6)
 //    SENTIENT_SELFTEST_OUT output file (default <tmp>/sentient-selftest.txt)
 //    SENTIENT_MODEL_PATH   override the dev model path
@@ -168,6 +168,33 @@ enum SelfTest {
             return
         }
 
+        // Notes decode-rate validation: deterministic, no model, STATS ONLY (no note content) —
+        // proves the gunzip → protobuf 2→3→2 recipe on this Mac's real NoteStore.sqlite.
+        if mode == "notesdecode" {
+            do {
+                let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: NotesSource().dbPath)
+                defer { try? FileManager.default.removeItem(at: tempDir) }
+                let reader = try SQLiteReader(path: dbURL.path)
+                var total = 0, locked = 0, deleted = 0, noBlob = 0, ok = 0, fail = 0, empty = 0
+                try reader.forEachRow("""
+                    SELECT o.ZISPASSWORDPROTECTED, o.ZMARKEDFORDELETION, d.ZDATA
+                    FROM ZICCLOUDSYNCINGOBJECT o JOIN ZICNOTEDATA d ON o.ZNOTEDATA = d.Z_PK
+                    """) { r in
+                    total += 1
+                    if r.int(0) == 1 { locked += 1; return }
+                    if r.int(1) == 1 { deleted += 1; return }
+                    guard let blob = r.blob(2) else { noBlob += 1; return }
+                    guard let text = NotesSource.decodeBody(blob) else { fail += 1; return }
+                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { empty += 1 }
+                    else { ok += 1 }
+                }
+                emit("note rows: \(total) · locked: \(locked) · deleted: \(deleted) · no-blob: \(noBlob)")
+                emit("decode: \(ok) ok / \(fail) FAIL / \(empty) empty-text")
+                emit(fail == 0 ? "✅ decode clean" : "⚠️ inspect failures before trusting notes")
+            } catch { emit("notesdecode FAILED: \(error)") }
+            return
+        }
+
         // Vault mode: exercise the REAL Stage-2 path (Store → VaultGenerator → ~/Sentient OS -- The Vault).
         //   SENTIENT_SELFTEST_N>0   → subset (cheap plumbing check);  0/unset → full vault
         //   SENTIENT_VAULT_EFFORT   → effort override (default xhigh; direct route only)
@@ -232,13 +259,15 @@ enum SelfTest {
         case "imessage":
             source = iMessageSource(chatGUIDs: chatFilter((try? iMessageSource().listChats()) ?? []))
             maxTokens = 16384
+        case "notes":
+            source = NotesSource(); maxTokens = 4096
         case "files":
             guard let dl = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
                 emit("could not locate ~/Downloads"); return
             }
             source = FilesSource(root: dl, label: "Downloads"); maxTokens = 4096
         default:
-            emit("unknown mode '\(mode)' (use whatsapp | imessage | files)"); return
+            emit("unknown mode '\(mode)' (use whatsapp | imessage | notes | files)"); return
         }
 
         let candidates: [Candidate]

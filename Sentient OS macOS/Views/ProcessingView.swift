@@ -17,12 +17,14 @@ enum RunSource: Hashable {
     case files(FileRoot)
     case whatsapp(chatJIDs: Set<String>)    // the opt-in chats to analyze
     case imessage(chatGUIDs: Set<String>)   // the opt-in chats to analyze
+    case notes                              // all notes (newest-1000 cap inside the source)
 
     var label: String {
         switch self {
         case .files(let root): return root.label
         case .whatsapp:        return "WhatsApp"
         case .imessage:        return "iMessage"
+        case .notes:           return "Apple Notes"
         }
     }
 
@@ -30,7 +32,7 @@ enum RunSource: Hashable {
     var isChatSource: Bool {
         switch self {
         case .whatsapp, .imessage: return true
-        case .files:               return false
+        case .files, .notes:       return false
         }
     }
 }
@@ -309,6 +311,8 @@ struct ProcessingView: View {
                     try await runPass(WhatsAppSource(chatJIDs: jids), pipeline: pipeline)
                 case .imessage(let guids):
                     try await runPass(iMessageSource(chatGUIDs: guids), pipeline: pipeline)
+                case .notes:
+                    try await runPass(NotesSource(), pipeline: pipeline)
                 }
             }
 
