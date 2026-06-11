@@ -98,6 +98,28 @@ enum SelfTest {
             return
         }
 
+        // Mirror mode: no model — exercise the REAL MirrorClient against the live (or local,
+        // via SENTIENT_MIRROR_BASE) MCP mirror: enable → push the vault → stats → delete. Proves
+        // the read/write token split, zip-replace, and auth header end to end on this Mac.
+        if mode == "mirror" {
+            emit("base: \(MirrorClient.baseURL)")
+            let client = MirrorClient()
+            do {
+                let url = await client.enable()
+                emit("share URL: \(url)")
+                emit("vault: \(VaultGenerator.vaultRoot.path)")
+                try await client.push()
+                emit("✅ pushed vault zip")
+                let s = try await client.stats()
+                emit("stats: notesRead24h=\(s.notesRead24h) toolCalls24h=\(s.toolCalls24h) last=\(s.lastAccess?.description ?? "nil")")
+                try await client.deleteRemote()
+                emit("✅ deleted remote copy")
+                await client.disable()
+                emit("✅ disabled (tokens forgotten)")
+            } catch { emit("mirror FAILED: \(error)") }
+            return
+        }
+
         // Chat-list modes: deterministic, no model — verify listChats() enumeration (and, for
         // iMessage, that names resolved instead of raw +1415… handles).
         if mode == "chats" || mode == "imchats" {
