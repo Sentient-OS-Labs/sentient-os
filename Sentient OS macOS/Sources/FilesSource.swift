@@ -12,6 +12,10 @@
 //  The model is given the home-relative path (e.g. ~/Downloads/Useless Stuff/x.jpg) + creation
 //  date — the folder structure alone is strong signal for junk/intent.
 //
+//  Skipping & caps (see Documentation/Files Source (Skipping & Caps).md): code repos and
+//  machine-generated datasets are pruned at the walk level (`pruneReason`), and `scan` bounds
+//  every run — newest 1,000 per root, 100/300 per directory, 1-year age cutoff for Downloads.
+//
 
 import Foundation
 import PDFKit
@@ -23,41 +27,121 @@ struct FilesSource: DataSource, Sendable {
     let kind: SourceKind = .file
     let root: URL
     let label: String   // human folder name ("Downloads", "Desktop", a custom folder…) → stored as each artifact's `folder` tag
+    let perDirectoryCap: Int     // max candidates any single directory contributes (newest win)
+    let maxAge: TimeInterval?    // drop files older than this (nil = no age cutoff)
+
+    init(root: URL, label: String, perDirectoryCap: Int = 300, maxAge: TimeInterval? = nil) {
+        self.root = root
+        self.label = label
+        self.perDirectoryCap = perDirectoryCap
+        self.maxAge = maxAge
+    }
 
     static let allowedExtensions: Set<String> = ["pdf", "doc", "docx", "md", "txt", "png", "jpg", "jpeg", "heic"]
+    static let perRootCap = 1_000   // connector limit (June 10): newest 1,000 per root, every root
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic"]
     private static let maxContentChars = 8_000
     private static let pdfPageLimit = 3
     private static let imageMaxPixel = 1_280   // ≈ 720p short edge on 16:9
 
-    // MARK: Pruning (skip code repos / dependency caches — Spotlight-style)
+    // MARK: Skipping (code repos / dependency caches / datasets — Spotlight-style)
 
-    /// Dependency / build / cache directories — pruned by name (their subtree is never walked).
+    /// Dependency / build / cache / dataset directories — pruned by name (subtree never walked).
     private static let skipDirNames: Set<String> = [
         "node_modules", "bower_components", "jspm_packages", "vendor", "pods", "carthage",
         "dist", "build", "target", ".build", "__pycache__", "venv", ".venv", ".tox",
         ".mypy_cache", ".pytest_cache", ".gradle", "deriveddata", ".dart_tool",
         ".next", ".nuxt", ".svelte-kit", ".angular",
+        "site-packages", "dataset", "datasets", "corpus", "checkpoints",
     ]
 
     /// Hard "this is a code project" manifests — if present, skip the WHOLE folder. Deliberately
-    /// NOT `.git`: Obsidian vaults & personal note repos are git repos full of markdown we WANT.
-    private static let projectManifests: [String] = [
+    /// NOT `.git` alone: Obsidian vaults & personal note repos are git repos full of markdown we
+    /// WANT (`.git` only prunes alongside code signals — see `pruneReason`).
+    private static let projectManifests: Set<String> = [
         "package.json", "Cargo.toml", "go.mod", "Package.swift", "pom.xml",
         "build.gradle", "build.gradle.kts", "composer.json", "Gemfile",
         "pyproject.toml", "Pipfile", "requirements.txt",
+        "Makefile", "makefile", "CMakeLists.txt", "mix.exs", "deno.json", "build.sbt",
     ]
 
-    /// Should this directory's whole subtree be skipped? (dep/build dir · *.noindex · OS
-    /// never-index marker · code-project root). `.app`/`.xcodeproj` bundles + hidden dirs are
-    /// already handled by the enumerator options.
-    private static func shouldPrune(_ dir: URL) -> Bool {
+    /// Source-code extensions for the density heuristic — a folder that's mostly these is a code
+    /// project even without a recognized manifest.
+    private static let codeExtensions: Set<String> = [
+        "py", "js", "jsx", "ts", "tsx", "mjs", "c", "h", "cpp", "cc", "hpp", "m", "mm",
+        "swift", "java", "kt", "rs", "go", "rb", "php", "cs", "scala", "sh", "lua",
+        "dart", "vue", "svelte", "sql", "pl", "r",
+    ]
+
+    /// Classic code-project directory names — with `.git` present, any of these confirms "repo".
+    private static let codeDirNames: Set<String> = [
+        "src", "lib", "tests", "test", "spec", "include", "cmd", "pkg", "sources", "bin",
+    ]
+
+    /// Why this directory's whole subtree is skipped — nil means walk in. Reads the directory
+    /// listing ONCE and runs every check against it. `.app`/`.xcodeproj` bundle *descendants* +
+    /// hidden dirs are already excluded by the enumerator options; this prunes at the parent.
+    /// Internal (not private) so the skipping self-test's census can report reasons.
+    static func pruneReason(_ dir: URL) -> String? {
         let name = dir.lastPathComponent
-        if name.hasSuffix(".noindex") { return true }
-        if skipDirNames.contains(name.lowercased()) { return true }
-        let fm = FileManager.default
-        if fm.fileExists(atPath: dir.appendingPathComponent(".metadata_never_index").path) { return true }
-        return projectManifests.contains { fm.fileExists(atPath: dir.appendingPathComponent($0).path) }
+        if name.hasSuffix(".noindex") { return "noindex" }
+        if skipDirNames.contains(name.lowercased()) { return "dep/build/dataset dir name" }
+
+        guard let listing = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
+        let names = Set(listing)
+        if names.contains(".metadata_never_index") { return "never-index marker" }
+        if names.contains(".obsidian") { return nil }   // Obsidian vault — always keep, no further checks
+
+        if let manifest = projectManifests.first(where: { names.contains($0) }) { return "manifest: \(manifest)" }
+        if let bundle = listing.first(where: { $0.hasSuffix(".xcodeproj") || $0.hasSuffix(".sln") }) {
+            return "project bundle: \(bundle)"
+        }
+
+        // Code-density: ≥10 extensioned entries and source code is the majority.
+        let exts = listing.compactMap { n -> String? in
+            let e = (n as NSString).pathExtension.lowercased()
+            return e.isEmpty ? nil : e
+        }
+        let codeCount = exts.count(where: { codeExtensions.contains($0) })
+        if exts.count >= 10, codeCount * 2 >= exts.count { return "code-density \(codeCount)/\(exts.count)" }
+
+        // Bare repo: .git + any code file or a classic code dir (markdown-only git repos pass).
+        let lowered = Set(listing.map { $0.lowercased() })
+        if names.contains(".git"), codeCount > 0 || !codeDirNames.isDisjoint(with: lowered) {
+            return ".git + code"
+        }
+
+        // Dataset: ≥100 files of one extension, ≥90% homogeneous, ≥80% machine-generated names.
+        // Skipped ENTIRELY (decision June 10) — a sampled dataset still pollutes the vault.
+        if exts.count >= 100 {
+            var counts: [String: Int] = [:]
+            for e in exts { counts[e, default: 0] += 1 }
+            if let top = counts.max(by: { $0.value < $1.value }),
+               top.value >= 100, top.value * 10 >= exts.count * 9 {
+                let members = listing.filter { ($0 as NSString).pathExtension.lowercased() == top.key }
+                let machine = members.count(where: { isDatasetName($0) })
+                if machine * 5 >= members.count * 4 { return "dataset: \(top.value)×.\(top.key)" }
+            }
+        }
+        return nil
+    }
+
+    /// Machine-generated filename (pure numbers, sequential frames/chunks, hashes, UUIDs) — the
+    /// signature of a dataset, not a life. Screenshots & camera rolls are deliberately exempt
+    /// (personal gold; the per-directory cap bounds their volume instead — decision June 10).
+    private static func isDatasetName(_ name: String) -> Bool {
+        let base = (name as NSString).deletingPathExtension.lowercased()
+        if base.hasPrefix("screenshot") || base.hasPrefix("screen shot")
+            || base.hasPrefix("cleanshot") || base.hasPrefix("img_") || base.hasPrefix("dsc") {
+            return false
+        }
+        let patterns = [
+            #"^\d+$"#,                                        // 000123
+            #"^[a-z]+[-_ ]?\d{3,}$"#,                         // frame_0001 · part-00042 · chunk12345
+            #"^[0-9a-f]{12,}$"#,                              // content hashes
+            #"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$"#,  // UUIDs
+        ]
+        return patterns.contains { base.range(of: $0, options: .regularExpression) != nil }
     }
 
     // MARK: Scan (cheap — stat only, recurses subfolders)
@@ -76,7 +160,7 @@ struct FilesSource: DataSource, Sendable {
             // Prune at the WALK level: skipDescendants() means nothing inside is ever yielded,
             // so it never becomes a Candidate / hits the ledger / sees inference.
             if vals?.isDirectory == true {
-                if Self.shouldPrune(url) { enumerator.skipDescendants() }
+                if Self.pruneReason(url) != nil { enumerator.skipDescendants() }
                 continue   // directories are never candidates themselves
             }
 
@@ -99,8 +183,23 @@ struct FilesSource: DataSource, Sendable {
             let candidate = Candidate(id: "file:\(url.path)", kind: .file, signature: signature, metadata: meta)
             rows.append((candidate, created?.timeIntervalSince1970 ?? mtime))
         }
-        // Newest first — nicer for incremental runs + manual testing.
-        return rows.sorted { $0.sortKey > $1.sortKey }.map(\.candidate)
+        // Newest first, then the caps (connector-limits decision, June 10):
+        //  • optional age cutoff (Downloads: 1 year — downloads age into junk; keepers elsewhere don't)
+        //  • per-directory cap (Downloads 100 / others 300) — the bulk-dump backstop
+        //  • per-root cap (newest 1,000, every root)
+        let cutoff = maxAge.map { Date().timeIntervalSince1970 - $0 }
+        var perDir: [String: Int] = [:]
+        var kept: [Candidate] = []
+        for row in rows.sorted(by: { $0.sortKey > $1.sortKey }) {
+            if kept.count >= Self.perRootCap { break }
+            if let cutoff, row.sortKey < cutoff { break }   // sorted → every later row is older
+            guard let path = row.candidate.metadata["path"] else { continue }
+            let dir = (path as NSString).deletingLastPathComponent
+            if perDir[dir, default: 0] >= perDirectoryCap { continue }
+            perDir[dir, default: 0] += 1
+            kept.append(row.candidate)
+        }
+        return kept
     }
 
     // MARK: Load (expensive — extract content)
@@ -232,6 +331,16 @@ enum FileRoot: Hashable, Identifiable {
         case .documents:        return "Documents"
         case .custom(let url):  return url.lastPathComponent
         }
+    }
+
+    /// Connector limits (decision June 10): Downloads is the junk accumulator — tighter caps,
+    /// plus a 1-year age cutoff (old downloads are noise; old Desktop/Documents files can be keepers).
+    var perDirectoryCap: Int { self == .downloads ? 100 : 300 }
+    var maxAge: TimeInterval? { self == .downloads ? 365 * 24 * 3_600 : nil }
+
+    /// The fully configured source for this root (nil if the system folder can't be resolved).
+    var source: FilesSource? {
+        url.map { FilesSource(root: $0, label: label, perDirectoryCap: perDirectoryCap, maxAge: maxAge) }
     }
 
     /// The three standard folders, in display order.

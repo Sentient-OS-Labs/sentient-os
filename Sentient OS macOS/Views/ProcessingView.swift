@@ -305,8 +305,8 @@ struct ProcessingView: View {
 
                 switch src {
                 case .files(let root):
-                    guard let url = root.url else { continue }
-                    try await runPass(FilesSource(root: url, label: root.label), pipeline: pipeline)
+                    guard let source = root.source else { continue }
+                    try await runPass(source, pipeline: pipeline)
                 case .whatsapp(let jids):
                     try await runPass(WhatsAppSource(chatJIDs: jids), pipeline: pipeline)
                 case .imessage(let guids):
