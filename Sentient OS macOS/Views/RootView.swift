@@ -3,8 +3,9 @@
 //  Sentient OS macOS
 //
 //  The home window. "Start Analysis" (the glow CTA) hands off to the full-screen ProcessingView;
-//  "View knowledge" opens the Database viewer. A #if DEBUG "Reset store" sits below.
-//  Dark, on-brand. Real onboarding arrives in Phase 2.
+//  "View knowledge" opens the Database viewer. Below: the dev controls (source picker +
+//  Reset store) — visible in ALL build configs until real Settings/onboarding ship
+//  (re-hide is part of the Phase-6 "Release strip" task). Dark, on-brand.
 //
 
 import SwiftUI
@@ -21,8 +22,7 @@ struct RootView: View {
     private static let modelPath = ModelLocator.resolve()
     private static let processingLimit: Int? = nil   // nil = process the whole folder
 
-    #if DEBUG
-    // The DEBUG source picker: which folders "Start Analysis" runs over. Named-folder toggles
+    // The dev source picker: which folders "Start Analysis" runs over. Named-folder toggles
     // persist across launches; custom folders are session-only (re-pick after a relaunch).
     @AppStorage("dbg.run.downloads") private var runDownloads = true
     @AppStorage("dbg.run.desktop")   private var runDesktop = true
@@ -41,12 +41,9 @@ struct RootView: View {
     // main debug area stays uncluttered.
     @State private var showMoreOptions = false
     @State private var fdaGranted = false
-    #endif
 
-    /// The sources "Start Analysis" will process. In DEBUG this is the picker's selection (folders
-    /// + DB sources); in release builds it's the three standard folders (real onboarding is Phase 2).
+    /// The sources "Start Analysis" will process: the picker's selection (folders + DB sources).
     private var selectedSources: [RunSource] {
-        #if DEBUG
         var s: [RunSource] = []
         if runDownloads { s.append(.files(.downloads)) }
         if runDesktop   { s.append(.files(.desktop)) }
@@ -61,12 +58,8 @@ struct RootView: View {
         }
         if runNotes && fdaGranted { s.append(.notes) }
         return s
-        #else
-        return FileRoot.standard.map { .files($0) }
-        #endif
     }
 
-    #if DEBUG
     /// The opt-in chats, decoded from the persisted comma-joined id lists (WhatsApp JIDs / iMessage GUIDs).
     private var selectedChatJIDs: Set<String> {
         Set(selectedChatsCSV.split(separator: ",").map(String.init))
@@ -74,7 +67,6 @@ struct RootView: View {
     private var selectedIMessageGUIDs: Set<String> {
         Set(selectedIMessageChatsCSV.split(separator: ",").map(String.init))
     }
-    #endif
 
     var body: some View {
         ZStack {
@@ -90,7 +82,6 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 560, minHeight: 640)
-        #if DEBUG
         .sheet(isPresented: $showChatPicker) {
             ChatPicker(sourceName: "WhatsApp",
                        loadChats: { try WhatsAppSource().listChats() },
@@ -107,7 +98,6 @@ struct RootView: View {
                 runIMessage = !newSel.isEmpty
             }
         }
-        #endif
     }
 
     private var home: some View {
@@ -133,9 +123,7 @@ struct RootView: View {
                 }
                 .buttonStyle(.bordered).controlSize(.large).tint(Theme.accent)
 
-                #if DEBUG
-                debugSection
-                #endif
+                devControls
 
                 VaultView(store: store)
                     .padding(.top, 14)
@@ -145,11 +133,10 @@ struct RootView: View {
         }
     }
 
-    #if DEBUG
-    private var debugSection: some View {
+    private var devControls: some View {
         VStack(spacing: 14) {
             Divider().overlay(Theme.stroke).padding(.vertical, 10)
-            Text("DEBUG").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
+            Text("DEV CONTROLS").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
 
             sourcePicker
 
@@ -371,5 +358,4 @@ struct RootView: View {
             resetResult = "Reset FAIL: \(error)"
         }
     }
-    #endif
 }
