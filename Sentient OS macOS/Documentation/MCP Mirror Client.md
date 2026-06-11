@@ -11,23 +11,22 @@ disposable copy.
 let mirror = MirrorClient.shared
 await mirror.isEnabled                 // tokens exist in the Keychain?
 let url = await mirror.enable()        // opt in → mints tokens → returns the share URL
-await mirror.shareURL                  // the "Copy MCP Link" value (read token), or nil
+await mirror.shareURL                  // the "Copy MCP Link" value, or nil
 try await mirror.push()                // zip the vault + replace the mirror (call after any change)
 let s = try await mirror.stats()       // {notesRead24h, toolCalls24h, lastAccess} for "Your AIs"
-try await mirror.deleteRemote()        // one-click delete (keeps tokens → stable URL on re-enable)
-await mirror.disable()                 // full opt-out: delete remote + forget tokens
+try await mirror.deleteRemote()        // one-click delete (keeps the token → stable URL on re-enable)
+await mirror.disable()                 // full opt-out: delete remote + forget the token
 ```
 
-## The two tokens (read/write split)
+## The single token
 
-No accounts, ever (Invariant 4). Each vault has two minted tokens, both in the Keychain:
+No accounts, ever (Invariant 4). Each vault has ONE minted token, in the Keychain. It lives
+in the share URL (`/u/<token>/mcp`) and authorizes everything — MCP reads AND push/delete/stats
+(no `Authorization` header). Tradeoff: anyone who sees the share URL can also overwrite or
+delete the vault; mitigated by no accounts, the 30-day lease, one-click delete, and the vault
+being PII-stripped.
 
-- **read token** — lives in the share URL (`/u/<read>/mcp`). Pasted into ChatGPT/Claude. Reads only.
-- **write token** — NEVER leaves this Mac. Sent as `Authorization: Bearer <write>` on
-  push/delete/stats. The server binds it on the first push (stores only its sha256), so a
-  leaked share URL can never replace or delete the vault.
-
-Lost tokens are a non-event: mint new ones, re-push; the orphaned cloud copy expires on its
+A lost token is a non-event: mint a new one, re-push; the orphaned cloud copy expires on its
 30-day lease.
 
 ## Sync

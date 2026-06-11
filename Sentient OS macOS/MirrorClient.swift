@@ -6,13 +6,13 @@
 //  persistent backend so the user's ChatGPT/Claude can read it over MCP. Opt-in, opt-out,
 //  one-click delete — the Mac's vault is always canonical; the mirror is a disposable copy.
 //
-//  IDENTITY = TWO TOKENS, NO ACCOUNTS (Invariant 4 + the read/write split):
-//   • read token  — lives in the share URL (mcp.sentient-os.ai/u/<read>/mcp); MCP reads only.
-//   • write token — NEVER leaves this Mac (Keychain); sent as `Authorization: Bearer <write>`
-//                   on push/delete/stats. The server binds it on the first push (stores only
-//                   its sha256). So a leaked share URL can never replace or delete the vault.
-//  Both are minted once, on opt-in, and kept in the Keychain. Losing them is a non-event:
-//  mint new ones, re-push, the orphaned cloud copy expires on its 30-day lease.
+//  IDENTITY = ONE TOKEN, NO ACCOUNTS (Invariant 4):
+//   A single random token in the share URL (mcp.sentient-os.ai/u/<token>/mcp) is the identity.
+//   It authorizes everything — MCP reads AND push/delete/stats — so push/delete carry no auth
+//   header. Tradeoff: anyone who sees the share URL can also overwrite/delete the vault;
+//   mitigated by no accounts, the 30-day lease, one-click delete, and the vault being
+//   PII-stripped. The token is minted once on opt-in and kept in the Keychain; losing it is a
+//   non-event (mint a new one, re-push; the orphaned cloud copy expires on its 30-day lease).
 //
 //  Sync = whole-vault zip-replace (Arch §7): POST /vault sends the entire vault as a zip
 //  (~KBs of markdown) on any change; DELETE /vault is the one-click delete.
@@ -55,23 +55,22 @@ actor MirrorClient {
 
     // MARK: Enable / disable
 
-    /// Whether the user has opted into the mirror (the tokens exist in the Keychain).
-    var isEnabled: Bool { Keychain.read(Self.readKey) != nil && Keychain.read(Self.writeKey) != nil }
+    /// Whether the user has opted into the mirror (the token exists in the Keychain).
+    var isEnabled: Bool { Keychain.read(Self.tokenKey) != nil }
 
-    /// Opt in: mint both tokens (idempotent — keeps existing ones so the share URL is stable).
+    /// Opt in: mint the token (idempotent — keeps an existing one so the share URL is stable).
     /// Returns the share URL.
     @discardableResult
     func enable() -> String {
-        if Keychain.read(Self.readKey) == nil { Keychain.set(Self.readKey, Self.mintToken()) }
-        if Keychain.read(Self.writeKey) == nil { Keychain.set(Self.writeKey, Self.mintToken()) }
+        if Keychain.read(Self.tokenKey) == nil { Keychain.set(Self.tokenKey, Self.mintToken()) }
         return shareURL!
     }
 
-    /// The user-facing MCP connector URL (read token), or nil if not enabled. This is what
-    /// "Copy MCP Link" copies and what gets pasted into ChatGPT/Claude.
+    /// The user-facing MCP connector URL, or nil if not enabled. This is what "Copy MCP Link"
+    /// copies and what gets pasted into ChatGPT/Claude.
     var shareURL: String? {
-        guard let read = Keychain.read(Self.readKey) else { return nil }
-        return "\(Self.baseURL)/u/\(read)/mcp"
+        guard let token = Keychain.read(Self.tokenKey) else { return nil }
+        return "\(Self.baseURL)/u/\(token)/mcp"
     }
 
     // MARK: Push / delete / stats
@@ -79,18 +78,15 @@ actor MirrorClient {
     /// Zip the local vault and replace the mirror with it. Renews the 30-day lease.
     /// No-op-safe to call after any vault change (initial gen, daily update, user edit).
     func push() async throws {
-        guard let read = Keychain.read(Self.readKey), let write = Keychain.read(Self.writeKey) else {
-            throw MirrorError.notEnabled
-        }
+        guard let token = Keychain.read(Self.tokenKey) else { throw MirrorError.notEnabled }
         let root = VaultGenerator.vaultRoot
         guard FileManager.default.fileExists(atPath: root.path) else { throw MirrorError.noVault }
 
         let zip = try Self.zipDirectory(root)
         defer { try? FileManager.default.removeItem(at: zip) }
 
-        var req = URLRequest(url: URL(string: "\(Self.baseURL)/u/\(read)/vault")!)
+        var req = URLRequest(url: URL(string: "\(Self.baseURL)/u/\(token)/vault")!)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(write)", forHTTPHeaderField: "Authorization")
         req.setValue("application/zip", forHTTPHeaderField: "Content-Type")
         req.timeoutInterval = 120
         let (data, resp) = try await URLSession.shared.upload(for: req, fromFile: zip)
@@ -98,33 +94,26 @@ actor MirrorClient {
     }
 
     /// The one-click delete — removes the cloud copy (and its access log). The local vault
-    /// is untouched. Tokens are kept so re-enabling reuses the same share URL.
+    /// is untouched. The token is kept so re-enabling reuses the same share URL.
     func deleteRemote() async throws {
-        guard let read = Keychain.read(Self.readKey), let write = Keychain.read(Self.writeKey) else {
-            throw MirrorError.notEnabled
-        }
-        var req = URLRequest(url: URL(string: "\(Self.baseURL)/u/\(read)/vault")!)
+        guard let token = Keychain.read(Self.tokenKey) else { throw MirrorError.notEnabled }
+        var req = URLRequest(url: URL(string: "\(Self.baseURL)/u/\(token)/vault")!)
         req.httpMethod = "DELETE"
-        req.setValue("Bearer \(write)", forHTTPHeaderField: "Authorization")
         let (data, resp) = try await URLSession.shared.data(for: req)
         try Self.check(resp, data)
     }
 
-    /// Full opt-out: delete the cloud copy AND forget the tokens (a fresh opt-in later mints
+    /// Full opt-out: delete the cloud copy AND forget the token (a fresh opt-in later mints
     /// a new share URL). Best-effort on the network call — local forget always happens.
     func disable() async {
         try? await deleteRemote()
-        Keychain.delete(Self.readKey)
-        Keychain.delete(Self.writeKey)
+        Keychain.delete(Self.tokenKey)
     }
 
     /// The "your AIs read N notes" numbers for the home screen. nil if not enabled / no vault yet.
     func stats() async throws -> Stats {
-        guard let read = Keychain.read(Self.readKey), let write = Keychain.read(Self.writeKey) else {
-            throw MirrorError.notEnabled
-        }
-        var req = URLRequest(url: URL(string: "\(Self.baseURL)/u/\(read)/stats")!)
-        req.setValue("Bearer \(write)", forHTTPHeaderField: "Authorization")
+        guard let token = Keychain.read(Self.tokenKey) else { throw MirrorError.notEnabled }
+        var req = URLRequest(url: URL(string: "\(Self.baseURL)/u/\(token)/stats")!)
         let (data, resp) = try await URLSession.shared.data(for: req)
         try Self.check(resp, data)
         let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
@@ -136,8 +125,7 @@ actor MirrorClient {
 
     // MARK: Helpers
 
-    private static let readKey = "mcp.mirror.readToken"
-    private static let writeKey = "mcp.mirror.writeToken"
+    private static let tokenKey = "mcp.mirror.token"
 
     /// 32 random bytes → base64url (43 chars, no padding) — inside the server's [32,64] window
     /// and URL-safe, so it drops straight into the path.
