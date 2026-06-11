@@ -121,7 +121,8 @@ enum SelfTest {
         }
 
         // Chat-list modes: deterministic, no model — verify listChats() enumeration (and, for
-        // iMessage, that names resolved instead of raw +1415… handles).
+        // iMessage, that names resolved instead of raw +1415… handles). The WhatsApp flavor also
+        // prints the session-type distribution + what the community filters removed (counts only).
         if mode == "chats" || mode == "imchats" {
             do {
                 let list = mode == "chats" ? try WhatsAppSource().listChats()
@@ -129,6 +130,25 @@ enum SelfTest {
                 emit("active chats in the last \(ChatWindowing.lookbackDays) days: \(list.count)\n")
                 for c in list.prefix(count > 6 ? count : 20) {
                     emit("  [\(c.isGroup ? "group" : "DM  ")] \(c.name)  —  \(c.messageCount) msgs · last \(c.lastActive)")
+                }
+                if mode == "chats" {
+                    let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: WhatsAppSource().dbPath)
+                    defer { try? FileManager.default.removeItem(at: tempDir) }
+                    let reader = try SQLiteReader(path: dbURL.path)
+                    var dist: [(Int64, Int64)] = []
+                    try reader.forEachRow("SELECT ZSESSIONTYPE, COUNT(*) FROM ZWACHATSESSION GROUP BY 1 ORDER BY 1") { r in
+                        dist.append((r.int(0), r.int(1)))
+                    }
+                    var twins: Int64 = 0
+                    try reader.forEachRow("""
+                        SELECT COUNT(*) FROM ZWACHATSESSION s
+                        WHERE s.ZSESSIONTYPE = 1 AND s.ZPARTNERNAME IN
+                            (SELECT ZPARTNERNAME FROM ZWACHATSESSION
+                             WHERE ZSESSIONTYPE = 4 AND ZPARTNERNAME IS NOT NULL)
+                        """) { r in twins = r.int(0) }
+                    emit("\nsession types (0=DM 1=group 2=broadcast 3=status 4=community): "
+                         + dist.map { "\($0.0)=\($0.1)" }.joined(separator: " · "))
+                    emit("community filter removes: \(dist.first { $0.0 == 4 }?.1 ?? 0) homes + \(twins) announcement twins")
                 }
             } catch { emit("listChats FAILED: \(error)") }
             return

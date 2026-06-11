@@ -83,6 +83,18 @@ enum ChatWindowing {
         return out
     }
 
+    /// "Alex, Sam & 2 others" — display name for a group without an explicit one, synthesized
+    /// from its CURRENT participants (both chat sources use this; members who left are excluded
+    /// by the caller).
+    static func groupName(of participants: [String]) -> String {
+        switch participants.count {
+        case 0:  return "Group chat"
+        case 1:  return participants[0]
+        case 2:  return "\(participants[0]) & \(participants[1])"
+        default: return "\(participants[0]), \(participants[1]) & \(participants.count - 2) others"
+        }
+    }
+
     private static let df: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f
     }()
