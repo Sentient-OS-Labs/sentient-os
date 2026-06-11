@@ -189,12 +189,14 @@ struct WhatsAppSource: DataSource, Sendable {
         return chat.name   // DM: the other party is the chat partner
     }
 
-    /// A real display name, or nil if it's actually an opaque WhatsApp JID/LID blob. Real names are
-    /// short or contain spaces; LIDs are long, unbroken, and contain '/' (e.g. "CIW9/tAGIA…").
+    /// A real display name, or nil if it's actually an opaque WhatsApp JID/LID blob. LID blobs
+    /// are long, UNBROKEN base64-ish tokens (e.g. "CIW9/tAGIA…") — they never contain spaces.
+    /// Anything multi-word is a real name, slashes and all ("Amrit Sanju Uncle T34/1803" is a
+    /// real saved contact; rejecting on '/' alone showed the raw number instead).
     private static func cleanName(_ s: String?) -> String? {
         guard let s = s?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
-        if s.contains("/") { return nil }                    // LID/JID blobs contain '/'
-        if s.count > 24 && !s.contains(" ") { return nil }   // long unbroken token → not a real name
+        if s.contains(" ") { return s }                      // multi-word → a real name
+        if s.contains("/") || s.count > 24 { return nil }    // single long/slashed token → LID/JID blob
         return s
     }
 
