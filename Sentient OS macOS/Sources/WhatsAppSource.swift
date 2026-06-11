@@ -26,6 +26,23 @@ struct WhatsAppSource: DataSource, Sendable {
 
     init(chatJIDs: Set<String>? = nil) { self.chatJIDs = chatJIDs }
 
+    /// Sessions worth analyzing — a WHITELIST of DMs (0) and real groups (1), so broadcast
+    /// lists (2), status (3), community homes (4), and whatever WhatsApp invents next are
+    /// excluded automatically. The second clause removes community ANNOUNCEMENT channels:
+    /// they're stored as ordinary type-1 groups, but always wear the community's exact
+    /// ZPARTNERNAME — a name-twin of a type-4 session ([MEASURED]: the only marker in this
+    /// schema; no parent-JID column exists, JID prefixes proved unreliable). Community
+    /// sub-groups are indistinguishable from normal groups and deliberately stay (they're
+    /// real conversations; the per-chat opt-in gates them anyway).
+    /// ⚠️ The IS NOT NULL inside the subquery is load-bearing: one NULL there and SQL's
+    /// NOT IN semantics silently hide EVERY group.
+    private static let sessionFilter = """
+        s.ZSESSIONTYPE IN (0, 1)
+            AND NOT (s.ZSESSIONTYPE = 1 AND s.ZPARTNERNAME IN
+                (SELECT ZPARTNERNAME FROM ZWACHATSESSION
+                 WHERE ZSESSIONTYPE = 4 AND ZPARTNERNAME IS NOT NULL))
+        """
+
     /// Active chats (text messages within the lookback) for the picker — newest first, with counts.
     /// Its own WAL-safe copy → query → delete.
     func listChats() throws -> [ChatInfo] {
@@ -39,13 +56,14 @@ struct WhatsAppSource: DataSource, Sendable {
             SELECT s.ZCONTACTJID, s.ZPARTNERNAME, COUNT(m.Z_PK), MAX(m.ZMESSAGEDATE)
             FROM ZWAMESSAGE m JOIN ZWACHATSESSION s ON m.ZCHATSESSION = s.Z_PK
             WHERE m.ZTEXT IS NOT NULL AND length(m.ZTEXT) > 0 AND m.ZMESSAGEDATE >= \(floor)
+              AND \(Self.sessionFilter)
             GROUP BY s.Z_PK
             ORDER BY MAX(m.ZMESSAGEDATE) DESC
             """) { r in
             let jid = r.text(0) ?? ""
             guard !jid.isEmpty else { return }
             out.append(ChatInfo(id: jid,
-                                name: r.text(1) ?? Self.handle(jid),
+                                name: Self.displayName(r.text(1), jid: jid),
                                 isGroup: jid.hasSuffix("@g.us"),
                                 messageCount: Int(r.int(2)),
                                 lastActive: Date(timeIntervalSinceReferenceDate: r.double(3))))
@@ -73,15 +91,18 @@ struct WhatsAppSource: DataSource, Sendable {
         defer { try? FileManager.default.removeItem(at: tempDir) }   // delete the plaintext copy immediately
         let reader = try SQLiteReader(path: dbURL.path)
 
-        // Chat sessions → name + DM/group.
+        // Chat sessions → name + DM/group. The session filter here also drops community noise
+        // from scan itself — so a stale opted-in JID (or the self-test's all-chats mode) can
+        // never window an excluded session.
         var chats: [Int64: Chat] = [:]
-        try reader.forEachRow("SELECT Z_PK, ZPARTNERNAME, ZCONTACTJID FROM ZWACHATSESSION") { r in
+        try reader.forEachRow("SELECT s.Z_PK, s.ZPARTNERNAME, s.ZCONTACTJID FROM ZWACHATSESSION s WHERE \(Self.sessionFilter)") { r in
             let jid = r.text(2) ?? ""
-            let name = r.text(1) ?? (jid.isEmpty ? "Unknown chat" : Self.handle(jid))
-            chats[r.int(0)] = Chat(pk: r.int(0), jid: jid, name: name, isGroup: jid.hasSuffix("@g.us"))
+            chats[r.int(0)] = Chat(pk: r.int(0), jid: jid,
+                                   name: Self.displayName(r.text(1), jid: jid),
+                                   isGroup: jid.hasSuffix("@g.us"))
         }
 
-        // Text messages within the limits (90-day floor AND newest-200k cap — the inner
+        // Text messages within the limits (90-day floor AND newest-`maxMessages` cap — the inner
         // newest-first LIMIT applies the cap across ALL chats; the outer ORDER restores
         // per-chat ascending iteration), oldest → newest per chat.
         let floor = ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate
@@ -154,4 +175,12 @@ struct WhatsAppSource: DataSource, Sendable {
 
     /// Phone/handle from a JID like "14155551234@s.whatsapp.net" → "14155551234" (chat-name fallback only).
     private static func handle(_ jid: String) -> String { String(jid.prefix { $0 != "@" }) }
+
+    /// Chat display name: validated partner name → phone handle — but NEVER an opaque @lid
+    /// identifier (a privacy-mode chat without a saved name shows a clean generic instead).
+    private static func displayName(_ partnerName: String?, jid: String) -> String {
+        if let n = cleanName(partnerName) { return n }
+        if jid.isEmpty || jid.hasSuffix("@lid") { return "Unknown chat" }
+        return handle(jid)
+    }
 }
