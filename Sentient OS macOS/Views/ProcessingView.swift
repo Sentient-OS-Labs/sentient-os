@@ -15,12 +15,22 @@ import SwiftUI
 /// own pass through the pipeline. (iMessage / Notes slot in here as they land.)
 enum RunSource: Hashable {
     case files(FileRoot)
-    case whatsapp(chatJIDs: Set<String>)   // the opt-in chats to analyze
+    case whatsapp(chatJIDs: Set<String>)    // the opt-in chats to analyze
+    case imessage(chatGUIDs: Set<String>)   // the opt-in chats to analyze
 
     var label: String {
         switch self {
         case .files(let root): return root.label
         case .whatsapp:        return "WhatsApp"
+        case .imessage:        return "iMessage"
+        }
+    }
+
+    /// Chat sources feed the model big conversation windows → they need the large KV cache.
+    var isChatSource: Bool {
+        switch self {
+        case .whatsapp, .imessage: return true
+        case .files:               return false
         }
     }
 }
@@ -276,7 +286,7 @@ struct ProcessingView: View {
         do {
             // Chat windows are big (and prompt scaffolding is sizeable); size the KV cache with
             // comfortable headroom so a window + prompt can never overflow (we have the RAM).
-            let needsBigContext = sources.contains { if case .whatsapp = $0 { return true }; return false }
+            let needsBigContext = sources.contains(where: \.isChatSource)
             let engine = Engine(modelPath: modelPath, maxNumTokens: needsBigContext ? 16384 : 4096)
             try await engine.load()
             self.engine = engine
@@ -297,6 +307,8 @@ struct ProcessingView: View {
                     try await runPass(FilesSource(root: url, label: root.label), pipeline: pipeline)
                 case .whatsapp(let jids):
                     try await runPass(WhatsAppSource(chatJIDs: jids), pipeline: pipeline)
+                case .imessage(let guids):
+                    try await runPass(iMessageSource(chatGUIDs: guids), pipeline: pipeline)
                 }
             }
 

@@ -29,8 +29,11 @@ struct RootView: View {
     @AppStorage("dbg.run.documents") private var runDocuments = true
     @AppStorage("dbg.run.whatsapp")  private var runWhatsApp = false   // is WhatsApp active this run (chip lit)
     @AppStorage("dbg.whatsapp.chats") private var selectedChatsCSV = ""  // opt-in chat JIDs, comma-joined
+    @AppStorage("dbg.run.imessage")  private var runIMessage = false   // is iMessage active this run (chip lit)
+    @AppStorage("dbg.imessage.chats") private var selectedIMessageChatsCSV = ""  // opt-in chat GUIDs, comma-joined
     @State private var customRoots: [URL] = []
     @State private var showChatPicker = false
+    @State private var showIMessagePicker = false
     @State private var resetResult: String?
     @State private var isResetting = false
     // "More Options" — advanced debug (Full Disk Access + the DB sources), tucked away so the
@@ -48,8 +51,12 @@ struct RootView: View {
         if runDesktop   { s.append(.files(.desktop)) }
         if runDocuments { s.append(.files(.documents)) }
         s.append(contentsOf: customRoots.map { .files(.custom($0)) })
-        if runWhatsApp && fdaGranted && !selectedChatJIDs.isEmpty {   // never run a DB source without FDA + a chat selection
+        // Never run a DB source without FDA + a chat selection.
+        if runWhatsApp && fdaGranted && !selectedChatJIDs.isEmpty {
             s.append(.whatsapp(chatJIDs: selectedChatJIDs))
+        }
+        if runIMessage && fdaGranted && !selectedIMessageGUIDs.isEmpty {
+            s.append(.imessage(chatGUIDs: selectedIMessageGUIDs))
         }
         return s
         #else
@@ -58,9 +65,12 @@ struct RootView: View {
     }
 
     #if DEBUG
-    /// The opt-in WhatsApp chats, decoded from the persisted comma-joined JID list.
+    /// The opt-in chats, decoded from the persisted comma-joined id lists (WhatsApp JIDs / iMessage GUIDs).
     private var selectedChatJIDs: Set<String> {
         Set(selectedChatsCSV.split(separator: ",").map(String.init))
+    }
+    private var selectedIMessageGUIDs: Set<String> {
+        Set(selectedIMessageChatsCSV.split(separator: ",").map(String.init))
     }
     #endif
 
@@ -80,9 +90,19 @@ struct RootView: View {
         .frame(minWidth: 560, minHeight: 640)
         #if DEBUG
         .sheet(isPresented: $showChatPicker) {
-            WhatsAppChatPicker(initialSelection: selectedChatJIDs) { newSel in
+            ChatPicker(sourceName: "WhatsApp",
+                       loadChats: { try WhatsAppSource().listChats() },
+                       initialSelection: selectedChatJIDs) { newSel in
                 selectedChatsCSV = newSel.sorted().joined(separator: ",")
                 runWhatsApp = !newSel.isEmpty   // lit only if at least one chat is chosen
+            }
+        }
+        .sheet(isPresented: $showIMessagePicker) {
+            ChatPicker(sourceName: "iMessage",
+                       loadChats: { try iMessageSource().listChats() },
+                       initialSelection: selectedIMessageGUIDs) { newSel in
+                selectedIMessageChatsCSV = newSel.sorted().joined(separator: ",")
+                runIMessage = !newSel.isEmpty
             }
         }
         #endif
@@ -201,7 +221,17 @@ struct RootView: View {
                     }
                 }
                 chooseFolderChip
-                whatsAppChip   // DB source — enabled once Full Disk Access is granted (see More Options)
+                // DB sources — enabled once Full Disk Access is granted (see More Options).
+                chatSourceChip("WhatsApp", systemImage: "message.fill",
+                               isOn: runWhatsApp && fdaGranted && !selectedChatJIDs.isEmpty,
+                               count: selectedChatJIDs.count,
+                               turnOff: { runWhatsApp = false },
+                               openPicker: { showChatPicker = true })
+                chatSourceChip("iMessage", systemImage: "bubble.left.fill",
+                               isOn: runIMessage && fdaGranted && !selectedIMessageGUIDs.isEmpty,
+                               count: selectedIMessageGUIDs.count,
+                               turnOff: { runIMessage = false },
+                               openPicker: { showIMessagePicker = true })
             }
             .frame(maxWidth: 420)
 
@@ -210,32 +240,33 @@ struct RootView: View {
                     .font(.caption2).foregroundStyle(Theme.faint)
             }
             if !fdaGranted {
-                Text("WhatsApp needs Full Disk Access — grant it in More Options below.")
+                Text("WhatsApp & iMessage need Full Disk Access — grant it in More Options below.")
                     .font(.caption2).foregroundStyle(Theme.faint)
             }
         }
         .onAppear { fdaGranted = Permissions.hasFullDiskAccess() }
     }
 
-    /// WhatsApp source chip. Tap when OFF → opens the chat picker → Done lights it up (with the
-    /// chat count). Tap when ON → turns it off (keeps the selection for next time).
-    private var whatsAppChip: some View {
-        let count = selectedChatJIDs.count
-        let on = runWhatsApp && fdaGranted && count > 0
-        return HStack(spacing: 6) {
-            Image(systemName: on ? "checkmark.circle.fill" : "message.fill").font(.system(size: 11))
-            Text(on ? "WhatsApp · \(count)" : "WhatsApp").font(.caption.weight(.medium)).lineLimit(1)
+    /// A chat-DB source chip (WhatsApp / iMessage). Tap when OFF → opens that source's chat
+    /// picker → Done lights it up (with the chat count). Tap when ON → turns it off (keeps the
+    /// selection for next time).
+    private func chatSourceChip(_ name: String, systemImage: String, isOn: Bool, count: Int,
+                                turnOff: @escaping () -> Void,
+                                openPicker: @escaping () -> Void) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: isOn ? "checkmark.circle.fill" : systemImage).font(.system(size: 11))
+            Text(isOn ? "\(name) · \(count)" : name).font(.caption.weight(.medium)).lineLimit(1)
         }
-        .foregroundStyle(on ? .black : (fdaGranted ? Theme.secondary : Theme.faint))
+        .foregroundStyle(isOn ? .black : (fdaGranted ? Theme.secondary : Theme.faint))
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 11).padding(.vertical, 6)
-        .background(on ? Theme.accent : Color.white.opacity(0.06), in: Capsule())
-        .overlay(Capsule().strokeBorder(on ? .clear : Theme.stroke, lineWidth: 1))
+        .background(isOn ? Theme.accent : Color.white.opacity(0.06), in: Capsule())
+        .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.stroke, lineWidth: 1))
         .contentShape(Capsule())
         .onTapGesture {
             guard fdaGranted else { return }
-            if on { runWhatsApp = false }       // ON → off (selection kept)
-            else { showChatPicker = true }      // OFF → choose chats
+            if isOn { turnOff() }          // ON → off (selection kept)
+            else { openPicker() }          // OFF → choose chats
         }
     }
 

@@ -1,33 +1,38 @@
 //
-//  WhatsAppChatPicker.swift
+//  ChatPicker.swift
 //  Sentient OS macOS
 //
-//  The opt-in "Choose chats & groups" sheet. Lists the WhatsApp chats ACTIVE within the scan
-//  window (newest first, with message counts), with search + per-chat checkboxes + bulk
-//  All-DMs / All-groups / Clear. "Done" hands the selected chat JIDs back to the caller, which
-//  persists them and lights up the WhatsApp source chip.
+//  The opt-in "Choose chats & groups" sheet, shared by the chat sources (WhatsApp + iMessage).
+//  Lists the chats ACTIVE within the scan window (newest first, with message counts), with
+//  search + per-chat checkboxes + bulk All-DMs / All-groups / Clear. "Done" hands the selected
+//  chat ids (JIDs / GUIDs) back to the caller, which persists them and lights up the source chip.
 //
 
 import SwiftUI
 
-struct WhatsAppChatPicker: View {
+struct ChatPicker: View {
+    let sourceName: String                                   // "WhatsApp" / "iMessage" — for error/empty states
+    let loadChats: @Sendable () throws -> [ChatInfo]
     let initialSelection: Set<String>
     var onDone: (Set<String>) -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @State private var chats: [WhatsAppSource.ChatInfo] = []
+    @State private var chats: [ChatInfo] = []
     @State private var selection: Set<String>
     @State private var search = ""
     @State private var loaded = false
     @State private var loadError: String?
 
-    init(initialSelection: Set<String>, onDone: @escaping (Set<String>) -> Void) {
+    init(sourceName: String, loadChats: @escaping @Sendable () throws -> [ChatInfo],
+         initialSelection: Set<String>, onDone: @escaping (Set<String>) -> Void) {
+        self.sourceName = sourceName
+        self.loadChats = loadChats
         self.initialSelection = initialSelection
         self.onDone = onDone
         _selection = State(initialValue: initialSelection)
     }
 
-    private var filtered: [WhatsAppSource.ChatInfo] {
+    private var filtered: [ChatInfo] {
         search.isEmpty ? chats : chats.filter { $0.name.localizedCaseInsensitiveContains(search) }
     }
 
@@ -48,7 +53,7 @@ struct WhatsAppChatPicker: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Choose chats & groups").font(.serif(24)).italic().foregroundStyle(.white)
             Text(loaded
-                 ? "\(selection.count) selected · \(chats.count) active in the last \(WhatsAppSource.lookbackDays) days"
+                 ? "\(selection.count) selected · \(chats.count) active in the last \(ChatWindowing.lookbackDays) days"
                  : "Reading your chats…")
                 .font(.footnote).foregroundStyle(Theme.secondary)
         }
@@ -65,8 +70,8 @@ struct WhatsAppChatPicker: View {
             .padding(.horizontal, 12).padding(.vertical, 9).glassCard(radius: 10)
 
             HStack(spacing: 7) {
-                bulk("All DMs")    { for c in filtered where !c.isGroup { selection.insert(c.jid) } }
-                bulk("All groups") { for c in filtered where c.isGroup  { selection.insert(c.jid) } }
+                bulk("All DMs")    { for c in filtered where !c.isGroup { selection.insert(c.id) } }
+                bulk("All groups") { for c in filtered where c.isGroup  { selection.insert(c.id) } }
                 bulk("Clear")      { selection.removeAll() }
                 Spacer()
             }
@@ -88,7 +93,7 @@ struct WhatsAppChatPicker: View {
         if let loadError {
             centered {
                 Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
-                Text("Couldn't read WhatsApp").foregroundStyle(.white)
+                Text("Couldn't read \(sourceName)").foregroundStyle(.white)
                 Text(loadError).font(.caption).foregroundStyle(Theme.faint)
                     .multilineTextAlignment(.center).padding(.horizontal, 30)
             }
@@ -97,7 +102,7 @@ struct WhatsAppChatPicker: View {
         } else if chats.isEmpty {
             centered {
                 Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(Theme.faint)
-                Text("No active chats in the last \(WhatsAppSource.lookbackDays) days").foregroundStyle(Theme.secondary)
+                Text("No active chats in the last \(ChatWindowing.lookbackDays) days").foregroundStyle(Theme.secondary)
             }
         } else {
             ScrollView {
@@ -109,8 +114,8 @@ struct WhatsAppChatPicker: View {
         }
     }
 
-    private func row(_ chat: WhatsAppSource.ChatInfo) -> some View {
-        let on = selection.contains(chat.jid)
+    private func row(_ chat: ChatInfo) -> some View {
+        let on = selection.contains(chat.id)
         return HStack(spacing: 12) {
             Image(systemName: on ? "checkmark.circle.fill" : "circle")
                 .font(.system(size: 18)).foregroundStyle(on ? Theme.accent : Theme.faint)
@@ -129,7 +134,7 @@ struct WhatsAppChatPicker: View {
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
             .strokeBorder(on ? Theme.accent.opacity(0.5) : Color.white.opacity(0.06), lineWidth: 1))
         .contentShape(Rectangle())
-        .onTapGesture { if on { selection.remove(chat.jid) } else { selection.insert(chat.jid) } }
+        .onTapGesture { if on { selection.remove(chat.id) } else { selection.insert(chat.id) } }
     }
 
     private var footer: some View {
@@ -155,7 +160,8 @@ struct WhatsAppChatPicker: View {
     private func load() async {
         guard !loaded else { return }
         do {
-            chats = try await Task.detached { try WhatsAppSource().listChats() }.value
+            let loader = loadChats
+            chats = try await Task.detached { try loader() }.value
         } catch {
             loadError = "\(error)"
         }

@@ -84,5 +84,9 @@ final class SQLiteReader {
             guard sqlite3_column_type(stmt, i) != SQLITE_NULL, let c = sqlite3_column_text(stmt, i) else { return nil }
             return String(cString: c)
         }
+        func blob(_ i: Int32) -> Data? {
+            guard sqlite3_column_type(stmt, i) != SQLITE_NULL, let p = sqlite3_column_blob(stmt, i) else { return nil }
+            return Data(bytes: p, count: Int(sqlite3_column_bytes(stmt, i)))
+        }
     }
 }
