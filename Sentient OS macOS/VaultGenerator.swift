@@ -16,25 +16,11 @@
 //  Key methods:
 //   - generate(summaries:resume:onProgress:)  → the agentic build, returns stats
 //   - vaultRoot                               → ~/Sentient OS -- The Vault
-//   - writeWelcomeBriefing()                  → initial gen's second act (For You day one)
 //
 //  Doc: Documentation/Vault Generation (Stage 2).md
 //
 
 import Foundation
-
-/// Where For You artifacts live — `~/Library/Application Support/SentientOS/Briefings/`
-/// [STARTING POINT], deliberately outside the vault (briefings are artifacts we generate,
-/// not the user's knowledge base — they must never ride the mirror push). Written by the
-/// welcome briefing today; proactive intelligence (rebuilt separately) writes here next.
-enum Briefings {
-    static var dir: URL {
-        let d = URL.applicationSupportDirectory
-            .appendingPathComponent("SentientOS/Briefings", isDirectory: true)
-        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
-        return d
-    }
-}
 
 actor VaultGenerator {
 
@@ -168,48 +154,6 @@ actor VaultGenerator {
                       inputTokens: envelope.inputTokens ?? 0,
                       outputTokens: envelope.outputTokens ?? 0,
                       vaultPath: root.path)
-    }
-
-    /// The welcome briefing — initial gen's second act ("here's what I learned about you"),
-    /// For You's day-one artifact. A cheap medium-effort pass over the freshly built vault that lands
-    /// ONE .md in the Briefings folder (outside the vault — it never rides the mirror push).
-    /// Best-effort: a failure logs and moves on; the vault itself is already safe on disk.
-    func writeWelcomeBriefing() async {
-        let date: String = {
-            let f = ISO8601DateFormatter(); f.formatOptions = [.withFullDate]
-            return f.string(from: Date())
-        }()
-        let file = Briefings.dir.appendingPathComponent("\(date) — What I learned about you.md")
-
-        var inv = CodexCLI.Invocation(prompt: """
-            You just finished organizing a person's entire digital life into the Obsidian-style \
-            knowledge vault that is your working directory. Now write them a welcome.
-
-            Read the root README.md first, then explore a handful of the most interesting notes \
-            (be selective, not exhaustive). Then write ONE markdown briefing to \
-            this exact path:
-            \(file.path)
-
-            Shape: title "What I learned about you". Open with a warm, specific portrait of who \
-            they are — a few real paragraphs, addressed to them as "you" (never "the user"). \
-            Then 3–5 delightful cross-domain connections you noticed that they might not have \
-            seen themselves (the screenshot trail that matches a note, the plan echoed across \
-            chats…). Close with one short paragraph on what happens next: their vault now stays \
-            current automatically, and their other AIs can read it the moment they connect. \
-            Specific beats flattering; true beats complete. Never include raw private specifics.
-
-            When the briefing is written, reply with one line: DONE.
-            """)
-        inv.sandbox = .workspaceWrite
-        inv.cwd = Self.vaultRoot.path
-        inv.addDirs = [Briefings.dir.path]
-        inv.timeout = 600
-        do {
-            _ = try await CodexCLI.shared.run(inv)
-            Log("VaultGenerator: welcome briefing → \(file.lastPathComponent)")
-        } catch {
-            Log("VaultGenerator: welcome briefing failed — \(error)")
-        }
     }
 
     /// Count the .md notes (and folders containing them) under a directory.

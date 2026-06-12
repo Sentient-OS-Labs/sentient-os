@@ -54,14 +54,6 @@ Small `UNUserNotificationCenter` wrapper (`now(title:body:)` only, for now). Per
 requested lazily on first use (the real ask moves into onboarding); suppressed entirely under
 `SENTIENT_SELFTEST`. Quiet by design — no-op runs never notify.
 
-## The welcome briefing
-
-Initial generation's second act (`VaultGenerator.writeWelcomeBriefing()`): a cheap medium-effort pass
-over the freshly built vault that writes "What I learned about you" (portrait + 3–5
-cross-domain connections + what happens next) into the **Briefings folder**
-(`~/Library/Application Support/SentientOS/Briefings/` — deliberately OUTSIDE the vault, so
-For You artifacts never ride the mirror push). Best-effort, off the UI path, fired alongside
-the post-gen mirror push.
 
 ## Self-test (a real cloud call — it spends a little budget)
 

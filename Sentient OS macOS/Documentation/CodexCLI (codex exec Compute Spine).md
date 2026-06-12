@@ -16,7 +16,7 @@ piggybacks on the user's own Codex CLI (their ChatGPT subscription pays). Replac
 
 `Invocation`: `prompt` (always over **stdin**, never argv) · `effort` (`.high` = initial gen,
 `.medium` = everything daily) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` ·
-`addDirs` (extra writable roots, e.g. Briefings) · `webSearch` · `outputSchema` (JSON-Schema
+`addDirs` (extra writable roots) · `webSearch` · `outputSchema` (JSON-Schema
 string → temp file → `--output-schema`) · `resumeSessionID` · `timeout` (default 1 h).
 
 `Envelope`: `result` (final agent message) · `sessionID` (thread id — the resume handle) ·
@@ -59,7 +59,7 @@ ChatGPT-plan limit message is still unverified — refine the markers during dog
 |---|---|
 | GUI-spawnable, sanitized env | `env -i HOME USER PATH=system` + absolute path → PIGGYBACK_OK. Auth = `~/.codex/auth.json` (file, not Keychain), no TTY. |
 | Agentic file-writing, headless | `-s workspace-write -C <dir>` wrote exact-content files, zero prompts; `file_change` events stream per-file progress |
-| `--add-dir` | wrote outside cwd into the add-dir'd folder (the Briefings pattern) |
+| `--add-dir` | wrote outside cwd into the add-dir'd folder (extra writable root) |
 | `--output-schema` | clean conforming JSON for the proactive `{time, text}` shape |
 | Resume | same thread id, full memory; workspace = process cwd (see above) |
 | Web search | `-c tools.web_search=true` → `web_search` items, correct live answer |
