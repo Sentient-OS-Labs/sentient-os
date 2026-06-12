@@ -71,8 +71,9 @@ ChatGPT-plan limit message is still unverified — refine the markers during dog
 - Sessions persist in `~/.codex/sessions/` (on-device, user-owned — same story as Claude
   Code's `~/.claude/`). `--ephemeral` exists if a job should ever skip persistence; nothing
   uses it today because resume is worth more.
-- The direct-API fallback (`VaultGenerator.generateDirect`, Anthropic key in `Secrets.swift`)
-  does NOT route through this spine; its fate belongs to the free-tier decision.
+- This spine is the ONLY cloud-model path in the app (the old direct-Anthropic-API fallback
+  and `Secrets.swift` were deleted June 11 — git history has them). No codex = no cloud
+  organize until the free tier ships.
 
 ## Self-test
 

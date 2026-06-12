@@ -3,7 +3,7 @@
 //  Sentient OS macOS
 //
 //  The Stage-2 home-screen surface: the "Create Knowledge Vault" glow CTA, a simple working
-//  state while Opus 4.8 organizes your life in the cloud (the *fancy* processing UX comes later),
+//  state while your AI organizes your life in the cloud (the *fancy* processing UX comes later),
 //  and a done state that reveals the vault in Finder. Drives VaultGenerator (Arch §8).
 //
 //  Vault is written to ~/Sentient OS -- The Vault/.
@@ -16,12 +16,11 @@ import AppKit
 @MainActor
 @Observable
 final class VaultModel {
-    enum Phase: Equatable { case idle, gathering, calling, receiving, writing, materializing, done, failed }
+    enum Phase: Equatable { case idle, gathering, calling, writing, materializing, done, failed }
 
     var phase: Phase = .idle
     var summaryCount = 0
-    var chars = 0                                          // direct route: streamed chars
-    var notes = 0                                          // agentic route: .md files written so far
+    var notes = 0                                          // .md files written so far
     var result: VaultGenerator.Result?
     var errorMsg: String?
     /// Set when an agentic run hit a usage limit — "Try again" resumes that session
@@ -33,7 +32,7 @@ final class VaultModel {
     }
 
     func run(_ store: Store) async {
-        errorMsg = nil; chars = 0; notes = 0; phase = .gathering
+        errorMsg = nil; notes = 0; phase = .gathering
         let summaries = await store.survivorSummaries()
         guard !summaries.isEmpty else { phase = .idle; return }
         phase = .calling
@@ -43,7 +42,6 @@ final class VaultModel {
                     guard let self else { return }
                     switch p {
                     case .calling:          self.phase = .calling
-                    case .receiving(let c): self.chars = c; self.phase = .receiving
                     case .writing(let n):   self.notes = n; self.phase = .writing
                     case .materializing:    self.phase = .materializing
                     case .gathering:        break
@@ -118,10 +116,6 @@ struct VaultView: View {
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             Text("This takes a few minutes.")
                 .font(.caption2).foregroundStyle(Theme.faint)
-            if model.phase == .receiving {
-                Text("\(model.chars.formatted()) characters woven…")
-                    .font(.system(.caption2, design: .monospaced)).foregroundStyle(Theme.secondary)
-            }
             if model.phase == .writing && model.notes > 0 {
                 Text("\(model.notes) notes written…")
                     .font(.system(.caption2, design: .monospaced)).foregroundStyle(Theme.secondary)
@@ -167,8 +161,8 @@ struct VaultView: View {
     private var primaryLine: String {
         switch model.phase {
         case .gathering:           return "Gathering your summaries…"
-        case .calling, .receiving: return "Your AI is thinking deeply across your whole life."
-        case .writing:             return "Your AI is writing your knowledge base, note by note."
+        case .calling: return "Your AI is thinking deeply across your whole life."
+        case .writing: return "Your AI is writing your knowledge base, note by note."
         case .materializing:       return "Writing your notes to disk…"
         default:                   return "Working…"
         }

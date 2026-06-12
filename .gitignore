@@ -23,5 +23,3 @@ build/
 # On-device model weights (3.66 GB; bundled locally for dev, downloaded by users — never committed)
 *.litertlm
 
-# 🔒 Secrets — the Anthropic API key (dev hardcode until the claude -p migration). NEVER commit (public repo).
-Secrets.swift

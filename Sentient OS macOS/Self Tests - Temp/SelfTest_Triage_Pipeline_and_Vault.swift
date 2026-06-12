@@ -233,13 +233,9 @@ enum SelfTest {
 
         // Vault mode: exercise the REAL Stage-2 path (Store → VaultGenerator → ~/Sentient OS -- The Vault).
         //   SENTIENT_SELFTEST_N>0   → subset (cheap plumbing check);  0/unset → full vault
-        //   SENTIENT_VAULT_EFFORT   → effort override (default xhigh; direct route only)
-        //   SENTIENT_VAULT_ROUTE    → "direct" forces the API fallback; default auto (agentic when codex works)
         if mode == "vault" {
             let env = ProcessInfo.processInfo.environment
             let want = env["SENTIENT_SELFTEST_N"].flatMap(Int.init) ?? 0
-            let effort = env["SENTIENT_VAULT_EFFORT"] ?? "xhigh"
-            let route = env["SENTIENT_VAULT_ROUTE"] ?? "auto"
             let container: ModelContainer
             do { container = try ModelContainer(for: Summary.self, SourceCursor.self) }
             catch { emit("ModelContainer FAILED: \(error)"); return }
@@ -247,24 +243,15 @@ enum SelfTest {
             var summaries = await store.survivorSummaries()
             emit("survivor summaries in store: \(summaries.count)")
             if want > 0 && want < summaries.count { summaries = Array(summaries.prefix(want)) }
-            let maxTokens = (want > 0 && want <= 400) ? 32_000 : 128_000
-            emit("generating vault from \(summaries.count) summaries · route=\(route) · effort=\(effort) · maxTokens=\(maxTokens)…")
+            emit("generating vault from \(summaries.count) summaries (agentic, codex)…")
             do {
                 let t0 = Date()
                 let gen = VaultGenerator()
                 let onP: @Sendable (VaultGenerator.Progress) -> Void = { p in
-                    switch p {
-                    case .receiving(let c): if c % 15_000 < 1_600 { Log("  …received \(c) chars") }
-                    case .writing(let n):   Log("  …\(n) notes written")
-                    default: break
-                    }
+                    if case .writing(let n) = p { Log("  …\(n) notes written") }
                 }
-                let res = route == "direct"
-                    ? try await gen.generateDirect(summaries: summaries, effort: effort,
-                                                   maxTokens: maxTokens, onProgress: onP)
-                    : try await gen.generate(summaries: summaries, effort: effort,
-                                             maxTokens: maxTokens, onProgress: onP)
-                emit("✅ DONE in \(Int(Date().timeIntervalSince(t0)))s — notes=\(res.notes) folders=\(res.folders) input=\(res.inputTokens) output=\(res.outputTokens) stop=\(res.stopReason)")
+                let res = try await gen.generate(summaries: summaries, onProgress: onP)
+                emit("✅ DONE in \(Int(Date().timeIntervalSince(t0)))s — notes=\(res.notes) folders=\(res.folders) input=\(res.inputTokens) output=\(res.outputTokens)")
                 emit("vault → \(res.vaultPath)")
                 let md = ((try? FileManager.default.subpathsOfDirectory(atPath: res.vaultPath)) ?? [])
                     .filter { $0.hasSuffix(".md") }.sorted()
