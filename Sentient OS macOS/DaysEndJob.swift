@@ -49,7 +49,9 @@ actor DaysEndJob {
         var folded = 0
         do {
             folded = try await VaultUpdater.shared.runDailyUpdate(store: store)
-            parts.append(folded == 0 ? "nothing new to fold" : "folded \(folded) memories")
+            // N = summaries the updater REVIEWED (and stamped) — it folds in only what's
+            // worth keeping; reviewing everything and changing nothing is a valid outcome.
+            parts.append(folded == 0 ? "nothing new to fold" : "reviewed \(folded) new memories")
         } catch {
             parts.append((error as? LocalizedError)?.errorDescription ?? "\(error)")
         }
@@ -57,10 +59,10 @@ actor DaysEndJob {
         // 2) Mirror push — any run that ends with a dirty vault and the mirror enabled.
         parts.append(await pushIfDirty())
 
-        // 3) Quiet by design: notify only when the vault actually changed.
+        // 3) Quiet by design: notify only when there was something to review.
         if folded > 0 {
             await Notify.now(title: "Your knowledge base is up to date",
-                             body: "Folded \(folded) new \(folded == 1 ? "memory" : "memories") in while your Mac rested.")
+                             body: "Caught up on \(folded) new \(folded == 1 ? "memory" : "memories") while your Mac rested.")
         }
         let status = "Done — " + parts.joined(separator: " · ")
         Log("DaysEndJob: \(status)")

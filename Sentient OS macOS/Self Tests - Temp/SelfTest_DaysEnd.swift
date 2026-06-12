@@ -113,7 +113,7 @@ enum SelfTestDaysEnd {
         let after = VaultUpdater.skeleton(of: vault)
         let readme = (try? String(contentsOf: vault.appendingPathComponent("README.md"), encoding: .utf8)) ?? ""
         let coffee = (try? String(contentsOf: vault.appendingPathComponent("Life/Coffee Notes.md"), encoding: .utf8)) ?? ""
-        check("status reports the fold", status.contains("folded 2"), status)
+        check("status reports the review", status.contains("reviewed 2"), status)
         check("exactly the sent rows stamped", await store.unsyncedSummaries().isEmpty)
         check("vault actually changed",
               before != after || coffee.contains("Gaggia") || readme.contains("Lisbon")
