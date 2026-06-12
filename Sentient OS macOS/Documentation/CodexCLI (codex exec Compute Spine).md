@@ -8,7 +8,7 @@ piggybacks on the user's own Codex CLI (their ChatGPT subscription pays). Replac
 ## Surface
 
 - `CodexCLI.locateBinary()` — known paths (`~/.local/bin/codex`, `/opt/homebrew/bin/codex`,
-  `/usr/local/bin/codex`) then `zsh -lc "which codex"`; cached in UserDefaults
+  `/usr/local/bin/codex`) then `zsh -lic (interactive — .zshrc is where nvm/asdf init) "which codex"`; cached in UserDefaults
   (`codexcli.binaryPath`), re-verified on every read.
 - `validate(force:)` — ping (`Reply with exactly: PIGGYBACK_OK`, 30 s), cached per app launch;
   `force: true` re-probes (the installer flow).

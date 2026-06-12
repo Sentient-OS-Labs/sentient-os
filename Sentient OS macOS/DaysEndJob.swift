@@ -47,24 +47,35 @@ actor DaysEndJob {
         //    re-enter the queue and the run continues to the push step (vaultDirty may still
         //    be set from an earlier change).
         var folded = 0
+        var failed = false
         do {
             folded = try await VaultUpdater.shared.runDailyUpdate(store: store)
             // N = summaries the updater REVIEWED (and stamped) — it folds in only what's
             // worth keeping; reviewing everything and changing nothing is a valid outcome.
             parts.append(folded == 0 ? "nothing new to fold" : "reviewed \(folded) new memories")
         } catch {
+            failed = true
             parts.append((error as? LocalizedError)?.errorDescription ?? "\(error)")
         }
 
         // 2) Mirror push — any run that ends with a dirty vault and the mirror enabled.
         parts.append(await pushIfDirty())
 
-        // 3) Quiet by design: notify only when there was something to review.
+        // 3) Quiet by design: notify only when there was something to review — and never
+        //    block the run's completion on it: the first notification ever triggers the
+        //    system permission dialog, and awaiting that (it resolves only when the user
+        //    answers) would hang this status return — i.e. a forever-spinning dev button.
         if folded > 0 {
-            await Notify.now(title: "Your knowledge base is up to date",
-                             body: "Caught up on \(folded) new \(folded == 1 ? "memory" : "memories") while your Mac rested.")
+            let n = folded
+            Task.detached(priority: .utility) {
+                await Notify.now(title: "Your knowledge base is up to date",
+                                 body: "Caught up on \(n) new \(n == 1 ? "memory" : "memories") while your Mac rested.")
+            }
         }
-        let status = "Done — " + parts.joined(separator: " · ")
+        // "Failed —" / "Done —" prefixes are load-bearing: the dev button colors results by
+        // prefix, and a failure wearing "Done" reads as success (measured: the missing-vault
+        // error showed green).
+        let status = (failed ? "Failed — " : "Done — ") + parts.joined(separator: " · ")
         Log("DaysEndJob: \(status)")
         return status
     }

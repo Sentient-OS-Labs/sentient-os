@@ -115,6 +115,7 @@ actor VaultGenerator {
         invocation.resumeSessionID = resume?.sessionID
         invocation.timeout = 3_600
 
+        Log("VaultGenerator: \(resume == nil ? "starting" : "RESUMING") initial generation — \(summaries.count) summaries → \(staging.lastPathComponent)")
         onProgress(.calling)
 
         // Progress = the files themselves: poll the staging dir's .md count. Honest, and
@@ -133,12 +134,18 @@ actor VaultGenerator {
             envelope = try await CodexCLI.shared.run(invocation)
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it.
+            Log("VaultGenerator: ⚠️ usage limit mid-generation (session \(sessionID ?? "nil"), staging kept) — \(message.prefix(160))")
             throw VaultError.usageLimit(message: message,
                                         resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
+        } catch {
+            // Any other failure: vault untouched; staging kept on disk for post-mortems.
+            Log("VaultGenerator: ❌ generation failed (staging kept at \(staging.lastPathComponent)) — \(error)")
+            throw error
         }
         poller.cancel()
 
         let (notes, folders) = Self.census(of: staging)
+        Log("VaultGenerator: codex finished (turns \(envelope.numTurns ?? -1), \(envelope.durationMS ?? -1)ms) — \(notes) notes / \(folders) folders in staging")
         guard notes > 0 else {
             try? fm.removeItem(at: staging)
             throw VaultError.empty
@@ -149,6 +156,7 @@ actor VaultGenerator {
         let root = Self.vaultRoot
         try? fm.removeItem(at: root)
         try fm.moveItem(at: staging, to: root)
+        Log("VaultGenerator: ✅ vault swapped into place — \(notes) notes at \(root.path)")
 
         return Result(notes: notes, folders: folders,
                       inputTokens: envelope.inputTokens ?? 0,

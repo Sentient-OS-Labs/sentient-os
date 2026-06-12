@@ -95,6 +95,11 @@ enum SelfTest {
         // "daysend" needs SENTIENT_VAULT_ROOT (fixture vault).
         if mode == "daysend" { await SelfTestDaysEnd.daysend(emit: emit); return }
 
+        // Full incremental loop, headless (SelfTest_E2E.swift): REAL engine analysis of a
+        // fixture folder → REAL codex updater → new file → pointer-only re-analysis → fold →
+        // no-op. Needs the model + codex + SENTIENT_VAULT_ROOT.
+        if mode == "e2e" { await SelfTestE2E.run(emit: emit); return }
+
         // CodexCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
         // codex exec spine (binary → env → stdin → JSONL envelope). Verifies the compute
         // waterfall's tier-1 path end to end on this Mac.

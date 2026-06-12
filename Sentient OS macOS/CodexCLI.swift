@@ -109,22 +109,35 @@ actor CodexCLI {
             return cached
         }
         let home = fm.homeDirectoryForCurrentUser.path
-        let known = [
+        var known = [
             "\(home)/.local/bin/codex",        // the standalone installer's symlink
             "/opt/homebrew/bin/codex",         // brew / npm -g (Apple Silicon)
             "/usr/local/bin/codex",
         ]
+        // npm-under-nvm (`npm i -g @openai/codex` with nvm-managed node): the binary lives in
+        // a VERSIONED dir invisible to fixed paths AND to non-interactive shells (nvm inits in
+        // .zshrc). Newest node version first. [MEASURED on Aditya's Mac — the app saw
+        // "notInstalled" for a fully working, logged-in codex.]
+        let nvmBin = "\(home)/.nvm/versions/node"
+        if let versions = try? fm.contentsOfDirectory(atPath: nvmBin) {
+            known += versions.sorted(by: >).map { "\(nvmBin)/\($0)/bin/codex" }
+        }
         let found = known.first(where: { fm.isExecutableFile(atPath: $0) }) ?? whichViaLoginShell()
         if let found { UserDefaults.standard.set(found, forKey: pathCacheKey) }
         return found
     }
 
+    /// `zsh -lic` (INTERACTIVE login shell — `-lc` never sources .zshrc, where nvm/asdf/volta
+    /// init). Interactive shells print theme noise, so the output is scanned line-by-line for
+    /// something that is actually an executable path. Watchdog-bounded; can't hang.
     private static func whichViaLoginShell() -> String? {
-        guard let out = try? execute(binary: "/bin/zsh", args: ["-lc", "which codex"],
-                                     stdinText: nil, cwd: nil, timeout: 5),
-              out.status == 0 else { return nil }
-        let path = out.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+        guard let out = try? execute(binary: "/bin/zsh", args: ["-lic", "which codex"],
+                                     stdinText: nil, cwd: nil, timeout: 5) else { return nil }
+        let fm = FileManager.default
+        return (out.stdout + "\n" + out.stderr)
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasPrefix("/") && fm.isExecutableFile(atPath: $0) }
     }
 
     // MARK: Validation
@@ -314,7 +327,11 @@ actor CodexCLI {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = args
-        var env: [String: String] = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+        // The binary's OWN directory leads the sanitized PATH: npm installs are
+        // `#!/usr/bin/env node` shims, and (in the nvm layout) `node` sits right next to
+        // them — without this, the shim exec-fails even when found.
+        let binDir = (binary as NSString).deletingLastPathComponent
+        var env: [String: String] = ["PATH": "\(binDir):/usr/bin:/bin:/usr/sbin:/sbin"]
         let current = ProcessInfo.processInfo.environment
         for key in ["HOME", "USER"] where current[key] != nil { env[key] = current[key] }
         proc.environment = env

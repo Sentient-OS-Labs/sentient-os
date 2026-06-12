@@ -33,7 +33,7 @@ actor VaultUpdater {
         var errorDescription: String? {
             switch self {
             case .noVault:
-                return "No vault on disk yet — run the initial generation first."
+                return "No knowledge base on disk yet — click Create Knowledge Base first."
             case .usageLimit(let m, _):
                 return "Your AI hit its usage limit — the next run resumes where it left off. (\(m.prefix(160)))"
             case .cloudFailed(let m):

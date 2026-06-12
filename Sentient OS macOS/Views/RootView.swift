@@ -348,7 +348,7 @@ struct RootView: View {
                 Text(result)
                     .font(.system(.footnote, design: .monospaced))
                     .foregroundStyle(result.hasPrefix(passPrefix) ? .green
-                                     : result.contains("FAIL") ? .red : Theme.secondary)
+                                     : result.localizedCaseInsensitiveContains("fail") ? .red : Theme.secondary)
                     .multilineTextAlignment(.leading)
                     .textSelection(.enabled)
                     .frame(maxWidth: 460)
