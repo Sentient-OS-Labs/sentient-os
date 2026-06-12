@@ -25,18 +25,19 @@ same function on its own clock; no logic lives in the button.
   `PersistentIdentifier`s — summaries are versioned, so we stamp the EXACT rows we sent, never
   "by sourceID". The queue self-populates (rows are born unsynced) and self-heals (failed jobs
   stamp nothing; rows simply re-enter).
-- **The job:** ONE `claude -p` call — `--model sonnet`, tools `Read,Glob,Grep,Write,Edit`,
+- **The job:** ONE `codex exec` call — GPT-5.5 medium effort, `workspace-write` sandbox,
   **cwd = the LIVE vault** (no staging dir: inputs are tiny, edits are surgical), 30-min
   timeout. Stdin = the vault's skeleton tree + the new summaries (title, text, itemDate,
   source-trust tag) + the editing-flavored port of the Stage-2 core (truth/attribution,
   source-trust tiers, explore-only-what-you-need, never delete wholesale).
 - **Safety net:** `cp -R` snapshot before the job. A thrown error mid-edit restores it; a
-  **usage limit does NOT** — the half-edited vault is exactly what `--resume` (session id kept
-  in memory) continues from. Either way nothing was stamped, so a fresh restart is also correct.
+  **usage limit does NOT** — the half-edited vault is exactly what a session resume
+  (`codex exec resume`, id kept in memory) continues from. Either way nothing was stamped, so
+  a fresh restart is also correct.
 - **On success:** stamp the sent rows, set `VaultActivity.vaultDirty`.
 - ⚠️ **Sized for daily deltas, not a from-scratch corpus.** After a schema wipe with an
   existing vault on disk: re-analyze, then stamp the corpus directly (see PR #12's migration
-  note) instead of folding ~everything through Sonnet.
+  note) instead of folding ~everything through the cloud model.
 
 ## Editor-idle + push (`VaultActivity` — the seam, not the feature)
 
@@ -55,14 +56,14 @@ requested lazily on first use (the real ask moves into onboarding); suppressed e
 
 ## The welcome briefing
 
-Initial generation's second act (`VaultGenerator.writeWelcomeBriefing()`): a cheap Sonnet pass
+Initial generation's second act (`VaultGenerator.writeWelcomeBriefing()`): a cheap medium-effort pass
 over the freshly built vault that writes "What I learned about you" (portrait + 3–5
 cross-domain connections + what happens next) into the **Briefings folder**
 (`~/Library/Application Support/SentientOS/Briefings/` — deliberately OUTSIDE the vault, so
 For You artifacts never ride the mirror push). Best-effort, off the UI path, fired alongside
 the post-gen mirror push.
 
-## Self-test (a real Sonnet call — it spends a little budget)
+## Self-test (a real cloud call — it spends a little budget)
 
 - `SENTIENT_SELFTEST=daysend SENTIENT_VAULT_ROOT=/tmp/scratch` — fixture vault + seeded queue
   → run → asserts the fold, exact-row stamping, vault change, and the second-run no-op.

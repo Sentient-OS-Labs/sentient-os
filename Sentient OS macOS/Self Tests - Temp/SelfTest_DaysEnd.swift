@@ -2,7 +2,7 @@
 //  SelfTest_DaysEnd.swift — the iterative-updater harness (Part II)
 //  Sentient OS macOS
 //
-//  One REAL-cloud mode (it spends a little Sonnet budget), dispatched from SelfTest:
+//  One REAL-cloud mode (it spends a little cloud budget), dispatched from SelfTest:
 //
 //    SENTIENT_SELFTEST=daysend SENTIENT_VAULT_ROOT=/tmp/some-scratch-dir
 //      Fixture vault + in-memory store seeded with unsynced summaries → DaysEndJob.run()
@@ -40,10 +40,10 @@ enum SelfTestDaysEnd {
                                 summary: SummaryDraft(text: text, title: title))
     }
 
-    private static func claudeReady(emit: (String) -> Void) async -> Bool {
-        let availability = await ClaudeCLI.shared.validate()
+    private static func codexReady(emit: (String) -> Void) async -> Bool {
+        let availability = await CodexCLI.shared.validate()
         guard case .available = availability else {
-            emit("SKIP — Claude Code unavailable: \(availability)")
+            emit("SKIP — Codex unavailable: \(availability)")
             return false
         }
         return true
@@ -52,7 +52,7 @@ enum SelfTestDaysEnd {
     // MARK: daysend
 
     static func daysend(emit: (String) -> Void) async {
-        guard await claudeReady(emit: emit) else { return }
+        guard await codexReady(emit: emit) else { return }
         let env = ProcessInfo.processInfo.environment
 
         // The vault override is mandatory: this harness writes into the vault root.
@@ -106,7 +106,7 @@ enum SelfTestDaysEnd {
         let queued = await store.unsyncedSummaries()
         check("seeded queue", queued.count == 2, "\(queued.count)")
 
-        emit("\nrunning DaysEndJob (real Sonnet call — ~a minute)…")
+        emit("\nrunning DaysEndJob (real cloud call — ~a minute)…")
         let status = await DaysEndJob.shared.run(store: store)
         emit("status: \(status)\n")
 

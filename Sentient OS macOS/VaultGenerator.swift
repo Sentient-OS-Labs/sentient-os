@@ -2,27 +2,22 @@
 //  VaultGenerator.swift
 //  Sentient OS macOS
 //
-//  Stage 2 — the cloud vault (Arch §6). Takes the on-device survivor summaries and has a
-//  frontier model organize them into an Obsidian-style markdown vault at
-//  "~/Sentient OS -- The Vault/". Two routes behind one generate() call:
+//  Stage 2 — the cloud vault (Arch §6). Takes the on-device survivor summaries and has the
+//  user's own Codex CLI (via CodexCLI, Arch §5) organize them into an Obsidian-style
+//  markdown vault at "~/Sentient OS -- The Vault/": the model WRITES the .md files itself
+//  (file tools, sandbox-scoped to a staging dir), which sidesteps per-message output caps
+//  and makes usage-limit resume natural. The old vault is only replaced on success
+//  (staging → atomic swap). No codex = no cloud organize until the free tier ships.
 //
-//   1. AGENTIC (default, Arch §5): the user's own Claude Code via ClaudeCLI — the model
-//      WRITES the .md files itself (Write/Edit/Read/Glob/Grep scoped to a staging dir),
-//      which sidesteps the 64k output cap and makes usage-limit resume natural. The old
-//      vault is only replaced on success (staging → atomic swap).
-//   2. DIRECT (fallback while the Bedrock tier doesn't exist): one streamed Opus API call
-//      emitting a `=== NOTE: <path> ===` stream we parse and materialize ourselves.
-//
-//  The shared prompt core is the product of a multi-cycle eval against real data: truth/
+//  The prompt core is the product of a multi-cycle eval against real data: truth/
 //  attribution guardrails, source-trust tiers, ruthless synthesis, a root README portrait
 //  written for an AI reader, [[wikilinks]].
 //
 //  Key methods:
-//   - generate(summaries:resume:onProgress:)  → routes agentic/direct, returns stats
+//   - generate(summaries:resume:onProgress:)  → the agentic build, returns stats
 //   - vaultRoot                               → ~/Sentient OS -- The Vault
-//   - parseNotes(_:)                          → splits the direct route's note stream
+//   - writeWelcomeBriefing()                  → initial gen's second act (For You day one)
 //
-//  🔒 The direct route's API key lives in Secrets.swift (gitignored).
 //  Doc: Documentation/Vault Generation (Stage 2).md
 //
 
@@ -48,19 +43,17 @@ actor VaultGenerator {
         let folders: Int
         let inputTokens: Int
         let outputTokens: Int
-        let stopReason: String
         let vaultPath: String
     }
 
     enum Progress: Sendable {
         case gathering(Int)
         case calling
-        case receiving(chars: Int)      // direct route: response streaming in
-        case writing(notes: Int)        // agentic route: .md files appearing in staging
+        case writing(notes: Int)        // .md files appearing in staging
         case materializing(notes: Int)
     }
 
-    /// Everything needed to pick up an agentic run after a usage limit: the Claude session
+    /// Everything needed to pick up an agentic run after a usage limit: the Codex session
     /// and the staging dir whose already-written notes survive untouched.
     struct ResumeToken: Sendable {
         let sessionID: String?
@@ -68,16 +61,14 @@ actor VaultGenerator {
     }
 
     enum VaultError: LocalizedError {
-        case http(Int, String)
         case empty
         case usageLimit(message: String, resume: ResumeToken)
 
         var errorDescription: String? {
             switch self {
-            case .http(let code, let body): return "Cloud returned HTTP \(code). \(body.prefix(300))"
             case .empty: return "The cloud returned no vault content."
             case .usageLimit(let message, _):
-                return "Claude hit its usage limit — try again later and the run resumes where it left off. (\(message.prefix(160)))"
+                return "Your AI hit its usage limit — try again later and the run resumes where it left off. (\(message.prefix(160)))"
             }
         }
     }
@@ -93,38 +84,17 @@ actor VaultGenerator {
             .appendingPathComponent("Sentient OS -- The Vault", isDirectory: true)
     }
 
-    // MARK: - Route selection
+    // MARK: - The agentic build (codex exec)
 
-    /// Generate the whole vault. Piggybacks on the user's Claude Code when available
-    /// (the compute waterfall's tier 1); otherwise falls back to the direct API call.
-    /// Pass a `resume` token (from a prior `.usageLimit` error) to continue that run.
+    /// Generate the whole vault through the user's own Codex CLI (the compute waterfall's
+    /// tier 1; without a working codex the run throws CodexCLI's `.notAvailable`). Pass a
+    /// `resume` token (from a prior `.usageLimit` error) to continue that run over its
+    /// kept staging dir.
     @discardableResult
     func generate(
         summaries: [SummaryItem],
         resume: ResumeToken? = nil,
-        effort: String = "xhigh",
-        maxTokens: Int = 128_000,
         onProgress: @Sendable @escaping (Progress) -> Void = { _ in }
-    ) async throws -> Result {
-        if resume != nil {
-            return try await generateAgentic(summaries: summaries, resume: resume, onProgress: onProgress)
-        }
-        if case .available = await ClaudeCLI.shared.validate() {
-            return try await generateAgentic(summaries: summaries, resume: nil, onProgress: onProgress)
-        }
-        #if DEBUG
-        Log("VaultGenerator: Claude Code unavailable → direct-API fallback")
-        #endif
-        return try await generateDirect(summaries: summaries, effort: effort,
-                                        maxTokens: maxTokens, onProgress: onProgress)
-    }
-
-    // MARK: - Route 1: agentic file-writer (claude -p)
-
-    private func generateAgentic(
-        summaries: [SummaryItem],
-        resume: ResumeToken?,
-        onProgress: @Sendable @escaping (Progress) -> Void
     ) async throws -> Result {
         onProgress(.gathering(summaries.count))
         let fm = FileManager.default
@@ -152,9 +122,9 @@ actor VaultGenerator {
                 + Self.corpusMessage(summaries, closing: "Synthesize them into the vault exactly as specified — write the files now.")
         }
 
-        var invocation = ClaudeCLI.Invocation(prompt: prompt)
-        invocation.model = .opus1M
-        invocation.allowedTools = ["Write", "Edit", "Read", "Glob", "Grep"]   // receipt-verified scoping
+        var invocation = CodexCLI.Invocation(prompt: prompt)
+        invocation.effort = .high                            // the initial build gets the deep pass
+        invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir
         invocation.cwd = staging.path
         invocation.resumeSessionID = resume?.sessionID
         invocation.timeout = 3_600
@@ -172,10 +142,10 @@ actor VaultGenerator {
         }
         defer { poller.cancel() }
 
-        let envelope: ClaudeCLI.Envelope
+        let envelope: CodexCLI.Envelope
         do {
-            envelope = try await ClaudeCLI.shared.run(invocation)
-        } catch let ClaudeCLI.CLIError.usageLimit(message, sessionID) {
+            envelope = try await CodexCLI.shared.run(invocation)
+        } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it.
             throw VaultError.usageLimit(message: message,
                                         resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
@@ -197,12 +167,11 @@ actor VaultGenerator {
         return Result(notes: notes, folders: folders,
                       inputTokens: envelope.inputTokens ?? 0,
                       outputTokens: envelope.outputTokens ?? 0,
-                      stopReason: envelope.stopReason ?? "end_turn",
                       vaultPath: root.path)
     }
 
     /// The welcome briefing — initial gen's second act ("here's what I learned about you"),
-    /// For You's day-one artifact. A cheap Sonnet pass over the freshly built vault that lands
+    /// For You's day-one artifact. A cheap medium-effort pass over the freshly built vault that lands
     /// ONE .md in the Briefings folder (outside the vault — it never rides the mirror push).
     /// Best-effort: a failure logs and moves on; the vault itself is already safe on disk.
     func writeWelcomeBriefing() async {
@@ -212,12 +181,12 @@ actor VaultGenerator {
         }()
         let file = Briefings.dir.appendingPathComponent("\(date) — What I learned about you.md")
 
-        var inv = ClaudeCLI.Invocation(prompt: """
+        var inv = CodexCLI.Invocation(prompt: """
             You just finished organizing a person's entire digital life into the Obsidian-style \
             knowledge vault that is your working directory. Now write them a welcome.
 
             Read the root README.md first, then explore a handful of the most interesting notes \
-            (Glob/Grep/Read — be selective, not exhaustive). Then write ONE markdown briefing to \
+            (be selective, not exhaustive). Then write ONE markdown briefing to \
             this exact path:
             \(file.path)
 
@@ -231,13 +200,12 @@ actor VaultGenerator {
 
             When the briefing is written, reply with one line: DONE.
             """)
-        inv.model = .sonnet
-        inv.allowedTools = ["Read", "Glob", "Grep", "Write"]
+        inv.sandbox = .workspaceWrite
         inv.cwd = Self.vaultRoot.path
         inv.addDirs = [Briefings.dir.path]
         inv.timeout = 600
         do {
-            _ = try await ClaudeCLI.shared.run(inv)
+            _ = try await CodexCLI.shared.run(inv)
             Log("VaultGenerator: welcome briefing → \(file.lastPathComponent)")
         } catch {
             Log("VaultGenerator: welcome briefing failed — \(error)")
@@ -257,110 +225,7 @@ actor VaultGenerator {
         return (notes, folders.count)
     }
 
-    // MARK: - Route 2: direct API (the code-preserved fallback)
-
-    private let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
-
-    /// Internal (not private) so the self-test can force this route via SENTIENT_VAULT_ROUTE=direct.
-    func generateDirect(
-        summaries: [SummaryItem],
-        effort: String,
-        maxTokens: Int,
-        onProgress: @Sendable @escaping (Progress) -> Void
-    ) async throws -> Result {
-        onProgress(.gathering(summaries.count))
-
-        // 1) Build the request.
-        let userMessage = Self.corpusMessage(
-            summaries,
-            closing: "Synthesize them into the vault exactly as specified — emit ONLY the stream of `=== NOTE: path ===` markdown files, nothing else.")
-        let body: [String: Any] = [
-            "model": "claude-opus-4-8",
-            "max_tokens": maxTokens,
-            "system": vaultPromptCore + "\n\n" + directOutputFormat,
-            "messages": [["role": "user", "content": userMessage]],
-            "thinking": ["type": "adaptive"],
-            "output_config": ["effort": effort],
-            "stream": true,
-        ]
-        var req = URLRequest(url: endpoint)
-        req.httpMethod = "POST"
-        req.setValue(Secrets.anthropicKey, forHTTPHeaderField: "x-api-key")
-        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-        req.setValue("application/json", forHTTPHeaderField: "content-type")
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-        req.timeoutInterval = 1800
-
-        let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 1800
-        config.timeoutIntervalForResource = 3600
-        let session = URLSession(configuration: config)
-
-        onProgress(.calling)
-
-        // 2) Stream-collect the SSE response (native URLSession keepalive avoids idle drops).
-        let (bytes, response) = try await session.bytes(for: req)
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            var err = ""
-            for try await line in bytes.lines { err += line; if err.count > 1200 { break } }
-            throw VaultError.http(http.statusCode, err)
-        }
-
-        var assembled = ""
-        var inTok = 0, outTok = 0, stop = "unknown", lastReport = 0
-        for try await line in bytes.lines {
-            guard line.hasPrefix("data:") else { continue }
-            let payload = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
-            guard let d = payload.data(using: .utf8),
-                  let ev = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
-                  let type = ev["type"] as? String else { continue }
-            switch type {
-            case "message_start":
-                if let m = ev["message"] as? [String: Any], let u = m["usage"] as? [String: Any] {
-                    inTok = u["input_tokens"] as? Int ?? 0
-                }
-            case "content_block_delta":
-                if let delta = ev["delta"] as? [String: Any],
-                   delta["type"] as? String == "text_delta",
-                   let t = delta["text"] as? String {
-                    assembled += t
-                    if assembled.count - lastReport >= 1500 {
-                        lastReport = assembled.count
-                        onProgress(.receiving(chars: assembled.count))
-                    }
-                }
-            case "message_delta":
-                if let u = ev["usage"] as? [String: Any] { outTok = u["output_tokens"] as? Int ?? outTok }
-                if let delta = ev["delta"] as? [String: Any], let sr = delta["stop_reason"] as? String { stop = sr }
-            case "error":
-                throw VaultError.http(0, payload)
-            default:
-                break
-            }
-        }
-        guard !assembled.isEmpty else { throw VaultError.empty }
-
-        // 3) Parse + materialize (full rebuild).
-        let notes = Self.parseNotes(assembled)
-        onProgress(.materializing(notes: notes.count))
-        let root = Self.vaultRoot
-        try? FileManager.default.removeItem(at: root)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        var folders = Set<String>()
-        for (path, content) in notes {
-            let dst = root.appendingPathComponent(path)
-            let dir = dst.deletingLastPathComponent()
-            if dir.path != root.path { folders.insert(dir.path) }
-            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try? content.write(to: dst, atomically: true, encoding: .utf8)
-        }
-
-        return Result(notes: notes.count, folders: folders.count,
-                      inputTokens: inTok, outputTokens: outTok, stopReason: stop,
-                      vaultPath: root.path)
-    }
-
-    // MARK: - Corpus building (shared by both routes)
+    // MARK: - Corpus building (the stdin corpus)
 
     private static func corpusMessage(_ summaries: [SummaryItem], closing: String) -> String {
         var lines: [String] = []
@@ -405,46 +270,10 @@ actor VaultGenerator {
         return p.hasPrefix(home) ? String(p.dropFirst(home.count + 1)) : p
     }
 
-    // MARK: - Note-stream parser (direct route)
-
-    /// Splits the `=== NOTE: <path> ===` stream into (vault-relative path, file content) pairs.
-    /// Ignores any prose before the first sentinel. Truncation-safe: every COMPLETE note survives.
-    static func parseNotes(_ text: String) -> [(path: String, content: String)] {
-        var out: [(String, String)] = []
-        var currentPath: String?
-        var buf: [Substring] = []
-        func flush() {
-            defer { buf.removeAll() }
-            guard let p = currentPath, let safe = sanitizePath(p) else { return }
-            let content = buf.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !content.isEmpty { out.append((safe, content + "\n")) }
-        }
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
-            let t = line.trimmingCharacters(in: .whitespaces)
-            if t.hasPrefix("=== NOTE:") && t.hasSuffix("===") {
-                flush()
-                var inner = t.dropFirst("=== NOTE:".count)
-                if let r = inner.range(of: "===", options: .backwards) { inner = inner[..<r.lowerBound] }
-                currentPath = inner.trimmingCharacters(in: .whitespaces)
-            } else if currentPath != nil {
-                buf.append(line)
-            }
-        }
-        flush()
-        return out
-    }
-
-    /// Strip leading slash, drop `..`/`.` components, ensure a `.md` extension. nil if empty.
-    private static func sanitizePath(_ raw: String) -> String? {
-        var comps = raw.split(separator: "/").map(String.init).filter { !$0.isEmpty && $0 != ".." && $0 != "." }
-        guard !comps.isEmpty else { return nil }
-        if !comps[comps.count - 1].lowercased().hasSuffix(".md") { comps[comps.count - 1] += ".md" }
-        return comps.joined(separator: "/")
-    }
 }
 
 // MARK: - The locked Stage-2 prompt core (validated over a multi-cycle eval; Arch §6)
-// Shared by both routes. The output-format sections below tailor it per route.
+// The output section (agenticOutputInstructions) follows it.
 
 private let vaultPromptCore = """
 You are the **Sentient OS Knowledge Base Architect** — the cloud brain of a privacy-first personal-intelligence product.
@@ -501,7 +330,7 @@ Aim for a **focused, high-signal vault — roughly 100–150 notes.** Synthesize
 /// Agentic route: the model writes real files with its tools (no output cap, resumable).
 private let agenticOutputInstructions = """
 ## Output — you have file tools; write REAL files
-You are running inside the vault's (currently empty) working directory. CREATE the vault as actual files using your Write tool — do NOT print the vault as text in your reply.
+You are running inside the vault's (currently empty) working directory. CREATE the vault as actual files using your file tools — do NOT print the vault as text in your reply.
 
 - Write the root `README.md` FIRST (the portrait + map), then every note at its vault-relative path, e.g. `Startup/Fundraising — Term Sheets.md`. Parent folders are created automatically by the paths you write.
 - Create ONLY `.md` files, ONLY inside the working directory — never absolute paths, never `..`.
@@ -519,24 +348,4 @@ refs: [<the #index numbers this note synthesizes>]
 ```
 
 - When the vault is complete, reply with a single line: the total number of notes you wrote.
-"""
-
-/// Direct route: one giant text response, parsed by parseNotes().
-private let directOutputFormat = """
-## Output format — read carefully
-Emit a **stream of markdown files and NOTHING else.** No prose, no preamble, no code fences before or after. Each file is introduced by a sentinel line carrying its full vault-relative path:
-
-```
-=== NOTE: <folder>/<subfolder>/<Title>.md ===
----
-title: <human-readable title>
-tags: [<a-few>, <kebab-case>, <tags>]
-refs: [<the #index numbers this note synthesizes>]
----
-# <Title>
-
-<rich markdown body — use [[Other Note Title]] wikilinks freely to connect the graph.>
-```
-
-Repeat the `=== NOTE: … ===` block for every note. The path on the sentinel line determines the folders (created implicitly). **Start with `=== NOTE: README.md ===`** (the root portrait + map), then emit the rest of the vault. Begin now.
 """

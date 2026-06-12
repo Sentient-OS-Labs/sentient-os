@@ -16,7 +16,7 @@
 //  Env knobs:
 //    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "notes" | "files"  (model dump) ·
 //                          "tokens"  (WhatsApp window token-cost measurement, model) ·
-//                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "claudecli"
+//                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "codexcli"
 //                          | "vault" | "skipping" | "skipcensus"
 //                          | "incremental"  (pointer-architecture proof, no model)
 //    SENTIENT_SELFTEST_N   item count (default 6)
@@ -91,25 +91,24 @@ enum SelfTest {
         // file (versioned summary + " — Edit" title) → junk advances the pointer with zero trace.
         if mode == "incremental" { await SelfTestIncremental.run(emit: emit); return }
 
-        // Iterative-updater harness (real Sonnet call — see SelfTest_DaysEnd.swift):
+        // Iterative-updater harness (real cloud call — see SelfTest_DaysEnd.swift):
         // "daysend" needs SENTIENT_VAULT_ROOT (fixture vault).
         if mode == "daysend" { await SelfTestDaysEnd.daysend(emit: emit); return }
 
-        // ClaudeCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
-        // claude -p spine (binary → env → stdin → JSON envelope). Verifies the compute waterfall's
-        // tier-1 path end to end on this Mac.
-        if mode == "claudecli" {
-            emit("binary: \(ClaudeCLI.locateBinary() ?? "NOT FOUND")")
-            let availability = await ClaudeCLI.shared.validate(force: true)
+        // CodexCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
+        // codex exec spine (binary → env → stdin → JSONL envelope). Verifies the compute
+        // waterfall's tier-1 path end to end on this Mac.
+        if mode == "codexcli" {
+            emit("binary: \(CodexCLI.locateBinary() ?? "NOT FOUND")")
+            let availability = await CodexCLI.shared.validate(force: true)
             emit("availability: \(availability)")
             guard case .available = availability else { return }
             do {
-                var inv = ClaudeCLI.Invocation(prompt: "Reply with exactly: SPINE_OK")
-                inv.model = .sonnet
+                var inv = CodexCLI.Invocation(prompt: "Reply with exactly: SPINE_OK")
                 inv.timeout = 120
-                let envelope = try await ClaudeCLI.shared.run(inv)
+                let envelope = try await CodexCLI.shared.run(inv)
                 emit("result: \(envelope.result)")
-                emit("session: \(envelope.sessionID ?? "nil") · turns: \(envelope.numTurns ?? -1) · \(envelope.durationMS ?? -1)ms · cost: $\(envelope.totalCostUSD ?? 0) · denials: \(envelope.permissionDenialCount)")
+                emit("session: \(envelope.sessionID ?? "nil") · items: \(envelope.numTurns ?? -1) · \(envelope.durationMS ?? -1)ms · tokens in/cached/out: \(envelope.inputTokens ?? -1)/\(envelope.cachedInputTokens ?? -1)/\(envelope.outputTokens ?? -1)")
                 emit(envelope.result.contains("SPINE_OK") ? "✅ spine OK" : "⚠️ unexpected result text")
             } catch { emit("run FAILED: \(error)") }
             return
@@ -234,13 +233,9 @@ enum SelfTest {
 
         // Vault mode: exercise the REAL Stage-2 path (Store → VaultGenerator → ~/Sentient OS -- The Vault).
         //   SENTIENT_SELFTEST_N>0   → subset (cheap plumbing check);  0/unset → full vault
-        //   SENTIENT_VAULT_EFFORT   → effort override (default xhigh; direct route only)
-        //   SENTIENT_VAULT_ROUTE    → "direct" forces the API fallback; default auto (agentic when claude works)
         if mode == "vault" {
             let env = ProcessInfo.processInfo.environment
             let want = env["SENTIENT_SELFTEST_N"].flatMap(Int.init) ?? 0
-            let effort = env["SENTIENT_VAULT_EFFORT"] ?? "xhigh"
-            let route = env["SENTIENT_VAULT_ROUTE"] ?? "auto"
             let container: ModelContainer
             do { container = try ModelContainer(for: Summary.self, SourceCursor.self) }
             catch { emit("ModelContainer FAILED: \(error)"); return }
@@ -248,24 +243,15 @@ enum SelfTest {
             var summaries = await store.survivorSummaries()
             emit("survivor summaries in store: \(summaries.count)")
             if want > 0 && want < summaries.count { summaries = Array(summaries.prefix(want)) }
-            let maxTokens = (want > 0 && want <= 400) ? 32_000 : 128_000
-            emit("generating vault from \(summaries.count) summaries · route=\(route) · effort=\(effort) · maxTokens=\(maxTokens)…")
+            emit("generating vault from \(summaries.count) summaries (agentic, codex)…")
             do {
                 let t0 = Date()
                 let gen = VaultGenerator()
                 let onP: @Sendable (VaultGenerator.Progress) -> Void = { p in
-                    switch p {
-                    case .receiving(let c): if c % 15_000 < 1_600 { Log("  …received \(c) chars") }
-                    case .writing(let n):   Log("  …\(n) notes written")
-                    default: break
-                    }
+                    if case .writing(let n) = p { Log("  …\(n) notes written") }
                 }
-                let res = route == "direct"
-                    ? try await gen.generateDirect(summaries: summaries, effort: effort,
-                                                   maxTokens: maxTokens, onProgress: onP)
-                    : try await gen.generate(summaries: summaries, effort: effort,
-                                             maxTokens: maxTokens, onProgress: onP)
-                emit("✅ DONE in \(Int(Date().timeIntervalSince(t0)))s — notes=\(res.notes) folders=\(res.folders) input=\(res.inputTokens) output=\(res.outputTokens) stop=\(res.stopReason)")
+                let res = try await gen.generate(summaries: summaries, onProgress: onP)
+                emit("✅ DONE in \(Int(Date().timeIntervalSince(t0)))s — notes=\(res.notes) folders=\(res.folders) input=\(res.inputTokens) output=\(res.outputTokens)")
                 emit("vault → \(res.vaultPath)")
                 let md = ((try? FileManager.default.subpathsOfDirectory(atPath: res.vaultPath)) ?? [])
                     .filter { $0.hasSuffix(".md") }.sorted()
