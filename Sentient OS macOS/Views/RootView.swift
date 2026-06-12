@@ -148,8 +148,9 @@ struct RootView: View {
 
             // The scheduler's stand-in [DECIDED]: this button IS the day's-end trigger until
             // the condition-gate loop lands — which will call exactly the same entry point
-            // (the full pipeline: updater → proactive intelligence → mirror push → notify).
-            debugTest(title: "Run Proactive Intelligence", systemImage: "bell.badge",
+            // (iterative updater → mirror push → notify). Proactive intelligence gets its
+            // own separate trigger when it lands.
+            debugTest(title: "Update Knowledge Base", systemImage: "arrow.triangle.2.circlepath",
                       isRunning: isDaysEndRunning, result: daysEndResult, passPrefix: "Done",
                       action: { Task { await runDaysEnd() } })
 
