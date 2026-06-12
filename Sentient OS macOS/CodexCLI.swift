@@ -28,9 +28,8 @@ actor CodexCLI {
     // MARK: Types
 
     /// Every job runs GPT-5.5 (1M context; 400k input through codex). Tiers differ only in
-    /// reasoning effort: `.xhigh` for the initial vault build, `.medium` for everything daily.
+    /// reasoning effort: `.high` for the initial vault build, `.medium` for everything daily.
     enum Effort: String, Sendable {
-        case xhigh                               // [MEASURED June 11] accepted live by codex 0.139.0
         case high
         case medium
     }

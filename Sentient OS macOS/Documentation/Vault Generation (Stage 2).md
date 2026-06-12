@@ -2,7 +2,7 @@
 
 `VaultGenerator.generate(summaries:resume:onProgress:)` turns the on-device survivor
 summaries into the markdown vault at `~/Sentient OS -- The Vault/`, through ONE route:
-`codex exec` via the `CodexCLI` spine — GPT-5.5 **xhigh effort**, `workspace-write` sandbox,
+`codex exec` via the `CodexCLI` spine — GPT-5.5 **high effort**, `workspace-write` sandbox,
 cwd = a staging dir; the model writes the `.md` files itself with its file tools. Without a
 working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — the free tier is
 the eventual answer for no-codex users; the old direct-Anthropic-API route and its
