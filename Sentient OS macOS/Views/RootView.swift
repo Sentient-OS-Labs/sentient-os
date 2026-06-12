@@ -352,8 +352,9 @@ struct RootView: View {
         defer { isResetting = false }
         do {
             try await store.reset()
+            LifetimeStats.reset()
             let counts = await store.counts()
-            resetResult = "Cleared ✓  ledger=\(counts.ledger)  summaries=\(counts.summaries)"
+            resetResult = "Cleared ✓  summaries=\(counts.versions)  pointers=\(counts.cursors)"
         } catch {
             resetResult = "Reset FAIL: \(error)"
         }

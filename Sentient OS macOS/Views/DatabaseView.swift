@@ -2,10 +2,12 @@
 //  DatabaseView.swift
 //  Sentient OS macOS
 //
-//  The knowledge inspector — a dark, glassy NavigationSplitView over the analyzed artifacts.
-//  Reads Sendable RecordSnapshots from the Store (never touches @Model directly). Real QuickLook
-//  file previews, verdict pills, reminder gradient, search + verdict filters, and a rich detail
-//  pane with Reveal-in-Finder / Open. Inspiration: the iOS DatabaseViewerView, rebuilt for Mac.
+//  The knowledge inspector — a dark, glassy NavigationSplitView over the survivor summaries.
+//  Reads Sendable SummaryRecords from the Store (never touches @Model directly). With the
+//  ledger gone there are no junk/sensitive rows to show — what's here IS the knowledge.
+//  Summaries are versioned: the sidebar lists the latest version per source; the detail pane
+//  shows that source's full version history (edits over time). Real QuickLook thumbnails,
+//  source/folder filters, reminder gradient, Reveal-in-Finder / Open.
 //
 
 import SwiftUI
@@ -18,30 +20,43 @@ struct DatabaseView: View {
 
     let store: Store
 
-    @State private var records: [RecordSnapshot] = []
+    @State private var records: [SummaryRecord] = []    // every version, newest first
     @State private var selectedID: String?
     @State private var search = ""
-    @State private var verdictFilter: Verdict?     // nil = all
-    @State private var folderFilter: String?       // nil = all folders
+    @State private var kindFilter: SourceKind?      // nil = all sources
+    @State private var folderFilter: String?        // nil = all folders
     @State private var loaded = false
 
-    private var filtered: [RecordSnapshot] {
-        records.filter { r in
-            (verdictFilter == nil || r.verdict == verdictFilter)
+    /// Latest version per source (the sidebar rows), preserving newest-first order.
+    private var latest: [SummaryRecord] {
+        var seen = Set<String>()
+        return records.filter { seen.insert($0.sourceID).inserted }
+    }
+
+    private var filtered: [SummaryRecord] {
+        latest.filter { r in
+            (kindFilter == nil || r.kind == kindFilter)
             && (folderFilter == nil || r.folder == folderFilter)
             && (search.isEmpty
-                || (r.summary?.localizedCaseInsensitiveContains(search) ?? false)
+                || r.text.localizedCaseInsensitiveContains(search)
+                || (r.title?.localizedCaseInsensitiveContains(search) ?? false)
                 || r.sourceID.localizedCaseInsensitiveContains(search))
         }
     }
 
     /// Distinct non-empty folders present in the store (for the folder filter pills).
     private var folders: [String] {
-        Array(Set(records.map(\.folder).filter { !$0.isEmpty })).sorted()
+        Array(Set(latest.map(\.folder).filter { !$0.isEmpty })).sorted()
     }
 
-    private var selected: RecordSnapshot? {
-        records.first { $0.id == selectedID }
+    private var selected: SummaryRecord? {
+        latest.first { $0.id == selectedID }
+    }
+
+    /// Every version of the selected source, newest first (records are already newest-first).
+    private var selectedVersions: [SummaryRecord] {
+        guard let s = selected else { return [] }
+        return records.filter { $0.sourceID == s.sourceID }
     }
 
     var body: some View {
@@ -54,7 +69,7 @@ struct DatabaseView: View {
         .frame(minWidth: 880, minHeight: 600)
         .background(Theme.bg)
         .task {
-            records = await store.allRecords()
+            records = await store.allSummaries()
             loaded = true
         }
     }
@@ -65,7 +80,7 @@ struct DatabaseView: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Knowledge").font(.serif(28)).italic().foregroundStyle(.white)
-                Text("\(filtered.count) of \(records.count) artifacts")
+                Text("\(filtered.count) of \(latest.count) memories · \(LifetimeStats.analyzed.formatted()) things understood")
                     .font(.footnote).foregroundStyle(Theme.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -76,7 +91,9 @@ struct DatabaseView: View {
             ScrollView {
                 LazyVStack(spacing: 8) {
                     ForEach(filtered) { record in
-                        RecordRow(record: record, isSelected: record.id == selectedID)
+                        RecordRow(record: record,
+                                  versions: versionCount(record.sourceID),
+                                  isSelected: record.id == selectedID)
                             .onTapGesture { selectedID = record.id }
                     }
                 }
@@ -87,21 +104,25 @@ struct DatabaseView: View {
         .background(Theme.bg)
     }
 
+    private func versionCount(_ sourceID: String) -> Int {
+        records.count(where: { $0.sourceID == sourceID })
+    }
+
     private var filterBar: some View {
         VStack(spacing: 10) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass").foregroundStyle(Theme.faint)
-                TextField("Search summaries & paths", text: $search)
+                TextField("Search summaries, titles & paths", text: $search)
                     .textFieldStyle(.plain).foregroundStyle(.white)
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
             .glassCard(radius: 10)
 
             HStack(spacing: 7) {
-                pill("All", color: .white, active: verdictFilter == nil) { verdictFilter = nil }
-                ForEach([Verdict.survivor, .junk, .sensitive], id: \.self) { v in
-                    pill(Theme.verdictLabel(v), color: Theme.verdictColor(v), active: verdictFilter == v) {
-                        verdictFilter = (verdictFilter == v) ? nil : v
+                pill("All", color: .white, active: kindFilter == nil) { kindFilter = nil }
+                ForEach(SourceKind.allCases, id: \.self) { k in
+                    pill(Self.kindLabel(k), color: Theme.accent, active: kindFilter == k) {
+                        kindFilter = (kindFilter == k) ? nil : k
                     }
                 }
                 Spacer()
@@ -123,6 +144,15 @@ struct DatabaseView: View {
         .padding(.horizontal, 18).padding(.bottom, 12)
     }
 
+    static func kindLabel(_ k: SourceKind) -> String {
+        switch k {
+        case .file:     return "Files"
+        case .whatsapp: return "WhatsApp"
+        case .imessage: return "iMessage"
+        case .notes:    return "Notes"
+        }
+    }
+
     private func pill(_ title: String, color: Color, active: Bool, _ tap: @escaping () -> Void) -> some View {
         Button(action: tap) {
             Text(title)
@@ -137,8 +167,8 @@ struct DatabaseView: View {
     private var emptyState: some View {
         VStack(spacing: 8) {
             Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(Theme.faint)
-            Text("No artifacts yet").foregroundStyle(Theme.secondary)
-            Text("Run the Files pipeline to populate the store.")
+            Text("No memories yet").foregroundStyle(Theme.secondary)
+            Text("Run an analysis to populate the store.")
                 .font(.caption).foregroundStyle(Theme.faint)
         }
         .padding(40)
@@ -148,12 +178,12 @@ struct DatabaseView: View {
 
     @ViewBuilder private var detail: some View {
         if let record = selected {
-            RecordDetail(record: record)
+            RecordDetail(record: record, versions: selectedVersions)
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "rectangle.on.rectangle.angled")
                     .font(.system(size: 38, weight: .thin)).foregroundStyle(Theme.faint)
-                Text("Select an artifact").font(.serif(20)).italic().foregroundStyle(Theme.secondary)
+                Text("Select a memory").font(.serif(20)).italic().foregroundStyle(Theme.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.bg)
@@ -164,26 +194,25 @@ struct DatabaseView: View {
 // MARK: - Row
 
 private struct RecordRow: View {
-    let record: RecordSnapshot
+    let record: SummaryRecord
+    let versions: Int
     let isSelected: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             FileThumbnail(path: record.filePath, size: 46)
             VStack(alignment: .leading, spacing: 4) {
-                if !record.folder.isEmpty || record.verdict != .survivor || record.reminderFlagged {
-                    HStack(spacing: 6) {
-                        if !record.folder.isEmpty { FolderTag(folder: record.folder) }
-                        if record.verdict != .survivor { VerdictBadge(verdict: record.verdict) }
-                        if record.reminderFlagged {
-                            Image(systemName: "bell.fill").font(.system(size: 9))
-                                .foregroundStyle(Theme.reminderGradient)
-                        }
+                HStack(spacing: 6) {
+                    if !record.folder.isEmpty { FolderTag(folder: record.folder) }
+                    if versions > 1 { VersionTag(count: versions) }
+                    if record.reminderFlagged {
+                        Image(systemName: "bell.fill").font(.system(size: 9))
+                            .foregroundStyle(Theme.reminderGradient)
                     }
                 }
                 Text(record.title ?? record.displayName)
                     .font(.subheadline.weight(.medium)).foregroundStyle(.white).lineLimit(1)
-                Text(record.summary ?? record.displayPath)
+                Text(record.text)
                     .font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
             }
             Spacer(minLength: 0)
@@ -202,7 +231,8 @@ private struct RecordRow: View {
 // MARK: - Detail
 
 private struct RecordDetail: View {
-    let record: RecordSnapshot
+    let record: SummaryRecord          // the latest version
+    let versions: [SummaryRecord]      // all versions, newest first (incl. `record`)
 
     var body: some View {
         ScrollView {
@@ -214,31 +244,49 @@ private struct RecordDetail: View {
                 }
                 .padding(.top, 10)
 
-                if record.verdict != .survivor || record.reminderFlagged {
-                    HStack(spacing: 8) {
-                        if record.verdict == .sensitive { SensitivePill() }
-                        else if record.verdict == .junk { JunkPill() }
-                        if record.reminderFlagged { ReminderPill() }
-                    }
-                }
+                if record.reminderFlagged { ReminderPill() }
 
                 Text(record.title ?? record.displayName)
                     .font(.serif(26)).italic().foregroundStyle(.white)
                     .textSelection(.enabled)
 
-                if let summary = record.summary { field("Summary", summary) }
+                field("Summary", record.text)
 
                 VStack(alignment: .leading, spacing: 11) {
                     meta("Path", record.displayPath)
-                    meta("Source", record.kind.rawValue)
+                    meta("Source", DatabaseView.kindLabel(record.kind))
                     if !record.folder.isEmpty { meta("Folder", record.folder) }
-                    meta("Signature", record.signature)
-                    meta("First seen", record.firstSeen.formatted(date: .abbreviated, time: .shortened))
-                    meta("Last seen", record.lastSeen.formatted(date: .abbreviated, time: .shortened))
+                    if let d = record.itemDate {
+                        meta("Item date", d.formatted(date: .abbreviated, time: .shortened))
+                    }
+                    meta("Analyzed", record.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    meta("In vault", record.syncedToVault.map {
+                        $0.formatted(date: .abbreviated, time: .shortened)
+                    } ?? "queued for next update")
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .glassCard()
+
+                if versions.count > 1 {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("VERSION HISTORY").font(.caption2.weight(.semibold)).tracking(1.2)
+                            .foregroundStyle(Theme.faint)
+                        ForEach(versions.dropFirst()) { v in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(v.createdAt.formatted(date: .abbreviated, time: .shortened))
+                                    .font(.caption2.monospaced()).foregroundStyle(Theme.faint)
+                                Text(v.text).font(.caption).foregroundStyle(Theme.secondary)
+                                    .textSelection(.enabled)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.white.opacity(0.03),
+                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                    }
+                }
 
                 if let path = record.filePath {
                     HStack(spacing: 10) {
@@ -280,7 +328,7 @@ private struct RecordDetail: View {
     }
 }
 
-// MARK: - Folder tag
+// MARK: - Tags
 
 /// A small accent chip showing which folder an artifact came from (Downloads / Desktop / …).
 private struct FolderTag: View {
@@ -293,6 +341,18 @@ private struct FolderTag: View {
         .foregroundStyle(Theme.accent)
         .padding(.horizontal, 6).padding(.vertical, 2)
         .background(Theme.accent.opacity(0.14), in: Capsule())
+    }
+}
+
+/// "3 versions" — this source has been re-analyzed after edits (summaries are versioned).
+private struct VersionTag: View {
+    let count: Int
+    var body: some View {
+        Text("\(count) versions")
+            .font(.system(size: 9, weight: .medium))
+            .foregroundStyle(Theme.secondary)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.white.opacity(0.08), in: Capsule())
     }
 }
 

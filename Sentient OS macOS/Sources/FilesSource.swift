@@ -2,8 +2,8 @@
 //  FilesSource.swift
 //  Sentient OS macOS
 //
-//  DataSource over a user folder (Phase 1b starts with ~/Downloads). Recurses subfolders,
-//  keeps only whitelisted extensions, and extracts a BOUNDED amount of content per type:
+//  DataSource over a user folder. Recurses subfolders, keeps only whitelisted extensions,
+//  and extracts a BOUNDED amount of content per type:
 //   • pdf              → first 3 pages of text (PDFKit)
 //   • doc / docx       → text (NSAttributedString, best-effort; legacy .doc may be empty)
 //   • md / txt         → text (char-capped)
@@ -11,6 +11,14 @@
 //
 //  The model is given the home-relative path (e.g. ~/Downloads/Useless Stuff/x.jpg) + creation
 //  date — the folder structure alone is strong signal for junk/intent.
+//
+//  POINTER (June 11 rewrite — Documentation/Pointer Architecture (Kill the Ledger).md):
+//  one "(epochSeconds|path)" pointer per folder root (cursorKey = "file:<FileRoot.id>").
+//  A file's date is max(dateAdded, dateModified, nearest moved-in ancestor's dateAdded) —
+//  dateAdded catches downloads with old mtimes, dateModified catches edits, and the ancestor
+//  propagation catches whole folders dragged into a root (their files keep old dates).
+//  Guards: 60-min freshness hold-back (mid-edit files wait for the next run) and a future-date
+//  clamp (clock weirdness can't poison the pointer). Scan returns candidates OLDEST-FIRST.
 //
 //  Skipping & caps (see Documentation/Files Source (Skipping & Caps).md): code repos and
 //  machine-generated datasets are pruned at the walk level (`pruneReason`), and `scan` bounds
@@ -27,12 +35,15 @@ struct FilesSource: DataSource, Sendable {
     let kind: SourceKind = .file
     let root: URL
     let label: String   // human folder name ("Downloads", "Desktop", a custom folder…) → stored as each artifact's `folder` tag
+    let cursorKey: String        // pointer key for this root ("file:<FileRoot.id>")
     let perDirectoryCap: Int     // max candidates any single directory contributes (newest win)
     let maxAge: TimeInterval?    // drop files older than this (nil = no age cutoff)
 
-    init(root: URL, label: String, perDirectoryCap: Int = 300, maxAge: TimeInterval? = nil) {
+    init(root: URL, label: String, cursorKey: String? = nil,
+         perDirectoryCap: Int = 300, maxAge: TimeInterval? = nil) {
         self.root = root
         self.label = label
+        self.cursorKey = cursorKey ?? "file:custom:" + root.path
         self.perDirectoryCap = perDirectoryCap
         self.maxAge = maxAge
     }
@@ -43,6 +54,13 @@ struct FilesSource: DataSource, Sendable {
     private static let maxContentChars = 8_000
     private static let pdfPageLimit = 3
     private static let imageMaxPixel = 1_280   // ≈ 720p short edge on 16:9
+
+    // Test seams (DEBUG self-tests only — production never touches these): fixtures can't
+    // backdate dateAdded on a real filesystem, so date-sensitive assertions couldn't run
+    // otherwise. `testIgnoreDateAdded` makes file dates mtime-only; `testZeroHoldBack`
+    // disables the freshness hold-back (just-created fixtures would all be held back).
+    nonisolated(unsafe) static var testIgnoreDateAdded = false
+    nonisolated(unsafe) static var testZeroHoldBack = false
 
     // MARK: Skipping (code repos / dependency caches / datasets — Spotlight-style)
 
@@ -137,33 +155,70 @@ struct FilesSource: DataSource, Sendable {
         return patterns.contains { base.range(of: $0, options: .regularExpression) != nil }
     }
 
+    // MARK: Pointer encoding — "(epochSeconds|path)", path = same-second tiebreak
+
+    static func pointerValue(date: Date, path: String) -> String {
+        "\(date.timeIntervalSince1970)|\(path)"
+    }
+
+    static func parsePointer(_ raw: String?) -> (date: Double, path: String)? {
+        guard let raw, let bar = raw.firstIndex(of: "|"), let t = Double(raw[..<bar]) else { return nil }
+        return (t, String(raw[raw.index(after: bar)...]))
+    }
+
+    /// Is (date, path) strictly past the pointer? (nil pointer = everything qualifies.)
+    private static func isPast(_ pointer: (date: Double, path: String)?, date: Double, path: String) -> Bool {
+        guard let pointer else { return true }
+        return date > pointer.date || (date == pointer.date && path > pointer.path)
+    }
+
     // MARK: Scan (cheap — stat only, recurses subfolders)
 
-    func scan(since cursor: String?) throws -> [Candidate] {
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey, .contentModificationDateKey, .creationDateKey]
+    func scan(since cursors: [String: String]) throws -> [Candidate] {
+        let pointer = Self.parsePointer(cursors[cursorKey])
+        let now = Date()
+        let holdBack = Self.testZeroHoldBack ? now : now.addingTimeInterval(-sourceFreshnessHoldBack)
+
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey,
+                                         .contentModificationDateKey, .creationDateKey,
+                                         .addedToDirectoryDateKey]
         guard let enumerator = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: Array(keys),
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else { return [] }
 
+        // Effective "moved-in" date per directory: a folder dragged into the root carries files
+        // with OLD dates — the folder's own dateAdded (propagated down the tree) rescues them.
+        // The enumerator is preorder (parents before children), so parent lookups always hit.
+        var movedIn: [String: Date] = [root.path: .distantPast]
+
         var rows: [(candidate: Candidate, sortKey: Double)] = []
         for case let url as URL in enumerator {
             let vals = try? url.resourceValues(forKeys: keys)
+            let parentEff = movedIn[url.deletingLastPathComponent().path] ?? .distantPast
 
             // Prune at the WALK level: skipDescendants() means nothing inside is ever yielded,
-            // so it never becomes a Candidate / hits the ledger / sees inference.
+            // so it never becomes a Candidate / sees inference.
             if vals?.isDirectory == true {
-                if Self.pruneReason(url) != nil { enumerator.skipDescendants() }
+                if Self.pruneReason(url) != nil { enumerator.skipDescendants(); continue }
+                let added = Self.testIgnoreDateAdded ? .distantPast
+                                                     : (vals?.addedToDirectoryDate ?? .distantPast)
+                movedIn[url.path] = max(parentEff, min(added, now))   // future-clamped
                 continue   // directories are never candidates themselves
             }
 
             guard vals?.isRegularFile == true,
                   Self.allowedExtensions.contains(url.pathExtension.lowercased()) else { continue }
 
-            let size = vals?.fileSize ?? 0
-            let mtime = vals?.contentModificationDate?.timeIntervalSince1970 ?? 0
-            let created = vals?.creationDate
-            let signature = "\(size):\(Int(mtime))"
+            let mtime = vals?.contentModificationDate ?? .distantPast
+            let added = Self.testIgnoreDateAdded ? .distantPast
+                                                 : (vals?.addedToDirectoryDate ?? .distantPast)
+            // The file's date: whichever signal is closest to today, clamped so a future-dated
+            // file (clock weirdness) is treated as "now" instead of poisoning the pointer.
+            let date = min(max(mtime, added, parentEff), now)
+
+            guard date <= holdBack else { continue }                          // freshness hold-back
+            guard Self.isPast(pointer, date: date.timeIntervalSince1970, path: url.path) else { continue }
 
             var meta: [String: String] = [
                 "path": url.path,
@@ -171,16 +226,19 @@ struct FilesSource: DataSource, Sendable {
                 "name": url.lastPathComponent,
                 "folder": label,
             ]
-            if let created { meta["created"] = Self.dateString(created) }
+            if let created = vals?.creationDate { meta["created"] = Self.dateString(created) }
 
-            let candidate = Candidate(id: "file:\(url.path)", kind: .file, signature: signature, metadata: meta)
-            rows.append((candidate, created?.timeIntervalSince1970 ?? mtime))
+            let candidate = Candidate(id: "file:\(url.path)", kind: .file,
+                                      cursorKey: cursorKey,
+                                      cursorValue: Self.pointerValue(date: date, path: url.path),
+                                      itemDate: date, metadata: meta)
+            rows.append((candidate, date.timeIntervalSince1970))
         }
         // Newest first, then the caps (connector-limits decision, June 10–11):
         //  • optional age cutoff (Downloads: 1 year — downloads age into junk; keepers elsewhere don't)
         //  • per-directory cap (300, every root) — the bulk-dump backstop
         //  • per-root cap (newest 1,000, every root)
-        let cutoff = maxAge.map { Date().timeIntervalSince1970 - $0 }
+        let cutoff = maxAge.map { now.timeIntervalSince1970 - $0 }
         var perDir: [String: Int] = [:]
         var kept: [Candidate] = []
         for row in rows.sorted(by: { $0.sortKey > $1.sortKey }) {
@@ -192,7 +250,11 @@ struct FilesSource: DataSource, Sendable {
             perDir[dir, default: 0] += 1
             kept.append(row.candidate)
         }
-        return kept
+        // Process OLDEST-FIRST (the pointer contract): selection is newest-N, consumption is
+        // ascending, so the pointer sweeps forward and a stopped run resumes exactly here.
+        return kept.sorted {
+            ($0.itemDate, $0.id) < ($1.itemDate, $1.id)   // id = "file:<path>" → path tiebreak
+        }
     }
 
     // MARK: Load (expensive — extract content)
@@ -287,9 +349,10 @@ struct FilesSource: DataSource, Sendable {
 
 // MARK: - FileRoot (which folders the Files pipeline can run over)
 
-/// A user folder the Files pipeline can analyze. The DEBUG picker (RootView) offers the three
+/// A user folder the Files pipeline can analyze. The dev picker (RootView) offers the three
 /// standard folders plus any number of custom-chosen ones; each selected root becomes its own
-/// `FilesSource` pass. Arch §3.4: "suggest Desktop + Downloads, but the user chooses the folders."
+/// `FilesSource` pass with its OWN pointer. Arch §3.4: "suggest Desktop + Downloads, but the
+/// user chooses the folders."
 enum FileRoot: Hashable, Identifiable {
     case downloads
     case desktop
@@ -332,8 +395,9 @@ enum FileRoot: Hashable, Identifiable {
     var maxAge: TimeInterval? { self == .downloads ? 365 * 24 * 3_600 : nil }
 
     /// The fully configured source for this root (nil if the system folder can't be resolved).
+    /// The pointer key uses `id` (never `label` — two custom folders can share a name).
     var source: FilesSource? {
-        url.map { FilesSource(root: $0, label: label, maxAge: maxAge) }
+        url.map { FilesSource(root: $0, label: label, cursorKey: "file:\(id)", maxAge: maxAge) }
     }
 
     /// The three standard folders, in display order.

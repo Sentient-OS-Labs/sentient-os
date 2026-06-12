@@ -14,8 +14,9 @@
 //  chat.db stores no names) resolve through AddressBookNames.
 //
 //  Key methods: listChats() (picker rows) · scan(since:) · load(_:). Limits per ChatWindowing:
-//  90-day floor AND newest-200k cap. Tapbacks (associated_message_type != 0) and system items
-//  (item_type != 0) are filtered in SQL — they'd spam every window otherwise.
+//  90-day floor AND newest-100k cap. Tapbacks (associated_message_type != 0) and system items
+//  (item_type != 0) are filtered in SQL — they'd spam every window otherwise. Incrementality:
+//  a per-chat ROWID pointer ("imessage:<guid>" in SourceCursor) + a one-hour tail hold-back.
 //
 
 import Foundation
@@ -124,7 +125,11 @@ struct iMessageSource: DataSource, Sendable {
 
     // MARK: Scan — copy → query → decode → window → delete
 
-    func scan(since cursor: String?) throws -> [Candidate] {
+    /// Pointer (June 11 rewrite): ONE cursor per opted-in chat — key "imessage:<guid>", value =
+    /// the highest consumed `ROWID` — plus a one-hour tail hold-back. Per-chat (not one global
+    /// ROWID pointer) because chats interleave in ROWID space; see WhatsAppSource.scan for the
+    /// full rationale. Windows are emitted ascending per chat (the pointer contract).
+    func scan(since cursors: [String: String]) throws -> [Candidate] {
         let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
         defer { try? FileManager.default.removeItem(at: tempDir) }   // delete the plaintext copy immediately
         let reader = try SQLiteReader(path: dbURL.path)
@@ -138,6 +143,14 @@ struct iMessageSource: DataSource, Sendable {
             .filter { chatGUIDs == nil || chatGUIDs!.contains($0.guid) }
             .map(\.rowid)
         guard !analyzedROWIDs.isEmpty else { return [] }
+
+        // Each analyzed chat's pointer (no row = chat never consumed = everything qualifies).
+        var pointers: [Int64: Int64] = [:]
+        for chat in chats.values {
+            if let v = cursors["imessage:\(chat.guid)"].flatMap(Int64.init) { pointers[chat.rowid] = v }
+        }
+        let tailFloorNS = Int64(Date().addingTimeInterval(-sourceFreshnessHoldBack)
+            .timeIntervalSinceReferenceDate * 1e9)
 
         // Messages within the limits (90-day floor AND newest-`maxMessages` cap over the
         // analyzed chats; the outer ORDER restores per-chat ascending iteration), decoded
@@ -154,6 +167,8 @@ struct iMessageSource: DataSource, Sendable {
             ORDER BY m.chat_id, m.ROWID
             """) { r in
             guard let chat = chats[r.int(5)] else { return }
+            guard r.int(0) > pointers[chat.rowid] ?? -1 else { return }   // already consumed
+            guard r.int(1) <= tailFloorNS else { return }                 // tail hold-back
 
             let body = r.text(3) ?? r.blob(4).flatMap(Self.typedstreamText)
             guard let body, !body.trimmingCharacters(in: .whitespaces).isEmpty else { return }
@@ -172,24 +187,32 @@ struct iMessageSource: DataSource, Sendable {
                 text: String(body.prefix(ChatWindowing.maxMessageChars))))
         }
 
-        // Window each chat to the byte budget; one window = one Artifact.
-        var built: [(candidate: Candidate, last: Date)] = []
+        // Window each chat to the byte budget; one window = one Artifact. A window's cursor
+        // value is its newest ROWID — consuming windows in order sweeps the chat's pointer.
+        var perChat: [(lastActive: Date, candidates: [Candidate])] = []
         for (chatROWID, msgs) in byChat {
             guard let chat = chats[chatROWID] else { continue }
+            var wins: [Candidate] = []
             for win in ChatWindowing.windows(of: msgs) where !win.isEmpty {
                 let meta: [String: String] = [
                     "folder": chat.name,                         // per-chat tag → folder pills in the viewer
                     "name": chat.name,
                     "displayPath": "iMessage · \(chat.name)",
                     "isGroup": chat.isGroup ? "1" : "0",         // → group vs DM bouncer prompt
+                    "msgCount": "\(win.count)",
                     "windowText": ChatWindowing.format(chatName: chat.name, isGroup: chat.isGroup, messages: win),
                 ]
-                let id = "imessage:c\(chatROWID):\(win.first!.id)-\(win.last!.id)"
-                built.append((Candidate(id: id, kind: .imessage, signature: "\(win.count)", metadata: meta),
-                              win.last!.date))
+                wins.append(Candidate(id: "imessage:c\(chatROWID):\(win.first!.id)-\(win.last!.id)",
+                                      kind: .imessage,
+                                      cursorKey: "imessage:\(chat.guid)",
+                                      cursorValue: "\(win.last!.id)",
+                                      itemDate: win.last!.date,
+                                      metadata: meta))
             }
+            if !wins.isEmpty { perChat.append((msgs.last!.date, wins)) }
         }
-        return built.sorted { $0.last > $1.last }.map(\.candidate)   // newest conversations first
+        // Active chats first; windows within a chat stay ascending (the pointer contract).
+        return perChat.sorted { $0.lastActive > $1.lastActive }.flatMap(\.candidates)
     }
 
     func load(_ candidate: Candidate) throws -> Artifact {

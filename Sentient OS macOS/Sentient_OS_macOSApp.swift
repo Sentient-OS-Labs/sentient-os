@@ -22,7 +22,7 @@ struct SentientOSApp: App {
 
         // One container for the whole app; only `Store` ever touches it (Arch §2.3).
         func makeContainer() throws -> ModelContainer {
-            try ModelContainer(for: LedgerEntry.self, Summary.self, SourceCursor.self)
+            try ModelContainer(for: Summary.self, SourceCursor.self)
         }
         do {
             self.store = Store(modelContainer: try makeContainer())

@@ -11,9 +11,9 @@
 //  SAME pipeline as a file: one window = one Artifact = one bouncer verdict (Triage's
 //  chat-flavored prompt). The model sees the chat name, DM-vs-group, and per-message sender.
 //
-//  Requires Full Disk Access (Permissions.swift). v1 scope: backfills the lookback window;
-//  dedup is ledger-based via stable window ids (like Files). A Z_PK cursor, hold-back of the
-//  active tail, and slide-proof window anchoring are a Phase-4 (scheduler) hardening — see Arch §3.1.
+//  Requires Full Disk Access (Permissions.swift). Incrementality: a per-chat Z_PK pointer
+//  ("whatsapp:<jid>" in SourceCursor) + a one-hour tail hold-back — the initial backfill and
+//  the daily delta are the same scan. See Documentation/Pointer Architecture (Kill the Ledger).md.
 //
 
 import Foundation
@@ -116,7 +116,13 @@ struct WhatsAppSource: DataSource, Sendable {
 
     // MARK: Scan — copy → query → window → delete
 
-    func scan(since cursor: String?) throws -> [Candidate] {
+    /// Pointer (June 11 rewrite): ONE cursor per opted-in chat — key "whatsapp:<jid>", value =
+    /// the highest consumed `Z_PK`. Per-chat (not one global Z_PK pointer) because chats
+    /// interleave in Z_PK space: with a single pointer, saving chat B's window would move the
+    /// pointer past chat A's still-unprocessed older messages and a crash would lose them.
+    /// Per-chat keys make every chat independently crash-safe — same shape as Files' per-root
+    /// pointers. Windows are emitted ascending per chat (the pointer contract).
+    func scan(since cursors: [String: String]) throws -> [Candidate] {
         let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
         defer { try? FileManager.default.removeItem(at: tempDir) }   // delete the plaintext copy immediately
         let reader = try SQLiteReader(path: dbURL.path)
@@ -141,6 +147,15 @@ struct WhatsAppSource: DataSource, Sendable {
             .map(\.pk)
         guard !analyzedPKs.isEmpty else { return [] }
 
+        // Each analyzed chat's pointer (no row = chat never consumed = everything qualifies).
+        var pointers: [Int64: Int64] = [:]
+        for chat in chats.values {
+            if let v = cursors["whatsapp:\(chat.jid)"].flatMap(Int64.init) { pointers[chat.pk] = v }
+        }
+        // Tail hold-back: an actively-flowing conversation isn't chopped mid-thought — the last
+        // hour's messages are windowed next run (they stay past the pointer until consumed).
+        let tailFloor = Date().addingTimeInterval(-sourceFreshnessHoldBack).timeIntervalSinceReferenceDate
+
         // Text messages within the limits (90-day floor AND newest-`maxMessages` cap over the
         // analyzed chats; the outer ORDER restores per-chat ascending iteration), oldest →
         // newest per chat.
@@ -158,6 +173,8 @@ struct WhatsAppSource: DataSource, Sendable {
             ORDER BY m.ZCHATSESSION, m.Z_PK
             """) { r in
             guard let chat = chats[r.int(5)] else { return }
+            guard r.int(0) > pointers[chat.pk] ?? -1 else { return }   // already consumed
+            guard r.double(1) <= tailFloor else { return }             // tail hold-back
             let isFromMe = r.int(2) == 1
             byChat[r.int(5), default: []].append(ChatMessage(
                 id: r.int(0),
@@ -169,24 +186,33 @@ struct WhatsAppSource: DataSource, Sendable {
                 text: String((r.text(3) ?? "").prefix(ChatWindowing.maxMessageChars))))
         }
 
-        // Window each chat to the byte budget; one window = one Artifact.
-        var built: [(candidate: Candidate, last: Date)] = []
+        // Window each chat to the byte budget; one window = one Artifact. A window's cursor
+        // value is its newest Z_PK — messages arrive ascending, so consuming windows in order
+        // sweeps the chat's pointer forward.
+        var perChat: [(lastActive: Date, candidates: [Candidate])] = []
         for (chatPK, msgs) in byChat {
             guard let chat = chats[chatPK] else { continue }
+            var wins: [Candidate] = []
             for win in ChatWindowing.windows(of: msgs) where !win.isEmpty {
                 let meta: [String: String] = [
                     "folder": chat.name,                         // per-chat tag → folder pills in the viewer
                     "name": chat.name,
                     "displayPath": "WhatsApp · \(chat.name)",
                     "isGroup": chat.isGroup ? "1" : "0",         // → group vs DM bouncer prompt
+                    "msgCount": "\(win.count)",
                     "windowText": ChatWindowing.format(chatName: chat.name, isGroup: chat.isGroup, messages: win),
                 ]
-                let id = "whatsapp:c\(chatPK):\(win.first!.id)-\(win.last!.id)"
-                built.append((Candidate(id: id, kind: .whatsapp, signature: "\(win.count)", metadata: meta),
-                              win.last!.date))
+                wins.append(Candidate(id: "whatsapp:c\(chatPK):\(win.first!.id)-\(win.last!.id)",
+                                      kind: .whatsapp,
+                                      cursorKey: "whatsapp:\(chat.jid)",
+                                      cursorValue: "\(win.last!.id)",
+                                      itemDate: win.last!.date,
+                                      metadata: meta))
             }
+            if !wins.isEmpty { perChat.append((msgs.last!.date, wins)) }
         }
-        return built.sorted { $0.last > $1.last }.map(\.candidate)   // newest conversations first
+        // Active chats first; windows within a chat stay ascending (the pointer contract).
+        return perChat.sorted { $0.lastActive > $1.lastActive }.flatMap(\.candidates)
     }
 
     func load(_ candidate: Candidate) throws -> Artifact {

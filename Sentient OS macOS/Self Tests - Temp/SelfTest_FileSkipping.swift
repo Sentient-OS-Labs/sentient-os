@@ -19,6 +19,13 @@ enum SelfTestFileSkipping {
     // MARK: - Synthetic fixture assertions
 
     static func synthetic(emit: (String) -> Void) {
+        // Pointer-architecture test seams: fixtures can't backdate dateAdded (the filesystem
+        // stamps "now"), and just-created files would all be freshness-held-back. Dates in this
+        // harness are therefore mtime-only, with no hold-back.
+        FilesSource.testIgnoreDateAdded = true
+        FilesSource.testZeroHoldBack = true
+        defer { FilesSource.testIgnoreDateAdded = false; FilesSource.testZeroHoldBack = false }
+
         let fm = FileManager.default
         var base = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("sentient-skiptest-\(UUID().uuidString.prefix(8))")
@@ -53,7 +60,7 @@ enum SelfTestFileSkipping {
         func counts(_ source: FilesSource) -> [String: Int] {
             let rootPath = source.root.path + "/"
             var by: [String: Int] = [:]
-            for c in (try? source.scan(since: nil)) ?? [] {
+            for c in (try? source.scan(since: [:])) ?? [] {
                 guard let p = c.metadata["path"], p.hasPrefix(rootPath) else { continue }
                 by[String(p.dropFirst(rootPath.count).split(separator: "/").first ?? "?"), default: 0] += 1
             }
@@ -158,7 +165,7 @@ enum SelfTestFileSkipping {
             }
 
             // What survives, and which directories contribute the most.
-            let candidates = (try? source.scan(since: nil)) ?? []
+            let candidates = (try? source.scan(since: [:])) ?? []
             var byDir: [String: Int] = [:]
             for c in candidates {
                 byDir[((c.metadata["path"] ?? "?") as NSString).deletingLastPathComponent, default: 0] += 1
