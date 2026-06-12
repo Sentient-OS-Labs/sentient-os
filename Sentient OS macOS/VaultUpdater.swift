@@ -85,13 +85,13 @@ actor VaultUpdater {
         invocation.cwd = vault.path
         invocation.timeout = 1_800                                   // a daily delta is minutes, not hours
 
-        Log("VaultUpdater: folding \(queue.count) summaries into the vault…")
+        Log("VaultUpdater: reviewing \(queue.count) summaries against the vault…")
         do {
             let envelope = try await CodexCLI.shared.run(invocation)
             resumeSessionID = nil
             await store.markSynced(queue.map(\.persistentID))        // EXACTLY the rows we sent
             await MainActor.run { VaultActivity.shared.vaultDirty = true }
-            Log("VaultUpdater: ✅ folded \(queue.count) (turns \(envelope.numTurns ?? -1), \(envelope.durationMS ?? -1)ms) — \(envelope.result.prefix(120))")
+            Log("VaultUpdater: ✅ reviewed \(queue.count) (turns \(envelope.numTurns ?? -1), \(envelope.durationMS ?? -1)ms) — \(envelope.result.prefix(120))")
             return queue.count
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             resumeSessionID = sessionID                              // stamp nothing; resume later
@@ -141,6 +141,12 @@ actor VaultUpdater {
         \(skeleton)
 
         ## How to work — surgical edits, not a rebuild
+        - **You are the second sieve — not every item deserves the vault.** The on-device \
+        model already dropped obvious junk, but it is a small, lenient model; YOU are the \
+        quality bar, exactly as when you built this vault (curate ruthlessly). If an item adds \
+        nothing durable — trivia, noise, redundancy an existing note already covers — SKIP it: \
+        change nothing for that item. A run where nothing is worth folding is a perfectly good \
+        run; reply "0".
         - **Explore only the notes you need.** Search the tree to find where each new item \
         belongs; do not re-read the whole vault.
         - **Rewrite only what changed.** Prefer editing an existing note over creating a \

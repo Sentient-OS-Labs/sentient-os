@@ -19,7 +19,11 @@ judged on-device, discarded, gone (no tombstones anywhere; `LifetimeStats` keeps
 | `whatsapp:<jid>` | highest consumed `Z_PK` | **Per chat** (see below). |
 | `imessage:<guid>` | highest consumed `ROWID` | **Per chat**. |
 | `notes` | `modEpochSeconds\|noteUUID` | Edited note → mod-date passes the pointer → re-summarized. |
-| `proactive` | `timeIntervalSinceReferenceDate` | Judged-summaries high-water mark (Part II). ⚠️ Stored in Date's NATIVE representation — epoch conversion round-trips lossily and re-judges the newest item. |
+
+⚠️ **Date-valued pointer rule** (learned live): store `timeIntervalSinceReferenceDate` — Date's
+NATIVE representation. A Unix-epoch conversion round-trips lossily through Double and the
+strict `>` re-matches the newest already-consumed row. (Proactive intelligence's judged-items
+pointer hit exactly this; it returns with its own trigger — scaffold in git `67d8078`.)
 
 **Why per-chat keys (a deliberate divergence from the handoff's single Z_PK pointer):** chats
 interleave in Z_PK/ROWID space. With one global pointer, saving chat B's window advances the
