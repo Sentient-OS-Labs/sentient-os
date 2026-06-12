@@ -2,81 +2,83 @@
 //  Models.swift
 //  Sentient OS macOS
 //
-//  SwiftData persistence models — the local "plumbing" store (Arch §6).
-//   - LedgerEntry:  one tombstone per artifact EVER analyzed (dedup; permanent).
-//   - Summary:      survivors only — the ~30-word summaries that feed the Stage-2 vault.
-//   - SourceCursor: per-source resumable progress marker (one row per source kind).
+//  SwiftData persistence models — the local "plumbing" store (Arch §6, pointer architecture).
+//   - Summary:      survivors only, VERSIONED — every (re-)analysis inserts a new row.
+//   - SourceCursor: one row per pointer key — "processed everything up to HERE".
 //   - Verdict:      the on-device "bouncer" decision (survivor / junk / sensitive).
+//
+//  There is NO ledger and NO tombstones (June 11 pointer rewrite): junk and sensitive items
+//  leave ZERO trace — judged on-device, discarded, gone. "What's new?" is answered by the
+//  per-source pointers, not by diffing against a permanent list of the past.
 //
 //  Only the `Store` @ModelActor (Store.swift) ever constructs or mutates these. Everything
 //  else passes Sendable value types (see Sources/DataSource.swift). The vault — not this
-//  DB — is the product; this is just the dedup ledger + a staging area for survivors.
+//  DB — is the product; this is the pointer store + a staging area for survivor summaries.
+//  Doc: Documentation/Pointer Architecture (Kill the Ledger).md
 //
 
 import Foundation
 import SwiftData
 
-/// The on-device model's per-artifact verdict. Decides what survives (Arch §1.1, §5.2).
+/// The on-device model's per-artifact verdict. Survivors get a Summary row; junk/sensitive
+/// save NOTHING (the pointer simply moves past them).
 enum Verdict: Int, Codable, Sendable {
-    case survivor = 0   // useful + not sensitive → tombstone + summary, enters vault (Stage 2)
-    case junk      = 1   // not worth keeping      → tombstone only (summary discarded)
-    case sensitive = 2   // must never leave device → tombstone only (summary discarded)
+    case survivor = 0   // useful + not sensitive → summary row, enters the vault (Stage 2)
+    case junk      = 1   // not worth keeping      → zero trace
+    case sensitive = 2   // must never leave device → zero trace
 }
 
-/// One row per artifact we've EVER analyzed — the permanent dedup tombstone.
-@Model
-final class LedgerEntry {
-    @Attribute(.unique) var sourceID: String   // stable id, e.g. "file:/Users/…/a.pdf", "imessage:1234"
-    var sourceKind: String                      // SourceKind.rawValue
-    var folder: String = ""                     // files: which root it came from ("Downloads", "Desktop", a custom folder…); "" for db sources
-    var signature: String                       // files: "size:mtime"; db sources: the cursor value
-    var verdict: Int                            // Verdict.rawValue
-    var firstSeen: Date
-    var lastSeen: Date
-
-    init(sourceID: String, sourceKind: String, folder: String = "", signature: String,
-         verdict: Int, firstSeen: Date, lastSeen: Date) {
-        self.sourceID = sourceID
-        self.sourceKind = sourceKind
-        self.folder = folder
-        self.signature = signature
-        self.verdict = verdict
-        self.firstSeen = firstSeen
-        self.lastSeen = lastSeen
-    }
-}
-
-/// Survivors only — the clean summaries that get folded into the vault later (Stage 2).
+/// One survivor summary VERSION. `sourceID` is deliberately NOT unique — re-analyzing an
+/// edited artifact INSERTS a new row (our code appends " — Edit" to the title), because the
+/// cloud model benefits from seeing the evolution. `survivorSummaries()` collapses to
+/// latest-per-source for full vault generations; the iterative updater consumes every
+/// unsynced version (`syncedToVault == nil` — rows are born unsynced, so the updater's
+/// queue populates itself with zero extra bookkeeping).
 @Model
 final class Summary {
-    @Attribute(.unique) var sourceID: String
+    var sourceID: String
+    var kind: String                  // SourceKind.rawValue — the vault prompt's source-trust tiers key on it
+    var folder: String                // files: root label ("Downloads"…); chats: chat name; notes: folder
     var text: String                  // ~30-word summary (the model writes this FIRST)
     var title: String?                // short human title (written after the summary)
     var reminderFlagged: Bool
-    var syncedToVault: Date?          // nil until folded into the vault (Stage 2)
+    var itemDate: Date?               // the artifact's OWN date (file date / newest message / note mod-date)
+    var syncedToVault: Date?          // nil until folded into the vault — the updater's input queue
     var createdAt: Date
 
-    init(sourceID: String, text: String, title: String? = nil,
-         reminderFlagged: Bool = false, syncedToVault: Date? = nil, createdAt: Date) {
+    init(sourceID: String, kind: String, folder: String, text: String, title: String? = nil,
+         reminderFlagged: Bool = false, itemDate: Date? = nil, syncedToVault: Date? = nil,
+         createdAt: Date) {
         self.sourceID = sourceID
+        self.kind = kind
+        self.folder = folder
         self.text = text
         self.title = title
         self.reminderFlagged = reminderFlagged
+        self.itemDate = itemDate
         self.syncedToVault = syncedToVault
         self.createdAt = createdAt
     }
 }
 
-/// One row per source kind — the cursor we advance only AFTER a durable save, so a
-/// crashed overnight run resumes rather than skips (Arch §3).
+/// One row per pointer key — "I have processed everything up to HERE." Advanced only after a
+/// durable save (the cursor write IS the durable record for junk/sensitive, which save nothing
+/// else), so a crashed run resumes rather than skips.
+///
+/// Keys in use:
+///   "file:<FileRoot.id>"   per folder root, value "epochSeconds|path" (path = same-second tiebreak)
+///   "whatsapp:<jid>"       per opted-in chat, value = highest consumed Z_PK
+///   "imessage:<guid>"      per opted-in chat, value = highest consumed ROWID
+///   "notes"                value "modEpochSeconds|noteUUID"
+///   "proactive"            judged-summaries high-water mark (createdAt epoch), Part II §E
 @Model
 final class SourceCursor {
-    @Attribute(.unique) var kind: String   // SourceKind.rawValue
-    var value: String                       // opaque marker (Z_PK, ROWID, mod-date, …)
+    @Attribute(.unique) var key: String
+    var value: String
     var updatedAt: Date
 
-    init(kind: String, value: String, updatedAt: Date) {
-        self.kind = kind
+    init(key: String, value: String, updatedAt: Date) {
+        self.key = key
         self.value = value
         self.updatedAt = updatedAt
     }

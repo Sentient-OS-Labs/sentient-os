@@ -70,8 +70,13 @@ actor VaultGenerator {
     }
 
     /// Where the vault lives on disk — visible, in the user's home folder.
+    /// `SENTIENT_VAULT_ROOT` overrides for self-tests (the daysend harness points everything
+    /// vault-shaped at a fixture dir instead of the real vault).
     static var vaultRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if let override = ProcessInfo.processInfo.environment["SENTIENT_VAULT_ROOT"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Sentient OS -- The Vault", isDirectory: true)
     }
 
@@ -181,6 +186,49 @@ actor VaultGenerator {
                       outputTokens: envelope.outputTokens ?? 0,
                       stopReason: envelope.stopReason ?? "end_turn",
                       vaultPath: root.path)
+    }
+
+    /// The welcome briefing — initial gen's second act ("here's what I learned about you"),
+    /// For You's day-one artifact. A cheap Sonnet pass over the freshly built vault that lands
+    /// ONE .md in the Briefings folder (outside the vault — it never rides the mirror push).
+    /// Best-effort: a failure logs and moves on; the vault itself is already safe on disk.
+    func writeWelcomeBriefing() async {
+        let date: String = {
+            let f = ISO8601DateFormatter(); f.formatOptions = [.withFullDate]
+            return f.string(from: Date())
+        }()
+        let file = Briefings.dir.appendingPathComponent("\(date) — What I learned about you.md")
+
+        var inv = ClaudeCLI.Invocation(prompt: """
+            You just finished organizing a person's entire digital life into the Obsidian-style \
+            knowledge vault that is your working directory. Now write them a welcome.
+
+            Read the root README.md first, then explore a handful of the most interesting notes \
+            (Glob/Grep/Read — be selective, not exhaustive). Then write ONE markdown briefing to \
+            this exact path:
+            \(file.path)
+
+            Shape: title "What I learned about you". Open with a warm, specific portrait of who \
+            they are — a few real paragraphs, addressed to them as "you" (never "the user"). \
+            Then 3–5 delightful cross-domain connections you noticed that they might not have \
+            seen themselves (the screenshot trail that matches a note, the plan echoed across \
+            chats…). Close with one short paragraph on what happens next: their vault now stays \
+            current automatically, and their other AIs can read it the moment they connect. \
+            Specific beats flattering; true beats complete. Never include raw private specifics.
+
+            When the briefing is written, reply with one line: DONE.
+            """)
+        inv.model = .sonnet
+        inv.allowedTools = ["Read", "Glob", "Grep", "Write"]
+        inv.cwd = Self.vaultRoot.path
+        inv.addDirs = [Briefings.dir.path]
+        inv.timeout = 600
+        do {
+            _ = try await ClaudeCLI.shared.run(inv)
+            Log("VaultGenerator: welcome briefing → \(file.lastPathComponent)")
+        } catch {
+            Log("VaultGenerator: welcome briefing failed — \(error)")
+        }
     }
 
     /// Count the .md notes (and folders containing them) under a directory.
@@ -319,8 +367,9 @@ actor VaultGenerator {
         """
     }
 
-    /// Location string + the source-trust tag the prompt keys on (the user's own notes vs saved files).
-    private static func locSrc(_ s: SummaryItem) -> (loc: String, source: String) {
+    /// Location string + the source-trust tag the prompt keys on (the user's own notes vs saved
+    /// files). Internal: the iterative updater (VaultUpdater) formats its items with it too.
+    static func locSrc(_ s: SummaryItem) -> (loc: String, source: String) {
         if s.kind == .whatsapp { return (s.folder, "WhatsApp · \(s.folder)") }
         let p = relPath(s.sourceID)
         let low = p.lowercased()

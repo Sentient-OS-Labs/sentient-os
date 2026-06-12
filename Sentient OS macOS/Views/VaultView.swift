@@ -29,7 +29,7 @@ final class VaultModel {
     var resumeToken: VaultGenerator.ResumeToken?
 
     func loadCount(_ store: Store) async {
-        summaryCount = await store.counts().summaries
+        summaryCount = await store.counts().sources   // distinct sources = the corpus size
     }
 
     func run(_ store: Store) async {
@@ -52,8 +52,17 @@ final class VaultModel {
             }
             result = res
             resumeToken = nil
-            await store.markAllSurvivorsSynced()
+            // Stamp exactly what this full generation represented (corpus rows + the versions
+            // they supersede) — anything newer stays queued for the iterative updater.
+            await store.markCorpusSynced(summaries)
             phase = .done
+            // The vault changed → mirror push (if enabled), plus the day-one welcome briefing.
+            // Both best-effort and off the UI path.
+            VaultActivity.shared.vaultDirty = true
+            Task.detached(priority: .utility) {
+                await VaultGenerator().writeWelcomeBriefing()
+                _ = await DaysEndJob.shared.pushIfDirty()
+            }
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
             resumeToken = resume
             errorMsg = "Claude hit its usage limit — \"Try again\" later will resume right where it left off. (\(message.prefix(160)))"

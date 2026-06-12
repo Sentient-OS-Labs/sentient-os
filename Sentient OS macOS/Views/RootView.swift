@@ -37,6 +37,8 @@ struct RootView: View {
     @State private var showIMessagePicker = false
     @State private var resetResult: String?
     @State private var isResetting = false
+    @State private var daysEndResult: String?
+    @State private var isDaysEndRunning = false
     // "More Options" — advanced debug (Full Disk Access + the DB sources), tucked away so the
     // main debug area stays uncluttered.
     @State private var showMoreOptions = false
@@ -143,6 +145,13 @@ struct RootView: View {
             debugTest(title: "Reset store", systemImage: "trash",
                       isRunning: isResetting, result: resetResult, passPrefix: "Cleared",
                       action: { Task { await runReset() } })
+
+            // The scheduler's stand-in [DECIDED]: this button IS the day's-end trigger until
+            // the condition-gate loop lands — which will call exactly the same entry point
+            // (the full pipeline: updater → proactive intelligence → mirror push → notify).
+            debugTest(title: "Run Proactive Intelligence", systemImage: "bell.badge",
+                      isRunning: isDaysEndRunning, result: daysEndResult, passPrefix: "Done",
+                      action: { Task { await runDaysEnd() } })
 
             Button {
                 withAnimation { showMoreOptions.toggle() }
@@ -347,13 +356,21 @@ struct RootView: View {
     }
 
     @MainActor
+    private func runDaysEnd() async {
+        isDaysEndRunning = true
+        defer { isDaysEndRunning = false }
+        daysEndResult = await DaysEndJob.shared.run(store: store)
+    }
+
+    @MainActor
     private func runReset() async {
         isResetting = true
         defer { isResetting = false }
         do {
             try await store.reset()
+            LifetimeStats.reset()
             let counts = await store.counts()
-            resetResult = "Cleared ✓  ledger=\(counts.ledger)  summaries=\(counts.summaries)"
+            resetResult = "Cleared ✓  summaries=\(counts.versions)  pointers=\(counts.cursors)"
         } catch {
             resetResult = "Reset FAIL: \(error)"
         }

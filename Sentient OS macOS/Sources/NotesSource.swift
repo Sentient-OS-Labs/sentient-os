@@ -12,9 +12,9 @@
 //  deliberately NOT a schema-aware protobuf parser. Fail-closed: anything undecodable is
 //  skipped, never fed garbled to the model.
 //
-//  Dedup: id = the note's stable UUID (ZIDENTIFIER); signature = modification date, so an
-//  edited note reprocesses automatically (the Files size:mtime pattern). Locked
-//  (ZISPASSWORDPROTECTED) and deleted (ZMARKEDFORDELETION) notes are skipped in SQL.
+//  Incrementality (June 11 pointer rewrite): one "notes" pointer, "(modEpochSeconds|UUID)" —
+//  an edited note's mod-date moves past it and the note re-summarizes as a new version.
+//  Locked (ZISPASSWORDPROTECTED) and deleted (ZMARKEDFORDELETION) notes are skipped in SQL.
 //  Requires Full Disk Access. Key methods: scan(since:) · load(_:) · decodeBody(_:).
 //
 
@@ -36,7 +36,15 @@ struct NotesSource: DataSource, Sendable {
 
     // MARK: Scan — copy → query → decode → delete
 
-    func scan(since cursor: String?) throws -> [Candidate] {
+    /// Pointer (June 11 rewrite): one cursor, key "notes", value "(modEpochSeconds|noteUUID)"
+    /// (UUID = same-second tiebreak). An edited note's mod-date moves past the pointer → it's
+    /// re-summarized as a new version. The one-hour hold-back keeps a note that's being typed
+    /// out of the run. Candidates are emitted OLDEST-FIRST (the pointer contract).
+    func scan(since cursors: [String: String]) throws -> [Candidate] {
+        let pointer = Self.parsePointer(cursors["notes"])
+        let holdBackFloor = Date().addingTimeInterval(-sourceFreshnessHoldBack)
+            .timeIntervalSinceReferenceDate
+
         let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
         defer { try? FileManager.default.removeItem(at: tempDir) }   // delete the plaintext copy immediately
         let reader = try SQLiteReader(path: dbURL.path)
@@ -47,8 +55,8 @@ struct NotesSource: DataSource, Sendable {
             if let t = r.text(1) { folders[r.int(0)] = t }
         }
 
-        // Newest notes first; locked/deleted skipped in SQL. Creation-date column name varies
-        // across macOS versions → COALESCE the known variants.
+        // Newest notes first (the cap selects the newest `maxNotes`); locked/deleted skipped in
+        // SQL. Creation-date column name varies across macOS versions → COALESCE the variants.
         var out: [Candidate] = []
         try reader.forEachRow("""
             SELECT o.ZIDENTIFIER, o.ZTITLE1, o.ZMODIFICATIONDATE1,
@@ -58,21 +66,26 @@ struct NotesSource: DataSource, Sendable {
             WHERE o.ZISPASSWORDPROTECTED IS NOT 1 AND o.ZMARKEDFORDELETION IS NOT 1
             ORDER BY o.ZMODIFICATIONDATE1 DESC LIMIT \(Self.maxNotes)
             """) { r in
-            guard let id = r.text(0), let blob = r.blob(5),
+            guard let id = r.text(0) else { return }
+            let modified = r.double(2)
+            guard modified <= holdBackFloor else { return }                       // being typed right now
+            guard Self.isPast(pointer, modified: Int64(modified), uuid: id) else { return }   // already consumed
+            guard let blob = r.blob(5),
                   let decoded = Self.decodeBody(blob) else { return }   // no/undecodable body → skip (fail-closed)
             let body = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !body.isEmpty else { return }                         // attachment-only / blank notes
 
             let title = r.text(1) ?? String(body.prefix(40))
             let folder = folders[r.int(4)] ?? "Notes"
-            let modified = r.double(2)
             let createdTS = r.double(3)
             let created = Date(timeIntervalSinceReferenceDate: createdTS > 0 ? createdTS : modified)
 
             out.append(Candidate(
                 id: "notes:\(id)",
                 kind: .notes,
-                signature: "\(Int(modified))",     // mod-date signature → edited notes reprocess
+                cursorKey: "notes",
+                cursorValue: "\(Int64(modified))|\(id)",
+                itemDate: Date(timeIntervalSinceReferenceDate: modified),
                 metadata: [
                     "folder": folder,              // per-folder tag → folder pills in the viewer
                     "name": title,
@@ -81,7 +94,20 @@ struct NotesSource: DataSource, Sendable {
                     "noteText": String(body.prefix(Self.maxContentChars)),
                 ]))
         }
-        return out   // already newest-first from the ORDER BY
+        // Selection was newest-first (the cap); consumption is oldest-first (the pointer contract).
+        return out.sorted { ($0.itemDate, $0.id) < ($1.itemDate, $1.id) }
+    }
+
+    // MARK: Pointer encoding — "(modEpochSeconds|noteUUID)"
+
+    private static func parsePointer(_ raw: String?) -> (modified: Int64, uuid: String)? {
+        guard let raw, let bar = raw.firstIndex(of: "|"), let t = Int64(raw[..<bar]) else { return nil }
+        return (t, String(raw[raw.index(after: bar)...]))
+    }
+
+    private static func isPast(_ pointer: (modified: Int64, uuid: String)?, modified: Int64, uuid: String) -> Bool {
+        guard let pointer else { return true }
+        return modified > pointer.modified || (modified == pointer.modified && uuid > pointer.uuid)
     }
 
     func load(_ candidate: Candidate) throws -> Artifact {

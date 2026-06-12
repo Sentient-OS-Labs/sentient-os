@@ -2,10 +2,18 @@
 //  Pipeline.swift
 //  Sentient OS macOS
 //
-//  The loop that ties Sources + Engine + Store together (Arch §2.1). For each new/changed
-//  item: load content → Engine.generate → Triage.decide → Store.save (tombstone always;
-//  summary only for survivors) → report progress. Runs off-main on its own actor; the heavy
-//  inference hops to the Engine actor, persistence to the Store actor.
+//  The loop that ties Sources + Engine + Store together (Arch §2.1). Fetches the pointer map,
+//  scans each source for items PAST its pointers, and processes them in scan order (ascending
+//  per pointer — the pointer contract): load content → Engine.generate → Triage.decide →
+//  Store.record (summary version for survivors + the pointer advance, one transaction).
+//  Initial run and incremental run are the SAME code path — an empty pointer map simply means
+//  "everything" (connector caps still apply inside each source's scan).
+//
+//  Failure policy (pointer architecture, June 11): a failed item is retried ONCE on a fresh
+//  engine when its failure triggered a reactive reload; an item that still fails is given up —
+//  its pointer is not advanced by it, so it's retried next run only if nothing newer in its
+//  pointer key succeeds (no failure bookkeeping anywhere, by design). Engine-wedge resilience
+//  (preemptive + reactive reloads) is unchanged.
 //
 
 import Foundation
@@ -37,7 +45,7 @@ actor Pipeline {
         self.store = store
     }
 
-    /// Process up to `limit` new/changed items from `source`. `onProgress` fires after each item.
+    /// Process up to `limit` items past `source`'s pointers. `onProgress` fires after each item.
     @discardableResult
     func run<S: DataSource & Sendable>(
         source: S,
@@ -45,8 +53,8 @@ actor Pipeline {
         limit: Int? = nil,
         onProgress: @Sendable (PipelineProgress) -> Void = { _ in }
     ) async throws -> PipelineProgress {
-        let candidates = try source.scan(since: nil)
-        var todo = await store.newOrChanged(candidates)
+        let cursors = await store.cursors()
+        var todo = try source.scan(since: cursors)
         if let limit, todo.count > limit { todo = Array(todo.prefix(limit)) }
 
         var p = PipelineProgress(total: todo.count)
@@ -74,13 +82,9 @@ actor Pipeline {
             sinceReload = 0
         }
 
-        for cand in todo {
-            if Task.isCancelled { break }   // "Stop Analysis" — halt after the current file
-
-            if sinceReload >= preemptiveReloadEvery { await reloadEngine() }
-
-            p.lastPath = cand.metadata["displayPath"] ?? cand.metadata["name"]
-            p.lastFilePath = cand.metadata["path"]
+        // One full attempt at one candidate: load → generate → decide → record (which also
+        // advances the candidate's pointer, durably). Returns false on any failure.
+        func attempt(_ cand: Candidate) async -> Bool {
             do {
                 // Drain transient extraction buffers (image/PDF/AppKit) every file so RAM
                 // doesn't creep across a long batch.
@@ -93,7 +97,8 @@ actor Pipeline {
                 #if DEBUG
                 Log("• \(cand.metadata["displayPath"] ?? cand.id)\n  → \(outcome.verdict) | \(result.text.replacingOccurrences(of: "\n", with: " "))")
                 #endif
-                try await store.save(artifact: artifact, verdict: outcome.verdict, summary: outcome.draft)
+                try await store.record(artifact: artifact, verdict: outcome.verdict, summary: outcome.draft)
+                LifetimeStats.bump(outcome.verdict)
 
                 switch outcome.verdict {
                 case .survivor:  p.survivors += 1
@@ -107,11 +112,23 @@ actor Pipeline {
                 p.lastReminder = outcome.reminder
                 p.lastSeconds = result.totalTime
                 p.totalSeconds += result.totalTime
-                consecutiveFailures = 0
-                reloadsWithoutProgress = 0   // we processed an item → the engine is healthy
+                return true
             } catch {
-                p.failed += 1
                 p.lastSummary = "(skipped: \(error))"
+                return false
+            }
+        }
+
+        for cand in todo {
+            if Task.isCancelled { break }   // "Stop Analysis" — halt after the current item
+
+            if sinceReload >= preemptiveReloadEvery { await reloadEngine() }
+
+            p.lastPath = cand.metadata["displayPath"] ?? cand.metadata["name"]
+            p.lastFilePath = cand.metadata["path"]
+
+            var ok = await attempt(cand)
+            if !ok {
                 consecutiveFailures += 1
                 if consecutiveFailures >= failuresBeforeReload {
                     guard reloadsWithoutProgress < maxReloadsWithoutProgress else {
@@ -123,7 +140,14 @@ actor Pipeline {
                     await reloadEngine()
                     reloadsWithoutProgress += 1
                     consecutiveFailures = 0
+                    ok = await attempt(cand)   // the wedge ate this item's first try — retry it once
                 }
+            }
+            if ok {
+                consecutiveFailures = 0
+                reloadsWithoutProgress = 0   // we processed an item → the engine is healthy
+            } else {
+                p.failed += 1
             }
             sinceReload += 1
             p.done += 1

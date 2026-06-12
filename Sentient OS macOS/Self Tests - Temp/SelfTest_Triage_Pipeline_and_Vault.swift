@@ -17,7 +17,8 @@
 //    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "notes" | "files"  (model dump) ·
 //                          "tokens"  (WhatsApp window token-cost measurement, model) ·
 //                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "claudecli"
-//                          | "vault" | "skipping" | "skipcensus"  (no model)
+//                          | "vault" | "skipping" | "skipcensus"
+//                          | "incremental"  (pointer-architecture proof, no model)
 //    SENTIENT_SELFTEST_N   item count (default 6)
 //    SENTIENT_SELFTEST_OUT output file (default <tmp>/sentient-selftest.txt)
 //    SENTIENT_MODEL_PATH   override the dev model path
@@ -84,6 +85,17 @@ enum SelfTest {
         // read-only census of the real standard folders ("skipcensus"). See SelfTest_FileSkipping.swift.
         if mode == "skipping" { SelfTestFileSkipping.synthetic(emit: emit); return }
         if mode == "skipcensus" { SelfTestFileSkipping.census(emit: emit); return }
+
+        // Incremental-pointer proof: deterministic, no model — runs the REAL FilesSource + Store
+        // (in-memory) through the pointer lifecycle: full pass → no-op pass → new file → edited
+        // file (versioned summary + " — Edit" title) → junk advances the pointer with zero trace.
+        if mode == "incremental" { await SelfTestIncremental.run(emit: emit); return }
+
+        // Living-system harnesses (real Sonnet calls — see SelfTest_DaysEnd.swift):
+        // "daysend" needs SENTIENT_VAULT_ROOT (fixture vault); "proactive" seeds flagged
+        // summaries and proves the judge + the ≤1/day cap + the pointer.
+        if mode == "daysend" { await SelfTestDaysEnd.daysend(emit: emit); return }
+        if mode == "proactive" { await SelfTestDaysEnd.proactive(emit: emit); return }
 
         // ClaudeCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
         // claude -p spine (binary → env → stdin → JSON envelope). Verifies the compute waterfall's
@@ -232,7 +244,7 @@ enum SelfTest {
             let effort = env["SENTIENT_VAULT_EFFORT"] ?? "xhigh"
             let route = env["SENTIENT_VAULT_ROUTE"] ?? "auto"
             let container: ModelContainer
-            do { container = try ModelContainer(for: LedgerEntry.self, Summary.self, SourceCursor.self) }
+            do { container = try ModelContainer(for: Summary.self, SourceCursor.self) }
             catch { emit("ModelContainer FAILED: \(error)"); return }
             let store = Store(modelContainer: container)
             var summaries = await store.survivorSummaries()
@@ -286,7 +298,7 @@ enum SelfTest {
         if mode == "tokens" {
             let source = WhatsAppSource(chatJIDs: chatFilter((try? WhatsAppSource().listChats()) ?? []))
             let candidates: [Candidate]
-            do { candidates = try source.scan(since: nil) }
+            do { candidates = try source.scan(since: [:]) }
             catch { emit("scan FAILED: \(error)"); return }
             emit("windows in backlog: \(candidates.count) · current byte budget: \(ChatWindowing.maxWindowBytes)\n")
             guard !candidates.isEmpty else { return }
@@ -299,7 +311,8 @@ enum SelfTest {
             // conversation bytes). Window tokens = prefill − overhead[flavour].
             var overhead: [String: Int] = [:]
             for flavour in ["0", "1"] {
-                let cand = Candidate(id: "calibration", kind: .whatsapp, signature: "0",
+                let cand = Candidate(id: "calibration", kind: .whatsapp,
+                                     cursorKey: "", cursorValue: "", itemDate: Date(),
                                      metadata: ["isGroup": flavour, "windowText": ""])
                 let prompt = Triage.prompt(for: Artifact(candidate: cand, text: ""), currentDate: Date())
                 do {
@@ -343,7 +356,7 @@ enum SelfTest {
                         + (cand.metadata["isGroup"] == "1" ? " [g]" : "")
                     emit(pad(name, 26)
                          + String(format: " %4d %7d %8d %8d %6.2f %7d",
-                                  Int(cand.signature) ?? 0, winBytes, prefill, winTokens, row.ratio, row.decode))
+                                  Int(cand.metadata["msgCount"] ?? "") ?? 0, winBytes, prefill, winTokens, row.ratio, row.decode))
                 } catch { emit("ITEM \(i + 1) FAILED: \(error)") }
             }
             await engine.unload()
@@ -398,7 +411,7 @@ enum SelfTest {
         }
 
         let candidates: [Candidate]
-        do { candidates = try source.scan(since: nil) }
+        do { candidates = try source.scan(since: [:]) }
         catch { emit("scan FAILED: \(error)"); return }
         emit("scanned \(candidates.count) candidates; dumping first \(min(count, candidates.count))\n")
         guard !candidates.isEmpty else { emit("nothing to dump."); return }
