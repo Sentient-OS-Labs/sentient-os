@@ -287,7 +287,7 @@ enum SelfTest {
         if mode == "tokens" {
             let source = WhatsAppSource(chatJIDs: chatFilter((try? WhatsAppSource().listChats()) ?? []))
             let candidates: [Candidate]
-            do { candidates = try source.scan(since: [:]) }
+            do { candidates = try source.scan(since: [:]).candidates }
             catch { emit("scan FAILED: \(error)"); return }
             emit("windows in backlog: \(candidates.count) · current byte budget: \(ChatWindowing.maxWindowBytes)\n")
             guard !candidates.isEmpty else { return }
@@ -400,7 +400,7 @@ enum SelfTest {
         }
 
         let candidates: [Candidate]
-        do { candidates = try source.scan(since: [:]) }
+        do { candidates = try source.scan(since: [:]).candidates }
         catch { emit("scan FAILED: \(error)"); return }
         emit("scanned \(candidates.count) candidates; dumping first \(min(count, candidates.count))\n")
         guard !candidates.isEmpty else { emit("nothing to dump."); return }

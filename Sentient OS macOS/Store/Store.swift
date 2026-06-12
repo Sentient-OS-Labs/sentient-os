@@ -142,8 +142,10 @@ actor Store {
     // MARK: Stage 2 — the cloud vault & the iterative updater
 
     /// The corpus for FULL vault generations (initial gen / Regenerate): the LATEST version per
-    /// source, oldest first (stable ordering → stable `#index` refs). A 50-version file
-    /// contributes exactly one entry.
+    /// source, in the artifact's own chronology (stable ordering → stable `#index` refs). The
+    /// sort keys on `itemDate` — processing order means nothing now that backfills run
+    /// newest-first; the cloud model should read a life in the order it was lived. A 50-version
+    /// file contributes exactly one entry.
     func survivorSummaries() -> [SummaryItem] {
         let all = (try? modelContext.fetch(
             FetchDescriptor<Summary>(sortBy: [SortDescriptor(\.createdAt, order: .forward)])
@@ -151,7 +153,10 @@ actor Store {
         var latest: [String: Summary] = [:]
         for s in all { latest[s.sourceID] = s }       // ascending walk → last write wins
         return latest.values
-            .sorted { $0.createdAt < $1.createdAt }
+            .sorted {
+                let a = $0.itemDate ?? $0.createdAt, b = $1.itemDate ?? $1.createdAt
+                return a == b ? $0.createdAt < $1.createdAt : a < b
+            }
             .map(item(from:))
     }
 

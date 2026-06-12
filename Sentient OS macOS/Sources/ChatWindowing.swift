@@ -8,7 +8,10 @@
 //  the pipeline as one Artifact. Key pieces:
 //    ChatMessage          — one decoded message, normalized across sources
 //    ChatInfo             — a row for the opt-in chat picker
+//    ChatCursorState      — a chat's decoded pointer (incremental / backfill / first run)
 //    ChatWindowing.windows(of:)  — greedy byte-budget batching
+//    ChatWindowing.chatCandidates(...) — one chat's windows under its pointer state (the
+//                                  backfill/incremental ordering logic, shared verbatim)
 //    ChatWindowing.format(...)   — frames a window for the model (chat name, group/DM,
 //                                  "you sent N of M" participation anchor, per-message senders)
 //  Limits (TODO plan): chat connectors read the last `lookbackDays` 90 days OR the newest
@@ -36,6 +39,32 @@ struct ChatInfo: Sendable, Identifiable {
     let isGroup: Bool
     let messageCount: Int
     let lastActive: Date
+}
+
+/// One chat's pointer state, decoded from its SourceCursor value (WhatsApp Z_PK / iMessage
+/// ROWID — both monotonic Int64 row ids). `.backfill` carries the consumed interval [lo, hi];
+/// chats are unbudgeted (remaining nil) — the rolling 90-day floor terminates the dig.
+enum ChatCursorState: Sendable {
+    case backfillStart                                  // no pointer yet — first run for this chat
+    case backfill(BackfillCursor, hi: Int64, lo: Int64)
+    case incremental(Int64)
+
+    static func decode(_ raw: String?) -> ChatCursorState {
+        if let bf = BackfillCursor.decode(raw), let hi = Int64(bf.hi), let lo = Int64(bf.lo) {
+            return .backfill(bf, hi: hi, lo: lo)
+        }
+        if let v = raw.flatMap(Int64.init) { return .incremental(v) }
+        return .backfillStart
+    }
+
+    /// Should a message row with this id be fetched under this state?
+    func wants(_ id: Int64) -> Bool {
+        switch self {
+        case .backfillStart:                return true
+        case .backfill(_, let hi, let lo):  return id > hi || id < lo
+        case .incremental(let v):           return id > v
+        }
+    }
 }
 
 enum ChatWindowing {
@@ -79,6 +108,61 @@ enum ChatWindowing {
 
     /// UTF-8 byte size of a formatted line — the upper bound on its token count.
     private static func msgBytes(_ m: ChatMessage) -> Int { m.text.utf8.count + 28 }   // + date/sender label overhead
+
+    // MARK: One chat's candidates under its pointer state (shared by WhatsApp + iMessage)
+
+    /// Window `msgs` (ascending by row id, already state-filtered by the source's fetch) and
+    /// assign each window's pointer write per the backfill contract (DataSource.swift):
+    ///   now — new windows (above hi / past the plain pointer), ascending
+    ///   dig — backfill descent windows, NEWEST first; each write records [window min, hi]
+    ///   completion — the plain pointer value when this chat's backfill just finished
+    /// `make` builds the source-specific Candidate from (window, cursorValue).
+    /// `mayBeClipped`: when the connector-wide newest-`maxMessages` cap was hit, an empty dig
+    /// might be the clip rather than a finished backfill — never complete on a clipped scan
+    /// (the state lingers and completes on a quieter run; collapsing early would skip the
+    /// chat's remaining history forever).
+    static func chatCandidates(
+        msgs: [ChatMessage], state: ChatCursorState, mayBeClipped: Bool,
+        make: ([ChatMessage], String) -> Candidate
+    ) -> (now: [Candidate], dig: [Candidate], completion: String?) {
+        switch state {
+        case .backfillStart:
+            let wins = windows(of: msgs).filter { !$0.isEmpty }
+            guard let hi = wins.last?.last?.id else { return ([], [], nil) }
+            let dig = wins.reversed().map { win in
+                make(win, BackfillCursor(hi: "\(hi)", lo: "\(win.first!.id)", remaining: nil).encoded)
+            }
+            return ([], dig, nil)
+
+        case .backfill(let bf, let hi, let lo):
+            let aboveWins = windows(of: msgs.filter { $0.id > hi }).filter { !$0.isEmpty }
+            let belowWins = windows(of: msgs.filter { $0.id < lo }).filter { !$0.isEmpty }
+            if belowWins.isEmpty {
+                if mayBeClipped {   // dig starved by the cap, not finished — keep the state
+                    let now = aboveWins.map { win in
+                        make(win, BackfillCursor(hi: "\(win.last!.id)", lo: bf.lo, remaining: nil).encoded)
+                    }
+                    return (now, [], nil)
+                }
+                // Backfill over — collapse to a plain pointer; new windows proceed as
+                // ordinary incrementals.
+                return (aboveWins.map { make($0, "\($0.last!.id)") }, [], bf.hi)
+            }
+            // The dig's writes must carry the hi the now-group will have swept up to.
+            let hiFinal = aboveWins.last.map { "\($0.last!.id)" } ?? bf.hi
+            let now = aboveWins.map { win in
+                make(win, BackfillCursor(hi: "\(win.last!.id)", lo: bf.lo, remaining: nil).encoded)
+            }
+            let dig = belowWins.reversed().map { win in
+                make(win, BackfillCursor(hi: hiFinal, lo: "\(win.first!.id)", remaining: nil).encoded)
+            }
+            return (now, dig, nil)
+
+        case .incremental:
+            let wins = windows(of: msgs).filter { !$0.isEmpty }
+            return (wins.map { make($0, "\($0.last!.id)") }, [], nil)
+        }
+    }
 
     // MARK: Formatting — frame the window for the model
 

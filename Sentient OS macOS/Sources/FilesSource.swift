@@ -12,13 +12,16 @@
 //  The model is given the home-relative path (e.g. ~/Downloads/Useless Stuff/x.jpg) + creation
 //  date — the folder structure alone is strong signal for junk/intent.
 //
-//  POINTER (June 11 rewrite — Documentation/Pointer Architecture (Kill the Ledger).md):
+//  POINTER (June 11 rewrite + June 12 backfill — Documentation/Pointer Architecture…):
 //  one "(epochSeconds|path)" pointer per folder root (cursorKey = "file:<FileRoot.id>").
 //  A file's date is max(dateAdded, dateModified, nearest moved-in ancestor's dateAdded) —
 //  dateAdded catches downloads with old mtimes, dateModified catches edits, and the ancestor
 //  propagation catches whole folders dragged into a root (their files keep old dates).
 //  Guards: 60-min freshness hold-back (mid-edit files wait for the next run) and a future-date
-//  clamp (clock weirdness can't poison the pointer). Scan returns candidates OLDEST-FIRST.
+//  clamp (clock weirdness can't poison the pointer). Ordering: incremental runs ascend
+//  (oldest-first); a root's FIRST run (no pointer yet) is a BACKFILL — newest-first descent
+//  tracked by a BackfillCursor [lo, hi] interval, resumable, with the root cap as a TOTAL
+//  budget across interruptions. New files arriving mid-backfill process before the dig resumes.
 //
 //  Skipping & caps (see Documentation/Files Source (Skipping & Caps).md): code repos and
 //  machine-generated datasets are pruned at the walk level (`pruneReason`), and `scan` bounds
@@ -172,10 +175,21 @@ struct FilesSource: DataSource, Sendable {
         return date > pointer.date || (date == pointer.date && path > pointer.path)
     }
 
+    /// Strictly below the backfill descent watermark — the dig's mirror of `isPast`.
+    /// (nil = fail-closed: an unparseable `lo` digs nothing rather than re-digging everything.)
+    private static func isBelow(_ pointer: (date: Double, path: String)?, date: Double, path: String) -> Bool {
+        guard let pointer else { return false }
+        return date < pointer.date || (date == pointer.date && path < pointer.path)
+    }
+
     // MARK: Scan (cheap — stat only, recurses subfolders)
 
-    func scan(since cursors: [String: String]) throws -> [Candidate] {
-        let pointer = Self.parsePointer(cursors[cursorKey])
+    func scan(since cursors: [String: String]) throws -> ScanResult {
+        let raw = cursors[cursorKey]
+        let backfill = BackfillCursor.decode(raw)
+        let pointer = backfill == nil ? Self.parsePointer(raw) : nil   // plain pointer (incremental)
+        let hiPointer = backfill.flatMap { Self.parsePointer($0.hi) }
+        let loPointer = backfill.flatMap { Self.parsePointer($0.lo) }
         let now = Date()
         let holdBack = Self.testZeroHoldBack ? now : now.addingTimeInterval(-sourceFreshnessHoldBack)
 
@@ -185,7 +199,7 @@ struct FilesSource: DataSource, Sendable {
         guard let enumerator = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: Array(keys),
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+        ) else { return ScanResult(candidates: []) }
 
         // Effective "moved-in" date per directory: a folder dragged into the root carries files
         // with OLD dates — the folder's own dateAdded (propagated down the tree) rescues them.
@@ -218,7 +232,14 @@ struct FilesSource: DataSource, Sendable {
             let date = min(max(mtime, added, parentEff), now)
 
             guard date <= holdBack else { continue }                          // freshness hold-back
-            guard Self.isPast(pointer, date: date.timeIntervalSince1970, path: url.path) else { continue }
+            // Keep only rows the current pointer state could consume: incremental = past the
+            // plain pointer; backfill resume = above hi OR below lo; backfill start = everything.
+            let (d, p) = (date.timeIntervalSince1970, url.path)
+            if backfill != nil {
+                guard Self.isPast(hiPointer, date: d, path: p) || Self.isBelow(loPointer, date: d, path: p) else { continue }
+            } else {
+                guard Self.isPast(pointer, date: d, path: p) else { continue }
+            }
 
             var meta: [String: String] = [
                 "path": url.path,
@@ -234,15 +255,59 @@ struct FilesSource: DataSource, Sendable {
                                       itemDate: date, metadata: meta)
             rows.append((candidate, date.timeIntervalSince1970))
         }
-        // Newest first, then the caps (connector-limits decision, June 10–11):
-        //  • optional age cutoff (Downloads: 1 year — downloads age into junk; keepers elsewhere don't)
-        //  • per-directory cap (300, every root) — the bulk-dump backstop
-        //  • per-root cap (newest 1,000, every root)
+        // ── Backfill resume: new-above-hi first (ascending), then dig below lo (descending) ──
+        if let backfill {
+            let aboveRows = rows.filter {
+                Self.isPast(hiPointer, date: $0.sortKey, path: $0.candidate.metadata["path"] ?? "")
+            }
+            let aboveAsc = cappedNewestFirst(aboveRows, budget: Self.perRootCap, now: now)
+                .sorted { ($0.itemDate, $0.id) < ($1.itemDate, $1.id) }
+            let belowRows = rows.filter {
+                Self.isBelow(loPointer, date: $0.sortKey, path: $0.candidate.metadata["path"] ?? "")
+            }
+            let budget = backfill.remaining ?? 0
+            let dig = budget > 0
+                ? cappedNewestFirst(belowRows, budget: min(budget, Self.perRootCap), now: now) : []
+            if dig.isEmpty {
+                // Backfill over (budget spent, everything below aged out, or nothing left) —
+                // collapse to a plain pointer; the new items proceed as ordinary incrementals.
+                return ScanResult(candidates: aboveAsc, completions: [cursorKey: backfill.hi])
+            }
+            // The dig's writes must carry the hi the above-group will have swept up to.
+            let hiFinal = aboveAsc.last?.cursorValue ?? backfill.hi
+            let aboveCands = aboveAsc.map {
+                $0.replacingCursorValue(BackfillCursor(hi: $0.cursorValue, lo: backfill.lo,
+                                                       remaining: budget).encoded)
+            }
+            return ScanResult(candidates: aboveCands + BackfillCursor.descent(dig, hi: hiFinal, budget: budget))
+        }
+
+        // ── Backfill start (no pointer at all): newest-first descent over the capped selection ──
+        if raw == nil {
+            let kept = cappedNewestFirst(rows, budget: Self.perRootCap, now: now)
+            guard let hi = kept.first?.cursorValue else { return ScanResult(candidates: []) }
+            return ScanResult(candidates: BackfillCursor.descent(kept, hi: hi, budget: kept.count))
+        }
+
+        // ── Incremental (plain pointer): newest-N selection, OLDEST-FIRST consumption — the
+        // pointer sweeps forward and a stopped run resumes exactly here. Unchanged behavior. ──
+        let kept = cappedNewestFirst(rows, budget: Self.perRootCap, now: now)
+        return ScanResult(candidates: kept.sorted {
+            ($0.itemDate, $0.id) < ($1.itemDate, $1.id)   // id = "file:<path>" → path tiebreak
+        })
+    }
+
+    /// Newest-first selection under the connector caps (June 10–11 decisions):
+    ///  • optional age cutoff (Downloads: 1 year — downloads age into junk; keepers elsewhere don't)
+    ///  • per-directory cap (300, every root) — the bulk-dump backstop
+    ///  • `budget` — the per-root cap, or what's left of a backfill's descent budget
+    private func cappedNewestFirst(_ rows: [(candidate: Candidate, sortKey: Double)],
+                                   budget: Int, now: Date) -> [Candidate] {
         let cutoff = maxAge.map { now.timeIntervalSince1970 - $0 }
         var perDir: [String: Int] = [:]
         var kept: [Candidate] = []
         for row in rows.sorted(by: { $0.sortKey > $1.sortKey }) {
-            if kept.count >= Self.perRootCap { break }
+            if kept.count >= budget { break }
             if let cutoff, row.sortKey < cutoff { break }   // sorted → every later row is older
             guard let path = row.candidate.metadata["path"] else { continue }
             let dir = (path as NSString).deletingLastPathComponent
@@ -250,11 +315,7 @@ struct FilesSource: DataSource, Sendable {
             perDir[dir, default: 0] += 1
             kept.append(row.candidate)
         }
-        // Process OLDEST-FIRST (the pointer contract): selection is newest-N, consumption is
-        // ascending, so the pointer sweeps forward and a stopped run resumes exactly here.
-        return kept.sorted {
-            ($0.itemDate, $0.id) < ($1.itemDate, $1.id)   // id = "file:<path>" → path tiebreak
-        }
+        return kept
     }
 
     // MARK: Load (expensive — extract content)
