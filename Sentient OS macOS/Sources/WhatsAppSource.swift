@@ -116,13 +116,15 @@ struct WhatsAppSource: DataSource, Sendable {
 
     // MARK: Scan — copy → query → window → delete
 
-    /// Pointer (June 11 rewrite): ONE cursor per opted-in chat — key "whatsapp:<jid>", value =
-    /// the highest consumed `Z_PK`. Per-chat (not one global Z_PK pointer) because chats
+    /// Pointer (June 11 rewrite + June 12 backfill): ONE cursor per opted-in chat — key
+    /// "whatsapp:<jid>", value = the highest consumed `Z_PK` (or a BackfillCursor while the
+    /// chat's first run is in flight). Per-chat (not one global Z_PK pointer) because chats
     /// interleave in Z_PK space: with a single pointer, saving chat B's window would move the
     /// pointer past chat A's still-unprocessed older messages and a crash would lose them.
     /// Per-chat keys make every chat independently crash-safe — same shape as Files' per-root
-    /// pointers. Windows are emitted ascending per chat (the pointer contract).
-    func scan(since cursors: [String: String]) throws -> [Candidate] {
+    /// pointers. Ordering: incremental windows ascend per chat; a chat's first run digs
+    /// newest-window-first, with every chat's NEW windows emitted before any chat's dig.
+    func scan(since cursors: [String: String]) throws -> ScanResult {
         let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
         defer { try? FileManager.default.removeItem(at: tempDir) }   // delete the plaintext copy immediately
         let reader = try SQLiteReader(path: dbURL.path)
@@ -145,12 +147,12 @@ struct WhatsAppSource: DataSource, Sendable {
         let analyzedPKs = chats.values
             .filter { chatJIDs == nil || chatJIDs!.contains($0.jid) }
             .map(\.pk)
-        guard !analyzedPKs.isEmpty else { return [] }
+        guard !analyzedPKs.isEmpty else { return ScanResult(candidates: []) }
 
-        // Each analyzed chat's pointer (no row = chat never consumed = everything qualifies).
-        var pointers: [Int64: Int64] = [:]
+        // Each analyzed chat's pointer state (no row = backfill start = everything qualifies).
+        var states: [Int64: ChatCursorState] = [:]
         for chat in chats.values {
-            if let v = cursors["whatsapp:\(chat.jid)"].flatMap(Int64.init) { pointers[chat.pk] = v }
+            states[chat.pk] = ChatCursorState.decode(cursors["whatsapp:\(chat.jid)"])
         }
         // Tail hold-back: an actively-flowing conversation isn't chopped mid-thought — the last
         // hour's messages are windowed next run (they stay past the pointer until consumed).
@@ -161,6 +163,7 @@ struct WhatsAppSource: DataSource, Sendable {
         // newest per chat.
         let floor = ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate
         var byChat: [Int64: [ChatMessage]] = [:]
+        var fetched = 0   // raw rows the capped query returned (cap hit = a dig may be starved)
         // LEFT JOIN the group-member row (indexed on Z_PK → near-free) so senders without a
         // push-name resolve to their saved contact name instead of a raw JID/LID.
         try reader.forEachRow("""
@@ -172,9 +175,10 @@ struct WhatsAppSource: DataSource, Sendable {
             LEFT JOIN ZWAGROUPMEMBER gm ON m.ZGROUPMEMBER = gm.Z_PK
             ORDER BY m.ZCHATSESSION, m.Z_PK
             """) { r in
+            fetched += 1
             guard let chat = chats[r.int(5)] else { return }
-            guard r.int(0) > pointers[chat.pk] ?? -1 else { return }   // already consumed
-            guard r.double(1) <= tailFloor else { return }             // tail hold-back
+            guard states[chat.pk]?.wants(r.int(0)) ?? true else { return }   // already consumed
+            guard r.double(1) <= tailFloor else { return }                   // tail hold-back
             let isFromMe = r.int(2) == 1
             byChat[r.int(5), default: []].append(ChatMessage(
                 id: r.int(0),
@@ -186,33 +190,49 @@ struct WhatsAppSource: DataSource, Sendable {
                 text: String((r.text(3) ?? "").prefix(ChatWindowing.maxMessageChars))))
         }
 
-        // Window each chat to the byte budget; one window = one Artifact. A window's cursor
-        // value is its newest Z_PK — messages arrive ascending, so consuming windows in order
-        // sweeps the chat's pointer forward.
-        var perChat: [(lastActive: Date, candidates: [Candidate])] = []
+        // Window each chat to the byte budget; one window = one Artifact. The shared
+        // ChatWindowing.chatCandidates applies the chat's pointer state (incremental ascend /
+        // backfill descent / completion).
+        let mayBeClipped = fetched >= ChatWindowing.maxMessages
+        var perChat: [(lastActive: Date, now: [Candidate], dig: [Candidate])] = []
+        var completions: [String: String] = [:]
         for (chatPK, msgs) in byChat {
             guard let chat = chats[chatPK] else { continue }
-            var wins: [Candidate] = []
-            for win in ChatWindowing.windows(of: msgs) where !win.isEmpty {
-                let meta: [String: String] = [
-                    "folder": chat.name,                         // per-chat tag → folder pills in the viewer
-                    "name": chat.name,
-                    "displayPath": "WhatsApp · \(chat.name)",
-                    "isGroup": chat.isGroup ? "1" : "0",         // → group vs DM bouncer prompt
-                    "msgCount": "\(win.count)",
-                    "windowText": ChatWindowing.format(chatName: chat.name, isGroup: chat.isGroup, messages: win),
-                ]
-                wins.append(Candidate(id: "whatsapp:c\(chatPK):\(win.first!.id)-\(win.last!.id)",
-                                      kind: .whatsapp,
-                                      cursorKey: "whatsapp:\(chat.jid)",
-                                      cursorValue: "\(win.last!.id)",
-                                      itemDate: win.last!.date,
-                                      metadata: meta))
+            let (now, dig, completion) = ChatWindowing.chatCandidates(
+                msgs: msgs, state: states[chatPK] ?? .backfillStart, mayBeClipped: mayBeClipped
+            ) { win, cursorValue in
+                Candidate(id: "whatsapp:c\(chatPK):\(win.first!.id)-\(win.last!.id)",
+                          kind: .whatsapp,
+                          cursorKey: "whatsapp:\(chat.jid)",
+                          cursorValue: cursorValue,
+                          itemDate: win.last!.date,
+                          metadata: [
+                              "folder": chat.name,                 // per-chat tag → folder pills in the viewer
+                              "name": chat.name,
+                              "displayPath": "WhatsApp · \(chat.name)",
+                              "isGroup": chat.isGroup ? "1" : "0", // → group vs DM bouncer prompt
+                              "msgCount": "\(win.count)",
+                              "windowText": ChatWindowing.format(chatName: chat.name, isGroup: chat.isGroup, messages: win),
+                          ])
             }
-            if !wins.isEmpty { perChat.append((msgs.last!.date, wins)) }
+            if let completion { completions["whatsapp:\(chat.jid)"] = completion }
+            if !(now.isEmpty && dig.isEmpty) { perChat.append((msgs.last!.date, now, dig)) }
         }
-        // Active chats first; windows within a chat stay ascending (the pointer contract).
-        return perChat.sorted { $0.lastActive > $1.lastActive }.flatMap(\.candidates)
+        // A backfilling chat with NO fetched messages has nothing above hi and nothing left
+        // below lo (within the floor) — its backfill is over. Never collapse on a clipped scan.
+        if !mayBeClipped {
+            for chat in chats.values where chatJIDs?.contains(chat.jid) ?? true {
+                if case .backfill(let bf, _, _) = states[chat.pk] ?? .backfillStart,
+                   byChat[chat.pk] == nil {
+                    completions["whatsapp:\(chat.jid)"] = bf.hi
+                }
+            }
+        }
+        // Every chat's NEW windows first (what's happening now), then the backfill digs —
+        // active chats first within each group.
+        let ordered = perChat.sorted { $0.lastActive > $1.lastActive }
+        return ScanResult(candidates: ordered.flatMap(\.now) + ordered.flatMap(\.dig),
+                          completions: completions)
     }
 
     func load(_ candidate: Candidate) throws -> Artifact {

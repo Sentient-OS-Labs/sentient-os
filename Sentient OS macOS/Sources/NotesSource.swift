@@ -36,12 +36,18 @@ struct NotesSource: DataSource, Sendable {
 
     // MARK: Scan — copy → query → decode → delete
 
-    /// Pointer (June 11 rewrite): one cursor, key "notes", value "(modEpochSeconds|noteUUID)"
-    /// (UUID = same-second tiebreak). An edited note's mod-date moves past the pointer → it's
-    /// re-summarized as a new version. The one-hour hold-back keeps a note that's being typed
-    /// out of the run. Candidates are emitted OLDEST-FIRST (the pointer contract).
-    func scan(since cursors: [String: String]) throws -> [Candidate] {
-        let pointer = Self.parsePointer(cursors["notes"])
+    /// Pointer (June 11 rewrite + June 12 backfill): one cursor, key "notes", value
+    /// "(modEpochSeconds|noteUUID)" (UUID = same-second tiebreak). An edited note's mod-date
+    /// moves past the pointer → it's re-summarized as a new version. The one-hour hold-back
+    /// keeps a note that's being typed out of the run. Ordering: incremental runs ascend; the
+    /// FIRST run is a newest-first backfill descent (BackfillCursor, resumable, the newest-1000
+    /// cap as a total budget) — notes edited mid-backfill jump above `hi` and process first.
+    func scan(since cursors: [String: String]) throws -> ScanResult {
+        let raw = cursors["notes"]
+        let backfill = BackfillCursor.decode(raw)
+        let pointer = backfill == nil ? Self.parsePointer(raw) : nil   // plain pointer (incremental)
+        let hiPointer = backfill.flatMap { Self.parsePointer($0.hi) }
+        let loPointer = backfill.flatMap { Self.parsePointer($0.lo) }
         let holdBackFloor = Date().addingTimeInterval(-sourceFreshnessHoldBack)
             .timeIntervalSinceReferenceDate
 
@@ -57,7 +63,7 @@ struct NotesSource: DataSource, Sendable {
 
         // Newest notes first (the cap selects the newest `maxNotes`); locked/deleted skipped in
         // SQL. Creation-date column name varies across macOS versions → COALESCE the variants.
-        var out: [Candidate] = []
+        var rows: [(cand: Candidate, modified: Int64, uuid: String)] = []
         try reader.forEachRow("""
             SELECT o.ZIDENTIFIER, o.ZTITLE1, o.ZMODIFICATIONDATE1,
                    COALESCE(o.ZCREATIONDATE3, o.ZCREATIONDATE2, o.ZCREATIONDATE1, o.ZCREATIONDATE),
@@ -69,7 +75,14 @@ struct NotesSource: DataSource, Sendable {
             guard let id = r.text(0) else { return }
             let modified = r.double(2)
             guard modified <= holdBackFloor else { return }                       // being typed right now
-            guard Self.isPast(pointer, modified: Int64(modified), uuid: id) else { return }   // already consumed
+            // Keep only rows the current pointer state could consume: incremental = past the
+            // plain pointer; backfill resume = above hi OR below lo; backfill start = everything.
+            if backfill != nil {
+                guard Self.isPast(hiPointer, modified: Int64(modified), uuid: id)
+                   || Self.isBelow(loPointer, modified: Int64(modified), uuid: id) else { return }
+            } else {
+                guard Self.isPast(pointer, modified: Int64(modified), uuid: id) else { return }
+            }
             guard let blob = r.blob(5),
                   let decoded = Self.decodeBody(blob) else { return }   // no/undecodable body → skip (fail-closed)
             let body = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -80,7 +93,7 @@ struct NotesSource: DataSource, Sendable {
             let createdTS = r.double(3)
             let created = Date(timeIntervalSinceReferenceDate: createdTS > 0 ? createdTS : modified)
 
-            out.append(Candidate(
+            rows.append((Candidate(
                 id: "notes:\(id)",
                 kind: .notes,
                 cursorKey: "notes",
@@ -92,10 +105,43 @@ struct NotesSource: DataSource, Sendable {
                     "displayPath": "Apple Notes · \(folder) · \(title)",
                     "created": Self.dateString(created),
                     "noteText": String(body.prefix(Self.maxContentChars)),
-                ]))
+                ]), Int64(modified), id))
         }
-        // Selection was newest-first (the cap); consumption is oldest-first (the pointer contract).
-        return out.sorted { ($0.itemDate, $0.id) < ($1.itemDate, $1.id) }
+        // `rows` is newest-first (the SQL ORDER). Assemble per pointer state:
+
+        // ── Backfill resume: edited/new notes first (ascending), then dig below lo (descending) ──
+        if let backfill {
+            let aboveAsc = rows
+                .filter { Self.isPast(hiPointer, modified: $0.modified, uuid: $0.uuid) }
+                .map(\.cand)
+                .sorted { ($0.itemDate, $0.id) < ($1.itemDate, $1.id) }
+            let budget = backfill.remaining ?? 0
+            let dig = Array(rows
+                .filter { Self.isBelow(loPointer, modified: $0.modified, uuid: $0.uuid) }
+                .map(\.cand)
+                .prefix(budget))
+            if dig.isEmpty {
+                // Backfill over (budget spent or nothing left below lo) — collapse to a plain
+                // pointer; the new/edited notes proceed as ordinary incrementals.
+                return ScanResult(candidates: aboveAsc, completions: ["notes": backfill.hi])
+            }
+            let hiFinal = aboveAsc.last?.cursorValue ?? backfill.hi
+            let aboveCands = aboveAsc.map {
+                $0.replacingCursorValue(BackfillCursor(hi: $0.cursorValue, lo: backfill.lo,
+                                                       remaining: budget).encoded)
+            }
+            return ScanResult(candidates: aboveCands + BackfillCursor.descent(dig, hi: hiFinal, budget: budget))
+        }
+
+        // ── Backfill start (no pointer at all): newest-first descent over the capped selection ──
+        if raw == nil {
+            let kept = rows.map(\.cand)
+            guard let hi = kept.first?.cursorValue else { return ScanResult(candidates: []) }
+            return ScanResult(candidates: BackfillCursor.descent(kept, hi: hi, budget: kept.count))
+        }
+
+        // ── Incremental: selection was newest-first (the cap); consumption is oldest-first. ──
+        return ScanResult(candidates: rows.map(\.cand).sorted { ($0.itemDate, $0.id) < ($1.itemDate, $1.id) })
     }
 
     // MARK: Pointer encoding — "(modEpochSeconds|noteUUID)"
@@ -108,6 +154,13 @@ struct NotesSource: DataSource, Sendable {
     private static func isPast(_ pointer: (modified: Int64, uuid: String)?, modified: Int64, uuid: String) -> Bool {
         guard let pointer else { return true }
         return modified > pointer.modified || (modified == pointer.modified && uuid > pointer.uuid)
+    }
+
+    /// Strictly below the backfill descent watermark — the dig's mirror of `isPast`.
+    /// (nil = fail-closed: an unparseable `lo` digs nothing rather than re-digging everything.)
+    private static func isBelow(_ pointer: (modified: Int64, uuid: String)?, modified: Int64, uuid: String) -> Bool {
+        guard let pointer else { return false }
+        return modified < pointer.modified || (modified == pointer.modified && uuid < pointer.uuid)
     }
 
     func load(_ candidate: Candidate) throws -> Artifact {

@@ -3,11 +3,13 @@
 //  Sentient OS macOS
 //
 //  The loop that ties Sources + Engine + Store together (Arch §2.1). Fetches the pointer map,
-//  scans each source for items PAST its pointers, and processes them in scan order (ascending
-//  per pointer — the pointer contract): load content → Engine.generate → Triage.decide →
+//  scans each source for items PAST its pointers, and processes them in scan order (the
+//  pointer contract, DataSource.swift: incremental keys ascend; a key's FIRST run is a
+//  newest-first backfill descent): load content → Engine.generate → Triage.decide →
 //  Store.record (summary version for survivors + the pointer advance, one transaction).
-//  Initial run and incremental run are the SAME code path — an empty pointer map simply means
-//  "everything" (connector caps still apply inside each source's scan).
+//  Initial run and incremental run are the SAME code path — a missing pointer simply means
+//  "backfill everything, newest first" (connector caps still apply inside each source's scan).
+//  Finished backfills reported by the scan collapse to plain pointers before processing.
 //
 //  Failure policy (pointer architecture, June 11): a failed item is retried ONCE on a fresh
 //  engine when its failure triggered a reactive reload; an item that still fails is given up —
@@ -54,7 +56,13 @@ actor Pipeline {
         onProgress: @Sendable (PipelineProgress) -> Void = { _ in }
     ) async throws -> PipelineProgress {
         let cursors = await store.cursors()
-        var todo = try source.scan(since: cursors)
+        let scan = try source.scan(since: cursors)
+        // Backfills the scan found to be finished collapse to plain pointers first, so this
+        // run's candidates (if any) write against the collapsed state the scan assumed.
+        for (key, value) in scan.completions {
+            try await store.advanceCursor(value, forKey: key)
+        }
+        var todo = scan.candidates
         if let limit, todo.count > limit { todo = Array(todo.prefix(limit)) }
 
         var p = PipelineProgress(total: todo.count)
