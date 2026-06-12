@@ -14,9 +14,8 @@ piggybacks on the user's own Codex CLI (their ChatGPT subscription pays). Replac
   `force: true` re-probes (the installer flow).
 - `run(Invocation) → Envelope` — one headless call, typed errors.
 
-`Invocation`: `prompt` (always over **stdin**, never argv) · `effort` (`.xhigh` = initial gen
-[MEASURED June 11: accepted live by codex 0.139.0], `.medium` = everything daily, `.high`
-available but currently unused) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` ·
+`Invocation`: `prompt` (always over **stdin**, never argv) · `effort` (`.high` = initial gen,
+`.medium` = everything daily) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` ·
 `addDirs` (extra writable roots) · `webSearch` · `outputSchema` (JSON-Schema
 string → temp file → `--output-schema`) · `resumeSessionID` · `timeout` (default 1 h).
 
