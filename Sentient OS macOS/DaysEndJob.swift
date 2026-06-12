@@ -2,15 +2,19 @@
 //  DaysEndJob.swift
 //  Sentient OS macOS
 //
-//  THE day's-end entry point (Part II §A) — the one function the whole living system hangs
-//  off: editor-idle check → iterative updater → proactive intelligence → mirror push →
-//  notification. Idempotent and safe to re-invoke (an empty unsynced queue is a cheap no-op);
-//  single-flight (a trigger while running is ignored).
+//  THE day's-end entry point (Part II §A) — the one function the knowledge-base lifecycle
+//  hangs off: editor-idle check → iterative updater → mirror push → notification. Idempotent
+//  and safe to re-invoke (an empty unsynced queue is a cheap no-op); single-flight (a trigger
+//  while running is ignored).
 //
-//  TRIGGERS: today, only the dev "Run Proactive Intelligence" button in RootView (it fires
-//  this WHOLE pipeline, not just the judge). The condition-gate scheduler (Phase 3,
-//  deliberately NOT built yet) will simply call `DaysEndJob.shared.run(...)` on its own
-//  clock — no logic lives in the button that the scheduler would need to duplicate.
+//  Proactive intelligence is deliberately NOT in this pipeline (June 11 decision — it's being
+//  built separately, with its own trigger, scheduled to run AFTER a knowledge-base update;
+//  the removed working scaffold lives in git history at 67d8078).
+//
+//  TRIGGERS: today, only the dev "Update Knowledge Base" button in RootView. The
+//  condition-gate scheduler (Phase 3, deliberately NOT built yet) will simply call
+//  `DaysEndJob.shared.run(...)` on its own clock — no logic lives in the button that the
+//  scheduler would need to duplicate.
 //
 //  Doc: Documentation/Days-End Job (Living System).md
 //
@@ -24,7 +28,7 @@ actor DaysEndJob {
     /// Single-flight: an actor bool, not a queue (per the handoff — no bookkeeping).
     private var running = false
 
-    /// The full day's-end pipeline. Returns a one-line status for the dev button / logs.
+    /// The day's-end pipeline. Returns a one-line status for the dev button / logs.
     @discardableResult
     func run(store: Store) async -> String {
         guard !running else { return "Already running — trigger ignored." }
@@ -45,27 +49,20 @@ actor DaysEndJob {
         var folded = 0
         do {
             folded = try await VaultUpdater.shared.runDailyUpdate(store: store)
-            parts.append(folded == 0 ? "nothing new to fold" : "folded \(folded) memories")
+            // N = summaries the updater REVIEWED (and stamped) — it folds in only what's
+            // worth keeping; reviewing everything and changing nothing is a valid outcome.
+            parts.append(folded == 0 ? "nothing new to fold" : "reviewed \(folded) new memories")
         } catch {
             parts.append((error as? LocalizedError)?.errorDescription ?? "\(error)")
         }
 
-        // 2) Proactive intelligence — wrapped independently inside `run`; never blocks the push.
-        let proactive = await Proactive.run(store: store)
-        if proactive.judged > 0 {
-            parts.append("judged \(proactive.judged) flagged"
-                         + (proactive.reminders > 0 ? " → 1 reminder" : "")
-                         + (proactive.briefings > 0 ? " → 1 briefing" : ""))
-        }
-        if let note = proactive.note { parts.append(note) }
-
-        // 3) Mirror push — any run that ends with a dirty vault and the mirror enabled.
+        // 2) Mirror push — any run that ends with a dirty vault and the mirror enabled.
         parts.append(await pushIfDirty())
 
-        // 4) Quiet by design: notify only when the vault actually changed.
+        // 3) Quiet by design: notify only when there was something to review.
         if folded > 0 {
             await Notify.now(title: "Your knowledge base is up to date",
-                             body: "Folded \(folded) new \(folded == 1 ? "memory" : "memories") in while your Mac rested.")
+                             body: "Caught up on \(folded) new \(folded == 1 ? "memory" : "memories") while your Mac rested.")
         }
         let status = "Done — " + parts.joined(separator: " · ")
         Log("DaysEndJob: \(status)")

@@ -28,6 +28,19 @@
 
 import Foundation
 
+/// Where For You artifacts live — `~/Library/Application Support/SentientOS/Briefings/`
+/// [STARTING POINT], deliberately outside the vault (briefings are artifacts we generate,
+/// not the user's knowledge base — they must never ride the mirror push). Written by the
+/// welcome briefing today; proactive intelligence (rebuilt separately) writes here next.
+enum Briefings {
+    static var dir: URL {
+        let d = URL.applicationSupportDirectory
+            .appendingPathComponent("SentientOS/Briefings", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+}
+
 actor VaultGenerator {
 
     struct Result: Sendable {

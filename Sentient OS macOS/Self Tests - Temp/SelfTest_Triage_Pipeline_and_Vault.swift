@@ -91,11 +91,9 @@ enum SelfTest {
         // file (versioned summary + " — Edit" title) → junk advances the pointer with zero trace.
         if mode == "incremental" { await SelfTestIncremental.run(emit: emit); return }
 
-        // Living-system harnesses (real Sonnet calls — see SelfTest_DaysEnd.swift):
-        // "daysend" needs SENTIENT_VAULT_ROOT (fixture vault); "proactive" seeds flagged
-        // summaries and proves the judge + the ≤1/day cap + the pointer.
+        // Iterative-updater harness (real Sonnet call — see SelfTest_DaysEnd.swift):
+        // "daysend" needs SENTIENT_VAULT_ROOT (fixture vault).
         if mode == "daysend" { await SelfTestDaysEnd.daysend(emit: emit); return }
-        if mode == "proactive" { await SelfTestDaysEnd.proactive(emit: emit); return }
 
         // ClaudeCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
         // claude -p spine (binary → env → stdin → JSON envelope). Verifies the compute waterfall's

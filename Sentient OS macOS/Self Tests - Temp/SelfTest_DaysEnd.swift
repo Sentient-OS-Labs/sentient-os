@@ -1,19 +1,14 @@
 //
-//  SelfTest_DaysEnd.swift — the living-system harness (Part II)
+//  SelfTest_DaysEnd.swift — the iterative-updater harness (Part II)
 //  Sentient OS macOS
 //
-//  Two REAL-cloud modes (they spend a little Sonnet budget), dispatched from SelfTest:
+//  One REAL-cloud mode (it spends a little Sonnet budget), dispatched from SelfTest:
 //
 //    SENTIENT_SELFTEST=daysend SENTIENT_VAULT_ROOT=/tmp/some-scratch-dir
 //      Fixture vault + in-memory store seeded with unsynced summaries → DaysEndJob.run()
 //      → asserts the vault changed, exactly the sent rows got stamped, and a second run
 //      is a clean no-op. SENTIENT_VAULT_ROOT is REQUIRED (protects the real vault); add
 //      SENTIENT_MIRROR_BASE for a local mirror push, otherwise the push step must be off.
-//
-//    SENTIENT_SELFTEST=proactive
-//      In-memory store seeded with reminder-flagged summaries (one genuinely actionable,
-//      one stale) → Proactive.run() → prints the judge's decisions, asserts the ≤1/day cap
-//      and that the pointer advanced (a re-run judges nothing).
 //
 //  Safety: daysend REFUSES to run if the mirror is enabled but SENTIENT_MIRROR_BASE isn't
 //  set — the push step would replace the user's real hosted mirror with the fixture vault.
@@ -36,14 +31,13 @@ enum SelfTestDaysEnd {
     }
 
     /// Seed one survivor summary through the REAL record path (synthetic candidate → artifact).
-    private static func seed(_ store: Store, id: String, title: String, text: String,
-                             reminder: Bool = false, itemDate: Date = Date()) async {
+    private static func seed(_ store: Store, id: String, title: String, text: String) async {
         let cand = Candidate(id: id, kind: .file,
                              cursorKey: "file:fixture", cursorValue: "\(Date().timeIntervalSince1970)|\(id)",
-                             itemDate: itemDate, metadata: ["folder": "Fixture", "name": title])
+                             itemDate: Date(), metadata: ["folder": "Fixture", "name": title])
         let artifact = Artifact(candidate: cand, text: text)
         try? await store.record(artifact: artifact, verdict: .survivor,
-                                summary: SummaryDraft(text: text, title: title, reminderFlagged: reminder))
+                                summary: SummaryDraft(text: text, title: title))
     }
 
     private static func claudeReady(emit: (String) -> Void) async -> Bool {
@@ -119,7 +113,7 @@ enum SelfTestDaysEnd {
         let after = VaultUpdater.skeleton(of: vault)
         let readme = (try? String(contentsOf: vault.appendingPathComponent("README.md"), encoding: .utf8)) ?? ""
         let coffee = (try? String(contentsOf: vault.appendingPathComponent("Life/Coffee Notes.md"), encoding: .utf8)) ?? ""
-        check("status reports the fold", status.contains("folded 2"), status)
+        check("status reports the review", status.contains("reviewed 2"), status)
         check("exactly the sent rows stamped", await store.unsyncedSummaries().isEmpty)
         check("vault actually changed",
               before != after || coffee.contains("Gaggia") || readme.contains("Lisbon")
@@ -130,43 +124,6 @@ enum SelfTestDaysEnd {
         check("second run is a no-op", second.contains("nothing new to fold"), second)
 
         emit("\nvault skeleton after:\n\(after)")
-        emit("\n# \(fail == 0 ? "✅ ALL PASS" : "❌ FAILURES") — \(pass) passed · \(fail) failed")
-    }
-
-    // MARK: proactive
-
-    static func proactive(emit: (String) -> Void) async {
-        guard await claudeReady(emit: emit) else { return }
-        guard let store = freshStore(emit: emit) else { return }
-
-        var pass = 0, fail = 0
-        func check(_ name: String, _ ok: Bool, _ detail: String = "") {
-            if ok { pass += 1 } else { fail += 1 }
-            emit("\(ok ? "✅" : "❌") \(name)\(detail.isEmpty ? "" : "  (\(detail))")")
-        }
-
-        // One genuinely actionable item (dated tomorrow) + one stale one (long past).
-        let tomorrow = Date().addingTimeInterval(86_400)
-        await seed(store, id: "file:/tmp/fixture/tickets.png", title: "Concert Presale Screenshot",
-                   text: "The user screenshotted a presale notice: tickets for the Khruangbin show "
-                       + "go on sale \(tomorrow.formatted(date: .abbreviated, time: .omitted)) at 5 PM.",
-                   reminder: true, itemDate: Date())
-        await seed(store, id: "file:/tmp/fixture/dentist-2024.txt", title: "Old Dentist Reminder",
-                   text: "A note about a dentist appointment that happened back in March 2024.",
-                   reminder: true, itemDate: Date(timeIntervalSinceNow: -700 * 86_400))
-
-        emit("running the proactive judge (real Sonnet call)…")
-        let outcome = await Proactive.run(store: store)
-        check("judged both flagged items", outcome.judged == 2, "\(outcome.judged)")
-        check("taste cap held (≤1 action)", outcome.reminders + outcome.briefings <= 1,
-              "reminders \(outcome.reminders) · briefings \(outcome.briefings)")
-        check("no failure note", outcome.note == nil, outcome.note ?? "")
-        let pointer = await store.cursor(forKey: "proactive")
-        check("pointer advanced", pointer != nil, pointer ?? "nil")
-
-        let again = await Proactive.run(store: store)
-        check("re-run judges nothing (pointer)", again.judged == 0, "\(again.judged)")
-
         emit("\n# \(fail == 0 ? "✅ ALL PASS" : "❌ FAILURES") — \(pass) passed · \(fail) failed")
     }
 }
