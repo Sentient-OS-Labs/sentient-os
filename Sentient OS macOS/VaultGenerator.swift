@@ -6,10 +6,10 @@
 //  frontier model organize them into an Obsidian-style markdown vault at
 //  "~/Sentient OS -- The Vault/". Two routes behind one generate() call:
 //
-//   1. AGENTIC (default, Arch §5): the user's own Claude Code via ClaudeCLI — the model
-//      WRITES the .md files itself (Write/Edit/Read/Glob/Grep scoped to a staging dir),
-//      which sidesteps the 64k output cap and makes usage-limit resume natural. The old
-//      vault is only replaced on success (staging → atomic swap).
+//   1. AGENTIC (default, Arch §5): the user's own Codex CLI via CodexCLI — the model
+//      WRITES the .md files itself (file tools, sandbox-scoped to a staging dir),
+//      which sidesteps per-message output caps and makes usage-limit resume natural. The
+//      old vault is only replaced on success (staging → atomic swap).
 //   2. DIRECT (fallback while the Bedrock tier doesn't exist): one streamed Opus API call
 //      emitting a `=== NOTE: <path> ===` stream we parse and materialize ourselves.
 //
@@ -47,7 +47,7 @@ actor VaultGenerator {
         case materializing(notes: Int)
     }
 
-    /// Everything needed to pick up an agentic run after a usage limit: the Claude session
+    /// Everything needed to pick up an agentic run after a usage limit: the Codex session
     /// and the staging dir whose already-written notes survive untouched.
     struct ResumeToken: Sendable {
         let sessionID: String?
@@ -64,7 +64,7 @@ actor VaultGenerator {
             case .http(let code, let body): return "Cloud returned HTTP \(code). \(body.prefix(300))"
             case .empty: return "The cloud returned no vault content."
             case .usageLimit(let message, _):
-                return "Claude hit its usage limit — try again later and the run resumes where it left off. (\(message.prefix(160)))"
+                return "Your AI hit its usage limit — try again later and the run resumes where it left off. (\(message.prefix(160)))"
             }
         }
     }
@@ -82,7 +82,7 @@ actor VaultGenerator {
 
     // MARK: - Route selection
 
-    /// Generate the whole vault. Piggybacks on the user's Claude Code when available
+    /// Generate the whole vault. Piggybacks on the user's Codex CLI when available
     /// (the compute waterfall's tier 1); otherwise falls back to the direct API call.
     /// Pass a `resume` token (from a prior `.usageLimit` error) to continue that run.
     @discardableResult
@@ -96,17 +96,17 @@ actor VaultGenerator {
         if resume != nil {
             return try await generateAgentic(summaries: summaries, resume: resume, onProgress: onProgress)
         }
-        if case .available = await ClaudeCLI.shared.validate() {
+        if case .available = await CodexCLI.shared.validate() {
             return try await generateAgentic(summaries: summaries, resume: nil, onProgress: onProgress)
         }
         #if DEBUG
-        Log("VaultGenerator: Claude Code unavailable → direct-API fallback")
+        Log("VaultGenerator: Codex unavailable → direct-API fallback")
         #endif
         return try await generateDirect(summaries: summaries, effort: effort,
                                         maxTokens: maxTokens, onProgress: onProgress)
     }
 
-    // MARK: - Route 1: agentic file-writer (claude -p)
+    // MARK: - Route 1: agentic file-writer (codex exec)
 
     private func generateAgentic(
         summaries: [SummaryItem],
@@ -139,9 +139,9 @@ actor VaultGenerator {
                 + Self.corpusMessage(summaries, closing: "Synthesize them into the vault exactly as specified — write the files now.")
         }
 
-        var invocation = ClaudeCLI.Invocation(prompt: prompt)
-        invocation.model = .opus1M
-        invocation.allowedTools = ["Write", "Edit", "Read", "Glob", "Grep"]   // receipt-verified scoping
+        var invocation = CodexCLI.Invocation(prompt: prompt)
+        invocation.effort = .high                            // the initial build gets the deep pass
+        invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir
         invocation.cwd = staging.path
         invocation.resumeSessionID = resume?.sessionID
         invocation.timeout = 3_600
@@ -159,10 +159,10 @@ actor VaultGenerator {
         }
         defer { poller.cancel() }
 
-        let envelope: ClaudeCLI.Envelope
+        let envelope: CodexCLI.Envelope
         do {
-            envelope = try await ClaudeCLI.shared.run(invocation)
-        } catch let ClaudeCLI.CLIError.usageLimit(message, sessionID) {
+            envelope = try await CodexCLI.shared.run(invocation)
+        } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it.
             throw VaultError.usageLimit(message: message,
                                         resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
@@ -184,12 +184,12 @@ actor VaultGenerator {
         return Result(notes: notes, folders: folders,
                       inputTokens: envelope.inputTokens ?? 0,
                       outputTokens: envelope.outputTokens ?? 0,
-                      stopReason: envelope.stopReason ?? "end_turn",
+                      stopReason: "completed",
                       vaultPath: root.path)
     }
 
     /// The welcome briefing — initial gen's second act ("here's what I learned about you"),
-    /// For You's day-one artifact. A cheap Sonnet pass over the freshly built vault that lands
+    /// For You's day-one artifact. A cheap medium-effort pass over the freshly built vault that lands
     /// ONE .md in the Briefings folder (outside the vault — it never rides the mirror push).
     /// Best-effort: a failure logs and moves on; the vault itself is already safe on disk.
     func writeWelcomeBriefing() async {
@@ -199,12 +199,12 @@ actor VaultGenerator {
         }()
         let file = Briefings.dir.appendingPathComponent("\(date) — What I learned about you.md")
 
-        var inv = ClaudeCLI.Invocation(prompt: """
+        var inv = CodexCLI.Invocation(prompt: """
             You just finished organizing a person's entire digital life into the Obsidian-style \
             knowledge vault that is your working directory. Now write them a welcome.
 
             Read the root README.md first, then explore a handful of the most interesting notes \
-            (Glob/Grep/Read — be selective, not exhaustive). Then write ONE markdown briefing to \
+            (be selective, not exhaustive). Then write ONE markdown briefing to \
             this exact path:
             \(file.path)
 
@@ -218,13 +218,12 @@ actor VaultGenerator {
 
             When the briefing is written, reply with one line: DONE.
             """)
-        inv.model = .sonnet
-        inv.allowedTools = ["Read", "Glob", "Grep", "Write"]
+        inv.sandbox = .workspaceWrite
         inv.cwd = Self.vaultRoot.path
         inv.addDirs = [Briefings.dir.path]
         inv.timeout = 600
         do {
-            _ = try await ClaudeCLI.shared.run(inv)
+            _ = try await CodexCLI.shared.run(inv)
             Log("VaultGenerator: welcome briefing → \(file.lastPathComponent)")
         } catch {
             Log("VaultGenerator: welcome briefing failed — \(error)")
@@ -488,7 +487,7 @@ Aim for a **focused, high-signal vault — roughly 100–150 notes.** Synthesize
 /// Agentic route: the model writes real files with its tools (no output cap, resumable).
 private let agenticOutputInstructions = """
 ## Output — you have file tools; write REAL files
-You are running inside the vault's (currently empty) working directory. CREATE the vault as actual files using your Write tool — do NOT print the vault as text in your reply.
+You are running inside the vault's (currently empty) working directory. CREATE the vault as actual files using your file tools — do NOT print the vault as text in your reply.
 
 - Write the root `README.md` FIRST (the portrait + map), then every note at its vault-relative path, e.g. `Startup/Fundraising — Term Sheets.md`. Parent folders are created automatically by the paths you write.
 - Create ONLY `.md` files, ONLY inside the working directory — never absolute paths, never `..`.

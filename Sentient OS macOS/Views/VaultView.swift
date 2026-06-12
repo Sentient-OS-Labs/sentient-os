@@ -65,7 +65,7 @@ final class VaultModel {
             }
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
             resumeToken = resume
-            errorMsg = "Claude hit its usage limit — \"Try again\" later will resume right where it left off. (\(message.prefix(160)))"
+            errorMsg = "Your AI hit its usage limit — \"Try again\" later will resume right where it left off. (\(message.prefix(160)))"
             phase = .failed
         } catch {
             // Keep any resume token: a failed resume attempt can still be retried.
@@ -167,8 +167,8 @@ struct VaultView: View {
     private var primaryLine: String {
         switch model.phase {
         case .gathering:           return "Gathering your summaries…"
-        case .calling, .receiving: return "Claude is thinking deeply across your whole life."
-        case .writing:             return "Claude is writing your knowledge base, note by note."
+        case .calling, .receiving: return "Your AI is thinking deeply across your whole life."
+        case .writing:             return "Your AI is writing your knowledge base, note by note."
         case .materializing:       return "Writing your notes to disk…"
         default:                   return "Working…"
         }

@@ -3,13 +3,13 @@
 //  Sentient OS macOS
 //
 //  The iterative vault updater (Part II §B) — the day's-end cloud job that folds NEW survivor
-//  summaries into the EXISTING vault. One `claude -p` call (Sonnet — daily updates are cheap;
-//  Opus stays reserved for initial generation): the vault's skeleton tree + the unsynced
-//  summaries go in over stdin, the agent explores only the notes it needs (Read/Glob/Grep)
-//  and rewrites only what changed (Edit/Write), working directly on the LIVE vault — no
-//  staging dir, because the inputs are tiny and edits are surgical. A cp -R snapshot is the
-//  safety net: a thrown error mid-edit restores it (a usage limit does NOT — the half-edited
-//  state is exactly what --resume continues from).
+//  summaries into the EXISTING vault. One `codex exec` call (medium effort — daily updates
+//  are cheap; high effort stays reserved for initial generation): the vault's skeleton tree
+//  + the unsynced summaries go in over stdin, the agent explores only the notes it needs
+//  and rewrites only what changed, working directly on the LIVE vault — no staging dir,
+//  because the inputs are tiny and edits are surgical. A cp -R snapshot is the safety net:
+//  a thrown error mid-edit restores it (a usage limit does NOT — the half-edited state is
+//  exactly what a session resume continues from).
 //
 //  On success, EXACTLY the consumed rows are stamped (`Store.markSynced(ids:)`) — summaries
 //  are versioned, so stamping by sourceID would be wrong. On usage limit nothing is stamped;
@@ -35,7 +35,7 @@ actor VaultUpdater {
             case .noVault:
                 return "No vault on disk yet — run the initial generation first."
             case .usageLimit(let m, _):
-                return "Claude hit its usage limit — the next run resumes where it left off. (\(m.prefix(160)))"
+                return "Your AI hit its usage limit — the next run resumes where it left off. (\(m.prefix(160)))"
             case .cloudFailed(let m):
                 return "Vault update failed: \(m)"
             }
@@ -67,9 +67,9 @@ actor VaultUpdater {
         try fm.copyItem(at: vault, to: snapshot)
         defer { try? fm.removeItem(at: snapshot) }
 
-        var invocation: ClaudeCLI.Invocation
+        var invocation: CodexCLI.Invocation
         if let resumeSessionID {
-            var inv = ClaudeCLI.Invocation(prompt: """
+            var inv = CodexCLI.Invocation(prompt: """
                 Continue folding the new items into the vault exactly where you left off — the \
                 edits you already made are still on disk. When everything is folded, reply with \
                 one line: the number of notes you created or edited.
@@ -77,23 +77,23 @@ actor VaultUpdater {
             inv.resumeSessionID = resumeSessionID
             invocation = inv
         } else {
-            invocation = ClaudeCLI.Invocation(
+            invocation = CodexCLI.Invocation(
                 prompt: Self.updatePrompt(skeleton: Self.skeleton(of: vault), items: queue))
         }
-        invocation.model = .sonnet                                   // daily updates are Sonnet [DECIDED]
-        invocation.allowedTools = ["Read", "Glob", "Grep", "Write", "Edit"]
+        invocation.effort = .medium                                  // daily updates are cheap [DECIDED]
+        invocation.sandbox = .workspaceWrite                         // edits confined to the vault
         invocation.cwd = vault.path
         invocation.timeout = 1_800                                   // a daily delta is minutes, not hours
 
         Log("VaultUpdater: folding \(queue.count) summaries into the vault…")
         do {
-            let envelope = try await ClaudeCLI.shared.run(invocation)
+            let envelope = try await CodexCLI.shared.run(invocation)
             resumeSessionID = nil
             await store.markSynced(queue.map(\.persistentID))        // EXACTLY the rows we sent
             await MainActor.run { VaultActivity.shared.vaultDirty = true }
             Log("VaultUpdater: ✅ folded \(queue.count) (turns \(envelope.numTurns ?? -1), \(envelope.durationMS ?? -1)ms) — \(envelope.result.prefix(120))")
             return queue.count
-        } catch let ClaudeCLI.CLIError.usageLimit(message, sessionID) {
+        } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             resumeSessionID = sessionID                              // stamp nothing; resume later
             throw UpdaterError.usageLimit(message: message, sessionID: sessionID)
         } catch {
@@ -141,9 +141,9 @@ actor VaultUpdater {
         \(skeleton)
 
         ## How to work — surgical edits, not a rebuild
-        - **Explore only the notes you need.** Use Glob/Grep/Read to find where each new item \
+        - **Explore only the notes you need.** Search the tree to find where each new item \
         belongs; do not re-read the whole vault.
-        - **Rewrite only what changed.** Prefer editing an existing note (Edit) over creating a \
+        - **Rewrite only what changed.** Prefer editing an existing note over creating a \
         new one; create a new note ONLY when no existing note fits, following the existing \
         folder structure and naming style (`Domain/Specific — Topic.md`, frontmatter included).
         - **Never delete notes wholesale**, never reorganize folders, never rename existing \

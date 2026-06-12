@@ -46,10 +46,10 @@ enum SelfTestDaysEnd {
                                 summary: SummaryDraft(text: text, title: title, reminderFlagged: reminder))
     }
 
-    private static func claudeReady(emit: (String) -> Void) async -> Bool {
-        let availability = await ClaudeCLI.shared.validate()
+    private static func codexReady(emit: (String) -> Void) async -> Bool {
+        let availability = await CodexCLI.shared.validate()
         guard case .available = availability else {
-            emit("SKIP — Claude Code unavailable: \(availability)")
+            emit("SKIP — Codex unavailable: \(availability)")
             return false
         }
         return true
@@ -58,7 +58,7 @@ enum SelfTestDaysEnd {
     // MARK: daysend
 
     static func daysend(emit: (String) -> Void) async {
-        guard await claudeReady(emit: emit) else { return }
+        guard await codexReady(emit: emit) else { return }
         let env = ProcessInfo.processInfo.environment
 
         // The vault override is mandatory: this harness writes into the vault root.
@@ -136,7 +136,7 @@ enum SelfTestDaysEnd {
     // MARK: proactive
 
     static func proactive(emit: (String) -> Void) async {
-        guard await claudeReady(emit: emit) else { return }
+        guard await codexReady(emit: emit) else { return }
         guard let store = freshStore(emit: emit) else { return }
 
         var pass = 0, fail = 0

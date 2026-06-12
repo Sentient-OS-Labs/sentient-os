@@ -6,11 +6,11 @@
 //   1. Selection: reminder-flagged summaries newer than the "proactive" pointer (a createdAt
 //      high-water mark in SourceCursor — judged once, no bookkeeping tables, re-runs never
 //      re-judge).
-//   2. The judge: ONE Sonnet call, no tools, structured output — which of these (if any)
+//   2. The judge: ONE read-only structured-output call — which of these (if any)
 //      genuinely deserve the user's attention. The taste law lives in the prompt AND in code:
 //      at most ONE non-skip decision survives per run.
 //   3. Tier 1 (remind): a scheduled macOS notification. Past/unparseable time → fire now.
-//      Tier 2 (brief): a second, agentic call — vault context + WebSearch → ONE briefing .md
+//      Tier 2 (brief): a second, agentic call — vault context + web search → ONE briefing .md
 //      into the Briefings folder (OUTSIDE the vault: briefings are For You artifacts, not the
 //      user's knowledge base — they must never ride the mirror push). Never auto-send.
 //
@@ -73,12 +73,11 @@ enum Proactive {
             guard !flagged.isEmpty else { return out }
             out.judged = flagged.count
 
-            // 2) The judge — one structured-output Sonnet call, no tools.
-            var inv = ClaudeCLI.Invocation(prompt: Self.judgePrompt(flagged))
-            inv.model = .sonnet
-            inv.jsonSchema = judgeSchema
+            // 2) The judge — one structured-output call, read-only sandbox (the default).
+            var inv = CodexCLI.Invocation(prompt: Self.judgePrompt(flagged))
+            inv.outputSchema = judgeSchema
             inv.timeout = 300
-            let envelope = try await ClaudeCLI.shared.run(inv)
+            let envelope = try await CodexCLI.shared.run(inv)
             let decisions = Self.parseDecisions(envelope.result)
 
             // The taste cap, enforced in CODE: the prompt requests restraint, this guarantees
@@ -116,7 +115,7 @@ enum Proactive {
 
     // MARK: Tier 2 — the agentic briefing
 
-    /// Research/draft the task with vault context + WebSearch and land ONE .md in Briefings.
+    /// Research/draft the task with vault context + web search and land ONE .md in Briefings.
     private static func writeBriefing(task: String) async -> Bool {
         let date = ISO8601DateFormatter.dateOnly.string(from: Date())
         let slug = task.lowercased()
@@ -124,11 +123,11 @@ enum Proactive {
             .filter { !$0.isEmpty }.prefix(6).joined(separator: "-")
         let file = Briefings.dir.appendingPathComponent("\(date) — \(slug.isEmpty ? "briefing" : slug).md")
 
-        var inv = ClaudeCLI.Invocation(prompt: """
+        var inv = CodexCLI.Invocation(prompt: """
             You are preparing a morning briefing for the user of Sentient OS — a private, \
             personal-intelligence app. Your working directory is their personal knowledge \
-            vault: explore it (Glob/Grep/Read) for context about who they are and what this \
-            task means to them. Use WebSearch for anything that needs current information.
+            vault: explore it for context about who they are and what this \
+            task means to them. Use web search for anything that needs current information.
 
             THE TASK: \(task)
 
@@ -143,13 +142,13 @@ enum Proactive {
 
             When the briefing is written, reply with one line: DONE.
             """)
-        inv.model = .sonnet
-        inv.allowedTools = ["Read", "Glob", "Grep", "WebSearch", "Write"]
+        inv.sandbox = .workspaceWrite
+        inv.webSearch = true
         inv.cwd = VaultGenerator.vaultRoot.path
         inv.addDirs = [Briefings.dir.path]
         inv.timeout = 900
         do {
-            _ = try await ClaudeCLI.shared.run(inv)
+            _ = try await CodexCLI.shared.run(inv)
             return FileManager.default.fileExists(atPath: file.path)
         } catch {
             Log("Proactive: briefing agent failed — \(error)")
@@ -205,7 +204,7 @@ enum Proactive {
     }
 
     static func parseDecisions(_ result: String) -> [Decision] {
-        // --json-schema makes `result` the JSON object itself; tolerate fenced/prefixed output.
+        // --output-schema makes `result` the JSON object itself; tolerate fenced/prefixed output.
         let span: String
         if let start = result.firstIndex(of: "{"), let end = result.lastIndex(of: "}"), start < end {
             span = String(result[start...end])

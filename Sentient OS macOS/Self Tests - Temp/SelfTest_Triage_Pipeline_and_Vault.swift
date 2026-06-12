@@ -16,7 +16,7 @@
 //  Env knobs:
 //    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "notes" | "files"  (model dump) ·
 //                          "tokens"  (WhatsApp window token-cost measurement, model) ·
-//                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "claudecli"
+//                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "codexcli"
 //                          | "vault" | "skipping" | "skipcensus"
 //                          | "incremental"  (pointer-architecture proof, no model)
 //    SENTIENT_SELFTEST_N   item count (default 6)
@@ -97,21 +97,20 @@ enum SelfTest {
         if mode == "daysend" { await SelfTestDaysEnd.daysend(emit: emit); return }
         if mode == "proactive" { await SelfTestDaysEnd.proactive(emit: emit); return }
 
-        // ClaudeCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
-        // claude -p spine (binary → env → stdin → JSON envelope). Verifies the compute waterfall's
-        // tier-1 path end to end on this Mac.
-        if mode == "claudecli" {
-            emit("binary: \(ClaudeCLI.locateBinary() ?? "NOT FOUND")")
-            let availability = await ClaudeCLI.shared.validate(force: true)
+        // CodexCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
+        // codex exec spine (binary → env → stdin → JSONL envelope). Verifies the compute
+        // waterfall's tier-1 path end to end on this Mac.
+        if mode == "codexcli" {
+            emit("binary: \(CodexCLI.locateBinary() ?? "NOT FOUND")")
+            let availability = await CodexCLI.shared.validate(force: true)
             emit("availability: \(availability)")
             guard case .available = availability else { return }
             do {
-                var inv = ClaudeCLI.Invocation(prompt: "Reply with exactly: SPINE_OK")
-                inv.model = .sonnet
+                var inv = CodexCLI.Invocation(prompt: "Reply with exactly: SPINE_OK")
                 inv.timeout = 120
-                let envelope = try await ClaudeCLI.shared.run(inv)
+                let envelope = try await CodexCLI.shared.run(inv)
                 emit("result: \(envelope.result)")
-                emit("session: \(envelope.sessionID ?? "nil") · turns: \(envelope.numTurns ?? -1) · \(envelope.durationMS ?? -1)ms · cost: $\(envelope.totalCostUSD ?? 0) · denials: \(envelope.permissionDenialCount)")
+                emit("session: \(envelope.sessionID ?? "nil") · items: \(envelope.numTurns ?? -1) · \(envelope.durationMS ?? -1)ms · tokens in/cached/out: \(envelope.inputTokens ?? -1)/\(envelope.cachedInputTokens ?? -1)/\(envelope.outputTokens ?? -1)")
                 emit(envelope.result.contains("SPINE_OK") ? "✅ spine OK" : "⚠️ unexpected result text")
             } catch { emit("run FAILED: \(error)") }
             return
@@ -237,7 +236,7 @@ enum SelfTest {
         // Vault mode: exercise the REAL Stage-2 path (Store → VaultGenerator → ~/Sentient OS -- The Vault).
         //   SENTIENT_SELFTEST_N>0   → subset (cheap plumbing check);  0/unset → full vault
         //   SENTIENT_VAULT_EFFORT   → effort override (default xhigh; direct route only)
-        //   SENTIENT_VAULT_ROUTE    → "direct" forces the API fallback; default auto (agentic when claude works)
+        //   SENTIENT_VAULT_ROUTE    → "direct" forces the API fallback; default auto (agentic when codex works)
         if mode == "vault" {
             let env = ProcessInfo.processInfo.environment
             let want = env["SENTIENT_SELFTEST_N"].flatMap(Int.init) ?? 0

@@ -5,15 +5,16 @@ summaries into the markdown vault at `~/Sentient OS -- The Vault/`. It routes au
 
 | Route | When | How |
 |---|---|---|
-| **Agentic** (default) | `ClaudeCLI.validate()` says the user's Claude Code works | `claude -p` with `Write,Edit,Read,Glob,Grep`, cwd = a staging dir; the model writes the `.md` files itself |
-| **Direct** (fallback) | No working Claude Code (until the Bedrock tier exists) | One streamed Opus API call emitting a `=== NOTE: path ===` stream we parse + materialize |
+| **Agentic** (default) | `CodexCLI.validate()` says the user's Codex CLI works | `codex exec` — GPT-5.5 high effort, `workspace-write` sandbox, cwd = a staging dir; the model writes the `.md` files itself |
+| **Direct** (fallback) | No working Codex CLI (until the free tier exists) | One streamed Opus API call emitting a `=== NOTE: path ===` stream we parse + materialize |
 
 ## Why agentic is the default (Arch §5/§6)
 
-- **No 64k output cap** — the model writes files across turns instead of one giant response.
+- **No per-message output cap** — the model writes files across turns instead of one giant response.
 - **Resumable** — a usage-limit failure throws `VaultError.usageLimit(message:resume:)`; the
-  `ResumeToken` carries the Claude `session_id` AND the staging path. Passing it back to
+  `ResumeToken` carries the Codex session (thread) id AND the staging path. Passing it back to
   `generate(resume:)` continues the same session over the same half-written staging dir.
+  ⚠️ On resume the workspace root is the PROCESS cwd (CodexCLI sets it from `Invocation.cwd`).
 - **Free at the margin** — the user's own subscription does the work.
 
 ## Safety: staging + atomic swap
@@ -44,8 +45,9 @@ SENTIENT_SELFTEST=vault SENTIENT_SELFTEST_N=8 "<app>/Contents/MacOS/Sentient OS"
 SENTIENT_VAULT_ROUTE=direct …                                                       # force the API fallback
 ```
 
-## Future
+## Siblings on the same spine
 
-The iterative day's-end updater (skeleton tree + new summaries + scoped tools over the LIVE
-vault) rides the same `ClaudeCLI` spine — it edits in place rather than regenerate. Welcome
-briefing lands with initial gen (separate task).
+The iterative day's-end updater (skeleton tree + new summaries over the LIVE vault — see
+`Days-End Job (Living System).md`) and the post-gen welcome briefing
+(`writeWelcomeBriefing()`, medium effort, Briefings dir via `--add-dir`) ride the same
+`CodexCLI` spine.

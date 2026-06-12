@@ -16,14 +16,15 @@ clock; no logic lives in the button.
   `PersistentIdentifier`s — summaries are versioned, so we stamp the EXACT rows we sent, never
   "by sourceID". The queue self-populates (rows are born unsynced) and self-heals (failed jobs
   stamp nothing; rows simply re-enter).
-- **The job:** ONE `claude -p` call — `--model sonnet`, tools `Read,Glob,Grep,Write,Edit`,
+- **The job:** ONE `codex exec` call — GPT-5.5 medium effort, `workspace-write` sandbox,
   **cwd = the LIVE vault** (no staging dir: inputs are tiny, edits are surgical), 30-min
   timeout. Stdin = the vault's skeleton tree + the new summaries (title, text, itemDate,
   source-trust tag) + the editing-flavored port of the Stage-2 core (truth/attribution,
   source-trust tiers, explore-only-what-you-need, never delete wholesale).
 - **Safety net:** `cp -R` snapshot before the job. A thrown error mid-edit restores it; a
-  **usage limit does NOT** — the half-edited vault is exactly what `--resume` (session id kept
-  in memory) continues from. Either way nothing was stamped, so a fresh restart is also correct.
+  **usage limit does NOT** — the half-edited vault is exactly what a session resume
+  (`codex exec resume`, id kept in memory) continues from. Either way nothing was stamped, so
+  a fresh restart is also correct.
 - **On success:** stamp the sent rows, set `VaultActivity.vaultDirty`.
 
 ## Editor-idle + push (`VaultActivity` — the seam, not the feature)
