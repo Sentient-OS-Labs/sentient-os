@@ -56,6 +56,13 @@ final class VaultModel {
             // they supersede) — anything newer stays queued for the iterative updater.
             await store.markCorpusSynced(summaries)
             phase = .done
+            // The vault changed → mirror push (if enabled), plus the day-one welcome briefing.
+            // Both best-effort and off the UI path.
+            VaultActivity.shared.vaultDirty = true
+            Task.detached(priority: .utility) {
+                await VaultGenerator().writeWelcomeBriefing()
+                _ = await DaysEndJob.shared.pushIfDirty()
+            }
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
             resumeToken = resume
             errorMsg = "Claude hit its usage limit — \"Try again\" later will resume right where it left off. (\(message.prefix(160)))"

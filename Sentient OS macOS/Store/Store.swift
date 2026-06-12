@@ -165,6 +165,17 @@ actor Store {
         return rows.map(item(from:))
     }
 
+    /// Reminder-flagged summaries newer than the proactive pointer — the judge's input
+    /// (Part II §E). Oldest first; `after == nil` = never judged = everything flagged.
+    func flaggedSummaries(after: Date?) -> [SummaryItem] {
+        let floor = after ?? .distantPast
+        let rows = (try? modelContext.fetch(
+            FetchDescriptor<Summary>(predicate: #Predicate { $0.reminderFlagged && $0.createdAt > floor },
+                                     sortBy: [SortDescriptor(\.createdAt, order: .forward)])
+        )) ?? []
+        return rows.map(item(from:))
+    }
+
     /// Stamp EXACTLY the rows a cloud job consumed (the updater's path). Failed/limited jobs
     /// stamp nothing — unstamped rows simply re-enter the queue (it self-heals).
     func markSynced(_ ids: [PersistentIdentifier], date: Date = Date()) {
