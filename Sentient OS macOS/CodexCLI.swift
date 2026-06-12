@@ -47,8 +47,8 @@ actor CodexCLI {
         var effort: Effort = .medium
         var sandbox: Sandbox = .readOnly
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
-        var addDirs: [String] = []             // extra writable roots (the Briefings folder)
-        var webSearch = false                  // native web_search tool (tier-2 briefings)
+        var addDirs: [String] = []             // extra writable roots beyond cwd
+        var webSearch = false                  // native web_search tool
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
         var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
