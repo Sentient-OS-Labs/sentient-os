@@ -4,7 +4,7 @@
 //
 //  The iterative vault updater (Part II §B) — the day's-end cloud job that folds NEW survivor
 //  summaries into the EXISTING vault. One `codex exec` call (medium effort — daily updates
-//  are cheap; high effort stays reserved for initial generation): the vault's skeleton tree
+//  are cheap; xhigh effort stays reserved for initial generation): the vault's skeleton tree
 //  + the unsynced summaries go in over stdin, the agent explores only the notes it needs
 //  and rewrites only what changed, working directly on the LIVE vault — no staging dir,
 //  because the inputs are tiny and edits are surgical. A cp -R snapshot is the safety net:

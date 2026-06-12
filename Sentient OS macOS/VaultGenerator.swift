@@ -109,7 +109,7 @@ actor VaultGenerator {
         }
 
         var invocation = CodexCLI.Invocation(prompt: prompt)
-        invocation.effort = .high                            // the initial build gets the deep pass
+        invocation.effort = .xhigh                           // the initial build gets the deepest pass
         invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir
         invocation.cwd = staging.path
         invocation.resumeSessionID = resume?.sessionID
