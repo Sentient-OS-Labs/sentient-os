@@ -48,6 +48,52 @@ enum Theme {
         colors: [Color(red: 1.0, green: 0.78, blue: 0.28), Color(red: 0.98, green: 0.42, blue: 0.52)],
         startPoint: .leading, endPoint: .trailing
     )
+
+    /// The editorial ink palette (from the Constellation mockup) — shared by the Constellation
+    /// home and the For You / briefings window.
+    enum Ink {
+        static let cardBG = Color(red: 0.047, green: 0.047, blue: 0.059)       // #0c0c0f
+        static let statusInk = Color(red: 0.914, green: 0.906, blue: 0.933)    // #e9e7ee
+        static let body = Color(red: 0.608, green: 0.604, blue: 0.627)         // #9b9aa0
+        static let label = Color(red: 0.431, green: 0.427, blue: 0.459)        // #6e6d75
+        static let deepMuted = Color(red: 0.337, green: 0.333, blue: 0.369)    // #56555e
+        static let bright = Color(red: 0.812, green: 0.804, blue: 0.839)       // #cfcdd6
+        static let mint = Color(red: 0.278, green: 0.843, blue: 0.675)         // #47d7ac
+        static let amber = Color(red: 1.0, green: 0.765, blue: 0.443)          // #ffc371
+        static let chipInk = Color(red: 0.541, green: 0.537, blue: 0.565)      // #8a8990
+        static let chipBorder = Color(red: 0.114, green: 0.114, blue: 0.133)   // #1d1d22
+    }
+}
+
+/// Monospace ALL-CAPS with wide tracking — the design language's whisper voice.
+struct MonoCaps: View {
+    let text: String
+    let size: CGFloat
+    let tracking: CGFloat
+    let color: Color
+
+    init(_ text: String, size: CGFloat, tracking: CGFloat, color: Color) {
+        self.text = text
+        self.size = size
+        self.tracking = tracking
+        self.color = color
+    }
+
+    var body: some View {
+        Text(text.uppercased())
+            .font(.system(size: size, weight: .medium, design: .monospaced))
+            .tracking(tracking)
+            .foregroundStyle(color)
+    }
+}
+
+/// Subtle scale-on-press for custom (non-bordered) buttons across the app.
+struct PressScaleStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.easeOut(duration: 0.18), value: configuration.isPressed)
+    }
 }
 
 extension Font {

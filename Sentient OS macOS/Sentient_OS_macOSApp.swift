@@ -45,7 +45,20 @@ struct SentientOSApp: App {
                 .environment(appState)
                 .preferredColorScheme(.dark)   // Sentient OS is dark-only — no light mode
         }
+        .windowStyle(.hiddenTitleBar)            // OLED black runs edge-to-edge; no gray trim
         .windowResizability(.contentMinSize)
+        .defaultSize(width: 1100, height: 760)   // the Constellation's intended canvas
+
+        // For You — the briefings ("offerings") window. Its own scene; the Constellation's
+        // briefing satellite and (later) the menu bar open it.
+        Window("", id: BriefingsView.windowID) {
+            BriefingsView()
+                .environment(appState)
+                .preferredColorScheme(.dark)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 1180, height: 800)
 
         // The knowledge inspector is its OWN resizable window (native traffic-light controls,
         // closed with the red button) — not a sheet. Single-instance; `openWindow` brings it up.
