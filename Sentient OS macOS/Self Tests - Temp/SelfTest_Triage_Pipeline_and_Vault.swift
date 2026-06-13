@@ -91,9 +91,11 @@ enum SelfTest {
         // file (versioned summary + " — Edit" title) → junk advances the pointer with zero trace.
         if mode == "incremental" { await SelfTestIncremental.run(emit: emit); return }
 
-        // Iterative-updater harness (real cloud call — see SelfTest_DaysEnd.swift):
-        // "daysend" needs SENTIENT_VAULT_ROOT (fixture vault).
-        if mode == "daysend" { await SelfTestDaysEnd.daysend(emit: emit); return }
+        // Comprehensive, content-verified iterative-updater proof (SelfTest_UpdaterE2E.swift):
+        // seeds summaries deterministically, then READS the vault .md files to prove facts
+        // actually folded — empty/no-vault guards · first fold · incremental · no-op · versioned
+        // edit · DaysEndJob wrapper. Real codex calls; needs SENTIENT_VAULT_ROOT.
+        if mode == "updater" { await SelfTestUpdaterE2E.run(emit: emit); return }
 
         // Full incremental loop, headless (SelfTest_E2E.swift): REAL engine analysis of a
         // fixture folder → REAL codex updater → new file → pointer-only re-analysis → fold →

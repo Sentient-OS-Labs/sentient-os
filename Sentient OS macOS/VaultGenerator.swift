@@ -60,7 +60,7 @@ actor VaultGenerator {
     }
 
     /// Where the vault lives on disk — visible, in the user's home folder.
-    /// `SENTIENT_VAULT_ROOT` overrides for self-tests (the daysend harness points everything
+    /// `SENTIENT_VAULT_ROOT` overrides for self-tests (the updater harness points everything
     /// vault-shaped at a fixture dir instead of the real vault).
     static var vaultRoot: URL {
         if let override = ProcessInfo.processInfo.environment["SENTIENT_VAULT_ROOT"], !override.isEmpty {

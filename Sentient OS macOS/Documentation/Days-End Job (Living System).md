@@ -55,10 +55,21 @@ requested lazily on first use (the real ask moves into onboarding); suppressed e
 `SENTIENT_SELFTEST`. Quiet by design — no-op runs never notify.
 
 
-## Self-test (a real cloud call — it spends a little budget)
+## Self-tests (real cloud calls — they spend a little budget)
 
-- `SENTIENT_SELFTEST=daysend SENTIENT_VAULT_ROOT=/tmp/scratch` — fixture vault + seeded queue
-  → run → asserts the fold, exact-row stamping, vault change, and the second-run no-op.
-  REQUIRES the vault-root override; refuses to run if the mirror is enabled without
-  `SENTIENT_MIRROR_BASE` (the push step would clobber the real hosted mirror).
-- `SENTIENT_VAULT_ROOT` is honored by everything vault-shaped (generator, updater, mirror zip).
+- **`SENTIENT_SELFTEST=updater SENTIENT_VAULT_ROOT=/tmp/scratch`** — the comprehensive,
+  content-verified updater proof (`SelfTest_UpdaterE2E.swift`, 30 checks). Seeds summaries
+  deterministically through the real `Store.record` path, then READS the vault `.md` files to
+  prove facts actually folded — it does NOT trust status strings. Phases: empty-queue no-op ·
+  no-vault guard (the bug the missing-vault case tripped) · first fold (3 distinct facts land,
+  existing notes survive, exact rows stamped) · incremental (one new file, queue holds only it,
+  reviews 1 not 4, old facts preserved) · idempotent byte-identical no-op · versioned edit (the
+  ` — Edit` title, the August date supersedes July, corpus dedups to 4) · the `DaysEndJob.run()`
+  wrapper (`Done —` prefix, `mirror: off`, queue drained, no hang). Last run: **30/30** live.
+- **`SENTIENT_SELFTEST=e2e SENTIENT_VAULT_ROOT=/tmp/scratch`** — the complementary full-CHAIN
+  smoke test: REAL on-device engine analysis of a fixture folder → pointer → REAL codex fold →
+  add a file → pointer-only re-analysis → fold → no-op. Proves the analysis→updater chain end
+  to end (the `updater` test seeds summaries to stay deterministic; this one earns them).
+- Both REQUIRE the vault-root override and refuse to run if the mirror is enabled without
+  `SENTIENT_MIRROR_BASE` (the push step would clobber the real hosted mirror with the fixture).
+  `SENTIENT_VAULT_ROOT` is honored by everything vault-shaped (generator, updater, mirror zip).
