@@ -15,7 +15,7 @@ import UserNotifications
 enum Notify {
 
     /// Headless self-tests can't answer the system permission dialog — requestAuthorization
-    /// would hang the harness forever (measured: the daysend run wedged here). Notify is a
+    /// would hang the harness forever (measured: an early day's-end run wedged here). Notify is a
     /// silent no-op under SENTIENT_SELFTEST.
     private static var suppressed: Bool {
         ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] != nil
