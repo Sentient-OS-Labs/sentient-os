@@ -1,29 +1,28 @@
 //
-//  FileVaultCloud.swift
+//  VaultCloud.swift
 //  Sentient OS macOS
 //
-//  The files-iterative system's three cloud calls, all through the user's own Codex CLI (CodexCLI):
+//  The iterative system's three cloud calls, all through the user's own Codex CLI (CodexCLI):
 //   • create    — "go make knowledge base exist": build the vault from scratch. Reuses
 //                 VaultGenerator (staging dir + atomic swap + usage-limit resume).
 //   • update    — "go update knowledge base": fold the cycle's new notes into the existing vault
-//                 with surgical edits on the live vault. The eval-validated update prompt is lifted
-//                 from the old VaultUpdater (the orchestration is rebuilt here — no store queue,
-//                 since the files system's notes are wiped wholesale each cycle).
+//                 with surgical edits on the live vault (eval-validated prompt lifted from the old
+//                 VaultUpdater; no store queue — the cycle's notes are wiped wholesale each cycle).
 //   • proactive — "proactive system": send the reminder-flagged notes to a PLACEHOLDER proactive
 //                 pass and return how many were sent (the real system isn't built yet).
 //
+//  Connector-agnostic: operates on `CycleStore.notes()` regardless of source (files / notes / chats).
 //  After create/update the mirror is pushed (same rule as the retired DaysEndJob.pushIfDirty).
 //
 
 import Foundation
 
 /// A Sendable, store-agnostic description of one summary handed to a Codex call. Decouples the
-/// cloud prompts from the old Store's SummaryItem (whose PersistentIdentifier the files system has
-/// no use for). Built from a files FileNoteItem — and from a legacy SummaryItem (bridges
-/// VaultGenerator's transitional generate(summaries:) adapter).
+/// cloud prompts from any particular store. Built from a CycleNoteItem (the iterative system) — and
+/// from a legacy SummaryItem (used only by the self-test's vault mode against the old Store).
 struct CloudNote: Sendable {
     let kind: SourceKind
-    let sourceID: String       // "file:<abs path>" — VaultGenerator.locSrc / relPath key on it
+    let sourceID: String       // "file:<abs path>" / "notes:<uuid>" — VaultGenerator.locSrc keys on it
     let folder: String
     let title: String?
     let text: String
@@ -34,25 +33,25 @@ struct CloudNote: Sendable {
         self.title = title; self.text = text; self.itemDate = itemDate
     }
 
-    /// From a files-iterative note.
-    init(_ n: FileNoteItem) {
-        self.init(kind: .file, sourceID: "file:\(n.path)", folder: n.folder,
-                  title: n.title, text: n.text, itemDate: n.dateAdded)
+    /// From an iterative cycle note.
+    init(_ n: CycleNoteItem) {
+        self.init(kind: n.kind, sourceID: n.sourceID, folder: n.folder,
+                  title: n.title, text: n.text, itemDate: n.itemDate)
     }
 
-    /// From a legacy old-Store summary (used only by VaultGenerator's transitional adapter).
+    /// From a legacy old-Store summary (self-test vault mode only).
     init(_ s: SummaryItem) {
         self.init(kind: s.kind, sourceID: s.sourceID, folder: s.folder,
                   title: s.title, text: s.text, itemDate: s.itemDate)
     }
 }
 
-actor FileVaultCloud {
+actor VaultCloud {
 
-    static let shared = FileVaultCloud()
+    static let shared = VaultCloud()
 
-    // In-memory resume handles (an app restart just starts fresh — correct, since the cycle's
-    // notes stay in FileStore until the proactive button wipes them).
+    // In-memory resume handles (an app restart just starts fresh — correct, since the cycle's notes
+    // stay in CycleStore until the proactive button wipes them).
     private var createResume: VaultGenerator.ResumeToken?
     private var updateResumeSessionID: String?
 
@@ -122,12 +121,12 @@ actor FileVaultCloud {
         invocation.cwd = vault.path
         invocation.timeout = 1_800
 
-        Log("FileVaultCloud.update: folding \(notes.count) notes into the vault…")
+        Log("VaultCloud.update: folding \(notes.count) notes into the vault…")
         do {
             let envelope = try await CodexCLI.shared.run(invocation)
             updateResumeSessionID = nil
             await markDirtyAndPush()
-            Log("FileVaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1)) — \(envelope.result.prefix(120))")
+            Log("VaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1)) — \(envelope.result.prefix(120))")
             return notes.count
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             updateResumeSessionID = sessionID                        // resume later; vault left as-is
@@ -149,17 +148,17 @@ actor FileVaultCloud {
     @discardableResult
     func proactive(reminderNotes: [CloudNote]) async throws -> Int {
         guard !reminderNotes.isEmpty else {
-            Log("FileVaultCloud.proactive: no reminder-flagged notes — nothing to send.")
+            Log("VaultCloud.proactive: no reminder-flagged notes — nothing to send.")
             return 0
         }
         var inv = CodexCLI.Invocation(prompt: Self.proactivePrompt(reminderNotes))
         inv.effort = .medium
         inv.sandbox = .readOnly
         inv.timeout = 600
-        Log("FileVaultCloud.proactive: sending \(reminderNotes.count) reminder candidate(s) to codex (placeholder)…")
+        Log("VaultCloud.proactive: sending \(reminderNotes.count) reminder candidate(s) to codex (placeholder)…")
         do {
             let envelope = try await CodexCLI.shared.run(inv)
-            Log("FileVaultCloud.proactive: ✅ sent \(reminderNotes.count) — \(envelope.result.prefix(120))")
+            Log("VaultCloud.proactive: ✅ sent \(reminderNotes.count) — \(envelope.result.prefix(120))")
         } catch let CodexCLI.CLIError.usageLimit(message, _) {
             throw CloudError.usageLimit(message)
         } catch {
@@ -176,9 +175,9 @@ actor FileVaultCloud {
         do {
             try await MirrorClient.shared.push()
             await MainActor.run { VaultActivity.shared.vaultDirty = false }
-            Log("FileVaultCloud: mirror pushed ✓")
+            Log("VaultCloud: mirror pushed ✓")
         } catch {
-            Log("FileVaultCloud: mirror push failed — \((error as? LocalizedError)?.errorDescription ?? "\(error)") (retries next time)")
+            Log("VaultCloud: mirror push failed — \((error as? LocalizedError)?.errorDescription ?? "\(error)") (retries next time)")
         }
     }
 
@@ -208,7 +207,7 @@ actor FileVaultCloud {
         You are the **Sentient OS Knowledge Base Architect** — the cloud brain of a privacy-first \
         personal-intelligence product. You previously organized this user's digital life into the \
         Obsidian-style markdown vault that is your current working directory. While their Mac sat \
-        idle, an on-device LLM privately summarized the user's NEW files — you are receiving today's \
+        idle, an on-device LLM privately summarized the user's NEW items — you are receiving today's \
         survivors (junk and sensitive items were already discarded on-device). Your job: fold them \
         into the existing vault, surgically.
 

@@ -1,17 +1,17 @@
 //
-//  FileNotesView.swift
+//  SummariesView.swift
 //  Sentient OS macOS
 //
-//  VIEW SUMMARIES — a plain dev list of the current cycle's FileNotes (the files-iterative
-//  system's ephemeral survivor summaries, FileStore). Initial or iterative, it just shows
-//  whatever notes exist right now (they're wiped when the proactive button ends the cycle).
+//  VIEW SUMMARIES — a plain dev list of the current cycle's notes (the iterative system's ephemeral
+//  survivor summaries, CycleStore). Any connector, initial or iterative; just shows whatever exists
+//  right now (wiped when the proactive button ends the cycle).
 //
 
 import SwiftUI
 
-struct FileNotesView: View {
+struct SummariesView: View {
     @Environment(\.dismiss) private var dismiss
-    @State private var notes: [FileNoteItem] = []
+    @State private var notes: [CycleNoteItem] = []
     @State private var loaded = false
 
     var body: some View {
@@ -47,7 +47,7 @@ struct FileNotesView: View {
         .task { await load() }
     }
 
-    private func row(_ n: FileNoteItem) -> some View {
+    private func row(_ n: CycleNoteItem) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
                 Text(n.title ?? n.displayName)
@@ -74,7 +74,7 @@ struct FileNotesView: View {
     }
 
     private func load() async {
-        notes = await FileStore.shared.notes()
+        notes = await CycleStore.shared.notes()
         loaded = true
     }
 }

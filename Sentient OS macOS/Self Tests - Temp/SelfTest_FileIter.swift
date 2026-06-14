@@ -2,17 +2,12 @@
 //  SelfTest_FileIter.swift
 //  Sentient OS macOS
 //
-//  SENTIENT_SELFTEST=fileiter — a deterministic proof of the files-iterative CORE (no model, no
-//  codex, in-memory store):
-//    • FileKey ordering — the (dateAdded, path) tiebreak.
-//    • The iterative "newer than hi" partition, with a same-second TWIN straddling the boundary
-//      (the exact case the tiebreak exists for: the twin below the line is NOT reprocessed).
-//    • FileStore round-trip — pointer set/get, clearFolder, recordNote/notes/reminderNotes,
-//      wipeAllNotes.
-//    • FilesSource.eligibleFiles — keeps allowed files, skips a disallowed extension, prunes a
-//      .git repo.
-//  (Date ORDERING of real files can't be unit-tested — kMDItemDateAdded can't be backdated on a
-//  fixture — so the dev buttons on real folders are the end-to-end check; this proves the logic.)
+//  SENTIENT_SELFTEST=fileiter — a deterministic proof of the iterative CORE through the Files
+//  connector (no model, no codex, in-memory store):
+//    • ItemKey ordering — the (order, tiebreak) tiebreak.
+//    • The iterative "newer than mark" partition, with a same-order TWIN at the boundary.
+//    • CycleStore round-trip — pointer set/get, clearBucket, recordNote/notes/reminderNotes/wipeAllNotes.
+//    • FilesConnector.buckets — keeps allowed files, skips a disallowed extension, prunes a .git repo.
 //
 
 import Foundation
@@ -27,52 +22,50 @@ enum SelfTestFileIter {
             else { failed += 1; emit("  ✗ FAIL — \(label)") }
         }
 
-        emit("=== fileiter: FileKey ordering (the tiebreak) ===")
-        let a = FileKey(dateAdded: Date(timeIntervalSince1970: 100), path: "/d/a.png")
-        let b = FileKey(dateAdded: Date(timeIntervalSince1970: 100), path: "/d/b.png")
-        let c = FileKey(dateAdded: Date(timeIntervalSince1970: 200), path: "/d/c.png")
-        check("same second → path breaks the tie (a < b)", a < b)
-        check("later date wins regardless of path (b < c)", b < c)
+        emit("=== fileiter: ItemKey ordering (the tiebreak) ===")
+        let a = ItemKey(date: Date(timeIntervalSince1970: 100), tiebreak: "/d/a.png")
+        let b = ItemKey(date: Date(timeIntervalSince1970: 100), tiebreak: "/d/b.png")
+        let c = ItemKey(date: Date(timeIntervalSince1970: 200), tiebreak: "/d/c.png")
+        check("same order → tiebreak decides (a < b)", a < b)
+        check("later order wins regardless of tiebreak (b < c)", b < c)
         check("twins are strictly ordered, not equal", a < b && !(b < a) && a != b)
 
-        emit("\n=== fileiter: iterative partition (newer-than-hi, twin at the boundary) ===")
-        // Previous run's newest processed = B (t100, b). Its same-second twin A (t100, a) is BELOW
-        // the boundary (already done); C (t200) is genuinely new. Iterative selects keys > hi.
-        let hi = b
-        let newer = [a, b, c].filter { $0 > hi }.sorted()
-        check("twin A (same second, path < hi) is NOT reprocessed", !newer.contains(a))
-        check("the boundary file B itself is excluded", !newer.contains(b))
+        emit("\n=== fileiter: iterative partition (newer-than-mark, twin at the boundary) ===")
+        // Previous run's mark = B. Its same-order twin A (tiebreak < mark) is already done; C is new.
+        let mark = b
+        let newer = [a, b, c].filter { $0 > mark }.sorted()
+        check("twin A (same order, tiebreak < mark) is NOT reprocessed", !newer.contains(a))
+        check("the boundary mark B itself is excluded", !newer.contains(b))
         check("genuinely new C is picked up, alone", newer == [c])
 
-        emit("\n=== fileiter: FileStore round-trip (in-memory) ===")
+        emit("\n=== fileiter: CycleStore round-trip (in-memory) ===")
         let store = inMemoryStore()
-        let key = "file:__fileiter__"
-        check("pointer nil before any initial run", await store.pointer(forKey: key) == nil)
-        // Iterative climbs the mark up per item — simulate two ascending advances (a then c).
-        await store.setPointer(forKey: key, a)
-        await store.setPointer(forKey: key, c)
-        check("pointer persists the high-water mark (c)", await store.pointer(forKey: key) == c)
+        let bucket = "file:__fileiter__"
+        check("pointer nil before any initial run", await store.pointer(bucket) == nil)
+        await store.setPointer(bucket, a)
+        await store.setPointer(bucket, c)
+        check("pointer persists the high-water mark (c)", await store.pointer(bucket) == c)
 
-        await store.recordNote(rootKey: key, folder: "Fix", path: "/d/a.png", dateAdded: a.dateAdded,
-                               text: "summary a", title: "A", reminderFlagged: true)
-        await store.recordNote(rootKey: key, folder: "Fix", path: "/d/c.png", dateAdded: c.dateAdded,
-                               text: "summary c", title: "C", reminderFlagged: false)
+        await store.recordNote(bucketKey: bucket, kind: .file, sourceID: "file:/d/a.png", folder: "Fix",
+                               itemDate: Date(timeIntervalSince1970: 100), text: "summary a", title: "A", reminderFlagged: true)
+        await store.recordNote(bucketKey: bucket, kind: .file, sourceID: "file:/d/c.png", folder: "Fix",
+                               itemDate: Date(timeIntervalSince1970: 200), text: "summary c", title: "C", reminderFlagged: false)
         let notes = await store.notes()
         check("two notes recorded", notes.count == 2)
-        check("notes are newest-first (c before a)", notes.first?.path == "/d/c.png")
+        check("notes are newest-first (c before a)", notes.first?.sourceID == "file:/d/c.png")
         check("exactly one reminder-flagged", await store.reminderNotes().count == 1)
 
-        await store.clearFolder(rootKey: key)
-        check("clearFolder drops the pointer", await store.pointer(forKey: key) == nil)
-        check("clearFolder removes that root's notes", await store.counts().notes == 0)
+        await store.clearBucket(bucket)
+        check("clearBucket drops the pointer", await store.pointer(bucket) == nil)
+        check("clearBucket removes that bucket's notes", await store.counts().notes == 0)
 
-        await store.recordNote(rootKey: "file:other", folder: "Other", path: "/x/y.txt",
-                               dateAdded: a.dateAdded, text: "t", title: nil, reminderFlagged: false)
-        check("a note under another root exists", await store.counts().notes == 1)
+        await store.recordNote(bucketKey: "file:other", kind: .file, sourceID: "file:/x/y.txt", folder: "Other",
+                               itemDate: Date(timeIntervalSince1970: 100), text: "t", title: nil, reminderFlagged: false)
+        check("a note under another bucket exists", await store.counts().notes == 1)
         await store.wipeAllNotes()
         check("wipeAllNotes empties every note (cycle end)", await store.counts().notes == 0)
 
-        emit("\n=== fileiter: FilesSource.eligibleFiles (skip + keep) ===")
+        emit("\n=== fileiter: FilesConnector.buckets (skip + keep) ===")
         let fm = FileManager.default
         let baseDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("sentient-fileiter-\(UUID().uuidString.prefix(8))")
@@ -85,9 +78,9 @@ enum SelfTestFileIter {
         try? "print('hi')".data(using: .utf8)!.write(to: repo.appendingPathComponent("code.py"))
         defer { try? fm.removeItem(at: baseDir) }
 
-        let src = FilesSource(root: baseDir, label: "Fixture", cursorKey: "file:__fileiter_fix__")
-        let names = Set(src.eligibleFiles()
-            .compactMap { $0.metadata["path"] }
+        let connector = FilesConnector(roots: [.custom(baseDir)])
+        let items = ((try? connector.buckets(since: [:])) ?? []).flatMap { $0.items }
+        let names = Set(items.compactMap { $0.item.metadata["path"] }
             .map { URL(fileURLWithPath: $0).lastPathComponent })
         emit("  eligible: \(names.sorted())")
         check("keeps the 3 allowed files", names == ["keep1.txt", "keep2.md", "keep3.png"])
@@ -97,11 +90,11 @@ enum SelfTestFileIter {
         emit("\n=== fileiter: \(passed) passed · \(failed) failed ===")
     }
 
-    /// A throwaway in-memory FileStore so the proof never touches the real on-disk store.
-    private static func inMemoryStore() -> FileStore {
-        let schema = Schema([FolderPointer.self, FileNote.self])
+    /// A throwaway in-memory CycleStore so the proof never touches the real on-disk store.
+    private static func inMemoryStore() -> CycleStore {
+        let schema = Schema([BucketPointer.self, CycleNote.self])
         let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = try! ModelContainer(for: schema, configurations: config)
-        return FileStore(modelContainer: container)
+        return CycleStore(modelContainer: container)
     }
 }

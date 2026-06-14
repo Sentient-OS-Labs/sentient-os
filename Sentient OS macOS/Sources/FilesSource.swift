@@ -299,14 +299,15 @@ struct FilesSource: DataSource, Sendable {
 
     // MARK: Eligible files (the files-iterative system's flat, pointer-free view)
 
-    /// The current eligible set for this root, for the files-iterative system (FileRun). Same
+    /// The current eligible set for this root, for the iterative system (IterativeRun via
+    /// FilesConnector). Same
     /// skip rules (`pruneReason`) and caps (`cappedNewestFirst`: 1,000/root · 300/dir · Downloads
     /// 1-yr) as `scan`, but deliberately DIFFERENT in two ways:
     ///   • keyed on PURE `addedToDirectoryDate` (a file's "date added" — what Finder shows), NOT
     ///     scan's max(dateAdded, mtime, ancestor). The interval pointer reprocesses nothing on
     ///     edits, so only date-added matters.
     ///   • NO cursor / backfill / hold-back logic — the FolderPointer interval decides new-vs-done.
-    /// Returns newest-first; each Candidate's `itemDate` IS its date added (so FileKey =
+    /// Returns newest-first; each Candidate's `itemDate` IS its date added (so ItemKey =
     /// (itemDate, path)). Reuse `load(_:)` for content extraction.
     func eligibleFiles() -> [Candidate] {
         let now = Date()
@@ -371,15 +372,18 @@ struct FilesSource: DataSource, Sendable {
 
     // MARK: Load (expensive — extract content)
 
-    func load(_ candidate: Candidate) throws -> Artifact {
+    func load(_ candidate: Candidate) throws -> Artifact { try Self.loadArtifact(candidate) }
+
+    /// Static content extraction — shared by the old DataSource path (above) and the files-iterative
+    /// `FilesConnector`. Stateless: reads only `candidate.metadata["path"]`.
+    static func loadArtifact(_ candidate: Candidate) throws -> Artifact {
         guard let path = candidate.metadata["path"] else { throw FilesError.noPath }
         let url = URL(fileURLWithPath: path)
         let ext = url.pathExtension.lowercased()
-
-        if Self.imageExtensions.contains(ext) {
-            return Artifact(candidate: candidate, imageData: try Self.downsampledJPEG(url))
+        if imageExtensions.contains(ext) {
+            return Artifact(candidate: candidate, imageData: try downsampledJPEG(url))
         }
-        return Artifact(candidate: candidate, text: try Self.extractText(url: url, ext: ext))
+        return Artifact(candidate: candidate, text: try extractText(url: url, ext: ext))
     }
 
     // MARK: Text extraction
