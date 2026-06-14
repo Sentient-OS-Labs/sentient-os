@@ -38,11 +38,25 @@ enum RunSource: Hashable {
 }
 
 struct ProcessingView: View {
-    let store: Store
+    let store: Store?
     let modelPath: String
     let sources: [RunSource]   // one pass per source, in order
     let limit: Int?
     var onDone: () -> Void
+    /// When set, run the new IterativeRun over these connectors instead of the old pipeline.
+    private let iterative: (connectors: [any Connector], mode: IterativeRun.Mode)?
+
+    /// Old pipeline takeover (home's Analyze Now): runs `sources` through Pipeline → old Store.
+    init(store: Store, modelPath: String, sources: [RunSource], limit: Int?, onDone: @escaping () -> Void) {
+        self.store = store; self.modelPath = modelPath; self.sources = sources
+        self.limit = limit; self.onDone = onDone; self.iterative = nil
+    }
+
+    /// Iterative takeover (dev start-on-device): runs the connectors through IterativeRun → CycleStore.
+    init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode, onDone: @escaping () -> Void) {
+        self.store = nil; self.modelPath = modelPath; self.sources = []
+        self.limit = nil; self.onDone = onDone; self.iterative = (connectors, mode)
+    }
 
     private enum UIState: Equatable { case loadingModel, processing, completed, failed(String) }
     @State private var state: UIState = .loadingModel
@@ -55,6 +69,7 @@ struct ProcessingView: View {
     @State private var engine: Engine?
     @State private var started = false
     @State private var pipelineTask: Task<PipelineProgress, Error>?
+    @State private var iterativeTask: Task<PipelineProgress, Never>?
 
     var body: some View {
         ZStack {
@@ -78,7 +93,7 @@ struct ProcessingView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await startIfNeeded() }
-        .onDisappear { let e = engine; Task { await e?.unload() } }
+        .onDisappear { iterativeTask?.cancel(); let e = engine; Task { await e?.unload() } }
     }
 
     // MARK: States
@@ -265,6 +280,7 @@ struct ProcessingView: View {
     private func stop() {
         stopped = true
         pipelineTask?.cancel()
+        iterativeTask?.cancel()
         onDone()
     }
 
@@ -281,9 +297,32 @@ struct ProcessingView: View {
     }
 
     private func run() async {
-        state = .loadingModel
         stopped = false
         totals = PipelineProgress()
+
+        // Iterative takeover (dev start-on-device): stream IterativeRun's progress into the same UI.
+        if let iterative {
+            state = .loadingModel
+            let (stream, continuation) = AsyncStream.makeStream(
+                of: PipelineProgress.self, bufferingPolicy: .bufferingNewest(1))
+            let task = Task {
+                defer { continuation.finish() }
+                let runner = IterativeRun(modelPath: modelPath)
+                return iterative.mode == .initial
+                    ? await runner.runInitial(iterative.connectors) { continuation.yield($0) }
+                    : await runner.runIterative(iterative.connectors) { continuation.yield($0) }
+            }
+            iterativeTask = task
+            for await p in stream {
+                if state == .loadingModel { withAnimation { state = .processing } }
+                progress = p
+            }
+            progress = await task.value
+            withAnimation { state = .completed }
+            return
+        }
+
+        state = .loadingModel
         guard !sources.isEmpty else { state = .failed("No sources selected to analyze."); return }
         do {
             // Chat windows are big (and prompt scaffolding is sizeable); size the KV cache with
@@ -294,7 +333,7 @@ struct ProcessingView: View {
             self.engine = engine
             withAnimation { state = .processing }
 
-            let pipeline = Pipeline(engine: engine, store: store)
+            let pipeline = Pipeline(engine: engine, store: store!)
             rootCount = sources.count
 
             // One pass per source (its own progress bar); verdict counts accumulate for the summary.

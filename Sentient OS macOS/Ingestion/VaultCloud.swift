@@ -141,29 +141,11 @@ actor VaultCloud {
 
     // MARK: Proactive — placeholder scaffold
 
-    /// Send the reminder-flagged notes to a proactive pass and return how many were sent. The real
-    /// proactive intelligence system isn't built yet — this is a deliberate scaffold (CodexCLI,
-    /// read-only sandbox) that proves the wiring end to end.
+    /// DUMMY proactive pass — the real proactive intelligence system isn't built yet. It just reports
+    /// how many reminder-flagged notes WOULD be sent; **nothing goes to Codex.**
     /// TODO: real proactive (cloud judge → tier-1 reminders / tier-2 briefings).
-    @discardableResult
-    func proactive(reminderNotes: [CloudNote]) async throws -> Int {
-        guard !reminderNotes.isEmpty else {
-            Log("VaultCloud.proactive: no reminder-flagged notes — nothing to send.")
-            return 0
-        }
-        var inv = CodexCLI.Invocation(prompt: Self.proactivePrompt(reminderNotes))
-        inv.effort = .medium
-        inv.sandbox = .readOnly
-        inv.timeout = 600
-        Log("VaultCloud.proactive: sending \(reminderNotes.count) reminder candidate(s) to codex (placeholder)…")
-        do {
-            let envelope = try await CodexCLI.shared.run(inv)
-            Log("VaultCloud.proactive: ✅ sent \(reminderNotes.count) — \(envelope.result.prefix(120))")
-        } catch let CodexCLI.CLIError.usageLimit(message, _) {
-            throw CloudError.usageLimit(message)
-        } catch {
-            throw CloudError.failed("\(error)")
-        }
+    func proactive(reminderNotes: [CloudNote]) -> Int {
+        Log("VaultCloud.proactive: filtered \(reminderNotes.count) reminder candidate(s) (dummy — not sent).")
         return reminderNotes.count
     }
 
@@ -251,23 +233,4 @@ actor VaultCloud {
         """
     }
 
-    /// Placeholder proactive prompt — proves the codex wiring; replaced when the real proactive
-    /// system lands.
-    private static func proactivePrompt(_ notes: [CloudNote]) -> String {
-        var lines: [String] = []
-        for (i, n) in notes.enumerated() {
-            let title = (n.title?.isEmpty == false) ? n.title! : "(untitled)"
-            lines.append("#\(i + 1) \(title) — \(n.text)")
-        }
-        return """
-        [PLACEHOLDER — Sentient OS proactive intelligence is not built yet. This is a wiring test.]
-
-        Below are on-device "potential reminder" candidates the local model flagged as possibly \
-        time-sensitive or worth the user's attention. The real proactive system (a cloud judge that \
-        decides which deserve a reminder or a briefing) will replace this prompt. For now, simply \
-        acknowledge receipt and reply with ONE line: the number of candidates you received.
-
-        \(lines.joined(separator: "\n"))
-        """
-    }
 }
