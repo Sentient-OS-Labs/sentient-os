@@ -91,8 +91,8 @@ enum SelfTest {
         // file (versioned summary + " — Edit" title) → junk advances the pointer with zero trace.
         if mode == "incremental" { await SelfTestIncremental.run(emit: emit); return }
 
-        // Files-iterative core proof: deterministic, no model/codex — FileKey tiebreak · the
-        // newer-than-hi partition (twin at the boundary) · FileStore round-trip · eligibleFiles.
+        // Iterative core proof: deterministic, no model/codex — ItemKey tiebreak · the
+        // newer-than-mark partition (twin at the boundary) · CycleStore round-trip · FilesConnector.
         if mode == "fileiter" { await SelfTestFileIter.run(emit: emit); return }
 
         // CodexCLI mode: no model needed — discovery, ping, and one tiny run through the REAL

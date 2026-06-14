@@ -15,7 +15,7 @@
 //  newer than the saved pointer, oldest→newest. "tell cloud" hands the cycle's summaries to
 //  Codex (create / surgical update). "proactive system" sends the reminder-flagged summaries to
 //  the placeholder proactive pass, then WIPES the cycle's summaries (the cycle ends). All of it
-//  runs through the new self-contained stack (FileRun · FileVaultCloud · FileStore) — the old
+//  runs through the new self-contained stack (IterativeRun · VaultCloud · CycleStore) — the old
 //  Store/Pipeline/messages are untouched, reachable from "More" + the home's Analyze Now.
 //
 //  `SourceSelection` is the one shared reader of the dbg.run.* prefs so the home's Analyze Now and
@@ -141,7 +141,7 @@ struct DevToolsView: View {
         }
         .frame(width: 720, height: 780)
         .background(Theme.bg)
-        .sheet(isPresented: $showSummaries) { FileNotesView() }
+        .sheet(isPresented: $showSummaries) { SummariesView() }
         .sheet(isPresented: $showChatPicker) {
             ChatPicker(sourceName: "WhatsApp",
                        loadChats: { try WhatsAppSource().listChats() },
@@ -245,25 +245,26 @@ struct DevToolsView: View {
 
     // MARK: The actions (all on the NEW files-iterative stack)
 
-    private func runOnDevice(mode: FileRun.Mode, progress: @escaping @Sendable (String) -> Void) async -> String {
+    private func runOnDevice(mode: IterativeRun.Mode, progress: @escaping @Sendable (String) -> Void) async -> String {
         guard let mp = Self.modelPath else { return "✗ model not found" }
         let roots = selectedFileRoots
         guard !roots.isEmpty else { return "✗ select a file folder above" }
-        let runner = FileRun(modelPath: mp)
+        let runner = IterativeRun(modelPath: mp)
+        let connector = FilesConnector(roots: roots)
         let onProg: @Sendable (PipelineProgress) -> Void = { p in
             progress("… \(p.done)/\(p.total) · kept \(p.survivors)")
         }
         let p = mode == .initial
-            ? await runner.runInitial(roots: roots, onProgress: onProg)
-            : await runner.runIterative(roots: roots, onProgress: onProg)
+            ? await runner.runInitial(connector, onProgress: onProg)
+            : await runner.runIterative(connector, onProgress: onProg)
         return "✓ \(p.survivors) kept · \(p.junk) junk · \(p.sensitive) sensitive · \(p.failed) failed"
     }
 
     private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {
-        let notes = await FileStore.shared.notes().map(CloudNote.init)
+        let notes = await CycleStore.shared.notes().map(CloudNote.init)
         guard !notes.isEmpty else { return "✗ no summaries — run on-device first" }
         do {
-            let r = try await FileVaultCloud.shared.create(notes: notes) { p in
+            let r = try await VaultCloud.shared.create(notes: notes) { p in
                 switch p {
                 case .calling:              progress("… thinking")
                 case .writing(let n):       progress("… writing \(n) notes")
@@ -278,10 +279,10 @@ struct DevToolsView: View {
     }
 
     private func cloudUpdate() async -> String {
-        let notes = await FileStore.shared.notes().map(CloudNote.init)
+        let notes = await CycleStore.shared.notes().map(CloudNote.init)
         guard !notes.isEmpty else { return "✗ no new summaries to fold" }
         do {
-            let n = try await FileVaultCloud.shared.update(notes: notes)
+            let n = try await VaultCloud.shared.update(notes: notes)
             return "✓ folded \(n) notes into the vault"
         } catch {
             return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
@@ -291,10 +292,10 @@ struct DevToolsView: View {
     /// Send the reminder-flagged summaries to the placeholder proactive pass, then WIPE the cycle's
     /// summaries (the cycle ends; the next on-device run starts fresh).
     private func runProactive() async -> String {
-        let reminders = await FileStore.shared.reminderNotes().map(CloudNote.init)
+        let reminders = await CycleStore.shared.reminderNotes().map(CloudNote.init)
         do {
-            let n = try await FileVaultCloud.shared.proactive(reminderNotes: reminders)
-            await FileStore.shared.wipeAllNotes()
+            let n = try await VaultCloud.shared.proactive(reminderNotes: reminders)
+            await CycleStore.shared.wipeAllNotes()
             return "✓ sent \(n) reminder\(n == 1 ? "" : "s") · summaries wiped"
         } catch {
             return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
@@ -480,10 +481,10 @@ struct DevToolsView: View {
     /// (messages/Notes) is untouched.
     @MainActor
     private func runReset() async {
-        await FileStore.shared.wipeAllNotes()
+        await CycleStore.shared.wipeAllNotes()
         // Clear every selected root's pointer too, so the next initial truly starts fresh.
-        for root in selectedFileRoots { await FileStore.shared.clearFolder(rootKey: "file:\(root.id)") }
-        let c = await FileStore.shared.counts()
-        resetResult = "✓ file store cleared — notes \(c.notes)"
+        for root in selectedFileRoots { await CycleStore.shared.clearBucket("file:\(root.id)") }
+        let c = await CycleStore.shared.counts()
+        resetResult = "✓ cycle store cleared — notes \(c.notes)"
     }
 }

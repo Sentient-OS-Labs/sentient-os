@@ -198,7 +198,7 @@ actor VaultGenerator {
     }
 
     /// Location string + the source-trust tag the prompt keys on (the user's own notes vs saved
-    /// files). Takes primitive fields so both the corpus (CloudNote) and FileVaultCloud.update
+    /// files). Takes primitive fields so both the corpus (CloudNote) and VaultCloud.update
     /// can call it without coupling to a particular summary type.
     static func locSrc(kind: SourceKind, folder: String, sourceID: String) -> (loc: String, source: String) {
         if kind == .whatsapp { return (folder, "WhatsApp · \(folder)") }
