@@ -7,7 +7,7 @@
 //    • FileKey ordering — the (dateAdded, path) tiebreak.
 //    • The iterative "newer than hi" partition, with a same-second TWIN straddling the boundary
 //      (the exact case the tiebreak exists for: the twin below the line is NOT reprocessed).
-//    • FileStore round-trip — interval set/get, clearFolder, recordNote/notes/reminderNotes,
+//    • FileStore round-trip — pointer set/get, clearFolder, recordNote/notes/reminderNotes,
 //      wipeAllNotes.
 //    • FilesSource.eligibleFiles — keeps allowed files, skips a disallowed extension, prunes a
 //      .git repo.
@@ -47,13 +47,11 @@ enum SelfTestFileIter {
         emit("\n=== fileiter: FileStore round-trip (in-memory) ===")
         let store = inMemoryStore()
         let key = "file:__fileiter__"
-        check("interval nil before any initial run", await store.interval(forKey: key) == nil)
-        // Initial: pin hi at the newest (c), then slide lo down to the oldest (a).
-        await store.setInterval(forKey: key, lo: c, hi: c)
-        await store.setInterval(forKey: key, lo: a, hi: c)
-        let iv = await store.interval(forKey: key)
-        check("interval persists hi = c (the iterative anchor)", iv?.hi == c)
-        check("interval persists lo = a (descent watermark)", iv?.lo == a)
+        check("pointer nil before any initial run", await store.pointer(forKey: key) == nil)
+        // Iterative climbs the mark up per item — simulate two ascending advances (a then c).
+        await store.setPointer(forKey: key, a)
+        await store.setPointer(forKey: key, c)
+        check("pointer persists the high-water mark (c)", await store.pointer(forKey: key) == c)
 
         await store.recordNote(rootKey: key, folder: "Fix", path: "/d/a.png", dateAdded: a.dateAdded,
                                text: "summary a", title: "A", reminderFlagged: true)
@@ -65,7 +63,7 @@ enum SelfTestFileIter {
         check("exactly one reminder-flagged", await store.reminderNotes().count == 1)
 
         await store.clearFolder(rootKey: key)
-        check("clearFolder drops the pointer", await store.interval(forKey: key) == nil)
+        check("clearFolder drops the pointer", await store.pointer(forKey: key) == nil)
         check("clearFolder removes that root's notes", await store.counts().notes == 0)
 
         await store.recordNote(rootKey: "file:other", folder: "Other", path: "/x/y.txt",

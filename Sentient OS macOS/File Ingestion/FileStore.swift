@@ -6,16 +6,15 @@
 //  (its own on-disk SwiftData container, so adding these models never schema-wipes the existing
 //  dev DB, and the two systems can't entangle). Two models:
 //
-//   - FolderPointer  DURABLE. One row per file root. The processed interval [lo, hi] of the
-//                    date-added timeline. `hi` = newest processed (the anchor the next ITERATIVE
-//                    run starts above); `lo` = oldest processed (an INITIAL top→bottom descent
-//                    slides it down). This is the ONLY state that survives a cycle.
+//   - FolderPointer  DURABLE. One row per file root. The HIGH-WATER MARK — the newest file
+//                    processed. Everything ≤ it is done; everything newer is new (the next
+//                    ITERATIVE run starts above it). The ONLY state that survives a cycle.
 //   - FileNote       EPHEMERAL. One survivor summary per file, wiped at the end of every cycle
 //                    (the proactive button clears them). Junk/sensitive files store NOTHING — the
 //                    pointer simply moves past them (zero trace).
 //
 //  Only this actor touches the @Model objects; callers get/pass Sendable value types (FileKey,
-//  FileNoteItem). Methods: interval/setInterval/clearFolder · recordNote/notes/reminderNotes/
+//  FileNoteItem). Methods: pointer/setPointer/clearFolder · recordNote/notes/reminderNotes/
 //  wipeAllNotes · counts.
 //
 
@@ -24,27 +23,24 @@ import SwiftData
 
 // MARK: - Models
 
-/// DURABLE — one per file root. The processed interval as two (epoch, path) bounds.
+/// DURABLE — one per file root. The HIGH-WATER MARK: the newest file processed, `(epoch, path)`.
+/// Invariant: everything ≤ mark is done, everything newer is new. Set when an INITIAL descent
+/// completes; an ITERATIVE run climbs it up, per item.
 @Model
 final class FolderPointer {
     @Attribute(.unique) var key: String   // "file:<FileRoot.id>"
-    var loEpoch: Double
-    var loPath: String
-    var hiEpoch: Double
-    var hiPath: String
+    var markEpoch: Double
+    var markPath: String
     var updatedAt: Date
 
-    init(key: String, lo: FileKey, hi: FileKey, updatedAt: Date = Date()) {
+    init(key: String, mark: FileKey, updatedAt: Date = Date()) {
         self.key = key
-        self.loEpoch = lo.dateAdded.timeIntervalSince1970
-        self.loPath = lo.path
-        self.hiEpoch = hi.dateAdded.timeIntervalSince1970
-        self.hiPath = hi.path
+        self.markEpoch = mark.dateAdded.timeIntervalSince1970
+        self.markPath = mark.path
         self.updatedAt = updatedAt
     }
 
-    var lo: FileKey { FileKey(dateAdded: Date(timeIntervalSince1970: loEpoch), path: loPath) }
-    var hi: FileKey { FileKey(dateAdded: Date(timeIntervalSince1970: hiEpoch), path: hiPath) }
+    var mark: FileKey { FileKey(dateAdded: Date(timeIntervalSince1970: markEpoch), path: markPath) }
 }
 
 /// EPHEMERAL — one survivor summary for one file, this cycle only.
@@ -99,21 +95,22 @@ actor FileStore {
 
     // MARK: Pointers (durable)
 
-    /// The processed interval for a root, or nil if it has never had an initial run.
-    func interval(forKey key: String) -> (lo: FileKey, hi: FileKey)? {
-        guard let row = pointerRow(key) else { return nil }
-        return (row.lo, row.hi)
+    /// The high-water mark for a root (newest file processed), or nil if it's never completed an
+    /// initial run.
+    func pointer(forKey key: String) -> FileKey? {
+        pointerRow(key)?.mark
     }
 
-    /// Set/advance a root's processed interval (initial sets hi then slides lo down; iterative
-    /// slides hi up). Called once per processed item so a crash resumes rather than skips.
-    func setInterval(forKey key: String, lo: FileKey, hi: FileKey) {
+    /// Set/advance a root's high-water mark — initial sets it = newest once its descent completes;
+    /// iterative climbs it up per item (ascending → everything ≤ it is done, so a stopped run
+    /// resumes rather than skips).
+    func setPointer(forKey key: String, _ mark: FileKey) {
         if let row = pointerRow(key) {
-            row.loEpoch = lo.dateAdded.timeIntervalSince1970; row.loPath = lo.path
-            row.hiEpoch = hi.dateAdded.timeIntervalSince1970; row.hiPath = hi.path
+            row.markEpoch = mark.dateAdded.timeIntervalSince1970
+            row.markPath = mark.path
             row.updatedAt = Date()
         } else {
-            modelContext.insert(FolderPointer(key: key, lo: lo, hi: hi))
+            modelContext.insert(FolderPointer(key: key, mark: mark))
         }
         try? modelContext.save()
     }

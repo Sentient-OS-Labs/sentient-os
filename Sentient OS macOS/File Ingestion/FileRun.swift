@@ -4,16 +4,17 @@
 //
 //  The files-iterative on-device orchestrator — what the dev UI's "start on device" buttons call.
 //  Reuses Engine + Triage + FilesSource (eligibleFiles + load), writing survivor summaries and the
-//  processed interval into FileStore. Two directions:
+//  per-folder high-water mark into FileStore. Two directions:
 //
-//   • runInitial   (top→bottom): clear the root, pin `hi` at the NEWEST file, walk newest→oldest,
-//                   sliding `lo` down. The user watches it understand NOW first.
-//   • runIterative (bottom→top): take only files NEWER than `hi`, walk oldest→newest, sliding `hi`
-//                   up to today's newest. (No interval yet ⇒ "run initial first", skipped.)
+//   • runInitial   (top→bottom): clear the root, walk the eligible files newest→oldest, then on
+//                   completion set the mark = newest. The user watches it understand NOW first.
+//                   (Interrupted ⇒ mark stays unset ⇒ iterative says "run initial first".)
+//   • runIterative (bottom→top): take only files NEWER than the mark, walk oldest→newest, and
+//                   climb the mark up per item (so a stopped run resumes, not skips). No mark yet
+//                   ⇒ "run initial first", skipped.
 //
-//  The interval advances after EVERY item (survivor / junk / sensitive / given-up alike) so it
-//  stays contiguous and a stopped run resumes rather than skips; survivors also write a FileNote,
-//  while junk/sensitive store nothing (zero trace). GPU-wedge resilience mirrors Pipeline's policy.
+//  Survivors write a FileNote; junk/sensitive store nothing (zero trace). GPU-wedge resilience
+//  mirrors Pipeline's policy.
 //
 
 import Foundation
@@ -115,33 +116,28 @@ struct FileRun {
             guard let source = root.source else { continue }
             let rootKey = source.cursorKey
 
-            // Build this root's ordered work + the interval bounds for the chosen direction.
+            // Build this root's ordered work for the chosen direction.
             let all = source.eligibleFiles().map { (cand: $0, key: fileKey($0)) }   // newest-first
             let work: [(cand: Candidate, key: FileKey)]
-            let pinnedHi: FileKey?    // initial: the pinned top; iterative: nil
-            let fixedLo: FileKey?     // iterative: the existing lo; initial: nil (lo slides)
 
             switch mode {
             case .initial:
-                await store.clearFolder(rootKey: rootKey)
-                guard let top = all.first?.key else { continue }
-                await store.setInterval(forKey: rootKey, lo: top, hi: top)   // pin hi at the newest
-                work = all                                                   // already top→bottom
-                pinnedHi = top; fixedLo = nil
+                await store.clearFolder(rootKey: rootKey)   // fresh start; the mark is set on completion
+                work = all                                  // newest → oldest (top→bottom)
             case .iterative:
-                guard let iv = await store.interval(forKey: rootKey) else {
-                    Log("FileRun: \(rootKey) has no interval — run initial first; skipping.")
+                guard let mark = await store.pointer(forKey: rootKey) else {
+                    Log("FileRun: \(rootKey) has no pointer — run initial first; skipping.")
                     continue
                 }
-                work = all.filter { $0.key > iv.hi }.sorted { $0.key < $1.key }   // bottom→top
-                pinnedHi = nil; fixedLo = iv.lo
+                work = all.filter { $0.key > mark }.sorted { $0.key < $1.key }   // oldest → newest (bottom→top)
             }
 
             p.total += work.count
             onProgress(p)
 
+            var finished = true
             for w in work {
-                if Task.isCancelled { break rootLoop }
+                if Task.isCancelled { finished = false; break rootLoop }
                 if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine() }
 
                 p.lastPath = w.cand.metadata["displayPath"] ?? w.cand.metadata["name"]
@@ -153,7 +149,7 @@ struct FileRun {
                     if consecutiveFailures >= Self.failuresBeforeReload {
                         guard reloadsWithoutProgress < Self.maxReloadsWithoutProgress else {
                             Log("FileRun: engine not recovering after \(reloadsWithoutProgress) reloads — stopping.")
-                            break rootLoop
+                            finished = false; break rootLoop
                         }
                         await reloadEngine(); reloadsWithoutProgress += 1; consecutiveFailures = 0
                         ok = await attempt(w.cand, source: source, rootKey: rootKey, dateAdded: w.key.dateAdded)
@@ -161,14 +157,19 @@ struct FileRun {
                 }
                 if ok { consecutiveFailures = 0; reloadsWithoutProgress = 0 } else { p.failed += 1 }
 
-                // Advance the interval past this item — contiguous, every verdict, so a stopped run
-                // resumes exactly here. Initial slides lo down (hi pinned); iterative slides hi up.
-                switch mode {
-                case .initial:   await store.setInterval(forKey: rootKey, lo: w.key, hi: pinnedHi!)
-                case .iterative: await store.setInterval(forKey: rootKey, lo: fixedLo!, hi: w.key)
-                }
+                // ITERATIVE climbs the mark up per item (ascending → everything ≤ this is now done,
+                // so a stopped run resumes here, not skips). INITIAL leaves it untouched mid-run —
+                // its mark is set only once the whole descent finishes (below).
+                if mode == .iterative { await store.setPointer(forKey: rootKey, w.key) }
                 sinceReload += 1; p.done += 1
                 onProgress(p)
+            }
+
+            // INITIAL finished this root's full descent → everything ≤ newest is done → set the mark.
+            // (Interrupted/aborted → break rootLoop skips this → the mark stays unset, so iterative
+            // correctly says "run initial first".)
+            if mode == .initial, finished, let newest = all.first?.key {
+                await store.setPointer(forKey: rootKey, newest)
             }
         }
         await engine.unload()

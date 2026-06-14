@@ -8,13 +8,17 @@ with `BackfillCursor`) and will migrate to this system later.
 It is **self-contained** (new `File Ingestion/` group + its own SwiftData store) and driven entirely
 from the **DEV TOOLS sheet** (`DevToolsView`) — the hand-drawn INITIAL | ITERATIVE mockup.
 
-## The one durable idea: a per-folder processed interval
+## The one durable idea: a per-folder high-water mark
 
-The only thing that survives a cycle is, per file root, the **processed interval `[lo, hi]`** of the
-**date-added** timeline. Each bound is a `FileKey = (dateAdded, path)`:
+The only thing that survives a cycle is, per file root, a single **high-water mark** = the **newest
+file processed**, stored as a `FileKey = (dateAdded, path)`. Invariant: everything ≤ the mark is
+done; everything newer is new (the next ITERATIVE run starts *above* it). INITIAL sets it = newest
+once its descent completes; ITERATIVE climbs it up, per item.
 
-- **`hi`** = newest file processed. The anchor the next ITERATIVE run starts *above*.
-- **`lo`** = oldest file processed. An INITIAL top→bottom descent slides it down.
+*(There is no `[lo, hi]` interval — an earlier design tracked the descent's low end too, but it was
+write-only: nothing ever read it. The mark alone is sufficient. The trade is that a stopped INITIAL
+restarts rather than resumes — fine, since initial is the one-time, foreground, watched run, and the
+ongoing ITERATIVE flow is single-mark crash-resumable.)*
 
 **Why `(dateAdded, path)` and not just a date** (`FileKey.swift`): `kMDItemDateAdded` is only
 second-precise and real folders have files sharing the exact same second (two screenshots at
@@ -29,7 +33,7 @@ reprocess edited files.
 A cycle = *on-device summarize → cloud (make/update KB) → cloud (proactive) → wipe summaries → next
 cycle starts clean*. So **`FileNote`s are ephemeral** — they live only for one cycle. That means
 "tell cloud" just sends whatever notes currently exist (no "which are new?" bookkeeping), and the
-**proactive button ends the cycle by wiping all notes**. The interval pointer persists; the
+**proactive button ends the cycle by wiping all notes**. The high-water mark persists; the
 summaries do not.
 
 ## Components (`File Ingestion/`)
@@ -37,17 +41,15 @@ summaries do not.
 - **`FileKey.swift`** — the `(dateAdded, path)` ordered key (the tiebreak, in one place).
 - **`FileStore.swift`** — `@ModelActor` over its **own** on-disk container (`FileIngestion.store`,
   isolated from the old `Store`'s `default.store` so adding these models never schema-wipes the dev
-  DB). Models: `FolderPointer` (durable interval) + `FileNote` (ephemeral survivor). API:
-  `interval/setInterval/clearFolder · recordNote/notes/reminderNotes/wipeAllNotes · counts`.
+  DB). Models: `FolderPointer` (durable high-water mark) + `FileNote` (ephemeral survivor). API:
+  `pointer/setPointer/clearFolder · recordNote/notes/reminderNotes/wipeAllNotes · counts`.
 - **`FileRun.swift`** — the on-device orchestrator. Reuses `Engine` + `Triage` + `FilesSource`
   (`eligibleFiles` + `load`); mirrors `Pipeline`'s GPU-wedge resilience.
-  - `runInitial(roots:)` — top→bottom: `clearFolder`, pin `hi` at the newest, walk newest→oldest,
-    slide `lo` down.
-  - `runIterative(roots:)` — bottom→top: take files with `key > hi`, walk oldest→newest, slide `hi`
-    up. (No interval yet ⇒ "run initial first", skipped.)
-  - The interval advances after **every** item (survivor / junk / sensitive / given-up) so it stays
-    contiguous and a stopped run resumes; survivors write a `FileNote`, junk/sensitive store nothing
-    (zero trace).
+  - `runInitial(roots:)` — top→bottom: `clearFolder`, walk newest→oldest, then on completion set the
+    mark = newest. (Interrupted ⇒ mark stays unset ⇒ iterative says "run initial first".)
+  - `runIterative(roots:)` — bottom→top: take files with `key > mark`, walk oldest→newest, climbing
+    the mark per item (so a stopped run resumes). No mark yet ⇒ "run initial first", skipped.
+  - Survivors write a `FileNote`; junk/sensitive store nothing (zero trace).
 - **`FileVaultCloud.swift`** — the three Codex calls + the `CloudNote` value type (decouples the
   cloud prompts from the old `Store`'s `SummaryItem`/`PersistentIdentifier`):
   - `create` — reuses `VaultGenerator.generate(notes:)` (staging + atomic swap + usage-limit resume).
