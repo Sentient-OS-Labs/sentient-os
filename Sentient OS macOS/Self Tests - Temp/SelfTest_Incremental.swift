@@ -29,8 +29,7 @@ enum SelfTestIncremental {
 
     static func run(emit: (String) -> Void) async {
         FilesSource.testIgnoreDateAdded = true
-        FilesSource.testZeroHoldBack = true
-        defer { FilesSource.testIgnoreDateAdded = false; FilesSource.testZeroHoldBack = false }
+        defer { FilesSource.testIgnoreDateAdded = false }
 
         let fm = FileManager.default
         var base = URL(fileURLWithPath: NSTemporaryDirectory())

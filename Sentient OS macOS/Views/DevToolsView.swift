@@ -68,15 +68,6 @@ final class DevRunModel {
     var status: [String: String] = [:]      // action id → live/final line
 }
 
-/// Which connector the INITIAL/ITERATIVE buttons drive (one at a time, per the dev cockpit).
-enum DevConnector: String, CaseIterable, Identifiable {
-    case files = "Files"
-    case notes = "Apple Notes"
-    case whatsapp = "WhatsApp"
-    case imessage = "iMessage"
-    var id: String { rawValue }
-}
-
 struct DevToolsView: View {
     let store: Store
     @Binding var customRoots: [URL]
@@ -84,7 +75,6 @@ struct DevToolsView: View {
     var onStartAnalysis: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openWindow) private var openWindow
 
     private static let modelPath = ModelLocator.resolve()
 
@@ -99,7 +89,6 @@ struct DevToolsView: View {
     @AppStorage("dbg.run.notes")     private var runNotes = false
 
     @State private var run = DevRunModel()
-    @State private var devConnector: DevConnector = .files
     @State private var showChatPicker = false
     @State private var showIMessagePicker = false
     @State private var showSummaries = false
@@ -141,7 +130,6 @@ struct DevToolsView: View {
                             .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     }
 
-                    connectorPicker
                     columns
                     viewSummariesButton
                     moreSection
@@ -173,25 +161,6 @@ struct DevToolsView: View {
     }
 
     // MARK: The two columns
-
-    private var connectorHint: String {
-        switch devConnector {
-        case .files: return "Runs the selected file folders above."
-        case .notes: return "Runs all Apple Notes (needs Full Disk Access)."
-        case .whatsapp, .imessage: return "Runs the selected \(devConnector.rawValue) chats above (needs Full Disk Access)."
-        }
-    }
-
-    private var connectorPicker: some View {
-        VStack(spacing: 6) {
-            Text("ON-DEVICE CONNECTOR").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
-            Picker("", selection: $devConnector) {
-                ForEach(DevConnector.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
-            Text(connectorHint).font(.caption2).foregroundStyle(Theme.faint)
-        }
-    }
 
     private var columns: some View {
         HStack(alignment: .top, spacing: 16) {
@@ -277,33 +246,32 @@ struct DevToolsView: View {
 
     private func runOnDevice(mode: IterativeRun.Mode, progress: @escaping @Sendable (String) -> Void) async -> String {
         guard let mp = Self.modelPath else { return "✗ model not found" }
-        let connector: any Connector
-        switch devConnector {
-        case .files:
-            let roots = selectedFileRoots
-            guard !roots.isEmpty else { return "✗ select a file folder above" }
-            connector = FilesConnector(roots: roots)
-        case .notes:
-            guard fdaGranted else { return "✗ grant Full Disk Access (More ▾) for Notes" }
-            connector = NotesConnector()
-        case .whatsapp:
-            guard fdaGranted else { return "✗ grant Full Disk Access (More ▾) for WhatsApp" }
-            let jids = selectedChatJIDs
-            guard !jids.isEmpty else { return "✗ pick WhatsApp chats (chip above)" }
-            connector = WhatsAppConnector(chatJIDs: jids)
-        case .imessage:
-            guard fdaGranted else { return "✗ grant Full Disk Access (More ▾) for iMessage" }
-            let guids = selectedIMessageGUIDs
-            guard !guids.isEmpty else { return "✗ pick iMessage chats (chip above)" }
-            connector = iMessageConnector(chatGUIDs: guids)
+        // Build connectors straight from the SOURCES selection (SourceSelection already FDA-gates the
+        // chat/Notes sources): all selected file folders → one FilesConnector; each opted chat / Notes
+        // → its connector. The buttons run everything that's lit, in one pass.
+        let roots = selectedFileRoots
+        var connectors: [any Connector] = roots.isEmpty ? [] : [FilesConnector(roots: roots)]
+        for src in selectedSources {
+            switch src {
+            case .whatsapp(let jids): connectors.append(WhatsAppConnector(chatJIDs: jids))
+            case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
+            case .notes:               connectors.append(NotesConnector())
+            case .files:               break   // folded into FilesConnector(roots:)
+            }
         }
-        let runner = IterativeRun(modelPath: mp)
+        guard !connectors.isEmpty else { return "✗ select a source above (folder / chat / Apple Notes)" }
+        if mode == .initial {
+            // Fresh start: immediately wipe the existing on-device knowledge base (the vault).
+            try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
+            Log("DevTools: INITIAL — wiped the on-device vault at \(VaultGenerator.vaultRoot.path)")
+        }
         let onProg: @Sendable (PipelineProgress) -> Void = { p in
             progress("… \(p.done)/\(p.total) · kept \(p.survivors)")
         }
+        let runner = IterativeRun(modelPath: mp)
         let p = mode == .initial
-            ? await runner.runInitial(connector, onProgress: onProg)
-            : await runner.runIterative(connector, onProgress: onProg)
+            ? await runner.runInitial(connectors, onProgress: onProg)
+            : await runner.runIterative(connectors, onProgress: onProg)
         return "✓ \(p.survivors) kept · \(p.junk) junk · \(p.sensitive) sensitive · \(p.failed) failed"
     }
 
@@ -379,7 +347,7 @@ struct DevToolsView: View {
             }
             .frame(maxWidth: 460)
 
-            Text("The INITIAL / ITERATIVE buttons act on the selected FILE folders. WhatsApp · iMessage · Apple Notes still run the old pipeline (home’s Analyze Now / “More” below).")
+            Text("The INITIAL / ITERATIVE buttons run every selected source (folders + opted chats + Apple Notes) through the iterative core. Select only one to test it alone.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
@@ -471,14 +439,8 @@ struct DevToolsView: View {
 
             if showMore {
                 VStack(spacing: 12) {
-                    HStack(spacing: 10) {
-                        Button("Start Analysis (legacy)") { onStartAnalysis() }
-                            .buttonStyle(.bordered)
-                        Button { openWindow(id: DatabaseView.windowID) } label: {
-                            Label("View knowledge (old store)", systemImage: "sparkles.rectangle.stack")
-                        }
-                        .buttonStyle(.bordered).tint(Theme.accent)
-                    }
+                    Button("Start Analysis (legacy)") { onStartAnalysis() }
+                        .buttonStyle(.bordered)
 
                     VStack(spacing: 4) {
                         Button(role: .destructive) { Task { await runReset() } } label: {

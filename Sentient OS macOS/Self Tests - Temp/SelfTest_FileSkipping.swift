@@ -23,8 +23,7 @@ enum SelfTestFileSkipping {
         // stamps "now"), and just-created files would all be freshness-held-back. Dates in this
         // harness are therefore mtime-only, with no hold-back.
         FilesSource.testIgnoreDateAdded = true
-        FilesSource.testZeroHoldBack = true
-        defer { FilesSource.testIgnoreDateAdded = false; FilesSource.testZeroHoldBack = false }
+        defer { FilesSource.testIgnoreDateAdded = false }
 
         let fm = FileManager.default
         var base = URL(fileURLWithPath: NSTemporaryDirectory())

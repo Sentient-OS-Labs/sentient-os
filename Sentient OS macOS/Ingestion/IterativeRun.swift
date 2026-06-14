@@ -26,21 +26,24 @@ struct IterativeRun {
     private static let maxReloadsWithoutProgress = 4
 
     @discardableResult
-    func runInitial(_ connector: any Connector,
+    func runInitial(_ connectors: [any Connector],
                     onProgress: @Sendable @escaping (PipelineProgress) -> Void = { _ in }) async -> PipelineProgress {
-        await run(connector, mode: .initial, onProgress: onProgress)
+        await run(connectors, mode: .initial, onProgress: onProgress)
     }
 
     @discardableResult
-    func runIterative(_ connector: any Connector,
+    func runIterative(_ connectors: [any Connector],
                       onProgress: @Sendable @escaping (PipelineProgress) -> Void = { _ in }) async -> PipelineProgress {
-        await run(connector, mode: .iterative, onProgress: onProgress)
+        await run(connectors, mode: .iterative, onProgress: onProgress)
     }
 
-    private func run(_ connector: any Connector, mode: Mode,
+    /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The dev
+    /// buttons pass every selected source at once; per-connector load + kind ride along per bucket.
+    private func run(_ connectors: [any Connector], mode: Mode,
                      onProgress: @Sendable @escaping (PipelineProgress) -> Void) async -> PipelineProgress {
         var p = PipelineProgress()
-        let engine = Engine(modelPath: modelPath, maxNumTokens: connector.maxTokens)
+        guard !connectors.isEmpty else { return p }
+        let engine = Engine(modelPath: modelPath, maxNumTokens: connectors.map(\.maxTokens).max() ?? 4096)
         do { try await engine.load() } catch {
             Log("IterativeRun: engine load failed — \(error)")
             return p
@@ -60,7 +63,7 @@ struct IterativeRun {
         }
 
         // One full attempt at one item: load → generate → decide → (survivor ⇒ recordNote).
-        func attempt(_ cand: Candidate, bucketKey: String) async -> Bool {
+        func attempt(_ cand: Candidate, connector: any Connector, bucketKey: String) async -> Bool {
             do {
                 let artifact = try autoreleasepool { try connector.load(cand) }
                 let result = try await engine.generate(
@@ -99,58 +102,62 @@ struct IterativeRun {
         // Initial wants everything (we clear + reprocess) → pass [:]. Iterative passes the real
         // marks so connectors can query efficiently; the run still filters/advances authoritatively.
         let marks = mode == .initial ? [:] : await store.allPointers()
-        let buckets: [Bucket]
-        do { buckets = try connector.buckets(since: marks) }
-        catch { Log("IterativeRun: buckets() failed — \(error)"); await engine.unload(); return p }
 
-        bucketLoop: for bucket in buckets {
+        runLoop: for connector in connectors {
             if Task.isCancelled { break }
-            let work: [(key: ItemKey, item: Candidate)]
-            switch mode {
-            case .initial:
-                await store.clearBucket(bucket.key)
-                work = bucket.items                                            // newest → oldest
-            case .iterative:
-                guard let mark = await store.pointer(bucket.key) else {
-                    Log("IterativeRun: \(bucket.key) has no pointer — run initial first; skipping.")
-                    continue
-                }
-                work = bucket.items.filter { $0.key > mark }.sorted { $0.key < $1.key }   // oldest → newest
-            }
+            let buckets: [Bucket]
+            do { buckets = try connector.buckets(since: marks) }
+            catch { Log("IterativeRun: buckets() failed for \(connector.kind) — \(error)"); continue }
 
-            p.total += work.count
-            onProgress(p)
-
-            var finished = true
-            for w in work {
-                if Task.isCancelled { finished = false; break bucketLoop }
-                if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine() }
-
-                p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
-                p.lastFilePath = w.item.metadata["path"]
-
-                var ok = await attempt(w.item, bucketKey: bucket.key)
-                if !ok {
-                    consecutiveFailures += 1
-                    if consecutiveFailures >= Self.failuresBeforeReload {
-                        guard reloadsWithoutProgress < Self.maxReloadsWithoutProgress else {
-                            Log("IterativeRun: engine not recovering after \(reloadsWithoutProgress) reloads — stopping.")
-                            finished = false; break bucketLoop
-                        }
-                        await reloadEngine(); reloadsWithoutProgress += 1; consecutiveFailures = 0
-                        ok = await attempt(w.item, bucketKey: bucket.key)
+            for bucket in buckets {
+                if Task.isCancelled { break runLoop }
+                let work: [(key: ItemKey, item: Candidate)]
+                switch mode {
+                case .initial:
+                    await store.clearBucket(bucket.key)
+                    work = bucket.items                                            // newest → oldest
+                case .iterative:
+                    guard let mark = await store.pointer(bucket.key) else {
+                        Log("IterativeRun: \(bucket.key) has no pointer — run initial first; skipping.")
+                        continue
                     }
+                    work = bucket.items.filter { $0.key > mark }.sorted { $0.key < $1.key }   // oldest → newest
                 }
-                if ok { consecutiveFailures = 0; reloadsWithoutProgress = 0 } else { p.failed += 1 }
 
-                if mode == .iterative { await store.setPointer(bucket.key, w.key) }   // climb per item
-                sinceReload += 1; p.done += 1
+                p.total += work.count
                 onProgress(p)
-            }
 
-            // INITIAL completed this bucket's full descent → everything ≤ newest is done → set mark.
-            if mode == .initial, finished, let newest = bucket.items.first?.key {
-                await store.setPointer(bucket.key, newest)
+                var finished = true
+                for w in work {
+                    if Task.isCancelled { finished = false; break runLoop }
+                    if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine() }
+
+                    p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
+                    p.lastFilePath = w.item.metadata["path"]
+
+                    var ok = await attempt(w.item, connector: connector, bucketKey: bucket.key)
+                    if !ok {
+                        consecutiveFailures += 1
+                        if consecutiveFailures >= Self.failuresBeforeReload {
+                            guard reloadsWithoutProgress < Self.maxReloadsWithoutProgress else {
+                                Log("IterativeRun: engine not recovering after \(reloadsWithoutProgress) reloads — stopping.")
+                                finished = false; break runLoop
+                            }
+                            await reloadEngine(); reloadsWithoutProgress += 1; consecutiveFailures = 0
+                            ok = await attempt(w.item, connector: connector, bucketKey: bucket.key)
+                        }
+                    }
+                    if ok { consecutiveFailures = 0; reloadsWithoutProgress = 0 } else { p.failed += 1 }
+
+                    if mode == .iterative { await store.setPointer(bucket.key, w.key) }   // climb per item
+                    sinceReload += 1; p.done += 1
+                    onProgress(p)
+                }
+
+                // INITIAL completed this bucket's full descent → everything ≤ newest done → set mark.
+                if mode == .initial, finished, let newest = bucket.items.first?.key {
+                    await store.setPointer(bucket.key, newest)
+                }
             }
         }
         await engine.unload()

@@ -31,17 +31,6 @@ enum SourceKind: String, Codable, Sendable, CaseIterable {
     case notes
 }
 
-/// Freshness hold-back shared by every source: items newer than this are left for the NEXT
-/// run, so a document mid-editing-session / an actively-flowing conversation / a note being
-/// typed isn't summarized between keystrokes. Pointers never advance past `now − holdBack`
-/// by construction (held-back items are never candidates).
-///
-/// ⚠️ TEMPORARILY 2 minutes (June 12, for dogfooding) — so a freshly-added file/message is
-/// eligible almost immediately when you click Analyze, instead of after an hour, while still
-/// skipping something you're actively mid-edit on. RESTORE `3_600` before launch (or make it a
-/// Settings toggle): the hold-back is what stops us summarizing a doc mid-edit or a
-/// conversation mid-sentence.
-let sourceFreshnessHoldBack: TimeInterval = 120
 
 /// Cheap unit produced by `scan` — enough to order and process without reading content.
 /// `metadata` carries light context (displayPath, name, created…).

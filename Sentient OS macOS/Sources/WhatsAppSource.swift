@@ -12,7 +12,7 @@
 //  chat-flavored prompt). The model sees the chat name, DM-vs-group, and per-message sender.
 //
 //  Requires Full Disk Access (Permissions.swift). Incrementality: a per-chat Z_PK pointer
-//  ("whatsapp:<jid>" in SourceCursor) + a one-hour tail hold-back — the initial backfill and
+//  ("whatsapp:<jid>" in SourceCursor) — the initial backfill and
 //  the daily delta are the same scan. See Documentation/Pointer Architecture (Kill the Ledger).md.
 //
 
@@ -154,9 +154,6 @@ struct WhatsAppSource: DataSource, Sendable {
         for chat in chats.values {
             states[chat.pk] = ChatCursorState.decode(cursors["whatsapp:\(chat.jid)"])
         }
-        // Tail hold-back: an actively-flowing conversation isn't chopped mid-thought — the last
-        // hour's messages are windowed next run (they stay past the pointer until consumed).
-        let tailFloor = Date().addingTimeInterval(-sourceFreshnessHoldBack).timeIntervalSinceReferenceDate
 
         // Text messages within the limits (90-day floor AND newest-`maxMessages` cap over the
         // analyzed chats; the outer ORDER restores per-chat ascending iteration), oldest →
@@ -178,7 +175,6 @@ struct WhatsAppSource: DataSource, Sendable {
             fetched += 1
             guard let chat = chats[r.int(5)] else { return }
             guard states[chat.pk]?.wants(r.int(0)) ?? true else { return }   // already consumed
-            guard r.double(1) <= tailFloor else { return }                   // tail hold-back
             let isFromMe = r.int(2) == 1
             byChat[r.int(5), default: []].append(ChatMessage(
                 id: r.int(0),
@@ -242,7 +238,7 @@ struct WhatsAppSource: DataSource, Sendable {
     // MARK: Eligible windows (the iterative system's flat, pointer-free view)
 
     /// Current conversation windows per opted-in chat, for the iterative system (WhatsAppConnector).
-    /// Same DB read + windowing + caps (100k/90-day) + tail hold-back as `scan`, but with NO cursor/
+    /// Same DB read + windowing + caps (100k/90-day) as `scan`, but with NO cursor/
     /// backfill — IterativeRun's per-chat pointer (highest message Z_PK) decides new-vs-done. One
     /// bucket per chat ("whatsapp:<jid>"); each window keyed by its last (max) Z_PK; newest-first.
     /// (Reuses the static helpers + ChatWindowing; the read overlaps `scan` until the old path retires.)
@@ -262,7 +258,6 @@ struct WhatsAppSource: DataSource, Sendable {
         let analyzedPKs = chats.values.filter { chatJIDs == nil || chatJIDs!.contains($0.jid) }.map(\.pk)
         guard !analyzedPKs.isEmpty else { return [] }
 
-        let tailFloor = Date().addingTimeInterval(-sourceFreshnessHoldBack).timeIntervalSinceReferenceDate
         let floor = ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate
         var byChat: [Int64: [ChatMessage]] = [:]
         try reader.forEachRow("""
@@ -275,7 +270,6 @@ struct WhatsAppSource: DataSource, Sendable {
             ORDER BY m.ZCHATSESSION, m.Z_PK
             """) { r in
             guard let chat = chats[r.int(5)] else { return }
-            guard r.double(1) <= tailFloor else { return }                   // tail hold-back
             let isFromMe = r.int(2) == 1
             byChat[r.int(5), default: []].append(ChatMessage(
                 id: r.int(0),

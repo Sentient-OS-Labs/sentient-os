@@ -16,7 +16,7 @@
 //  Key methods: listChats() (picker rows) · scan(since:) · load(_:). Limits per ChatWindowing:
 //  90-day floor AND newest-100k cap. Tapbacks (associated_message_type != 0) and system items
 //  (item_type != 0) are filtered in SQL — they'd spam every window otherwise. Incrementality:
-//  a per-chat ROWID pointer ("imessage:<guid>" in SourceCursor) + a one-hour tail hold-back.
+//  a per-chat ROWID pointer ("imessage:<guid>" in SourceCursor).
 //
 
 import Foundation
@@ -127,7 +127,7 @@ struct iMessageSource: DataSource, Sendable {
 
     /// Pointer (June 11 rewrite + June 12 backfill): ONE cursor per opted-in chat — key
     /// "imessage:<guid>", value = the highest consumed `ROWID` (or a BackfillCursor while the
-    /// chat's first run is in flight) — plus a one-hour tail hold-back. Per-chat (not one
+    /// chat's first run is in flight). Per-chat (not one
     /// global ROWID pointer) because chats interleave in ROWID space; see WhatsAppSource.scan
     /// for the full rationale. Ordering: incremental windows ascend per chat; a chat's first
     /// run digs newest-window-first, with every chat's NEW windows emitted before any dig.
@@ -151,8 +151,6 @@ struct iMessageSource: DataSource, Sendable {
         for chat in chats.values {
             states[chat.rowid] = ChatCursorState.decode(cursors["imessage:\(chat.guid)"])
         }
-        let tailFloorNS = Int64(Date().addingTimeInterval(-sourceFreshnessHoldBack)
-            .timeIntervalSinceReferenceDate * 1e9)
 
         // Messages within the limits (90-day floor AND newest-`maxMessages` cap over the
         // analyzed chats; the outer ORDER restores per-chat ascending iteration), decoded
@@ -172,7 +170,6 @@ struct iMessageSource: DataSource, Sendable {
             fetched += 1
             guard let chat = chats[r.int(5)] else { return }
             guard states[chat.rowid]?.wants(r.int(0)) ?? true else { return }   // already consumed
-            guard r.int(1) <= tailFloorNS else { return }                       // tail hold-back
 
             let body = r.text(3) ?? r.blob(4).flatMap(Self.typedstreamText)
             guard let body, !body.trimmingCharacters(in: .whitespaces).isEmpty else { return }
@@ -243,7 +240,7 @@ struct iMessageSource: DataSource, Sendable {
     // MARK: Eligible windows (the iterative system's flat, pointer-free view)
 
     /// Current conversation windows per opted-in chat, for the iterative system (iMessageConnector).
-    /// Same DB read + typedstream decode + windowing + caps + tail hold-back as `scan`, but with NO
+    /// Same DB read + typedstream decode + windowing + caps as `scan`, but with NO
     /// cursor/backfill — IterativeRun's per-chat pointer (highest ROWID) decides new-vs-done. One
     /// bucket per chat ("imessage:<guid>"); each window keyed by its last (max) ROWID; newest-first.
     func eligibleWindows() throws -> [Bucket] {
@@ -256,8 +253,6 @@ struct iMessageSource: DataSource, Sendable {
         let analyzedROWIDs = chats.values.filter { chatGUIDs == nil || chatGUIDs!.contains($0.guid) }.map(\.rowid)
         guard !analyzedROWIDs.isEmpty else { return [] }
 
-        let tailFloorNS = Int64(Date().addingTimeInterval(-sourceFreshnessHoldBack)
-            .timeIntervalSinceReferenceDate * 1e9)
         var byChat: [Int64: [ChatMessage]] = [:]
         try reader.forEachRow("""
             SELECT m.ROWID, m.date, m.is_from_me, m.text, m.attributedBody, m.chat_id, h.id
@@ -270,7 +265,6 @@ struct iMessageSource: DataSource, Sendable {
             ORDER BY m.chat_id, m.ROWID
             """) { r in
             guard let chat = chats[r.int(5)] else { return }
-            guard r.int(1) <= tailFloorNS else { return }                       // tail hold-back
             let body = r.text(3) ?? r.blob(4).flatMap(Self.typedstreamText)
             guard let body, !body.trimmingCharacters(in: .whitespaces).isEmpty else { return }
             let isFromMe = r.int(2) == 1

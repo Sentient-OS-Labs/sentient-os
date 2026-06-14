@@ -38,8 +38,7 @@ struct NotesSource: DataSource, Sendable {
 
     /// Pointer (June 11 rewrite + June 12 backfill): one cursor, key "notes", value
     /// "(modEpochSeconds|noteUUID)" (UUID = same-second tiebreak). An edited note's mod-date
-    /// moves past the pointer → it's re-summarized as a new version. The one-hour hold-back
-    /// keeps a note that's being typed out of the run. Ordering: incremental runs ascend; the
+    /// moves past the pointer → it's re-summarized as a new version. Ordering: incremental runs ascend; the
     /// FIRST run is a newest-first backfill descent (BackfillCursor, resumable, the newest-1000
     /// cap as a total budget) — notes edited mid-backfill jump above `hi` and process first.
     func scan(since cursors: [String: String]) throws -> ScanResult {
@@ -48,8 +47,6 @@ struct NotesSource: DataSource, Sendable {
         let pointer = backfill == nil ? Self.parsePointer(raw) : nil   // plain pointer (incremental)
         let hiPointer = backfill.flatMap { Self.parsePointer($0.hi) }
         let loPointer = backfill.flatMap { Self.parsePointer($0.lo) }
-        let holdBackFloor = Date().addingTimeInterval(-sourceFreshnessHoldBack)
-            .timeIntervalSinceReferenceDate
 
         let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
         defer { try? FileManager.default.removeItem(at: tempDir) }   // delete the plaintext copy immediately
@@ -74,7 +71,6 @@ struct NotesSource: DataSource, Sendable {
             """) { r in
             guard let id = r.text(0) else { return }
             let modified = r.double(2)
-            guard modified <= holdBackFloor else { return }                       // being typed right now
             // Keep only rows the current pointer state could consume: incremental = past the
             // plain pointer; backfill resume = above hi OR below lo; backfill start = everything.
             if backfill != nil {
