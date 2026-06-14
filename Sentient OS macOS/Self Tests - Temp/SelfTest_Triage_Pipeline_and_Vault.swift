@@ -91,16 +91,9 @@ enum SelfTest {
         // file (versioned summary + " — Edit" title) → junk advances the pointer with zero trace.
         if mode == "incremental" { await SelfTestIncremental.run(emit: emit); return }
 
-        // Comprehensive, content-verified iterative-updater proof (SelfTest_UpdaterE2E.swift):
-        // seeds summaries deterministically, then READS the vault .md files to prove facts
-        // actually folded — empty/no-vault guards · first fold · incremental · no-op · versioned
-        // edit · DaysEndJob wrapper. Real codex calls; needs SENTIENT_VAULT_ROOT.
-        if mode == "updater" { await SelfTestUpdaterE2E.run(emit: emit); return }
-
-        // Full incremental loop, headless (SelfTest_E2E.swift): REAL engine analysis of a
-        // fixture folder → REAL codex updater → new file → pointer-only re-analysis → fold →
-        // no-op. Needs the model + codex + SENTIENT_VAULT_ROOT.
-        if mode == "e2e" { await SelfTestE2E.run(emit: emit); return }
+        // Files-iterative core proof: deterministic, no model/codex — FileKey tiebreak · the
+        // newer-than-hi partition (twin at the boundary) · FileStore round-trip · eligibleFiles.
+        if mode == "fileiter" { await SelfTestFileIter.run(emit: emit); return }
 
         // CodexCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
         // codex exec spine (binary → env → stdin → JSONL envelope). Verifies the compute
@@ -257,7 +250,7 @@ enum SelfTest {
                 let onP: @Sendable (VaultGenerator.Progress) -> Void = { p in
                     if case .writing(let n) = p { Log("  …\(n) notes written") }
                 }
-                let res = try await gen.generate(summaries: summaries, onProgress: onP)
+                let res = try await gen.generate(notes: summaries.map(CloudNote.init), onProgress: onP)
                 emit("✅ DONE in \(Int(Date().timeIntervalSince(t0)))s — notes=\(res.notes) folders=\(res.folders) input=\(res.inputTokens) output=\(res.outputTokens)")
                 emit("vault → \(res.vaultPath)")
                 let md = ((try? FileManager.default.subpathsOfDirectory(atPath: res.vaultPath)) ?? [])

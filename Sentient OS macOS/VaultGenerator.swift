@@ -78,11 +78,11 @@ actor VaultGenerator {
     /// kept staging dir.
     @discardableResult
     func generate(
-        summaries: [SummaryItem],
+        notes: [CloudNote],
         resume: ResumeToken? = nil,
         onProgress: @Sendable @escaping (Progress) -> Void = { _ in }
     ) async throws -> Result {
-        onProgress(.gathering(summaries.count))
+        onProgress(.gathering(notes.count))
         let fm = FileManager.default
 
         // Staging lives in HOME (same APFS volume as the vault) so the final swap is an
@@ -105,7 +105,7 @@ actor VaultGenerator {
             """
         } else {
             prompt = vaultPromptCore + "\n\n" + agenticOutputInstructions + "\n\n"
-                + Self.corpusMessage(summaries, closing: "Synthesize them into the vault exactly as specified — write the files now.")
+                + Self.corpusMessage(notes, closing: "Synthesize them into the vault exactly as specified — write the files now.")
         }
 
         var invocation = CodexCLI.Invocation(prompt: prompt)
@@ -115,7 +115,7 @@ actor VaultGenerator {
         invocation.resumeSessionID = resume?.sessionID
         invocation.timeout = 3_600
 
-        Log("VaultGenerator: \(resume == nil ? "starting" : "RESUMING") initial generation — \(summaries.count) summaries → \(staging.lastPathComponent)")
+        Log("VaultGenerator: \(resume == nil ? "starting" : "RESUMING") initial generation — \(notes.count) summaries → \(staging.lastPathComponent)")
         onProgress(.calling)
 
         // Progress = the files themselves: poll the staging dir's .md count. Honest, and
@@ -179,11 +179,11 @@ actor VaultGenerator {
 
     // MARK: - Corpus building (the stdin corpus)
 
-    private static func corpusMessage(_ summaries: [SummaryItem], closing: String) -> String {
+    private static func corpusMessage(_ notes: [CloudNote], closing: String) -> String {
         var lines: [String] = []
-        lines.reserveCapacity(summaries.count)
-        for (i, s) in summaries.enumerated() {
-            let (loc, src) = locSrc(s)
+        lines.reserveCapacity(notes.count)
+        for (i, s) in notes.enumerated() {
+            let (loc, src) = locSrc(kind: s.kind, folder: s.folder, sourceID: s.sourceID)
             let title = (s.title?.isEmpty == false) ? s.title! : "(untitled)"
             lines.append("#\(i + 1) · [\(src)] \(loc)\n\(title) — \(s.text)")
         }
@@ -198,10 +198,11 @@ actor VaultGenerator {
     }
 
     /// Location string + the source-trust tag the prompt keys on (the user's own notes vs saved
-    /// files). Internal: the iterative updater (VaultUpdater) formats its items with it too.
-    static func locSrc(_ s: SummaryItem) -> (loc: String, source: String) {
-        if s.kind == .whatsapp { return (s.folder, "WhatsApp · \(s.folder)") }
-        let p = relPath(s.sourceID)
+    /// files). Takes primitive fields so both the corpus (CloudNote) and FileVaultCloud.update
+    /// can call it without coupling to a particular summary type.
+    static func locSrc(kind: SourceKind, folder: String, sourceID: String) -> (loc: String, source: String) {
+        if kind == .whatsapp { return (folder, "WhatsApp · \(folder)") }
+        let p = relPath(sourceID)
         let low = p.lowercased()
         if low.contains("icloud~md~obsidian") {                       // the user's own Obsidian vault
             if let r = p.range(of: "Documents/") {
@@ -210,9 +211,9 @@ actor VaultGenerator {
             return (p, "Obsidian — USER'S OWN NOTE")
         }
         if low.hasSuffix(".md") || low.hasSuffix(".txt") {            // other authored text
-            return (p, "\(s.folder.isEmpty ? "file" : s.folder) — user-authored note")
+            return (p, "\(folder.isEmpty ? "file" : folder) — user-authored note")
         }
-        return (p, s.folder.isEmpty ? "file" : s.folder)             // screenshots / photos / pdfs
+        return (p, folder.isEmpty ? "file" : folder)                 // screenshots / photos / pdfs
     }
 
     private static func relPath(_ sid: String) -> String {

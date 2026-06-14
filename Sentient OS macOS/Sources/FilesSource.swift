@@ -297,6 +297,57 @@ struct FilesSource: DataSource, Sendable {
         })
     }
 
+    // MARK: Eligible files (the files-iterative system's flat, pointer-free view)
+
+    /// The current eligible set for this root, for the files-iterative system (FileRun). Same
+    /// skip rules (`pruneReason`) and caps (`cappedNewestFirst`: 1,000/root · 300/dir · Downloads
+    /// 1-yr) as `scan`, but deliberately DIFFERENT in two ways:
+    ///   • keyed on PURE `addedToDirectoryDate` (a file's "date added" — what Finder shows), NOT
+    ///     scan's max(dateAdded, mtime, ancestor). The interval pointer reprocesses nothing on
+    ///     edits, so only date-added matters.
+    ///   • NO cursor / backfill / hold-back logic — the FolderPointer interval decides new-vs-done.
+    /// Returns newest-first; each Candidate's `itemDate` IS its date added (so FileKey =
+    /// (itemDate, path)). Reuse `load(_:)` for content extraction.
+    func eligibleFiles() -> [Candidate] {
+        let now = Date()
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey,
+                                         .creationDateKey, .addedToDirectoryDateKey]
+        guard let enumerator = FileManager.default.enumerator(
+            at: root, includingPropertiesForKeys: Array(keys),
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return [] }
+
+        var rows: [(candidate: Candidate, sortKey: Double)] = []
+        for case let url as URL in enumerator {
+            let vals = try? url.resourceValues(forKeys: keys)
+            if vals?.isDirectory == true {
+                if Self.pruneReason(url) != nil { enumerator.skipDescendants() }
+                continue   // directories are never candidates themselves
+            }
+            guard vals?.isRegularFile == true,
+                  Self.allowedExtensions.contains(url.pathExtension.lowercased()) else { continue }
+
+            // Pure date added, future-clamped. A file with no recorded date-added sorts to the
+            // bottom (.distantPast) rather than poisoning the newest end.
+            let added = min(vals?.addedToDirectoryDate ?? .distantPast, now)
+
+            var meta: [String: String] = [
+                "path": url.path,
+                "displayPath": Self.homeRelativePath(url),
+                "name": url.lastPathComponent,
+                "folder": label,
+            ]
+            if let created = vals?.creationDate { meta["created"] = Self.dateString(created) }
+
+            let candidate = Candidate(id: "file:\(url.path)", kind: .file,
+                                      cursorKey: cursorKey,
+                                      cursorValue: Self.pointerValue(date: added, path: url.path),
+                                      itemDate: added, metadata: meta)
+            rows.append((candidate, added.timeIntervalSince1970))
+        }
+        return cappedNewestFirst(rows, budget: Self.perRootCap, now: now)
+    }
+
     /// Newest-first selection under the connector caps (June 10–11 decisions):
     ///  • optional age cutoff (Downloads: 1 year — downloads age into junk; keepers elsewhere don't)
     ///  • per-directory cap (300, every root) — the bulk-dump backstop
