@@ -17,8 +17,7 @@
 //  A file's date is max(dateAdded, dateModified, nearest moved-in ancestor's dateAdded) —
 //  dateAdded catches downloads with old mtimes, dateModified catches edits, and the ancestor
 //  propagation catches whole folders dragged into a root (their files keep old dates).
-//  Guards: 60-min freshness hold-back (mid-edit files wait for the next run) and a future-date
-//  clamp (clock weirdness can't poison the pointer). Ordering: incremental runs ascend
+//  Guards: a future-date clamp (clock weirdness can't poison the pointer). Ordering: incremental runs ascend
 //  (oldest-first); a root's FIRST run (no pointer yet) is a BACKFILL — newest-first descent
 //  tracked by a BackfillCursor [lo, hi] interval, resumable, with the root cap as a TOTAL
 //  budget across interruptions. New files arriving mid-backfill process before the dig resumes.
@@ -58,12 +57,9 @@ struct FilesSource: DataSource, Sendable {
     private static let pdfPageLimit = 3
     private static let imageMaxPixel = 1_280   // ≈ 720p short edge on 16:9
 
-    // Test seams (DEBUG self-tests only — production never touches these): fixtures can't
-    // backdate dateAdded on a real filesystem, so date-sensitive assertions couldn't run
-    // otherwise. `testIgnoreDateAdded` makes file dates mtime-only; `testZeroHoldBack`
-    // disables the freshness hold-back (just-created fixtures would all be held back).
+    // Test seam (DEBUG self-tests only — production never touches it): fixtures can't backdate
+    // dateAdded on a real filesystem, so `testIgnoreDateAdded` makes file dates mtime-only.
     nonisolated(unsafe) static var testIgnoreDateAdded = false
-    nonisolated(unsafe) static var testZeroHoldBack = false
 
     // MARK: Skipping (code repos / dependency caches / datasets — Spotlight-style)
 
@@ -191,7 +187,6 @@ struct FilesSource: DataSource, Sendable {
         let hiPointer = backfill.flatMap { Self.parsePointer($0.hi) }
         let loPointer = backfill.flatMap { Self.parsePointer($0.lo) }
         let now = Date()
-        let holdBack = Self.testZeroHoldBack ? now : now.addingTimeInterval(-sourceFreshnessHoldBack)
 
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey,
                                          .contentModificationDateKey, .creationDateKey,
@@ -231,7 +226,6 @@ struct FilesSource: DataSource, Sendable {
             // file (clock weirdness) is treated as "now" instead of poisoning the pointer.
             let date = min(max(mtime, added, parentEff), now)
 
-            guard date <= holdBack else { continue }                          // freshness hold-back
             // Keep only rows the current pointer state could consume: incremental = past the
             // plain pointer; backfill resume = above hi OR below lo; backfill start = everything.
             let (d, p) = (date.timeIntervalSince1970, url.path)
