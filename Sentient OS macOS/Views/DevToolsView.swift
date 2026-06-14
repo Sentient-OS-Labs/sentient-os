@@ -72,6 +72,8 @@ final class DevRunModel {
 enum DevConnector: String, CaseIterable, Identifiable {
     case files = "Files"
     case notes = "Apple Notes"
+    case whatsapp = "WhatsApp"
+    case imessage = "iMessage"
     var id: String { rawValue }
 }
 
@@ -172,6 +174,14 @@ struct DevToolsView: View {
 
     // MARK: The two columns
 
+    private var connectorHint: String {
+        switch devConnector {
+        case .files: return "Runs the selected file folders above."
+        case .notes: return "Runs all Apple Notes (needs Full Disk Access)."
+        case .whatsapp, .imessage: return "Runs the selected \(devConnector.rawValue) chats above (needs Full Disk Access)."
+        }
+    }
+
     private var connectorPicker: some View {
         VStack(spacing: 6) {
             Text("ON-DEVICE CONNECTOR").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
@@ -179,9 +189,7 @@ struct DevToolsView: View {
                 ForEach(DevConnector.allCases) { Text($0.rawValue).tag($0) }
             }
             .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 320)
-            Text(devConnector == .notes ? "Runs all Apple Notes (needs Full Disk Access)."
-                                        : "Runs the selected file folders above.")
-                .font(.caption2).foregroundStyle(Theme.faint)
+            Text(connectorHint).font(.caption2).foregroundStyle(Theme.faint)
         }
     }
 
@@ -278,6 +286,16 @@ struct DevToolsView: View {
         case .notes:
             guard fdaGranted else { return "✗ grant Full Disk Access (More ▾) for Notes" }
             connector = NotesConnector()
+        case .whatsapp:
+            guard fdaGranted else { return "✗ grant Full Disk Access (More ▾) for WhatsApp" }
+            let jids = selectedChatJIDs
+            guard !jids.isEmpty else { return "✗ pick WhatsApp chats (chip above)" }
+            connector = WhatsAppConnector(chatJIDs: jids)
+        case .imessage:
+            guard fdaGranted else { return "✗ grant Full Disk Access (More ▾) for iMessage" }
+            let guids = selectedIMessageGUIDs
+            guard !guids.isEmpty else { return "✗ pick iMessage chats (chip above)" }
+            connector = iMessageConnector(chatGUIDs: guids)
         }
         let runner = IterativeRun(modelPath: mp)
         let onProg: @Sendable (PipelineProgress) -> Void = { p in

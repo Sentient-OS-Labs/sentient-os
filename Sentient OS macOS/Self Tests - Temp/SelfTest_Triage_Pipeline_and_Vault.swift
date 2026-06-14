@@ -98,6 +98,9 @@ enum SelfTest {
         // NotesConnector against the live Notes DB — structural invariants (needs Full Disk Access).
         if mode == "notesiter" { await SelfTestNotesIter.run(emit: emit); return }
 
+        // WhatsApp + iMessage connectors against the live DBs — structural invariants (needs FDA).
+        if mode == "chatiter" { await SelfTestChatIter.run(emit: emit); return }
+
         // CodexCLI mode: no model needed — discovery, ping, and one tiny run through the REAL
         // codex exec spine (binary → env → stdin → JSONL envelope). Verifies the compute
         // waterfall's tier-1 path end to end on this Mac.

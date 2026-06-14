@@ -240,6 +240,68 @@ struct iMessageSource: DataSource, Sendable {
         Artifact(candidate: candidate, text: candidate.metadata["windowText"] ?? "")
     }
 
+    // MARK: Eligible windows (the iterative system's flat, pointer-free view)
+
+    /// Current conversation windows per opted-in chat, for the iterative system (iMessageConnector).
+    /// Same DB read + typedstream decode + windowing + caps + tail hold-back as `scan`, but with NO
+    /// cursor/backfill — IterativeRun's per-chat pointer (highest ROWID) decides new-vs-done. One
+    /// bucket per chat ("imessage:<guid>"); each window keyed by its last (max) ROWID; newest-first.
+    func eligibleWindows() throws -> [Bucket] {
+        let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let reader = try SQLiteReader(path: dbURL.path)
+
+        let chats = try Self.chats(reader)
+        let contacts = AddressBookNames.loadMap()
+        let analyzedROWIDs = chats.values.filter { chatGUIDs == nil || chatGUIDs!.contains($0.guid) }.map(\.rowid)
+        guard !analyzedROWIDs.isEmpty else { return [] }
+
+        let tailFloorNS = Int64(Date().addingTimeInterval(-sourceFreshnessHoldBack)
+            .timeIntervalSinceReferenceDate * 1e9)
+        var byChat: [Int64: [ChatMessage]] = [:]
+        try reader.forEachRow("""
+            SELECT m.ROWID, m.date, m.is_from_me, m.text, m.attributedBody, m.chat_id, h.id
+            FROM (SELECT message.ROWID, date, is_from_me, text, attributedBody, handle_id, cmj.chat_id
+                  FROM message JOIN chat_message_join cmj ON cmj.message_id = message.ROWID
+                  WHERE date >= \(Self.floorNS) AND \(Self.messageFilter)
+                        AND cmj.chat_id IN (\(analyzedROWIDs.sorted().map(String.init).joined(separator: ",")))
+                  ORDER BY date DESC LIMIT \(ChatWindowing.maxMessages)) m
+            LEFT JOIN handle h ON h.ROWID = m.handle_id
+            ORDER BY m.chat_id, m.ROWID
+            """) { r in
+            guard let chat = chats[r.int(5)] else { return }
+            guard r.int(1) <= tailFloorNS else { return }                       // tail hold-back
+            let body = r.text(3) ?? r.blob(4).flatMap(Self.typedstreamText)
+            guard let body, !body.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+            let isFromMe = r.int(2) == 1
+            let sender: String
+            if isFromMe { sender = "Me" }
+            else if chat.isGroup { sender = Self.resolved(r.text(6) ?? "", contacts) }
+            else { sender = chat.name }
+            byChat[r.int(5), default: []].append(ChatMessage(
+                id: r.int(0), date: Self.date(fromAppleNS: r.int(1)), sender: sender,
+                isFromMe: isFromMe, text: String(body.prefix(ChatWindowing.maxMessageChars))))
+        }
+
+        return byChat.compactMap { (chatROWID, msgs) -> Bucket? in
+            guard let chat = chats[chatROWID] else { return nil }
+            let items = ChatWindowing.windows(of: msgs).filter { !$0.isEmpty }.map { win -> (key: ItemKey, item: Candidate) in
+                let cand = Candidate(
+                    id: "imessage:c\(chatROWID):\(win.first!.id)-\(win.last!.id)", kind: .imessage,
+                    cursorKey: "imessage:\(chat.guid)", cursorValue: "",   // vestigial — core keys on ItemKey
+                    itemDate: win.last!.date,
+                    metadata: [
+                        "folder": chat.name, "name": chat.name,
+                        "displayPath": "iMessage · \(chat.name)",
+                        "isGroup": chat.isGroup ? "1" : "0", "msgCount": "\(win.count)",
+                        "windowText": ChatWindowing.format(chatName: chat.name, isGroup: chat.isGroup, messages: win),
+                    ])
+                return (key: ItemKey(rowID: win.last!.id), item: cand)
+            }
+            return items.isEmpty ? nil : Bucket(key: "imessage:\(chat.guid)", items: items.sorted { $0.key > $1.key })
+        }
+    }
+
     // MARK: The typedstream heuristic — deliberately NOT a full parser (Arch §4)
 
     /// Extract the message body from an `attributedBody` typedstream blob: find the NSString /
