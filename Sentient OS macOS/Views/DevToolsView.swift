@@ -150,7 +150,7 @@ struct DevToolsView: View {
         .background(Theme.bg)
         .sheet(isPresented: $showSummaries) { SummariesView() }
         .sheet(item: $deviceJob) { job in
-            ProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors, mode: job.mode) {
+            DevProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors, mode: job.mode) {
                 deviceJob = nil
             }
             .frame(minWidth: 600, minHeight: 680)
