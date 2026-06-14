@@ -239,6 +239,71 @@ struct WhatsAppSource: DataSource, Sendable {
         Artifact(candidate: candidate, text: candidate.metadata["windowText"] ?? "")
     }
 
+    // MARK: Eligible windows (the iterative system's flat, pointer-free view)
+
+    /// Current conversation windows per opted-in chat, for the iterative system (WhatsAppConnector).
+    /// Same DB read + windowing + caps (100k/90-day) + tail hold-back as `scan`, but with NO cursor/
+    /// backfill — IterativeRun's per-chat pointer (highest message Z_PK) decides new-vs-done. One
+    /// bucket per chat ("whatsapp:<jid>"); each window keyed by its last (max) Z_PK; newest-first.
+    /// (Reuses the static helpers + ChatWindowing; the read overlaps `scan` until the old path retires.)
+    func eligibleWindows() throws -> [Bucket] {
+        let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let reader = try SQLiteReader(path: dbURL.path)
+
+        let members = Self.activeMemberNames(reader)
+        var chats: [Int64: Chat] = [:]
+        try reader.forEachRow("SELECT s.Z_PK, s.ZPARTNERNAME, s.ZCONTACTJID FROM ZWACHATSESSION s WHERE \(Self.sessionFilter)") { r in
+            let jid = r.text(2) ?? ""
+            chats[r.int(0)] = Chat(pk: r.int(0), jid: jid,
+                                   name: Self.displayName(r.text(1), jid: jid, members: members[r.int(0)]),
+                                   isGroup: jid.hasSuffix("@g.us"))
+        }
+        let analyzedPKs = chats.values.filter { chatJIDs == nil || chatJIDs!.contains($0.jid) }.map(\.pk)
+        guard !analyzedPKs.isEmpty else { return [] }
+
+        let tailFloor = Date().addingTimeInterval(-sourceFreshnessHoldBack).timeIntervalSinceReferenceDate
+        let floor = ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate
+        var byChat: [Int64: [ChatMessage]] = [:]
+        try reader.forEachRow("""
+            SELECT m.Z_PK, m.ZMESSAGEDATE, m.ZISFROMME, m.ZTEXT, m.ZPUSHNAME, m.ZCHATSESSION, gm.ZCONTACTNAME, gm.ZFIRSTNAME
+            FROM (SELECT * FROM ZWAMESSAGE
+                  WHERE ZTEXT IS NOT NULL AND length(ZTEXT) > 0 AND ZMESSAGEDATE >= \(floor)
+                        AND ZCHATSESSION IN (\(analyzedPKs.sorted().map(String.init).joined(separator: ",")))
+                  ORDER BY ZMESSAGEDATE DESC LIMIT \(ChatWindowing.maxMessages)) m
+            LEFT JOIN ZWAGROUPMEMBER gm ON m.ZGROUPMEMBER = gm.Z_PK
+            ORDER BY m.ZCHATSESSION, m.Z_PK
+            """) { r in
+            guard let chat = chats[r.int(5)] else { return }
+            guard r.double(1) <= tailFloor else { return }                   // tail hold-back
+            let isFromMe = r.int(2) == 1
+            byChat[r.int(5), default: []].append(ChatMessage(
+                id: r.int(0),
+                date: Date(timeIntervalSinceReferenceDate: r.double(1)),
+                sender: isFromMe ? "Me" : Self.sender(pushName: r.text(4), memberName: r.text(6) ?? r.text(7), chat: chat),
+                isFromMe: isFromMe,
+                text: String((r.text(3) ?? "").prefix(ChatWindowing.maxMessageChars))))
+        }
+
+        return byChat.compactMap { (chatPK, msgs) -> Bucket? in
+            guard let chat = chats[chatPK] else { return nil }
+            let items = ChatWindowing.windows(of: msgs).filter { !$0.isEmpty }.map { win -> (key: ItemKey, item: Candidate) in
+                let cand = Candidate(
+                    id: "whatsapp:c\(chatPK):\(win.first!.id)-\(win.last!.id)", kind: .whatsapp,
+                    cursorKey: "whatsapp:\(chat.jid)", cursorValue: "",   // vestigial — core keys on ItemKey
+                    itemDate: win.last!.date,
+                    metadata: [
+                        "folder": chat.name, "name": chat.name,
+                        "displayPath": "WhatsApp · \(chat.name)",
+                        "isGroup": chat.isGroup ? "1" : "0", "msgCount": "\(win.count)",
+                        "windowText": ChatWindowing.format(chatName: chat.name, isGroup: chat.isGroup, messages: win),
+                    ])
+                return (key: ItemKey(rowID: win.last!.id), item: cand)
+            }
+            return items.isEmpty ? nil : Bucket(key: "whatsapp:\(chat.jid)", items: items.sorted { $0.key > $1.key })
+        }
+    }
+
     // MARK: Sender labels
 
     private static func sender(pushName: String?, memberName: String?, chat: Chat) -> String {

@@ -52,8 +52,15 @@ Connector-agnostic; operates on `CycleStore.notes()` regardless of source (`Clou
   key `(createdDate, "notes:<uuid>")`, item = a note; wraps `NotesSource.eligibleNotes` (reuses the
   gunzip/protobuf `decodeBody`). **Created-date** key ⇒ edited notes are **not** re-summarized.
   Needs Full Disk Access.
-- **ChatConnector** (next) — per chat (`whatsapp:<jid>` / `imessage:<guid>`), key `(rowID, "")`,
-  item = a `ChatWindowing` window; reuse `ChatWindowing` / `SQLiteDB` / `AddressBookNames`.
+- **`WhatsAppConnector` / `iMessageConnector`** (`Ingestion/Connectors/ChatConnectors.swift`) ✅ —
+  per chat (`whatsapp:<jid>` / `imessage:<guid>`), key `(rowID, "")` (row id is unique + monotonic →
+  no tiebreak), item = a `ChatWindowing` window (so `maxTokens` 16384), chat Triage prompt (DM vs
+  group). Wrap each source's `eligibleWindows()` (reuses `ChatWindowing` / `SQLiteDB` /
+  `AddressBookNames` / the typedstream decode). Per-chat opt-in via the dev picker's chat selection.
+
+All three on-device source families now run on the core. **Remaining (out of scope here):** rewire
+the home's Analyze Now to `IterativeRun`, add the scheduler, then delete the old belt
+(`DataSource`/`Pipeline`/old `Store` + the sources' `scan` paths). Gmail/Calendar are the later cloud family.
 
 The dev cockpit (`DevToolsView`) has an **ON-DEVICE CONNECTOR** picker (Files / Apple Notes) that
 routes the INITIAL/ITERATIVE buttons to the chosen connector. "tell cloud" / proactive operate on
@@ -70,5 +77,8 @@ all of `CycleStore.notes()` regardless of connector.
 `SENTIENT_SELFTEST=fileiter` — deterministic, no model/codex: ItemKey tiebreak · the newer-than-mark
 partition (twin at the boundary) · CycleStore round-trip · `FilesConnector.buckets` skip/keep.
 `SENTIENT_SELFTEST=notesiter` — runs the real `NotesConnector` against the live Notes DB (structural
-invariants); needs Full Disk Access (skips gracefully without it). Engine-driven + cloud end-to-end
-is exercised via the dev buttons on real folders / Apple Notes.
+invariants); needs Full Disk Access (skips gracefully without it).
+`SENTIENT_SELFTEST=chatiter` — runs the real WhatsApp + iMessage connectors over all chats (per-chat
+buckets · right kind · windows have text · keys unique + newest-first per chat); WhatsApp's group
+container is readable without FDA (validated on 77 chats / 237 windows), iMessage's `chat.db` needs
+FDA. Engine-driven + cloud end-to-end is exercised via the dev buttons.
