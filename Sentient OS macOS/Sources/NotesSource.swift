@@ -167,6 +167,56 @@ struct NotesSource: DataSource, Sendable {
         Artifact(candidate: candidate, text: candidate.metadata["noteText"] ?? "")
     }
 
+    // MARK: Eligible notes (the iterative system's flat, pointer-free view)
+
+    /// The current eligible notes for the iterative system (NotesConnector). Same decode + cap as
+    /// `scan`, but keyed on **creation date** (so an edited note is NOT re-summarized — created-date
+    /// never moves), with NO cursor/backfill/hold-back — IterativeRun's pointer decides new-vs-done.
+    /// Each Candidate's `itemDate` IS its creation date (so ItemKey = (createdDate, "notes:<uuid>")).
+    /// Newest-created first. Reuses `decodeBody` (fail-closed: undecodable → skipped).
+    func eligibleNotes() throws -> [Candidate] {
+        let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
+        defer { try? FileManager.default.removeItem(at: tempDir) }   // delete the plaintext copy immediately
+        let reader = try SQLiteReader(path: dbURL.path)
+
+        var folders: [Int64: String] = [:]
+        try reader.forEachRow("SELECT Z_PK, ZTITLE2 FROM ZICCLOUDSYNCINGOBJECT WHERE ZTITLE2 IS NOT NULL") { r in
+            if let t = r.text(1) { folders[r.int(0)] = t }
+        }
+
+        var out: [Candidate] = []
+        try reader.forEachRow("""
+            SELECT o.ZIDENTIFIER, o.ZTITLE1,
+                   COALESCE(o.ZCREATIONDATE3, o.ZCREATIONDATE2, o.ZCREATIONDATE1, o.ZCREATIONDATE) AS created,
+                   o.ZFOLDER, d.ZDATA
+            FROM ZICCLOUDSYNCINGOBJECT o JOIN ZICNOTEDATA d ON o.ZNOTEDATA = d.Z_PK
+            WHERE o.ZISPASSWORDPROTECTED IS NOT 1 AND o.ZMARKEDFORDELETION IS NOT 1
+            ORDER BY created DESC LIMIT \(Self.maxNotes)
+            """) { r in
+            guard let id = r.text(0) else { return }
+            guard let blob = r.blob(4), let decoded = Self.decodeBody(blob) else { return }   // fail-closed
+            let body = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { return }                                                 // attachment-only / blank
+
+            let title = r.text(1) ?? String(body.prefix(40))
+            let folder = folders[r.int(3)] ?? "Notes"
+            let created = Date(timeIntervalSinceReferenceDate: r.double(2))
+
+            out.append(Candidate(
+                id: "notes:\(id)", kind: .notes,
+                cursorKey: "notes", cursorValue: "",   // vestigial — the iterative core keys on ItemKey
+                itemDate: created,
+                metadata: [
+                    "folder": folder,
+                    "name": title,
+                    "displayPath": "Apple Notes · \(folder) · \(title)",
+                    "created": Self.dateString(created),
+                    "noteText": String(body.prefix(Self.maxContentChars)),
+                ]))
+        }
+        return out   // newest-created first (the SQL ORDER)
+    }
+
     // MARK: Body decode — gunzip, then protobuf fields 2 → 3 → 2
 
     /// ZICNOTEDATA.ZDATA → the note's plain text. nil = not decodable (skip the note).

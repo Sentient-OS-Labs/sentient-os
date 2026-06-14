@@ -48,10 +48,16 @@ Connector-agnostic; operates on `CycleStore.notes()` regardless of source (`Clou
 - **`FilesConnector`** (`Ingestion/Connectors/FilesConnector.swift`) ✅ — one bucket per `FileRoot`
   (`file:<root.id>`), key `(dateAdded, path)`, item = a file. Wraps `FilesSource.eligibleFiles`
   (skip rules + caps) + `FilesSource.loadArtifact`.
-- **NotesConnector** (next) — single bucket `"notes"`, key `(createdDate, uuid)`, item = a note;
-  reuse `NotesSource.decodeBody`. Created-date key ⇒ edited notes are **not** re-summarized.
-- **ChatConnector** (after) — per chat (`whatsapp:<jid>` / `imessage:<guid>`), key `(rowID, "")`,
+- **`NotesConnector`** (`Ingestion/Connectors/NotesConnector.swift`) ✅ — single bucket `"notes"`,
+  key `(createdDate, "notes:<uuid>")`, item = a note; wraps `NotesSource.eligibleNotes` (reuses the
+  gunzip/protobuf `decodeBody`). **Created-date** key ⇒ edited notes are **not** re-summarized.
+  Needs Full Disk Access.
+- **ChatConnector** (next) — per chat (`whatsapp:<jid>` / `imessage:<guid>`), key `(rowID, "")`,
   item = a `ChatWindowing` window; reuse `ChatWindowing` / `SQLiteDB` / `AddressBookNames`.
+
+The dev cockpit (`DevToolsView`) has an **ON-DEVICE CONNECTOR** picker (Files / Apple Notes) that
+routes the INITIAL/ITERATIVE buttons to the chosen connector. "tell cloud" / proactive operate on
+all of `CycleStore.notes()` regardless of connector.
 
 ## What was deleted (folded into the core)
 `FileKey` / `FileStore` / `FileRun` / `FileVaultCloud` / `FileNotesView` → `ItemKey` / `CycleStore` /
@@ -63,4 +69,6 @@ Connector-agnostic; operates on `CycleStore.notes()` regardless of source (`Clou
 ## Verify
 `SENTIENT_SELFTEST=fileiter` — deterministic, no model/codex: ItemKey tiebreak · the newer-than-mark
 partition (twin at the boundary) · CycleStore round-trip · `FilesConnector.buckets` skip/keep.
-Engine-driven + cloud end-to-end is exercised via the dev buttons on real folders.
+`SENTIENT_SELFTEST=notesiter` — runs the real `NotesConnector` against the live Notes DB (structural
+invariants); needs Full Disk Access (skips gracefully without it). Engine-driven + cloud end-to-end
+is exercised via the dev buttons on real folders / Apple Notes.
