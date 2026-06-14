@@ -68,6 +68,13 @@ final class DevRunModel {
     var status: [String: String] = [:]      // action id → live/final line
 }
 
+/// A queued on-device run for the start-on-device buttons — drives the rich ProcessingView takeover.
+struct DeviceJob: Identifiable {
+    let id = UUID()
+    let connectors: [any Connector]
+    let mode: IterativeRun.Mode
+}
+
 struct DevToolsView: View {
     let store: Store
     @Binding var customRoots: [URL]
@@ -89,6 +96,7 @@ struct DevToolsView: View {
     @AppStorage("dbg.run.notes")     private var runNotes = false
 
     @State private var run = DevRunModel()
+    @State private var deviceJob: DeviceJob?
     @State private var showChatPicker = false
     @State private var showIMessagePicker = false
     @State private var showSummaries = false
@@ -141,6 +149,12 @@ struct DevToolsView: View {
         .frame(width: 720, height: 780)
         .background(Theme.bg)
         .sheet(isPresented: $showSummaries) { SummariesView() }
+        .sheet(item: $deviceJob) { job in
+            ProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors, mode: job.mode) {
+                deviceJob = nil
+            }
+            .frame(minWidth: 600, minHeight: 680)
+        }
         .sheet(isPresented: $showChatPicker) {
             ChatPicker(sourceName: "WhatsApp",
                        loadChats: { try WhatsAppSource().listChats() },
@@ -165,9 +179,7 @@ struct DevToolsView: View {
     private var columns: some View {
         HStack(alignment: .top, spacing: 16) {
             columnView("INITIAL") {
-                actionButton("init.device", "start on device\n(top → bottom)", "arrow.down.to.line", tint: .green) { progress in
-                    await runOnDevice(mode: .initial, progress: progress)
-                }
+                deviceButton("init.device", "start on device\n(top → bottom)", .initial)
                 actionButton("init.cloud", "tell cloud:\n“go make knowledge base exist”", "cloud.fill", tint: .purple) { progress in
                     await cloudCreate(progress: progress)
                 }
@@ -177,9 +189,7 @@ struct DevToolsView: View {
             }
             Divider().frame(maxHeight: 320).overlay(Theme.stroke)
             columnView("ITERATIVE") {
-                actionButton("iter.device", "start on device\n(bottom → top)", "arrow.up.to.line", tint: .green) { progress in
-                    await runOnDevice(mode: .iterative, progress: progress)
-                }
+                deviceButton("iter.device", "start on device\n(bottom → top)", .iterative)
                 actionButton("iter.cloud", "tell cloud:\n“go update knowledge base”", "cloud.fill", tint: .purple) { _ in
                     await cloudUpdate()
                 }
@@ -244,11 +254,29 @@ struct DevToolsView: View {
 
     // MARK: The actions (all on the NEW files-iterative stack)
 
-    private func runOnDevice(mode: IterativeRun.Mode, progress: @escaping @Sendable (String) -> Void) async -> String {
-        guard let mp = Self.modelPath else { return "✗ model not found" }
-        // Build connectors straight from the SOURCES selection (SourceSelection already FDA-gates the
-        // chat/Notes sources): all selected file folders → one FilesConnector; each opted chat / Notes
-        // → its connector. The buttons run everything that's lit, in one pass.
+    /// One of the two "start on device" buttons — presents the rich ProcessingView takeover.
+    private func deviceButton(_ id: String, _ title: String, _ mode: IterativeRun.Mode) -> some View {
+        VStack(spacing: 5) {
+            Button { startOnDevice(id: id, mode: mode) } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: mode == .initial ? "arrow.down.to.line" : "arrow.up.to.line")
+                    Text(title).font(.caption.weight(.medium)).multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered).tint(.green)
+            .disabled(deviceJob != nil || Self.modelPath == nil)
+            if let s = run.status[id] {   // only set for "✗ …" guidance (no source selected, etc.)
+                Text(s).font(.system(.caption2, design: .monospaced)).foregroundStyle(.red)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// Build the connectors from the lit SOURCES + (initial) wipe the vault, then present ProcessingView.
+    private func startOnDevice(id: String, mode: IterativeRun.Mode) {
+        guard Self.modelPath != nil else { run.status[id] = "✗ model not found"; return }
         let roots = selectedFileRoots
         var connectors: [any Connector] = roots.isEmpty ? [] : [FilesConnector(roots: roots)]
         for src in selectedSources {
@@ -259,20 +287,16 @@ struct DevToolsView: View {
             case .files:               break   // folded into FilesConnector(roots:)
             }
         }
-        guard !connectors.isEmpty else { return "✗ select a source above (folder / chat / Apple Notes)" }
+        guard !connectors.isEmpty else {
+            run.status[id] = "✗ select a source above (folder / chat / Apple Notes)"; return
+        }
         if mode == .initial {
             // Fresh start: immediately wipe the existing on-device knowledge base (the vault).
             try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
             Log("DevTools: INITIAL — wiped the on-device vault at \(VaultGenerator.vaultRoot.path)")
         }
-        let onProg: @Sendable (PipelineProgress) -> Void = { p in
-            progress("… \(p.done)/\(p.total) · kept \(p.survivors)")
-        }
-        let runner = IterativeRun(modelPath: mp)
-        let p = mode == .initial
-            ? await runner.runInitial(connectors, onProgress: onProg)
-            : await runner.runIterative(connectors, onProgress: onProg)
-        return "✓ \(p.survivors) kept · \(p.junk) junk · \(p.sensitive) sensitive · \(p.failed) failed"
+        run.status[id] = nil
+        deviceJob = DeviceJob(connectors: connectors, mode: mode)
     }
 
     private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {
@@ -308,13 +332,9 @@ struct DevToolsView: View {
     /// summaries (the cycle ends; the next on-device run starts fresh).
     private func runProactive() async -> String {
         let reminders = await CycleStore.shared.reminderNotes().map(CloudNote.init)
-        do {
-            let n = try await VaultCloud.shared.proactive(reminderNotes: reminders)
-            await CycleStore.shared.wipeAllNotes()
-            return "✓ sent \(n) reminder\(n == 1 ? "" : "s") · summaries wiped"
-        } catch {
-            return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
-        }
+        let n = await VaultCloud.shared.proactive(reminderNotes: reminders)   // dummy — no Codex
+        await CycleStore.shared.wipeAllNotes()
+        return "✓ filtered to send \(n) reminder\(n == 1 ? "" : "s") · summaries wiped"
     }
 
     // MARK: Source picker (which folders/connections the buttons act on)
