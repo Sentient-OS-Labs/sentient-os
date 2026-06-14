@@ -2,21 +2,32 @@
 //  DevToolsView.swift
 //  Sentient OS macOS
 //
-//  The dev cockpit — the pre-Constellation home screen, now living in a sheet behind the
-//  home's DEV TOOLS button (DX continuity until real Settings/onboarding ship; the Phase-6
-//  "Release strip" re-hides it). Start Analysis, View knowledge, the source picker (folders +
-//  chat pickers + Notes), Reset store, Update Knowledge Base, FDA tools, and the Stage-2
-//  VaultView. `SourceSelection` is the one shared reader of the dbg.run.* prefs so Analyze
-//  Now (RootView) and Start Analysis (here) run EXACTLY the same selection.
+//  The dev cockpit — a sheet behind the home's DEV TOOLS button. This is the control panel for
+//  the FILES-iterative system (the hand-drawn INITIAL | ITERATIVE mockup):
+//
+//    INITIAL                          ITERATIVE
+//    • start on device (top→bottom)   • start on device (bottom→top)
+//    • tell cloud: make KB exist      • tell cloud: update KB
+//    • proactive system               • proactive system
+//                       VIEW SUMMARIES
+//
+//  Initial resets each selected file root and walks newest→oldest; iterative walks only files
+//  newer than the saved pointer, oldest→newest. "tell cloud" hands the cycle's summaries to
+//  Codex (create / surgical update). "proactive system" sends the reminder-flagged summaries to
+//  the placeholder proactive pass, then WIPES the cycle's summaries (the cycle ends). All of it
+//  runs through the new self-contained stack (FileRun · FileVaultCloud · FileStore) — the old
+//  Store/Pipeline/messages are untouched, reachable from "More" + the home's Analyze Now.
+//
+//  `SourceSelection` is the one shared reader of the dbg.run.* prefs so the home's Analyze Now and
+//  this sheet's legacy Start Analysis run EXACTLY the same selection.
 //
 
 import SwiftUI
 import AppKit
 
-/// One-shot reader of the dev source-picker prefs (the same keys as the @AppStorage
-/// declarations below — defaults must match: folder toggles ON, DB sources OFF). RootView
-/// uses it for Analyze Now; this sheet uses it for Start Analysis. The @AppStorage copies in
-/// DevToolsView exist for SwiftUI reactivity; this exists for everyone else.
+/// One-shot reader of the dev source-picker prefs (same keys as the @AppStorage below; defaults
+/// must match: folder toggles ON, DB sources OFF). RootView uses it for Analyze Now; this sheet
+/// uses it too. The @AppStorage copies in DevToolsView exist for SwiftUI reactivity.
 enum SourceSelection {
     static var chatJIDs: Set<String> {
         Set((UserDefaults.standard.string(forKey: "dbg.whatsapp.chats") ?? "")
@@ -33,7 +44,6 @@ enum SourceSelection {
         if bool("dbg.run.desktop", default: true) { s.append(.files(.desktop)) }
         if bool("dbg.run.documents", default: true) { s.append(.files(.documents)) }
         s.append(contentsOf: customRoots.map { .files(.custom($0)) })
-        // Never run a DB source without FDA + a chat selection.
         if bool("dbg.run.whatsapp", default: false) && fdaGranted && !chatJIDs.isEmpty {
             s.append(.whatsapp(chatJIDs: chatJIDs))
         }
@@ -49,10 +59,19 @@ enum SourceSelection {
     }
 }
 
+/// Tracks which dev action is running + each action's latest status line. MainActor-isolated so a
+/// background run's `@Sendable` progress callback can update it safely.
+@MainActor
+@Observable
+final class DevRunModel {
+    var busy: String?                       // running action id (nil = idle) → disables all buttons
+    var status: [String: String] = [:]      // action id → live/final line
+}
+
 struct DevToolsView: View {
     let store: Store
     @Binding var customRoots: [URL]
-    /// Closes the sheet and hands off to the processing takeover.
+    /// Closes the sheet and hands off to the (legacy) full-pipeline processing takeover.
     var onStartAnalysis: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -60,31 +79,31 @@ struct DevToolsView: View {
 
     private static let modelPath = ModelLocator.resolve()
 
-    // The dev source picker: which folders analysis runs over. Named-folder toggles persist
-    // across launches; custom folders are session-only (re-pick after a relaunch). Same keys
-    // as SourceSelection above.
+    // The dev source picker (same keys as SourceSelection).
     @AppStorage("dbg.run.downloads") private var runDownloads = true
     @AppStorage("dbg.run.desktop")   private var runDesktop = true
     @AppStorage("dbg.run.documents") private var runDocuments = true
-    @AppStorage("dbg.run.whatsapp")  private var runWhatsApp = false   // is WhatsApp active this run (chip lit)
-    @AppStorage("dbg.whatsapp.chats") private var selectedChatsCSV = ""  // opt-in chat JIDs, comma-joined
-    @AppStorage("dbg.run.imessage")  private var runIMessage = false   // is iMessage active this run (chip lit)
-    @AppStorage("dbg.imessage.chats") private var selectedIMessageChatsCSV = ""  // opt-in chat GUIDs, comma-joined
-    @AppStorage("dbg.run.notes")     private var runNotes = false      // Apple Notes (no picker — all notes, capped)
+    @AppStorage("dbg.run.whatsapp")  private var runWhatsApp = false
+    @AppStorage("dbg.whatsapp.chats") private var selectedChatsCSV = ""
+    @AppStorage("dbg.run.imessage")  private var runIMessage = false
+    @AppStorage("dbg.imessage.chats") private var selectedIMessageChatsCSV = ""
+    @AppStorage("dbg.run.notes")     private var runNotes = false
 
+    @State private var run = DevRunModel()
     @State private var showChatPicker = false
     @State private var showIMessagePicker = false
-    @State private var resetResult: String?
-    @State private var isResetting = false
-    @State private var daysEndResult: String?
-    @State private var isDaysEndRunning = false
-    // "More Options" — advanced debug (Full Disk Access + the DB sources), tucked away so the
-    // main debug area stays uncluttered.
-    @State private var showMoreOptions = false
+    @State private var showSummaries = false
+    @State private var showMore = false
     @State private var fdaGranted = false
+    @State private var resetResult: String?
 
     private var selectedSources: [RunSource] {
         SourceSelection.current(customRoots: customRoots, fdaGranted: fdaGranted)
+    }
+    /// Just the FILE roots — what the new INITIAL/ITERATIVE buttons act on (messages/Notes are the
+    /// old system's, run from the home's Analyze Now or "More" below).
+    private var selectedFileRoots: [FileRoot] {
+        selectedSources.compactMap { if case .files(let r) = $0 { return r } else { return nil } }
     }
     private var selectedChatJIDs: Set<String> {
         Set(selectedChatsCSV.split(separator: ",").map(String.init))
@@ -103,42 +122,32 @@ struct DevToolsView: View {
             .padding(.horizontal, 18).padding(.vertical, 12)
 
             ScrollView {
-                VStack(spacing: 18) {
-                    GlowButton(title: "Start Analysis", systemImage: "sparkles",
-                               active: !selectedSources.isEmpty && Self.modelPath != nil) {
-                        onStartAnalysis()
-                    }
-                    .frame(maxWidth: 300)
+                VStack(spacing: 22) {
+                    sourcePicker
 
                     if Self.modelPath == nil {
                         Text("On-device model not found — place \(ModelLocator.fileName) next to the .xcodeproj, or set SENTIENT_MODEL_PATH.")
                             .font(.caption2).foregroundStyle(Theme.faint)
-                            .multilineTextAlignment(.center)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     }
 
-                    Button { openWindow(id: DatabaseView.windowID) } label: {
-                        Label("View knowledge", systemImage: "sparkles.rectangle.stack")
-                    }
-                    .buttonStyle(.bordered).controlSize(.large).tint(Theme.accent)
-
-                    devControls
-
-                    VaultView(store: store)
-                        .padding(.top, 14)
+                    columns
+                    viewSummariesButton
+                    moreSection
                 }
-                .padding(30)
+                .padding(24)
                 .frame(maxWidth: .infinity)
             }
         }
-        .frame(width: 660, height: 740)
+        .frame(width: 720, height: 780)
         .background(Theme.bg)
+        .sheet(isPresented: $showSummaries) { FileNotesView() }
         .sheet(isPresented: $showChatPicker) {
             ChatPicker(sourceName: "WhatsApp",
                        loadChats: { try WhatsAppSource().listChats() },
                        initialSelection: selectedChatJIDs) { newSel in
                 selectedChatsCSV = newSel.sorted().joined(separator: ",")
-                runWhatsApp = !newSel.isEmpty   // lit only if at least one chat is chosen
+                runWhatsApp = !newSel.isEmpty
             }
         }
         .sheet(isPresented: $showIMessagePicker) {
@@ -149,77 +158,150 @@ struct DevToolsView: View {
                 runIMessage = !newSel.isEmpty
             }
         }
+        .onAppear { fdaGranted = Permissions.hasFullDiskAccess() }
     }
 
-    private var devControls: some View {
-        VStack(spacing: 14) {
-            Divider().overlay(Theme.stroke).padding(.vertical, 10)
+    // MARK: The two columns
 
-            sourcePicker
-
-            debugTest(title: "Reset store", systemImage: "trash",
-                      isRunning: isResetting, result: resetResult, passPrefix: "Cleared",
-                      action: { Task { await runReset() } })
-
-            // The scheduler's stand-in [DECIDED]: this button IS the day's-end trigger until
-            // the condition-gate loop lands — which will call exactly the same entry point
-            // (iterative updater → mirror push → notify). Proactive intelligence gets its
-            // own separate trigger when it lands.
-            debugTest(title: "Update Knowledge Base", systemImage: "arrow.triangle.2.circlepath",
-                      isRunning: isDaysEndRunning, result: daysEndResult, passPrefix: "Done",
-                      action: { Task { await runDaysEnd() } })
-
-            Button {
-                withAnimation { showMoreOptions.toggle() }
-                if showMoreOptions { fdaGranted = Permissions.hasFullDiskAccess() }
-            } label: {
-                Label("More Options", systemImage: showMoreOptions ? "chevron.down" : "chevron.right")
-                    .font(.caption.weight(.medium))
-            }
-            .buttonStyle(.plain).foregroundStyle(Theme.secondary)
-
-            if showMoreOptions { moreOptions }
-        }
-    }
-
-    // MARK: More Options (advanced DEBUG: Full Disk Access + DB sources)
-
-    private var moreOptions: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Image(systemName: fdaGranted ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
-                    .foregroundStyle(fdaGranted ? Theme.verdictColor(.survivor) : .orange)
-                Text(fdaGranted ? "Full Disk Access granted" : "Full Disk Access needed")
-                    .font(.caption.weight(.medium)).foregroundStyle(.white)
-                Spacer()
-                Button("Re-check") { fdaGranted = Permissions.hasFullDiskAccess() }
-                    .buttonStyle(.borderless).controlSize(.small).tint(Theme.accent)
-            }
-
-            if !fdaGranted {
-                Text("The database sources (WhatsApp · iMessage · Notes) read protected databases. Grant Full Disk Access, then restart.")
-                    .font(.caption2).foregroundStyle(Theme.faint)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 10) {
-                    Button("Grant Full Disk Access…") { Permissions.openFullDiskAccessSettings() }
-                        .buttonStyle(.bordered).tint(Theme.accent)
-                    Button("Restart app") { Permissions.relaunch() }
-                        .buttonStyle(.bordered).tint(.white)
+    private var columns: some View {
+        HStack(alignment: .top, spacing: 16) {
+            columnView("INITIAL") {
+                actionButton("init.device", "start on device\n(top → bottom)", "arrow.down.to.line", tint: .green) { progress in
+                    await runOnDevice(mode: .initial, progress: progress)
                 }
-            } else {
-                Text("Database sources (WhatsApp · iMessage · Notes) are unlocked — pick them up in SOURCES above.")
-                    .font(.caption2).foregroundStyle(Theme.faint)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                actionButton("init.cloud", "tell cloud:\n“go make knowledge base exist”", "cloud.fill", tint: .purple) { progress in
+                    await cloudCreate(progress: progress)
+                }
+                actionButton("init.proactive", "proactive system", "bell.badge.fill", tint: .orange) { _ in
+                    await runProactive()
+                }
+            }
+            Divider().frame(maxHeight: 320).overlay(Theme.stroke)
+            columnView("ITERATIVE") {
+                actionButton("iter.device", "start on device\n(bottom → top)", "arrow.up.to.line", tint: .green) { progress in
+                    await runOnDevice(mode: .iterative, progress: progress)
+                }
+                actionButton("iter.cloud", "tell cloud:\n“go update knowledge base”", "cloud.fill", tint: .purple) { _ in
+                    await cloudUpdate()
+                }
+                actionButton("iter.proactive", "proactive system", "bell.badge.fill", tint: .orange) { _ in
+                    await runProactive()
+                }
             }
         }
-        .padding(14)
-        .frame(maxWidth: 460)
-        .glassCard()
     }
 
-    // MARK: Source picker (DEBUG) — pick which folders analysis runs over
+    private func columnView<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(spacing: 12) {
+            Text(title).font(.callout.weight(.bold)).tracking(4).foregroundStyle(Theme.secondary)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    // MARK: One action button (spinner while running + a live/final status line)
+
+    private func actionButton(_ id: String, _ title: String, _ systemImage: String, tint: Color,
+                              work: @escaping (@escaping @Sendable (String) -> Void) async -> String) -> some View {
+        VStack(spacing: 5) {
+            Button {
+                run.busy = id
+                run.status[id] = "…"
+                let progress: @Sendable (String) -> Void = { s in Task { @MainActor in run.status[id] = s } }
+                Task {
+                    let result = await work(progress)
+                    await MainActor.run { run.status[id] = result; run.busy = nil }
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    if run.busy == id { ProgressView().controlSize(.small) }
+                    else { Image(systemName: systemImage) }
+                    Text(title).font(.caption.weight(.medium)).multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.bordered).tint(tint)
+            .disabled(run.busy != nil || Self.modelPath == nil)
+
+            if let s = run.status[id] {
+                Text(s)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(s.hasPrefix("✓") ? .green : s.hasPrefix("✗") ? .red : Theme.secondary)
+                    .multilineTextAlignment(.center).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var viewSummariesButton: some View {
+        Button { showSummaries = true } label: {
+            Label("VIEW SUMMARIES", systemImage: "list.bullet.rectangle")
+                .font(.caption.weight(.bold)).tracking(2)
+                .frame(maxWidth: .infinity, minHeight: 40)
+        }
+        .buttonStyle(.bordered).tint(Theme.accent)
+    }
+
+    // MARK: The actions (all on the NEW files-iterative stack)
+
+    private func runOnDevice(mode: FileRun.Mode, progress: @escaping @Sendable (String) -> Void) async -> String {
+        guard let mp = Self.modelPath else { return "✗ model not found" }
+        let roots = selectedFileRoots
+        guard !roots.isEmpty else { return "✗ select a file folder above" }
+        let runner = FileRun(modelPath: mp)
+        let onProg: @Sendable (PipelineProgress) -> Void = { p in
+            progress("… \(p.done)/\(p.total) · kept \(p.survivors)")
+        }
+        let p = mode == .initial
+            ? await runner.runInitial(roots: roots, onProgress: onProg)
+            : await runner.runIterative(roots: roots, onProgress: onProg)
+        return "✓ \(p.survivors) kept · \(p.junk) junk · \(p.sensitive) sensitive · \(p.failed) failed"
+    }
+
+    private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {
+        let notes = await FileStore.shared.notes().map(CloudNote.init)
+        guard !notes.isEmpty else { return "✗ no summaries — run on-device first" }
+        do {
+            let r = try await FileVaultCloud.shared.create(notes: notes) { p in
+                switch p {
+                case .calling:              progress("… thinking")
+                case .writing(let n):       progress("… writing \(n) notes")
+                case .materializing(let n): progress("… finishing \(n)")
+                case .gathering:            break
+                }
+            }
+            return "✓ \(r.notes) notes / \(r.folders) folders"
+        } catch {
+            return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+        }
+    }
+
+    private func cloudUpdate() async -> String {
+        let notes = await FileStore.shared.notes().map(CloudNote.init)
+        guard !notes.isEmpty else { return "✗ no new summaries to fold" }
+        do {
+            let n = try await FileVaultCloud.shared.update(notes: notes)
+            return "✓ folded \(n) notes into the vault"
+        } catch {
+            return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+        }
+    }
+
+    /// Send the reminder-flagged summaries to the placeholder proactive pass, then WIPE the cycle's
+    /// summaries (the cycle ends; the next on-device run starts fresh).
+    private func runProactive() async -> String {
+        let reminders = await FileStore.shared.reminderNotes().map(CloudNote.init)
+        do {
+            let n = try await FileVaultCloud.shared.proactive(reminderNotes: reminders)
+            await FileStore.shared.wipeAllNotes()
+            return "✓ sent \(n) reminder\(n == 1 ? "" : "s") · summaries wiped"
+        } catch {
+            return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+        }
+    }
+
+    // MARK: Source picker (which folders/connections the buttons act on)
 
     private var sourcePicker: some View {
         VStack(spacing: 9) {
@@ -235,7 +317,6 @@ struct DevToolsView: View {
                     }
                 }
                 chooseFolderChip
-                // DB sources — enabled once Full Disk Access is granted (see More Options).
                 chatSourceChip("WhatsApp", systemImage: "message.fill",
                                isOn: runWhatsApp && fdaGranted && !selectedChatJIDs.isEmpty,
                                count: selectedChatJIDs.count,
@@ -248,22 +329,14 @@ struct DevToolsView: View {
                                openPicker: { showIMessagePicker = true })
                 notesChip
             }
-            .frame(maxWidth: 420)
+            .frame(maxWidth: 460)
 
-            if selectedSources.isEmpty {
-                Text("Select at least one source to analyze.")
-                    .font(.caption2).foregroundStyle(Theme.faint)
-            }
-            if !fdaGranted {
-                Text("WhatsApp, iMessage & Apple Notes need Full Disk Access — grant it in More Options below.")
-                    .font(.caption2).foregroundStyle(Theme.faint)
-            }
+            Text("The INITIAL / ITERATIVE buttons act on the selected FILE folders. WhatsApp · iMessage · Apple Notes still run the old pipeline (home’s Analyze Now / “More” below).")
+                .font(.caption2).foregroundStyle(Theme.faint)
+                .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
-        .onAppear { fdaGranted = Permissions.hasFullDiskAccess() }
     }
 
-    /// Apple Notes chip — a plain FDA-gated toggle (no picker: all notes go in, capped inside
-    /// the source). Same look as the chat chips, minus the count.
     private var notesChip: some View {
         let on = runNotes && fdaGranted
         return HStack(spacing: 6) {
@@ -276,18 +349,11 @@ struct DevToolsView: View {
         .background(on ? Theme.accent : Color.white.opacity(0.06), in: Capsule())
         .overlay(Capsule().strokeBorder(on ? .clear : Theme.stroke, lineWidth: 1))
         .contentShape(Capsule())
-        .onTapGesture {
-            guard fdaGranted else { return }
-            runNotes.toggle()
-        }
+        .onTapGesture { guard fdaGranted else { return }; runNotes.toggle() }
     }
 
-    /// A chat-DB source chip (WhatsApp / iMessage). Tap when OFF → opens that source's chat
-    /// picker → Done lights it up (with the chat count). Tap when ON → turns it off (keeps the
-    /// selection for next time).
     private func chatSourceChip(_ name: String, systemImage: String, isOn: Bool, count: Int,
-                                turnOff: @escaping () -> Void,
-                                openPicker: @escaping () -> Void) -> some View {
+                                turnOff: @escaping () -> Void, openPicker: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
             Image(systemName: isOn ? "checkmark.circle.fill" : systemImage).font(.system(size: 11))
             Text(isOn ? "\(name) · \(count)" : name).font(.caption.weight(.medium)).lineLimit(1)
@@ -298,18 +364,13 @@ struct DevToolsView: View {
         .background(isOn ? Theme.accent : Color.white.opacity(0.06), in: Capsule())
         .overlay(Capsule().strokeBorder(isOn ? .clear : Theme.stroke, lineWidth: 1))
         .contentShape(Capsule())
-        .onTapGesture {
-            guard fdaGranted else { return }
-            if isOn { turnOff() }          // ON → off (selection kept)
-            else { openPicker() }          // OFF → choose chats
-        }
+        .onTapGesture { guard fdaGranted else { return }; if isOn { turnOff() } else { openPicker() } }
     }
 
     private func sourceChip(_ label: String, selected: Bool, removable: Bool = false,
                             _ tap: @escaping () -> Void) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: removable ? "xmark.circle.fill"
-                              : (selected ? "checkmark.circle.fill" : "circle"))
+            Image(systemName: removable ? "xmark.circle.fill" : (selected ? "checkmark.circle.fill" : "circle"))
                 .font(.system(size: 11))
             Text(label).font(.caption.weight(.medium)).lineLimit(1).truncationMode(.middle)
         }
@@ -336,7 +397,6 @@ struct DevToolsView: View {
         .onTapGesture(perform: chooseFolder)
     }
 
-    /// Pick any folder(s) to add as custom sources for this session.
     private func chooseFolder() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -348,47 +408,82 @@ struct DevToolsView: View {
         for url in panel.urls where !customRoots.contains(url) { customRoots.append(url) }
     }
 
-    @ViewBuilder
-    private func debugTest(title: String, systemImage: String, isRunning: Bool,
-                           result: String?, passPrefix: String,
-                           action: @escaping () -> Void) -> some View {
-        VStack(spacing: 8) {
-            Button(action: action) {
-                if isRunning { ProgressView().controlSize(.small) }
-                Label(title, systemImage: systemImage)
-            }
-            .disabled(isRunning)
+    // MARK: More (legacy + FDA + reset)
 
-            if let result {
-                Text(result)
-                    .font(.system(.footnote, design: .monospaced))
-                    .foregroundStyle(result.hasPrefix(passPrefix) ? .green
-                                     : result.localizedCaseInsensitiveContains("fail") ? .red : Theme.secondary)
-                    .multilineTextAlignment(.leading)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: 460)
+    private var moreSection: some View {
+        VStack(spacing: 12) {
+            Button {
+                withAnimation { showMore.toggle() }
+                if showMore { fdaGranted = Permissions.hasFullDiskAccess() }
+            } label: {
+                Label("More", systemImage: showMore ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.medium))
+            }
+            .buttonStyle(.plain).foregroundStyle(Theme.secondary)
+
+            if showMore {
+                VStack(spacing: 12) {
+                    HStack(spacing: 10) {
+                        Button("Start Analysis (legacy)") { onStartAnalysis() }
+                            .buttonStyle(.bordered)
+                        Button { openWindow(id: DatabaseView.windowID) } label: {
+                            Label("View knowledge (old store)", systemImage: "sparkles.rectangle.stack")
+                        }
+                        .buttonStyle(.bordered).tint(Theme.accent)
+                    }
+
+                    VStack(spacing: 4) {
+                        Button(role: .destructive) { Task { await runReset() } } label: {
+                            Label("Reset FILE store (pointers + summaries)", systemImage: "trash")
+                        }
+                        .buttonStyle(.bordered)
+                        if let resetResult {
+                            Text(resetResult).font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(resetResult.hasPrefix("✓") ? .green : .red)
+                        }
+                    }
+
+                    fdaPane
+                }
+                .padding(.top, 4)
             }
         }
     }
 
-    @MainActor
-    private func runDaysEnd() async {
-        isDaysEndRunning = true
-        defer { isDaysEndRunning = false }
-        daysEndResult = await DaysEndJob.shared.run(store: store)
+    private var fdaPane: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: fdaGranted ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                    .foregroundStyle(fdaGranted ? Theme.verdictColor(.survivor) : .orange)
+                Text(fdaGranted ? "Full Disk Access granted" : "Full Disk Access needed")
+                    .font(.caption.weight(.medium)).foregroundStyle(.white)
+                Spacer()
+                Button("Re-check") { fdaGranted = Permissions.hasFullDiskAccess() }
+                    .buttonStyle(.borderless).controlSize(.small).tint(Theme.accent)
+            }
+            if !fdaGranted {
+                Text("WhatsApp · iMessage · Apple Notes read protected databases. Grant Full Disk Access, then restart.")
+                    .font(.caption2).foregroundStyle(Theme.faint)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 10) {
+                    Button("Grant Full Disk Access…") { Permissions.openFullDiskAccessSettings() }
+                        .buttonStyle(.bordered).tint(Theme.accent)
+                    Button("Restart app") { Permissions.relaunch() }
+                        .buttonStyle(.bordered).tint(.white)
+                }
+            }
+        }
+        .padding(14).frame(maxWidth: 460).glassCard()
     }
 
+    /// Reset the FILE store only (the new files-iterative pointers + summaries). The old Store
+    /// (messages/Notes) is untouched.
     @MainActor
     private func runReset() async {
-        isResetting = true
-        defer { isResetting = false }
-        do {
-            try await store.reset()
-            LifetimeStats.reset()
-            let counts = await store.counts()
-            resetResult = "Cleared ✓  summaries=\(counts.versions)  pointers=\(counts.cursors)"
-        } catch {
-            resetResult = "Reset FAIL: \(error)"
-        }
+        await FileStore.shared.wipeAllNotes()
+        // Clear every selected root's pointer too, so the next initial truly starts fresh.
+        for root in selectedFileRoots { await FileStore.shared.clearFolder(rootKey: "file:\(root.id)") }
+        let c = await FileStore.shared.counts()
+        resetResult = "✓ file store cleared — notes \(c.notes)"
     }
 }
