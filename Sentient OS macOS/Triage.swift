@@ -107,7 +107,9 @@ enum Triage {
     /// output contract (so parse()/decide() stay shared across DM, group, and files).
     private static func chatJudgingTail(for artifact: Artifact, currentDate: Date) -> String {
         let today = Self.dateString(currentDate)
-        let conversation = artifact.text ?? "(empty conversation)"
+        // Backstop: keep the conversation under the KV cache so the prompt can never be rejected as
+        // "too long" (near-always a no-op — a normal window is far below `maxConversationBytes`).
+        let conversation = ChatWindowing.clampToContext(artifact.text ?? "(empty conversation)")
         return """
         Nothing is ever deleted from the device — "junk" only means "don't add this to the vault". Today is \(today).
 

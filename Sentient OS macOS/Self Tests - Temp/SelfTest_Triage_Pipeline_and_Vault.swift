@@ -293,7 +293,7 @@ enum SelfTest {
             emit("windows in backlog: \(candidates.count) · current byte budget: \(ChatWindowing.maxWindowBytes)\n")
             guard !candidates.isEmpty else { return }
 
-            let engine = Engine(modelPath: modelPath, maxNumTokens: 16384, collectStats: true)
+            let engine = Engine(modelPath: modelPath, maxNumTokens: ChatWindowing.kvCacheTokens, collectStats: true)
             do { try await engine.load() }
             catch { emit("engine load FAILED: \(error)"); return }
 
@@ -385,10 +385,10 @@ enum SelfTest {
         switch mode {
         case "whatsapp":
             source = WhatsAppSource(chatJIDs: chatFilter((try? WhatsAppSource().listChats()) ?? []))
-            maxTokens = 16384
+            maxTokens = ChatWindowing.kvCacheTokens
         case "imessage":
             source = iMessageSource(chatGUIDs: chatFilter((try? iMessageSource().listChats()) ?? []))
-            maxTokens = 16384
+            maxTokens = ChatWindowing.kvCacheTokens
         case "notes":
             source = NotesSource(); maxTokens = 4096
         case "files":
