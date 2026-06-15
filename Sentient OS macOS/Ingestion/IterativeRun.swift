@@ -21,25 +21,42 @@ struct IterativeRun {
 
     enum Mode { case initial, iterative }
 
+    /// DEV-ONLY hook: surfaces the EXACT prompt per item and STREAMS the raw model response token by
+    /// token. When this is `nil` (the product processing path), generation uses the fast one-shot
+    /// `Engine.generate()` — no streaming, no per-item prompt capture. Streaming is dev-only by
+    /// construction: only DevProcessingView passes a DevObserver.
+    struct DevObserver: Sendable {
+        /// New item STARTING — its exact prompt + display path + abs file path. Fires before the
+        /// response streams, so the view can show the CURRENT item immediately (footer + a placeholder
+        /// card) instead of lagging on the previous item. Resets the response pane.
+        var onItemStart: @Sendable (_ prompt: String, _ displayPath: String?, _ filePath: String?) -> Void
+        var onToken: @Sendable (String) -> Void    // one streamed chunk of the raw response
+        /// Item fully parsed — swap the placeholder for the real summary card (progress now holds it).
+        var onItemDone: @Sendable () -> Void = {}
+        /// Awaited AFTER each item's response is delivered — the dev "pause between items" throttle
+        /// (the view sleeps here when its checkbox is on, so you can read the response). Default: no-op.
+        var afterItem: @Sendable () async -> Void = {}
+    }
+
     private static let preemptiveReloadEvery = 40
     private static let failuresBeforeReload = 3
     private static let maxReloadsWithoutProgress = 4
 
     @discardableResult
-    func runInitial(_ connectors: [any Connector],
+    func runInitial(_ connectors: [any Connector], dev: DevObserver? = nil,
                     onProgress: @Sendable @escaping (PipelineProgress) -> Void = { _ in }) async -> PipelineProgress {
-        await run(connectors, mode: .initial, onProgress: onProgress)
+        await run(connectors, mode: .initial, dev: dev, onProgress: onProgress)
     }
 
     @discardableResult
-    func runIterative(_ connectors: [any Connector],
+    func runIterative(_ connectors: [any Connector], dev: DevObserver? = nil,
                       onProgress: @Sendable @escaping (PipelineProgress) -> Void = { _ in }) async -> PipelineProgress {
-        await run(connectors, mode: .iterative, onProgress: onProgress)
+        await run(connectors, mode: .iterative, dev: dev, onProgress: onProgress)
     }
 
     /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The dev
     /// buttons pass every selected source at once; per-connector load + kind ride along per bucket.
-    private func run(_ connectors: [any Connector], mode: Mode,
+    private func run(_ connectors: [any Connector], mode: Mode, dev: DevObserver? = nil,
                      onProgress: @Sendable @escaping (PipelineProgress) -> Void) async -> PipelineProgress {
         var p = PipelineProgress()
         guard !connectors.isEmpty else { return p }
@@ -66,9 +83,17 @@ struct IterativeRun {
         func attempt(_ cand: Candidate, connector: any Connector, bucketKey: String) async -> Bool {
             do {
                 let artifact = try autoreleasepool { try connector.load(cand) }
-                let result = try await engine.generate(
-                    prompt: Triage.prompt(for: artifact, currentDate: Date()),
-                    imageData: artifact.imageData)
+                let prompt = Triage.prompt(for: artifact, currentDate: Date())
+                // Streaming is DEV-ONLY: only when a DevObserver is attached. Production → generate().
+                let result: Engine.Result
+                if let dev {
+                    dev.onItemStart(prompt, cand.metadata["displayPath"] ?? cand.metadata["name"], cand.metadata["path"])
+                    result = try await engine.generateStream(prompt: prompt, imageData: artifact.imageData) {
+                        dev.onToken($0)
+                    }
+                } else {
+                    result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
+                }
                 let outcome = Triage.decide(result.text)
                 if outcome.verdict == .survivor {
                     await store.recordNote(
@@ -152,6 +177,10 @@ struct IterativeRun {
                     if mode == .iterative { await store.setPointer(bucket.key, w.key) }   // climb per item
                     sinceReload += 1; p.done += 1
                     onProgress(p)
+                    if let dev {
+                        dev.onItemDone()         // placeholder → real summary card (progress holds it now)
+                        await dev.afterItem()    // dev throttle: pause between items when on
+                    }
                 }
 
                 // INITIAL completed this bucket's full descent → everything ≤ newest done → set mark.
