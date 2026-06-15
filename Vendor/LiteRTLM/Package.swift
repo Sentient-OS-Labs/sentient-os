@@ -29,16 +29,21 @@ let package = Package(
   ],
   targets: [
     // The Prebuilt Binary Target for iOS
+    // Pinned to the v0.13.1 release assets (June 14 — bumped from v0.13.0; checksum-verified).
+    // NOTE: the upstream v0.13.1 TAG's own manifest still points at the v0.13.0 binaries — an
+    // upstream oversight; v0.13.1 did publish fresh binaries (C++ runtime bugfixes incl. "channel
+    // extraction when content is empty"), so we point at them to pair the v0.13.1 binary with our
+    // already-v0.13.1 Swift wrapper.
     .binaryTarget(
       name: "CLiteRTLM",
-      url: "https://github.com/google-ai-edge/LiteRT-LM/releases/download/v0.13.0/CLiteRTLM.xcframework.zip",
-      checksum: "af23c77b8eae3f1888fc0348c133af8a13f1e8a89f5788de7e38457f512e768a"
+      url: "https://github.com/google-ai-edge/LiteRT-LM/releases/download/v0.13.1/CLiteRTLM.xcframework.zip",
+      checksum: "7ff01c42106b754748b5dd3036a4a57161b25ebf523e705bebc1219061852362"
     ),
     // The Prebuilt Binary Target for Mac
     .binaryTarget(
       name: "CLiteRTLM_mac",
-      url: "https://github.com/google-ai-edge/LiteRT-LM/releases/download/v0.13.0/CLiteRTLM_mac.xcframework.zip",
-      checksum: "5b5ca1d15763924247cc27931e2ab099f39fb06a12376df01d1f8f6242f1cec3"
+      url: "https://github.com/google-ai-edge/LiteRT-LM/releases/download/v0.13.1/CLiteRTLM_mac.xcframework.zip",
+      checksum: "ec9ffe230dc39117a7fc8933b1cc15910454027fee6d3041534ab7cf17313981"
     ),
     // The Swift Wrapper Target
     .target(

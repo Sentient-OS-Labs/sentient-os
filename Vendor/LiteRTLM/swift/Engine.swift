@@ -172,6 +172,12 @@ public actor Engine {
       litert_lm_session_config_set_sampler_params(cSessionConfig, &params)
     }
 
+    // SENTIENT LOCAL PATCH: cap decode length (gibberish-loop / runaway backstop). Re-apply on
+    // any LiteRT-LM wrapper update. Mirrors the Python/JS wrappers' max_output_tokens handling.
+    if let maxOutputTokens = conversationConfig.maxOutputTokens {
+      litert_lm_session_config_set_max_output_tokens(cSessionConfig, Int32(maxOutputTokens))
+    }
+
     guard let cConversationConfig = litert_lm_conversation_config_create() else {
       throw LiteRTLMError.engine(.failedToCreateConversationConfig)
     }

@@ -149,17 +149,25 @@ public struct ConversationConfig {
   // If `nil`, then uses the engine's default values.
   public let samplerConfig: SamplerConfig?
 
+  // Hard cap on generated (decode) tokens for this conversation; `nil` = the runtime default
+  // (decode until the KV cache fills). [SENTIENT LOCAL PATCH — surfaces the existing C API
+  // `litert_lm_session_config_set_max_output_tokens` that upstream's Swift wrapper omits; the
+  // Python/JS wrappers expose it. Re-apply after any LiteRT-LM wrapper update.]
+  public let maxOutputTokens: Int?
+
   /// - Parameters:
   ///   - systemMessage: The system message to be used in the conversation.
   ///   - initialMessages: The initial messages to populate the conversation history.
   ///   - tools: The list of tool instances to be used in the conversation.
   ///   - samplerConfig: Configuration for the sampling process. If `nil`, then uses the engine's
   ///     default values.
+  ///   - maxOutputTokens: Hard cap on generated tokens; `nil` uses the runtime default.
   public init(
     systemMessage: Message? = nil,
     initialMessages: [Message] = [],
     tools: [Tool] = [],
-    samplerConfig: SamplerConfig? = nil
+    samplerConfig: SamplerConfig? = nil,
+    maxOutputTokens: Int? = nil
   ) {
     self.systemMessage = systemMessage.map { msg in
       msg.role == .system
@@ -168,5 +176,6 @@ public struct ConversationConfig {
     self.initialMessages = initialMessages
     self.tools = tools
     self.samplerConfig = samplerConfig
+    self.maxOutputTokens = maxOutputTokens
   }
 }
