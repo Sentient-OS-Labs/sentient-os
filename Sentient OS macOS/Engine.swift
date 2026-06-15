@@ -35,19 +35,29 @@ actor Engine {
     enum EngineError: Error, CustomStringConvertible {
         case modelNotFound(String)
         case notLoaded
+        case streamStalled
 
         var description: String {
             switch self {
             case .modelNotFound(let path): return "Model file not found at: \(path)"
             case .notLoaded:               return "Engine.generate() called before load()."
+            case .streamStalled:           return "On-device stream stalled (likely a GPU wedge) — reload + retry."
             }
         }
     }
+
+    /// How long a streaming generation may run before we treat it as wedged. A normal item is a few
+    /// seconds; a hung native stream never returns at all (see generateStream). Generous so it never
+    /// trips a legitimately-slow vision item, low enough that recovery isn't glacial.
+    private static let streamTimeout: TimeInterval = 40
 
     private let modelPath: String
     private let maxNumTokens: Int
     private let collectStats: Bool
     private var native: LiteRTLM.Engine?
+    /// The Conversation of the in-flight streaming generation, so a watchdog can cancel it (the only
+    /// thing that unblocks a hung native sendMessageStream). Set/cleared inside generateStream.
+    private var activeConversation: Conversation?
 
     /// `collectStats` turns on LiteRT-LM's benchmark instrumentation (must be decided before
     /// `load()`) so every `Result` carries exact prefill/decode token counts — used by the
@@ -133,6 +143,63 @@ actor Engine {
             result.decodeTokensPerSecond = info.lastDecodeTokensPerSecond
         }
         return result
+    }
+
+    /// Streaming variant of `generate` — emits each decode chunk via `onToken` as it arrives, then
+    /// returns the same `Result` (full accumulated text + stats). DEV-ONLY: the product processing
+    /// path always uses `generate()`; only the dev processing UI streams (chunks are deltas, so we
+    /// concatenate). Identical sampler/Conversation lifecycle to `generate`.
+    func generateStream(prompt: String, imageData: Data? = nil,
+                        onToken: @Sendable (String) -> Void) async throws -> Result {
+        guard let native else { throw EngineError.notLoaded }
+
+        let sampler = try SamplerConfig(topK: 64, topP: 0.95, temperature: 0.15)
+        let conversation = try await native.createConversation(
+            with: ConversationConfig(samplerConfig: sampler)
+        )
+        activeConversation = conversation
+        defer { activeConversation = nil }
+
+        var contents: [Content] = []
+        if let imageData { contents.append(.imageData(imageData)) }
+        contents.append(.text(prompt))
+
+        // Stall watchdog. A wedged native stream never yields a token, never finishes, and never
+        // throws (unlike sendMessage, which returns an error) — so the for-await below would block
+        // forever and IterativeRun's failure-driven reload could never fire. If the stream hasn't
+        // finished within streamTimeout, cancel() it (the only way to unblock the native callback)
+        // and we report a stall, which routes into the existing reload + retry. Captures only `self`
+        // (an actor → Sendable), so no non-Sendable closure capture.
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.streamTimeout))
+            await self?.cancelActiveConversation()
+        }
+        defer { watchdog.cancel() }
+
+        let start = Date()
+        var full = ""
+        for try await chunk in conversation.sendMessageStream(Message(contents: contents)) {
+            let piece = chunk.toString
+            if !piece.isEmpty { full += piece; onToken(piece) }
+        }
+        watchdog.cancel()
+        // The watchdog had to fire (it cancelled a hung stream) → treat as a wedge so attempt() fails.
+        if Date().timeIntervalSince(start) >= Self.streamTimeout { throw EngineError.streamStalled }
+
+        var result = Result(text: full, totalTime: Date().timeIntervalSince(start))
+        if collectStats, let info = try? conversation.getBenchmarkInfo() {
+            result.prefillTokens = info.lastPrefillTokenCount
+            result.decodeTokens = info.lastDecodeTokenCount
+            result.prefillTokensPerSecond = info.lastPrefillTokensPerSecond
+            result.decodeTokensPerSecond = info.lastDecodeTokensPerSecond
+        }
+        return result
+    }
+
+    /// Cancel the in-flight streaming Conversation (called by generateStream's watchdog). Runs on the
+    /// actor via reentrancy while generateStream is suspended at its for-await, so it can interrupt it.
+    private func cancelActiveConversation() {
+        try? activeConversation?.cancel()
     }
 
     /// Writable scratch dir for LiteRT-LM's shader/compilation cache.

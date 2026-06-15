@@ -5,12 +5,18 @@
 //  DEV-ONLY copy of the on-device processing takeover, dedicated to the iterative system's
 //  "start on device" buttons in DevToolsView. It is a deliberate FORK of ProcessingView so the
 //  dev processing UI can be iterated on freely without touching the production home "Analyze Now"
-//  screen (ProcessingView). Only the iterative path lives here: it streams IterativeRun's progress
-//  (over the lit connectors) into the same breathing-sparkle / glow-bar / "just processed" layout.
+//  screen (ProcessingView).
 //
-//  Reuses the shared FileThumbnail + verdict pills (Theme.swift) + PipelineProgress; carries its
-//  OWN copies of the title + glow-bar helpers (DevAnalyzingTitle / DevGlowProgressBar) because the
-//  ProcessingView originals are file-private.
+//  The dev "lab" layout: the REAL status header on top (same glow bar + counts as production),
+//  then two live panes below — LEFT = the EXACT prompt fed to the model for the current item;
+//  RIGHT = the model's raw response STREAMING in token by token, with the production just-processed
+//  card (parsed title/summary/verdict) shown beneath it for the last finished item (both modes).
+//  Streaming is DEV-ONLY: it is driven by an IterativeRun.DevObserver that ONLY this view passes
+//  (the product path never streams — see IterativeRun / Engine.generateStream).
+//
+//  Reuses the shared FileThumbnail + verdict pills (Theme.swift); carries its OWN copies of the
+//  title + glow-bar helpers (DevAnalyzingTitle / DevGlowProgressBar) because the ProcessingView
+//  originals are file-private.
 //
 
 import SwiftUI
@@ -26,9 +32,24 @@ struct DevProcessingView: View {
     }
 
     private enum UIState: Equatable { case loadingModel, processing, completed, failed(String) }
+
+    /// One ordered event off the run — progress for the header, start/token for the panes, itemDone to
+    /// swap the placeholder for the real card. A single stream keeps them in program order.
+    private enum RunEvent {
+        case progress(PipelineProgress)
+        case start(prompt: String, displayPath: String?, filePath: String?)
+        case token(String)
+        case itemDone
+    }
+
     @State private var state: UIState = .loadingModel
     @State private var progress = PipelineProgress()
-    @State private var stopped = false
+    @State private var currentPrompt = ""    // LEFT pane — exact prompt for the current item
+    @State private var currentDisplayPath: String?    // footer — current item being processed
+    @State private var currentFilePath: String?       // placeholder card thumbnail (current item)
+    @State private var liveResponse = ""     // RIGHT pane — raw response, streamed token by token
+    @State private var responseComplete = false   // false while streaming (placeholder), true → summary card
+    @State private var pauseBetweenItems = true   // dev checkbox — sleep 8s after each item (on by default)
     @State private var started = false
     @State private var iterativeTask: Task<PipelineProgress, Never>?
 
@@ -69,13 +90,24 @@ struct DevProcessingView: View {
     }
 
     private var processingContent: some View {
-        VStack(spacing: 26) {
-            Image(systemName: "sparkles").font(.system(size: 46))
-                .foregroundStyle(.white.opacity(0.65)).symbolEffect(.breathe, options: .speed(0.7))
+        VStack(spacing: 16) {
+            statusHeader
+            Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
+            promptResponsePanes
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.top, 18)
+    }
 
-            DevAnalyzingTitle()
-
-            VStack(spacing: 10) {
+    /// The REAL on-device status — same glow bar + verdict counts as production ("real status!").
+    private var statusHeader: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles").font(.system(size: 20))
+                    .foregroundStyle(.white.opacity(0.65)).symbolEffect(.breathe, options: .speed(0.7))
+                DevAnalyzingTitle()
+            }
+            VStack(spacing: 8) {
                 DevGlowProgressBar(value: progress.total > 0 ? Double(progress.done) / Double(progress.total) : 0)
                 HStack {
                     Text("\(progress.done) of \(progress.total)").fontWeight(.bold).monospacedDigit()
@@ -84,16 +116,143 @@ struct DevProcessingView: View {
                 }
                 .font(.subheadline).foregroundStyle(.white.opacity(0.9))
             }
-            .frame(width: 320)
-
+            .frame(width: 360)
             countsLine
+        }
+        .padding(.vertical, 14).padding(.horizontal, 22)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.white.opacity(0.08)))
+    }
 
-            if progress.lastPath != nil {   // something was processed (files have a path; chat windows do too)
-                justProcessed
+    /// LEFT: the exact prompt for the current item. RIGHT: the model's raw streaming response, plus
+    /// the production "JUST PROCESSED" card (parsed title/summary/verdict) for the last item done.
+    private var promptResponsePanes: some View {
+        HStack(spacing: 0) {
+            devPane(title: "PROMPT", text: currentPrompt, autoScroll: false)
+            Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
+            responseColumn
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.08)))
+    }
+
+    /// The PROMPT column — header + the scrollable monospace prompt.
+    private func devPane(title: String, text: String, autoScroll: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            paneHeader(title, chars: text.count)
+            monoScroll(text: text, autoScroll: autoScroll)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// The RESPONSE column — raw streaming response on top, the parsed "just processed" card below.
+    private var responseColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            paneHeader("RESPONSE TO PROMPT", chars: liveResponse.count)
+            monoScroll(text: liveResponse, autoScroll: true)
+            if !currentPrompt.isEmpty {   // a run is underway — card section present in BOTH modes
+                Rectangle().fill(.white.opacity(0.1)).frame(height: 1)
+                // While the response streams → placeholder for the CURRENT item (never the previous
+                // item's summary). On completion → the real summary, in sync with the finished JSON.
+                if responseComplete { justProcessed } else { analyzingPlaceholder }
             }
         }
-        .frame(maxHeight: .infinity, alignment: .top)
-        .padding(.top, 30)
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func paneHeader(_ title: String, chars: Int) -> some View {
+        HStack {
+            Text(title).font(.caption2.weight(.semibold)).tracking(1.5)
+                .foregroundStyle(.white.opacity(0.45))
+            Spacer()
+            Text("\(chars) chars").font(.caption2).monospacedDigit()
+                .foregroundStyle(.white.opacity(0.25))
+        }
+    }
+
+    /// A scrollable monospace text body. `autoScroll` pins it to the bottom as text streams in.
+    private func monoScroll(text: String, autoScroll: Bool) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                Text(text.isEmpty ? "—" : text)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(text.isEmpty ? 0.25 : 0.82))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Color.clear.frame(height: 1).id("bottom")
+            }
+            .onChange(of: text) {
+                guard autoScroll else { return }
+                withAnimation(.linear(duration: 0.1)) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Shown while the CURRENT item's response is still streaming — the current file's thumbnail with
+    /// an "Analyzing…" note, so the previous item's summary is never displayed mid-stream.
+    private var analyzingPlaceholder: some View {
+        HStack(alignment: .top, spacing: 14) {
+            FileThumbnail(path: currentFilePath, size: 60)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Analyzing…").font(.subheadline.weight(.bold)).foregroundStyle(.white.opacity(0.5))
+                Text("Waiting for the model to finish this item.")
+                    .font(.subheadline).italic().foregroundStyle(.white.opacity(0.3))
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The production just-processed card — thumbnail + verdict pill + bold title + summary + path,
+    /// for the most-recently-completed item (same data + look as the real ProcessingView). Always
+    /// visible in both pause + no-pause modes; updates at each item completion (with the full JSON).
+    private var justProcessed: some View {
+        HStack(alignment: .top, spacing: 14) {
+            FileThumbnail(path: progress.lastFilePath, size: 60)
+                .id(progress.done).transition(.blurReplace)
+            VStack(alignment: .leading, spacing: 6) {
+                let verdict = progress.lastVerdict
+                // Pills: sensitive (red) / junk (dim) / reminder (gradient). Kept = none.
+                if verdict == .sensitive || verdict == .junk || progress.lastReminder {
+                    HStack(spacing: 6) {
+                        if verdict == .sensitive { SensitivePill() }
+                        else if verdict == .junk { JunkPill() }
+                        if progress.lastReminder && verdict != .sensitive { ReminderPill() }
+                    }
+                }
+                if let title = progress.lastTitle {
+                    Text(title).font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white.opacity(verdict == .junk ? 0.5 : 1.0))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                // Survivors carry a summary; junk/sensitive often don't — show a graceful placeholder.
+                let fallback = verdict == .sensitive ? "Held back — sensitive."
+                             : verdict == .junk ? "Nothing worth keeping here." : ""
+                let body = progress.lastSummary ?? fallback
+                if !body.isEmpty {
+                    Text(body).font(.subheadline)
+                        .italic(progress.lastSummary == nil)
+                        .foregroundStyle(.white.opacity(verdict == .survivor ? 0.85 : 0.32))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .blur(radius: verdict == .sensitive ? 6 : 0)   // redact sensitive content
+                }
+                if let path = progress.lastPath {
+                    Text(path).font(.caption).foregroundStyle(.white.opacity(0.3))
+                        .lineLimit(1).truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 2)
+                }
+            }
+            .id(progress.done).transition(.blurReplace)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(.easeInOut(duration: 0.4), value: progress.done)
     }
 
     private var countsLine: some View {
@@ -113,59 +272,6 @@ struct DevProcessingView: View {
             Text("\(n)").font(.caption.weight(.bold)).foregroundStyle(color).monospacedDigit()
             Text(label).font(.caption).foregroundStyle(.white.opacity(0.45))
         }
-    }
-
-    private var justProcessed: some View {
-        VStack(spacing: 12) {
-            Rectangle().fill(.white.opacity(0.1)).frame(height: 1).padding(.horizontal, 60)
-            Text("JUST PROCESSED").font(.caption2).tracking(1.5).foregroundStyle(.white.opacity(0.3))
-            HStack(alignment: .top, spacing: 16) {
-                FileThumbnail(path: progress.lastFilePath, size: 66)
-                    .id(progress.done)
-                    .transition(.blurReplace)
-                VStack(alignment: .leading, spacing: 6) {
-                    let verdict = progress.lastVerdict
-                    // Pills: sensitive (red) / junk (dim) / reminder (gradient). Kept = none.
-                    if verdict == .sensitive || verdict == .junk || progress.lastReminder {
-                        HStack(spacing: 6) {
-                            if verdict == .sensitive { SensitivePill() }
-                            else if verdict == .junk { JunkPill() }
-                            if progress.lastReminder && verdict != .sensitive { ReminderPill() }
-                        }
-                    }
-                    if let title = progress.lastTitle {
-                        Text(title).font(.subheadline.weight(.bold))
-                            .foregroundStyle(.white.opacity(verdict == .junk ? 0.5 : 1.0))
-                            .frame(maxWidth: 340, alignment: .leading)
-                    }
-                    let fallback = verdict == .sensitive ? "Held back — sensitive."
-                                 : verdict == .junk ? "Nothing worth keeping here." : ""
-                    let body = progress.lastSummary ?? fallback
-                    if !body.isEmpty {
-                        Text(body)
-                            .font(.subheadline)
-                            .italic(progress.lastSummary == nil)
-                            .foregroundStyle(.white.opacity(verdict == .survivor ? 0.85 : 0.32))
-                            .lineLimit(3).frame(maxWidth: 340, alignment: .leading)
-                            .blur(radius: verdict == .sensitive ? 6 : 0)   // redact sensitive content
-                    }
-                    if let path = progress.lastPath {
-                        Text(path)
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.3))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: 340, alignment: .leading)
-                            .padding(.top, 2)
-                    }
-                }
-                .id(progress.done)
-                .transition(.blurReplace)
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: 460)
-        }
-        .animation(.easeInOut(duration: 0.4), value: progress.done)
     }
 
     private var completedView: some View {
@@ -203,6 +309,12 @@ struct DevProcessingView: View {
 
     private var footer: some View {
         VStack(spacing: 18) {
+            Toggle(isOn: $pauseBetweenItems) {
+                Text("Pause 8s after each response (dev)").font(.caption)
+            }
+            .toggleStyle(.checkbox)
+            .foregroundStyle(.white.opacity(0.7))
+
             VStack(spacing: 6) {
                 Button(action: stop) {
                     Text("Stop Analysis")
@@ -215,9 +327,11 @@ struct DevProcessingView: View {
                 Text("Analysis can always resume later.")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
+            // Dev: the current item being processed (replaces the production trust footer).
             HStack(spacing: 7) {
-                Image(systemName: "lock.shield.fill")
-                Text("Private by design. Your files never leave this Mac.")
+                Image(systemName: "doc.text")
+                Text(currentDisplayPath ?? "—")
+                    .lineLimit(1).truncationMode(.middle).monospaced()
             }
             .font(.callout).foregroundStyle(.white.opacity(0.6))
         }
@@ -225,7 +339,6 @@ struct DevProcessingView: View {
 
     /// Stop the run and return home. The cycle's pointers advance per durable save, so re-running resumes.
     private func stop() {
-        stopped = true
         iterativeTask?.cancel()
         onDone()
     }
@@ -243,23 +356,45 @@ struct DevProcessingView: View {
     }
 
     private func run() async {
-        stopped = false
         state = .loadingModel
+        currentPrompt = ""; liveResponse = ""; responseComplete = false
 
-        // Stream IterativeRun's progress into the takeover (IterativeRun owns the engine).
-        let (stream, continuation) = AsyncStream.makeStream(
-            of: PipelineProgress.self, bufferingPolicy: .bufferingNewest(1))
-        let task = Task {
+        // One unbounded ordered stream carries progress + the dev start/token/itemDone events (tokens
+        // must never be dropped, so NOT bufferingNewest). The DevObserver is what flips on streaming —
+        // passing it makes IterativeRun use Engine.generateStream; production never passes one.
+        let (stream, continuation) = AsyncStream.makeStream(of: RunEvent.self, bufferingPolicy: .unbounded)
+        let task = Task<PipelineProgress, Never> {
             defer { continuation.finish() }
             let runner = IterativeRun(modelPath: modelPath)
+            let dev = IterativeRun.DevObserver(
+                onItemStart: { continuation.yield(.start(prompt: $0, displayPath: $1, filePath: $2)) },
+                onToken:     { continuation.yield(.token($0)) },
+                onItemDone:  { continuation.yield(.itemDone) },
+                afterItem: {
+                    // Read the checkbox LIVE on the main actor; sleep so the response stays readable.
+                    // Cancellation-aware (Stop during the pause throws → swallowed → loop exits).
+                    let shouldPause = await MainActor.run { pauseBetweenItems }
+                    if shouldPause { try? await Task.sleep(for: .seconds(8)) }
+                })
             return mode == .initial
-                ? await runner.runInitial(connectors) { continuation.yield($0) }
-                : await runner.runIterative(connectors) { continuation.yield($0) }
+                ? await runner.runInitial(connectors, dev: dev) { continuation.yield(.progress($0)) }
+                : await runner.runIterative(connectors, dev: dev) { continuation.yield(.progress($0)) }
         }
         iterativeTask = task
-        for await p in stream {
-            if state == .loadingModel { withAnimation { state = .processing } }
-            progress = p
+        for await ev in stream {
+            switch ev {
+            case .progress(let p):
+                if state == .loadingModel { withAnimation { state = .processing } }
+                progress = p
+            case .start(let prompt, let dp, let fp):
+                // New item → show it immediately (no lag), reset the response, back to placeholder.
+                currentPrompt = prompt; currentDisplayPath = dp; currentFilePath = fp
+                liveResponse = ""; responseComplete = false
+            case .token(let t):
+                liveResponse += t
+            case .itemDone:
+                withAnimation { responseComplete = true }   // placeholder → real summary card
+            }
         }
         progress = await task.value
         withAnimation { state = .completed }
