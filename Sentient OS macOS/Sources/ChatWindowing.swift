@@ -81,12 +81,27 @@ enum ChatWindowing {
     // 12,000 is sized from measurement (June 11 `tokens` self-test, 24 real windows across 14
     // chats): real chat runs ~2.4 bytes/token (min 2.05), so a full window is ~5k tokens typical
     // — and even the adversarial worst case (1 token/byte) fits the chat engine's 16,384
-    // maxNumTokens with room for the group prompt template (1,567 tokens measured) + reply.
+    // maxNumTokens (`kvCacheTokens`) with room for the group prompt template (~1,567 tokens
+    // measured) + reply. As a hard backstop, `Triage` clamps the conversation to
+    // `maxConversationBytes`, so a chat prompt can NEVER trip LiteRT-LM's "input too long" reject.
     // The old 5,000 left ~83% of the context empty and paid that fixed template cost once per
     // ~30 messages. Quality, not token math, is the gate on raising this further — more
     // speakers per window = more attribution risk for a 4B judge.
     static let maxWindowBytes = 12_000
     static let maxMessageChars = 1_000     // cap a single pasted-essay message so it can't dominate a window
+
+    // The chat engine's KV-cache size — TOTAL tokens, since prompt + reply share the one cache.
+    // Single source of truth: the chat connectors, the processing view, and the self-tests all read
+    // it from here. A full 12,000-byte window (~7.4k tokens incl. the ~1.6k group template) sits
+    // comfortably inside this; `clampToContext` is the hard backstop if a window ever overshoots.
+    static let kvCacheTokens = 16_384
+
+    // Hard cap on the conversation bytes embedded in a chat prompt — the truncation backstop. Sized
+    // so that even at the impossible worst case (1 token/byte) the conversation + the ~1.7k-token
+    // group template stay under `kvCacheTokens` with ~1k tokens of reply headroom. A normal window
+    // (`maxWindowBytes` = 12,000) sits far below this; it only ever bites if the window budget is
+    // raised or a single slice balloons. See `clampToContext`.
+    static let maxConversationBytes = kvCacheTokens - 1_700 - 1_024   // worst-case template + reply, in byte-tokens
 
     /// The 90-day floor as a Date (sources convert to their own epoch/units for SQL).
     static var lookbackFloor: Date { Date().addingTimeInterval(-Double(lookbackDays) * 86_400) }
@@ -172,6 +187,20 @@ enum ChatWindowing {
         out += "In this slice, you (\"Me\") sent \(mine) of \(messages.count) messages.\n"
         for m in messages { out += "[\(dateString(m.date))] \(m.sender): \(m.text)\n" }
         return out
+    }
+
+    /// Hard context backstop: trim a rendered window to `maxConversationBytes` on a message
+    /// boundary, so the assembled chat prompt can never exceed the KV cache (which would make
+    /// LiteRT-LM reject the prompt with "input token ids are too long"). Near-always a no-op —
+    /// normal windows are well under budget; this only bites a pathological / over-large slice.
+    /// Keeps the slice header + the oldest messages, drops the newest overflow, marks the cut.
+    static func clampToContext(_ rendered: String) -> String {
+        let byteCount = rendered.utf8.count
+        guard byteCount > maxConversationBytes else { return rendered }
+        let head = String(decoding: rendered.utf8.prefix(maxConversationBytes), as: UTF8.self)
+        let cut: Substring = head.lastIndex(of: "\n").map { head[..<$0] } ?? Substring(head)
+        Log("ChatWindowing: window \(byteCount)B > context budget \(maxConversationBytes)B — trimmed to fit the KV cache.")
+        return String(cut) + "\n[… conversation truncated to fit the model's context …]"
     }
 
     /// "Alex, Sam & 2 others" — display name for a group without an explicit one, synthesized

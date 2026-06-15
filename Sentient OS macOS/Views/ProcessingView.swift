@@ -297,7 +297,7 @@ struct ProcessingView: View {
             // Chat windows are big (and prompt scaffolding is sizeable); size the KV cache with
             // comfortable headroom so a window + prompt can never overflow (we have the RAM).
             let needsBigContext = sources.contains(where: \.isChatSource)
-            let engine = Engine(modelPath: modelPath, maxNumTokens: needsBigContext ? 16384 : 4096)
+            let engine = Engine(modelPath: modelPath, maxNumTokens: needsBigContext ? ChatWindowing.kvCacheTokens : 4096)
             try await engine.load()
             self.engine = engine
             withAnimation { state = .processing }

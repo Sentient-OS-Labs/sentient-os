@@ -51,6 +51,13 @@ actor Engine {
     /// trips a legitimately-slow vision item, low enough that recovery isn't glacial.
     private static let streamTimeout: TimeInterval = 40
 
+    /// Hard cap on generated tokens per item (decode), passed to the runtime via the wrapper's
+    /// `maxOutputTokens` passthrough. A triage reply is a compact JSON summary — even a rich
+    /// multi-paragraph keeper for a dense transcript (an investor call, say) sits well under this;
+    /// 1024 leaves generous room while bounding a runaway repetition loop to ~1024 tokens (~16s)
+    /// instead of letting it decode all the way to the KV ceiling (the ~165s "hang" we measured).
+    private static let maxOutputTokens = 1024
+
     private let modelPath: String
     private let maxNumTokens: Int
     private let collectStats: Bool
@@ -118,15 +125,17 @@ actor Engine {
     func generate(prompt: String, imageData: Data? = nil) async throws -> Result {
         guard let native else { throw EngineError.notLoaded }
 
-        // Low temperature → reliable JSON + faithful instruction-following (less "creative"
-        // identity-fusion / misattribution in the bouncer). This is a classification task, not
-        // creative writing, so we want near-deterministic, mode-seeking sampling.
+        // Low temperature (0.15) → near-deterministic, reliable JSON + faithful instruction-following
+        // (less "creative" identity-fusion / misattribution in the bouncer). NOT 0/greedy: pure argmax
+        // is the LOOPIEST setting, and LiteRT-LM has no repetition penalty, so a sliver of temperature
+        // is our only lever to let the model escape gibberish-repeat grooves. `maxOutputTokens` (below)
+        // is the hard backstop that bounds any loop that still slips through.
         let sampler = try SamplerConfig(topK: 64, topP: 0.95, temperature: 0.15)
         // Fresh Conversation per call = a CLEAN context: no history bleed, its own KV cache.
         // It deinits at function exit (frees the native handle + KV cache), so per-file memory
         // is fully released — RAM stays flat whether it's file #1 or #500.
         let conversation = try await native.createConversation(
-            with: ConversationConfig(samplerConfig: sampler)
+            with: ConversationConfig(samplerConfig: sampler, maxOutputTokens: Self.maxOutputTokens)
         )
 
         var contents: [Content] = []
@@ -153,9 +162,9 @@ actor Engine {
                         onToken: @Sendable (String) -> Void) async throws -> Result {
         guard let native else { throw EngineError.notLoaded }
 
-        let sampler = try SamplerConfig(topK: 64, topP: 0.95, temperature: 0.15)
+        let sampler = try SamplerConfig(topK: 64, topP: 0.95, temperature: 0.15)   // see generate()
         let conversation = try await native.createConversation(
-            with: ConversationConfig(samplerConfig: sampler)
+            with: ConversationConfig(samplerConfig: sampler, maxOutputTokens: Self.maxOutputTokens)
         )
         activeConversation = conversation
         defer { activeConversation = nil }

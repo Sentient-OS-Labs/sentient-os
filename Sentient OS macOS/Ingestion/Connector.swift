@@ -24,7 +24,7 @@ struct Bucket: Sendable {
 
 protocol Connector: Sendable {
     var kind: SourceKind { get }
-    /// Engine KV-cache size for this connector's items (chats feed big windows → 16384; default 4096).
+    /// Engine KV-cache size for this connector's items (chats feed big windows → `ChatWindowing.kvCacheTokens`; default 4096).
     var maxTokens: Int { get }
 
     /// Current eligible work-items per bucket, newest-first. `marks` = the current per-bucket pointer
