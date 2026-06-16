@@ -111,7 +111,7 @@ struct Briefing: Identifiable {
             id: "luis", kind: .meeting,
             kicker: "Meeting · iMessage + Calendar",
             title: "Luis invited you to lunch at Headline.",
-            body: "Lunch at Headline's Presidio office, next Wednesday at 1 PM. I checked your calendar — you're free. The reply is drafted.",
+            body: "He proposed next Wednesday at 1 PM. I checked your calendar — you're free. Should I reply and add it to your cal?",
             letter: """
             Luis Schmitz invited you to lunch at Headline next Wednesday at 1 PM, at their Presidio office. I checked your calendar: you're free, with nothing for two hours on either side.
 
