@@ -175,32 +175,37 @@ struct Briefing: Identifiable {
             codexPrompt: "Use the browser to open the ZFellows Dropout Graduation registration and submit it for Jesai Tarun, UMass Amherst, building Sentient OS."),
 
         Briefing(
-            id: "sfbreak", kind: .plan,
-            kicker: "Plan · WhatsApp · Cofounders",
-            title: "Your perfect SF break.",
-            body: "You three were brainstorming attractions in the group chat. I built the day from everything I know about you — golden hour included.",
+            id: "deepika", kind: .plan,
+            kicker: "Warm intro · 3 days · Gmail",
+            title: "Deepika opened a $1.5M door.",
+            body: "She's connecting you with Jordan, Outlander's senior partner, and asked for a TLDR she can forward. I wrote it.",
             letter: """
-            The three of you were brainstorming a break day in the group chat. I built it from everything I know about you — the camera itch, the food list, the fog:
+            Deepika (Outlander VC) loved Sentient and is connecting you with Jordan, their senior partner, to talk through the ~$1.5M. She asked for a TLDR she could forward.
 
-            ✦ 9 AM — Tartine in the Mission. It's been sitting on your Food to Try list since April.
-
-            ✦ 11 AM — Marin Headlands. The Golden Gate from above, and the best photography light of the day.
-
-            ✦ 2 PM — Musée Mécanique and Pier 39 chaos, settled by an It's-It taste test.
-
-            ✦ 5 PM — Karl the Fog permitting: Twin Peaks at golden hour.
-
-            ✦ 8 PM — the Alcatraz night tour — the one booking that actually sells out. I can grab three tickets the moment you say yes.
+            That was three days ago. Time to land it — the draft is below, written to be forwarded.
             """,
-            detailLabel: "view the plan",
-            offer: "Shall I post it to the chat?",
-            workLog: ["→ opening WhatsApp",
-                      "→ “Aditya, Aryaman & Jesai”",
-                      "→ posting the plan…",
-                      "✓ posted"],
-            doneTitle: "It's on the chat.",
-            doneBody: "Aditya and Aryaman are typing…",
-            codexPrompt: "Post the SF break-day plan from this briefing to the WhatsApp group 'Aditya, Aryaman & Jesai'."),
+            draft: """
+            Hi Deepika,
+
+            So great speaking with you — and thank you for connecting me with Jordan! Here's a TLDR you can forward along:
+
+            Sentient OS is the private, on-device intelligence layer for your digital life. Your Mac reads everything you've saved — files, screenshots, WhatsApp, iMessage, Notes — entirely on your own hardware, and distills it into a knowledge vault every AI you use can plug into. Raw data never leaves the device. 2,500+ waitlist signups in 24 hours from a single Reddit post, a working product, and a public launch this month.
+
+            Would love to walk Jordan through a live demo whenever suits.
+
+            Best,
+            Jesai
+            """,
+            draftLabel: "Draft · Gmail",
+            detailLabel: "read the draft",
+            offer: "Should I send it for you?",
+            workLog: ["→ reading the thread with Deepika",
+                      "→ opening Gmail",
+                      "→ composing the forwardable TLDR…",
+                      "✓ sent"],
+            doneTitle: "Sent to Deepika.",
+            doneBody: "The TLDR is on its way to Jordan.",
+            codexPrompt: "Open Gmail and reply to the latest thread with Deepika (Outlander VC) using the approved draft in this briefing. Send it."),
 
         Briefing(
             id: "welcome", kind: .welcome,
