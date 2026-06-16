@@ -109,7 +109,7 @@ actor VaultGenerator {
         }
 
         var invocation = CodexCLI.Invocation(prompt: prompt)
-        invocation.effort = .high                            // the initial build gets the deep pass
+        invocation.effort = .xhigh                           // KB build gets the deepest pass (gpt-5.5)
         invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir
         invocation.cwd = staging.path
         invocation.resumeSessionID = resume?.sessionID
@@ -202,6 +202,7 @@ actor VaultGenerator {
     /// can call it without coupling to a particular summary type.
     static func locSrc(kind: SourceKind, folder: String, sourceID: String) -> (loc: String, source: String) {
         if kind == .whatsapp { return (folder, "WhatsApp · \(folder)") }
+        if kind == .gmail { return (folder, "Gmail — the user's email correspondence") }
         let p = relPath(sourceID)
         let low = p.lowercased()
         if low.contains("icloud~md~obsidian") {                       // the user's own Obsidian vault

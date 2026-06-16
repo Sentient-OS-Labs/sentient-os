@@ -116,7 +116,7 @@ actor VaultCloud {
         } else {
             invocation = CodexCLI.Invocation(prompt: Self.updatePrompt(skeleton: Self.skeleton(of: vault), notes: notes))
         }
-        invocation.effort = .medium                                   // daily updates are cheap
+        invocation.effort = .xhigh                                    // KB work gets the deepest pass
         invocation.sandbox = .workspaceWrite                         // edits confined to the vault
         invocation.cwd = vault.path
         invocation.timeout = 1_800

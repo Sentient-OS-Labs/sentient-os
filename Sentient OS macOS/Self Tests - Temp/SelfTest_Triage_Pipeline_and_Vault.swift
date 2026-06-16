@@ -111,6 +111,7 @@ enum SelfTest {
             guard case .available = availability else { return }
             do {
                 var inv = CodexCLI.Invocation(prompt: "Reply with exactly: SPINE_OK")
+                inv.effort = .low            // a ping doesn't need the xhigh default
                 inv.timeout = 120
                 let envelope = try await CodexCLI.shared.run(inv)
                 emit("result: \(envelope.result)")
