@@ -110,10 +110,10 @@ struct Briefing: Identifiable {
         Briefing(
             id: "luis", kind: .meeting,
             kicker: "Meeting · iMessage + Calendar",
-            title: "Luis wants Wednesday, 1 PM.",
-            body: "Luis Schmitz (Headline) set lunch for next Wednesday at the Presidio. I checked your calendar — you're free at 1 PM. The reply is drafted.",
+            title: "Luis invited you to lunch at Headline.",
+            body: "Lunch at Headline's Presidio office, next Wednesday at 1 PM. I checked your calendar — you're free. The reply is drafted.",
             letter: """
-            Luis Schmitz from Headline set lunch for next Wednesday at 1 PM, at the Presidio. I checked your calendar: you're free, with nothing for two hours on either side.
+            Luis Schmitz invited you to lunch at Headline next Wednesday at 1 PM, at their Presidio office. I checked your calendar: you're free, with nothing for two hours on either side.
 
             Worth remembering: their HQ is 101 Montgomery Street in the Presidio — NOT the Montgomery in Downtown. I'll remind you that morning.
             """,
