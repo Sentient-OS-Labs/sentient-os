@@ -103,6 +103,9 @@ struct DevToolsView: View {
     @State private var showMore = false
     @State private var fdaGranted = false
     @State private var resetResult: String?
+    @State private var showGmailConnect = false
+    @AppStorage("dbg.gmail.connected") private var gmailConnected = false
+    @AppStorage("dbg.run.gmail")       private var runGmail = false
 
     private var selectedSources: [RunSource] {
         SourceSelection.current(customRoots: customRoots, fdaGranted: fdaGranted)
@@ -149,6 +152,7 @@ struct DevToolsView: View {
         .frame(width: 720, height: 780)
         .background(Theme.bg)
         .sheet(isPresented: $showSummaries) { SummariesView() }
+        .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
         .sheet(item: $deviceJob) { job in
             DevProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors, mode: job.mode) {
                 deviceJob = nil
@@ -211,6 +215,7 @@ struct DevToolsView: View {
     // MARK: One action button (spinner while running + a live/final status line)
 
     private func actionButton(_ id: String, _ title: String, _ systemImage: String, tint: Color,
+                              requiresModel: Bool = true, disabled: Bool = false,
                               work: @escaping (@escaping @Sendable (String) -> Void) async -> String) -> some View {
         VStack(spacing: 5) {
             Button {
@@ -231,7 +236,7 @@ struct DevToolsView: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered).tint(tint)
-            .disabled(run.busy != nil || Self.modelPath == nil)
+            .disabled(run.busy != nil || (requiresModel && Self.modelPath == nil) || disabled)
 
             if let s = run.status[id] {
                 Text(s)
@@ -254,29 +259,34 @@ struct DevToolsView: View {
 
     // MARK: The actions (all on the NEW files-iterative stack)
 
-    /// One of the two "start on device" buttons — presents the rich ProcessingView takeover.
+    /// One of the two "start" buttons. Device sources present the rich ProcessingView takeover;
+    /// Gmail (cloud) runs inline with progress in this button's status line.
     private func deviceButton(_ id: String, _ title: String, _ mode: IterativeRun.Mode) -> some View {
         VStack(spacing: 5) {
             Button { startOnDevice(id: id, mode: mode) } label: {
                 HStack(spacing: 7) {
-                    Image(systemName: mode == .initial ? "arrow.down.to.line" : "arrow.up.to.line")
+                    if run.busy == id { ProgressView().controlSize(.small) }
+                    else { Image(systemName: mode == .initial ? "arrow.down.to.line" : "arrow.up.to.line") }
                     Text(title).font(.caption.weight(.medium)).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered).tint(.green)
-            .disabled(deviceJob != nil || Self.modelPath == nil)
-            if let s = run.status[id] {   // only set for "✗ …" guidance (no source selected, etc.)
-                Text(s).font(.system(.caption2, design: .monospaced)).foregroundStyle(.red)
+            .disabled(deviceJob != nil || run.busy != nil || (Self.modelPath == nil && !(gmailConnected && runGmail)))
+            if let s = run.status[id] {
+                Text(s)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(s.hasPrefix("✓") ? .green : s.hasPrefix("✗") ? .red : Theme.secondary)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
         }
     }
 
-    /// Build the connectors from the lit SOURCES + (initial) wipe the vault, then present ProcessingView.
+    /// Build the connectors from the lit SOURCES + (initial) wipe the vault. Device sources go through
+    /// the ProcessingView takeover; Gmail (cloud) runs alongside via GmailConnect.
     private func startOnDevice(id: String, mode: IterativeRun.Mode) {
-        guard Self.modelPath != nil else { run.status[id] = "✗ model not found"; return }
+        let gmailRun = gmailConnected && runGmail
         let roots = selectedFileRoots
         var connectors: [any Connector] = roots.isEmpty ? [] : [FilesConnector(roots: roots)]
         for src in selectedSources {
@@ -287,8 +297,12 @@ struct DevToolsView: View {
             case .files:               break   // folded into FilesConnector(roots:)
             }
         }
-        guard !connectors.isEmpty else {
-            run.status[id] = "✗ select a source above (folder / chat / Apple Notes)"; return
+        guard gmailRun || !connectors.isEmpty else {
+            run.status[id] = "✗ select a source above (folder / chat / Apple Notes / Gmail)"; return
+        }
+        // Device sources need the on-device model; Gmail (cloud) does not.
+        if !connectors.isEmpty && Self.modelPath == nil {
+            run.status[id] = "✗ model not found"; return
         }
         if mode == .initial {
             // Fresh start: immediately wipe the existing on-device knowledge base (the vault).
@@ -296,7 +310,20 @@ struct DevToolsView: View {
             Log("DevTools: INITIAL — wiped the on-device vault at \(VaultGenerator.vaultRoot.path)")
         }
         run.status[id] = nil
-        deviceJob = DeviceJob(connectors: connectors, mode: mode)
+        if gmailRun { startGmail(id: id, mode: mode) }   // cloud read, progress in this button's line
+        if !connectors.isEmpty { deviceJob = DeviceJob(connectors: connectors, mode: mode) }
+    }
+
+    /// Run Gmail's cloud read (initial = last month / iterative = since last) with progress in `id`'s line.
+    private func startGmail(id: String, mode: IterativeRun.Mode) {
+        run.busy = id
+        run.status[id] = "…"
+        let progress: @Sendable (String) -> Void = { s in Task { @MainActor in run.status[id] = s } }
+        Task {
+            let result = mode == .initial ? await runGmailInitial(progress: progress)
+                                          : await runGmailIterative(progress: progress)
+            await MainActor.run { run.status[id] = result; run.busy = nil }
+        }
     }
 
     private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {
@@ -323,6 +350,26 @@ struct DevToolsView: View {
         do {
             let n = try await VaultCloud.shared.update(notes: notes)
             return "✓ folded \(n) notes into the vault"
+        } catch {
+            return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+        }
+    }
+
+    // MARK: Gmail actions (the cloud source — GmailConnect drives Codex)
+
+    private func runGmailInitial(progress: @escaping @Sendable (String) -> Void) async -> String {
+        do {
+            let n = try await GmailConnect.runInitial { s in progress(s) }
+            return n > 0 ? "✓ \(n) weekly summaries — fold with “tell cloud”" : "✓ nothing notable in the last month"
+        } catch {
+            return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+        }
+    }
+
+    private func runGmailIterative(progress: @escaping @Sendable (String) -> Void) async -> String {
+        do {
+            let n = try await GmailConnect.runIterative { s in progress(s) }
+            return n > 0 ? "✓ \(n) new summary — fold with “tell cloud”" : "✓ no new email since last read"
         } catch {
             return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
         }
@@ -364,10 +411,11 @@ struct DevToolsView: View {
                                turnOff: { runIMessage = false },
                                openPicker: { showIMessagePicker = true })
                 notesChip
+                gmailChip
             }
             .frame(maxWidth: 460)
 
-            Text("The INITIAL / ITERATIVE buttons run every selected source (folders + opted chats + Apple Notes) through the iterative core. Select only one to test it alone.")
+            Text("The INITIAL / ITERATIVE buttons run every selected source (folders + opted chats + Apple Notes + Gmail) through the iterative core. Select only one to test it alone.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
@@ -386,6 +434,22 @@ struct DevToolsView: View {
         .overlay(Capsule().strokeBorder(on ? .clear : Theme.stroke, lineWidth: 1))
         .contentShape(Capsule())
         .onTapGesture { guard fdaGranted else { return }; runNotes.toggle() }
+    }
+
+    /// Gmail (cloud). Not connected → tap opens the connect popup; connected → tap toggles selection.
+    private var gmailChip: some View {
+        let on = gmailConnected && runGmail
+        return HStack(spacing: 6) {
+            Image(systemName: on ? "checkmark.circle.fill" : "envelope").font(.system(size: 11))
+            Text("Gmail").font(.caption.weight(.medium)).lineLimit(1)
+        }
+        .foregroundStyle(on ? .black : (gmailConnected ? Theme.secondary : Theme.accent))
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 11).padding(.vertical, 6)
+        .background(on ? Theme.accent : Color.white.opacity(0.06), in: Capsule())
+        .overlay(Capsule().strokeBorder(on ? .clear : (gmailConnected ? Theme.stroke : Theme.accent.opacity(0.4)), lineWidth: 1))
+        .contentShape(Capsule())
+        .onTapGesture { showGmailConnect = true }   // always open the popup (connect / select / remove)
     }
 
     private func chatSourceChip(_ name: String, systemImage: String, isOn: Bool, count: Int,

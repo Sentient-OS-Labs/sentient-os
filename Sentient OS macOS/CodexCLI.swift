@@ -27,11 +27,22 @@ actor CodexCLI {
 
     // MARK: Types
 
-    /// Every job runs GPT-5.5 (1M context; 400k input through codex). Tiers differ only in
-    /// reasoning effort: `.high` for the initial vault build, `.medium` for everything daily.
+    /// Reasoning-effort tier (codex `model_reasoning_effort`). All four are accepted by codex.
+    /// Per-call: Gmail connect-check = `.low`, Gmail processing = `.high`, knowledge-base work
+    /// (and everything else) = `.xhigh`.
     enum Effort: String, Sendable {
-        case high
+        case low
         case medium
+        case high
+        case xhigh
+    }
+
+    /// The model id passed to `codex exec -m`. NOTE: on a ChatGPT-account (subscription) auth only
+    /// gpt-5.5 and the gpt-5.4 family are available — gpt-5.4-spark / -codex / -mini-of-other-gens
+    /// are API-key-only [MEASURED June 15]. `gpt54mini` is the light model for the Gmail tier.
+    enum Model: String, Sendable {
+        case gpt55 = "gpt-5.5"           // knowledge-base work + everything else
+        case gpt54mini = "gpt-5.4-mini"  // Gmail connect-check + processing
     }
 
     /// OS-level (Seatbelt) confinement of everything the agent does — stronger than a tool
@@ -44,7 +55,8 @@ actor CodexCLI {
     /// One headless `codex exec` call, fully specified.
     struct Invocation: Sendable {
         var prompt: String
-        var effort: Effort = .medium
+        var model: Model = .gpt55              // gpt-5.5 for everything except the Gmail tier
+        var effort: Effort = .xhigh            // "everything else" default; Gmail overrides to low/high
         var sandbox: Sandbox = .readOnly
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd
@@ -208,7 +220,7 @@ actor CodexCLI {
         args += ["--json",
                  "--skip-git-repo-check",      // staging dirs and the vault aren't git repos
                  "--ignore-user-config",       // hermetic: personal config/plugins stay out of our jobs
-                 "-m", "gpt-5.5",
+                 "-m", inv.model.rawValue,
                  "-c", "model_reasoning_effort=\"\(inv.effort.rawValue)\""]
         if inv.resumeSessionID == nil {
             args += ["-s", inv.sandbox.rawValue]

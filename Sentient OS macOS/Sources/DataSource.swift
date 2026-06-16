@@ -23,12 +23,15 @@
 
 import Foundation
 
-/// The four local sources. `rawValue` is what we persist on summaries and in cursor keys.
+/// The sources. `rawValue` is what we persist on summaries and in cursor keys.
+/// `file`/`whatsapp`/`imessage`/`notes` are read on-device; `gmail` is the lone CLOUD source —
+/// fetched + summarized through the user's Codex Gmail connector (no on-device read), see GmailConnect.
 enum SourceKind: String, Codable, Sendable, CaseIterable {
     case file
     case whatsapp
     case imessage
     case notes
+    case gmail
 }
 
 
