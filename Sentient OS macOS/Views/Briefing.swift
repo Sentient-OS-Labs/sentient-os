@@ -78,7 +78,7 @@ struct Briefing: Identifiable {
             id: "anthos", kind: .overdue,
             kicker: "Overdue · 4 days · Gmail",
             title: "You ghosted Anthos Capital.",
-            body: "Serena cold-emailed four days ago — $1.5B fund, names like Honey and Kalshi. She wants time next week. I wrote your reply.",
+            body: "Serena cold-emailed four days ago — $3B+ AUM, names like Honey and Kalshi. She wants time next week. I wrote your reply.",
             letter: """
             Serena Saxena from Anthos Capital cold-emailed four days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
 
