@@ -65,6 +65,11 @@ actor Engine {
     /// The Conversation of the in-flight streaming generation, so a watchdog can cancel it (the only
     /// thing that unblocks a hung native sendMessageStream). Set/cleared inside generateStream.
     private var activeConversation: Conversation?
+    /// Monotonic id for the in-flight streaming generation. Bumped at the start of each
+    /// generateStream; the watchdog captures its value and cancels ONLY if it still matches — so a
+    /// stale watchdog (whose own stream already finished) can never cancel a LATER item's stream that
+    /// is reusing the shared `activeConversation` slot.
+    private var streamGeneration = 0
 
     /// `collectStats` turns on LiteRT-LM's benchmark instrumentation (must be decided before
     /// `load()`) so every `Result` carries exact prefill/decode token counts — used by the
@@ -166,6 +171,8 @@ actor Engine {
         let conversation = try await native.createConversation(
             with: ConversationConfig(samplerConfig: sampler, maxOutputTokens: Self.maxOutputTokens)
         )
+        streamGeneration &+= 1
+        let generation = streamGeneration
         activeConversation = conversation
         defer { activeConversation = nil }
 
@@ -178,10 +185,19 @@ actor Engine {
         // forever and IterativeRun's failure-driven reload could never fire. If the stream hasn't
         // finished within streamTimeout, cancel() it (the only way to unblock the native callback)
         // and we report a stall, which routes into the existing reload + retry. Captures only `self`
-        // (an actor → Sendable), so no non-Sendable closure capture.
+        // (an actor → Sendable) + an Int, so no non-Sendable closure capture.
+        //
+        // ⚠️ On NORMAL completion the `defer` below cancels this watchdog — and a cancelled
+        // `Task.sleep` THROWS, so we MUST bail in the `catch`. Falling through to the cancel (the old
+        // `try?`-swallow bug) would, because `activeConversation` is a single shared slot, risk
+        // cancelling the NEXT item's healthy in-flight stream. That stray cross-item cancel is exactly
+        // what wedged back-to-back dev runs; the old "pause 8s between items" toggle only hid it by
+        // letting the slot go nil before the stray cancel landed. The `generation` guard in
+        // cancelActiveConversation closes the residual timeout-boundary race for good measure.
         let watchdog = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.streamTimeout))
-            await self?.cancelActiveConversation()
+            do { try await Task.sleep(for: .seconds(Self.streamTimeout)) }
+            catch { return }   // cancelled because the stream finished cleanly — leave the slot alone
+            await self?.cancelActiveConversation(generation: generation)
         }
         defer { watchdog.cancel() }
 
@@ -205,9 +221,12 @@ actor Engine {
         return result
     }
 
-    /// Cancel the in-flight streaming Conversation (called by generateStream's watchdog). Runs on the
-    /// actor via reentrancy while generateStream is suspended at its for-await, so it can interrupt it.
-    private func cancelActiveConversation() {
+    /// Cancel the in-flight streaming Conversation (called by generateStream's watchdog) — but ONLY if
+    /// `generation` is still the active stream, so a stale watchdog can never cancel a newer item's
+    /// stream that reused the shared slot. Runs on the actor via reentrancy while generateStream is
+    /// suspended at its for-await, so it can interrupt a genuinely-hung stream.
+    private func cancelActiveConversation(generation: Int) {
+        guard generation == streamGeneration else { return }
         try? activeConversation?.cancel()
     }
 
