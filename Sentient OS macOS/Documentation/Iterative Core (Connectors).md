@@ -23,7 +23,7 @@ A connector is dumb: it lists keyed work-items per bucket and loads one. *All* p
 - **`CycleStore`** (`Ingestion/CycleStore.swift`) — `@ModelActor`, own on-disk store
   (`IterativeCycle.store`). `BucketPointer` (DURABLE high-water mark per bucket) + `CycleNote`
   (EPHEMERAL survivor, wiped each cycle; carries `kind`+`sourceID` for the cloud's trust tag). API:
-  `pointer/setPointer/clearBucket · recordNote/notes/reminderNotes/wipeAllNotes · counts · allPointers`.
+  `pointer/setPointer/clearBucket · recordNote/notes/wipeAllNotes · counts · allPointers`.
 - **`IterativeRun`** (`Ingestion/IterativeRun.swift`) — drives any connector. **initial**: per bucket,
   clear it, walk items newest→oldest, set the mark = newest *on completion* (interrupted ⇒ mark unset
   ⇒ iterative says "run initial first"). **iterative**: per bucket, take items `> mark`, walk
@@ -31,18 +31,21 @@ A connector is dumb: it lists keyed work-items per bucket and loads one. *All* p
   the GPU-wedge resilience. Survivors → `CycleNote`; junk/sensitive store nothing.
 
 ## The cycle (summaries are disposable)
-*on-device summarize → cloud (make/update KB) → cloud (proactive) → wipe summaries → next cycle clean.*
+*on-device summarize → cloud (make/update KB) → cloud (proactive judge) → next cycle.*
 `CycleNote`s are ephemeral, so "tell cloud" just sends whatever exists (no "which are new?"
-bookkeeping); the **proactive button ends the cycle by wiping all notes**. Only the per-bucket mark
-persists.
+bookkeeping). Only the per-bucket mark persists. (`wipeAllNotes` is the cycle-end wipe; the proactive
+button no longer fires it — the judge is read-only + re-runnable for prompt tuning. Where the wipe
+belongs in the real trigger sequence is a later wiring decision.)
 
 ## The cloud — `VaultCloud` (`Ingestion/VaultCloud.swift`)
 Connector-agnostic; operates on `CycleStore.notes()` regardless of source (`CloudNote.locSrc` keys on
 `kind`/`sourceID` for per-source trust tiers).
 - `create` — reuses `VaultGenerator.generate(notes:)` (staging + atomic swap + usage-limit resume).
 - `update` — surgical edits on the live vault (eval-validated prompt lifted from the old VaultUpdater).
-- `proactive` — **placeholder** (read-only Codex call) over the reminder-flagged notes; returns a count.
 - After create/update: mirror push (the retired `DaysEndJob.pushIfDirty` rule).
+
+Proactive intelligence is **its own module** (`Ingestion/Proactive.swift`, Arch §6) — the read-only
+judge over the last week of `CycleStore.notes()` + the live vault. See its doc.
 
 ## Connectors
 - **`FilesConnector`** (`Ingestion/Connectors/FilesConnector.swift`) ✅ — one bucket per `FileRoot`

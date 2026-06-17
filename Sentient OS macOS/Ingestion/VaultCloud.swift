@@ -2,15 +2,14 @@
 //  VaultCloud.swift
 //  Sentient OS macOS
 //
-//  The iterative system's three cloud calls, all through the user's own Codex CLI (CodexCLI):
+//  The iterative system's two knowledge-base cloud calls, through the user's own Codex CLI (CodexCLI):
 //   • create    — "go make knowledge base exist": build the vault from scratch. Reuses
 //                 VaultGenerator (staging dir + atomic swap + usage-limit resume).
 //   • update    — "go update knowledge base": fold the cycle's new notes into the existing vault
 //                 with surgical edits on the live vault (eval-validated prompt lifted from the old
 //                 VaultUpdater; no store queue — the cycle's notes are wiped wholesale each cycle).
-//   • proactive — "proactive system": send the reminder-flagged notes to a PLACEHOLDER proactive
-//                 pass and return how many were sent (the real system isn't built yet).
 //
+//  Proactive intelligence is its OWN module — see Proactive.swift (Arch §6: own module + trigger).
 //  Connector-agnostic: operates on `CycleStore.notes()` regardless of source (files / notes / chats).
 //  After create/update the mirror is pushed (same rule as the retired DaysEndJob.pushIfDirty).
 //
@@ -137,16 +136,6 @@ actor VaultCloud {
             try? fm.moveItem(at: snapshot, to: vault)
             throw CloudError.failed("\(error)")
         }
-    }
-
-    // MARK: Proactive — placeholder scaffold
-
-    /// DUMMY proactive pass — the real proactive intelligence system isn't built yet. It just reports
-    /// how many reminder-flagged notes WOULD be sent; **nothing goes to Codex.**
-    /// TODO: real proactive (cloud judge → tier-1 reminders / tier-2 briefings).
-    func proactive(reminderNotes: [CloudNote]) -> Int {
-        Log("VaultCloud.proactive: filtered \(reminderNotes.count) reminder candidate(s) (dummy — not sent).")
-        return reminderNotes.count
     }
 
     // MARK: Mirror push (same rule as the retired DaysEndJob.pushIfDirty)

@@ -182,14 +182,16 @@ actor VaultGenerator {
     private static func corpusMessage(_ notes: [CloudNote], closing: String) -> String {
         var lines: [String] = []
         lines.reserveCapacity(notes.count)
+        let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
         for (i, s) in notes.enumerated() {
             let (loc, src) = locSrc(kind: s.kind, folder: s.folder, sourceID: s.sourceID)
             let title = (s.title?.isEmpty == false) ? s.title! : "(untitled)"
-            lines.append("#\(i + 1) · [\(src)] \(loc)\n\(title) — \(s.text)")
+            let when = s.itemDate.map { " · \(df.string(from: $0))" } ?? ""
+            lines.append("#\(i + 1) · [\(src)] \(loc)\(when)\n\(title) — \(s.text)")
         }
         return """
         Here is the full corpus of on-device summaries of the user's digital life. Each item is \
-        `#<index> · [source] location` then `Title — summary`. \(closing)
+        `#<index> · [source] location · item date` then `Title — summary`. \(closing)
 
         ---
 

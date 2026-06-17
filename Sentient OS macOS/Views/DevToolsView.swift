@@ -68,11 +68,13 @@ final class DevRunModel {
     var status: [String: String] = [:]      // action id → live/final line
 }
 
-/// A queued on-device run for the start-on-device buttons — drives the rich ProcessingView takeover.
+/// A queued run for the start-on-device buttons — drives the rich ProcessingView takeover. Carries
+/// the on-device connectors AND whether to append the cloud Gmail leg (shown in the same takeover).
 struct DeviceJob: Identifiable {
     let id = UUID()
     let connectors: [any Connector]
     let mode: IterativeRun.Mode
+    let runGmail: Bool
 }
 
 struct DevToolsView: View {
@@ -100,6 +102,7 @@ struct DevToolsView: View {
     @State private var showChatPicker = false
     @State private var showIMessagePicker = false
     @State private var showSummaries = false
+    @State private var showActionItems = false
     @State private var showMore = false
     @State private var fdaGranted = false
     @State private var resetResult: String?
@@ -142,7 +145,10 @@ struct DevToolsView: View {
                     }
 
                     columns
-                    viewSummariesButton
+                    HStack(spacing: 10) {
+                        viewSummariesButton
+                        viewActionItemsButton
+                    }
                     moreSection
                 }
                 .padding(24)
@@ -152,9 +158,11 @@ struct DevToolsView: View {
         .frame(width: 720, height: 780)
         .background(Theme.bg)
         .sheet(isPresented: $showSummaries) { SummariesView() }
+        .sheet(isPresented: $showActionItems) { ProactiveItemsView() }
         .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
         .sheet(item: $deviceJob) { job in
-            DevProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors, mode: job.mode) {
+            DevProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors,
+                              mode: job.mode, runGmail: job.runGmail) {
                 deviceJob = nil
             }
             .frame(minWidth: 600, minHeight: 680)
@@ -187,8 +195,8 @@ struct DevToolsView: View {
                 actionButton("init.cloud", "tell cloud:\n“go make knowledge base exist”", "cloud.fill", tint: .purple) { progress in
                     await cloudCreate(progress: progress)
                 }
-                actionButton("init.proactive", "proactive system", "bell.badge.fill", tint: .orange) { _ in
-                    await runProactive()
+                actionButton("init.proactive", "proactive system", "bell.badge.fill", tint: .orange) { progress in
+                    await runProactive(progress: progress)
                 }
             }
             Divider().frame(maxHeight: 320).overlay(Theme.stroke)
@@ -197,8 +205,8 @@ struct DevToolsView: View {
                 actionButton("iter.cloud", "tell cloud:\n“go update knowledge base”", "cloud.fill", tint: .purple) { _ in
                     await cloudUpdate()
                 }
-                actionButton("iter.proactive", "proactive system", "bell.badge.fill", tint: .orange) { _ in
-                    await runProactive()
+                actionButton("iter.proactive", "proactive system", "bell.badge.fill", tint: .orange) { progress in
+                    await runProactive(progress: progress)
                 }
             }
         }
@@ -257,6 +265,15 @@ struct DevToolsView: View {
         .buttonStyle(.bordered).tint(Theme.accent)
     }
 
+    private var viewActionItemsButton: some View {
+        Button { showActionItems = true } label: {
+            Label("VIEW ACTION ITEMS", systemImage: "bell.badge")
+                .font(.caption.weight(.bold)).tracking(2)
+                .frame(maxWidth: .infinity, minHeight: 40)
+        }
+        .buttonStyle(.bordered).tint(.orange)
+    }
+
     // MARK: The actions (all on the NEW files-iterative stack)
 
     /// One of the two "start" buttons. Device sources present the rich ProcessingView takeover;
@@ -283,8 +300,9 @@ struct DevToolsView: View {
         }
     }
 
-    /// Build the connectors from the lit SOURCES + (initial) wipe the vault. Device sources go through
-    /// the ProcessingView takeover; Gmail (cloud) runs alongside via GmailConnect.
+    /// Build the connectors from the lit SOURCES + (initial) wipe the vault, then present the rich
+    /// ProcessingView takeover for ALL of it — device sources AND Gmail (the cloud leg shows in the
+    /// same takeover).
     private func startOnDevice(id: String, mode: IterativeRun.Mode) {
         let gmailRun = gmailConnected && runGmail
         let roots = selectedFileRoots
@@ -310,20 +328,7 @@ struct DevToolsView: View {
             Log("DevTools: INITIAL — wiped the on-device vault at \(VaultGenerator.vaultRoot.path)")
         }
         run.status[id] = nil
-        if gmailRun { startGmail(id: id, mode: mode) }   // cloud read, progress in this button's line
-        if !connectors.isEmpty { deviceJob = DeviceJob(connectors: connectors, mode: mode) }
-    }
-
-    /// Run Gmail's cloud read (initial = last month / iterative = since last) with progress in `id`'s line.
-    private func startGmail(id: String, mode: IterativeRun.Mode) {
-        run.busy = id
-        run.status[id] = "…"
-        let progress: @Sendable (String) -> Void = { s in Task { @MainActor in run.status[id] = s } }
-        Task {
-            let result = mode == .initial ? await runGmailInitial(progress: progress)
-                                          : await runGmailIterative(progress: progress)
-            await MainActor.run { run.status[id] = result; run.busy = nil }
-        }
+        deviceJob = DeviceJob(connectors: connectors, mode: mode, runGmail: gmailRun)
     }
 
     private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {
@@ -355,33 +360,23 @@ struct DevToolsView: View {
         }
     }
 
-    // MARK: Gmail actions (the cloud source — GmailConnect drives Codex)
-
-    private func runGmailInitial(progress: @escaping @Sendable (String) -> Void) async -> String {
+    /// Proactive STEP 1 — the judge. Send the cycle's summaries (windowed to the last week inside
+    /// Proactive) + the live vault to Codex and surface the top action items. Read-only: does NOT
+    /// wipe the cycle, so it's re-runnable while we tune the prompt. Full detail goes to the console.
+    private func runProactive(progress: @escaping @Sendable (String) -> Void) async -> String {
+        let notes = await CycleStore.shared.notes().map(CloudNote.init)
+        guard !notes.isEmpty else { return "✗ no summaries — run an on-device pass first" }
+        progress("Reading the last week + your knowledge base…")
         do {
-            let n = try await GmailConnect.runInitial { s in progress(s) }
-            return n > 0 ? "✓ \(n) weekly summaries — fold with “tell cloud”" : "✓ nothing notable in the last month"
+            let items = try await Proactive.shared.findActionItems(from: notes)
+            guard !items.isEmpty else { return "✓ nothing worth surfacing right now" }
+            let lines = items.enumerated().map { i, it in
+                "\(i + 1). [\(it.urgency.rawValue)\(it.dueDate.map { " · \($0)" } ?? "")] \(it.title)"
+            }
+            return "✓ \(items.count) action item\(items.count == 1 ? "" : "s") (full detail in console):\n" + lines.joined(separator: "\n")
         } catch {
             return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
         }
-    }
-
-    private func runGmailIterative(progress: @escaping @Sendable (String) -> Void) async -> String {
-        do {
-            let n = try await GmailConnect.runIterative { s in progress(s) }
-            return n > 0 ? "✓ \(n) new summary — fold with “tell cloud”" : "✓ no new email since last read"
-        } catch {
-            return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
-        }
-    }
-
-    /// Send the reminder-flagged summaries to the placeholder proactive pass, then WIPE the cycle's
-    /// summaries (the cycle ends; the next on-device run starts fresh).
-    private func runProactive() async -> String {
-        let reminders = await CycleStore.shared.reminderNotes().map(CloudNote.init)
-        let n = await VaultCloud.shared.proactive(reminderNotes: reminders)   // dummy — no Codex
-        await CycleStore.shared.wipeAllNotes()
-        return "✓ filtered to send \(n) reminder\(n == 1 ? "" : "s") · summaries wiped"
     }
 
     // MARK: Source picker (which folders/connections the buttons act on)

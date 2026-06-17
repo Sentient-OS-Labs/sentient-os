@@ -53,12 +53,6 @@ struct SummariesView: View {
                 Text(n.title ?? n.displayName)
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
                     .lineLimit(1)
-                if n.reminderFlagged {
-                    Text("REMINDER").font(.system(size: 8, weight: .bold)).tracking(1)
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(Color.orange.opacity(0.25), in: Capsule())
-                        .foregroundStyle(.orange)
-                }
                 Spacer()
                 Text(n.folder).font(.caption2).foregroundStyle(Theme.faint)
             }

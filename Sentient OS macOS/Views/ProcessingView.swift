@@ -141,7 +141,6 @@ struct ProcessingView: View {
         HStack(spacing: 16) {
             countTag(progress.survivors, "kept", Theme.verdictColor(.survivor))
             countTag(progress.junk, "junk", Theme.verdictColor(.junk))
-            countTag(progress.reminders, "reminders", Color(red: 1.0, green: 0.78, blue: 0.28))
             if let last = progress.lastSeconds {
                 Text("· \(String(format: "%.1f", last))s/file")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
@@ -166,12 +165,11 @@ struct ProcessingView: View {
                     .transition(.blurReplace)
                 VStack(alignment: .leading, spacing: 6) {
                     let verdict = progress.lastVerdict
-                    // Pills: sensitive (red) / junk (dim) / reminder (gradient). Kept = none.
-                    if verdict == .sensitive || verdict == .junk || progress.lastReminder {
+                    // Pills: sensitive (red) / junk (dim). Kept = none.
+                    if verdict == .sensitive || verdict == .junk {
                         HStack(spacing: 6) {
                             if verdict == .sensitive { SensitivePill() }
                             else if verdict == .junk { JunkPill() }
-                            if progress.lastReminder && verdict != .sensitive { ReminderPill() }
                         }
                     }
                     if let title = progress.lastTitle {
@@ -218,7 +216,7 @@ struct ProcessingView: View {
                 .foregroundStyle(Theme.verdictColor(.survivor))
             VStack(spacing: 6) {
                 Text("Analysis complete").font(.serif(28)).italic().foregroundStyle(.white)
-                Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.reminders) reminders · \(progress.failed) failed")
+                Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.failed) failed")
                     .font(.subheadline).foregroundStyle(.white.opacity(0.55))
             }
             Button(action: onDone) {
@@ -355,7 +353,6 @@ struct ProcessingView: View {
         totals.survivors += p.survivors
         totals.junk += p.junk
         totals.sensitive += p.sensitive
-        totals.reminders += p.reminders
         totals.failed += p.failed
     }
 }

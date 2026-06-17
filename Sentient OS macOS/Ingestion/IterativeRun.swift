@@ -71,7 +71,7 @@ struct IterativeRun {
         var reloadsWithoutProgress = 0
 
         func reloadEngine() async {
-            p.lastFilePath = nil; p.lastVerdict = nil; p.lastReminder = false
+            p.lastFilePath = nil; p.lastVerdict = nil
             p.lastTitle = "Resetting on-device engine…"
             p.lastSummary = "The GPU runtime needs a quick reset — resuming shortly."
             onProgress(p)
@@ -99,7 +99,7 @@ struct IterativeRun {
                     await store.recordNote(
                         bucketKey: bucketKey, kind: connector.kind, sourceID: cand.id,
                         folder: cand.metadata["folder"] ?? "", itemDate: cand.itemDate,
-                        text: outcome.summary, title: outcome.title, reminderFlagged: outcome.reminder)
+                        text: outcome.summary, title: outcome.title, reminderFlagged: false)
                 }
                 LifetimeStats.bump(outcome.verdict)
                 switch outcome.verdict {
@@ -107,11 +107,9 @@ struct IterativeRun {
                 case .junk:      p.junk += 1
                 case .sensitive: p.sensitive += 1
                 }
-                if outcome.reminder { p.reminders += 1 }
                 p.lastTitle = outcome.title
                 p.lastSummary = outcome.summary.isEmpty ? nil : outcome.summary
                 p.lastVerdict = outcome.verdict
-                p.lastReminder = outcome.reminder
                 p.lastSeconds = result.totalTime
                 p.totalSeconds += result.totalTime
                 #if DEBUG

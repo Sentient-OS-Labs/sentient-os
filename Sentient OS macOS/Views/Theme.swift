@@ -44,11 +44,6 @@ enum Theme {
         }
     }
 
-    static let reminderGradient = LinearGradient(
-        colors: [Color(red: 1.0, green: 0.78, blue: 0.28), Color(red: 0.98, green: 0.42, blue: 0.52)],
-        startPoint: .leading, endPoint: .trailing
-    )
-
     /// The editorial ink palette (from the Constellation mockup) — shared by the Constellation
     /// home and the For You / briefings window.
     enum Ink {
@@ -131,23 +126,6 @@ struct VerdictBadge: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .background(Theme.verdictColor(verdict).opacity(0.14), in: Capsule())
-    }
-}
-
-/// "Potential Intelligent Reminder" — the brand's golden→coral gradient pill (from iOS).
-/// The bell stays a solid golden yellow; only the text rides the gradient.
-struct ReminderPill: View {
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: "bell.fill")
-                .foregroundStyle(Color(red: 1.0, green: 0.78, blue: 0.28))   // solid golden yellow
-            Text("Potential Intelligent Reminder")
-                .foregroundStyle(Theme.reminderGradient)
-        }
-        .font(.caption2.weight(.semibold))
-        .padding(.horizontal, 10).padding(.vertical, 4)
-        .background(Capsule().fill(.white.opacity(0.04)))
-        .overlay(Capsule().strokeBorder(Theme.reminderGradient.opacity(0.5), lineWidth: 1))
     }
 }
 

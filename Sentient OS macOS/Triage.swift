@@ -4,7 +4,7 @@
 //
 //  The on-device "bouncer" (Arch §5.2). The model is asked to write the SUMMARY first (so it
 //  actually understands the file before judging), THEN a short title, THEN the junk flag, and
-//  only-if-applicable a sensitive / reminder flag. We parse that compact JSON and map it to a
+//  only-if-applicable a sensitive flag. We parse that compact JSON and map it to a
 //  Verdict (+ a SummaryDraft for survivors).
 //
 //  FAIL-CLOSED: anything we can't confidently parse is treated as JUNK (dropped), never a
@@ -59,9 +59,8 @@ enum Triage {
 
         {"summary":"<~30 words: what this file is>","title":"<short 3-6 word title>","junk":<true|false>}
 
-        Then append a key ONLY IF it applies:
+        Then append this key ONLY IF it applies:
           ,"sensitive":true  — only if it holds highly sensitive data that must never be stored anywhere (SSN, passport/ID, full card numbers, passwords, sensitive medical records)
-          ,"reminder":true   — only on a file you are KEEPING (never junk) that has a genuinely time-sensitive action worth surfacing (deadline, appointment, renewal, expiry). Be EXTREMELY conservative: far fewer than 1 in 500 files qualify.
 
         Guidance:
         - title: a short human title, e.g. "UMass Tech Challenge Award".
@@ -123,13 +122,12 @@ enum Triage {
 
         {"summary":"<ALWAYS write this first: the durable keepers if any; otherwise a brief one-line note of what the slice was actually about>","title":"<short 3-6 word title>","junk":<true|false>}
 
-        Then append a key ONLY IF it applies:
+        Then append this key ONLY IF it applies:
           ,"sensitive":true  — RARE. Use ONLY when the window is WHOLLY private — i.e. after omitting the private specifics there is nothing useful left worth keeping (e.g. a message that is only a password, only card/account details, or only a raw private medical disclosure). If anything safe and useful remains, prefer the sanitized summary above and keep it (junk=false) instead.
-          ,"reminder":true   — only on a window you are KEEPING, when there's a genuinely time-sensitive action FOR THE USER themselves (their own deadline, appointment, or dated commitment). NOT general schedules or public-event dates. Be conservative.
 
         EXAMPLE of the output style (made-up — copy the PHRASING & attribution, not the content): for a slice where 'Me' writes "signing the lease on the Capitol Hill place friday, moving in the 15th" and another person, Maya, says she'll be in Seattle in June, a good response is:
-        {"summary":"The user is signing a lease on a Capitol Hill apartment on Friday and moving in on the 15th. Maya plans to be in Seattle in June.","title":"New Apartment Lease","junk":false,"reminder":true}
-        Notice: the user is called 'the user' (NEVER 'Me'), Maya's plan is attributed to Maya by name, and the dated move-in makes it a reminder.
+        {"summary":"The user is signing a lease on a Capitol Hill apartment on Friday and moving in on the 15th. Maya plans to be in Seattle in June.","title":"New Apartment Lease","junk":false}
+        Notice: the user is called 'the user' (NEVER 'Me'), and Maya's plan is attributed to Maya by name.
         """
     }
 
@@ -141,32 +139,30 @@ enum Triage {
         let verdict: Verdict
         let title: String?
         let summary: String
-        let reminder: Bool
         let draft: SummaryDraft?
     }
 
     static func decide(_ responseText: String) -> Outcome {
         guard let r = parse(responseText) else {
-            return Outcome(verdict: .junk, title: nil, summary: "", reminder: false, draft: nil)   // fail-closed
+            return Outcome(verdict: .junk, title: nil, summary: "", draft: nil)   // fail-closed
         }
         let summary = r.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTitle = r.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = trimmedTitle.isEmpty ? nil : trimmedTitle
 
-        // A reminder only makes sense on a KEPT file — junk/sensitive are dropped, so no reminder.
         if r.sensitive {
-            return Outcome(verdict: .sensitive, title: title, summary: summary, reminder: false, draft: nil)
+            return Outcome(verdict: .sensitive, title: title, summary: summary, draft: nil)
         }
         if r.junk || summary.isEmpty {
-            return Outcome(verdict: .junk, title: title, summary: summary, reminder: false, draft: nil)
+            return Outcome(verdict: .junk, title: title, summary: summary, draft: nil)
         }
-        return Outcome(verdict: .survivor, title: title, summary: summary, reminder: r.reminder,
-                       draft: SummaryDraft(text: summary, title: title, reminderFlagged: r.reminder))
+        return Outcome(verdict: .survivor, title: title, summary: summary,
+                       draft: SummaryDraft(text: summary, title: title))
     }
 
     // MARK: Lenient JSON parsing
 
-    struct Parsed { let summary: String; let title: String; let junk: Bool; let sensitive: Bool; let reminder: Bool }
+    struct Parsed { let summary: String; let title: String; let junk: Bool; let sensitive: Bool }
 
     static func parse(_ text: String) -> Parsed? {
         // Isolate the JSON object span; if there are no braces at all, still try field recovery.
@@ -188,7 +184,7 @@ enum Triage {
             }
             return Parsed(summary: (obj["summary"] as? String) ?? "",
                           title: (obj["title"] as? String) ?? "",
-                          junk: flag("junk"), sensitive: flag("sensitive"), reminder: flag("reminder"))
+                          junk: flag("junk"), sensitive: flag("sensitive"))
         }
 
         // Recovery path: the model fumbled the JSON (a stray quote, trailing comma, …). Extract
@@ -198,8 +194,7 @@ enum Triage {
         return Parsed(summary: summary,
                       title: stringField("title", in: span) ?? "",
                       junk: boolField("junk", in: span) ?? true,
-                      sensitive: boolField("sensitive", in: span) ?? false,
-                      reminder: boolField("reminder", in: span) ?? false)
+                      sensitive: boolField("sensitive", in: span) ?? false)
     }
 
     /// Pull a JSON string value for `key` (honoring \" and \n escapes) even from almost-JSON.

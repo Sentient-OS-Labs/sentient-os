@@ -49,6 +49,14 @@ enum GmailConnect {
         let threadCount: Int
     }
 
+    /// Structured progress for the dev processing UI — each date window (a week, or the iterative
+    /// since-mark window) STARTING then FINISHING. `prompt` is the exact Codex ask (shown in the
+    /// processing view's PROMPT pane); `summary` is nil when the window had nothing notable.
+    enum Progress: Sendable {
+        case windowStart(step: Int, total: Int, label: String, prompt: String)
+        case windowDone(step: Int, total: Int, label: String, summary: String?, threads: Int, keptSoFar: Int)
+    }
+
     // MARK: - Connection probe (the "I'm done" YES/NO check)
 
     /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
@@ -75,7 +83,7 @@ enum GmailConnect {
     /// Fresh start: wipe the bucket, then read the last 4 weeks newest-first (one summary each).
     /// Records each into CycleStore; sets the high-water mark to the run-start on completion.
     @discardableResult
-    static func runInitial(onProgress: @Sendable @escaping (String) -> Void = { _ in }) async throws -> Int {
+    static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         await CycleStore.shared.clearBucket(bucketKey)
         let runStart = Date()
         let cal = Calendar.current
@@ -90,15 +98,18 @@ enum GmailConnect {
                 throw GmailError.dateMath
             }
             let weekLabel = "week of \(label(lower))"
-            onProgress("week \(week + 1)/\(initialWeeks) — reading \(weekLabel)…")
             let query = "after:\(qDate(lower)) before:\(qDate(upper))"
-            if let r = try await read(query: query, label: weekLabel) {
+            let prompt = weeklyPrompt(query: query, label: weekLabel)
+            onProgress(.windowStart(step: week + 1, total: initialWeeks, label: weekLabel, prompt: prompt))
+            if let r = try await read(prompt: prompt) {
                 let itemDate = cal.date(byAdding: .day, value: -1, to: upper) ?? lower
                 await record(r, itemDate: itemDate, label: weekLabel)
                 recorded += 1
-                onProgress("week \(week + 1)/\(initialWeeks) — \(r.threadCount) threads ✓")
+                onProgress(.windowDone(step: week + 1, total: initialWeeks, label: weekLabel,
+                                       summary: r.summary, threads: r.threadCount, keptSoFar: recorded))
             } else {
-                onProgress("week \(week + 1)/\(initialWeeks) — nothing notable")
+                onProgress(.windowDone(step: week + 1, total: initialWeeks, label: weekLabel,
+                                       summary: nil, threads: 0, keptSoFar: recorded))
             }
         }
         // High-water mark = run start. Iterative reads everything after it (a few hours of overlap
@@ -113,23 +124,26 @@ enum GmailConnect {
     /// One summary covering everything since the saved mark, then advance the mark. Falls back to a
     /// full initial read if Gmail has never been read on this Mac.
     @discardableResult
-    static func runIterative(onProgress: @Sendable @escaping (String) -> Void = { _ in }) async throws -> Int {
+    static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         guard let mark = await CycleStore.shared.pointer(bucketKey) else {
-            onProgress("no prior read — running initial…")
-            return try await runInitial(onProgress: onProgress)
+            return try await runInitial(onProgress: onProgress)   // never read → fall back to initial
         }
         let since = Date(timeIntervalSince1970: mark.order)
         let runStart = Date()
-        onProgress("reading new email since \(label(since))…")
+        let sinceLabel = "since \(label(since))"
         // Gmail's `after:` accepts an epoch-seconds boundary — precise, no day-rounding.
         let query = "after:\(Int(since.timeIntervalSince1970))"
+        let prompt = weeklyPrompt(query: query, label: sinceLabel)
+        onProgress(.windowStart(step: 1, total: 1, label: sinceLabel, prompt: prompt))
         var recorded = 0
-        if let r = try await read(query: query, label: "since \(label(since))") {
-            await record(r, itemDate: runStart, label: "since \(label(since))")
+        if let r = try await read(prompt: prompt) {
+            await record(r, itemDate: runStart, label: sinceLabel)
             recorded = 1
-            onProgress("\(r.threadCount) new threads ✓")
+            onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
+                                   summary: r.summary, threads: r.threadCount, keptSoFar: 1))
         } else {
-            onProgress("no new email")
+            onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
+                                   summary: nil, threads: 0, keptSoFar: 0))
         }
         await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
         Log("GmailConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
@@ -138,8 +152,8 @@ enum GmailConnect {
 
     // MARK: - One read (a single codex exec over a date window)
 
-    private static func read(query: String, label: String) async throws -> ReadResult? {
-        var inv = CodexCLI.Invocation(prompt: weeklyPrompt(query: query, label: label))
+    private static func read(prompt: String) async throws -> ReadResult? {
+        var inv = CodexCLI.Invocation(prompt: prompt)
         inv.model = .gpt54mini               // light model for the high-volume Gmail reads
         inv.effort = .high
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)

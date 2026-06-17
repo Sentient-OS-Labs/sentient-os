@@ -6,7 +6,7 @@
 //  connector (no model, no codex, in-memory store):
 //    • ItemKey ordering — the (order, tiebreak) tiebreak.
 //    • The iterative "newer than mark" partition, with a same-order TWIN at the boundary.
-//    • CycleStore round-trip — pointer set/get, clearBucket, recordNote/notes/reminderNotes/wipeAllNotes.
+//    • CycleStore round-trip — pointer set/get, clearBucket, recordNote/notes/wipeAllNotes.
 //    • FilesConnector.buckets — keeps allowed files, skips a disallowed extension, prunes a .git repo.
 //
 
@@ -47,13 +47,12 @@ enum SelfTestFileIter {
         check("pointer persists the high-water mark (c)", await store.pointer(bucket) == c)
 
         await store.recordNote(bucketKey: bucket, kind: .file, sourceID: "file:/d/a.png", folder: "Fix",
-                               itemDate: Date(timeIntervalSince1970: 100), text: "summary a", title: "A", reminderFlagged: true)
+                               itemDate: Date(timeIntervalSince1970: 100), text: "summary a", title: "A", reminderFlagged: false)
         await store.recordNote(bucketKey: bucket, kind: .file, sourceID: "file:/d/c.png", folder: "Fix",
                                itemDate: Date(timeIntervalSince1970: 200), text: "summary c", title: "C", reminderFlagged: false)
         let notes = await store.notes()
         check("two notes recorded", notes.count == 2)
         check("notes are newest-first (c before a)", notes.first?.sourceID == "file:/d/c.png")
-        check("exactly one reminder-flagged", await store.reminderNotes().count == 1)
 
         await store.clearBucket(bucket)
         check("clearBucket drops the pointer", await store.pointer(bucket) == nil)

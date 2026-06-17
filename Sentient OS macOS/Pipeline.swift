@@ -26,14 +26,12 @@ struct PipelineProgress: Sendable {
     var survivors = 0
     var junk = 0
     var sensitive = 0
-    var reminders = 0
     var failed = 0
     var lastPath: String?
     var lastFilePath: String?      // absolute path (for the thumbnail)
     var lastTitle: String?
     var lastSummary: String?
     var lastVerdict: Verdict?
-    var lastReminder = false
     var lastSeconds: Double?
     var totalSeconds: Double = 0   // sum over successful generations (for avg)
 }
@@ -82,7 +80,7 @@ actor Pipeline {
 
         // Reset the on-device engine's GPU state, surfacing a brief note in the UI.
         func reloadEngine() async {
-            p.lastFilePath = nil; p.lastVerdict = nil; p.lastReminder = false
+            p.lastFilePath = nil; p.lastVerdict = nil
             p.lastTitle = "Resetting on-device engine…"
             p.lastSummary = "The GPU runtime needs a quick reset — resuming shortly."
             onProgress(p)
@@ -113,11 +111,9 @@ actor Pipeline {
                 case .junk:      p.junk += 1
                 case .sensitive: p.sensitive += 1
                 }
-                if outcome.reminder { p.reminders += 1 }
                 p.lastTitle = outcome.title
                 p.lastSummary = outcome.summary.isEmpty ? nil : outcome.summary
                 p.lastVerdict = outcome.verdict
-                p.lastReminder = outcome.reminder
                 p.lastSeconds = result.totalTime
                 p.totalSeconds += result.totalTime
                 return true

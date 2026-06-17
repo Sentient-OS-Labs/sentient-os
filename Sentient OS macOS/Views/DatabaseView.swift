@@ -206,10 +206,6 @@ private struct RecordRow: View {
                 HStack(spacing: 6) {
                     if !record.folder.isEmpty { FolderTag(folder: record.folder) }
                     if versions > 1 { VersionTag(count: versions) }
-                    if record.reminderFlagged {
-                        Image(systemName: "bell.fill").font(.system(size: 9))
-                            .foregroundStyle(Theme.reminderGradient)
-                    }
                 }
                 Text(record.title ?? record.displayName)
                     .font(.subheadline.weight(.medium)).foregroundStyle(.white).lineLimit(1)
@@ -244,8 +240,6 @@ private struct RecordDetail: View {
                     Spacer()
                 }
                 .padding(.top, 10)
-
-                if record.reminderFlagged { ReminderPill() }
 
                 Text(record.title ?? record.displayName)
                     .font(.serif(26)).italic().foregroundStyle(.white)

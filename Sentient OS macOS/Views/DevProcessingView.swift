@@ -25,10 +25,13 @@ struct DevProcessingView: View {
     let modelPath: String
     let connectors: [any Connector]
     let mode: IterativeRun.Mode
+    let runGmail: Bool                  // append the cloud Gmail leg (shown in this same UI)
     var onDone: () -> Void
 
-    init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode, onDone: @escaping () -> Void) {
-        self.modelPath = modelPath; self.connectors = connectors; self.mode = mode; self.onDone = onDone
+    init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode,
+         runGmail: Bool = false, onDone: @escaping () -> Void) {
+        self.modelPath = modelPath; self.connectors = connectors; self.mode = mode
+        self.runGmail = runGmail; self.onDone = onDone
     }
 
     private enum UIState: Equatable { case loadingModel, processing, completed, failed(String) }
@@ -82,9 +85,10 @@ struct DevProcessingView: View {
 
     private var loadingView: some View {
         VStack(spacing: 22) {
-            Image(systemName: "cpu").font(.system(size: 46))
+            Image(systemName: connectors.isEmpty ? "envelope" : "cpu").font(.system(size: 46))
                 .foregroundStyle(.white.opacity(0.6)).symbolEffect(.pulse)
-            Text("Loading on-device model").font(.title3.weight(.semibold)).foregroundStyle(.white)
+            Text(connectors.isEmpty ? "Connecting to Gmail" : "Loading on-device model")
+                .font(.title3.weight(.semibold)).foregroundStyle(.white)
             ProgressView().tint(.white.opacity(0.4))
         }
     }
@@ -216,12 +220,11 @@ struct DevProcessingView: View {
                 .id(progress.done).transition(.blurReplace)
             VStack(alignment: .leading, spacing: 6) {
                 let verdict = progress.lastVerdict
-                // Pills: sensitive (red) / junk (dim) / reminder (gradient). Kept = none.
-                if verdict == .sensitive || verdict == .junk || progress.lastReminder {
+                // Pills: sensitive (red) / junk (dim). Kept = none.
+                if verdict == .sensitive || verdict == .junk {
                     HStack(spacing: 6) {
                         if verdict == .sensitive { SensitivePill() }
                         else if verdict == .junk { JunkPill() }
-                        if progress.lastReminder && verdict != .sensitive { ReminderPill() }
                     }
                 }
                 if let title = progress.lastTitle {
@@ -259,7 +262,6 @@ struct DevProcessingView: View {
         HStack(spacing: 16) {
             countTag(progress.survivors, "kept", Theme.verdictColor(.survivor))
             countTag(progress.junk, "junk", Theme.verdictColor(.junk))
-            countTag(progress.reminders, "reminders", Color(red: 1.0, green: 0.78, blue: 0.28))
             if let last = progress.lastSeconds {
                 Text("· \(String(format: "%.1f", last))s/file")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
@@ -280,7 +282,7 @@ struct DevProcessingView: View {
                 .foregroundStyle(Theme.verdictColor(.survivor))
             VStack(spacing: 6) {
                 Text("Analysis complete").font(.serif(28)).italic().foregroundStyle(.white)
-                Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.reminders) reminders · \(progress.failed) failed")
+                Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.failed) failed")
                     .font(.subheadline).foregroundStyle(.white.opacity(0.55))
             }
             Button(action: onDone) {
@@ -360,25 +362,16 @@ struct DevProcessingView: View {
         currentPrompt = ""; liveResponse = ""; responseComplete = false
 
         // One unbounded ordered stream carries progress + the dev start/token/itemDone events (tokens
-        // must never be dropped, so NOT bufferingNewest). The DevObserver is what flips on streaming —
-        // passing it makes IterativeRun use Engine.generateStream; production never passes one.
+        // must never be dropped, so NOT bufferingNewest). The producer runs the on-device leg (if any
+        // connectors) THEN the cloud Gmail leg (if requested) — both feed this same stream so Gmail
+        // shows in the very same processing UI as the device sources.
         let (stream, continuation) = AsyncStream.makeStream(of: RunEvent.self, bufferingPolicy: .unbounded)
         let task = Task<PipelineProgress, Never> {
             defer { continuation.finish() }
-            let runner = IterativeRun(modelPath: modelPath)
-            let dev = IterativeRun.DevObserver(
-                onItemStart: { continuation.yield(.start(prompt: $0, displayPath: $1, filePath: $2)) },
-                onToken:     { continuation.yield(.token($0)) },
-                onItemDone:  { continuation.yield(.itemDone) },
-                afterItem: {
-                    // Read the checkbox LIVE on the main actor; sleep so the response stays readable.
-                    // Cancellation-aware (Stop during the pause throws → swallowed → loop exits).
-                    let shouldPause = await MainActor.run { pauseBetweenItems }
-                    if shouldPause { try? await Task.sleep(for: .seconds(8)) }
-                })
-            return mode == .initial
-                ? await runner.runInitial(connectors, dev: dev) { continuation.yield(.progress($0)) }
-                : await runner.runIterative(connectors, dev: dev) { continuation.yield(.progress($0)) }
+            var p = PipelineProgress()
+            if !connectors.isEmpty { p = await runDeviceLeg(continuation: continuation) }
+            if runGmail { p = await runGmailLeg(base: p, continuation: continuation) }
+            return p
         }
         iterativeTask = task
         for await ev in stream {
@@ -398,6 +391,88 @@ struct DevProcessingView: View {
         }
         progress = await task.value
         withAnimation { state = .completed }
+    }
+
+    /// On-device leg — IterativeRun + the DevObserver (the observer is what flips on token streaming;
+    /// production never passes one). Returns its final progress, which seeds the Gmail leg.
+    private func runDeviceLeg(continuation: AsyncStream<RunEvent>.Continuation) async -> PipelineProgress {
+        let runner = IterativeRun(modelPath: modelPath)
+        let dev = IterativeRun.DevObserver(
+            onItemStart: { continuation.yield(.start(prompt: $0, displayPath: $1, filePath: $2)) },
+            onToken:     { continuation.yield(.token($0)) },
+            onItemDone:  { continuation.yield(.itemDone) },
+            afterItem: {
+                // Read the checkbox LIVE on the main actor; sleep so the response stays readable.
+                // Cancellation-aware (Stop during the pause throws → swallowed → loop exits).
+                let shouldPause = await MainActor.run { pauseBetweenItems }
+                if shouldPause { try? await Task.sleep(for: .seconds(8)) }
+            })
+        return mode == .initial
+            ? await runner.runInitial(connectors, dev: dev) { continuation.yield(.progress($0)) }
+            : await runner.runIterative(connectors, dev: dev) { continuation.yield(.progress($0)) }
+    }
+
+    /// Cloud Gmail leg — GmailConnect (no token streaming). Each date window maps onto the SAME UI:
+    /// the weekly prompt → PROMPT pane, the summary → RESPONSE pane + the just-processed card, the
+    /// windows → the header progress (extended past `base`, the device leg's final counts).
+    private func runGmailLeg(base: PipelineProgress,
+                             continuation: AsyncStream<RunEvent>.Continuation) async -> PipelineProgress {
+        let box = ProgressBox(base)
+        let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseJunk = base.junk
+        let onProgress: @Sendable (GmailConnect.Progress) -> Void = { ev in
+            switch ev {
+            case let .windowStart(step, total, label, prompt):
+                var p = box.value
+                p.total = baseTotal + total
+                p.done  = baseDone + (step - 1)
+                box.value = p
+                continuation.yield(.start(prompt: prompt, displayPath: "Gmail · \(label)", filePath: nil))
+                continuation.yield(.progress(p))
+            case let .windowDone(step, total, label, summary, threads, keptSoFar):
+                var p = box.value
+                p.total      = baseTotal + total
+                p.done       = baseDone + step
+                p.survivors  = baseKept + keptSoFar
+                p.junk       = baseJunk + (step - keptSoFar)     // a window with nothing notable
+                p.lastTitle  = "Email — \(label)"
+                p.lastSummary = summary
+                p.lastVerdict = summary == nil ? .junk : .survivor
+                p.lastFilePath = nil
+                p.lastPath   = "Gmail · \(label)" + (threads > 0 ? " · \(threads) threads" : "")
+                p.lastSeconds = nil
+                box.value = p
+                continuation.yield(.token(summary ?? "Nothing notable this window."))
+                continuation.yield(.itemDone)
+                continuation.yield(.progress(p))
+            }
+        }
+        do {
+            _ = mode == .initial ? try await GmailConnect.runInitial(onProgress: onProgress)
+                                 : try await GmailConnect.runIterative(onProgress: onProgress)
+        } catch {
+            var p = box.value
+            p.lastTitle = "Gmail failed"
+            p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            p.lastVerdict = .junk
+            p.lastFilePath = nil
+            box.value = p
+            continuation.yield(.itemDone)
+            continuation.yield(.progress(p))
+            Log("DevProcessingView.gmail: ✗ \(error)")
+        }
+        return box.value
+    }
+}
+
+/// Thread-safe holder so the Gmail leg's `@Sendable` progress callback can accumulate onto the
+/// device leg's final counts and hand the final value back (mirrors CodexCLI's PipeDrain pattern).
+private final class ProgressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var p: PipelineProgress
+    init(_ p: PipelineProgress) { self.p = p }
+    var value: PipelineProgress {
+        get { lock.lock(); defer { lock.unlock() }; return p }
+        set { lock.lock(); p = newValue; lock.unlock() }
     }
 }
 

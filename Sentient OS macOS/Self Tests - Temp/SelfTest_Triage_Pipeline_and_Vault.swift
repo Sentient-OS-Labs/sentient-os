@@ -76,7 +76,7 @@ enum SelfTest {
                 let o = Triage.decide(s)
                 emit("• \(label)")
                 emit("    in : \(s)")
-                emit("    out: verdict=\(o.verdict) reminder=\(o.reminder) title=\(o.title ?? "nil") summary=\"\(o.summary.prefix(60))\"\n")
+                emit("    out: verdict=\(o.verdict) title=\(o.title ?? "nil") summary=\"\(o.summary.prefix(60))\"\n")
             }
             return
         }
@@ -432,7 +432,7 @@ enum SelfTest {
                 emit("----------------------- RAW OUTPUT -----------------------")
                 emit(raw.isEmpty ? "⚠️ (EMPTY — model returned no text)" : result.text)
                 emit("------------------------- PARSED -------------------------")
-                emit("verdict=\(outcome.verdict)  reminder=\(outcome.reminder)  title=\(outcome.title ?? "nil")")
+                emit("verdict=\(outcome.verdict)  title=\(outcome.title ?? "nil")")
                 emit("")
             } catch {
                 emit("ITEM \(i + 1) — \(label) FAILED: \(error)\n")

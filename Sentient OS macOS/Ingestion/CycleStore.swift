@@ -146,13 +146,6 @@ actor CycleStore {
         return rows.map(item(from:))
     }
 
-    /// The reminder-flagged subset (the proactive system's input).
-    func reminderNotes() -> [CycleNoteItem] {
-        let rows = (try? modelContext.fetch(FetchDescriptor<CycleNote>(
-            predicate: #Predicate { $0.reminderFlagged }))) ?? []
-        return rows.map(item(from:))
-    }
-
     /// End-of-cycle wipe (fired by the proactive button) — pointers persist, notes do not.
     func wipeAllNotes() {
         try? modelContext.delete(model: CycleNote.self)
