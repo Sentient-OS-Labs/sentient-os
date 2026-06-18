@@ -169,8 +169,9 @@ struct DevToolsView: View {
         .sheet(isPresented: $showActionItems) { ProactiveItemsView() }
         .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
         .sheet(item: $deviceJob) { job in
-            DevProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors,
-                              mode: job.mode, runGmail: job.runGmail) {
+            // Same takeover + same engine as the home "Analyze Now" — dev just gets the prompt pane.
+            ProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors,
+                           mode: job.mode, runGmail: job.runGmail, showPrompt: true) {
                 deviceJob = nil
             }
             .frame(minWidth: 600, minHeight: 680)
@@ -316,16 +317,7 @@ struct DevToolsView: View {
     /// same takeover).
     private func startOnDevice(id: String, mode: IterativeRun.Mode) {
         let gmailRun = gmailConnected && runGmail
-        let roots = selectedFileRoots
-        var connectors: [any Connector] = roots.isEmpty ? [] : [FilesConnector(roots: roots)]
-        for src in selectedSources {
-            switch src {
-            case .whatsapp(let jids): connectors.append(WhatsAppConnector(chatJIDs: jids))
-            case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
-            case .notes:               connectors.append(NotesConnector())
-            case .files:               break   // folded into FilesConnector(roots:)
-            }
-        }
+        let connectors = RunSource.connectors(from: selectedSources)
         guard gmailRun || !connectors.isEmpty else {
             run.status[id] = "✗ select a source above (folder / chat / Apple Notes / Gmail)"; return
         }

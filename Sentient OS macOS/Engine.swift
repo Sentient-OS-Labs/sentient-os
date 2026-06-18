@@ -35,21 +35,14 @@ actor Engine {
     enum EngineError: Error, CustomStringConvertible {
         case modelNotFound(String)
         case notLoaded
-        case streamStalled
 
         var description: String {
             switch self {
             case .modelNotFound(let path): return "Model file not found at: \(path)"
             case .notLoaded:               return "Engine.generate() called before load()."
-            case .streamStalled:           return "On-device stream stalled (likely a GPU wedge) — reload + retry."
             }
         }
     }
-
-    /// How long a streaming generation may run before we treat it as wedged. A normal item is a few
-    /// seconds; a hung native stream never returns at all (see generateStream). Generous so it never
-    /// trips a legitimately-slow vision item, low enough that recovery isn't glacial.
-    private static let streamTimeout: TimeInterval = 40
 
     /// Hard cap on generated tokens per item (decode), passed to the runtime via the wrapper's
     /// `maxOutputTokens` passthrough. A triage reply is a compact JSON summary — even a rich
@@ -62,14 +55,6 @@ actor Engine {
     private let maxNumTokens: Int
     private let collectStats: Bool
     private var native: LiteRTLM.Engine?
-    /// The Conversation of the in-flight streaming generation, so a watchdog can cancel it (the only
-    /// thing that unblocks a hung native sendMessageStream). Set/cleared inside generateStream.
-    private var activeConversation: Conversation?
-    /// Monotonic id for the in-flight streaming generation. Bumped at the start of each
-    /// generateStream; the watchdog captures its value and cancels ONLY if it still matches — so a
-    /// stale watchdog (whose own stream already finished) can never cancel a LATER item's stream that
-    /// is reusing the shared `activeConversation` slot.
-    private var streamGeneration = 0
 
     /// `collectStats` turns on LiteRT-LM's benchmark instrumentation (must be decided before
     /// `load()`) so every `Result` carries exact prefill/decode token counts — used by the
@@ -157,77 +142,6 @@ actor Engine {
             result.decodeTokensPerSecond = info.lastDecodeTokensPerSecond
         }
         return result
-    }
-
-    /// Streaming variant of `generate` — emits each decode chunk via `onToken` as it arrives, then
-    /// returns the same `Result` (full accumulated text + stats). DEV-ONLY: the product processing
-    /// path always uses `generate()`; only the dev processing UI streams (chunks are deltas, so we
-    /// concatenate). Identical sampler/Conversation lifecycle to `generate`.
-    func generateStream(prompt: String, imageData: Data? = nil,
-                        onToken: @Sendable (String) -> Void) async throws -> Result {
-        guard let native else { throw EngineError.notLoaded }
-
-        let sampler = try SamplerConfig(topK: 64, topP: 0.95, temperature: 0.15)   // see generate()
-        let conversation = try await native.createConversation(
-            with: ConversationConfig(samplerConfig: sampler, maxOutputTokens: Self.maxOutputTokens)
-        )
-        streamGeneration &+= 1
-        let generation = streamGeneration
-        activeConversation = conversation
-        defer { activeConversation = nil }
-
-        var contents: [Content] = []
-        if let imageData { contents.append(.imageData(imageData)) }
-        contents.append(.text(prompt))
-
-        // Stall watchdog. A wedged native stream never yields a token, never finishes, and never
-        // throws (unlike sendMessage, which returns an error) — so the for-await below would block
-        // forever and IterativeRun's failure-driven reload could never fire. If the stream hasn't
-        // finished within streamTimeout, cancel() it (the only way to unblock the native callback)
-        // and we report a stall, which routes into the existing reload + retry. Captures only `self`
-        // (an actor → Sendable) + an Int, so no non-Sendable closure capture.
-        //
-        // ⚠️ On NORMAL completion the `defer` below cancels this watchdog — and a cancelled
-        // `Task.sleep` THROWS, so we MUST bail in the `catch`. Falling through to the cancel (the old
-        // `try?`-swallow bug) would, because `activeConversation` is a single shared slot, risk
-        // cancelling the NEXT item's healthy in-flight stream. That stray cross-item cancel is exactly
-        // what wedged back-to-back dev runs; the old "pause 8s between items" toggle only hid it by
-        // letting the slot go nil before the stray cancel landed. The `generation` guard in
-        // cancelActiveConversation closes the residual timeout-boundary race for good measure.
-        let watchdog = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(Self.streamTimeout)) }
-            catch { return }   // cancelled because the stream finished cleanly — leave the slot alone
-            await self?.cancelActiveConversation(generation: generation)
-        }
-        defer { watchdog.cancel() }
-
-        let start = Date()
-        var full = ""
-        for try await chunk in conversation.sendMessageStream(Message(contents: contents)) {
-            let piece = chunk.toString
-            if !piece.isEmpty { full += piece; onToken(piece) }
-        }
-        watchdog.cancel()
-        // The watchdog had to fire (it cancelled a hung stream) → treat as a wedge so attempt() fails.
-        if Date().timeIntervalSince(start) >= Self.streamTimeout { throw EngineError.streamStalled }
-
-        var result = Result(text: full, totalTime: Date().timeIntervalSince(start))
-        if collectStats, let info = try? conversation.getBenchmarkInfo() {
-            result.prefillTokens = info.lastPrefillTokenCount
-            result.decodeTokens = info.lastDecodeTokenCount
-            result.prefillTokensPerSecond = info.lastPrefillTokensPerSecond
-            result.decodeTokensPerSecond = info.lastDecodeTokensPerSecond
-        }
-        return result
-    }
-
-    /// Cancel the in-flight streaming Conversation (called by generateStream's watchdog) — but ONLY if
-    /// `generation` is still the active stream, so a stale watchdog can never cancel a newer item's
-    /// stream that reused the shared slot. Runs on the actor via reentrancy while generateStream is
-    /// suspended at its for-await, so it can interrupt a genuinely-hung stream.
-    private func cancelActiveConversation(generation: Int) {
-        guard generation == streamGeneration else { return }
-        try? activeConversation?.cancel()
     }
 
     /// Writable scratch dir for LiteRT-LM's shader/compilation cache.

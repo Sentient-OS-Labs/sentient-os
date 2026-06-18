@@ -29,6 +29,7 @@ struct PipelineProgress: Sendable {
     var failed = 0
     var lastPath: String?
     var lastFilePath: String?      // absolute path (for the thumbnail)
+    var lastPrompt: String?        // the EXACT prompt fed to the model for this item (dev prompt pane)
     var lastTitle: String?
     var lastSummary: String?
     var lastVerdict: Verdict?
