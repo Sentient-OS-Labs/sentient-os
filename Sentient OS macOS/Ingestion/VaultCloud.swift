@@ -138,17 +138,29 @@ actor VaultCloud {
         }
     }
 
-    // MARK: Mirror push (same rule as the retired DaysEndJob.pushIfDirty)
+    // MARK: Mirror push (restores the retired DaysEndJob.pushIfDirty durable retry)
 
+    /// Mark the vault changed, then immediately try to sync it to the mirror.
     private func markDirtyAndPush() async {
         await MainActor.run { VaultActivity.shared.vaultDirty = true }
+        await Self.pushIfDirty()
+    }
+
+    /// Push the vault to the mirror IFF the mirror is enabled AND there's an unsynced change
+    /// (`VaultActivity.vaultDirty`). Clears the dirty flag only on a successful push; a failure
+    /// leaves it set so the next trigger retries. Called after every create/update AND once on app
+    /// launch (`SentientOSApp`) — that launch call is the durable catch-up for a push that failed
+    /// or never ran (e.g. the app quit between a KB update and its push). No-op when the mirror is
+    /// off or the vault is already in sync, so it's safe to call anytime.
+    static func pushIfDirty() async {
         guard await MirrorClient.shared.isEnabled else { return }
+        guard await MainActor.run(body: { VaultActivity.shared.vaultDirty }) else { return }
         do {
             try await MirrorClient.shared.push()
             await MainActor.run { VaultActivity.shared.vaultDirty = false }
             Log("VaultCloud: mirror pushed ✓")
         } catch {
-            Log("VaultCloud: mirror push failed — \((error as? LocalizedError)?.errorDescription ?? "\(error)") (retries next time)")
+            Log("VaultCloud: mirror push failed — \((error as? LocalizedError)?.errorDescription ?? "\(error)") (retries next trigger)")
         }
     }
 

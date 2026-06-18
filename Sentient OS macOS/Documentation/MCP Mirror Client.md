@@ -31,10 +31,31 @@ A lost token is a non-event: mint a new one, re-push; the orphaned cloud copy ex
 
 ## Sync
 
-Whole-vault **zip-replace**: `push()` zips `VaultGenerator.vaultRoot` via the OS's coordinated
-`.forUploading` read (no shelling out, no deps) and `POST`s it. A vault is ~KBs of markdown.
-Call `push()` after initial generation, each daily update, and any user edit (the editor-idle
-guard + change trigger are the scheduler's job).
+Whole-vault **zip-replace**: `push()` zips `VaultGenerator.vaultRoot` and `POST`s it. A vault is
+~KBs of markdown. The zip is built by shelling to `/usr/bin/zip` from **inside** the vault dir
+(`zip -r -X -q … .`) so entries are **root-relative** (`README.md`, `Career/Job.md`) — the server's
+contract. (We deliberately do *not* use `NSFileCoordinator.forUploading`: it wraps everything under
+the vault folder name, which breaks the README-portrait bundling in `get_structure`. The server
+also defensively unwraps a lone wrapper dir, so old clients still sync correctly.)
+
+**The sync happens automatically after every knowledge-base change.** `VaultCloud.create()` and
+`VaultCloud.update()` each end with `markDirtyAndPush()`, which sets `VaultActivity.vaultDirty`
+then calls **`VaultCloud.pushIfDirty()`** — the single push orchestrator: push only if the mirror
+is enabled AND the vault is dirty, clearing the dirty flag only on a successful push. A failure
+leaves `vaultDirty` set so the next trigger retries. `SentientOSApp` also calls
+`VaultCloud.pushIfDirty()` once on launch (a `.task` on `RootView`) — the **durable catch-up** for
+a push that failed or never ran (e.g. the app quit between a KB update and its push). `vaultDirty`
+is persisted in `UserDefaults`, so a deferred sync survives a relaunch. (This restores the retry
+the retired `DaysEndJob.pushIfDirty()` used to provide; future vault-editor saves hook in the same
+way.)
+
+## Turning the mirror on (today)
+
+The opt-in is "mint a token" — `enable()`. The real onboarding/Settings opt-in UI is Phase 5, so
+ahead of that there's a **MCP TOGGLE** button in **DEV TOOLS** (`DevToolsView`): ON mints the token
+and pushes the current vault; OFF deletes the cloud copy and forgets the token. Detailed actions
+(copy share link, force a Sync now, read access stats) sit under **More** while the mirror is ON.
+Use this to dogfood end-to-end sync on a real INITIAL/ITERATIVE cloud run.
 
 ## Keychain
 
@@ -52,6 +73,8 @@ Runs enable → push → stats → delete → disable. Needs a vault on disk (`~
 
 ## Not built here (downstream)
 
-UI surfaces (Copy MCP Link in the menu bar, the "Your AIs" satellite, the MCP opt-in
-onboarding screen) and the auto-push triggers (after vault changes, editor-idle-gated) are
-Phase-5 / scheduler work that calls into this client.
+The production opt-in surfaces — the MCP opt-in onboarding screen (step ⑨) with the
+no-account/token/30-day-lease explainer, the "Your AIs" satellite (access-log line), and the
+menu-bar Copy MCP Link — are Phase-5 work that calls into this client (the DEV TOOLS MCP TOGGLE is
+the interim dogfood stand-in). Auto-push *after vault changes* is now wired (see Sync above); the
+editor-idle gate (`VaultActivity.editorBusy`) still awaits the Phase-5 vault editor.
