@@ -471,8 +471,8 @@ private enum Demo {
     static let synced = "Synced · 3:41 AM"
     static let pending = 214
     static let forYouTeasers: [(kind: Briefing.Kind, text: String)] = [
-        (.overdue,  "Send your reply to Outlander VC?"),
-        (.promise,  "Text Dad his running-shoe research?"),
+        (.overdue,  "Reply to Anthos Capital?"),
+        (.promise,  "Confirm the AIM interview?"),
         (.deadline, "Register you for ZFellows?"),
     ]
     static let forYouFoot = "6 offerings · one click each"

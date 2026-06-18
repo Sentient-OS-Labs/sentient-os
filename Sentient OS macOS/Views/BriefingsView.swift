@@ -426,7 +426,7 @@ private struct LetterView: View {
 
 private enum Demo {
     static let name = "Jesai"   // later: the vault portrait's first name
-    static let reminders = "Reminders · Luis @ Headline — Fri 1 PM · ZFellows — 8 days · Workout — tonight 8 PM"
+    static let reminders = "Reminders · EWOR call — Daniel Dippold, Fri 11 AM · ZFellows — 8 days · Workout — tonight 8 PM"
     static func readLine(count: Int) -> String {
         "While you slept, I read 1,704 things · \(count) offering\(count == 1 ? "" : "s")"
     }
