@@ -59,7 +59,7 @@ enum SelfTestFileSkipping {
         func counts(_ source: FilesSource) -> [String: Int] {
             let rootPath = source.root.path + "/"
             var by: [String: Int] = [:]
-            for c in (try? source.scan(since: [:]).candidates) ?? [] {
+            for c in source.eligibleFiles() {
                 guard let p = c.metadata["path"], p.hasPrefix(rootPath) else { continue }
                 by[String(p.dropFirst(rootPath.count).split(separator: "/").first ?? "?"), default: 0] += 1
             }
@@ -164,7 +164,7 @@ enum SelfTestFileSkipping {
             }
 
             // What survives, and which directories contribute the most.
-            let candidates = (try? source.scan(since: [:]).candidates) ?? []
+            let candidates = source.eligibleFiles()
             var byDir: [String: Int] = [:]
             for c in candidates {
                 byDir[((c.metadata["path"] ?? "?") as NSString).deletingLastPathComponent, default: 0] += 1

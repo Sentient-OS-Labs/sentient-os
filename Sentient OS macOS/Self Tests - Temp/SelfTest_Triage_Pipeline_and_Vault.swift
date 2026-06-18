@@ -253,8 +253,8 @@ enum SelfTest {
         if mode == "tokens" {
             let source = WhatsAppSource(chatJIDs: chatFilter((try? WhatsAppSource().listChats()) ?? []))
             let candidates: [Candidate]
-            do { candidates = try source.scan(since: [:]).candidates }
-            catch { emit("scan FAILED: \(error)"); return }
+            do { candidates = try source.eligibleWindows().flatMap { $0.items.map(\.item) } }
+            catch { emit("eligibleWindows FAILED: \(error)"); return }
             emit("windows in backlog: \(candidates.count) · current byte budget: \(ChatWindowing.maxWindowBytes)\n")
             guard !candidates.isEmpty else { return }
 
@@ -293,7 +293,7 @@ enum SelfTest {
             emit(pad("chat", 26) + " msgs   bytes  prefill  win-tok  B/tok  decode")
             for (i, cand) in sample.enumerated() {
                 do {
-                    let artifact = try source.load(cand)
+                    let artifact = Artifact(candidate: cand, text: cand.metadata["windowText"] ?? "")
                     let prompt = Triage.prompt(for: artifact, currentDate: Date())
                     let r = try await engine.generate(prompt: prompt)
                     guard let prefill = r.prefillTokens, prefill > 0 else {
@@ -344,31 +344,36 @@ enum SelfTest {
             return
         }
 
-        // 1) Build the source + scan candidates.
-        let source: any DataSource
-        let maxTokens: Int
-        switch mode {
-        case "whatsapp":
-            source = WhatsAppSource(chatJIDs: chatFilter((try? WhatsAppSource().listChats()) ?? []))
-            maxTokens = ChatWindowing.kvCacheTokens
-        case "imessage":
-            source = iMessageSource(chatGUIDs: chatFilter((try? iMessageSource().listChats()) ?? []))
-            maxTokens = ChatWindowing.kvCacheTokens
-        case "notes":
-            source = NotesSource(); maxTokens = 4096
-        case "files":
-            guard let files = FileRoot.downloads.source else {
-                emit("could not locate ~/Downloads"); return
-            }
-            source = files; maxTokens = 4096
-        default:
-            emit("unknown mode '\(mode)' (use whatsapp | imessage | notes | files)"); return
-        }
-
+        // 1) List candidates via the iterative path (each source's eligible…()) + a per-source loader.
         let candidates: [Candidate]
-        do { candidates = try source.scan(since: [:]).candidates }
-        catch { emit("scan FAILED: \(error)"); return }
-        emit("scanned \(candidates.count) candidates; dumping first \(min(count, candidates.count))\n")
+        let load: (Candidate) throws -> Artifact
+        let maxTokens: Int
+        do {
+            switch mode {
+            case "whatsapp":
+                candidates = try WhatsAppSource(chatJIDs: chatFilter((try? WhatsAppSource().listChats()) ?? []))
+                    .eligibleWindows().flatMap { $0.items.map(\.item) }
+                load = { Artifact(candidate: $0, text: $0.metadata["windowText"] ?? "") }
+                maxTokens = ChatWindowing.kvCacheTokens
+            case "imessage":
+                candidates = try iMessageSource(chatGUIDs: chatFilter((try? iMessageSource().listChats()) ?? []))
+                    .eligibleWindows().flatMap { $0.items.map(\.item) }
+                load = { Artifact(candidate: $0, text: $0.metadata["windowText"] ?? "") }
+                maxTokens = ChatWindowing.kvCacheTokens
+            case "notes":
+                candidates = try NotesSource().eligibleNotes()
+                load = { Artifact(candidate: $0, text: $0.metadata["noteText"] ?? "") }
+                maxTokens = 4096
+            case "files":
+                guard let files = FileRoot.downloads.source else { emit("could not locate ~/Downloads"); return }
+                candidates = files.eligibleFiles()
+                load = { try FilesSource.loadArtifact($0) }
+                maxTokens = 4096
+            default:
+                emit("unknown mode '\(mode)' (use whatsapp | imessage | notes | files)"); return
+            }
+        } catch { emit("listing FAILED: \(error)"); return }
+        emit("listed \(candidates.count) candidates; dumping first \(min(count, candidates.count))\n")
         guard !candidates.isEmpty else { emit("nothing to dump."); return }
 
         // 2) Load the model once.
@@ -381,7 +386,7 @@ enum SelfTest {
         for (i, cand) in candidates.prefix(count).enumerated() {
             let label = cand.metadata["folder"] ?? cand.metadata["displayPath"] ?? cand.id
             do {
-                let artifact = try source.load(cand)
+                let artifact = try load(cand)
                 let prompt = Triage.prompt(for: artifact, currentDate: Date())
                 let result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
                 let outcome = Triage.decide(result.text)
