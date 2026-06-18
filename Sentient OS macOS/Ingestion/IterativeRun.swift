@@ -2,15 +2,19 @@
 //  IterativeRun.swift
 //  Sentient OS macOS
 //
-//  The connector-agnostic on-device orchestrator — what the dev "start on device" buttons call.
-//  Drives any Connector:
-//   • runInitial   (top→bottom): per bucket, clear it, walk items newest→oldest, then on completion
-//                  set the bucket's mark = newest. (Interrupted ⇒ mark unset ⇒ iterative says "run
+//  The connector-agnostic on-device orchestrator — the ONE engine path behind BOTH the home
+//  "Analyze Now" takeover and the dev "start on device" buttons (both via ProcessingView). Drives
+//  any Connector through ONE Engine (sized to the biggest connector), per BUCKET:
+//   • .initial   (top→bottom): clear the bucket, walk items newest→oldest, then on completion set
+//                  the bucket's mark = newest. (Interrupted ⇒ mark unset ⇒ iterative says "run
 //                  initial first".)
-//   • runIterative (bottom→top): per bucket, take items past the mark, walk oldest→newest, climbing
-//                  the mark per item (so a stopped run resumes). No mark yet ⇒ skipped.
-//  Reuses Engine + Triage + the GPU-wedge resilience. Survivors → CycleNote; junk/sensitive store
-//  nothing (zero trace).
+//   • .iterative (bottom→top): take items past the mark, walk oldest→newest, climbing the mark per
+//                  item (so a stopped run resumes). No mark yet ⇒ skipped.
+//   • .auto:      per bucket — initial if it has no mark yet, else iterative. This is the home
+//                  button's mode: the first run backfills, every run after just catches up, and a
+//                  freshly-added folder backfills while the rest catch up — all in one pass.
+//  Reuses Engine + Triage + the GPU-wedge resilience (preemptive + reactive reloads). Survivors →
+//  CycleNote; junk/sensitive store nothing (zero trace). Synchronous generate() only — no streaming.
 //
 
 import Foundation
@@ -19,45 +23,17 @@ struct IterativeRun {
     let modelPath: String
     var store: CycleStore = .shared
 
-    enum Mode { case initial, iterative }
-
-    /// DEV-ONLY hook: surfaces the EXACT prompt per item and STREAMS the raw model response token by
-    /// token. When this is `nil` (the product processing path), generation uses the fast one-shot
-    /// `Engine.generate()` — no streaming, no per-item prompt capture. Streaming is dev-only by
-    /// construction: only DevProcessingView passes a DevObserver.
-    struct DevObserver: Sendable {
-        /// New item STARTING — its exact prompt + display path + abs file path. Fires before the
-        /// response streams, so the view can show the CURRENT item immediately (footer + a placeholder
-        /// card) instead of lagging on the previous item. Resets the response pane.
-        var onItemStart: @Sendable (_ prompt: String, _ displayPath: String?, _ filePath: String?) -> Void
-        var onToken: @Sendable (String) -> Void    // one streamed chunk of the raw response
-        /// Item fully parsed — swap the placeholder for the real summary card (progress now holds it).
-        var onItemDone: @Sendable () -> Void = {}
-        /// Awaited AFTER each item's response is delivered — the dev "pause between items" throttle
-        /// (the view sleeps here when its checkbox is on, so you can read the response). Default: no-op.
-        var afterItem: @Sendable () async -> Void = {}
-    }
+    enum Mode { case initial, iterative, auto }
 
     private static let preemptiveReloadEvery = 40
     private static let failuresBeforeReload = 3
     private static let maxReloadsWithoutProgress = 4
 
+    /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The caller
+    /// passes every selected source at once; per-connector load + kind ride along per bucket.
     @discardableResult
-    func runInitial(_ connectors: [any Connector], dev: DevObserver? = nil,
-                    onProgress: @Sendable @escaping (PipelineProgress) -> Void = { _ in }) async -> PipelineProgress {
-        await run(connectors, mode: .initial, dev: dev, onProgress: onProgress)
-    }
-
-    @discardableResult
-    func runIterative(_ connectors: [any Connector], dev: DevObserver? = nil,
-                      onProgress: @Sendable @escaping (PipelineProgress) -> Void = { _ in }) async -> PipelineProgress {
-        await run(connectors, mode: .iterative, dev: dev, onProgress: onProgress)
-    }
-
-    /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The dev
-    /// buttons pass every selected source at once; per-connector load + kind ride along per bucket.
-    private func run(_ connectors: [any Connector], mode: Mode, dev: DevObserver? = nil,
-                     onProgress: @Sendable @escaping (PipelineProgress) -> Void) async -> PipelineProgress {
+    func run(_ connectors: [any Connector], mode: Mode,
+             onProgress: @Sendable @escaping (PipelineProgress) -> Void = { _ in }) async -> PipelineProgress {
         var p = PipelineProgress()
         guard !connectors.isEmpty else { return p }
         let engine = Engine(modelPath: modelPath, maxNumTokens: connectors.map(\.maxTokens).max() ?? 4096)
@@ -79,21 +55,14 @@ struct IterativeRun {
             sinceReload = 0
         }
 
-        // One full attempt at one item: load → generate → decide → (survivor ⇒ recordNote).
+        // One full attempt at one item: load → generate → decide → (survivor ⇒ recordNote). The
+        // exact prompt is stashed on the progress so ProcessingView's dev pane can show it.
         func attempt(_ cand: Candidate, connector: any Connector, bucketKey: String) async -> Bool {
             do {
                 let artifact = try autoreleasepool { try connector.load(cand) }
                 let prompt = Triage.prompt(for: artifact, currentDate: Date())
-                // Streaming is DEV-ONLY: only when a DevObserver is attached. Production → generate().
-                let result: Engine.Result
-                if let dev {
-                    dev.onItemStart(prompt, cand.metadata["displayPath"] ?? cand.metadata["name"], cand.metadata["path"])
-                    result = try await engine.generateStream(prompt: prompt, imageData: artifact.imageData) {
-                        dev.onToken($0)
-                    }
-                } else {
-                    result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
-                }
+                p.lastPrompt = prompt
+                let result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
                 let outcome = Triage.decide(result.text)
                 if outcome.verdict == .survivor {
                     await store.recordNote(
@@ -122,7 +91,7 @@ struct IterativeRun {
             }
         }
 
-        // Initial wants everything (we clear + reprocess) → pass [:]. Iterative passes the real
+        // Initial wants everything (we clear + reprocess) → pass [:]. Iterative/auto pass the real
         // marks so connectors can query efficiently; the run still filters/advances authoritatively.
         let marks = mode == .initial ? [:] : await store.allPointers()
 
@@ -134,17 +103,26 @@ struct IterativeRun {
 
             for bucket in buckets {
                 if Task.isCancelled { break runLoop }
+
+                // Per-bucket effective mode: .auto = initial when the bucket has never completed an
+                // initial run (no mark), else iterative — so one "Analyze Now" backfills new buckets
+                // and catches up the rest in a single pass.
+                let mark = await store.pointer(bucket.key)
+                let effective: Mode = (mode == .auto) ? (mark == nil ? .initial : .iterative) : mode
+
                 let work: [(key: ItemKey, item: Candidate)]
-                switch mode {
+                switch effective {
                 case .initial:
                     await store.clearBucket(bucket.key)
                     work = bucket.items                                            // newest → oldest
                 case .iterative:
-                    guard let mark = await store.pointer(bucket.key) else {
+                    guard let mark else {
                         Log("IterativeRun: \(bucket.key) has no pointer — run initial first; skipping.")
                         continue
                     }
                     work = bucket.items.filter { $0.key > mark }.sorted { $0.key < $1.key }   // oldest → newest
+                case .auto:
+                    continue   // resolved into .initial / .iterative above; never reached
                 }
 
                 p.total += work.count
@@ -172,17 +150,13 @@ struct IterativeRun {
                     }
                     if ok { consecutiveFailures = 0; reloadsWithoutProgress = 0 } else { p.failed += 1 }
 
-                    if mode == .iterative { await store.setPointer(bucket.key, w.key) }   // climb per item
+                    if effective == .iterative { await store.setPointer(bucket.key, w.key) }   // climb per item
                     sinceReload += 1; p.done += 1
                     onProgress(p)
-                    if let dev {
-                        dev.onItemDone()         // placeholder → real summary card (progress holds it now)
-                        await dev.afterItem()    // dev throttle: pause between items when on
-                    }
                 }
 
                 // INITIAL completed this bucket's full descent → everything ≤ newest done → set mark.
-                if mode == .initial, finished, let newest = bucket.items.first?.key {
+                if effective == .initial, finished, let newest = bucket.items.first?.key {
                     await store.setPointer(bucket.key, newest)
                 }
             }

@@ -22,7 +22,6 @@ struct RootView: View {
 
     // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
     private static let modelPath = ModelLocator.resolve()
-    private static let processingLimit: Int? = nil   // nil = process the whole selection
 
     /// The sources Analyze Now will process — the dev picker's selection (folders + DB sources).
     private var selectedSources: [RunSource] {
@@ -33,8 +32,11 @@ struct RootView: View {
         ZStack {
             Theme.bg.ignoresSafeArea()
             if isProcessing, let modelPath = Self.modelPath {
-                ProcessingView(store: store, modelPath: modelPath,
-                               sources: selectedSources, limit: Self.processingLimit) {
+                // Same engine + UI as the dev "start on device" buttons; .auto = backfill new
+                // buckets, catch up the rest. (Gmail is a dev-tools leg; the home button is on-device.)
+                ProcessingView(modelPath: modelPath,
+                               connectors: RunSource.connectors(from: selectedSources),
+                               mode: .auto) {
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
                 }
                 .transition(.opacity)
