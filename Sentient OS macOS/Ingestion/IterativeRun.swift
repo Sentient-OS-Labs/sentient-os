@@ -19,6 +19,26 @@
 
 import Foundation
 
+/// Live progress for one analysis run — the bar, the verdict counts, and the most-recently-processed
+/// item (its prompt/title/summary/verdict). Every snapshot is internally consistent: all the `last*`
+/// fields describe the SAME item, so a UI can show them together without desync. Read by ProcessingView.
+struct RunProgress: Sendable {
+    var total = 0
+    var done = 0
+    var survivors = 0
+    var junk = 0
+    var sensitive = 0
+    var failed = 0
+    var lastPath: String?
+    var lastFilePath: String?      // absolute path (for the thumbnail)
+    var lastPrompt: String?        // the EXACT prompt fed to the model for this item (dev prompt pane)
+    var lastTitle: String?
+    var lastSummary: String?
+    var lastVerdict: Verdict?
+    var lastSeconds: Double?
+    var totalSeconds: Double = 0   // sum over successful generations (for avg)
+}
+
 struct IterativeRun {
     let modelPath: String
     var store: CycleStore = .shared
@@ -33,8 +53,8 @@ struct IterativeRun {
     /// passes every selected source at once; per-connector load + kind ride along per bucket.
     @discardableResult
     func run(_ connectors: [any Connector], mode: Mode,
-             onProgress: @Sendable @escaping (PipelineProgress) -> Void = { _ in }) async -> PipelineProgress {
-        var p = PipelineProgress()
+             onProgress: @Sendable @escaping (RunProgress) -> Void = { _ in }) async -> RunProgress {
+        var p = RunProgress()
         guard !connectors.isEmpty else { return p }
         let engine = Engine(modelPath: modelPath, maxNumTokens: connectors.map(\.maxTokens).max() ?? 4096)
         do { try await engine.load() } catch {

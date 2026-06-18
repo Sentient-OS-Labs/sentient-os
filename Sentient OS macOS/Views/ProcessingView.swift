@@ -69,9 +69,9 @@ struct ProcessingView: View {
 
     private enum UIState: Equatable { case loadingModel, processing, completed, failed(String) }
     @State private var state: UIState = .loadingModel
-    @State private var progress = PipelineProgress()
+    @State private var progress = RunProgress()
     @State private var started = false
-    @State private var runTask: Task<PipelineProgress, Never>?
+    @State private var runTask: Task<RunProgress, Never>?
 
     var body: some View {
         ZStack {
@@ -333,17 +333,17 @@ struct ProcessingView: View {
     }
 
     /// One progress stream carries the on-device leg (IterativeRun) then the optional cloud Gmail
-    /// leg — both feed the SAME bar/card. `.bufferingNewest(1)` is fine: every PipelineProgress is a
+    /// leg — both feed the SAME bar/card. `.bufferingNewest(1)` is fine: every RunProgress is a
     /// complete, internally-consistent snapshot, so dropping intermediate frames never desyncs the
     /// prompt pane from the card.
     private func run() async {
         state = .loadingModel
-        progress = PipelineProgress()
+        progress = RunProgress()
         let (stream, continuation) = AsyncStream.makeStream(
-            of: PipelineProgress.self, bufferingPolicy: .bufferingNewest(1))
-        let task = Task<PipelineProgress, Never> {
+            of: RunProgress.self, bufferingPolicy: .bufferingNewest(1))
+        let task = Task<RunProgress, Never> {
             defer { continuation.finish() }
-            var p = PipelineProgress()
+            var p = RunProgress()
             if !connectors.isEmpty {
                 p = await IterativeRun(modelPath: modelPath).run(connectors, mode: mode) { continuation.yield($0) }
             }
@@ -364,8 +364,8 @@ struct ProcessingView: View {
     /// Cloud Gmail leg — each weekly window maps onto the SAME bar/card: its prompt → the prompt
     /// pane, its summary → the just-processed card, the windows → the bar (extended past `base`, the
     /// device leg's final counts).
-    private func runGmailLeg(base: PipelineProgress,
-                             yield: @Sendable @escaping (PipelineProgress) -> Void) async -> PipelineProgress {
+    private func runGmailLeg(base: RunProgress,
+                             yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
         let box = ProgressBox(base)
         let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseJunk = base.junk
         let onProgress: @Sendable (GmailConnect.Progress) -> Void = { ev in
@@ -415,9 +415,9 @@ struct ProcessingView: View {
 /// device leg's final counts and hand the final value back (mirrors CodexCLI's PipeDrain pattern).
 private final class ProgressBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var p: PipelineProgress
-    init(_ p: PipelineProgress) { self.p = p }
-    var value: PipelineProgress {
+    private var p: RunProgress
+    init(_ p: RunProgress) { self.p = p }
+    var value: RunProgress {
         get { lock.lock(); defer { lock.unlock() }; return p }
         set { lock.lock(); p = newValue; lock.unlock() }
     }

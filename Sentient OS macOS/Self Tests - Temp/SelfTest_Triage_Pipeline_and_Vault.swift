@@ -17,8 +17,8 @@
 //    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "notes" | "files"  (model dump) ·
 //                          "tokens"  (WhatsApp window token-cost measurement, model) ·
 //                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "codexcli"
-//                          | "vault" | "skipping" | "skipcensus"
-//                          | "incremental"  (pointer-architecture proof, no model)
+//                          | "skipping" | "skipcensus"
+//                          | "fileiter" | "chatiter" | "notesiter"  (iterative-core proofs, no model)
 //    SENTIENT_SELFTEST_N   item count (default 6)
 //    SENTIENT_SELFTEST_OUT output file (default <tmp>/sentient-selftest.txt)
 //    SENTIENT_MODEL_PATH   override the dev model path
@@ -26,7 +26,6 @@
 
 #if DEBUG
 import Foundation
-import SwiftData
 
 enum SelfTest {
     /// If SENTIENT_SELFTEST is set, run the dump (no UI) and exit. Called first thing in App.init().
@@ -85,11 +84,6 @@ enum SelfTest {
         // read-only census of the real standard folders ("skipcensus"). See SelfTest_FileSkipping.swift.
         if mode == "skipping" { SelfTestFileSkipping.synthetic(emit: emit); return }
         if mode == "skipcensus" { SelfTestFileSkipping.census(emit: emit); return }
-
-        // Incremental-pointer proof: deterministic, no model — runs the REAL FilesSource + Store
-        // (in-memory) through the pointer lifecycle: full pass → no-op pass → new file → edited
-        // file (versioned summary + " — Edit" title) → junk advances the pointer with zero trace.
-        if mode == "incremental" { await SelfTestIncremental.run(emit: emit); return }
 
         // Iterative core proof: deterministic, no model/codex — ItemKey tiebreak · the
         // newer-than-mark partition (twin at the boundary) · CycleStore round-trip · FilesConnector.
@@ -235,36 +229,6 @@ enum SelfTest {
                 emit("decode: \(ok) ok / \(fail) FAIL / \(empty) empty-text")
                 emit(fail == 0 ? "✅ decode clean" : "⚠️ inspect failures before trusting notes")
             } catch { emit("notesdecode FAILED: \(error)") }
-            return
-        }
-
-        // Vault mode: exercise the REAL Stage-2 path (Store → VaultGenerator → ~/Sentient OS -- The Vault).
-        //   SENTIENT_SELFTEST_N>0   → subset (cheap plumbing check);  0/unset → full vault
-        if mode == "vault" {
-            let env = ProcessInfo.processInfo.environment
-            let want = env["SENTIENT_SELFTEST_N"].flatMap(Int.init) ?? 0
-            let container: ModelContainer
-            do { container = try ModelContainer(for: Summary.self, SourceCursor.self) }
-            catch { emit("ModelContainer FAILED: \(error)"); return }
-            let store = Store(modelContainer: container)
-            var summaries = await store.survivorSummaries()
-            emit("survivor summaries in store: \(summaries.count)")
-            if want > 0 && want < summaries.count { summaries = Array(summaries.prefix(want)) }
-            emit("generating vault from \(summaries.count) summaries (agentic, codex)…")
-            do {
-                let t0 = Date()
-                let gen = VaultGenerator()
-                let onP: @Sendable (VaultGenerator.Progress) -> Void = { p in
-                    if case .writing(let n) = p { Log("  …\(n) notes written") }
-                }
-                let res = try await gen.generate(notes: summaries.map(CloudNote.init), onProgress: onP)
-                emit("✅ DONE in \(Int(Date().timeIntervalSince(t0)))s — notes=\(res.notes) folders=\(res.folders) input=\(res.inputTokens) output=\(res.outputTokens)")
-                emit("vault → \(res.vaultPath)")
-                let md = ((try? FileManager.default.subpathsOfDirectory(atPath: res.vaultPath)) ?? [])
-                    .filter { $0.hasSuffix(".md") }.sorted()
-                emit("\(md.count) .md files:")
-                for f in md { emit("  \(f)") }
-            } catch { emit("generate FAILED: \(error)") }
             return
         }
 

@@ -12,7 +12,6 @@
 import SwiftUI
 
 struct RootView: View {
-    let store: Store
     @Environment(\.openWindow) private var openWindow
 
     @State private var isProcessing = false
@@ -46,7 +45,7 @@ struct RootView: View {
         }
         .frame(minWidth: 920, minHeight: 660)
         .sheet(isPresented: $showDevTools) {
-            DevToolsView(store: store, customRoots: $customRoots) {
+            DevToolsView(customRoots: $customRoots) {
                 showDevTools = false
                 withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true }
             }

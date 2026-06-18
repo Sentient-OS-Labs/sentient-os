@@ -78,7 +78,6 @@ struct DeviceJob: Identifiable {
 }
 
 struct DevToolsView: View {
-    let store: Store
     @Binding var customRoots: [URL]
     /// Closes the sheet and hands off to the (legacy) full-pipeline processing takeover.
     var onStartAnalysis: () -> Void

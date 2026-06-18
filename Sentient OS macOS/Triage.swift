@@ -5,7 +5,7 @@
 //  The on-device "bouncer" (Arch §5.2). The model is asked to write the SUMMARY first (so it
 //  actually understands the file before judging), THEN a short title, THEN the junk flag, and
 //  only-if-applicable a sensitive flag. We parse that compact JSON and map it to a
-//  Verdict (+ a SummaryDraft for survivors).
+//  Verdict + the model's title/summary (Outcome).
 //
 //  FAIL-CLOSED: anything we can't confidently parse is treated as JUNK (dropped), never a
 //  survivor — so a malformed parse can never leak content into the cloud vault. Sensitivity
@@ -133,31 +133,29 @@ enum Triage {
 
     // MARK: Decision
 
-    /// The full outcome: the verdict + the model's title/summary (shown during processing for ANY
-    /// verdict) + what actually gets persisted (`draft` is nil for junk/sensitive — they're dropped).
+    /// The full outcome: the verdict + the model's title/summary, shown during processing for ANY
+    /// verdict. Survivors carry a non-empty summary; junk/sensitive are dropped (zero trace).
     struct Outcome {
         let verdict: Verdict
         let title: String?
         let summary: String
-        let draft: SummaryDraft?
     }
 
     static func decide(_ responseText: String) -> Outcome {
         guard let r = parse(responseText) else {
-            return Outcome(verdict: .junk, title: nil, summary: "", draft: nil)   // fail-closed
+            return Outcome(verdict: .junk, title: nil, summary: "")   // fail-closed
         }
         let summary = r.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTitle = r.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = trimmedTitle.isEmpty ? nil : trimmedTitle
 
         if r.sensitive {
-            return Outcome(verdict: .sensitive, title: title, summary: summary, draft: nil)
+            return Outcome(verdict: .sensitive, title: title, summary: summary)
         }
         if r.junk || summary.isEmpty {
-            return Outcome(verdict: .junk, title: title, summary: summary, draft: nil)
+            return Outcome(verdict: .junk, title: title, summary: summary)
         }
-        return Outcome(verdict: .survivor, title: title, summary: summary,
-                       draft: SummaryDraft(text: summary, title: title))
+        return Outcome(verdict: .survivor, title: title, summary: summary)
     }
 
     // MARK: Lenient JSON parsing
