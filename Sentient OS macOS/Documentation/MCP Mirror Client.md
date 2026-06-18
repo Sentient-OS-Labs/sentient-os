@@ -9,13 +9,13 @@ disposable copy.
 
 ```swift
 let mirror = MirrorClient.shared
-await mirror.isEnabled                 // tokens exist in the Keychain?
-let url = await mirror.enable()        // opt in → mints tokens → returns the share URL
+await mirror.isEnabled                 // is mirroring ON? (the toggle flag — NOT just "token exists")
+let url = await mirror.enable()        // opt in → mints token if absent → returns the share URL
 await mirror.shareURL                  // the "Copy MCP Link" value, or nil
 try await mirror.push()                // zip the vault + replace the mirror (call after any change)
 let s = try await mirror.stats()       // {notesRead24h, toolCalls24h, lastAccess} for "Your AIs"
-try await mirror.deleteRemote()        // one-click delete (keeps the token → stable URL on re-enable)
-await mirror.disable()                 // full opt-out: delete remote + forget the token
+try await mirror.deleteRemote()        // delete the cloud copy (keeps the token → stable URL)
+await mirror.disable()                 // opt out: flip OFF + delete remote, but KEEP the token (stable link)
 ```
 
 ## The single token
@@ -25,6 +25,13 @@ in the share URL (`/u/<token>/mcp`) and authorizes everything — MCP reads AND 
 (no `Authorization` header). Tradeoff: anyone who sees the share URL can also overwrite or
 delete the vault; mitigated by no accounts, the 30-day lease, one-click delete, and the vault
 being PII-stripped.
+
+**Identity ≠ on/off.** The token is the durable identity: minted once and kept across OFF→ON, so
+the share URL is **stable** (it's what the user pasted into ChatGPT/Claude — toggling must never
+reroll it and break their connectors). Whether mirroring is currently ON is a *separate* flag
+(`mcp.mirror.enabled`, UserDefaults) that `isEnabled` reads and the toggle flips — NOT "does a token
+exist". `disable()` flips OFF and deletes the cloud copy but keeps the token. (Builds before this
+flag equated enabled with token-exists; `isEnabled` migrates that state on first read.)
 
 A lost token is a non-event: mint a new one, re-push; the orphaned cloud copy expires on its
 30-day lease.
@@ -52,7 +59,7 @@ auto-push-after-KB-update, call `await Self.pushIfDirty()` from `VaultCloud.mark
 
 The opt-in is "mint a token" — `enable()`. The real onboarding/Settings opt-in UI is Phase 5, so
 ahead of that the **DEV TOOLS** panel (`DevToolsView`) exposes, while the mirror is ON:
-- **MCP TOGGLE** — ON mints the token + pushes the current vault; OFF deletes the cloud copy + forgets the token.
+- **MCP TOGGLE** — ON mints the token (if absent) + pushes the current vault; OFF deletes the cloud copy but **keeps the token**, so re-enabling reuses the same share link.
 - **Copy MCP Link** / **Copy System Prompt** — the share URL and the coached connector prompt to paste into ChatGPT/Claude.
 - **MCP SYNC** — force-push the current vault to the mirror (sync is a separate manual step now; see Sync above).
 - **Stats** (under **More**) — the access-log summary.

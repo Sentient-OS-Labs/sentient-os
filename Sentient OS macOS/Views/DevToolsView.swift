@@ -571,15 +571,17 @@ struct DevToolsView: View {
     }
 
     /// The headline MCP control. ON mints the token and pushes the current vault to Render; OFF
-    /// deletes the cloud copy and forgets the token. The share link + coached system prompt copy
-    /// right under it (while ON); Sync now / Stats live in `mirrorPane` under "More".
+    /// deletes the cloud copy but KEEPS the token, so re-enabling reuses the same share link (the
+    /// link is what the user pasted into ChatGPT/Claude — toggling must not break those connectors).
+    /// The share link + coached system prompt copy right under it (while ON); Sync now / Stats live
+    /// in `mirrorPane` under "More".
     private var mcpToggleButton: some View {
         VStack(spacing: 5) {
             Button {
                 Task { await runMirror {
                     if mirrorEnabled {
                         await MirrorClient.shared.disable()
-                        mirrorStatus = "✓ MCP mirror OFF — cloud copy deleted"
+                        mirrorStatus = "✓ MCP mirror OFF — cloud copy deleted (link kept)"
                     } else {
                         _ = await MirrorClient.shared.enable()
                         do {

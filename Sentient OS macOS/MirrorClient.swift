@@ -55,14 +55,23 @@ actor MirrorClient {
 
     // MARK: Enable / disable
 
-    /// Whether the user has opted into the mirror (the token exists in the Keychain).
-    var isEnabled: Bool { Keychain.read(Self.tokenKey) != nil }
+    /// Whether mirroring is currently ON. Deliberately INDEPENDENT of the token's existence: the
+    /// token (the identity, Invariant 4) is minted once and kept forever so the share link stays
+    /// stable across OFF→ON — it's what the user pasted into ChatGPT/Claude, so toggling must never
+    /// reroll it. This flag is the on/off the toggle flips, and what gates auto-push.
+    var isEnabled: Bool {
+        let d = UserDefaults.standard
+        // Migrate pre-flag builds, which equated "enabled" with "a token exists".
+        if d.object(forKey: Self.enabledKey) == nil { return Keychain.read(Self.tokenKey) != nil }
+        return d.bool(forKey: Self.enabledKey)
+    }
 
-    /// Opt in: mint the token (idempotent — keeps an existing one so the share URL is stable).
-    /// Returns the share URL.
+    /// Opt in: mint the token if absent (idempotent — an existing token is kept, so the share URL
+    /// is stable) and flip mirroring ON. Returns the share URL.
     @discardableResult
     func enable() -> String {
         if Keychain.read(Self.tokenKey) == nil { Keychain.set(Self.tokenKey, Self.mintToken()) }
+        UserDefaults.standard.set(true, forKey: Self.enabledKey)
         return shareURL!
     }
 
@@ -103,11 +112,12 @@ actor MirrorClient {
         try Self.check(resp, data)
     }
 
-    /// Full opt-out: delete the cloud copy AND forget the token (a fresh opt-in later mints
-    /// a new share URL). Best-effort on the network call — local forget always happens.
+    /// Opt out: flip mirroring OFF and delete the cloud copy, but KEEP the token so re-enabling
+    /// reuses the SAME share URL (it's what the user pasted into ChatGPT/Claude — opting out must
+    /// not break those connectors). Best-effort on the network call; the local OFF always sticks.
     func disable() async {
+        UserDefaults.standard.set(false, forKey: Self.enabledKey)
         try? await deleteRemote()
-        Keychain.delete(Self.tokenKey)
     }
 
     /// The "your AIs read N notes" numbers for the home screen. nil if not enabled / no vault yet.
@@ -125,7 +135,8 @@ actor MirrorClient {
 
     // MARK: Helpers
 
-    private static let tokenKey = "mcp.mirror.token"
+    private static let tokenKey = "mcp.mirror.token"      // Keychain: the identity (persists)
+    private static let enabledKey = "mcp.mirror.enabled"  // UserDefaults: the on/off the toggle flips
 
     /// 32 random bytes → base64url (43 chars, no padding) — inside the server's [32,64] window
     /// and URL-safe, so it drops straight into the path.
