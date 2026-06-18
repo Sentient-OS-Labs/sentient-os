@@ -145,25 +145,33 @@ actor MirrorClient {
         }
     }
 
-    /// Zip a directory into a temp .zip using the OS's own coordinated "for uploading" read —
-    /// no shelling out, no dependency. The zip's entries are vault-relative (the server expects
-    /// paths like `README.md`, `Career/Job Search.md`).
+    /// Zip the vault's CONTENTS into a temp .zip with ROOT-RELATIVE entries (`README.md`,
+    /// `Career/Job.md`). We shell to `/usr/bin/zip` from inside the vault dir on purpose:
+    /// NSFileCoordinator's `.forUploading` instead wraps everything under the vault folder name
+    /// (`Sentient OS -- The Vault/…`), which breaks the server's root-relative contract — the README
+    /// portrait stops bundling in `get_structure` and every note nests a level too deep. The macOS
+    /// `zip` writes UTF-8 names without the 0x800 flag; the server recovers those. (`zip` ships with
+    /// macOS; the app is non-sandboxed, so spawning it is fine — same as `CodexCLI`.)
     private static func zipDirectory(_ dir: URL) throws -> URL {
-        var coordError: NSError?
-        var thrown: Error?
-        var result: URL?
-        let coordinator = NSFileCoordinator()
-        coordinator.coordinate(readingItemAt: dir, options: [.forUploading], error: &coordError) { zipped in
-            // `zipped` is a temp .zip the OS created; move it somewhere we own before the block ends.
-            let dst = FileManager.default.temporaryDirectory
-                .appendingPathComponent("vault-\(UUID().uuidString).zip")
-            do { try FileManager.default.moveItem(at: zipped, to: dst); result = dst }
-            catch { thrown = error }
+        let dst = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vault-\(UUID().uuidString).zip")
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        proc.currentDirectoryURL = dir
+        // -r recurse · -X drop extra macOS attributes · -q quiet · "." = the dir CONTENTS (no wrapper).
+        proc.arguments = ["-r", "-X", "-q", dst.path, ".", "-x", ".DS_Store", "*/.DS_Store"]
+        let errPipe = Pipe()
+        proc.standardError = errPipe
+        proc.standardOutput = FileHandle.nullDevice
+        do { try proc.run() }
+        catch { throw MirrorError.zipFailed("couldn't launch /usr/bin/zip: \(error.localizedDescription)") }
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0, FileManager.default.fileExists(atPath: dst.path) else {
+            let msg = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw MirrorError.zipFailed("zip exited \(proc.terminationStatus): \(msg.prefix(200))")
         }
-        if let coordError { throw MirrorError.zipFailed(coordError.localizedDescription) }
-        if let thrown { throw MirrorError.zipFailed(thrown.localizedDescription) }
-        guard let result else { throw MirrorError.zipFailed("no archive produced") }
-        return result
+        return dst
     }
 }
 

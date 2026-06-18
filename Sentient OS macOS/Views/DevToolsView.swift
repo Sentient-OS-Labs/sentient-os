@@ -112,6 +112,13 @@ struct DevToolsView: View {
     @AppStorage("dbg.gmail.connected") private var gmailConnected = false
     @AppStorage("dbg.run.gmail")       private var runGmail = false
 
+    // MCP mirror (the hosted Render copy). Local mirrors of MirrorClient's actor state, refreshed
+    // when "More" opens and after each action.
+    @State private var mirrorEnabled = false
+    @State private var mirrorURL: String?
+    @State private var mirrorStatus: String?
+    @State private var mirrorBusy = false
+
     private var selectedSources: [RunSource] {
         SourceSelection.current(customRoots: customRoots, fdaGranted: fdaGranted)
     }
@@ -151,6 +158,7 @@ struct DevToolsView: View {
                         viewSummariesButton
                         viewActionItemsButton
                     }
+                    mcpToggleButton
                     clearSummariesButton
                     moreSection
                 }
@@ -186,7 +194,10 @@ struct DevToolsView: View {
                 runIMessage = !newSel.isEmpty
             }
         }
-        .onAppear { fdaGranted = Permissions.hasFullDiskAccess() }
+        .onAppear {
+            fdaGranted = Permissions.hasFullDiskAccess()
+            Task { await refreshMirror() }
+        }
     }
 
     // MARK: The two columns
@@ -543,7 +554,10 @@ struct DevToolsView: View {
         VStack(spacing: 12) {
             Button {
                 withAnimation { showMore.toggle() }
-                if showMore { fdaGranted = Permissions.hasFullDiskAccess() }
+                if showMore {
+                    fdaGranted = Permissions.hasFullDiskAccess()
+                    Task { await refreshMirror() }
+                }
             } label: {
                 Label("More", systemImage: showMore ? "chevron.down" : "chevron.right")
                     .font(.caption.weight(.medium))
@@ -567,10 +581,171 @@ struct DevToolsView: View {
                     }
 
                     fdaPane
+                    mirrorPane
                 }
                 .padding(.top, 4)
             }
         }
+    }
+
+    // MARK: MCP mirror (opt-in toggle + manual sync — dogfood ahead of the Phase-5 onboarding screen)
+
+    /// The coached system prompt the user pastes into ChatGPT/Claude/Gemini (custom instructions).
+    /// Naming the connector + "always call get_structure" is what reliably makes the client load and
+    /// use the tools — clients lazy-load connector tools behind a search gate (Arch §7 field learnings).
+    static let mcpSystemPrompt = """
+        Use the Sentient OS MCP whenever relevant. It gives you access to the user's personal knowledge \
+        base, created just for you! It's basically an Obsidian vault of notes about their actual life: \
+        their work, projects, plans, relationships, places, preferences, and history, built from their \
+        entire digital life (notes, messages, emails, etc.) using on-device LLMs that analyzed their \
+        whole digital life.
+
+        In fact, using it would help you improve almost anything you need to help the user with!
+
+        ALWAYS call get_structure at the start of ANY chat with the user.
+
+        It returns the folder and file-name index structure of the vault (so you can know if there's \
+        anything you want to read in full), and it also returns the README file of the vault with some \
+        incredible general context. So ALWAYS call this at the start of EVERY chat.
+
+        And yeah, any time you think another file is really relevant to a conversation/prompt, go read \
+        it in full using get_files!
+        """
+
+    /// Put a string on the system clipboard.
+    private func copyToPasteboard(_ s: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(s, forType: .string)
+    }
+
+    /// The headline MCP control. ON mints the token and pushes the current vault to Render; OFF
+    /// deletes the cloud copy and forgets the token. The share link + coached system prompt copy
+    /// right under it (while ON); Sync now / Stats live in `mirrorPane` under "More".
+    private var mcpToggleButton: some View {
+        VStack(spacing: 5) {
+            Button {
+                Task { await runMirror {
+                    if mirrorEnabled {
+                        await MirrorClient.shared.disable()
+                        mirrorStatus = "✓ MCP mirror OFF — cloud copy deleted"
+                    } else {
+                        _ = await MirrorClient.shared.enable()
+                        do {
+                            try await MirrorClient.shared.push()
+                            VaultActivity.shared.vaultDirty = false
+                            mirrorStatus = "✓ MCP mirror ON — vault pushed to Render"
+                        } catch MirrorClient.MirrorError.noVault {
+                            mirrorStatus = "✓ MCP mirror ON — no vault yet (syncs on first KB build)"
+                        }
+                    }
+                } }
+            } label: {
+                HStack(spacing: 7) {
+                    if mirrorBusy { ProgressView().controlSize(.small) }
+                    else {
+                        Image(systemName: mirrorEnabled
+                              ? "antenna.radiowaves.left.and.right"
+                              : "antenna.radiowaves.left.and.right.slash")
+                    }
+                    Text("MCP TOGGLE").font(.caption.weight(.bold)).tracking(2)
+                    Text(mirrorEnabled ? "ON" : "OFF")
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Capsule().fill((mirrorEnabled ? Color.green : Theme.secondary).opacity(0.22)))
+                        .foregroundStyle(mirrorEnabled ? .green : Theme.secondary)
+                }
+                .frame(maxWidth: .infinity, minHeight: 40)
+            }
+            .buttonStyle(.bordered).tint(mirrorEnabled ? .green : Theme.secondary)
+            .disabled(mirrorBusy)
+
+            if mirrorEnabled, let url = mirrorURL {
+                HStack(spacing: 8) {
+                    Button {
+                        copyToPasteboard(url)
+                        mirrorStatus = "✓ MCP link copied — add it as a connector in ChatGPT/Claude"
+                    } label: {
+                        Label("Copy MCP Link", systemImage: "link")
+                            .font(.caption2.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    .buttonStyle(.bordered).controlSize(.small).tint(Theme.accent)
+                    Button {
+                        copyToPasteboard(Self.mcpSystemPrompt)
+                        mirrorStatus = "✓ system prompt copied — paste into the model's custom instructions"
+                    } label: {
+                        Label("Copy System Prompt", systemImage: "text.quote")
+                            .font(.caption2.weight(.semibold))
+                            .frame(maxWidth: .infinity, minHeight: 32)
+                    }
+                    .buttonStyle(.bordered).controlSize(.small).tint(.purple)
+                }
+                .frame(maxWidth: 460)
+                .disabled(mirrorBusy)
+            }
+
+            if let mirrorStatus {
+                Text(mirrorStatus)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(mirrorStatus.hasPrefix("✓") ? .green : mirrorStatus.hasPrefix("✗") ? .red : Theme.secondary)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+
+    /// Detailed mirror actions under "More" — shown only while the mirror is ON (flip it with the
+    /// MCP TOGGLE button above). Copy the share URL, force a sync, or read the access-log stats.
+    @ViewBuilder private var mirrorPane: some View {
+        if mirrorEnabled, let url = mirrorURL {
+            VStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    Image(systemName: "antenna.radiowaves.left.and.right")
+                        .foregroundStyle(Theme.verdictColor(.survivor))
+                    Text("MCP mirror — syncs after each KB update")
+                        .font(.caption.weight(.medium)).foregroundStyle(.white)
+                    Spacer()
+                    if mirrorBusy { ProgressView().controlSize(.small) }
+                }
+                Text(url)
+                    .font(.system(.caption2, design: .monospaced)).foregroundStyle(Theme.faint)
+                    .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
+                HStack(spacing: 8) {
+                    Button("Sync now") { Task { await runMirror {
+                        try await MirrorClient.shared.push()
+                        VaultActivity.shared.vaultDirty = false
+                        mirrorStatus = "✓ synced to mirror"
+                    } } }
+                    .buttonStyle(.bordered).controlSize(.small).tint(.purple).disabled(mirrorBusy)
+                    Button("Stats") { Task { await runMirror {
+                        let s = try await MirrorClient.shared.stats()
+                        let last = s.lastAccess.map {
+                            RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date())
+                        } ?? "never"
+                        mirrorStatus = "✓ \(s.notesRead24h) notes · \(s.toolCalls24h) calls (24h) · last \(last)"
+                    } } }
+                    .buttonStyle(.bordered).controlSize(.small).tint(.white).disabled(mirrorBusy)
+                }
+            }
+            .padding(14).frame(maxWidth: 460).glassCard()
+        }
+    }
+
+    /// Pull MirrorClient's actor state into the local @State the pane renders from.
+    @MainActor private func refreshMirror() async {
+        mirrorEnabled = await MirrorClient.shared.isEnabled
+        mirrorURL = await MirrorClient.shared.shareURL
+    }
+
+    /// Run one mirror action with a busy spinner; funnel thrown errors into the status line and
+    /// always refresh the enabled/URL state afterward.
+    @MainActor private func runMirror(_ work: @escaping @MainActor () async throws -> Void) async {
+        guard !mirrorBusy else { return }
+        mirrorBusy = true
+        do { try await work() }
+        catch { mirrorStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")" }
+        await refreshMirror()
+        mirrorBusy = false
     }
 
     private var fdaPane: some View {
