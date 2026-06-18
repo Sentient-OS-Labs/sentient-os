@@ -2,17 +2,23 @@
 //  ProcessingView.swift
 //  Sentient OS macOS
 //
-//  The overnight-analysis screen — a dim, OLED-friendly takeover (ported in spirit from the iOS
-//  ProcessingView). Loads the on-device model, runs the Files pipeline over ~/Downloads, and
-//  shows a breathing sparkle, an "Analyzing ___" cycling-gradient title, a progress bar, live
-//  verdict counts, and a "just processed" preview (real file thumbnail + verdict + summary).
-//  Owns its Engine for the run and releases it on completion.
+//  THE one on-device analysis takeover — a dim, OLED-friendly screen shared by BOTH the home
+//  "Analyze Now" button and the dev "start on device" buttons. It drives the connector-agnostic
+//  IterativeRun (synchronous generate() + GPU-wedge recovery — NO streaming) over the selected
+//  connectors, optionally followed by the cloud Gmail leg, and shows a breathing sparkle, an
+//  "Analyzing ___" cycling-gradient title, a glowing progress bar, live verdict counts, and a
+//  "just processed" preview (thumbnail + verdict + title + summary).
+//
+//  The ONLY dev/prod difference is `showPrompt`: the dev buttons pass `true`, which adds a left
+//  pane showing the EXACT prompt fed to the model for the item currently on the card. Same engine,
+//  same UI, everywhere — there is no separate dev processing view.
 //
 
 import SwiftUI
 
-/// One thing the user picked to analyze — a file folder or a database source. Each runs as its
-/// own pass through the pipeline. (iMessage / Notes slot in here as they land.)
+/// One thing the user picked to analyze — a file root or a database/chat source. `RunSource` is the
+/// selection model (the dev picker + the home satellites speak it); `connectors(from:)` turns a
+/// selection into the iterative-core connectors both run paths share.
 enum RunSource: Hashable {
     case files(FileRoot)
     case whatsapp(chatJIDs: Set<String>)    // the opt-in chats to analyze
@@ -28,40 +34,44 @@ enum RunSource: Hashable {
         }
     }
 
-    /// Chat sources feed the model big conversation windows → they need the large KV cache.
-    var isChatSource: Bool {
-        switch self {
-        case .whatsapp, .imessage: return true
-        case .files, .notes:       return false
+    /// Map a source selection to the iterative-core connectors. File roots fold into ONE
+    /// FilesConnector (it pages each root itself); chats/Notes each become their own connector.
+    /// Shared by the home "Analyze Now" and the dev "start on device" buttons so both run the exact
+    /// same engine over the same picks.
+    static func connectors(from sources: [RunSource]) -> [any Connector] {
+        let roots: [FileRoot] = sources.compactMap { if case .files(let r) = $0 { return r } else { return nil } }
+        var connectors: [any Connector] = roots.isEmpty ? [] : [FilesConnector(roots: roots)]
+        for s in sources {
+            switch s {
+            case .whatsapp(let jids):  connectors.append(WhatsAppConnector(chatJIDs: jids))
+            case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
+            case .notes:               connectors.append(NotesConnector())
+            case .files:               break   // folded into FilesConnector(roots:)
+            }
         }
+        return connectors
     }
 }
 
 struct ProcessingView: View {
-    let store: Store
     let modelPath: String
-    let sources: [RunSource]   // one pass per source, in order
-    let limit: Int?
+    let connectors: [any Connector]   // the on-device sources to analyze (empty = Gmail-only)
+    let mode: IterativeRun.Mode       // home → .auto · dev INITIAL/ITERATIVE buttons → .initial/.iterative
+    let runGmail: Bool                // append the cloud Gmail leg (shown in this same takeover)
+    let showPrompt: Bool              // dev: add the left-side prompt pane
     var onDone: () -> Void
 
-    /// Home's Analyze Now takeover: runs `sources` through Pipeline → old Store.
-    /// (The dev iterative system has its own takeover — DevProcessingView.)
-    init(store: Store, modelPath: String, sources: [RunSource], limit: Int?, onDone: @escaping () -> Void) {
-        self.store = store; self.modelPath = modelPath; self.sources = sources
-        self.limit = limit; self.onDone = onDone
+    init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode,
+         runGmail: Bool = false, showPrompt: Bool = false, onDone: @escaping () -> Void) {
+        self.modelPath = modelPath; self.connectors = connectors; self.mode = mode
+        self.runGmail = runGmail; self.showPrompt = showPrompt; self.onDone = onDone
     }
 
     private enum UIState: Equatable { case loadingModel, processing, completed, failed(String) }
     @State private var state: UIState = .loadingModel
-    @State private var progress = PipelineProgress()   // live bar for the CURRENT folder's pass (resets per folder)
-    @State private var totals = PipelineProgress()     // accumulated across all folders (for the final summary)
-    @State private var currentRootLabel = ""
-    @State private var currentRootIndex = 0
-    @State private var rootCount = 0
-    @State private var stopped = false
-    @State private var engine: Engine?
+    @State private var progress = RunProgress()
     @State private var started = false
-    @State private var pipelineTask: Task<PipelineProgress, Error>?
+    @State private var runTask: Task<RunProgress, Never>?
 
     var body: some View {
         ZStack {
@@ -85,36 +95,43 @@ struct ProcessingView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await startIfNeeded() }
-        .onDisappear { let e = engine; Task { await e?.unload() } }
+        .onDisappear { runTask?.cancel() }
     }
 
     // MARK: States
 
     private var loadingView: some View {
         VStack(spacing: 22) {
-            Image(systemName: "cpu").font(.system(size: 46))
+            Image(systemName: connectors.isEmpty ? "envelope" : "cpu").font(.system(size: 46))
                 .foregroundStyle(.white.opacity(0.6)).symbolEffect(.pulse)
-            Text("Loading on-device model").font(.title3.weight(.semibold)).foregroundStyle(.white)
+            Text(connectors.isEmpty ? "Connecting to Gmail" : "Loading on-device model")
+                .font(.title3.weight(.semibold)).foregroundStyle(.white)
             ProgressView().tint(.white.opacity(0.4))
         }
     }
 
-    private var processingContent: some View {
-        VStack(spacing: 26) {
+    /// Production layout (centered). With `showPrompt`, the same layout sits in the RIGHT column and
+    /// the exact prompt for the current item fills the LEFT — the one dev/prod difference.
+    @ViewBuilder private var processingContent: some View {
+        if showPrompt {
+            HStack(spacing: 0) {
+                promptPane
+                Rectangle().fill(.white.opacity(0.12)).frame(width: 1)
+                centerColumn.frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.top, 12)
+        } else {
+            centerColumn
+        }
+    }
+
+    private var centerColumn: some View {
+        VStack(spacing: 24) {
             Image(systemName: "sparkles").font(.system(size: 46))
                 .foregroundStyle(.white.opacity(0.65)).symbolEffect(.breathe, options: .speed(0.7))
 
             AnalyzingTitle()
-
-            if !currentRootLabel.isEmpty {
-                Text(rootCount > 1
-                     ? "\(currentRootLabel) · \(currentRootIndex + 1) of \(rootCount)"
-                     : currentRootLabel)
-                    .font(.caption).foregroundStyle(.white.opacity(0.45))
-                    .monospacedDigit()
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.3), value: currentRootLabel)
-            }
 
             VStack(spacing: 10) {
                 GlowProgressBar(value: progress.total > 0 ? Double(progress.done) / Double(progress.total) : 0)
@@ -129,12 +146,36 @@ struct ProcessingView: View {
 
             countsLine
 
-            if progress.lastPath != nil {   // something was processed (files have a path; chat windows do too)
-                justProcessed
-            }
+            if progress.lastPath != nil { justProcessed }   // files have a path; chat windows do too
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .padding(.top, 30)
+    }
+
+    /// DEV-only: the EXACT prompt fed to the model for the item currently shown on the card.
+    private var promptPane: some View {
+        let prompt = progress.lastPrompt ?? ""
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("PROMPT").font(.caption2.weight(.semibold)).tracking(1.5)
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                Text("\(prompt.count) chars").font(.caption2).monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.25))
+            }
+            ScrollView {
+                Text(prompt.isEmpty ? "—" : prompt)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(prompt.isEmpty ? 0.25 : 0.82))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.08)))
     }
 
     private var countsLine: some View {
@@ -178,8 +219,7 @@ struct ProcessingView: View {
                             .frame(maxWidth: 340, alignment: .leading)
                     }
                     // Survivors carry a summary; junk/sensitive often don't — show a graceful
-                    // placeholder so the round never looks blank (the documents bug never hit this
-                    // because files always had a thumbnail + a summary).
+                    // placeholder so the round never looks blank.
                     let fallback = verdict == .sensitive ? "Held back — sensitive."
                                  : verdict == .junk ? "Nothing worth keeping here." : ""
                     let body = progress.lastSummary ?? fallback
@@ -257,19 +297,26 @@ struct ProcessingView: View {
                 Text("Analysis can always resume later.")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
-            HStack(spacing: 7) {
-                Image(systemName: "lock.shield.fill")
-                Text("Private by design. Your files never leave this Mac.")
+            if showPrompt {
+                // Dev: the current item being processed (replaces the trust footer).
+                HStack(spacing: 7) {
+                    Image(systemName: "doc.text")
+                    Text(progress.lastPath ?? "—").lineLimit(1).truncationMode(.middle).monospaced()
+                }
+                .font(.callout).foregroundStyle(.white.opacity(0.6))
+            } else {
+                HStack(spacing: 7) {
+                    Image(systemName: "lock.shield.fill")
+                    Text("Private by design. Your files never leave this Mac.")
+                }
+                .font(.callout).foregroundStyle(.white.opacity(0.6))
             }
-            .font(.callout).foregroundStyle(.white.opacity(0.6))
         }
     }
 
-    /// Stop the run and return home. Progress is saved per file, so re-running resumes (dedup).
-    /// `stopped` also halts the outer per-folder loop so it doesn't roll on to the next folder.
+    /// Stop the run and return. Pointers advance per durable save, so re-running resumes.
     private func stop() {
-        stopped = true
-        pipelineTask?.cancel()
+        runTask?.cancel()
         onDone()
     }
 
@@ -285,83 +332,101 @@ struct ProcessingView: View {
         await run()
     }
 
+    /// One progress stream carries the on-device leg (IterativeRun) then the optional cloud Gmail
+    /// leg — both feed the SAME bar/card. `.bufferingNewest(1)` is fine: every RunProgress is a
+    /// complete, internally-consistent snapshot, so dropping intermediate frames never desyncs the
+    /// prompt pane from the card.
     private func run() async {
-        stopped = false
-        totals = PipelineProgress()
-
         state = .loadingModel
-        guard !sources.isEmpty else { state = .failed("No sources selected to analyze."); return }
-        do {
-            // Chat windows are big (and prompt scaffolding is sizeable); size the KV cache with
-            // comfortable headroom so a window + prompt can never overflow (we have the RAM).
-            let needsBigContext = sources.contains(where: \.isChatSource)
-            let engine = Engine(modelPath: modelPath, maxNumTokens: needsBigContext ? ChatWindowing.kvCacheTokens : 4096)
-            try await engine.load()
-            self.engine = engine
-            withAnimation { state = .processing }
-
-            let pipeline = Pipeline(engine: engine, store: store)
-            rootCount = sources.count
-
-            // One pass per source (its own progress bar); verdict counts accumulate for the summary.
-            for (idx, src) in sources.enumerated() {
-                if stopped || Task.isCancelled { break }
-                withAnimation { currentRootIndex = idx; currentRootLabel = src.label }
-                progress = PipelineProgress()   // reset the live bar for this pass
-
-                switch src {
-                case .files(let root):
-                    guard let source = root.source else { continue }
-                    try await runPass(source, pipeline: pipeline)
-                case .whatsapp(let jids):
-                    try await runPass(WhatsAppSource(chatJIDs: jids), pipeline: pipeline)
-                case .imessage(let guids):
-                    try await runPass(iMessageSource(chatGUIDs: guids), pipeline: pipeline)
-                case .notes:
-                    try await runPass(NotesSource(), pipeline: pipeline)
-                }
-            }
-
-            await engine.unload()
-            self.engine = nil
-            progress = totals                    // the completed view summarizes ALL sources
-            withAnimation { state = .completed }
-        } catch {
-            state = .failed("\(error)")
-        }
-    }
-
-    /// Run one source as a pass, streaming its progress into the live bar and folding its final
-    /// counts into the grand totals. Generic so the Pipeline stays a single concrete-typed call.
-    private func runPass<S: DataSource & Sendable>(_ source: S, pipeline: Pipeline) async throws {
+        progress = RunProgress()
         let (stream, continuation) = AsyncStream.makeStream(
-            of: PipelineProgress.self, bufferingPolicy: .bufferingNewest(1))
-        let task = Task {
+            of: RunProgress.self, bufferingPolicy: .bufferingNewest(1))
+        let task = Task<RunProgress, Never> {
             defer { continuation.finish() }
-            return try await pipeline.run(source: source, currentDate: Date(),
-                                          limit: limit) { continuation.yield($0) }
+            var p = RunProgress()
+            if !connectors.isEmpty {
+                p = await IterativeRun(modelPath: modelPath).run(connectors, mode: mode) { continuation.yield($0) }
+            }
+            if runGmail {
+                p = await runGmailLeg(base: p) { continuation.yield($0) }
+            }
+            return p
         }
-        pipelineTask = task
-        for await p in stream { progress = p }   // scoped .animation(value:) modifiers drive the morphs
-        accumulate(try await task.value)
+        runTask = task
+        for await p in stream {
+            if state == .loadingModel { withAnimation { state = .processing } }
+            progress = p
+        }
+        progress = await task.value
+        withAnimation { state = .completed }
     }
 
-    /// Fold one folder's final progress into the running grand totals (shown on completion).
-    private func accumulate(_ p: PipelineProgress) {
-        totals.total += p.total
-        totals.done += p.done
-        totals.survivors += p.survivors
-        totals.junk += p.junk
-        totals.sensitive += p.sensitive
-        totals.failed += p.failed
+    /// Cloud Gmail leg — each weekly window maps onto the SAME bar/card: its prompt → the prompt
+    /// pane, its summary → the just-processed card, the windows → the bar (extended past `base`, the
+    /// device leg's final counts).
+    private func runGmailLeg(base: RunProgress,
+                             yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
+        let box = ProgressBox(base)
+        let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseJunk = base.junk
+        let onProgress: @Sendable (GmailConnect.Progress) -> Void = { ev in
+            switch ev {
+            case let .windowStart(step, total, label, prompt):
+                var p = box.value
+                p.total = baseTotal + total
+                p.done  = baseDone + (step - 1)
+                p.lastPrompt = prompt
+                p.lastPath = "Gmail · \(label)"
+                box.value = p
+                yield(p)
+            case let .windowDone(step, total, label, summary, threads, keptSoFar):
+                var p = box.value
+                p.total       = baseTotal + total
+                p.done        = baseDone + step
+                p.survivors   = baseKept + keptSoFar
+                p.junk        = baseJunk + (step - keptSoFar)   // a window with nothing notable
+                p.lastTitle   = "Email — \(label)"
+                p.lastSummary = summary
+                p.lastVerdict = summary == nil ? .junk : .survivor
+                p.lastFilePath = nil
+                p.lastPath    = "Gmail · \(label)" + (threads > 0 ? " · \(threads) threads" : "")
+                p.lastSeconds = nil
+                box.value = p
+                yield(p)
+            }
+        }
+        do {
+            _ = mode == .iterative ? try await GmailConnect.runIterative(onProgress: onProgress)
+                                   : try await GmailConnect.runInitial(onProgress: onProgress)
+        } catch {
+            var p = box.value
+            p.lastTitle = "Gmail failed"
+            p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            p.lastVerdict = .junk
+            p.lastFilePath = nil
+            box.value = p
+            yield(p)
+            Log("ProcessingView.gmail: ✗ \(error)")
+        }
+        return box.value
+    }
+}
+
+/// Thread-safe holder so the Gmail leg's `@Sendable` progress callback can accumulate onto the
+/// device leg's final counts and hand the final value back (mirrors CodexCLI's PipeDrain pattern).
+private final class ProgressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var p: RunProgress
+    init(_ p: RunProgress) { self.p = p }
+    var value: RunProgress {
+        get { lock.lock(); defer { lock.unlock() }; return p }
+        set { lock.lock(); p = newValue; lock.unlock() }
     }
 }
 
 // MARK: - Analyzing title
 
-/// "Analyzing ___" with the right-hand word cycling every 2s. Isolated in its OWN view (with its
-/// own state + timer) so the cycle runs exactly once at a steady pace, immune to the parent's
-/// per-file re-renders.
+/// "Analyzing ___" with the right-hand word cycling. Isolated in its OWN view (with its own state +
+/// timer) so the cycle runs at a steady pace, immune to the parent's per-file re-renders.
 private struct AnalyzingTitle: View {
     private let words = ["Files", "Notes", "Messages", "WhatsApp", "Everything."]
     @State private var index = 0
@@ -446,8 +511,8 @@ private struct GlowProgressBar: View {
         return result
     }()
 
-    /// The fill-width capsule of the scrolling color gradient — rendered crisp on top and
-    /// blurred behind (= the glow). Same gradient/offset, so the glow flows with the colors.
+    /// The fill-width capsule of the scrolling color gradient — rendered crisp on top and blurred
+    /// behind (= the glow). Same gradient/offset, so the glow flows with the colors.
     @ViewBuilder
     private func coloredCapsule(p: CGFloat, fill: CGFloat) -> some View {
         ZStack(alignment: .leading) {
@@ -461,12 +526,10 @@ private struct GlowProgressBar: View {
     }
 
     /// A tip-concentrated glow: the colored capsule masked to a fixed-width region at the leading
-    /// tip (fading out toward the start) BEFORE blurring, so it blooms freely (keeps its vertical
-    /// halo) but only at the leading edge — a long bar never glows end-to-end.
+    /// tip (fading out toward the start) BEFORE blurring, so it blooms freely but only at the
+    /// leading edge — a long bar never glows end-to-end.
     @ViewBuilder
     private func tipGlow(p: CGFloat, fill: CGFloat, blur: CGFloat) -> some View {
-        // PROGRESSIVE front-weighting: the trailing edge dims more as the bar grows. value→0 →
-        // ~uniform (full glow, like before); larger value → the glow ramps to the front only.
         let t = min(1.0, value * 3.0)   // how strongly the back is dimmed (tune the 3.0)
         coloredCapsule(p: p, fill: fill)
             .mask {
@@ -488,8 +551,6 @@ private struct GlowProgressBar: View {
                 Capsule().fill(Color.white.opacity(0.08))
                 if fill > 0 {
                     ZStack(alignment: .leading) {
-                        // Glow gently weighted toward the leading tip — subtle on long bars,
-                        // full glow when short (same as before).
                         tipGlow(p: p, fill: fill, blur: 38)
                         tipGlow(p: p, fill: fill, blur: 22)
                         tipGlow(p: p, fill: fill, blur: 11)
@@ -499,8 +560,8 @@ private struct GlowProgressBar: View {
                 }
             }
             .overlay {
-                // Drive the scroll: phase ACCUMULATES (speed × dt) so changing speed never jumps
-                // the colors. Speed ∝ fill width → tiny pill = slow, gentle color fade.
+                // Drive the scroll: phase ACCUMULATES (speed × dt) so changing speed never jumps the
+                // colors. Speed ∝ fill width → tiny pill = slow, gentle color fade.
                 TimelineView(.animation) { ctx in
                     Color.clear.onChange(of: ctx.date) { _, newDate in
                         let dt = lastTick.map { newDate.timeIntervalSince($0) } ?? 0

@@ -18,8 +18,7 @@
 import Foundation
 
 /// A Sendable, store-agnostic description of one summary handed to a Codex call. Decouples the
-/// cloud prompts from any particular store. Built from a CycleNoteItem (the iterative system) — and
-/// from a legacy SummaryItem (used only by the self-test's vault mode against the old Store).
+/// cloud prompts from any particular store. Built from a CycleNoteItem (the iterative system).
 struct CloudNote: Sendable {
     let kind: SourceKind
     let sourceID: String       // "file:<abs path>" / "notes:<uuid>" — VaultGenerator.locSrc keys on it
@@ -37,12 +36,6 @@ struct CloudNote: Sendable {
     init(_ n: CycleNoteItem) {
         self.init(kind: n.kind, sourceID: n.sourceID, folder: n.folder,
                   title: n.title, text: n.text, itemDate: n.itemDate)
-    }
-
-    /// From a legacy old-Store summary (self-test vault mode only).
-    init(_ s: SummaryItem) {
-        self.init(kind: s.kind, sourceID: s.sourceID, folder: s.folder,
-                  title: s.title, text: s.text, itemDate: s.itemDate)
     }
 }
 

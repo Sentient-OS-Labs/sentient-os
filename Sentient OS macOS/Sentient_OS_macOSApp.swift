@@ -2,46 +2,26 @@
 //  Sentient_OS_macOSApp.swift
 //  Sentient OS macOS
 //
-//  @main app shell (Arch §2.3). Builds the one shared SwiftData ModelContainer, hands it to
-//  the Store @ModelActor, and presents two scenes: the main window (onboarding/dashboard)
-//  and an always-present MenuBarExtra (glanceable overnight status).
+//  @main app shell. Presents the main window (Constellation ⟷ processing), the For You and
+//  Knowledge windows, and an always-present MenuBarExtra. The live store is CycleStore
+//  (Ingestion/CycleStore.swift), reached directly by the views — the app shell owns no store.
 //
 
 import SwiftUI
-import SwiftData
 
 @main
 struct SentientOSApp: App {
     @State private var appState = AppState()
-    private let store: Store
 
     init() {
         #if DEBUG
         SelfTest.runIfRequested()   // headless prompt/output dump when SENTIENT_SELFTEST is set (exits if so)
         #endif
-
-        // One container for the whole app; only `Store` ever touches it (Arch §2.3).
-        func makeContainer() throws -> ModelContainer {
-            try ModelContainer(for: Summary.self, SourceCursor.self)
-        }
-        do {
-            self.store = Store(modelContainer: try makeContainer())
-        } catch {
-            // Dev convenience: an incompatible schema change → wipe the store and retry once.
-            let base = URL.applicationSupportDirectory
-            for name in ["default.store", "default.store-shm", "default.store-wal"] {
-                try? FileManager.default.removeItem(at: base.appending(path: name))
-            }
-            guard let container = try? makeContainer() else {
-                fatalError("Failed to create SwiftData ModelContainer: \(error)")
-            }
-            self.store = Store(modelContainer: container)
-        }
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView(store: store)
+            RootView()
                 .environment(appState)
                 .preferredColorScheme(.dark)   // Sentient OS is dark-only — no light mode
                 .task { await VaultCloud.pushIfDirty() }   // catch up a mirror sync deferred by an earlier quit/failure
@@ -66,7 +46,7 @@ struct SentientOSApp: App {
         // Title is intentionally blank: the in-app serif "Knowledge" header is the title, so we
         // don't want the native titlebar repeating it.
         Window("", id: DatabaseView.windowID) {
-            DatabaseView(store: store)
+            DatabaseView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
         }

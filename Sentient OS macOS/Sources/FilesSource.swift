@@ -55,7 +55,12 @@ struct FilesSource: DataSource, Sendable {
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic"]
     private static let maxContentChars = 8_000
     private static let pdfPageLimit = 3
-    private static let imageMaxPixel = 1_280   // ≈ 720p short edge on 16:9
+    // Longest-edge cap for the JPEG we hand the vision model. Gemma 4's encoder resizes EVERYTHING
+    // to 768×768 internally (per runtime logs: "Resize image … to 768x768"), so anything larger is
+    // wasted bytes/decode/copy — 768 is model-native and ≤720p in area for any aspect. (The old 1280
+    // only hit true 720p for 16:9 landscape; portrait/square scans stayed ~1.6 MP.) NOTE: this is the
+    // INPUT shrink — what the model actually *processes* is governed by visualTokenBudget (Engine).
+    private static let imageMaxPixel = 768
 
     // Test seam (DEBUG self-tests only — production never touches it): fixtures can't backdate
     // dateAdded on a real filesystem, so `testIgnoreDateAdded` makes file dates mtime-only.

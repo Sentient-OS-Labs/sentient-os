@@ -77,8 +77,10 @@ struct CycleNoteItem: Sendable, Identifiable {
     let reminderFlagged: Bool
     let createdAt: Date
 
+    /// On-disk path for file artifacts (sourceID is "file:/abs/path"); nil for DB/chat sources.
+    var filePath: String? { sourceID.hasPrefix("file:") ? String(sourceID.dropFirst(5)) : nil }
     var displayName: String {
-        if sourceID.hasPrefix("file:") { return URL(fileURLWithPath: String(sourceID.dropFirst(5))).lastPathComponent }
+        if let p = filePath { return URL(fileURLWithPath: p).lastPathComponent }
         return title ?? folder
     }
     var displayPath: String {

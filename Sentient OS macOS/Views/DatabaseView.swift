@@ -2,12 +2,10 @@
 //  DatabaseView.swift
 //  Sentient OS macOS
 //
-//  The knowledge inspector — a dark, glassy NavigationSplitView over the survivor summaries.
-//  Reads Sendable SummaryRecords from the Store (never touches @Model directly). With the
-//  ledger gone there are no junk/sensitive rows to show — what's here IS the knowledge.
-//  Summaries are versioned: the sidebar lists the latest version per source; the detail pane
-//  shows that source's full version history (edits over time). Real QuickLook thumbnails,
-//  source/folder filters, reminder gradient, Reveal-in-Finder / Open.
+//  The knowledge inspector — a dark, glassy NavigationSplitView over the CURRENT cycle's survivor
+//  summaries (CycleStore). Junk/sensitive leave zero trace, so what's here IS the knowledge: the
+//  on-device summaries that feed the cloud vault. Real QuickLook thumbnails, source/folder filters,
+//  search. (Summaries are ephemeral per cycle now — no version history.)
 //
 
 import SwiftUI
@@ -18,45 +16,37 @@ struct DatabaseView: View {
     /// Scene id for the standalone knowledge window (opened via `openWindow`).
     static let windowID = "knowledge"
 
-    let store: Store
-
-    @State private var records: [SummaryRecord] = []    // every version, newest first
+    @State private var notes: [CycleNoteItem] = []     // current cycle, newest first
     @State private var selectedID: String?
     @State private var search = ""
     @State private var kindFilter: SourceKind?      // nil = all sources
     @State private var folderFilter: String?        // nil = all folders
     @State private var loaded = false
 
-    /// Latest version per source (the sidebar rows), preserving newest-first order.
-    private var latest: [SummaryRecord] {
+    /// One row per source (defensive dedup — a cycle holds at most one note per source), newest first.
+    private var latest: [CycleNoteItem] {
         var seen = Set<String>()
-        return records.filter { seen.insert($0.sourceID).inserted }
+        return notes.filter { seen.insert($0.sourceID).inserted }
     }
 
-    private var filtered: [SummaryRecord] {
-        latest.filter { r in
-            (kindFilter == nil || r.kind == kindFilter)
-            && (folderFilter == nil || r.folder == folderFilter)
+    private var filtered: [CycleNoteItem] {
+        latest.filter { n in
+            (kindFilter == nil || n.kind == kindFilter)
+            && (folderFilter == nil || n.folder == folderFilter)
             && (search.isEmpty
-                || r.text.localizedCaseInsensitiveContains(search)
-                || (r.title?.localizedCaseInsensitiveContains(search) ?? false)
-                || r.sourceID.localizedCaseInsensitiveContains(search))
+                || n.text.localizedCaseInsensitiveContains(search)
+                || (n.title?.localizedCaseInsensitiveContains(search) ?? false)
+                || n.sourceID.localizedCaseInsensitiveContains(search))
         }
     }
 
-    /// Distinct non-empty folders present in the store (for the folder filter pills).
+    /// Distinct non-empty folders present (for the folder filter pills).
     private var folders: [String] {
         Array(Set(latest.map(\.folder).filter { !$0.isEmpty })).sorted()
     }
 
-    private var selected: SummaryRecord? {
+    private var selected: CycleNoteItem? {
         latest.first { $0.id == selectedID }
-    }
-
-    /// Every version of the selected source, newest first (records are already newest-first).
-    private var selectedVersions: [SummaryRecord] {
-        guard let s = selected else { return [] }
-        return records.filter { $0.sourceID == s.sourceID }
     }
 
     var body: some View {
@@ -69,7 +59,7 @@ struct DatabaseView: View {
         .frame(minWidth: 880, minHeight: 600)
         .background(Theme.bg)
         .task {
-            records = await store.allSummaries()
+            notes = await CycleStore.shared.notes()
             loaded = true
         }
     }
@@ -90,22 +80,16 @@ struct DatabaseView: View {
 
             ScrollView {
                 LazyVStack(spacing: 8) {
-                    ForEach(filtered) { record in
-                        RecordRow(record: record,
-                                  versions: versionCount(record.sourceID),
-                                  isSelected: record.id == selectedID)
-                            .onTapGesture { selectedID = record.id }
+                    ForEach(filtered) { note in
+                        RecordRow(note: note, isSelected: note.id == selectedID)
+                            .onTapGesture { selectedID = note.id }
                     }
                 }
                 .padding(.horizontal, 14).padding(.bottom, 24)
             }
-            .overlay { if loaded && records.isEmpty { emptyState } }
+            .overlay { if loaded && notes.isEmpty { emptyState } }
         }
         .background(Theme.bg)
-    }
-
-    private func versionCount(_ sourceID: String) -> Int {
-        records.count(where: { $0.sourceID == sourceID })
     }
 
     private var filterBar: some View {
@@ -169,7 +153,7 @@ struct DatabaseView: View {
         VStack(spacing: 8) {
             Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(Theme.faint)
             Text("No memories yet").foregroundStyle(Theme.secondary)
-            Text("Run an analysis to populate the store.")
+            Text("Run an analysis to populate it.")
                 .font(.caption).foregroundStyle(Theme.faint)
         }
         .padding(40)
@@ -178,8 +162,8 @@ struct DatabaseView: View {
     // MARK: Detail
 
     @ViewBuilder private var detail: some View {
-        if let record = selected {
-            RecordDetail(record: record, versions: selectedVersions)
+        if let note = selected {
+            RecordDetail(note: note)
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "rectangle.on.rectangle.angled")
@@ -195,21 +179,17 @@ struct DatabaseView: View {
 // MARK: - Row
 
 private struct RecordRow: View {
-    let record: SummaryRecord
-    let versions: Int
+    let note: CycleNoteItem
     let isSelected: Bool
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            FileThumbnail(path: record.filePath, size: 46)
+            FileThumbnail(path: note.filePath, size: 46)
             VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    if !record.folder.isEmpty { FolderTag(folder: record.folder) }
-                    if versions > 1 { VersionTag(count: versions) }
-                }
-                Text(record.title ?? record.displayName)
+                if !note.folder.isEmpty { FolderTag(folder: note.folder) }
+                Text(note.title ?? note.displayName)
                     .font(.subheadline.weight(.medium)).foregroundStyle(.white).lineLimit(1)
-                Text(record.text)
+                Text(note.text)
                     .font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
             }
             Spacer(minLength: 0)
@@ -228,62 +208,36 @@ private struct RecordRow: View {
 // MARK: - Detail
 
 private struct RecordDetail: View {
-    let record: SummaryRecord          // the latest version
-    let versions: [SummaryRecord]      // all versions, newest first (incl. `record`)
+    let note: CycleNoteItem
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack {
                     Spacer()
-                    FileThumbnail(path: record.filePath, size: 240, cornerRadius: 16)
+                    FileThumbnail(path: note.filePath, size: 240, cornerRadius: 16)
                     Spacer()
                 }
                 .padding(.top, 10)
 
-                Text(record.title ?? record.displayName)
+                Text(note.title ?? note.displayName)
                     .font(.serif(26)).italic().foregroundStyle(.white)
                     .textSelection(.enabled)
 
-                field("Summary", record.text)
+                field("Summary", note.text)
 
                 VStack(alignment: .leading, spacing: 11) {
-                    meta("Path", record.displayPath)
-                    meta("Source", DatabaseView.kindLabel(record.kind))
-                    if !record.folder.isEmpty { meta("Folder", record.folder) }
-                    if let d = record.itemDate {
-                        meta("Item date", d.formatted(date: .abbreviated, time: .shortened))
-                    }
-                    meta("Analyzed", record.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    meta("In vault", record.syncedToVault.map {
-                        $0.formatted(date: .abbreviated, time: .shortened)
-                    } ?? "queued for next update")
+                    meta("Path", note.displayPath)
+                    meta("Source", DatabaseView.kindLabel(note.kind))
+                    if !note.folder.isEmpty { meta("Folder", note.folder) }
+                    meta("Item date", note.itemDate.formatted(date: .abbreviated, time: .shortened))
+                    meta("Analyzed", note.createdAt.formatted(date: .abbreviated, time: .shortened))
                 }
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .glassCard()
 
-                if versions.count > 1 {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("VERSION HISTORY").font(.caption2.weight(.semibold)).tracking(1.2)
-                            .foregroundStyle(Theme.faint)
-                        ForEach(versions.dropFirst()) { v in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(v.createdAt.formatted(date: .abbreviated, time: .shortened))
-                                    .font(.caption2.monospaced()).foregroundStyle(Theme.faint)
-                                Text(v.text).font(.caption).foregroundStyle(Theme.secondary)
-                                    .textSelection(.enabled)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color.white.opacity(0.03),
-                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        }
-                    }
-                }
-
-                if let path = record.filePath {
+                if let path = note.filePath {
                     HStack(spacing: 10) {
                         Button {
                             NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
@@ -325,7 +279,7 @@ private struct RecordDetail: View {
 
 // MARK: - Tags
 
-/// A small accent chip showing which folder an artifact came from (Downloads / Desktop / …).
+/// A small accent chip showing which folder/chat an artifact came from (Downloads / a chat name / …).
 private struct FolderTag: View {
     let folder: String
     var body: some View {
@@ -336,18 +290,6 @@ private struct FolderTag: View {
         .foregroundStyle(Theme.accent)
         .padding(.horizontal, 6).padding(.vertical, 2)
         .background(Theme.accent.opacity(0.14), in: Capsule())
-    }
-}
-
-/// "3 versions" — this source has been re-analyzed after edits (summaries are versioned).
-private struct VersionTag: View {
-    let count: Int
-    var body: some View {
-        Text("\(count) versions")
-            .font(.system(size: 9, weight: .medium))
-            .foregroundStyle(Theme.secondary)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Color.white.opacity(0.08), in: Capsule())
     }
 }
 
