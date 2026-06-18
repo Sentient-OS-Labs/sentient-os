@@ -45,10 +45,7 @@ struct RootView: View {
         }
         .frame(minWidth: 920, minHeight: 660)
         .sheet(isPresented: $showDevTools) {
-            DevToolsView(customRoots: $customRoots) {
-                showDevTools = false
-                withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true }
-            }
+            DevToolsView(customRoots: $customRoots)
         }
         .onChange(of: showDevTools) { _, open in
             if !open { fdaGranted = Permissions.hasFullDiskAccess() }   // may have changed in the sheet
