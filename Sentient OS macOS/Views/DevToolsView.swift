@@ -18,8 +18,8 @@
 //  runs through the new self-contained stack (IterativeRun · VaultCloud · CycleStore) — the old
 //  Store/Pipeline/messages are untouched, reachable from "More" + the home's Analyze Now.
 //
-//  `SourceSelection` is the one shared reader of the dbg.run.* prefs so the home's Analyze Now and
-//  this sheet's legacy Start Analysis run EXACTLY the same selection.
+//  `SourceSelection` is the one shared reader of the dbg.run.* prefs, so the home's Analyze Now and
+//  this sheet's INITIAL/ITERATIVE buttons act on EXACTLY the same source selection.
 //
 
 import SwiftUI
@@ -79,8 +79,6 @@ struct DeviceJob: Identifiable {
 
 struct DevToolsView: View {
     @Binding var customRoots: [URL]
-    /// Closes the sheet and hands off to the (legacy) full-pipeline processing takeover.
-    var onStartAnalysis: () -> Void
 
     @Environment(\.dismiss) private var dismiss
 
@@ -523,9 +521,6 @@ struct DevToolsView: View {
 
             if showMore {
                 VStack(spacing: 12) {
-                    Button("Start Analysis (legacy)") { onStartAnalysis() }
-                        .buttonStyle(.bordered)
-
                     VStack(spacing: 4) {
                         Button(role: .destructive) { Task { await runReset() } } label: {
                             Label("Reset FILE store (pointers + summaries)", systemImage: "trash")
