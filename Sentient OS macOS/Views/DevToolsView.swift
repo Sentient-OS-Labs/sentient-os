@@ -103,8 +103,6 @@ struct DevToolsView: View {
     @State private var showIMessagePicker = false
     @State private var showSummaries = false
     @State private var showActionItems = false
-    @State private var showClearSummariesConfirm = false
-    @State private var clearSummariesResult: String?
     @State private var showMore = false
     @State private var fdaGranted = false
     @State private var resetResult: String?
@@ -159,7 +157,6 @@ struct DevToolsView: View {
                         viewActionItemsButton
                     }
                     mcpToggleButton
-                    clearSummariesButton
                     moreSection
                 }
                 .padding(24)
@@ -286,37 +283,6 @@ struct DevToolsView: View {
                 .frame(maxWidth: .infinity, minHeight: 40)
         }
         .buttonStyle(.bordered).tint(.orange)
-    }
-
-    /// Clears ALL current-cycle summaries at once (notes only; per-source pointers are kept — use the
-    /// Reset button below to also drop pointers). The proactive button no longer wipes, so this is the
-    /// one-click "empty the summaries" control.
-    private var clearSummariesButton: some View {
-        VStack(spacing: 5) {
-            Button(role: .destructive) { showClearSummariesConfirm = true } label: {
-                Label("CLEAR SUMMARIES", systemImage: "trash")
-                    .font(.caption2.weight(.bold)).tracking(1.5)
-                    .frame(maxWidth: .infinity, minHeight: 32)
-            }
-            .buttonStyle(.bordered).tint(.red)
-            if let s = clearSummariesResult {
-                Text(s).font(.system(.caption2, design: .monospaced)).foregroundStyle(.green)
-            }
-        }
-        .confirmationDialog("Clear all current summaries?", isPresented: $showClearSummariesConfirm,
-                            titleVisibility: .visible) {
-            Button("Clear All", role: .destructive) { Task { await clearSummaries() } }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Deletes every summary in the current cycle. Per-source pointers are kept, so an ITERATIVE run won't re-summarize past items — run INITIAL to fully re-summarize.")
-        }
-    }
-
-    @MainActor
-    private func clearSummaries() async {
-        let before = await CycleStore.shared.counts().notes
-        await CycleStore.shared.wipeAllNotes()
-        clearSummariesResult = "✓ cleared \(before) summar\(before == 1 ? "y" : "ies")"
     }
 
     // MARK: The actions (all on the NEW files-iterative stack)
@@ -682,6 +648,26 @@ struct DevToolsView: View {
                 }
                 .frame(maxWidth: 460)
                 .disabled(mirrorBusy)
+
+                // Dedicated manual sync — create/update no longer auto-push (they only mark the
+                // vault dirty), so this is the explicit "push the vault to the mirror now" step.
+                Button {
+                    Task { await runMirror {
+                        try await MirrorClient.shared.push()
+                        VaultActivity.shared.vaultDirty = false
+                        mirrorStatus = "✓ synced to mirror"
+                    } }
+                } label: {
+                    HStack(spacing: 7) {
+                        if mirrorBusy { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "arrow.triangle.2.circlepath") }
+                        Text("MCP SYNC").font(.caption.weight(.bold)).tracking(2)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 40)
+                }
+                .buttonStyle(.borderedProminent).tint(.purple)
+                .frame(maxWidth: 460)
+                .disabled(mirrorBusy)
             }
 
             if let mirrorStatus {
@@ -711,12 +697,6 @@ struct DevToolsView: View {
                     .font(.system(.caption2, design: .monospaced)).foregroundStyle(Theme.faint)
                     .lineLimit(1).truncationMode(.middle).textSelection(.enabled)
                 HStack(spacing: 8) {
-                    Button("Sync now") { Task { await runMirror {
-                        try await MirrorClient.shared.push()
-                        VaultActivity.shared.vaultDirty = false
-                        mirrorStatus = "✓ synced to mirror"
-                    } } }
-                    .buttonStyle(.bordered).controlSize(.small).tint(.purple).disabled(mirrorBusy)
                     Button("Stats") { Task { await runMirror {
                         let s = try await MirrorClient.shared.stats()
                         let last = s.lastAccess.map {
