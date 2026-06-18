@@ -4,7 +4,7 @@
 //
 //  Stage 2 — the cloud vault (Arch §6). Takes the on-device survivor summaries and has the
 //  user's own Codex CLI (via CodexCLI, Arch §5) organize them into an Obsidian-style
-//  markdown vault at "~/Sentient OS -- The Vault/": the model WRITES the .md files itself
+//  markdown vault at "~/Sentient OS - Knowledge Base/": the model WRITES the .md files itself
 //  (file tools, sandbox-scoped to a staging dir), which sidesteps per-message output caps
 //  and makes usage-limit resume natural. The old vault is only replaced on success
 //  (staging → atomic swap). No codex = no cloud organize until the free tier ships.
@@ -15,7 +15,7 @@
 //
 //  Key methods:
 //   - generate(summaries:resume:onProgress:)  → the agentic build, returns stats
-//   - vaultRoot                               → ~/Sentient OS -- The Vault
+//   - vaultRoot                               → ~/Sentient OS - Knowledge Base
 //
 //  Doc: Documentation/Vault Generation (Stage 2).md
 //
@@ -67,7 +67,7 @@ actor VaultGenerator {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Sentient OS -- The Vault", isDirectory: true)
+            .appendingPathComponent("Sentient OS - Knowledge Base", isDirectory: true)
     }
 
     // MARK: - The agentic build (codex exec)

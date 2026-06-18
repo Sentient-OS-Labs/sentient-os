@@ -148,7 +148,7 @@ actor MirrorClient {
     /// Zip the vault's CONTENTS into a temp .zip with ROOT-RELATIVE entries (`README.md`,
     /// `Career/Job.md`). We shell to `/usr/bin/zip` from inside the vault dir on purpose:
     /// NSFileCoordinator's `.forUploading` instead wraps everything under the vault folder name
-    /// (`Sentient OS -- The Vault/…`), which breaks the server's root-relative contract — the README
+    /// (`Sentient OS - Knowledge Base/…`), which breaks the server's root-relative contract — the README
     /// portrait stops bundling in `get_structure` and every note nests a level too deep. The macOS
     /// `zip` writes UTF-8 names without the 0x800 flag; the server recovers those. (`zip` ships with
     /// macOS; the app is non-sandboxed, so spawning it is fine — same as `CodexCLI`.)
