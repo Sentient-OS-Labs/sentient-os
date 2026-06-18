@@ -2,7 +2,7 @@
 //  FilesSource.swift
 //  Sentient OS macOS
 //
-//  DataSource over a user folder. Recurses subfolders, keeps only whitelisted extensions,
+//  Reads a user folder. Recurses subfolders, keeps only whitelisted extensions,
 //  and extracts a BOUNDED amount of content per type:
 //   • pdf              → first 3 pages of text (PDFKit)
 //   • doc / docx       → text (NSAttributedString, best-effort; legacy .doc may be empty)
@@ -33,7 +33,7 @@ import AppKit
 import ImageIO
 import UniformTypeIdentifiers
 
-struct FilesSource: DataSource, Sendable {
+struct FilesSource: Sendable {
     let kind: SourceKind = .file
     let root: URL
     let label: String   // human folder name ("Downloads", "Desktop", a custom folder…) → stored as each artifact's `folder` tag
@@ -165,137 +165,6 @@ struct FilesSource: DataSource, Sendable {
         "\(date.timeIntervalSince1970)|\(path)"
     }
 
-    static func parsePointer(_ raw: String?) -> (date: Double, path: String)? {
-        guard let raw, let bar = raw.firstIndex(of: "|"), let t = Double(raw[..<bar]) else { return nil }
-        return (t, String(raw[raw.index(after: bar)...]))
-    }
-
-    /// Is (date, path) strictly past the pointer? (nil pointer = everything qualifies.)
-    private static func isPast(_ pointer: (date: Double, path: String)?, date: Double, path: String) -> Bool {
-        guard let pointer else { return true }
-        return date > pointer.date || (date == pointer.date && path > pointer.path)
-    }
-
-    /// Strictly below the backfill descent watermark — the dig's mirror of `isPast`.
-    /// (nil = fail-closed: an unparseable `lo` digs nothing rather than re-digging everything.)
-    private static func isBelow(_ pointer: (date: Double, path: String)?, date: Double, path: String) -> Bool {
-        guard let pointer else { return false }
-        return date < pointer.date || (date == pointer.date && path < pointer.path)
-    }
-
-    // MARK: Scan (cheap — stat only, recurses subfolders)
-
-    func scan(since cursors: [String: String]) throws -> ScanResult {
-        let raw = cursors[cursorKey]
-        let backfill = BackfillCursor.decode(raw)
-        let pointer = backfill == nil ? Self.parsePointer(raw) : nil   // plain pointer (incremental)
-        let hiPointer = backfill.flatMap { Self.parsePointer($0.hi) }
-        let loPointer = backfill.flatMap { Self.parsePointer($0.lo) }
-        let now = Date()
-
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey,
-                                         .contentModificationDateKey, .creationDateKey,
-                                         .addedToDirectoryDateKey]
-        guard let enumerator = FileManager.default.enumerator(
-            at: root, includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return ScanResult(candidates: []) }
-
-        // Effective "moved-in" date per directory: a folder dragged into the root carries files
-        // with OLD dates — the folder's own dateAdded (propagated down the tree) rescues them.
-        // The enumerator is preorder (parents before children), so parent lookups always hit.
-        var movedIn: [String: Date] = [root.path: .distantPast]
-
-        var rows: [(candidate: Candidate, sortKey: Double)] = []
-        for case let url as URL in enumerator {
-            let vals = try? url.resourceValues(forKeys: keys)
-            let parentEff = movedIn[url.deletingLastPathComponent().path] ?? .distantPast
-
-            // Prune at the WALK level: skipDescendants() means nothing inside is ever yielded,
-            // so it never becomes a Candidate / sees inference.
-            if vals?.isDirectory == true {
-                if Self.pruneReason(url) != nil { enumerator.skipDescendants(); continue }
-                let added = Self.testIgnoreDateAdded ? .distantPast
-                                                     : (vals?.addedToDirectoryDate ?? .distantPast)
-                movedIn[url.path] = max(parentEff, min(added, now))   // future-clamped
-                continue   // directories are never candidates themselves
-            }
-
-            guard vals?.isRegularFile == true,
-                  Self.allowedExtensions.contains(url.pathExtension.lowercased()) else { continue }
-
-            let mtime = vals?.contentModificationDate ?? .distantPast
-            let added = Self.testIgnoreDateAdded ? .distantPast
-                                                 : (vals?.addedToDirectoryDate ?? .distantPast)
-            // The file's date: whichever signal is closest to today, clamped so a future-dated
-            // file (clock weirdness) is treated as "now" instead of poisoning the pointer.
-            let date = min(max(mtime, added, parentEff), now)
-
-            // Keep only rows the current pointer state could consume: incremental = past the
-            // plain pointer; backfill resume = above hi OR below lo; backfill start = everything.
-            let (d, p) = (date.timeIntervalSince1970, url.path)
-            if backfill != nil {
-                guard Self.isPast(hiPointer, date: d, path: p) || Self.isBelow(loPointer, date: d, path: p) else { continue }
-            } else {
-                guard Self.isPast(pointer, date: d, path: p) else { continue }
-            }
-
-            var meta: [String: String] = [
-                "path": url.path,
-                "displayPath": Self.homeRelativePath(url),
-                "name": url.lastPathComponent,
-                "folder": label,
-            ]
-            if let created = vals?.creationDate { meta["created"] = Self.dateString(created) }
-
-            let candidate = Candidate(id: "file:\(url.path)", kind: .file,
-                                      cursorKey: cursorKey,
-                                      cursorValue: Self.pointerValue(date: date, path: url.path),
-                                      itemDate: date, metadata: meta)
-            rows.append((candidate, date.timeIntervalSince1970))
-        }
-        // ── Backfill resume: new-above-hi first (ascending), then dig below lo (descending) ──
-        if let backfill {
-            let aboveRows = rows.filter {
-                Self.isPast(hiPointer, date: $0.sortKey, path: $0.candidate.metadata["path"] ?? "")
-            }
-            let aboveAsc = cappedNewestFirst(aboveRows, budget: Self.perRootCap, now: now)
-                .sorted { ($0.itemDate, $0.id) < ($1.itemDate, $1.id) }
-            let belowRows = rows.filter {
-                Self.isBelow(loPointer, date: $0.sortKey, path: $0.candidate.metadata["path"] ?? "")
-            }
-            let budget = backfill.remaining ?? 0
-            let dig = budget > 0
-                ? cappedNewestFirst(belowRows, budget: min(budget, Self.perRootCap), now: now) : []
-            if dig.isEmpty {
-                // Backfill over (budget spent, everything below aged out, or nothing left) —
-                // collapse to a plain pointer; the new items proceed as ordinary incrementals.
-                return ScanResult(candidates: aboveAsc, completions: [cursorKey: backfill.hi])
-            }
-            // The dig's writes must carry the hi the above-group will have swept up to.
-            let hiFinal = aboveAsc.last?.cursorValue ?? backfill.hi
-            let aboveCands = aboveAsc.map {
-                $0.replacingCursorValue(BackfillCursor(hi: $0.cursorValue, lo: backfill.lo,
-                                                       remaining: budget).encoded)
-            }
-            return ScanResult(candidates: aboveCands + BackfillCursor.descent(dig, hi: hiFinal, budget: budget))
-        }
-
-        // ── Backfill start (no pointer at all): newest-first descent over the capped selection ──
-        if raw == nil {
-            let kept = cappedNewestFirst(rows, budget: Self.perRootCap, now: now)
-            guard let hi = kept.first?.cursorValue else { return ScanResult(candidates: []) }
-            return ScanResult(candidates: BackfillCursor.descent(kept, hi: hi, budget: kept.count))
-        }
-
-        // ── Incremental (plain pointer): newest-N selection, OLDEST-FIRST consumption — the
-        // pointer sweeps forward and a stopped run resumes exactly here. Unchanged behavior. ──
-        let kept = cappedNewestFirst(rows, budget: Self.perRootCap, now: now)
-        return ScanResult(candidates: kept.sorted {
-            ($0.itemDate, $0.id) < ($1.itemDate, $1.id)   // id = "file:<path>" → path tiebreak
-        })
-    }
-
     // MARK: Eligible files (the files-iterative system's flat, pointer-free view)
 
     /// The current eligible set for this root, for the iterative system (IterativeRun via
@@ -371,9 +240,8 @@ struct FilesSource: DataSource, Sendable {
 
     // MARK: Load (expensive — extract content)
 
-    func load(_ candidate: Candidate) throws -> Artifact { try Self.loadArtifact(candidate) }
 
-    /// Static content extraction — shared by the old DataSource path (above) and the files-iterative
+    /// Content extraction for the files-iterative
     /// `FilesConnector`. Stateless: reads only `candidate.metadata["path"]`.
     static func loadArtifact(_ candidate: Candidate) throws -> Artifact {
         guard let path = candidate.metadata["path"] else { throw FilesError.noPath }
