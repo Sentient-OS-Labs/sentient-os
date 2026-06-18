@@ -13,6 +13,7 @@ struct SummariesView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var notes: [CycleNoteItem] = []
     @State private var loaded = false
+    @State private var showClearConfirm = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -20,6 +21,8 @@ struct SummariesView: View {
                 Text("SUMMARIES · \(notes.count)")
                     .font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
                 Spacer()
+                Button("Clear All", role: .destructive) { showClearConfirm = true }
+                    .controlSize(.small).tint(.red).disabled(notes.isEmpty)
                 Button("Refresh") { Task { await load() } }.controlSize(.small)
                 Button("Done") { dismiss() }.controlSize(.small)
             }
@@ -45,6 +48,18 @@ struct SummariesView: View {
         .frame(width: 640, height: 720)
         .background(Theme.bg)
         .task { await load() }
+        .confirmationDialog("Clear all current summaries?", isPresented: $showClearConfirm,
+                            titleVisibility: .visible) {
+            Button("Clear All", role: .destructive) { Task { await clearAll() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Deletes every summary in the current cycle. Per-source pointers are kept, so an ITERATIVE run won't re-summarize past items — run INITIAL to fully re-summarize.")
+        }
+    }
+
+    private func clearAll() async {
+        await CycleStore.shared.wipeAllNotes()
+        await load()
     }
 
     private func row(_ n: CycleNoteItem) -> some View {

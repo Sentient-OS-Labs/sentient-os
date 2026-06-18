@@ -11,7 +11,8 @@
 //
 //  Proactive intelligence is its OWN module — see Proactive.swift (Arch §6: own module + trigger).
 //  Connector-agnostic: operates on `CycleStore.notes()` regardless of source (files / notes / chats).
-//  After create/update the mirror is pushed (same rule as the retired DaysEndJob.pushIfDirty).
+//  Create/update only MARK the vault dirty; MCP sync is a SEPARATE step (the dev "MCP SYNC" button →
+//  MirrorClient.push, plus pushIfDirty() as the on-launch catch-up). Re-couple in markDirty() later.
 //
 
 import Foundation
@@ -78,7 +79,7 @@ actor VaultCloud {
         do {
             let result = try await VaultGenerator().generate(notes: notes, resume: createResume, onProgress: onProgress)
             createResume = nil
-            await markDirtyAndPush()
+            await markDirty()
             return result
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
             createResume = resume
@@ -124,7 +125,7 @@ actor VaultCloud {
         do {
             let envelope = try await CodexCLI.shared.run(invocation)
             updateResumeSessionID = nil
-            await markDirtyAndPush()
+            await markDirty()
             Log("VaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1)) — \(envelope.result.prefix(120))")
             return notes.count
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
@@ -138,12 +139,14 @@ actor VaultCloud {
         }
     }
 
-    // MARK: Mirror push (restores the retired DaysEndJob.pushIfDirty durable retry)
+    // MARK: Mirror push
 
-    /// Mark the vault changed, then immediately try to sync it to the mirror.
-    private func markDirtyAndPush() async {
+    /// Flag the vault as changed (so a later sync knows there's something to push) WITHOUT pushing.
+    /// MCP sync is currently a SEPARATE manual step — the dev "MCP SYNC" button calls
+    /// `MirrorClient.push()`, and `pushIfDirty()` runs on app launch as the catch-up. To restore
+    /// auto-push-after-KB-update, just call `await Self.pushIfDirty()` here.
+    private func markDirty() async {
         await MainActor.run { VaultActivity.shared.vaultDirty = true }
-        await Self.pushIfDirty()
     }
 
     /// Push the vault to the mirror IFF the mirror is enabled AND there's an unsynced change

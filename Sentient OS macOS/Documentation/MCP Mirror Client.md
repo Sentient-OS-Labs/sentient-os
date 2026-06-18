@@ -38,24 +38,26 @@ contract. (We deliberately do *not* use `NSFileCoordinator.forUploading`: it wra
 the vault folder name, which breaks the README-portrait bundling in `get_structure`. The server
 also defensively unwraps a lone wrapper dir, so old clients still sync correctly.)
 
-**The sync happens automatically after every knowledge-base change.** `VaultCloud.create()` and
-`VaultCloud.update()` each end with `markDirtyAndPush()`, which sets `VaultActivity.vaultDirty`
-then calls **`VaultCloud.pushIfDirty()`** — the single push orchestrator: push only if the mirror
-is enabled AND the vault is dirty, clearing the dirty flag only on a successful push. A failure
-leaves `vaultDirty` set so the next trigger retries. `SentientOSApp` also calls
-`VaultCloud.pushIfDirty()` once on launch (a `.task` on `RootView`) — the **durable catch-up** for
-a push that failed or never ran (e.g. the app quit between a KB update and its push). `vaultDirty`
-is persisted in `UserDefaults`, so a deferred sync survives a relaunch. (This restores the retry
-the retired `DaysEndJob.pushIfDirty()` used to provide; future vault-editor saves hook in the same
-way.)
+**Sync is currently a SEPARATE manual step (dev decision — trivially re-couplable).**
+`VaultCloud.create()` and `VaultCloud.update()` only **mark the vault dirty** (`VaultActivity.vaultDirty`)
+— they no longer auto-push. The push happens via:
+- the **MCP SYNC** button in DEV TOOLS — a forced `MirrorClient.push()` that clears the dirty flag, and
+- **`VaultCloud.pushIfDirty()`** on app launch (a `.task` on `RootView`) — the durable catch-up that
+  pushes iff the mirror is enabled AND the vault is dirty, clearing the flag only on success.
+
+`vaultDirty` is persisted in `UserDefaults`, so a deferred sync survives a relaunch. To restore
+auto-push-after-KB-update, call `await Self.pushIfDirty()` from `VaultCloud.markDirty()`.
 
 ## Turning the mirror on (today)
 
 The opt-in is "mint a token" — `enable()`. The real onboarding/Settings opt-in UI is Phase 5, so
-ahead of that there's a **MCP TOGGLE** button in **DEV TOOLS** (`DevToolsView`): ON mints the token
-and pushes the current vault; OFF deletes the cloud copy and forgets the token. Detailed actions
-(copy share link, force a Sync now, read access stats) sit under **More** while the mirror is ON.
-Use this to dogfood end-to-end sync on a real INITIAL/ITERATIVE cloud run.
+ahead of that the **DEV TOOLS** panel (`DevToolsView`) exposes, while the mirror is ON:
+- **MCP TOGGLE** — ON mints the token + pushes the current vault; OFF deletes the cloud copy + forgets the token.
+- **Copy MCP Link** / **Copy System Prompt** — the share URL and the coached connector prompt to paste into ChatGPT/Claude.
+- **MCP SYNC** — force-push the current vault to the mirror (sync is a separate manual step now; see Sync above).
+- **Stats** (under **More**) — the access-log summary.
+
+Use these to dogfood end-to-end sync on a real INITIAL/ITERATIVE cloud run.
 
 ## Keychain
 
