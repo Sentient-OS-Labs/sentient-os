@@ -64,8 +64,9 @@ final class CycleNote {
     }
 }
 
-/// A Sendable snapshot of one CycleNote — what VIEW SUMMARIES + the cloud calls consume.
-struct CycleNoteItem: Sendable, Identifiable {
+/// A Sendable snapshot of one CycleNote — what VIEW SUMMARIES + the cloud calls consume. Codable so
+/// a whole summary set can be exported/imported between devs (computed props below aren't stored).
+struct CycleNoteItem: Codable, Sendable, Identifiable {
     let id: String             // sourceID (unique within a cycle)
     let bucketKey: String
     let kind: SourceKind
@@ -89,6 +90,15 @@ struct CycleNoteItem: Sendable, Identifiable {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return p.hasPrefix(home) ? "~" + String(p.dropFirst(home.count)) : p
     }
+}
+
+/// The JSON shape for exporting/importing a summary set between devs (a debug tool — e.g. share a
+/// rich CycleStore so a co-founder can build proactive against real context). Notes ONLY: pointers
+/// are never exported (a dev's high-water marks are meaningless — and harmful — on another machine).
+struct SummaryExport: Codable, Sendable {
+    var version = 1
+    var exportedAt = Date()
+    var notes: [CycleNoteItem]
 }
 
 // MARK: - The actor
@@ -151,6 +161,21 @@ actor CycleStore {
     /// End-of-cycle wipe (fired by the proactive button) — pointers persist, notes do not.
     func wipeAllNotes() {
         try? modelContext.delete(model: CycleNote.self)
+        try? modelContext.save()
+    }
+
+    /// Bulk-insert notes from an export file (dev cross-pollination — share a rich summary set with a
+    /// co-founder). Preserves each note's original createdAt + itemDate so proactive's recency windows
+    /// stay faithful to the source timeline. `replace` wipes existing notes first. Pointers are NEVER
+    /// touched — an import carries summaries only, so the importer's own processing state is unaffected.
+    func importNotes(_ items: [CycleNoteItem], replace: Bool) {
+        if replace { try? modelContext.delete(model: CycleNote.self) }
+        for it in items {
+            modelContext.insert(CycleNote(
+                bucketKey: it.bucketKey, kind: it.kind, sourceID: it.sourceID,
+                folder: it.folder, itemDate: it.itemDate, text: it.text,
+                title: it.title, reminderFlagged: it.reminderFlagged, createdAt: it.createdAt))
+        }
         try? modelContext.save()
     }
 
