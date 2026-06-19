@@ -68,6 +68,12 @@ struct Orb: View {
                 .fill(AngularGradient(colors: Orb.haloColors(for: mode), center: .center))
                 .frame(width: size * 1.8, height: size * 1.8)
                 .blur(radius: size * 0.30)
+                // .drawingGroup() rasterizes at the view's RECTANGULAR bounds and clips the
+                // blur's soft falloff — without this padding the glow is chopped into a hard
+                // square that then visibly spins (haloLayer rotates the cached texture). Pad so
+                // the whole blur tail fits inside the raster bounds; the margin is transparent,
+                // so the halo stays a soft circle. (Disc reaches ~0.9·size, blur adds ~0.9·size.)
+                .padding(size * 1.1)
                 .drawingGroup()
         }
     }

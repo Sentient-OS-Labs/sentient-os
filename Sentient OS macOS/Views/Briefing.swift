@@ -27,7 +27,7 @@ struct Briefing: Identifiable {
         var accent: Color {
             switch self {
             case .meeting:  Color(red: 0.36, green: 0.55, blue: 1.00)   // cobalt
-            case .overdue:  Theme.Ink.amber
+            case .overdue:  Color(red: 1.00, green: 0.50, blue: 0.18)   // overdue orange — hotter than amber
             case .promise:  Theme.Ink.mint
             case .deadline: Color(red: 1.00, green: 0.42, blue: 0.45)   // ember
             case .plan:     Color(red: 0.72, green: 0.46, blue: 0.96)   // orchid
@@ -73,29 +73,38 @@ struct Briefing: Identifiable {
 
     // MARK: The demo six
 
+    /// The EXACT reply we send Serena — ONE source of truth, shared by the Anthos card's draft
+    /// PREVIEW (what you read when you click the card) and the `codexPrompt` that actually sends
+    /// it. They interpolate this same string, so the preview and the sent email can never drift.
+    private static let anthosReply = """
+        Hey Serena,
+
+        Thanks for reaching out, and that's awesome to hear! :)
+
+        Would love to chat! I think you'll be surprised — what you see on the website right now is a really old version of Sentient from over a month ago.
+
+        I'm using our core on-device processing moat to build a knowledge base for all your LLMs from your entire life. And cooler still, what I call Proactive Intelligence:
+
+        Sentient, with its continuous free on-device compute, understands your entire life and then *acts* on it for you (backed by that rich knowledge base!). It does this through computer use and browser use.
+
+        I'd love to show you live any time you're free. Would tomorrow (Friday) work? If not, happy to chat early next week.
+
+        Best,
+        Jesai
+        """
+
     static let demo: [Briefing] = [
         Briefing(
             id: "anthos", kind: .overdue,
-            kicker: "Overdue · 4 days · Gmail",
-            title: "You ghosted Anthos Capital.",
-            body: "Serena cold-emailed four days ago — $3B+ AUM, names like Honey and Kalshi. She wants time next week. I wrote your reply.",
+            kicker: "Overdue · 6 days · Gmail",
+            title: "You still haven't replied to Anthos Capital.",
+            body: "Serena emailed six days ago — $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
             letter: """
-            Serena Saxena from Anthos Capital cold-emailed four days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
+            Serena Saxena from Anthos Capital emailed six days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
 
-            She's in LA and asked for time early next week. You went quiet. Let's fix that — the draft's below, warm and ready.
+            She's in LA and asked for time early this week. You went quiet. Let's fix that — the draft's below, warm and ready.
             """,
-            draft: """
-            Hi Serena,
-
-            Thank you for reaching out — and for going down the on-device rabbit hole. That's exactly the bet.
-
-            Quick context: Sentient OS is a private, on-device intelligence layer for your whole digital life. Your Mac reads everything you've saved — files, screenshots, WhatsApp, iMessage, Notes — entirely on your own hardware, and distills it into a knowledge vault every AI you use can plug into. Raw data never leaves the device. We hit 2,500+ waitlist signups in 24 hours from a single Reddit post, and we launch publicly this month.
-
-            I'd love to find time next week. I'm in SF — happy to do a call, or grab time if you're ever up here. Would Tuesday or Wednesday afternoon work on your end?
-
-            Best,
-            Jesai
-            """,
+            draft: Briefing.anthosReply,
             draftLabel: "Draft · Gmail",
             detailLabel: "read the draft",
             offer: "Should I send it for you?",
@@ -104,8 +113,18 @@ struct Briefing: Identifiable {
                       "→ composing your reply…",
                       "✓ sent"],
             doneTitle: "Sent to Anthos.",
-            doneBody: "Serena has your reply — and two times next week.",
-            codexPrompt: "Open Gmail and reply to Serena Saxena (Anthos Capital) with the approved draft in this briefing. Send it."),
+            doneBody: "Serena has your reply — Friday, or early next week.",
+            codexPrompt: """
+            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
+
+            Use the Gmail MCP to reply to the email from jesaitarun@gmail.com with the subject "Sentient OS test". Reply in that thread and send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
+
+            \(Briefing.anthosReply)
+
+            Send this reply now via the Gmail MCP — the user has already approved this send. Do not ask, do not draft-and-wait; complete the send and confirm it went out.
+
+            IMPORTANT — formatting: send it as an HTML email. Set the send tool's content_type to "text/html" and format the body as clean HTML so it reflows naturally in the reader's inbox: put EACH paragraph above inside its own <p>…</p> tag, and write the sign-off as "Best,<br>Jesai". Keep every word — including ":)", the "—" em-dash, "*acts*", and "(Friday)" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph; plain text gets hard-wrapped mid-sentence, which is the ugly formatting we're fixing.
+            """),
 
         Briefing(
             id: "luis", kind: .meeting,
@@ -175,37 +194,24 @@ struct Briefing: Identifiable {
             codexPrompt: "Use the browser to open the ZFellows Dropout Graduation registration and submit it for Jesai Tarun, UMass Amherst, building Sentient OS."),
 
         Briefing(
-            id: "deepika", kind: .plan,
-            kicker: "Warm intro · 3 days · Gmail",
-            title: "Deepika opened a $1.5M door.",
-            body: "She's connecting you with Jordan, Outlander's senior partner, and asked for a TLDR she can forward. I wrote it.",
+            id: "fareed", kind: .meeting,
+            kicker: "Prep · Tomorrow · Researched",
+            title: "Prepare for your call with Fareed from Speedrun tomorrow.",
+            body: "Remember: Josh Lu wanted Fareed to be your a16z Speedrun partner. I've researched and found that GTM strategy matters a lot to him. Here's a doc that'll help you prepare for your call.",
             letter: """
-            Deepika (Outlander VC) loved Sentient and is connecting you with Jordan, their senior partner, to talk through the ~$1.5M. She asked for a TLDR she could forward.
+            Remember: Josh Lu wanted Fareed to be your a16z Speedrun partner — and your call is tomorrow. I went through everything and pulled together what'll get you ready.
 
-            That was three days ago. Time to land it — the draft is below, written to be forwarded.
+            ✦ **GTM is his lens.** Across his bets and writing, Fareed weighs go-to-market harder than almost anything. He'll want a crisp distribution story, not just the tech.
+
+            ✦ **Open with the Reddit moment.** 2,500+ waitlist signups in 24 hours from a single post, $0 spent — that's the GTM proof that lands with him. Lead with it.
+
+            ✦ **Have the wedge ready.** Consumer free-forever as the loved wedge; the enterprise per-employee intelligence layer as the business. Expect him to push on how one becomes the other.
+
+            Walk in leading with distribution. — your Sentient
             """,
-            draft: """
-            Hi Deepika,
-
-            So great speaking with you — and thank you for connecting me with Jordan! Here's a TLDR you can forward along:
-
-            Sentient OS is the private, on-device intelligence layer for your digital life. Your Mac reads everything you've saved — files, screenshots, WhatsApp, iMessage, Notes — entirely on your own hardware, and distills it into a knowledge vault every AI you use can plug into. Raw data never leaves the device. 2,500+ waitlist signups in 24 hours from a single Reddit post, a working product, and a public launch this month.
-
-            Would love to walk Jordan through a live demo whenever suits.
-
-            Best,
-            Jesai
-            """,
-            draftLabel: "Draft · Gmail",
-            detailLabel: "read the draft",
-            offer: "Should I send it for you?",
-            workLog: ["→ reading the thread with Deepika",
-                      "→ opening Gmail",
-                      "→ composing the forwardable TLDR…",
-                      "✓ sent"],
-            doneTitle: "Sent to Deepika.",
-            doneBody: "The TLDR is on its way to Jordan.",
-            codexPrompt: "Open Gmail and reply to the latest thread with Deepika (Outlander VC) using the approved draft in this briefing. Send it."),
+            detailLabel: "read the prep doc",
+            offer: nil,
+            doneTitle: "", doneBody: ""),
 
         Briefing(
             id: "welcome", kind: .welcome,

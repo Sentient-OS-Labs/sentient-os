@@ -16,8 +16,13 @@ piggybacks on the user's own Codex CLI (their ChatGPT subscription pays). Replac
 
 `Invocation`: `prompt` (always over **stdin**, never argv) · `effort` (`.high` = initial gen,
 `.medium` = everything daily) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` ·
-`addDirs` (extra writable roots) · `webSearch` · `outputSchema` (JSON-Schema
-string → temp file → `--output-schema`) · `resumeSessionID` · `timeout` (default 1 h).
+`addDirs` (extra writable roots) · `webSearch` (**default `true`** — web search is available to
+every call) · `includeUserConfig` (**default `true`** — loads `~/.codex` + the user's MCP
+servers, e.g. their Gmail MCP, on every call; set `false` for a hermetic run) · `bypassApprovals`
+(default `false`; `true` → `--dangerously-bypass-approvals-and-sandbox`, the only way a hosted-
+connector WRITE tool like Gmail `send_email` fires headless — TRUSTED prompts only, no sandbox) ·
+`outputSchema` (JSON-Schema string → temp file → `--output-schema`) · `resumeSessionID` · `timeout`
+(default 1 h).
 
 `Envelope`: `result` (final agent message) · `sessionID` (thread id — the resume handle) ·
 `numTurns` (completed items) · `durationMS` (wall clock, measured here) · `inputTokens` /
@@ -29,8 +34,11 @@ string → temp file → `--output-schema`) · `resumeSessionID` · `timeout` (d
 |---|---|
 | `--json` | JSONL events → the envelope. `thread.started` carries the thread id in the FIRST event, so the resume handle survives mid-run failures. |
 | `--skip-git-repo-check` | staging dirs and the vault aren't git repos; codex refuses to run otherwise |
-| `--ignore-user-config` | hermetic runs — the user's personal `~/.codex/config.toml` (personality, plugins, MCP servers) must never leak into our jobs |
+| `--ignore-user-config` | **Default OFF (we DON'T pass it):** `Invocation.includeUserConfig` defaults `true`, so every call loads the user's `~/.codex` config + MCP servers (their Gmail MCP, etc.). We pass `--ignore-user-config` ONLY for an explicitly hermetic run (`includeUserConfig = false`). |
+| `-c tools.web_search=true` | added whenever `Invocation.webSearch` is true — now the **default**, so web search is an available tool on every call |
 | `-m gpt-5.5` + `-c model_reasoning_effort=…` | explicit beats the binary's drifting default |
+| `-c approval_policy="never"` (default path) | headless `exec` can't ask a human, so without it codex would stall on shell/file approvals. `never` = don't prompt; the Seatbelt sandbox (`-s`) stays the real guardrail. **Caveat:** for hosted-connector WRITE tools this resolves to auto-CANCEL, not auto-allow (`gmail.send_email` → "user cancelled MCP tool call") — that needs `bypassApprovals` instead |
+| `--dangerously-bypass-approvals-and-sandbox` (`bypassApprovals`) | the ONLY lever that makes an approval-gated connector write (Gmail `send_email`) fire headless. Removes BOTH approvals AND the sandbox, so it's mutually exclusive with `-s`/`approval_policy`. Used for the For You "send it" action. **TRUSTED, app-authored prompts only** — there's no sandbox left |
 | `-s <sandbox>` | OS-level Seatbelt confinement — stronger than a tool allowlist; even model-run shell commands can't escape cwd + addDirs |
 
 Web search = `-c tools.web_search=true` (`--search` exists only on the interactive CLI, not
