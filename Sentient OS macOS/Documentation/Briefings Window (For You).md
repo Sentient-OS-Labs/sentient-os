@@ -20,8 +20,8 @@ the full gradient).
 the loop in `ForYouModel.run` with `CodexCLI.run` on `codexPrompt`, streaming JSONL events
 into the same lines. One swap point, clearly marked.
 
-**All six cards are hard-coded showcase content** (Deepika/Outlander · Luis/Headline ·
-Dad's shoes · ZFellows · SF break plan · the welcome letter), mined from the real vault for
+**All six cards are hard-coded showcase content** (Anthos/Gmail · Luis/Headline ·
+AIM/press · ZFellows · Fareed/a16z-call · the welcome letter), mined from the real vault for
 authenticity. The proactive module generates real ones post-launch.
 
 ## `Views/BriefingCard.swift` — the card's four lives

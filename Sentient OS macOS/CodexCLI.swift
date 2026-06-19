@@ -60,7 +60,16 @@ actor CodexCLI {
         var sandbox: Sandbox = .readOnly
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd
-        var webSearch = false                  // native web_search tool
+        var webSearch = true                   // native web_search tool — available to EVERY call
+        var includeUserConfig = true           // load the user's ~/.codex config + MCP servers (e.g.
+                                               // their Gmail MCP) for EVERY call. Set false for a
+                                               // hermetic run (then we pass --ignore-user-config).
+        var bypassApprovals = false            // --dangerously-bypass-approvals-and-sandbox: NO
+                                               // approval prompts AND NO sandbox. Needed for hosted
+                                               // connector WRITE tools (Gmail `send_email`), which
+                                               // are approval-gated and return "user cancelled MCP
+                                               // tool call" headless even under approval_policy=never.
+                                               // TRUSTED, app-authored prompts ONLY (no sandbox!).
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
         var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
@@ -219,15 +228,32 @@ actor CodexCLI {
         if let sid = inv.resumeSessionID { args += ["resume", sid] }
         args += ["--json",
                  "--skip-git-repo-check",      // staging dirs and the vault aren't git repos
-                 "--ignore-user-config",       // hermetic: personal config/plugins stay out of our jobs
                  "-m", inv.model.rawValue,
                  "-c", "model_reasoning_effort=\"\(inv.effort.rawValue)\""]
-        if inv.resumeSessionID == nil {
-            args += ["-s", inv.sandbox.rawValue]
-            if let cwd = inv.cwd { args += ["--cd", cwd] }
-            for dir in inv.addDirs { args += ["--add-dir", dir] }
+        if !inv.includeUserConfig {
+            args += ["--ignore-user-config"]   // explicit hermetic opt-out only — includeUserConfig
+        }                                      // defaults TRUE, so by default we DON'T pass this and
+                                               // the user's ~/.codex config + MCP servers ARE loaded.
+
+        // Approvals + sandbox. `codex exec` is headless and can't answer an approval prompt:
+        //  · default → `approval_policy=never` (don't stall) + the Seatbelt sandbox (`-s`) as the
+        //    real guardrail for shell/file ops.
+        //  · bypassApprovals → `--dangerously-bypass-approvals-and-sandbox` (NO approvals, NO
+        //    sandbox). Required for hosted-connector WRITE tools (Gmail `send_email`), which are
+        //    approval-gated and return "user cancelled MCP tool call" headless even under
+        //    approval_policy=never. Mutually exclusive — codex rejects `-s`/approval_policy with it.
+        if inv.bypassApprovals {
+            args += ["--dangerously-bypass-approvals-and-sandbox"]
+            if inv.resumeSessionID == nil, let cwd = inv.cwd { args += ["--cd", cwd] }
         } else {
-            args += ["-c", "sandbox_mode=\"\(inv.sandbox.rawValue)\""]
+            args += ["-c", "approval_policy=\"never\""]
+            if inv.resumeSessionID == nil {
+                args += ["-s", inv.sandbox.rawValue]
+                if let cwd = inv.cwd { args += ["--cd", cwd] }
+                for dir in inv.addDirs { args += ["--add-dir", dir] }
+            } else {
+                args += ["-c", "sandbox_mode=\"\(inv.sandbox.rawValue)\""]
+            }
         }
         if inv.webSearch { args += ["-c", "tools.web_search=true"] }
         if let schemaFile { args += ["--output-schema", schemaFile] }

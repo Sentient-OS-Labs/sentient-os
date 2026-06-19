@@ -64,7 +64,7 @@ struct BriefingsView: View {
             Text(greeting)
                 .font(.system(size: 30, design: .serif).italic())
                 .foregroundStyle(Theme.Ink.statusInk)
-            MonoCaps(Demo.readLine(count: model.entries.count), size: 9.5, tracking: 2.2,
+            MonoCaps(Demo.readLine, size: 9.5, tracking: 2.2,
                      color: Theme.Ink.deepMuted)
         }
         .padding(.leading, 36).padding(.top, 28)
@@ -219,12 +219,23 @@ final class ForYouModel {
         update(e.id) { $0.phase = .offer }
     }
 
-    /// Fire the offer. THE CODEX SEAM: real execution replaces the scripted loop below with
-    /// `CodexCLI.shared.run(...)` on `briefing.codexPrompt`, streaming JSONL events into the
-    /// same `working(n)` lines. The demo plays the briefing's hard-coded theater.
+    /// Fire the offer. THE CODEX SEAM: most cards play the briefing's hard-coded `workLog`
+    /// theater, but the Anthos card is wired LIVE — it actually runs `CodexCLI.shared.run(...)`
+    /// on its `codexPrompt` (via `fireLiveCodex`, a real Gmail-MCP send) while the theater plays
+    /// for show; the real outcome is logged. Streaming JSONL into `working(n)` is the next step.
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
         let v = visit
+
+        // THE CODEX SEAM — LIVE for the Anthos card: actually run `codex exec` on its codexPrompt
+        // (real CodexCLI.run, with the user's Gmail MCP in scope, so the reply truly sends). The
+        // scripted theater below still plays for visual feedback; the real run happens in the
+        // background and its outcome is logged. Other cards stay pure demo — their prompts would
+        // attempt bogus sends.
+        if e.b.id == "anthos", let prompt = e.b.codexPrompt {
+            Task.detached(priority: .utility) { await Self.fireLiveCodex(prompt) }
+        }
+
         Task {
             withAnimation(.easeInOut(duration: 0.3)) { update(id) { $0.phase = .working(0) } }
             for n in 1...e.b.workLog.count {
@@ -239,6 +250,26 @@ final class ForYouModel {
             guard self.visit == v else { return }
             dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
                                        height: -CGFloat.random(in: 350...560)))
+        }
+    }
+
+    /// Live CODEX SEAM test (Anthos card): run the prompt through the real `codex exec` spine.
+    /// The user's Gmail MCP rides the CodexCLI defaults; `bypassApprovals` lets the connector's
+    /// approval-gated `send_email` actually fire headless. Outcome → `Log()` (tail /tmp/sentient-dev.log).
+    nonisolated static func fireLiveCodex(_ prompt: String) async {
+        Log("ForYou/codex: firing live codex exec (Anthos → Gmail MCP)…")
+        do {
+            var inv = CodexCLI.Invocation(prompt: prompt)
+            inv.effort = .medium                // an email reply doesn't need xhigh
+            inv.bypassApprovals = true          // hosted Gmail send_email is approval-gated → it
+                                                // auto-cancels headless unless we bypass approvals
+            inv.timeout = 300
+
+            let env = try await CodexCLI.shared.run(inv)
+            Log("ForYou/codex: ✓ finished in \(env.durationMS ?? -1)ms (\(env.numTurns ?? -1) turns) — \(env.result)")
+            Log("ForYou/codex: --- full JSONL (debug) ---\n\(env.raw)\n--- end JSONL ---")
+        } catch {
+            Log("ForYou/codex: ✗ failed — \(error)")
         }
     }
 
@@ -426,10 +457,8 @@ private struct LetterView: View {
 
 private enum Demo {
     static let name = "Jesai"   // later: the vault portrait's first name
-    static let reminders = "Reminders · EWOR call — Daniel Dippold, Fri 11 AM · ZFellows — 8 days · Workout — tonight 8 PM"
-    static func readLine(count: Int) -> String {
-        "While you slept, I read 1,704 things · \(count) offering\(count == 1 ? "" : "s")"
-    }
+    static let reminders = "Other reminders: EWOR CEO call — Daniel Dippold, tomorrow at 11 AM · Workout — tonight 8 PM"
+    static let readLine = "While you slept, I read 1,704 things"
 }
 
 #Preview("For You — the offerings") {
