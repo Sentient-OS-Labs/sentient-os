@@ -17,8 +17,9 @@
 //    SENTIENT_SELFTEST     "whatsapp" | "imessage" | "notes" | "files"  (model dump) ·
 //                          "tokens"  (WhatsApp window token-cost measurement, model) ·
 //                          "parse" | "chats" | "imchats" | "imdecode" | "notesdecode" | "codexcli"
-//                          | "skipping" | "skipcensus"
+//                          | "skipping" | "skipcensus" | "cookiedecrypt"  (proactive PART-3 cookies)
 //                          | "fileiter" | "chatiter" | "notesiter"  (iterative-core proofs, no model)
+//    SENTIENT_SELFTEST_DOMAINS  cookiedecrypt scope (comma-separated regs, e.g. amazon.com,github.com; empty = all)
 //    SENTIENT_SELFTEST_N   item count (default 6)
 //    SENTIENT_SELFTEST_OUT output file (default <tmp>/sentient-selftest.txt)
 //    SENTIENT_MODEL_PATH   override the dev model path
@@ -112,6 +113,30 @@ enum SelfTest {
                 emit("session: \(envelope.sessionID ?? "nil") · items: \(envelope.numTurns ?? -1) · \(envelope.durationMS ?? -1)ms · tokens in/cached/out: \(envelope.inputTokens ?? -1)/\(envelope.cachedInputTokens ?? -1)/\(envelope.outputTokens ?? -1)")
                 emit(envelope.result.contains("SPINE_OK") ? "✅ spine OK" : "⚠️ unexpected result text")
             } catch { emit("run FAILED: \(error)") }
+            return
+        }
+
+        // Cookie-decrypt mode: no model — the proactive PART-3 trusted layer. Locate Chrome's cookie
+        // DB, read the Keychain "Chrome Safe Storage" key (may prompt once), decrypt v10 cookies, and
+        // write a Playwright storageState. Scope with SENTIENT_SELFTEST_DOMAINS (empty = all).
+        if mode == "cookiedecrypt" {
+            let domains = (ProcessInfo.processInfo.environment["SENTIENT_SELFTEST_DOMAINS"] ?? "")
+                .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            emit("chrome cookie DB: \(CookieDecryptor.cookieDBPath() ?? "NOT FOUND")")
+            emit("domains: \(domains.isEmpty ? "(all)" : domains.joined(separator: ", "))")
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent("sentient-ss-selftest.json")
+            do {
+                let r = try CookieDecryptor.makeStorageState(domains: domains, to: url)
+                emit("decrypted: \(r.decrypted) · written to storageState: \(r.written)")
+                emit("storageState: \(url.path)")
+                if let data = try? Data(contentsOf: url),
+                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                   let cookies = obj["cookies"] as? [[String: Any]] {
+                    let sample = cookies.prefix(8).map { "\(($0["domain"] as? String) ?? "?")  \(($0["name"] as? String) ?? "?")" }
+                    emit("sample (domain · name, no values):\n  " + sample.joined(separator: "\n  "))
+                    emit(r.written > 0 ? "✅ cookies decrypted" : "⚠️ zero cookies written (logged out, or wrong domain scope?)")
+                }
+            } catch { emit("FAILED: \((error as? LocalizedError)?.errorDescription ?? "\(error)")") }
             return
         }
 

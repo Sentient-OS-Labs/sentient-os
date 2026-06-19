@@ -14,7 +14,10 @@
 import Foundation
 import SQLite3
 
-enum SQLiteDB {
+/// `nonisolated` (the project defaults declarations to @MainActor): these are pure utilities that
+/// work on a throwaway temp copy, so DB reads can run off-main — e.g. from the background
+/// ProactiveExecutor actor (CookieDecryptor). @MainActor sources can still call them freely.
+nonisolated enum SQLiteDB {
     enum DBError: Error, CustomStringConvertible {
         case missingFile(String)
         case open(String)
@@ -51,7 +54,7 @@ enum SQLiteDB {
 /// A thin SQLite connection for reading one copied DB. Single-threaded use; closes on deinit.
 /// Opened read-WRITE on the *temp copy* (not the original) so SQLite can transparently replay the
 /// copied `-wal` — the most reliable way to see the very latest rows.
-final class SQLiteReader {
+nonisolated final class SQLiteReader {
     private var db: OpaquePointer?
 
     init(path: String) throws {
