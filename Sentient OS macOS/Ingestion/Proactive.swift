@@ -3,18 +3,19 @@
 //  Sentient OS macOS
 //
 //  Proactive Intelligence — its OWN module + trigger (Arch §6), sequenced AFTER a knowledge-base
-//  build/update, never concurrently. This is STEP 1: the JUDGE.
+//  build/update, never concurrently. This is PART 1 of 3: the JUDGE.
 //
-//  Once the initial pass has produced summaries and the vault exists, the cloud model (Codex,
-//  gpt-5.5, high effort, READ-ONLY) reads BOTH (a) the last 7 days of survivor summaries from
-//  EVERY source — files, WhatsApp, iMessage, Apple Notes, Gmail — and (b) the live knowledge base
-//  in its working directory, connects the dots across them, and returns the up-to-5 most important,
-//  most time-sensitive ACTION ITEMS (ranked, `--output-schema`). It only FINDS and RANKS — it does
-//  not write, schedule, or notify (tier-1 reminders / tier-2 briefings come next). Dev-button-
-//  triggered for now (the scheduler calls the same entry point later).
+//  The proactive pipeline runs in three steps, each its own prompt: PART 1 (this file) finds the top
+//  action items, PART 2 researches/verifies them (Gmail MCP + web + the knowledge base), PART 3 acts.
+//  PART 1 is deliberately SUMMARIES-ONLY and hermetic: the cloud model (Codex, gpt-5.5, xhigh effort)
+//  reads ONLY the last 7 days of survivor summaries from EVERY source — files, WhatsApp, iMessage,
+//  Apple Notes, Calendar, Gmail — over stdin (no file/web/MCP tools), and returns the up-to-5 most
+//  important, most time-sensitive ACTION ITEMS (ranked, `--output-schema`). The deep grounding against
+//  the vault and live sources is PART 2's job, not this one. PART 1 only FINDS and RANKS — it does not
+//  verify, write, schedule, or notify. Dev-button-triggered for now (the scheduler calls it later).
 //
 //  Key methods:
-//   - findActionItems(from:now:)  → [ActionItem]   (windows to 7 days, requires the vault, runs Codex)
+//   - findActionItems(from:now:)  → [ActionItem]   (windows to 7 days of summaries, runs Codex)
 //
 //  Doc: Documentation/Proactive Intelligence (Judge).md
 //
@@ -45,13 +46,11 @@ actor Proactive {
     static let maxItems = 5
 
     enum ProError: LocalizedError {
-        case noVault
         case noRecent
         case usageLimit(String)
         case failed(String)
         var errorDescription: String? {
             switch self {
-            case .noVault:           return "No knowledge base on disk yet — build it first (the judge needs both the summaries AND the vault)."
             case .noRecent:          return "No summaries in the last \(Proactive.lookbackDays) days — nothing for the proactive judge to consider."
             case .usageLimit(let m): return "Your AI hit its usage limit — try again later. (\(m.prefix(160)))"
             case .failed(let m):     return m
@@ -61,9 +60,10 @@ actor Proactive {
 
     // MARK: The judge
 
-    /// Find the top action items across the last week of summaries + the live vault. Read-only:
-    /// returns the ranked list; it does not wipe, write, or notify. Throws on no-vault / no-recent /
-    /// usage-limit / failure so the caller can surface a clear status.
+    /// Find the top action items across the last week of summaries. PART 1 is summaries-only and
+    /// hermetic — no file/web/MCP tools (PART 2 does the deep research). Returns the ranked list; it
+    /// does not verify, write, or notify. Throws on no-recent / usage-limit / failure so the caller
+    /// can surface a clear status.
     func findActionItems(from notes: [CloudNote], now: Date = Date()) async throws -> [ActionItem] {
         // 1. Window the summaries to the last N days (each note carries its own item date).
         let cutoff = now.addingTimeInterval(-Double(Self.lookbackDays) * 86_400)
@@ -73,19 +73,23 @@ actor Proactive {
             .sorted { itemDate($0) > itemDate($1) }            // newest first
         guard !recent.isEmpty else { throw ProError.noRecent }
 
-        // 2. The vault must exist — the judge MUST use both inputs, and it's the agent's cwd.
-        let vault = VaultGenerator.vaultRoot
-        guard FileManager.default.fileExists(atPath: vault.path) else { throw ProError.noVault }
+        // 2. One hermetic Codex call: summaries over stdin, NO tools. A neutral empty scratch dir is
+        //    the cwd so even read-only file tools have nothing to find — the model judges from the
+        //    summaries ALONE (the vault / Gmail / web research is PART 2's job).
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sentient-proactive-judge", isDirectory: true)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 
-        // 3. One read-only Codex call: summaries over stdin, the vault as the working directory.
         var inv = CodexCLI.Invocation(prompt: Self.prompt(recent: recent, now: now))
-        inv.effort = .xhigh                 // the deepest pass — this judgment IS the product
-        inv.sandbox = .readOnly             // it only reads the vault — never writes or acts
-        inv.cwd = vault.path                // working dir = the knowledge base (Read/Glob/Grep)
+        inv.effort = .xhigh                 // the deepest reasoning — this judgment IS the product
+        inv.sandbox = .readOnly             // never writes or acts
+        inv.cwd = scratch.path              // neutral empty dir — nothing to read
+        inv.webSearch = false               // summaries-only; web research is PART 2
+        inv.includeUserConfig = false       // hermetic — no user MCP servers (Gmail is PART 2)
         inv.outputSchema = Self.schema
-        inv.timeout = 1_200                 // high-effort agentic reads over the vault can run long
+        inv.timeout = 1_200                 // xhigh reasoning can run long
 
-        Log("Proactive.judge: \(recent.count) summaries in the last \(Self.lookbackDays)d → asking Codex (read-only, vault cwd)…")
+        Log("Proactive.judge: \(recent.count) summaries in the last \(Self.lookbackDays)d → asking Codex (summaries-only, hermetic)…")
         do {
             let env = try await CodexCLI.shared.run(inv)
             let items = Array(Self.parse(env.result).prefix(Self.maxItems))
@@ -191,44 +195,37 @@ actor Proactive {
 
         Today is \(today).
 
-        ## YOUR EDGE IS CROSS-SOURCE CONTEXT — this is the whole game
-        Everyone else's AI is trapped inside one app. You are not. The very best action items almost \
-        never come from one source read in isolation — they emerge when you CONNECT THE DOTS across \
-        tools and across the knowledge base. A fragment in one place becomes a high-impact, perfectly \
-        grounded action the moment you corroborate and enrich it with everything else you know.
-
-        For EVERY candidate, ask: *what else do I know about this?* Hunt for the same person, project, \
-        deadline, place, amount, or commitment appearing in another source or in the vault — then FUSE \
-        them. Convergence across sources is gold: it is the action item that no single-app AI could \
-        ever find.
-        - A WhatsApp/iMessage message mentions a thing → the vault has a note on that exact thing → \
-        another tool has related info. Fuse all three.
-        - A reminder / renewal / confirmation email arrives → the vault shows why it actually matters \
-        to THIS user → it becomes a personalized action instead of inbox noise.
+        ## YOUR EDGE IS BREADTH — you see every source at once
+        Everyone else's AI is trapped inside one app. You are not. These summaries span the user's \
+        ENTIRE digital life at once — files, WhatsApp, iMessage, Apple Notes, Calendar, and email. \
+        That lets you notice when separate signals are actually about the SAME thing and connect them:
         - The user wrote a to-do in Apple Notes → a message or email shows it's now due or unblocked → \
-        surface it now, with the next step.
-        - Someone proposes a time in iMessage → the calendar shows the user is free → the action is \
-        "reply yes and put it on the calendar."
-        - A saved file / bookmark (a form, an application, an event) → a deadline stated or implied \
-        elsewhere → the action is "complete it before it closes."
+        that's one action item, not two.
+        - Someone proposes a time in iMessage → a calendar summary shows the user is free → "reply yes \
+        and put it on the calendar."
+        - A saved file / bookmark (a form, an application, an event) → a deadline stated or implied in \
+        another summary → "complete it before it closes."
+        - A renewal / confirmation email → another summary shows the user actually relies on that \
+        thing → it's a real action, not inbox noise.
 
-        A signal that exists in only ONE source with nothing else to corroborate or contextualize it \
-        is usually weaker — prefer the connected ones, and make the connection explicit.
+        Connect these when they're genuinely there — but don't strain to manufacture links. A strong \
+        item that lives in a single summary is every bit as valid as one that spans several.
 
-        ## USE BOTH INPUTS, DEEPLY — and do NOT let email dominate
-        1. **The last \(lookbackDays) days of summaries** (at the end of this message), from EVERY \
-        source — files, WhatsApp, iMessage, Apple Notes, Calendar, and Gmail. Each line is \
-        `#<n> · [source] location · date` then `Title — summary`. Email summaries LOOK action-dense \
-        because they spell tasks out — do NOT over-index on them. A promise made in WhatsApp, a to-do \
-        written in Notes, a deadline implied by a saved file, a request in iMessage are every bit as \
-        important. Actively scan EVERY source and aim for a SPREAD, not five email items.
-        2. **The knowledge base** — your working directory IS the user's whole life as an \
-        Obsidian-style markdown vault. READ IT DEEPLY with your file tools: start with the root \
-        `README.md`, then grep / list / read the notes relevant to each candidate (the people, \
-        projects, commitments, preferences, and timelines involved). The vault is what turns a generic \
-        signal into a personalized, accurate, high-impact action. NEVER judge importance from the \
-        summaries alone — ground every call in who this user actually is and what they're in the \
-        middle of.
+        IMPORTANT — your scope: you DETECT and RANK from these summaries ALONE. A separate research \
+        step runs AFTER you and verifies each item you pick against the live sources (Gmail, the web) \
+        and the user's knowledge base — correcting details and dropping anything already done. So you \
+        do NOT need to be perfectly certain or fully grounded here; that's handled next. But you must \
+        NOT pad: only the genuinely strongest candidates earn a slot.
+
+        ## YOUR INPUT: the last 7 days of summaries
+        The last \(lookbackDays) days of summaries (at the end of this message) are your ONLY input, \
+        from EVERY source — files, WhatsApp, iMessage, Apple Notes, Calendar, and Gmail. Each line is \
+        `#<n> · [source] location · date` then `Title — summary`. Scan EVERY source thoroughly — a \
+        promise made in WhatsApp, a to-do written in Notes, a deadline implied by a saved file, a \
+        request in iMessage can each be exactly as important as anything in email. Do NOT force a \
+        spread and do NOT penalize any source: just surface the genuinely best items, whatever they \
+        happen to be. If the strongest items all turn out to be email, that's completely fine. Judge \
+        from these summaries alone — you have no other tools here.
 
         ## What an ACTION ITEM is
         Something the user should DO, DECIDE, PREPARE FOR, or BE AWARE OF soon — concrete, time-relevant, \
@@ -239,56 +236,49 @@ actor Proactive {
         infrastructure ships. Do not actually perform anything; just detect and frame.
 
         ## Examples of the kinds to look for
-        (Illustrative and HYPOTHETICAL — learn the SHAPE and the cross-source reasoning, NOT these \
-        specific details. They generalize to any person, topic, and tool. Do not look for these exact \
-        scenarios; find the real ones in THIS user's data.)
+        (Illustrative and HYPOTHETICAL — learn the SHAPE, NOT these specific details. They generalize \
+        to any person, topic, and tool. Do not look for these exact scenarios; find the real ones in \
+        THIS user's summaries.)
 
         - **Overdue reply awaiting the user.** A contact emailed days ago asking the user to do \
-        something — an intro, a blurb, a decision — and it's still unanswered; the vault explains who \
-        they are and why it matters. ACTION: "Draft the reply (using the vault's context) so it's \
-        ready to send." Fuse: Gmail + the vault note on that person/topic.
-        - **Cross-tool meeting request.** Someone proposes a time over iMessage/WhatsApp; the calendar \
-        shows the user is free then. ACTION: "Reply to confirm and add it to the calendar." Fuse: \
-        message + Calendar + the vault note on that person.
-        - **A promise the user made.** In a chat the user said they'd send / research / share \
-        something, and another source or the vault shows that thing now exists or is ready. ACTION: \
-        "Send what you promised — it's ready." Fuse: WhatsApp + the research/file it lives in.
-        - **A deadline with a form to complete.** The user saved/bookmarked or got an email about an \
-        application, registration, or renewal that closes soon, and the vault holds the details the \
-        form needs (name, school, what they're building, etc.). ACTION: "Complete the registration \
-        before it closes (a browser agent can fill it from your vault facts)." Fuse: saved file / \
-        reminder email + a stated/known deadline + vault facts.
-        - **A renewal / expiry / payment.** A reminder email or saved document points to something \
-        expiring (a domain, subscription, membership, document); the vault confirms the user actually \
-        relies on it. ACTION: "Renew or cancel before <date>." Fuse: Gmail/file + vault.
-        - **A to-do the user wrote themselves.** The user noted a task in Apple Notes and another \
-        source shows it's now due or unblocked. ACTION: surface it with the concrete next step. Fuse: \
-        Notes + the corroborating source.
-        - **A plan forming across people.** A group chat is brainstorming something (a trip, an event, \
-        a decision); combined with everything the vault knows about the user, you can assemble the \
-        concrete plan. ACTION: "Here's the plan — shall I share it with the group?" Fuse: group chat + \
-        vault preferences/history.
+        something — an intro, a blurb, a decision — and nothing in the summaries shows a reply yet. \
+        ACTION: "Reply to <person> about <thing>." Signals: the email summary.
+        - **Cross-tool meeting request.** Someone proposes a time over iMessage/WhatsApp; a calendar \
+        summary shows the user is free then. ACTION: "Reply to confirm and add it to the calendar." \
+        Signals: the message summary + the calendar summary.
+        - **A promise the user made.** In a chat summary the user said they'd send / research / share \
+        something. ACTION: "Send what you promised." Signals: the chat summary (+ any summary showing \
+        it's ready).
+        - **A deadline with a form to complete.** A saved-file or email summary is about an \
+        application, registration, or renewal that closes soon. ACTION: "Complete the registration \
+        before it closes." Signals: the file / email summary + the stated deadline.
+        - **A renewal / expiry / payment.** A reminder email or saved-document summary points to \
+        something expiring (a domain, subscription, membership, document). ACTION: "Renew or cancel \
+        before <date>." Signals: the email / file summary.
+        - **A to-do the user wrote themselves.** A Notes summary holds a task, and another summary \
+        shows it's now due or unblocked. ACTION: surface it with the concrete next step. Signals: the \
+        Notes summary + the corroborating summary.
+        - **A plan forming across people.** A group-chat summary shows people brainstorming something \
+        (a trip, an event, a decision). ACTION: "A plan is forming — <the concrete next step>." \
+        Signals: the group-chat summary(ies).
 
-        These are starting patterns, not a checklist — the biggest wins are the cross-source items you \
-        discover that no template predicted.
+        These are starting patterns, not a checklist — the biggest wins are the connections across \
+        summaries that no template predicted.
 
         ## Hard accuracy rules (non-negotiable)
         - NEVER invent a date, name, fact, or deadline. If there's no real date, set `due_date` to "".
-        - Every action item MUST trace to real evidence in the summaries and/or the vault — and you \
-        must cite that evidence in `sources`.
-        - ATTRIBUTION: other people's plans, jobs, and tasks are THEIRS, not the user's. Only surface \
-        what is genuinely the user's to act on. (When someone introduces themselves in a group, that's \
-        about THEM, not the user.)
+        - Every action item MUST trace to real evidence in the summaries — and you must cite that \
+        evidence in `sources`.
         - NO raw private specifics (card / account numbers, passwords, exact medical or financial \
         figures).
         - A confident wrong item is far worse than a missed one.
 
         ## Rank, then cut
-        Rank by (impact to THIS user) × (time-sensitivity) × (how clearly actionable it is). Strongly \
-        favor cross-source items grounded in the vault. Return AT MOST \(maxItems). Return FEWER — even \
-        zero — if there genuinely aren't that many worth surfacing. NEVER pad. Two perfect cross-source \
-        items beat five shallow single-source ones, and aim for a SPREAD across sources — not five from \
-        the same place.
+        Rank by (impact to THIS user) × (time-sensitivity) × (how clearly actionable it is). Return AT \
+        MOST \(maxItems). Return FEWER — even zero — if there genuinely aren't that many worth \
+        surfacing. NEVER pad. Pick the genuinely strongest items regardless of which source they come \
+        from — do NOT force a spread; a deep, well-evidenced single-source item beats a shallow one \
+        every time.
 
         ## Output
         Return ONLY the structured object defined by the output schema — no prose around it. For each \
@@ -297,13 +287,12 @@ actor Proactive {
         - **action** — the EXACT next step, addressed to the user ("Reply to…", "Register for…", \
         "Send the…", "Renew…"), written as something ready to execute.
         - **importance** — WHY this matters to THIS user right now, and explicitly NAME THE DOTS YOU \
-        CONNECTED: which sources and which vault notes, and what each one contributed. This is where \
-        your cross-source intelligence must visibly show.
+        CONNECTED: which summaries/sources, and what each one contributed. This is where your \
+        reasoning must visibly show.
         - **due_date** — the real relevant date in plain words ("June 20, 2026", "this Friday"), or "" \
         if there genuinely is none.
-        - **sources** — the concrete evidence you fused, each item by name (e.g. "WhatsApp · Dad", \
-        "Vault · People/Dad.md", "Notes · running gear", "Calendar"). Show the cross-source provenance \
-        here.
+        - **sources** — the concrete summaries behind the item, each by name (e.g. "WhatsApp · Dad", \
+        "Notes · running gear", "Calendar", "Gmail · <subject>"). Cite the provenance here.
         - **urgency** — "high", "medium", or "low".
 
         The last \(lookbackDays) days of summaries follow.

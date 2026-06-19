@@ -81,6 +81,7 @@ struct DevToolsView: View {
     @Binding var customRoots: [URL]
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     private static let modelPath = ModelLocator.resolve()
 
@@ -149,6 +150,10 @@ struct DevToolsView: View {
                     }
 
                     columns
+                    actionButton("proactive.research", "proactive RESEARCH + PREPARE\n(part 2 · verify + ready-to-fire)", "wand.and.stars", tint: .orange, requiresModel: false) { progress in
+                        await runResearch(progress: progress)
+                    }
+                    executeButton
                     HStack(spacing: 10) {
                         viewSummariesButton
                         viewActionItemsButton
@@ -283,6 +288,22 @@ struct DevToolsView: View {
         .buttonStyle(.bordered).tint(.orange)
     }
 
+    /// Proactive PART 3 — the executor. Opens the PROACTIVE · EXECUTE window listing the real
+    /// ready-to-fire actions from the latest PART 2 run, each with a working FIRE button (Gmail MCP
+    /// send / headless Playwright browser / calendar MCP). Real execution — no mock theater.
+    private var executeButton: some View {
+        Button { openWindow(id: ProactiveExecuteView.windowID) } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "paperplane.fill")
+                Text("proactive EXECUTE\n(part 3 · fire the ready actions for real)")
+                    .font(.caption.weight(.medium)).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44)
+        }
+        .buttonStyle(.bordered).tint(.orange)
+    }
+
     // MARK: The actions (all on the NEW files-iterative stack)
 
     /// One of the two "start" buttons. Device sources present the rich ProcessingView takeover;
@@ -374,6 +395,26 @@ struct DevToolsView: View {
                 "\(i + 1). [\(it.urgency.rawValue)\(it.dueDate.map { " · \($0)" } ?? "")] \(it.title)"
             }
             return "✓ \(items.count) action item\(items.count == 1 ? "" : "s") (full detail in console):\n" + lines.joined(separator: "\n")
+        } catch {
+            return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+        }
+    }
+
+    /// Proactive PART 2 — research & prepare (one pass). Take the latest PART 1 action items and, for
+    /// each, verify it against the live sources (Gmail MCP + web) and the knowledge base — dropping
+    /// stale ones — then stage every survivor ready-to-fire (draft in the user's voice + the execution
+    /// recipe PART 3 will run). Read-only — it verifies + prepares, it never fires. Full detail (incl.
+    /// the drafts + recipes) goes to the console.
+    private func runResearch(progress: @escaping @Sendable (String) -> Void) async -> String {
+        let items = Proactive.latest()
+        guard !items.isEmpty else { return "✗ no action items — run “proactive system” (part 1) first" }
+        progress("Verifying + preparing \(items.count) item\(items.count == 1 ? "" : "s") against Gmail, web & your vault…")
+        do {
+            let result = try await ProactiveResearch.shared.researchAndPrepare(items: items)
+            let readyLines = result.ready.map { "✓ [\($0.kind.rawValue) · \($0.status.rawValue)] \($0.title)\($0.reviewNote.isEmpty ? "" : " ⚠︎ check first")" }
+            let dropLines = result.dropped.map { "✗ \($0.title) — \($0.reason)" }
+            let body = (readyLines + dropLines).joined(separator: "\n")
+            return "✓ ready \(result.ready.count), dropped \(result.dropped.count) (full detail in console):\n" + (body.isEmpty ? "(nothing)" : body)
         } catch {
             return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
         }

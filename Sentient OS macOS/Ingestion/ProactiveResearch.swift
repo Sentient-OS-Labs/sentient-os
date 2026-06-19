@@ -1,0 +1,376 @@
+//
+//  ProactiveResearch.swift
+//  Sentient OS macOS
+//
+//  Proactive Intelligence — PART 2 of 3: RESEARCH & PREPARE (Arch §6), the heart of the feature.
+//  PART 1 (Proactive.swift) finds the top action items from the summaries alone. PART 2 (this file)
+//  does two things, in order, for each item — all READ-ONLY, in ONE agentic pass:
+//    1. VERIFY it against the LIVE world (the Gmail MCP if connected + web + the knowledge base) —
+//       prove it's still real, still the user's, still needed; DROP the stale/done/expired ones.
+//    2. PREPARE every survivor to be READY TO FIRE — draft it in the user's voice + write the exact
+//       execution recipe — so PART 3 (the executor) runs it on the user's one-button press.
+//
+//  Merging verify + prepare into one pass avoids re-reading the same thread/vault twice, and keeps
+//  the WHOLE read-only/safe world in Parts 1–2 — the single write-capable step is PART 3.
+//
+//  THE TWO INVARIANTS (both enforced in the prompt AND the invocation):
+//    • Accuracy: receipts-only, never fabricate; "couldn't confirm" → `unverified` is a valid outcome.
+//    • Never fire: it stages but NEVER sends/submits/pays/RSVPs. `bypassApprovals = false` + sandbox
+//      means a connector WRITE would auto-cancel headless anyway (codex/Gmail permissioning findings).
+//
+//  Output: ready-to-fire `PreparedAction`s (carrying the verify verdict + the prepared draft + a
+//  deterministic `execution_recipe` — the contract PART 3 / the Playwright-browser-use executor runs)
+//  plus the `dropped` items. Verify-only on discovery: it never invents a NEW item (that's PART 1).
+//
+//  Key methods:
+//   - researchAndPrepare(items:now:)  → ReadyResult   (verifies + stages PART 1's items, runs Codex)
+//
+//  Doc: Documentation/Proactive Intelligence (Judge).md  (PART 2 section)
+//
+
+import Foundation
+
+/// One PART 1 action item after PART 2 — VERIFIED against the live world and STAGED ready to fire.
+/// Carries the verify verdict (`status` + `verification`) plus everything PART 3 needs to execute it:
+/// the human-facing card, the reviewable draft, and the deterministic recipe. Sendable value type the
+/// For You UI + PART 3 (the executor) consume.
+struct PreparedAction: Sendable, Identifiable, Codable {
+    let title: String
+    let kind: Kind
+    let urgency: ActionItem.Urgency
+    let dueDate: String?
+    let status: Status             // the verify verdict (confirmed / updated / unverified)
+    let verification: String       // WHAT was checked + WHAT each live source said (receipts)
+    let cardSummary: String        // human-facing: what this is + what the fire button will do
+    let preparedContent: String    // the reviewable artifact: the drafted email/message/event/briefing
+    let executionRecipe: String    // the exact, deterministic steps PART 3 runs ("none" for research/reminder)
+    let sources: [String]          // grounding receipts (vault notes, the thread, web results)
+    let reviewNote: String         // what to double-check/decide before firing; "" if fully ready
+
+    enum Status: String, Sendable, Codable { case confirmed, updated, unverified }
+
+    /// The action surface PART 3 will fire. `research` (a briefing to read) and `reminder` (a real
+    /// task only the user can do, e.g. a phone call) carry no fire — `executionRecipe == "none"`.
+    enum Kind: String, Sendable, Codable {
+        case emailReply = "email_reply"
+        case emailNew   = "email_new"
+        case message
+        case calendar
+        case browser
+        case research
+        case reminder
+    }
+    var id: String { title }
+}
+
+/// A PART 1 item that PART 2's verify half killed (already handled / expired / cancelled / a misread),
+/// with the reason the live source gave.
+struct DroppedItem: Sendable, Identifiable, Codable {
+    let title: String
+    let reason: String
+    var id: String { title }
+}
+
+/// The PART 2 result: the survivors staged ready to fire (`ready`) + what verification dropped
+/// (`dropped`). For You shows `ready`; PART 3 fires one of them on the user's press.
+struct ReadyResult: Sendable, Codable {
+    let ready: [PreparedAction]
+    let dropped: [DroppedItem]
+}
+
+actor ProactiveResearch {
+
+    static let shared = ProactiveResearch()
+
+    enum ResError: LocalizedError {
+        case noItems
+        case noVault
+        case usageLimit(String)
+        case failed(String)
+        var errorDescription: String? {
+            switch self {
+            case .noItems:           return "No action items to work — run PART 1 (\u{201C}proactive system\u{201D}) first."
+            case .noVault:           return "No knowledge base on disk yet — build it first (research + prepare read the vault for context + the user's voice)."
+            case .usageLimit(let m): return "Your AI hit its usage limit — try again later. (\(m.prefix(160)))"
+            case .failed(let m):     return m
+            }
+        }
+    }
+
+    // MARK: Research & prepare
+
+    /// PART 2 — verify then prepare, in one read-only pass. For each PART 1 item: prove it's still real
+    /// against the live sources (Gmail MCP if connected + web) and the knowledge base, dropping the
+    /// stale ones; then stage every survivor ready to fire (draft in the user's voice + the execution
+    /// recipe). Read-only — it researches and stages, it NEVER fires. Verify-only — it never adds a new
+    /// item. Returns the ready + dropped split; throws on no-items / no-vault / usage-limit / failure.
+    func researchAndPrepare(items: [ActionItem], now: Date = Date()) async throws -> ReadyResult {
+        guard !items.isEmpty else { throw ResError.noItems }
+
+        // The vault is a research surface, the source of the user's voice + the facts a draft/form
+        // needs, AND the agent's cwd (Read/Glob/Grep over the knowledge base).
+        let vault = VaultGenerator.vaultRoot
+        guard FileManager.default.fileExists(atPath: vault.path) else { throw ResError.noVault }
+
+        var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, now: now))
+        inv.effort = .xhigh                 // the deepest pass — accuracy + the prepared draft ARE the product
+        inv.sandbox = .readOnly             // verifies + stages — never sends, drafts into a provider, or acts
+        inv.cwd = vault.path                // working dir = the knowledge base (a research surface + the voice)
+        inv.webSearch = true                // ground external facts (on-sale/event dates, deadlines, form fields)
+        inv.includeUserConfig = true        // load the user's MCP servers — the Gmail MCP (read-only)
+        inv.bypassApprovals = false         // ⚠️ load-bearing: NO fire — a connector write auto-cancels
+        inv.outputSchema = Self.schema
+        inv.timeout = 1_800                 // agentic verify + prepare (Gmail + web + vault) over ≤5 items runs long
+
+        Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, Gmail MCP + web, never fire)…")
+        do {
+            let env = try await CodexCLI.shared.run(inv)
+            let result = Self.parse(env.result)
+            Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
+            for (i, a) in result.ready.enumerated() {
+                Log("  READY #\(i + 1) [\(a.kind.rawValue) · \(a.status.rawValue)\(a.dueDate.map { " · due \($0)" } ?? "")] \(a.title)\n      card: \(a.cardSummary)\n      checked: \(a.verification)\n      content: \(a.preparedContent)\n      recipe: \(a.executionRecipe)\n      review: \(a.reviewNote.isEmpty ? "(none — fully ready)" : a.reviewNote)\n      src: \(a.sources.joined(separator: " | "))")
+            }
+            for d in result.dropped {
+                Log("  DROP \(d.title) — \(d.reason)")
+            }
+            Self.saveLatest(result)
+            return result
+        } catch let CodexCLI.CLIError.usageLimit(message, _) {
+            throw ResError.usageLimit(message)
+        } catch {
+            throw ResError.failed("\(error)")
+        }
+    }
+
+    // MARK: Last-run persistence (for the For You surface / a dev viewer)
+
+    private static let latestKey = "proactive.latestReady"
+
+    /// Persist the most recent run (Codable → UserDefaults JSON) so the For You surface / a dev viewer
+    /// can show the ready-to-fire cards without re-running, and across app launches.
+    static func saveLatest(_ result: ReadyResult) {
+        if let data = try? JSONEncoder().encode(result) {
+            UserDefaults.standard.set(data, forKey: latestKey)
+        }
+    }
+
+    /// The most recent run (nil if it never ran).
+    static func latest() -> ReadyResult? {
+        guard let data = UserDefaults.standard.data(forKey: latestKey),
+              let result = try? JSONDecoder().decode(ReadyResult.self, from: data) else { return nil }
+        return result
+    }
+
+    // MARK: Output schema (the `--output-schema` contract)
+
+    private static let schema = """
+    {"type":"object","additionalProperties":false,"properties":{\
+    "ready":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
+    "title":{"type":"string"},\
+    "kind":{"type":"string","enum":["email_reply","email_new","message","calendar","browser","research","reminder"]},\
+    "urgency":{"type":"string","enum":["high","medium","low"]},\
+    "due_date":{"type":"string"},\
+    "status":{"type":"string","enum":["confirmed","updated","unverified"]},\
+    "verification":{"type":"string"},\
+    "card_summary":{"type":"string"},\
+    "prepared_content":{"type":"string"},\
+    "execution_recipe":{"type":"string"},\
+    "sources":{"type":"array","items":{"type":"string"}},\
+    "review_note":{"type":"string"}},\
+    "required":["title","kind","urgency","due_date","status","verification","card_summary","prepared_content","execution_recipe","sources","review_note"]}},\
+    "dropped":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
+    "title":{"type":"string"},\
+    "reason":{"type":"string"}},\
+    "required":["title","reason"]}}},\
+    "required":["ready","dropped"]}
+    """
+
+    // MARK: Tolerant parse (output-schema makes `result` the JSON; still fence-safe)
+
+    private static func parse(_ result: String) -> ReadyResult {
+        let span: String
+        if let s = result.firstIndex(of: "{"), let e = result.lastIndex(of: "}"), s < e {
+            span = String(result[s...e])
+        } else { span = result }
+        guard let data = span.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return ReadyResult(ready: [], dropped: [])
+        }
+        let ready: [PreparedAction] = (obj["ready"] as? [[String: Any]] ?? []).compactMap { d in
+            guard let title = (d["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else { return nil }
+            let due = (d["due_date"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return PreparedAction(
+                title: title,
+                kind: PreparedAction.Kind(rawValue: (d["kind"] as? String)?.lowercased() ?? "reminder") ?? .reminder,
+                urgency: ActionItem.Urgency(rawValue: (d["urgency"] as? String)?.lowercased() ?? "medium") ?? .medium,
+                dueDate: (due?.isEmpty == false) ? due : nil,
+                status: PreparedAction.Status(rawValue: (d["status"] as? String)?.lowercased() ?? "unverified") ?? .unverified,
+                verification: (d["verification"] as? String) ?? "",
+                cardSummary: (d["card_summary"] as? String) ?? "",
+                preparedContent: (d["prepared_content"] as? String) ?? "",
+                executionRecipe: (d["execution_recipe"] as? String) ?? "",
+                sources: (d["sources"] as? [String]) ?? [],
+                reviewNote: (d["review_note"] as? String) ?? "")
+        }
+        let dropped: [DroppedItem] = (obj["dropped"] as? [[String: Any]] ?? []).compactMap { d in
+            guard let title = (d["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !title.isEmpty else { return nil }
+            return DroppedItem(title: title, reason: (d["reason"] as? String) ?? "")
+        }
+        return ReadyResult(ready: ready, dropped: dropped)
+    }
+
+    // MARK: The prompt — verify THEN prepare, accuracy-obsessed, never fires
+
+    private static func prompt(items: [ActionItem], now: Date) -> String {
+        let today = todayString(now)
+        var lines: [String] = []
+        lines.reserveCapacity(items.count)
+        for (i, it) in items.enumerated() {
+            lines.append("""
+            #\(i + 1) · [\(it.urgency.rawValue)] \(it.title)
+               Proposed action: \(it.action)
+               Why PART 1 flagged it: \(it.importance)
+               Claimed due date: \(it.dueDate ?? "none stated")
+               Cited summaries: \(it.sources.isEmpty ? "—" : it.sources.joined(separator: ", "))
+            """)
+        }
+
+        return """
+        You are the **Research & Prepare** step of Sentient OS's Proactive Intelligence — PART 2 of 3, \
+        and the heart of the feature. PART 1 read the user's last week across every source and picked \
+        the handful of ACTION ITEMS that *might* deserve their attention — but those were inferred from \
+        short summaries that can be stale or imprecise. For EACH item you do two things, in order:
+
+        1. **VERIFY** it against the LIVE world — prove it's still real, still the user's to do, and \
+        still needed; get every detail exactly right, or DROP it.
+        2. **PREPARE** every survivor to be **ready to fire** — draft it in the user's own voice and \
+        write the exact recipe — so that in PART 3 the user taps ONE button and it executes with \
+        nothing left to decide or look up.
+
+        Today is \(today).
+
+        ## TWO INVIOLABLE RULES
+        **1 — Total accuracy, ZERO fabrication.** The user will ACT on what you produce, so a confident \
+        wrong answer is catastrophic, far worse than admitting uncertainty.
+        - **Receipts only.** State a fact about the live world ONLY if a tool you actually called this \
+        run returned it — point to the receipt (the specific email you read, the specific web result). \
+        No receipt → not a fact.
+        - **Never fabricate** a tool result, an email, a thread, a date, a price, a link, an address, or \
+        a status. If you didn't see it with a tool, it didn't happen.
+        - **"Couldn't confirm" is a valid, expected, GOOD outcome** (→ `status: unverified`). Honest \
+        uncertainty always beats invented certainty.
+        - **Identity-match every external fact** — only accept a Gmail/web result that clearly concerns \
+        the user's *specific* thing (right person, org, event, place, time), cross-checked against the \
+        knowledge base. Generic or ambiguous → reject it.
+
+        **2 — You PREPARE, you do NOT fire.** You verify, draft, gather, and stage — you NEVER perform \
+        the irreversible action: never send an email or message, submit a form, pay, RSVP, book, post, \
+        or confirm anything. Every outward action waits for the user's explicit press in PART 3. If you \
+        feel the pull to "just send it to be helpful" — do not. Staging it perfectly IS the job.
+
+        ## YOUR SURFACES (all READ-ONLY — you only gather, never act)
+        1. **The knowledge base** — your working directory IS the user's whole life as an Obsidian-style \
+        markdown vault. Read the root `README.md`, then grep/read the notes about the people, projects, \
+        and commitments involved. It's three things at once: your **identity anchor** (is a Gmail/web \
+        result really the user's thing?), the user's **VOICE** (how they actually write), and the \
+        **facts** a reply or form needs. Use it heavily.
+        2. **Gmail — via the Gmail MCP, IF connected.** Read the *actual current* thread: already \
+        replied/handled? resolved, cancelled, expired? deadline passed? **READ ONLY — never send, \
+        draft, reply, label, archive, or modify.** No Gmail tool available → skip gracefully, say so, \
+        mark `unverified` — never pretend.
+        3. **Web search** — ground external facts (on-sale/event dates, deadlines, hours, price, a \
+        form's required fields), identity-matched.
+        4. **The browser, IF a browser tool is available** — navigate and INSPECT a page to understand \
+        a task (what a form asks, where the controls are) so your recipe is exact. **Inspect only — \
+        never submit/pay/confirm.**
+        If a tool you'd need isn't available, go as far as you can and say in `review_note`/the recipe \
+        what the fire step will have to handle.
+
+        ## PER ITEM: VERIFY → then PREPARE
+        Work the items ONE AT A TIME.
+
+        **First, verify.** Read the vault for context, check the right live source, and decide a verdict:
+        - **dropped** — already handled, expired/past, cancelled, or a misread of the summary → drop it \
+        with the reason. When a live source contradicts the item, DROP it — never surface stale urgency.
+        - **survives** — it's real. Set `status`: **confirmed** (verified current), **updated** (real, \
+        but you corrected a detail — apply the correction), or **unverified** (couldn't confirm with \
+        tools, but no evidence it's stale either).
+
+        **Then prepare every survivor** to ready-to-fire:
+        - Gather everything the action needs — the thread, the form's fields, the facts — until nothing \
+        is missing.
+        - Compose `prepared_content`: the artifact the user reviews/approves, in the user's own voice \
+        wherever it's something they'd say.
+        - Write `execution_recipe`: the exact, deterministic steps PART 3 runs.
+        - If something irreversible genuinely can't be resolved (an unknown recipient, a real either/or \
+        choice), prepare everything else and put exactly what the user must check/decide in \
+        `review_note` — never guess on the irreversible specifics.
+
+        ## VERIFY-ONLY ON DISCOVERY
+        You work ONLY the items handed to you below. **Never invent a brand-new action item** — \
+        discovery already happened in PART 1.
+
+        ## ALL ACTION KINDS (set `kind`)
+        - **email_reply / email_new** — the full drafted message (subject + body), recipient(s), and \
+        the thread it belongs to.
+        - **message** — a drafted WhatsApp/iMessage reply, word-for-word, to the right chat.
+        - **calendar** — the event (title, start/end, attendees, notes), ready to add.
+        - **browser** — a task done in a browser (register, RSVP, fill an application, buy): the exact \
+        URL, the ordered steps, and EVERY field value (from the vault/your research), so the fire step \
+        (Playwright/browser-use) just runs it.
+        - **research** — informational, not an action: write the tidy briefing the user wanted (a trip \
+        plan, a comparison, the answer). No fire; `execution_recipe` = "none".
+        - **reminder** — a real task only the user can do manually (e.g. a phone call) with nothing to \
+        automate. No fire; `execution_recipe` = "none". (Use this instead of dropping a real-but-\
+        unautomatable item.)
+
+        ## ACCURACY & VOICE (this will go out under the user's name)
+        - Ground every draft and every field value in real evidence (the vault, the thread, verified \
+        facts). NEVER invent an address, a name, a date, or a form value — if you don't have it, say so \
+        in `review_note`.
+        - Match the user's voice and norms from the vault — greeting, formality, sign-off, how they \
+        actually write. The draft must read like THEY wrote it, not like an AI.
+        - Never stage anything the user wouldn't want sent (private specifics that don't belong, guesses \
+        dressed up as fact). For an `unverified` item, flag the unverified part in `review_note`.
+
+        ## OUTPUT
+        Return ONLY the structured object defined by the schema — no prose around it.
+        `ready` — the survivors, each staged to fire. For each:
+        - **title** — short, specific headline (≤ ~8 words).
+        - **kind** — one of the seven above.
+        - **urgency** — "high" / "medium" / "low".
+        - **due_date** — the real VERIFIED date in plain words, or "" if none / unverified.
+        - **status** — "confirmed" / "updated" / "unverified".
+        - **verification** — a tight account of WHAT you checked and WHAT each live source said, with \
+        receipts, separating what you VERIFIED from what remains inferred.
+        - **card_summary** — one or two lines the user reads in For You: what this is + what the button \
+        will do ("Send this reply to Dana confirming Thursday").
+        - **prepared_content** — the full artifact to review/approve (the drafted email subject+body, \
+        the message text, the event details, or the briefing write-up).
+        - **execution_recipe** — the exact, deterministic steps PART 3 runs (recipients + subject + \
+        body + thread for email; the chat + text for a message; the event fields for calendar; the URL \
+        + ordered steps + every field value for browser; "none" for research/reminder). Complete enough \
+        that firing needs no further thought.
+        - **sources** — the evidence you relied on, each by name, incl. what you verified against (e.g. \
+        "Gmail · thread with Dana (6/16)", "Web · venue on-sale page", "Vault · People/Dana.md").
+        - **review_note** — what (if anything) the user should double-check/decide before firing; "" if \
+        fully ready.
+        `dropped` — the items verification killed: **title** + **reason** (what the live source showed).
+
+        Return FEWER than you were given whenever research warrants it — dropping a stale item is a \
+        success, not a failure. Prepare everything that survives right up to the fire line, and stop there.
+
+        The action items to research and prepare follow.
+
+        ---
+
+        \(lines.joined(separator: "\n\n"))
+        """
+    }
+
+    private static func todayString(_ d: Date) -> String {
+        let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .none; return f.string(from: d)
+    }
+}

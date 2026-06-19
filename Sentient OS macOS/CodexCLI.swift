@@ -73,6 +73,12 @@ actor CodexCLI {
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
         var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
+        var customEnv: [String: String] = [:]  // extra env vars merged into the sanitized child env
+                                               // (e.g. PLAYWRIGHT_MCP_STORAGE_STATE for the browser
+                                               // executor). PATH is reserved — use extraPathDirs.
+        var extraPathDirs: [String] = []       // dirs PREPENDED to the child PATH (e.g. the
+                                               // playwright-cli / node bin dir) so codex's shell can
+                                               // find tools it shells out to.
 
         init(prompt: String) { self.prompt = prompt }
     }
@@ -215,7 +221,9 @@ actor CodexCLI {
                                               args: Self.arguments(for: invocation, schemaFile: schemaFile),
                                               stdinText: invocation.prompt,
                                               cwd: invocation.cwd,
-                                              timeout: invocation.timeout)
+                                              timeout: invocation.timeout,
+                                              customEnv: invocation.customEnv,
+                                              extraPathDirs: invocation.extraPathDirs)
         return try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
     }
 
@@ -347,11 +355,14 @@ actor CodexCLI {
     }
 
     private static func executeAsync(binary: String, args: [String], stdinText: String?,
-                                     cwd: String?, timeout: TimeInterval) async throws -> ExecResult {
+                                     cwd: String?, timeout: TimeInterval,
+                                     customEnv: [String: String] = [:],
+                                     extraPathDirs: [String] = []) async throws -> ExecResult {
         try await withCheckedThrowingContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
-                                                        cwd: cwd, timeout: timeout)) }
+                                                        cwd: cwd, timeout: timeout,
+                                                        customEnv: customEnv, extraPathDirs: extraPathDirs)) }
                 catch { cont.resume(throwing: error) }
             }
         }
@@ -361,17 +372,23 @@ actor CodexCLI {
     /// just HOME/USER + the system PATH and the absolute binary path; codex's auth lives in
     /// ~/.codex (resolved via HOME), no TTY needed (Arch §5, measured).
     private static func execute(binary: String, args: [String], stdinText: String?,
-                                cwd: String?, timeout: TimeInterval) throws -> ExecResult {
+                                cwd: String?, timeout: TimeInterval,
+                                customEnv: [String: String] = [:],
+                                extraPathDirs: [String] = []) throws -> ExecResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = args
         // The binary's OWN directory leads the sanitized PATH: npm installs are
         // `#!/usr/bin/env node` shims, and (in the nvm layout) `node` sits right next to
-        // them — without this, the shim exec-fails even when found.
+        // them — without this, the shim exec-fails even when found. `extraPathDirs` go in FRONT of
+        // it (e.g. so codex's shell finds a `playwright-cli` it shells out to).
         let binDir = (binary as NSString).deletingLastPathComponent
-        var env: [String: String] = ["PATH": "\(binDir):/usr/bin:/bin:/usr/sbin:/sbin"]
+        var env: [String: String] = [:]
         let current = ProcessInfo.processInfo.environment
         for key in ["HOME", "USER"] where current[key] != nil { env[key] = current[key] }
+        for (k, v) in customEnv { env[k] = v }                 // app-supplied extras (PLAYWRIGHT_MCP_*)
+        // PATH is set LAST so customEnv can't accidentally clobber it; extraPathDirs lead.
+        env["PATH"] = (extraPathDirs + [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"]).joined(separator: ":")
         proc.environment = env
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 

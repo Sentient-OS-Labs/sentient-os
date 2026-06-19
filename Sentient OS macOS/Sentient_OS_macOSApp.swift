@@ -41,6 +41,17 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1180, height: 800)
 
+        // PROACTIVE · EXECUTE — the dev window for PART 3 (the executor). Lists the real
+        // ready-to-fire actions from the latest research+prepare run, each with a working FIRE
+        // button. Opened from DEV TOOLS; a normal titled window so it's obviously closable.
+        Window("Proactive · Execute", id: ProactiveExecuteView.windowID) {
+            ProactiveExecuteView()
+                .environment(appState)
+                .preferredColorScheme(.dark)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 760, height: 820)
+
         // The knowledge inspector is its OWN resizable window (native traffic-light controls,
         // closed with the red button) — not a sheet. Single-instance; `openWindow` brings it up.
         // Title is intentionally blank: the in-app serif "Knowledge" header is the title, so we
