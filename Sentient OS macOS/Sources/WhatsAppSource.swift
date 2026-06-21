@@ -17,6 +17,7 @@
 //
 
 import Foundation
+import AppKit   // NSWorkspace — install probe (LaunchServices isn't UI-actor-isolated; safe off-main)
 
 struct WhatsAppSource: Sendable {
     let kind: SourceKind = .whatsapp
@@ -99,6 +100,14 @@ struct WhatsAppSource: Sendable {
                                 lastActive: Date(timeIntervalSinceReferenceDate: r.double(3))))
         }
         return out
+    }
+
+    /// Is the WhatsApp desktop app installed on this Mac? The connections UI hides WhatsApp
+    /// entirely when it isn't — there's nothing to read, nothing to offer. A LaunchServices
+    /// lookup (no Full Disk Access needed), keyed on the same bundle our group-container path
+    /// assumes, so "installed" and "readable" never disagree.
+    static var isInstalled: Bool {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: "net.whatsapp.WhatsApp") != nil
     }
 
     var dbPath: String {

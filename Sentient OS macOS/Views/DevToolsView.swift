@@ -46,7 +46,7 @@ enum SourceSelection {
         if bool("dbg.run.desktop", default: true) { s.append(.files(.desktop)) }
         if bool("dbg.run.documents", default: true) { s.append(.files(.documents)) }
         s.append(contentsOf: customRoots.map { .files(.custom($0)) })
-        if bool("dbg.run.whatsapp", default: false) && fdaGranted && !chatJIDs.isEmpty {
+        if bool("dbg.run.whatsapp", default: false) && fdaGranted && WhatsAppSource.isInstalled && !chatJIDs.isEmpty {
             s.append(.whatsapp(chatJIDs: chatJIDs))
         }
         if bool("dbg.run.imessage", default: false) && fdaGranted && !imessageGUIDs.isEmpty {
@@ -428,11 +428,13 @@ struct DevToolsView: View {
                     }
                 }
                 chooseFolderChip
-                chatSourceChip("WhatsApp", systemImage: "message.fill",
-                               isOn: runWhatsApp && fdaGranted && !selectedChatJIDs.isEmpty,
-                               count: selectedChatJIDs.count,
-                               turnOff: { runWhatsApp = false },
-                               openPicker: { showChatPicker = true })
+                if WhatsAppSource.isInstalled {
+                    chatSourceChip("WhatsApp", systemImage: "message.fill",
+                                   isOn: runWhatsApp && fdaGranted && !selectedChatJIDs.isEmpty,
+                                   count: selectedChatJIDs.count,
+                                   turnOff: { runWhatsApp = false },
+                                   openPicker: { showChatPicker = true })
+                }
                 chatSourceChip("iMessage", systemImage: "bubble.left.fill",
                                isOn: runIMessage && fdaGranted && !selectedIMessageGUIDs.isEmpty,
                                count: selectedIMessageGUIDs.count,
