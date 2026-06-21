@@ -21,6 +21,7 @@ struct HomeSources {
     var whatsapp = false
     var imessage = false
     var notes = false
+    var whatsappAvailable = true   // false → WhatsApp isn't installed on this Mac; hide its chip entirely
 }
 
 // MARK: - Analysis
@@ -62,7 +63,7 @@ struct AnalysisPopover: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     SourceChip("Files", on: sources.files)
-                    SourceChip("WhatsApp", on: sources.whatsapp)
+                    if sources.whatsappAvailable { SourceChip("WhatsApp", on: sources.whatsapp) }
                     SourceChip("iMessage", on: sources.imessage)
                 }
                 HStack(spacing: 8) {
