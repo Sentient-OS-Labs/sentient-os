@@ -137,8 +137,8 @@ actor ProactiveExecutor {
 
         let domains = Self.domains(from: recipe)
         do {
-            let counts = try CookieDecryptor.makeStorageState(domains: domains, to: ssURL)
-            Log("ProactiveExecutor/browser: storageState \(counts.written) cookies (\(counts.decrypted) decrypted) for \(domains.isEmpty ? "all domains" : domains.joined(separator: ", "))")
+            let r = try CookieDecryptor.makeStorageState(domains: domains, to: ssURL)
+            Log("ProactiveExecutor/browser: storageState \(r.written) cookies (\(r.decrypted) decrypted) from \(r.browser.displayName) for \(domains.isEmpty ? "all domains" : domains.joined(separator: ", "))")
         } catch {
             return .notFireable("Couldn't use your browser session: \(describe(error))")
         }
