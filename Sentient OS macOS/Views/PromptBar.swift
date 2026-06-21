@@ -1,0 +1,189 @@
+//
+//  PromptBar.swift
+//  Sentient OS macOS
+//
+//  The "Tell me what you want me to DO" command bar that docks at the foot of the For You
+//  window — the one glowing object on the screen (the jewelry rule). A slow, soft conic
+//  AI-gradient glow (the Analyze Now / GlowButton palette, GlowHalo.stops) hugs a glassy
+//  rounded field:
+//    [ Computer use | Browser use ]  ·  the prompt input (verb "DO" bolded bright)  ·  ◯↑ send
+//  The mode selector defaults to Computer use. `onSend(text, mode)` is the DEMO SEAM — real
+//  execution will hand the text + mode to CodexCLI (computer use → a workspace-write agent;
+//  browser use → a browser-driving agent). Today it just reports the intent.
+//
+//  Key pieces: PromptBar (the bar) · ModeToggle (the segmented selector) · SendButton ·
+//  PromptGlow (the rounded-rect twin of GlowButton's GlowHalo).
+//
+
+import SwiftUI
+
+/// What the agent is allowed to drive when it acts on the user's request.
+enum AgentMode: String, CaseIterable {
+    case computer, browser
+    var label: String { self == .computer ? "Computer use" : "Browser use" }
+    var icon: String { self == .computer ? "desktopcomputer" : "globe" }
+}
+
+struct PromptBar: View {
+    /// DEMO SEAM — fired when the user sends. Real execution routes (text, mode) → CodexCLI.
+    var onSend: (String, AgentMode) -> Void = { _, _ in }
+
+    @State private var text = ""
+    @State private var mode: AgentMode = .computer
+    @FocusState private var focused: Bool
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            ModeToggle(mode: $mode)
+
+            ZStack(alignment: .leading) {
+                if trimmed.isEmpty { placeholder }
+                TextField("", text: $text, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white)
+                    .tint(Theme.accent)
+                    .lineLimit(1...4)
+                    .focused($focused)
+                    .onSubmit(send)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { focused = true }
+
+            SendButton(active: !trimmed.isEmpty, action: send)
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, 11)
+        .padding(.vertical, 11)
+        .background(field)
+        .background(PromptGlow(intensity: focused ? 0.55 : 0.32))
+        .animation(.easeInOut(duration: 0.4), value: focused)
+    }
+
+    private func send() {
+        guard !trimmed.isEmpty else { return }
+        onSend(trimmed, mode)
+        text = ""
+    }
+
+    /// "Tell me what you want me to DO" — the verb glows bright; the rest whispers.
+    private var placeholder: some View {
+        (Text("Tell me what you want me to ").foregroundColor(Theme.Ink.label)
+         + Text("DO").foregroundColor(.white.opacity(0.92)).fontWeight(.heavy))
+            .font(.system(size: 14))
+            .allowsHitTesting(false)
+    }
+
+    /// The glassy field with a faint AI-gradient hairline that brightens on focus.
+    private var field: some View {
+        RoundedRectangle(cornerRadius: 16, style: .continuous)
+            .fill(Theme.Ink.cardBG)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(colors: GlowHalo.stops.map { $0.opacity(focused ? 0.6 : 0.32) },
+                                       startPoint: .leading, endPoint: .trailing),
+                        lineWidth: 1)
+            )
+    }
+}
+
+// MARK: - The Computer / Browser use selector
+
+private struct ModeToggle: View {
+    @Binding var mode: AgentMode
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(AgentMode.allCases, id: \.self) { segment($0) }
+        }
+        .padding(3)
+        .background(Capsule(style: .continuous).fill(.white.opacity(0.04)))
+        .overlay(Capsule(style: .continuous).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+    }
+
+    private func segment(_ m: AgentMode) -> some View {
+        let on = mode == m
+        return Button {
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) { mode = m }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: m.icon).font(.system(size: 10.5, weight: .semibold))
+                Text(m.label).font(.system(size: 11.5, weight: on ? .semibold : .medium))
+            }
+            .foregroundStyle(on ? .white : Theme.Ink.label)
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background {
+                if on {
+                    Capsule(style: .continuous).fill(.white.opacity(0.07))
+                        .overlay(Capsule(style: .continuous).strokeBorder(
+                            LinearGradient(colors: [Theme.accent.opacity(0.85), Theme.accent.opacity(0.30)],
+                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                            lineWidth: 1))
+                }
+            }
+            .contentShape(Capsule(style: .continuous))
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+// MARK: - The send button
+
+private struct SendButton: View {
+    let active: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(active ? .black : .white.opacity(0.40))
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(active ? Color.white : Color.white.opacity(0.08)))
+                .overlay(Circle().strokeBorder(.white.opacity(active ? 0 : 0.10), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+        .shadow(color: Theme.accent.opacity(active ? 0.55 : 0), radius: 11)
+        .disabled(!active)
+        .animation(.easeInOut(duration: 0.25), value: active)
+    }
+}
+
+// MARK: - The rounded-rect AI-gradient glow (twin of GlowButton's GlowHalo)
+
+/// A slow, ambient rotation of the GlowButton (Analyze Now) palette, blurred to a soft glow
+/// hugging the bar. Slower than the 3.5s CTA halo (7s) so it reads as a calm, magical presence,
+/// not a spinner. Kept tight (small bleed + blur) so it's a quiet rim-glow, not a big halo.
+private struct PromptGlow: View {
+    var intensity: Double
+    private static let period: Double = 7.0
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let angle = (t.truncatingRemainder(dividingBy: Self.period) / Self.period) * 360.0
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(AngularGradient(colors: GlowHalo.stops, center: .center, angle: .degrees(angle)))
+                .blur(radius: 16)
+                .padding(-2)
+        }
+        .opacity(intensity)
+        .animation(.easeInOut(duration: 0.5), value: intensity)
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Preview
+
+#Preview("Prompt bar") {
+    ZStack {
+        Theme.bg.ignoresSafeArea()
+        PromptBar { text, mode in print("[\(mode.rawValue)] \(text)") }
+            .padding(40)
+    }
+    .frame(width: 980, height: 220)
+}

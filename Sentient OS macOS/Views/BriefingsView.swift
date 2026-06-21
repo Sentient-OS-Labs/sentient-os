@@ -6,7 +6,7 @@
 //  with staggered physics; they settle into a loose scatter (placed, not gridded). Each card
 //  is an OFFER the user can fire (BriefingCard plays the agentic theater, then the card
 //  flies away), flick-dismiss with drag physics (the scatter reflows), or expand into a full
-//  typeset letter. A faint reminders strip + trust footer hold the floor; the empty state
+//  typeset letter. A glowing command bar + trust footer hold the floor; the empty state
 //  whispers "Your AI looks out for you."
 //
 //  Doc: Documentation/Briefings Window (For You).md · Demo content + the CodexCLI seam:
@@ -34,7 +34,7 @@ struct BriefingsView: View {
                 Group {
                     header
                     scatter(geo)
-                    bottomStrip
+                    bottomDock
                     if model.entries.isEmpty { emptyState.transition(.opacity) }
                 }
                 .blur(radius: letterShown ? 7 : 0)
@@ -81,7 +81,10 @@ struct BriefingsView: View {
     // MARK: The scatter
 
     private func scatter(_ geo: GeometryProxy) -> some View {
-        let slots = Self.slots(count: model.entries.count, in: geo.size)
+        // Reserve the bottom band for the command bar + footer: lay the scatter into the
+        // top 84% of the height so no card overlaps the glowing PromptBar.
+        let field = CGSize(width: geo.size.width, height: geo.size.height * 0.84)
+        let slots = Self.slots(count: model.entries.count, in: field)
         return ZStack {
             ForEach(Array(model.entries.enumerated()), id: \.element.id) { item in
                 DealtCard(
@@ -113,19 +116,24 @@ struct BriefingsView: View {
         return f.map { CGPoint(x: $0.0 * size.width, y: $0.1 * size.height) }
     }
 
-    // MARK: Floor — reminders whisper + trust footer
+    // MARK: Floor — the command bar + trust footer
 
-    private var bottomStrip: some View {
-        VStack(spacing: 9) {
-            MonoCaps(Demo.reminders, size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+    private var bottomDock: some View {
+        VStack(spacing: 16) {
+            PromptBar { text, mode in
+                // DEMO SEAM: real execution hands (text, mode) to CodexCLI — computer use runs a
+                // workspace-write agent; browser use drives the browser. For now, report the intent.
+                Log("ForYou/prompt: [\(mode.rawValue) use] \(text)")
+            }
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
                 Text("Private by design. Your files never leave this Mac.")
                     .font(.system(size: 12)).foregroundStyle(Theme.Ink.label)
             }
         }
+        .padding(.horizontal, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, 14)
+        .padding(.bottom, 16)
     }
 
     private var emptyState: some View {
@@ -457,7 +465,6 @@ private struct LetterView: View {
 
 private enum Demo {
     static let name = "Jesai"   // later: the vault portrait's first name
-    static let reminders = "Other reminders: EWOR CEO call — Daniel Dippold, tomorrow at 11 AM · Workout — tonight 8 PM"
     static let readLine = "While you slept, I read 1,704 things"
 }
 
