@@ -6,17 +6,19 @@
 //  the FILES-iterative system (the hand-drawn INITIAL | ITERATIVE mockup):
 //
 //    INITIAL                          ITERATIVE
-//    • start on device (top→bottom)   • start on device (bottom→top)
+//    • start / resume (top→bottom)    • start on device (bottom→top)
 //    • tell cloud: make KB exist      • tell cloud: update KB
 //    • proactive system               • proactive system
 //                       VIEW SUMMARIES
 //
-//  Initial resets each selected file root and walks newest→oldest; iterative walks only files
-//  newer than the saved pointer, oldest→newest. "tell cloud" hands the cycle's summaries to
-//  Codex (create / surgical update). "proactive system" sends the reminder-flagged summaries to
-//  the placeholder proactive pass, then WIPES the cycle's summaries (the cycle ends). All of it
-//  runs through the new self-contained stack (IterativeRun · VaultCloud · CycleStore) — the old
-//  Store/Pipeline/messages are untouched, reachable from "More" + the home's Analyze Now.
+//  "start / resume (top→bottom)" runs the resume-aware .auto pass: a fresh bucket descends
+//  newest→oldest (sinking a crash-resume floor), an interrupted one picks up where it stopped, a
+//  finished one catches up. "start on device (bottom→top)" forces .iterative (files past the mark,
+//  oldest→newest). Neither wipes anything — a from-scratch run is the deliberate "Reset everything"
+//  button under "More" (clears pointers + summaries + the knowledge base). "tell cloud" hands the
+//  cycle's summaries to Codex (create / surgical update). "proactive system" sends the
+//  reminder-flagged summaries to the placeholder proactive pass. All of it runs through the
+//  self-contained stack (IterativeRun · VaultCloud · CycleStore).
 //
 //  `SourceSelection` is the one shared reader of the dbg.run.* prefs, so the home's Analyze Now and
 //  this sheet's INITIAL/ITERATIVE buttons act on EXACTLY the same source selection.
@@ -118,11 +120,6 @@ struct DevToolsView: View {
     private var selectedSources: [RunSource] {
         SourceSelection.current(customRoots: customRoots, fdaGranted: fdaGranted)
     }
-    /// Just the FILE roots — what the new INITIAL/ITERATIVE buttons act on (messages/Notes are the
-    /// old system's, run from the home's Analyze Now or "More" below).
-    private var selectedFileRoots: [FileRoot] {
-        selectedSources.compactMap { if case .files(let r) = $0 { return r } else { return nil } }
-    }
     private var selectedChatJIDs: Set<String> {
         Set(selectedChatsCSV.split(separator: ",").map(String.init))
     }
@@ -205,7 +202,7 @@ struct DevToolsView: View {
     private var columns: some View {
         HStack(alignment: .top, spacing: 16) {
             columnView("INITIAL") {
-                deviceButton("init.device", "start on device\n(top → bottom)", .initial)
+                deviceButton("init.device", "start / resume\n(top → bottom)", .auto)
                 actionButton("init.cloud", "tell cloud:\n“go make knowledge base exist”", "cloud.fill", tint: .purple) { progress in
                     await cloudCreate(progress: progress)
                 }
@@ -313,7 +310,7 @@ struct DevToolsView: View {
             Button { startOnDevice(id: id, mode: mode) } label: {
                 HStack(spacing: 7) {
                     if run.busy == id { ProgressView().controlSize(.small) }
-                    else { Image(systemName: mode == .initial ? "arrow.down.to.line" : "arrow.up.to.line") }
+                    else { Image(systemName: mode == .iterative ? "arrow.up.to.line" : "arrow.down.to.line") }
                     Text(title).font(.caption.weight(.medium)).multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -330,9 +327,9 @@ struct DevToolsView: View {
         }
     }
 
-    /// Build the connectors from the lit SOURCES + (initial) wipe the vault, then present the rich
-    /// ProcessingView takeover for ALL of it — device sources AND Gmail (the cloud leg shows in the
-    /// same takeover).
+    /// Build the connectors from the lit SOURCES, then present the rich ProcessingView takeover for ALL
+    /// of it — device sources AND Gmail (the cloud leg shows in the same takeover). Non-destructive: a
+    /// from-scratch run is the deliberate "Reset everything" button under More.
     private func startOnDevice(id: String, mode: IterativeRun.Mode) {
         let gmailRun = gmailConnected && runGmail
         let connectors = RunSource.connectors(from: selectedSources)
@@ -342,11 +339,6 @@ struct DevToolsView: View {
         // Device sources need the on-device model; Gmail (cloud) does not.
         if !connectors.isEmpty && Self.modelPath == nil {
             run.status[id] = "✗ model not found"; return
-        }
-        if mode == .initial {
-            // Fresh start: immediately wipe the existing on-device knowledge base (the vault).
-            try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
-            Log("DevTools: INITIAL — wiped the on-device vault at \(VaultGenerator.vaultRoot.path)")
         }
         run.status[id] = nil
         deviceJob = DeviceJob(connectors: connectors, mode: mode, runGmail: gmailRun)
@@ -564,7 +556,7 @@ struct DevToolsView: View {
                 VStack(spacing: 12) {
                     VStack(spacing: 4) {
                         Button(role: .destructive) { Task { await runReset() } } label: {
-                            Label("Reset FILE store (pointers + summaries)", systemImage: "trash")
+                            Label("Reset everything (pointers · summaries · knowledge base)", systemImage: "trash")
                         }
                         .buttonStyle(.bordered)
                         if let resetResult {
@@ -783,14 +775,15 @@ struct DevToolsView: View {
         .padding(14).frame(maxWidth: 460).glassCard()
     }
 
-    /// Reset the FILE store only (the new files-iterative pointers + summaries). The old Store
-    /// (messages/Notes) is untouched.
+    /// Factory reset — wipe EVERY pointer + summary (the iterative cycle store) AND the knowledge base
+    /// (the vault), so the next "start / resume" run is a fresh first run that rebuilds everything from
+    /// scratch. The deliberate, separate alternative to the (now non-destructive) start button.
     @MainActor
     private func runReset() async {
-        await CycleStore.shared.wipeAllNotes()
-        // Clear every selected root's pointer too, so the next initial truly starts fresh.
-        for root in selectedFileRoots { await CycleStore.shared.clearBucket("file:\(root.id)") }
+        await CycleStore.shared.wipeEverything()
+        try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
+        Log("DevTools: RESET — wiped the cycle store + the knowledge base at \(VaultGenerator.vaultRoot.path)")
         let c = await CycleStore.shared.counts()
-        resetResult = "✓ cycle store cleared — notes \(c.notes)"
+        resetResult = "✓ reset — cycle store + knowledge base wiped (notes \(c.notes))"
     }
 }
