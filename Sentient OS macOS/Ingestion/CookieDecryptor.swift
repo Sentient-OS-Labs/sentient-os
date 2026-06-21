@@ -4,17 +4,21 @@
 //
 //  Proactive Intelligence — PART 3 (the executor), the TRUSTED cookie layer. To let a private,
 //  headless Chromium act as the user on the long tail of normal sites, we log it in by decrypting
-//  the user's own Chrome cookies ourselves (the app has Full Disk Access + owns the Keychain
-//  interaction) and handing them to Playwright as a `storageState` JSON — never touching the user's
-//  running browser, never copying a profile (we only READ the cookie DB). Browser/Arch receipts:
+//  the user's own Chromium-browser cookies ourselves (the app has Full Disk Access + owns the
+//  Keychain interaction) and handing them to Playwright as a `storageState` JSON — never touching the
+//  user's running browser, never copying a profile (we only READ the cookie DB). We support every
+//  Chromium browser that shares the macOS `v10` scheme — today Chrome AND Edge (`Browser` enum); the
+//  decryption is byte-identical, only the cookie-DB location + Keychain service name differ. Which
+//  browser we act in follows the user's DEFAULT browser (`resolveBrowser`). Browser/Arch receipts:
 //  Documentation/Browser Automation & Session Reuse (Proactive Part 3).md §3.4.
 //
-//  The macOS `v10` recipe (all measured): Keychain "Chrome Safe Storage" key → PBKDF2-HMAC-SHA1
+//  The macOS `v10` recipe (all measured): Keychain "<Browser> Safe Storage" key → PBKDF2-HMAC-SHA1
 //  (salt "saltysalt", 1003 iters, 16-byte key) → AES-128-CBC (iv = 16×0x20) per cookie → strip
 //  PKCS7 padding → strip a 32-byte SHA256(host_key) domain prefix if present → UTF-8 value.
 //
 //  Key methods:
-//   - CookieDecryptor.makeStorageState(domains:to:)  → write a Playwright storageState (scoped)
+//   - CookieDecryptor.resolveBrowser()               → which Chromium to act in (override → default → installed)
+//   - CookieDecryptor.makeStorageState(domains:to:)  → resolve + write a Playwright storageState (scoped)
 //   - CookieDecryptor.registrableDomain(_:)          → last-two-label domain (cookie scoping)
 //
 //  Raw cookies + the key NEVER leave this trusted Swift layer (Invariant 1 spirit): only the
@@ -23,31 +27,82 @@
 
 import Foundation
 import CommonCrypto
+import AppKit   // NSWorkspace — default-browser query (NSWorkspace isn't UI-actor-isolated; safe off-main)
 
 /// Pure utility (crypto + file IO + Process) — `nonisolated` so the off-main ProactiveExecutor actor
 /// can call it directly (the project defaults declarations to @MainActor; these don't belong there).
 nonisolated enum CookieDecryptor {
 
+    /// A supported Chromium browser. All share the identical macOS `v10` cookie-encryption scheme
+    /// (§3.4) — only the cookie-DB location and the Keychain "Safe Storage" service name differ, so
+    /// adding a browser is just three strings here.
+    enum Browser: String, CaseIterable {
+        case chrome
+        case edge
+
+        /// `Application Support/<this>` — the browser's user-data root.
+        var appSupportSubdir: String {
+            switch self {
+            case .chrome: return "Google/Chrome"
+            case .edge:   return "Microsoft Edge"
+            }
+        }
+        /// Keychain generic-password service holding the AES key.
+        var keychainService: String {
+            switch self {
+            case .chrome: return "Chrome Safe Storage"
+            case .edge:   return "Microsoft Edge Safe Storage"
+            }
+        }
+        /// LaunchServices bundle id of the app — for matching the user's default browser.
+        var bundleID: String {
+            switch self {
+            case .chrome: return "com.google.chrome"
+            case .edge:   return "com.microsoft.edgemac"
+            }
+        }
+        var displayName: String {
+            switch self {
+            case .chrome: return "Google Chrome"
+            case .edge:   return "Microsoft Edge"
+            }
+        }
+    }
+
     enum CookieError: LocalizedError {
-        case chromeNotFound
-        case keychain(String)
+        case noBrowser
+        case cookiesNotFound(Browser)
+        case keychain(Browser, String)
         var errorDescription: String? {
             switch self {
-            case .chromeNotFound:  return "No Google Chrome cookie database found — browser actions need your default browser to be Google Chrome."
-            case .keychain(let m): return "Couldn't read the Chrome Safe Storage key from the Keychain (\(m.prefix(160)))."
+            case .noBrowser:
+                return "No supported browser found — browser actions need Google Chrome or Microsoft Edge with a signed-in profile."
+            case .cookiesNotFound(let b):
+                return "No \(b.displayName) cookie database found — browser actions need \(b.displayName) with a signed-in profile."
+            case .keychain(let b, let m):
+                return "Couldn't read the \(b.displayName) Safe Storage key from the Keychain (\(m.prefix(160)))."
             }
         }
     }
 
     // MARK: Public
 
-    /// Decrypt the user's Chrome cookies (optionally scoped to `domains`, registrable-domain match;
-    /// empty = all) and write a Playwright `storageState` JSON to `fileURL`. Returns how many cookies
-    /// decrypted and how many were written. Reads the live Cookies DB WAL-safely and deletes the copy.
+    /// Decrypt the user's cookies for whichever browser `resolveBrowser` picks (optionally scoped to
+    /// `domains`) and write a Playwright `storageState` JSON to `fileURL`. Returns which browser was
+    /// used + how many cookies decrypted / were written.
     @discardableResult
-    static func makeStorageState(domains: [String], to fileURL: URL) throws -> (decrypted: Int, written: Int) {
-        guard let dbPath = cookieDBPath() else { throw CookieError.chromeNotFound }
-        let key = try deriveKey(password: try safeStoragePassword())
+    static func makeStorageState(domains: [String], to fileURL: URL) throws -> (browser: Browser, decrypted: Int, written: Int) {
+        guard let browser = resolveBrowser() else { throw CookieError.noBrowser }
+        let counts = try makeStorageState(browser: browser, domains: domains, to: fileURL)
+        return (browser, counts.decrypted, counts.written)
+    }
+
+    /// Same, for an explicit browser (the dev override / self-test path). Reads the live Cookies DB
+    /// WAL-safely and deletes the copy.
+    @discardableResult
+    static func makeStorageState(browser: Browser, domains: [String], to fileURL: URL) throws -> (decrypted: Int, written: Int) {
+        guard let dbPath = cookieDBPath(for: browser) else { throw CookieError.cookiesNotFound(browser) }
+        let key = try deriveKey(password: try safeStoragePassword(for: browser))
         let scope = Set(domains.map(registrableDomain))
 
         let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
@@ -105,13 +160,39 @@ nonisolated enum CookieDecryptor {
         return parts.suffix(2).joined(separator: ".")
     }
 
-    // MARK: Chrome locations
+    // MARK: Browser resolution
 
-    /// The Cookies DB for the user's Chrome — prefer the `Default` profile, else any profile that
-    /// has one. (Other Chromium browsers / Safe-Storage keys are future work — §7.)
-    static func cookieDBPath() -> String? {
+    /// Which browser to act in: a `SENTIENT_BROWSER` dev override → the user's DEFAULT browser (if it's
+    /// a supported Chromium that has a cookie DB) → the first installed supported browser with cookies
+    /// (Chrome first). The override is honored even with no cookie DB, so a forced run surfaces a clear
+    /// `cookiesNotFound` instead of silently falling through.
+    static func resolveBrowser() -> Browser? {
+        if let raw = ProcessInfo.processInfo.environment["SENTIENT_BROWSER"]?.lowercased(),
+           let forced = Browser(rawValue: raw) {
+            return forced
+        }
+        if let defID = defaultBrowserBundleID(),
+           let match = Browser.allCases.first(where: { $0.bundleID == defID }),
+           cookieDBPath(for: match) != nil {
+            return match
+        }
+        return Browser.allCases.first { cookieDBPath(for: $0) != nil }
+    }
+
+    /// The bundle id of the system default `https` handler (e.g. "com.google.chrome"), lowercased.
+    static func defaultBrowserBundleID() -> String? {
+        guard let url = URL(string: "https://example.com"),
+              let appURL = NSWorkspace.shared.urlForApplication(toOpen: url) else { return nil }
+        return Bundle(url: appURL)?.bundleIdentifier?.lowercased()
+    }
+
+    // MARK: Browser locations
+
+    /// The Cookies DB for the given browser — prefer the `Default` profile, else any profile that has
+    /// one. (nil = that browser isn't installed / has no profile with cookies.)
+    static func cookieDBPath(for browser: Browser) -> String? {
         let fm = FileManager.default
-        let base = "\(fm.homeDirectoryForCurrentUser.path)/Library/Application Support/Google/Chrome"
+        let base = "\(fm.homeDirectoryForCurrentUser.path)/Library/Application Support/\(browser.appSupportSubdir)"
         let preferred = ["Default", "Profile 1", "Profile 2"].map { "\(base)/\($0)/Cookies" }
         if let p = preferred.first(where: { fm.fileExists(atPath: $0) }) { return p }
         if let subs = try? fm.contentsOfDirectory(atPath: base) {
@@ -122,23 +203,23 @@ nonisolated enum CookieDecryptor {
 
     // MARK: Keychain key
 
-    /// `security find-generic-password -w -s "Chrome Safe Storage"` → the 24-char password. The
-    /// first read from a non-Chrome app may prompt the user once ("Always Allow") — that's expected.
-    static func safeStoragePassword() throws -> String {
+    /// `security find-generic-password -w -s "<Browser> Safe Storage"` → the 24-char password. The
+    /// first read from a non-browser app may prompt the user once ("Always Allow") — that's expected.
+    static func safeStoragePassword(for browser: Browser) throws -> String {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/security")
-        proc.arguments = ["find-generic-password", "-w", "-s", "Chrome Safe Storage"]
+        proc.arguments = ["find-generic-password", "-w", "-s", browser.keychainService]
         let outPipe = Pipe(), errPipe = Pipe()
         proc.standardOutput = outPipe
         proc.standardError = errPipe
-        do { try proc.run() } catch { throw CookieError.keychain("\(error)") }
+        do { try proc.run() } catch { throw CookieError.keychain(browser, "\(error)") }
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
         proc.waitUntilExit()
         let pw = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard proc.terminationStatus == 0, !pw.isEmpty else {
             let err = String(data: errData, encoding: .utf8) ?? ""
-            throw CookieError.keychain(err.isEmpty ? "security exited \(proc.terminationStatus)" : err)
+            throw CookieError.keychain(browser, err.isEmpty ? "security exited \(proc.terminationStatus)" : err)
         }
         return pw
     }
@@ -160,7 +241,7 @@ nonisolated enum CookieDecryptor {
                                      &derived, derived.count)
             }
         }
-        guard status == Int32(kCCSuccess) else { throw CookieError.keychain("PBKDF2 failed (\(status))") }
+        guard status == Int32(kCCSuccess) else { throw CookieError.keychain(.chrome, "PBKDF2 failed (\(status))") }
         return derived
     }
 
