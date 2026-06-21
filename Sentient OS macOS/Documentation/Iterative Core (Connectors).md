@@ -25,18 +25,26 @@ A connector is dumb: it lists keyed work-items per bucket and loads one. *All* p
   authoritatively, so returning extra items is harmless. Work payload + content reuse the existing
   `Candidate`/`Artifact` value types.
 - **`CycleStore`** (`Ingestion/CycleStore.swift`) — `@ModelActor`, own on-disk store
-  (`IterativeCycle.store`). `BucketPointer` (DURABLE high-water mark per bucket) + `CycleNote`
-  (EPHEMERAL survivor, wiped each cycle; carries `kind`+`sourceID` for the cloud's trust tag). API:
-  `pointer/allPointers/setPointer/clearBucket · recordNote/notes/wipeAllNotes/importNotes · counts`.
-- **`IterativeRun`** (`Ingestion/IterativeRun.swift`) — drives any connector, three modes. **initial**:
-  per bucket, clear it, walk items newest→oldest, set the mark = newest *on completion* (interrupted ⇒
-  mark unset ⇒ iterative says "run initial first"). **iterative**: per bucket, take items `> mark`,
-  walk oldest→newest, climb the mark *per item* (so a stopped run resumes). **auto**: per bucket,
-  initial when the bucket has no mark yet, else iterative — so one Analyze Now backfills a fresh folder
-  while catching the rest up, all in one pass. (Home → `.auto`; the dev INITIAL/ITERATIVE buttons →
-  `.initial`/`.iterative`.) Reuses `Engine` + `Triage` + the GPU-wedge resilience (preemptive reload
-  every ~40 items + reactive reload after a burst of failures). Survivors → `CycleNote`;
-  junk/sensitive store nothing.
+  (`IterativeCycle.store`). `BucketPointer` (DURABLE per bucket — normally the high-water mark; during a
+  first-run descent it *also* holds a **floor**, see crash-safety below) + `CycleNote` (EPHEMERAL
+  survivor, wiped each cycle; carries `kind`+`sourceID` for the cloud's trust tag). The crash-safe write
+  path is `advance` (everyday: note + mark in ONE save) / `sinkFloor` (first run: note + floor in ONE
+  save) / `collapseFloor`; plus `pointer`/`pointerState`/`connectorMarks`/`setPointer`/`clearBucket` ·
+  `recordNote`/`notes`/`wipeAllNotes`/`wipeEverything`/`importNotes` · `counts`.
+- **`IterativeRun`** (`Ingestion/IterativeRun.swift`) — drives any connector, three modes, and is
+  **crash-safe**: every processed item commits its optional survivor note AND its progress marker in ONE
+  atomic store write — no gap for a crash to land in, so a run never duplicates or skips. **initial**
+  (top→bottom): walk items newest→oldest, sinking a **floor** (the oldest item done so far) per item; a
+  crash RESUMES strictly below the floor instead of restarting, and on reaching the bottom the floor
+  collapses into the normal high-water mark. **iterative** (bottom→top): take items `> mark`, walk
+  oldest→newest, climbing the mark *per item* (a stopped run resumes). Needs a completed first run (floor
+  cleared); a bucket with no mark or a half-done first run is skipped ("run initial first"). **auto**:
+  per bucket — initial if it has no mark yet OR a first run is mid-descent (floor set ⇒ **resume** it),
+  else iterative — so one Analyze Now backfills a fresh folder, resumes an interrupted one, and catches
+  the rest up, all in one pass. (Home → `.auto`; the dev INITIAL/ITERATIVE buttons → `.initial`/
+  `.iterative`; explicit `.initial` first clears the bucket = a full reset.) Reuses `Engine` + `Triage` +
+  the GPU-wedge resilience (preemptive reload every ~40 items + reactive reload after a burst of
+  failures). Survivors → `CycleNote`; junk/sensitive store nothing.
 
 ## The cycle (summaries are disposable)
 *on-device summarize → cloud (make/update KB) → cloud (proactive judge) → next cycle.*

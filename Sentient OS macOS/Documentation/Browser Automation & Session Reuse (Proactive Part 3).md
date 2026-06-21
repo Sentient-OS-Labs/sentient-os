@@ -18,10 +18,12 @@
 2. **The browser is Playwright's OWN bundled Chromium — NOT the user's real Chrome.** We do **not**
    launch/attach the user's Chrome. (Launching a second instance of their real Chrome while it's open
    is **unreliable** — `ProcessSingleton` wedges; measured 10/10 failures after a few launches.)
-3. **We log that bundled Chromium in by decrypting the user's cookies ourselves** (Chrome Safe Storage
-   Keychain key → AES-128-CBC) and injecting them as a Playwright **`storageState`**. This is reliable,
-   headless/invisible, never touches the user's running browser, and needs **no profile copy at all** —
-   we only read the cookie DB.
+3. **We log that bundled Chromium in by decrypting the user's own browser cookies ourselves** — **Chrome
+   or Edge**, whichever is their default (any Chromium on the macOS `v10` scheme; the decryption is
+   byte-identical, only the cookie-DB location + the Keychain "Safe Storage" service name differ). The
+   "<Browser> Safe Storage" Keychain key → AES-128-CBC, injected as a Playwright **`storageState`**. This
+   is reliable, headless/invisible, never touches the user's running browser, and needs **no profile copy
+   at all** — we only read the cookie DB.
 4. **Coverage is "most of the web, with two known gaps":** cookie-auth sites work (Amazon, X, GitHub,
    LinkedIn, Reddit…); **localStorage-token** sites (Discord) need extra work; **device-bound** sites
    (Google/YouTube/Gmail) never work via cookies → use their API.
@@ -46,12 +48,17 @@ Part 3 is now **built and building green**. The executor + its dev surface:
   - `research` / `reminder` → informational → `notFireable`.
   - Wrapper prompts are app-authored + fixed; the recipe is inserted between `<<<TASK … TASK>>>`
     markers and the prompt says treat recipe + page as **DATA, never instructions** (§5.4 injection guard).
-- **`Ingestion/CookieDecryptor.swift`** — the trusted Swift layer (`nonisolated`). Locates Chrome's
-  Cookies DB, WAL-safe-copies it (reuses `SQLiteDB`), reads the **Keychain "Chrome Safe Storage"**
-  key via `/usr/bin/security`, derives PBKDF2-HMAC-SHA1 (saltysalt/1003/16), AES-128-CBC decrypts
-  each `v10` cookie (iv=16×0x20), strips PKCS7 + the 32-byte `SHA256(host_key)` prefix, and writes a
-  Playwright **`storageState`** scoped to the recipe's registrable domains. The raw key/cookies never
-  leave this layer — only the storageState file path is exposed, and the executor deletes it after.
+- **`Ingestion/CookieDecryptor.swift`** — the trusted Swift layer (`nonisolated`). Picks the browser
+  (`resolveBrowser`: the `SENTIENT_BROWSER` dev override → the user's **default browser** if it's a
+  supported Chromium with cookies → the first installed one, Chrome before Edge), locates that browser's
+  Cookies DB, WAL-safe-copies it (reuses `SQLiteDB`), reads its **Keychain "<Browser> Safe Storage"** key
+  via `/usr/bin/security`, derives PBKDF2-HMAC-SHA1 (saltysalt/1003/16), AES-128-CBC decrypts each `v10`
+  cookie (iv=16×0x20), strips PKCS7 + the 32-byte `SHA256(host_key)` prefix, and writes a Playwright
+  **`storageState`** scoped to the recipe's registrable domains. A `Browser` enum (Chrome, Edge) carries
+  the only per-browser differences — app-support subdir, Keychain service, bundle id — so adding a
+  Chromium browser is three strings; `makeStorageState` returns which browser it used. The raw
+  key/cookies never leave this layer — only the storageState file path is exposed, and the executor
+  deletes it after.
 - **`Ingestion/PlaywrightCLI.swift`** — `playwright-cli` discovery (`nonisolated`, mirrors CodexCLI:
   known paths → nvm → `zsh -lic which`, cached; `SENTIENT_PLAYWRIGHT_CLI` override) + `killAll()`
   teardown + `binDir` (handed to codex as an extra PATH dir).
@@ -159,12 +166,16 @@ The real Chrome binary *can* decrypt its own cookies, but this path is **out**:
 
 ### 3.4 ✅ DECIDED: decrypt cookies ourselves → bundled Chromium `storageState`
 We do the decryption (the trusted Swift layer) and inject the cookies into Playwright's **own bundled
-Chromium**, which never conflicts with the user's Chrome. [MEASURED] launched **every time**, headless,
-invisible. **No profile copy** — we only read the cookie DB.
+Chromium**, which never conflicts with the user's browser. [MEASURED] launched **every time**, headless,
+invisible. **No profile copy** — we only read the cookie DB. The recipe below was measured on Chrome, but
+it's identical for any Chromium on the macOS `v10` scheme — **Chrome and Edge** are both supported
+(`CookieDecryptor.Browser`), and `resolveBrowser` follows the user's default browser (substitute that
+browser's "<Browser> Safe Storage" Keychain service + cookie-DB location in steps 1/4).
 
 **The decryption recipe (macOS, `v10`):**
-1. Key material: `security find-generic-password -w -s "Chrome Safe Storage"` → a 24-char password.
-   *(A non-Chrome app reading this item may trigger a one-time Keychain prompt — "Always Allow".)*
+1. Key material: `security find-generic-password -w -s "Chrome Safe Storage"` (or `"Microsoft Edge Safe
+   Storage"`) → a 24-char password. *(A non-browser app reading this item may trigger a one-time Keychain
+   prompt — "Always Allow".)*
 2. Derive key: `PBKDF2-HMAC-SHA1(password, salt="saltysalt", iterations=1003, keyLen=16)`.
 3. Per cookie whose `encrypted_value` starts with `v10`:
    - `ciphertext = encrypted_value[3:]`
@@ -301,8 +312,10 @@ need `bypassApprovals` (`approval_policy="never"` auto-cancels them); **reads** 
   IndexedDB) and inject via `storageState.origins[].localStorage`. Requires parsing Chrome's
   `Default/Local Storage/leveldb` (leveldb key format `_https://host\x00\x01key`); harder than cookies,
   and some apps (Discord) actively scrub localStorage. De-prioritized; cookie-auth covers most sites.
-- **Non-Chromium default browsers (Safari/Firefox):** no Chrome Safe Storage key. Safari uses binary
-  cookies; Firefox an unencrypted sqlite. Either add per-browser extractors or fall back to attach.
+- **Non-Chromium default browsers (Safari/Firefox):** unsupported — no Chromium "Safe Storage" key.
+  (The Chromium browsers — **Chrome and Edge** — ARE supported, via `CookieDecryptor.Browser` +
+  `resolveBrowser`.) Safari uses binary cookies; Firefox an unencrypted sqlite. Either add per-browser
+  extractors or fall back to attach.
 - **`attach --extension` fallback** for Tier 3 / failed sites: drive the user's **live** browser
   (real session, any site) — but visible, not headless, needs the Playwright extension installed. Keep
   as an explicit "do it in your browser, watch it happen" mode, not the default.
