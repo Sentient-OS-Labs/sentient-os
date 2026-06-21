@@ -1,28 +1,37 @@
 # CodexCLI — the `codex exec` compute spine
 
-One actor (`CodexCLI.swift`), the spine EVERY cloud feature calls: initial vault generation,
-the day's-end updater, the welcome briefing, the proactive judge and tier-2 briefings. It
-piggybacks on the user's own Codex CLI (their ChatGPT subscription pays). Replaced
-`ClaudeCLI`/`claude -p` on June 11 (clean kill — same actor shape, same `Process` plumbing).
+One actor (`CodexCLI.swift`), the spine EVERY cloud feature calls: knowledge-base creation
+(`VaultGenerator`), knowledge-base updates (`VaultCloud`), the Gmail connector reads, the
+welcome briefing, and proactive intelligence. It piggybacks on the user's own Codex CLI
+(their ChatGPT subscription pays). It is the app's ONLY cloud-model path — there is no
+direct-Anthropic-API route (deleted, along with `Secrets.swift`) and no free tier yet.
+Replaced `ClaudeCLI`/`claude -p` on June 11 (clean kill — same actor shape, same `Process`
+plumbing).
 
 ## Surface
 
 - `CodexCLI.locateBinary()` — known paths (`~/.local/bin/codex`, `/opt/homebrew/bin/codex`,
-  `/usr/local/bin/codex`) then `zsh -lic (interactive — .zshrc is where nvm/asdf init) "which codex"`; cached in UserDefaults
-  (`codexcli.binaryPath`), re-verified on every read.
+  `/usr/local/bin/codex`), then every nvm-managed node version's `bin/codex` (newest first —
+  npm-under-nvm hides the binary in a versioned dir), then a login `zsh -lic "which codex"`
+  (interactive — `.zshrc` is where nvm/asdf init; `-lc` alone never sources it). Cached in
+  UserDefaults (`codexcli.binaryPath`), re-verified on every read.
 - `validate(force:)` — ping (`Reply with exactly: PIGGYBACK_OK`, 30 s), cached per app launch;
   `force: true` re-probes (the installer flow).
 - `run(Invocation) → Envelope` — one headless call, typed errors.
 
-`Invocation`: `prompt` (always over **stdin**, never argv) · `effort` (`.high` = initial gen,
-`.medium` = everything daily) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` ·
-`addDirs` (extra writable roots) · `webSearch` (**default `true`** — web search is available to
-every call) · `includeUserConfig` (**default `true`** — loads `~/.codex` + the user's MCP
-servers, e.g. their Gmail MCP, on every call; set `false` for a hermetic run) · `bypassApprovals`
-(default `false`; `true` → `--dangerously-bypass-approvals-and-sandbox`, the only way a hosted-
-connector WRITE tool like Gmail `send_email` fires headless — TRUSTED prompts only, no sandbox) ·
-`outputSchema` (JSON-Schema string → temp file → `--output-schema`) · `resumeSessionID` · `timeout`
-(default 1 h).
+`Invocation`: `prompt` (always over **stdin**, never argv) · `model` (`.gpt55` = `gpt-5.5`, the
+default for knowledge-base work and everything else / `.gpt54mini` = `gpt-5.4-mini`, the Gmail
+tier) · `effort` (`.low` / `.medium` / `.high` / `.xhigh`; **default `.high`** — the initial vault
+build overrides to `.xhigh`, the Gmail tier to `.medium`) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` · `addDirs`
+(extra writable roots) · `webSearch` (**default `true`** — web search is available to every call)
+· `includeUserConfig` (**default `true`** — loads `~/.codex` + the user's MCP servers, e.g. their
+Gmail MCP, on every call; set `false` for a hermetic run) · `bypassApprovals` (default `false`;
+`true` → `--dangerously-bypass-approvals-and-sandbox`, the only way a hosted-connector WRITE tool
+like Gmail `send_email` fires headless — TRUSTED prompts only, no sandbox) · `outputSchema`
+(JSON-Schema string → temp file → `--output-schema`) · `resumeSessionID` · `timeout` (default 1 h)
+· `customEnv` (extra env vars merged into the sanitized child env, e.g.
+`PLAYWRIGHT_MCP_STORAGE_STATE`; PATH is reserved) · `extraPathDirs` (dirs prepended to the child
+PATH so codex's shell can find tools it shells out to).
 
 `Envelope`: `result` (final agent message) · `sessionID` (thread id — the resume handle) ·
 `numTurns` (completed items) · `durationMS` (wall clock, measured here) · `inputTokens` /
@@ -36,7 +45,7 @@ connector WRITE tool like Gmail `send_email` fires headless — TRUSTED prompts 
 | `--skip-git-repo-check` | staging dirs and the vault aren't git repos; codex refuses to run otherwise |
 | `--ignore-user-config` | **Default OFF (we DON'T pass it):** `Invocation.includeUserConfig` defaults `true`, so every call loads the user's `~/.codex` config + MCP servers (their Gmail MCP, etc.). We pass `--ignore-user-config` ONLY for an explicitly hermetic run (`includeUserConfig = false`). |
 | `-c tools.web_search=true` | added whenever `Invocation.webSearch` is true — now the **default**, so web search is an available tool on every call |
-| `-m gpt-5.5` + `-c model_reasoning_effort=…` | explicit beats the binary's drifting default |
+| `-m <model>` + `-c model_reasoning_effort=…` | the per-call `Invocation.model` (`gpt-5.5` for KB work / `gpt-5.4-mini` for Gmail) and `Invocation.effort` — explicit beats the binary's drifting default |
 | `-c approval_policy="never"` (default path) | headless `exec` can't ask a human, so without it codex would stall on shell/file approvals. `never` = don't prompt; the Seatbelt sandbox (`-s`) stays the real guardrail. **Caveat:** for hosted-connector WRITE tools this resolves to auto-CANCEL, not auto-allow (`gmail.send_email` → "user cancelled MCP tool call") — that needs `bypassApprovals` instead |
 | `--dangerously-bypass-approvals-and-sandbox` (`bypassApprovals`) | the ONLY lever that makes an approval-gated connector write (Gmail `send_email`) fire headless. Removes BOTH approvals AND the sandbox, so it's mutually exclusive with `-s`/`approval_policy`. Used for the For You "send it" action. **TRUSTED, app-authored prompts only** — there's no sandbox left |
 | `-s <sandbox>` | OS-level Seatbelt confinement — stronger than a tool allowlist; even model-run shell commands can't escape cwd + addDirs |
@@ -61,7 +70,7 @@ Failure = non-zero exit OR no final agent message. Error text (JSONL `error` /
 …) → typed `usageLimit(message:sessionID:)` so callers reschedule + resume. ⚠️ The real
 ChatGPT-plan limit message is still unverified — refine the markers during dogfood.
 
-## Receipts (June 11, Aryaman's Mac, codex-cli 0.139.0)
+## Receipts (June 11, a dev's Mac, codex-cli 0.139.0)
 
 | Fact | Receipt |
 |---|---|
@@ -71,7 +80,7 @@ ChatGPT-plan limit message is still unverified — refine the markers during dog
 | `--output-schema` | clean conforming JSON for the proactive `{time, text}` shape |
 | Resume | same thread id, full memory; workspace = process cwd (see above) |
 | Web search | `-c tools.web_search=true` → `web_search` items, correct live answer |
-| Context | GPT-5.5: 1M API context, **400k input limit through codex** — covers the 10k-summary corpus (200–400k tokens) over stdin |
+| Context | GPT-5.5: 1M API context, **400k input limit through codex** — covers the 10k-summary corpus (200–400k tokens) over stdin (the Gmail tier on `gpt-5.4-mini` chunks weekly to stay well under its own cap) |
 | Overhead | ~25k input tokens per call (codex system prompt + tools), almost fully cached |
 
 ## Notes

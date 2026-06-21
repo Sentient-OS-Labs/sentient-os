@@ -12,8 +12,8 @@
 //  deliberately NOT a schema-aware protobuf parser. Fail-closed: anything undecodable is
 //  skipped, never fed garbled to the model.
 //
-//  Incrementality (June 11 pointer rewrite): one "notes" pointer, "(modEpochSeconds|UUID)" —
-//  an edited note's mod-date moves past it and the note re-summarizes as a new version.
+//  Incrementality: one "notes" bucket; each note keyed (ItemKey) on its CREATION date, so an
+//  edited note is NOT re-summarized (its creation date doesn't move). High-water mark in CycleStore.
 //  Locked (ZISPASSWORDPROTECTED) and deleted (ZMARKEDFORDELETION) notes are skipped in SQL.
 //  Requires Full Disk Access. Key methods: eligibleNotes() · decodeBody(_:).
 //

@@ -2,7 +2,7 @@
 //  DataSource.swift
 //  Sentient OS macOS
 //
-//  The Sendable value types the iterative ingestion pipeline passes around — `Candidate` (a cheap,
+//  The Sendable value types the iterative reading pipeline passes around — `Candidate` (a cheap,
 //  content-free work item) and `Artifact` (a Candidate plus its extracted text/image). Each source
 //  lists its current work as `Candidate`s via its `eligible…()` method (wrapped by a Connector —
 //  Ingestion/Connector.swift); IterativeRun loads the chosen ones into `Artifact`s for Triage. Live

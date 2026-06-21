@@ -1,14 +1,14 @@
 # Proactive Intelligence — Part 1 of 3: The Judge
 
-Flagship feature #2 (Arch §4, §6). Proactive is its **own module + trigger**, sequenced AFTER a
-knowledge-base build/update, never concurrently (two agentic jobs over the same vault). It runs as a
-**3-part pipeline — Find → Ready → Fire** — each its own prompt:
+The product's headline feature (Arch §4 / §6). Proactive is its **own module + trigger**, sequenced AFTER a
+knowledge-base build/update, never concurrently (two agentic jobs over the same knowledge base). It runs as a
+**3-part pipeline — Judge → Research & Prepare → Fire** — each its own prompt:
 - **PART 1 — Judge** (this doc): finds the top action items from the summaries alone. `Proactive.swift`.
-- **PART 2 — Research & Prepare**: verifies each against the live world (Gmail MCP + web + the vault)
-  AND stages every survivor **ready to fire** (draft + execution recipe), in one read-only pass.
-  `ProactiveResearch.swift`.
+- **PART 2 — Research & Prepare**: verifies each against the live world (Gmail MCP + web + the
+  knowledge base) AND stages every survivor **ready to fire** (draft + execution recipe), in one
+  read-only pass. `ProactiveResearch.swift`.
 - **PART 3 — Fire (the executor)**: the single write-capable step — on the user's one-button press it
-  runs a `PreparedAction`'s recipe with `bypassApprovals` (Playwright/browser-use). *Built separately.*
+  runs a `PreparedAction`'s recipe with `bypassApprovals`. ✅ built — `ProactiveExecutor.swift` (deep dive: the Browser Automation doc).
 
 **The whole read-only/safe world is Parts 1–2; the one dangerous, write-capable step is PART 3** — the
 pipeline lines up exactly on the permission boundary. The later tiers (reminders, the For You surface,
@@ -18,14 +18,13 @@ File: `Ingestion/Proactive.swift` (the `Proactive` actor + the `ActionItem` valu
 
 ## What it does
 
-PART 1 is a **hermetic, summaries-only** Codex call (gpt-5.5, **xhigh** effort — the deepest
-reasoning, since this judgment is the product) that reads ONE input and ranks it:
+PART 1 is a **hermetic, summaries-only** Codex call (gpt-5.5, **high** effort — every gpt-5.5
+call runs high; this judgment is the product) that reads ONE input and ranks it:
 
-- **The last 7 days of summaries** from EVERY source — files, WhatsApp, iMessage, Apple Notes,
-  Calendar, and Gmail — passed over stdin. Each line: `#n · [source] location · date` then
+- **The last 7 days of summaries** from every source — files, WhatsApp, iMessage, Apple Notes,
+  and Gmail — passed over stdin. Each line: `#n · [source] location · date` then
   `Title — summary`. "What just happened." (Windowed inside `findActionItems` by each note's
-  `itemDate`; the date is reliably present on every summary — see Pointer Architecture +
-  `corpusMessage`/`updatePrompt`.)
+  `itemDate`; the date is reliably present on every summary (`CycleNote.itemDate`).)
 
 PART 1 deliberately uses **NO tools** — no vault reads, no Gmail MCP, no web search. The call is run
 hermetic (`includeUserConfig = false`, `webSearch = false`) over a neutral empty scratch dir as `cwd`,
@@ -54,15 +53,18 @@ schedule, or notify — those are the later parts/tiers.
 
 Accuracy-first and deliberately detailed (the judgment IS the product). Cross-source context is the
 moat, but it's used to **ground** each item, not to filter or diversify the output. Core thrust:
-- **Cross-source context grounds every item** — corroborate, enrich, and verify each candidate against
-  the other tools + the vault to make it accurate and personalized. This is NOT a preference for items
-  that touch many sources: a deep single-source item is every bit as valid as one that spans five. The
-  `importance` field must name the dots connected and `sources` must cite the evidence.
+- **Cross-source context grounds every item** — connect candidates across sources (a Notes to-do that
+  another summary shows is now due, a proposed time plus a free calendar slot) to make each item
+  accurate and personalized. This is NOT a preference for items that touch many sources: a deep
+  single-source item is every bit as valid as one that spans five. The `importance` field must name
+  the dots connected and `sources` must cite the evidence. (Note: PART 1 sees only the summaries — no
+  vault/tool reads here; the deep grounding is PART 2.)
 - **No forced spread, no anti-email bias** (changed June 18) — scan every source thoroughly so a
   WhatsApp promise / Notes to-do / saved-file deadline / iMessage request isn't missed, but pick the
   genuinely strongest items whatever their source. If the best items are all email, that's fine.
-- **Read the vault deeply** (root README, then grep/read relevant notes) — never judge from summaries
-  alone.
+- **Judge from the summaries ALONE** — PART 1 is hermetic and has no tools, so the prompt tells the
+  model explicitly it has no vault/Gmail/web to lean on. The deep grounding (reading the knowledge
+  base + the live sources) is PART 2's job.
 - **Detection, not execution (for now)** — frame the exact next action (draft reply, fill a form via
   a browser agent, schedule, send) as ready-to-execute; the action infra ships later.
 - An **illustrative example catalogue** (hypothetical — overdue reply, cross-tool meeting, a promise
@@ -74,7 +76,7 @@ moat, but it's used to **ground** each item, not to filter or diversify the outp
 
 ## Invocation specifics
 
-`CodexCLI.Invocation`: `effort .xhigh`, `sandbox .readOnly`, `cwd =` a neutral empty scratch dir,
+`CodexCLI.Invocation`: `effort .high`, `sandbox .readOnly`, `cwd =` a neutral empty scratch dir,
 `webSearch = false` + `includeUserConfig = false` (hermetic — no tools), `outputSchema`, `timeout
 1200s`. Errors are typed (`ProError`): `noRecent` (nothing in the window), `usageLimit`, `failed`.
 
@@ -103,7 +105,7 @@ Research surfaces (all read-only): the **knowledge base** (`cwd` — identity an
 gracefully + mark `unverified` if absent), **web search** (external facts, identity-matched), and a
 **browser** to *inspect* only if a browser tool is present.
 
-`CodexCLI.Invocation`: `effort .xhigh`, `sandbox .readOnly`, `cwd = vault`, `webSearch = true`,
+`CodexCLI.Invocation`: `effort .high`, `sandbox .readOnly`, `cwd = vault`, `webSearch = true`,
 `includeUserConfig = true`, `bypassApprovals = false`, `outputSchema`, `timeout 1800s`. Output via
 `--output-schema`: `{ready:[{title, kind, urgency, due_date, status, verification, card_summary,
 prepared_content, execution_recipe, sources, review_note}], dropped:[{title, reason}]}`. `kind` ∈
@@ -114,15 +116,18 @@ contract PART 3 consumes**. Errors typed (`ResError`): `noItems`, `noVault`, `us
 ⚠️ If PART 2 ever needs to *drive* a browser (not just inspect), revisit `.readOnly` — but real browser
 actions belong in PART 3 (the executor), not here.
 
-## PART 3 — Fire / the executor (⛔ built separately, not in this module)
+## PART 3 — Fire / the executor (✅ built — `Ingestion/ProactiveExecutor.swift`)
 
 The single write-capable step: on the user's one-button press it takes a `PreparedAction`'s
 `execution_recipe` and actually performs it. **`bypassApprovals = true`** (the only thing that lets an
-approval-gated connector write fire headless — codex/Gmail findings) + Playwright/browser-use for
-browser actions. Prototyped today by `BriefingsView.fireLiveCodex` (the For You "send it" Gmail send).
+approval-gated connector write fire headless — codex/Gmail findings), routed by kind — email via the
+Gmail MCP, **browser use** via [microsoft/playwright-cli](https://github.com/microsoft/playwright-cli)
+driving a real browser with the user's own decrypted cookies (`CookieDecryptor` + `PlaywrightCLI`),
+calendar via a calendar MCP. (Deep dive: the Browser Automation doc.) The HomeView "send it" Gmail send
+(`ForYouModel.fireLiveCodex`) was the first live proof.
 
 ⚠️ **Security:** `bypassApprovals` removes the whole sandbox, and the recipe was authored by an LLM
-from the user's email/vault — a **prompt-injection path into a no-sandbox execution**. PART 3 must be a
+from the user's email + knowledge base — a **prompt-injection path into a no-sandbox execution**. PART 3 must be a
 **thin, app-authored wrapper** that treats the recipe as DATA (do exactly this one declared action and
 nothing else; ignore any instructions embedded in the data), never a raw "run whatever PART 2 wrote."
 
@@ -139,11 +144,14 @@ The **DEV TOOLS sheet** — run in order:
 Typical flow: on-device pass → "go make knowledge base exist" → "proactive system" → "proactive
 RESEARCH + PREPARE (part 2)".
 
-## Not built yet (next steps)
+## Not wired yet (next steps)
 
-- **PART 3 — the executor (the fire)** — see above; the thin app-authored wrapper + Playwright/
-  browser-use, `bypassApprovals = true`.
+- **The For You cards** — feed the home's suggestion cards from real `PreparedAction`s (`card_summary`
+  + `prepared_content` + a fire button wired to `execution_recipe`); they're a demo deck today. Stream
+  each action's progress back to its card with a STOP button.
+- **Computer use** — Codex's computer use (controls the Mac) for the command bar's computer-use mode.
+  ⚠️ WIP: it only works in Codex's DESKTOP APP today, not the CLI — we're reverse-engineering it onto
+  the Codex CLI (don't claim CLI computer use works yet).
 - Tier 1 — reminders (scheduled macOS notification from a `reminder`/dated action).
-- The For You surface (real cards from these `PreparedAction`s — `card_summary` + `prepared_content`
-  + a fire button wired to `execution_recipe`).
-- The real trigger (the scheduler calls this after a KB update) + the ≤1/day taste cap in code.
+- The real trigger (the scheduler runs this ~5s after the Mac wakes, after a knowledge-base update) +
+  the ≤1/day taste cap in code.

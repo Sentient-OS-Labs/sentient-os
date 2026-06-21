@@ -11,9 +11,9 @@
 //  SAME pipeline as a file: one window = one Artifact = one bouncer verdict (Triage's
 //  chat-flavored prompt). The model sees the chat name, DM-vs-group, and per-message sender.
 //
-//  Requires Full Disk Access (Permissions.swift). Incrementality: a per-chat Z_PK pointer
-//  ("whatsapp:<jid>" in SourceCursor) — the initial backfill and
-//  the daily delta are the same scan. See Documentation/Pointer Architecture (Kill the Ledger).md.
+//  Requires Full Disk Access (Permissions.swift). Incrementality: a per-chat high-water mark
+//  (max message Z_PK) per bucket "whatsapp:<jid>", held in CycleStore and advanced by IterativeRun.
+//  Doc: Documentation/WhatsApp Source (ChatStorage).md.
 //
 
 import Foundation
@@ -117,10 +117,9 @@ struct WhatsAppSource: Sendable {
     // MARK: Eligible windows (the iterative system's flat, pointer-free view)
 
     /// Current conversation windows per opted-in chat, for the iterative system (WhatsAppConnector).
-    /// Same DB read + windowing + caps (100k/90-day) as `scan`, but with NO cursor/
-    /// backfill — IterativeRun's per-chat pointer (highest message Z_PK) decides new-vs-done. One
-    /// bucket per chat ("whatsapp:<jid>"); each window keyed by its last (max) Z_PK; newest-first.
-    /// (Reuses the static helpers + ChatWindowing; the read overlaps `scan` until the old path retires.)
+    /// WAL-safe read → windowing → caps (100k / 90-day). No cursor, no backfill — IterativeRun's
+    /// per-chat high-water mark (highest message Z_PK) decides new-vs-done. One bucket per chat
+    /// ("whatsapp:<jid>"); each window keyed by its last (max) Z_PK; newest-first.
     func eligibleWindows() throws -> [Bucket] {
         let (dbURL, tempDir) = try SQLiteDB.walSafeCopy(of: dbPath)
         defer { try? FileManager.default.removeItem(at: tempDir) }

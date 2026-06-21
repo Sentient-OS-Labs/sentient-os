@@ -2,18 +2,16 @@
 //  RootView.swift
 //  Sentient OS macOS
 //
-//  The home window's switchboard: the Constellation home (idle) ⟷ the full-screen
-//  ProcessingView takeover (the fancy morph between them is a coming build phase — today
-//  they cross-fade). Analyze Now runs whatever the dev source picker has armed (read via
-//  SourceSelection); the picker itself and all debug controls live in DevToolsView, a sheet
-//  behind the home's DEV TOOLS button.
+//  The main window's switchboard: the proactive HomeView (idle) ⟷ the full-screen
+//  ProcessingView takeover (today they cross-fade). RootView owns the analyze/source state and
+//  feeds HomeView its live context; Analyze Now (in the home's Analysis popover) runs whatever
+//  the dev source picker has armed (SourceSelection). The picker + all debug controls live in
+//  DevToolsView, a sheet reached from the Analysis popover's DEV TOOLS link.
 //
 
 import SwiftUI
 
 struct RootView: View {
-    @Environment(\.openWindow) private var openWindow
-
     @State private var isProcessing = false
     @State private var showDevTools = false
     @State private var customRoots: [URL] = []   // session-only custom folders (dev picker)
@@ -40,10 +38,10 @@ struct RootView: View {
                 }
                 .transition(.opacity)
             } else {
-                constellation.transition(.opacity)
+                home.transition(.opacity)
             }
         }
-        .frame(minWidth: 920, minHeight: 660)
+        .frame(minWidth: 1040, minHeight: 800)
         .sheet(isPresented: $showDevTools) {
             DevToolsView(customRoots: $customRoots)
         }
@@ -52,20 +50,18 @@ struct RootView: View {
         }
     }
 
-    private var constellation: some View {
+    private var home: some View {
         let sources = selectedSources
-        return ConstellationHome(
+        return HomeView(
             thingsUnderstood: LifetimeStats.analyzed,
-            analyzeEnabled: !sources.isEmpty && Self.modelPath != nil,
-            modelMissing: Self.modelPath == nil,
             sources: .init(
                 files: sources.contains { if case .files = $0 { return true } else { return false } },
                 whatsapp: sources.contains { if case .whatsapp = $0 { return true } else { return false } },
                 imessage: sources.contains { if case .imessage = $0 { return true } else { return false } },
                 notes: sources.contains(.notes)),
+            analyzeEnabled: !sources.isEmpty && Self.modelPath != nil,
+            modelMissing: Self.modelPath == nil,
             onAnalyze: { withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true } },
-            onOpenVault: { openWindow(id: DatabaseView.windowID) },
-            onOpenBriefings: { openWindow(id: BriefingsView.windowID) },
             onShowDevTools: { showDevTools = true })
     }
 }

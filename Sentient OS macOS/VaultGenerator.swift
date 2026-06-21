@@ -14,7 +14,7 @@
 //  written for an AI reader, [[wikilinks]].
 //
 //  Key methods:
-//   - generate(summaries:resume:onProgress:)  → the agentic build, returns stats
+//   - generate(notes:resume:onProgress:)      → the agentic build, returns stats
 //   - vaultRoot                               → ~/Sentient OS - Knowledge Base
 //
 //  Doc: Documentation/Vault Generation (Stage 2).md
@@ -274,7 +274,7 @@ Aim for a **focused, high-signal vault — roughly 100–150 notes.** Synthesize
 ## Structure rules (hard constraints)
 - **Root folders are top-level life domains**, derived from THIS user's data. Roots contain **only subfolders**, never notes directly.
 - **Every content note lives at depth ≥ 2.** The single exception is the root `README.md`.
-- **No stub folders** — fold a 1–2-note domain into a broader sibling.
+- **No stub folders** — merge a 1–2-note domain into a broader sibling.
 - **Connect the graph with `[[wikilinks]]`.** Link by exact title; keep titles **unique**; **only link to notes you are actually creating** (no dangling links). Link people, projects, places, and recurring themes across domains.
 - Optionally add a short **index / Map-of-Content note** at the top of a large domain.
 

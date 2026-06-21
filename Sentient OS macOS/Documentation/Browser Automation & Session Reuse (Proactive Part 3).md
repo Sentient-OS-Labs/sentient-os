@@ -37,7 +37,7 @@ Part 3 is now **built and building green**. The executor + its dev surface:
 
 - **`Ingestion/ProactiveExecutor.swift`** — the `actor` (mirrors `Proactive`/`ProactiveResearch`).
   `fire(_ action: PreparedAction, progress:) → Outcome` routes on `kind`:
-  - `email_reply` / `email_new` → **Gmail channel** (generalizes `BriefingsView.fireLiveCodex`):
+  - `email_reply` / `email_new` → **Gmail channel** (generalizes `HomeView`'s `ForYouModel.fireLiveCodex`):
     `CodexCLI` `bypassApprovals + includeUserConfig`, app-authored wrapper, medium effort.
   - `calendar` → **codex + the user's calendar MCP** (real if one is configured; the wrapper makes
     codex reply `COULD NOT:` if no calendar tool exists — honest, no browser fallback).
@@ -115,9 +115,11 @@ agents** — which is exactly our codex setup.
 - **Key commands:** `open [url]`, `goto`, `snapshot [--depth=N]`, `click <ref>`, `fill <ref> <text>
   [--submit]`, `type`, `select`, `check/uncheck`, `upload`, `press`, `eval`, `screenshot`,
   `state-load/save`, `cookie-*`, `tab-*`, `close`/`close-all`/`kill-all`, `list`.
-- **Install:** `npm i -g @playwright/cli@latest` (+ `playwright install chromium`), with
-  `npx --no-install playwright-cli --version` as the discovery probe (same pattern as `CodexCLI`
-  binary discovery). `playwright-cli install --skills` drops an agent SKILL.md.
+- **Install:** `npm i -g @playwright/cli@latest` (+ `playwright install chromium`). Discovery
+  (`PlaywrightCLI.locateBinary`) mirrors `CodexCLI`: locate the `playwright-cli` binary on disk —
+  known paths (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`) → nvm-versioned dirs →
+  login-shell `which`, cached in UserDefaults; `SENTIENT_PLAYWRIGHT_CLI` overrides.
+  `playwright-cli install --skills` drops an agent SKILL.md.
 - **Config** via `.playwright/cli.config.json` or `PLAYWRIGHT_MCP_*` env (browser channel, headless,
   `userDataDir`, `cdpEndpoint`, **`storageState`**, allowed/blocked origins).
 - **Three ways to get a browser:** `open` (launch — what we use), `attach --extension`/`--cdp` (drive
@@ -172,7 +174,8 @@ invisible. **No profile copy** — we only read the cookie DB.
      (Chrome ≥ ~130 prepends `SHA256(host_key)` to bind a cookie to its domain). The remainder is the
      UTF-8 value.
 4. Read columns from the WAL-safe-copied `Cookies` DB, table `cookies`:
-   `host_key, name, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite`.
+   `host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite`
+   (the plain `value` column is the fallback for the rare unencrypted cookie — no `v10` tag).
    - `expires_utc` is microseconds since 1601 → `unix = expires_utc/1e6 - 11644473600` (0 ⇒ session ⇒
      Playwright `expires:-1`).
    - `samesite`: `2→Strict, 1→Lax, 0→None, -1→Lax`.
@@ -215,36 +218,38 @@ banks — device-bound) **can't** be done via copied login → use the provider 
 
 ---
 
-## 5. Wiring the Browser channel (how to build it)
+## 5. Wiring the Browser channel (the shipped flow)
 
 ```
 PreparedAction(kind=browser)
         │
         ▼
-[Swift] BrowserExecutor.fire(action)
-   1. default browser is Chromium?  (LaunchServices)  ── no ─▶ surface as manual reminder (for now)
-   2. read Cookies DB (WAL-safe copy) → decrypt (§3.4) → write /tmp/<uuid>.storagestate.json
-   3. ensure playwright-cli present (discover/install)
-   4. CodexCLI.run(Invocation):
-        prompt          = app-authored wrapper(execution_recipe)     ◀── DATA, not instructions
+[Swift] ProactiveExecutor.fireBrowser(recipe)
+   1. playwright-cli present?  (PlaywrightCLI.locateBinary)  ── no ─▶ notFireable (install hint)
+   2. scope domains from the recipe's URLs → decrypt Chrome cookies (§3.4) → write
+      /tmp/sentient-ss-<uuid>.json   (no Chrome cookie DB ─▶ notFireable, honest)
+   3. CodexCLI.run(Invocation):
+        prompt          = browserWrapper(recipe, playwrightBin, storageState)   ◀── DATA, not instructions
         bypassApprovals = true        // browser automation needs shell to drive playwright-cli
-        includeUserConfig = true
-        env (extra)     = PLAYWRIGHT_MCP_STORAGE_STATE=<ss.json>, PLAYWRIGHT_MCP_ISOLATED=true,
-                          PLAYWRIGHT_MCP_HEADLESS=true   // bundled chromium (do NOT set channel)
+        includeUserConfig = true · webSearch = true · effort = .high
+        customEnv       = PLAYWRIGHT_MCP_STORAGE_STATE=<ss.json>, PLAYWRIGHT_MCP_HEADLESS=true,
+                          PLAYWRIGHT_MCP_ISOLATED=true   // bundled chromium (do NOT set channel)
+        extraPathDirs   = [PlaywrightCLI.binDir]   // so codex's shell finds playwright-cli + node
         cwd             = a scratch dir
-   5. delete the storageState file + `playwright-cli kill-all`   (always, even on failure)
+   4. (defer, always — even on failure) delete the storageState + scratch + PlaywrightCLI.killAll()
 ```
 
-### 5.1 The Swift executor module (`ProactiveExecutor`, new)
-Mirror the actor shape of `Proactive`/`ProactiveResearch`. `fire(_ action: PreparedAction)` routes:
-- `email_*` → `Gmail channel` (§6, generalize `BriefingsView.fireLiveCodex`).
+### 5.1 The Swift executor module (`ProactiveExecutor`)
+Mirrors the actor shape of `Proactive`/`ProactiveResearch`. `fire(_ action:progress:)` routes on `kind`:
+- `email_*` → `Gmail channel` (§6, generalizes `HomeView`'s `ForYouModel.fireLiveCodex`).
+- `calendar` → the calendar MCP (honest `COULD NOT:` if none configured).
 - `browser` → the flow above.
-- else → not fireable yet.
+- `message` / `research` / `reminder` → `notFireable` (no automated send channel).
 
 ### 5.2 Cookie decryption (Swift, the trusted layer)
 Do it in-app (the app has Full Disk Access and owns the Keychain interaction) — **never hand the raw
 key or cookies to codex.** WAL-safe-copy `…/Chrome/Default/Cookies` (+`-wal`/`-shm`) to temp, read with
-SQLite, derive the key (`SecKeychain`/`security`), AES-128-CBC per §3.4, write the `storageState`, then
+SQLite, derive the key (`/usr/bin/security`), AES-128-CBC per §3.4, write the `storageState`, then
 delete the temp copy. Only the PII-stripped-by-construction cookie file path is exposed to the browser
 session. Self-test target: `SENTIENT_SELFTEST=cookiedecrypt` (count decrypted, validate printable).
 
@@ -256,7 +261,9 @@ falls back to `playwright-cli open <url>` → `state-load <ss.json>` → `reload
 creation was the verified-working path via `playwright-core`; the env is the CLI equivalent.)
 
 ### 5.4 The app-authored wrapper prompt (security-critical)
-`bypassApprovals` drops the sandbox → codex can run *any* shell command. The prompt is the only guard:
+`bypassApprovals` drops the sandbox → codex can run *any* shell command. The prompt is the only guard.
+The gist of the shipped `ProactiveExecutor.browserWrapper` (which also pins the absolute `playwright-cli`
+path, the `storageState` path, the `state-load → reload` fallback, and a trailing `kill-all`):
 > You are firing **one** pre-approved browser task for the user. The browser (`playwright-cli`) is
 > already loaded with the user's logged-in session. Do **exactly** this task and **nothing else**:
 > ⟪execution_recipe⟫. Work the loop: `snapshot` → `fill <ref>`/`click <ref>` by ref → `snapshot` to
@@ -282,8 +289,9 @@ wrapper is app-authored and fixed; only `⟪execution_recipe⟫` varies, inserte
 `email_*` (and anything Google) does **not** use the browser — Google device-binds sessions (Tier 3,
 measured: YouTube/Gmail both re-auth even with every cookie). Route through the **Gmail MCP via codex**:
 `bypassApprovals = true` + `includeUserConfig = true` (loads the user's Gmail connector), prompt =
-"send exactly this: ⟪execution_recipe⟫". This is already prototyped by `BriefingsView.fireLiveCodex`
-(For You "send it"); Part 3 generalizes it. See `CodexCLI (…).md` §permissioning: connector **writes**
+"send exactly this: ⟪execution_recipe⟫". This is already prototyped by `HomeView`'s
+`ForYouModel.fireLiveCodex` (For You "send it"); Part 3 generalizes it. See `CodexCLI (…).md`
+§permissioning: connector **writes**
 need `bypassApprovals` (`approval_policy="never"` auto-cancels them); **reads** are auto-allowed.
 
 ---
@@ -304,7 +312,7 @@ need `bypassApprovals` (`approval_policy="never"` auto-cancels them); **reads** 
   on a future Chrome that ties the key harder to Chrome.app. Mitigation if it happens: the
   attach-to-live-browser fallback (which never decrypts).
 - **Keychain prompt UX:** first decryption from the Sentient app may prompt for "Chrome Safe Storage" —
-  fold an explanation into onboarding ("Sentient unlocks your browser logins on-device to act for
+  work an explanation into onboarding ("Sentient unlocks your browser logins on-device to act for
   you").
 - **playwright-cli install flow:** like the codex installer — detect/install `@playwright/cli` +
   chromium during onboarding (one-time ~270 MB).

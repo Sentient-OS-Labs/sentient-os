@@ -1,10 +1,11 @@
 # Files Source — Skipping & Caps
 
-How `FilesSource.scan()` decides what *never* reaches the model. Two halves: **subtree pruning**
-(directories we refuse to walk into) and **caps** (bounds on what survives the walk). All of it
-lives in `Sources/FilesSource.swift`; everything here happens at the walk level via
-`enumerator.skipDescendants()`, so a skipped item never becomes a Candidate, never hits the
-ledger, never sees inference.
+How `FilesSource.eligibleFiles()` decides what *never* reaches the model. Two halves: **subtree
+pruning** (directories we refuse to walk into) and **caps** (bounds on what survives the walk).
+All of it lives in `Sources/FilesSource.swift`; everything here happens at the walk level via
+`enumerator.skipDescendants()`, so a skipped item never becomes a `Candidate` and never sees
+inference. `FilesConnector` (`Ingestion/Connectors/FilesConnector.swift`) wraps `eligibleFiles()`
+into one bucket per root for the iterative pipeline.
 
 ## Pruning — `pruneReason(_:) -> String?`
 
@@ -34,7 +35,7 @@ Hidden dirs and bundle *contents* are already excluded by the enumerator options
 
 ## Caps (connector-limits decision, June 10)
 
-Applied newest-first (by creation date) after the walk, in `scan()`:
+Applied newest-first (by date-added) after the walk, in `cappedNewestFirst`:
 
 - **Age cutoff** — Downloads only: files older than **1 year** are dropped (old downloads are
   noise; old Desktop/Documents files can be keepers). `FilesSource.maxAge`.
@@ -56,12 +57,12 @@ are judgment calls. Tune with evidence, not vibes — that's what the census mod
 `Self Tests - Temp/SelfTest_FileSkipping.swift`, no model needed:
 
 ```sh
-SENTIENT_SELFTEST=skipping   "<app>/Contents/MacOS/Sentient OS"   # synthetic fixtures, 16 assertions
+SENTIENT_SELFTEST=skipping   "<app>/Contents/MacOS/Sentient OS"   # synthetic fixtures, 17 assertions
 SENTIENT_SELFTEST=skipcensus "<app>/Contents/MacOS/Sentient OS"   # read-only real-Mac report:
                                                                   # every pruned dir + reason, top contributors
 ```
 
-June 11 census on Aryaman's Mac (waterfall: 21,364 raw whitelisted files in Downloads → 5,286
+June 11 census on a dev's Mac (waterfall: 21,364 raw whitelisted files in Downloads → 5,286
 after pruning → 551 after the 1-year cutoff → 324 after caps; Desktop 19,216 → 582 → 375):
 218 Downloads subtrees pruned (an ML dataset + course repos); Desktop screenshots capped at 300;
 the Documents Obsidian vault fully kept.

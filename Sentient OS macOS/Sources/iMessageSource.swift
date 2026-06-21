@@ -16,7 +16,7 @@
 //  Key methods: listChats() (picker rows) · eligibleWindows(). Limits per ChatWindowing:
 //  90-day floor AND newest-100k cap. Tapbacks (associated_message_type != 0) and system items
 //  (item_type != 0) are filtered in SQL — they'd spam every window otherwise. Incrementality:
-//  a per-chat ROWID pointer ("imessage:<guid>" in SourceCursor).
+//  a per-chat high-water mark (max ROWID) per bucket "imessage:<guid>", held in CycleStore.
 //
 
 import Foundation

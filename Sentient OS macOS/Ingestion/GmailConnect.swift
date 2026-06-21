@@ -10,7 +10,7 @@
 //  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "gmail"; the existing "tell cloud"
-//  buttons fold them into the vault, same as every other source):
+//  buttons add them to the vault, same as every other source):
 //   • runInitial   — the last month as 4 WEEKLY `codex exec` calls, newest week first. Weekly
 //                    chunking keeps each context window bounded (a heavy inbox measured at ~430
 //                    threads/week; one month in a single call would blow GPT-5.5's 400k input cap).
@@ -63,7 +63,7 @@ enum GmailConnect {
     static func probeConnected() async -> Bool {
         var inv = CodexCLI.Invocation(prompt: probePrompt)
         inv.model = .gpt54mini               // light model for the connect-check
-        inv.effort = .low
+        inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly
         inv.timeout = 120
         do {
@@ -155,7 +155,7 @@ enum GmailConnect {
     private static func read(prompt: String) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.model = .gpt54mini               // light model for the high-volume Gmail reads
-        inv.effort = .high
+        inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long

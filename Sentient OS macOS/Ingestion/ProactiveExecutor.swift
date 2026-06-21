@@ -72,12 +72,12 @@ actor ProactiveExecutor {
         !recipe.isEmpty && recipe.lowercased() != "none"
     }
 
-    // MARK: Gmail channel  (generalizes BriefingsView.fireLiveCodex)
+    // MARK: Gmail channel  (generalizes HomeView's ForYouModel.fireLiveCodex)
 
     private func fireGmail(recipe: String, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         progress("Sending via your Gmail connector…")
         var inv = CodexCLI.Invocation(prompt: Self.gmailWrapper(recipe: recipe))
-        inv.effort = .medium                 // an email send doesn't need xhigh
+        inv.effort = .high                   // gpt-5.5 → high
         inv.bypassApprovals = true           // hosted Gmail send_email is approval-gated → bypass to fire
         inv.includeUserConfig = true         // load the user's Gmail MCP
         inv.webSearch = false
@@ -91,7 +91,7 @@ actor ProactiveExecutor {
     private func fireCalendar(recipe: String, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         progress("Adding to your calendar…")
         var inv = CodexCLI.Invocation(prompt: Self.calendarWrapper(recipe: recipe))
-        inv.effort = .medium
+        inv.effort = .high                   // gpt-5.5 → high
         inv.bypassApprovals = true
         inv.includeUserConfig = true
         inv.webSearch = false

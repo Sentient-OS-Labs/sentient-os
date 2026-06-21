@@ -5,7 +5,7 @@
 //  The iterative system's two knowledge-base cloud calls, through the user's own Codex CLI (CodexCLI):
 //   • create    — "go make knowledge base exist": build the vault from scratch. Reuses
 //                 VaultGenerator (staging dir + atomic swap + usage-limit resume).
-//   • update    — "go update knowledge base": fold the cycle's new notes into the existing vault
+//   • update    — "go update knowledge base": merge the cycle's new notes into the existing vault
 //                 with surgical edits on the live vault (eval-validated prompt lifted from the old
 //                 VaultUpdater; no store queue — the cycle's notes are wiped wholesale each cycle).
 //
@@ -82,7 +82,7 @@ actor VaultCloud {
 
     // MARK: Update — "go update knowledge base"
 
-    /// Fold the current cycle's notes into the existing vault. Returns the number of notes sent.
+    /// Merge the current cycle's notes into the existing vault. Returns the number of notes sent.
     @discardableResult
     func update(notes: [CloudNote]) async throws -> Int {
         guard !notes.isEmpty else { return 0 }
@@ -100,8 +100,8 @@ actor VaultCloud {
         var invocation: CodexCLI.Invocation
         if let updateResumeSessionID {
             var inv = CodexCLI.Invocation(prompt: """
-                Continue folding the new items into the vault exactly where you left off — the edits \
-                you already made are still on disk. When everything is folded, reply with one line: \
+                Continue merging the new items into the vault exactly where you left off — the edits \
+                you already made are still on disk. When everything is merged, reply with one line: \
                 the number of notes you created or edited.
                 """)
             inv.resumeSessionID = updateResumeSessionID
@@ -109,12 +109,12 @@ actor VaultCloud {
         } else {
             invocation = CodexCLI.Invocation(prompt: Self.updatePrompt(skeleton: Self.skeleton(of: vault), notes: notes))
         }
-        invocation.effort = .xhigh                                    // KB work gets the deepest pass
+        invocation.effort = .high                                     // incremental KB update (gpt-5.5 → high)
         invocation.sandbox = .workspaceWrite                         // edits confined to the vault
         invocation.cwd = vault.path
         invocation.timeout = 1_800
 
-        Log("VaultCloud.update: folding \(notes.count) notes into the vault…")
+        Log("VaultCloud.update: merging \(notes.count) notes into the vault…")
         do {
             let envelope = try await CodexCLI.shared.run(invocation)
             updateResumeSessionID = nil
@@ -187,7 +187,7 @@ actor VaultCloud {
         personal-intelligence product. You previously organized this user's digital life into the \
         Obsidian-style markdown vault that is your current working directory. While their Mac sat \
         idle, an on-device LLM privately summarized the user's NEW items — you are receiving today's \
-        survivors (junk and sensitive items were already discarded on-device). Your job: fold them \
+        survivors (junk and sensitive items were already discarded on-device). Your job: merge them \
         into the existing vault, surgically.
 
         ## The vault's current skeleton (a recursive ls — the tree IS the index)
@@ -198,7 +198,7 @@ actor VaultCloud {
         already dropped obvious junk, but it is a small, lenient model; YOU are the quality bar, \
         exactly as when you built this vault (curate ruthlessly). If an item adds nothing durable — \
         trivia, noise, redundancy an existing note already covers — SKIP it: change nothing for that \
-        item. A run where nothing is worth folding is a perfectly good run; reply "0".
+        item. A run where nothing is worth merging is a perfectly good run; reply "0".
         - **Explore only the notes you need.** Search the tree to find where each new item belongs; \
         do not re-read the whole vault.
         - **Rewrite only what changed.** Prefer editing an existing note over creating a new one; \
@@ -207,7 +207,7 @@ actor VaultCloud {
         - **Never delete notes wholesale**, never reorganize folders, never rename existing notes \
         (links point at them). Keep every `[[wikilink]]` intact; add new ones where a new item \
         genuinely connects.
-        - **Synthesize, don't append-dump.** Fold an item into the narrative of its note — update \
+        - **Synthesize, don't append-dump.** Work an item into the narrative of its note — update \
         facts, extend timelines, collapse redundancy.
         - If today's items genuinely change who the user is or what they're up to, update the root \
         `README.md` portrait — otherwise leave it untouched.
@@ -225,7 +225,7 @@ actor VaultCloud {
 
         \(lines.joined(separator: "\n\n"))
 
-        Fold them in now. When you are done, reply with ONE line: the number of notes you created \
+        Merge them in now. When you are done, reply with ONE line: the number of notes you created \
         or edited.
         """
     }

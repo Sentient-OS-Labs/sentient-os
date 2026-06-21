@@ -2,11 +2,11 @@
 //  BriefingCard.swift
 //  Sentient OS macOS
 //
-//  One offering card in the For You window, through its four lives:
+//  One suggestion card in the For You window, through its four lives:
 //  sealed (the welcome envelope, wax-sealed with the orb) → offer (kicker + serif headline +
 //  the verb CTA, e.g. "Should I send it for you?") → working (the agentic theater: mono log
 //  lines typing in with a blinking cursor) → done (mint check; the model flies it away).
-//  `OfferButton` is shared with the expanded letter view in BriefingsView.
+//  `OfferButton` is shared with the expanded letter view in HomeView.
 //
 
 import SwiftUI
