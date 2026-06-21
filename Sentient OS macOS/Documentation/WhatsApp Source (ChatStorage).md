@@ -17,6 +17,22 @@ Message text is the plaintext `ZWAMESSAGE.ZTEXT`; the chat is `ZWACHATSESSION`. 
 is **seconds since 2001**, which is exactly Swift's reference date — used directly via
 `Date(timeIntervalSinceReferenceDate:)`, no offset.
 
+## Install detection
+
+`WhatsAppSource.isInstalled` — a LaunchServices lookup
+(`NSWorkspace.urlForApplication(withBundleIdentifier: "net.whatsapp.WhatsApp")`), keyed on the **same
+bundle** the group-container path above assumes, so "installed" and "readable" never disagree. It only
+asks LaunchServices whether the app exists, so it needs **no Full Disk Access** (unlike actually
+reading the DB).
+
+It's the single gate for **hiding WhatsApp in the connections UI when the app isn't on the Mac** —
+there's nothing to read, nothing to offer:
+
+- the source picker omits the WhatsApp chip, and `SourceSelection.current` won't arm WhatsApp from a
+  stale pref after an uninstall;
+- the home's Analysis popover drops the WhatsApp pill (`HomeSources.whatsappAvailable`, fed from
+  `RootView`).
+
 ## The unit of analysis: a conversation window
 
 Not one message — one **conversation window** (a time-ordered slice of a single chat, sized by a UTF-8
