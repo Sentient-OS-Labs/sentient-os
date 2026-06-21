@@ -60,6 +60,7 @@
 				5A3F390D2FD0F43300DD835E /* Sources */,
 				5A3F390E2FD0F43300DD835E /* Frameworks */,
 				5A3F390F2FD0F43300DD835E /* Resources */,
+				5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */,
 			);
 			buildRules = (
 			);
@@ -123,6 +124,28 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXShellScriptBuildPhase section */
+		5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Trim app bundle (thin LiteRT-LM, drop docs)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Sentient OS bundle-trim phase (runs before the final app code-sign, so the seal stays\n# valid). Two jobs, both shrinking the shipped .app:\n#\n# 1) Thin the prebuilt LiteRT-LM dylib to the app's ARCHS. Google ships CLiteRTLM_mac as a\n#    fat arm64+x86_64 binary (~127MB); arm64-only roughly halves the .app. ARCHS=arm64\n#    only governs code Xcode COMPILES -- a checksum-pinned remote SwiftPM binary is copied\n#    in whole, so we strip it here. Idempotent (skips an already-thin slice) + re-signs.\n# 2) Drop the internal engineering docs the synchronized file group sweeps in from\n#    Documentation/. They're public in the repo and never read at runtime; ~150KB of dead\n#    weight. Globbed so future docs are dropped automatically.\nset -e\n\nDYLIB=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libCLiteRTLM_mac.dylib\"\nif [ -f \"$DYLIB\" ]; then\n  THINNED=0\n  for arch in $(lipo -archs \"$DYLIB\"); do\n    case \" $ARCHS \" in\n      *\" $arch \"*) ;;\n      *) echo \"Thinning libCLiteRTLM_mac.dylib: removing $arch\"; lipo -remove \"$arch\" \"$DYLIB\" -output \"$DYLIB\"; THINNED=1 ;;\n    esac\n  done\n  if [ \"$THINNED\" = \"1\" ]; then\n    # Re-sign with the SAME options Xcode used, so a notarized Release stays valid: hardened\n    # runtime when enabled, plus a secure timestamp for Developer ID (distribution) signing\n    # only -- Apple Development / adhoc dev builds need neither (and skip the network round-trip).\n    SIGN_OPTS=\"\"\n    [ \"$ENABLE_HARDENED_RUNTIME\" = \"YES\" ] && SIGN_OPTS=\"--options runtime\"\n    case \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" in \"Developer ID\"*) SIGN_OPTS=\"$SIGN_OPTS --timestamp\" ;; esac\n    echo \"Re-signing thinned libCLiteRTLM_mac.dylib ($SIGN_OPTS)\"\n    codesign --force $SIGN_OPTS --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$DYLIB\"\n  fi\nelse\n  echo \"warning: libCLiteRTLM_mac.dylib not found at $DYLIB -- skipping arch thinning\"\nfi\n\nRES=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -d \"$RES\" ]; then\n  find \"$RES\" -name \"*.md\" -print -delete\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		5A3F390D2FD0F43300DD835E /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -173,7 +196,7 @@
 				DEVELOPMENT_TEAM = YJ8AZR3G5Q;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -238,7 +261,7 @@
 				DEVELOPMENT_TEAM = YJ8AZR3G5Q;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
