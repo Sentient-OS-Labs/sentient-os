@@ -10,7 +10,7 @@
 //                  files-iterative rebuild.)
 //   - vaultDirty:  set by ANYTHING that changes the local vault (initial gen, VaultCloud's
 //                  create/update, future editor saves). Cleared only after a successful mirror
-//                  push (VaultCloud.markDirtyAndPush). Persisted in UserDefaults so a quit
+//                  push (VaultCloud.pushIfDirty). Persisted in UserDefaults so a quit
 //                  between change and push can't lose the pending push.
 //
 

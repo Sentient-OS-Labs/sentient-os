@@ -78,7 +78,7 @@ SENTIENT_SELFTEST=mirror "<app>/Contents/MacOS/Sentient OS"          # against p
 SENTIENT_MIRROR_BASE=http://127.0.0.1:8901 SENTIENT_SELFTEST=mirror …  # against a local server
 ```
 
-Runs enable → push → stats → delete → disable. Needs a vault on disk (`~/Sentient OS -- The Vault/`).
+Runs enable → push → stats → delete → disable. Needs a knowledge base on disk (`~/Sentient OS - Knowledge Base/`).
 
 ## Not built here (downstream)
 

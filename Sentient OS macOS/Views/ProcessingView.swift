@@ -34,7 +34,7 @@ enum RunSource: Hashable {
         }
     }
 
-    /// Map a source selection to the iterative-core connectors. File roots fold into ONE
+    /// Map a source selection to the iterative-core connectors. File roots collapse into ONE
     /// FilesConnector (it pages each root itself); chats/Notes each become their own connector.
     /// Shared by the home "Analyze Now" and the dev "start on device" buttons so both run the exact
     /// same engine over the same picks.
@@ -46,7 +46,7 @@ enum RunSource: Hashable {
             case .whatsapp(let jids):  connectors.append(WhatsAppConnector(chatJIDs: jids))
             case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
             case .notes:               connectors.append(NotesConnector())
-            case .files:               break   // folded into FilesConnector(roots:)
+            case .files:               break   // rolled into FilesConnector(roots:)
             }
         }
         return connectors

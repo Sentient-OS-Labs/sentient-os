@@ -1,23 +1,39 @@
 //
-//  BriefingsView.swift
+//  HomeView.swift
 //  Sentient OS macOS
 //
-//  The For You window — "The Offerings". The orb deals the briefing cards onto the black
-//  with staggered physics; they settle into a loose scatter (placed, not gridded). Each card
-//  is an OFFER the user can fire (BriefingCard plays the agentic theater, then the card
-//  flies away), flick-dismiss with drag physics (the scatter reflows), or expand into a full
-//  typeset letter. A glowing command bar + trust footer hold the floor; the empty state
-//  whispers "Your AI looks out for you."
+//  THE HOME — the app's main surface, and the product itself: Proactive Intelligence. You
+//  open Sentient straight into this. The morning run (1 min after wake) leaves a scatter of
+//  SUGGESTION CARDS here — each one the AI already did the work for ("Should I send it for
+//  you?"); clicking is the user's fire (Privacy Constitution: we offer, they fire). A command
+//  bar at the foot lets you ask it to DO anything (computer / browser use).
 //
-//  Doc: Documentation/Briefings Window (For You).md · Demo content + the CodexCLI seam:
+//  The chrome is deliberately quiet: a wordmark, and four doors at the top-right —
+//  Analysis ▾ and Your AIs ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
+//  Settings (their own windows). Status lives inside Analysis, never cluttering the home.
+//
+//  WHEN THERE ARE NO CARDS, the living Orb blooms into the vacated center with "I'm here to
+//  help." — the orb appears ONLY here (its one home), turning the empty state into a launchpad
+//  that hands your eye straight to the command bar. (Retired ConstellationHome; harvested orb +
+//  sources + AIs + vault stats into this surface and its popovers.)
+//
+//  Doc: Documentation/Home — Proactive Intelligence (For You).md · cards + the CodexCLI seam:
 //  Briefing.swift.
 //
 
 import SwiftUI
 import AppKit
 
-struct BriefingsView: View {
-    static let windowID = "foryou"
+struct HomeView: View {
+    // Live context from RootView (the analyze/source switchboard).
+    var thingsUnderstood: Int = 0
+    var sources: HomeSources = .init()
+    var analyzeEnabled: Bool = false
+    var modelMissing: Bool = false
+    var onAnalyze: () -> Void = {}
+    var onShowDevTools: () -> Void = {}
+
+    @Environment(\.openWindow) private var openWindow
 
     @State private var model = ForYouModel()
     // The letter layer is ALWAYS mounted and driven purely by opacity/scale from plain
@@ -25,6 +41,8 @@ struct BriefingsView: View {
     // windows (the "appears only after a resize" bug); opacity changes cannot.
     @State private var letter: Briefing?
     @State private var letterShown = false
+    @State private var showAnalysis = false
+    @State private var showYourAIs = false
 
     var body: some View {
         GeometryReader { geo in
@@ -32,10 +50,13 @@ struct BriefingsView: View {
                 Theme.bg.ignoresSafeArea()
 
                 Group {
-                    header
                     scatter(geo)
+                    if model.entries.isEmpty {
+                        emptyState.transition(.scale(scale: 0.86).combined(with: .opacity))
+                    }
                     bottomDock
-                    if model.entries.isEmpty { emptyState.transition(.opacity) }
+                    chrome                     // on top → the nav stays clickable
+                    devToolsOverlay
                 }
                 .blur(radius: letterShown ? 7 : 0)
                 .opacity(letterShown ? 0.4 : 1)
@@ -43,32 +64,50 @@ struct BriefingsView: View {
                 letterLayer(geo)
             }
         }
-        .frame(minWidth: 1020, minHeight: 720)
+        .frame(minWidth: 1040, minHeight: 800)
         .background(Theme.bg)
-        .onAppear {                        // every visit starts fresh: sealed envelope, full deal
+        .onAppear {                        // every appearance starts fresh: sealed envelope, full deal
             letter = nil
             letterShown = false
             model.beginVisit()
         }
-        .animation(.easeInOut(duration: 0.5), value: model.entries.isEmpty)
+        .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
     }
 
-    // MARK: Header
+    // MARK: Chrome — the top-bar nav + the editorial greeting
+
+    private var chrome: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            topBar
+            header.padding(.top, 20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            OrbMark(size: 17)
+            Text("Sentient OS")
+                .font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white)
+            Spacer()
+            NavItem(title: "Analysis", dot: Theme.Ink.mint) { showAnalysis = true }
+                .popover(isPresented: $showAnalysis) { analysisPopover }
+            NavItem(title: "Your AIs") { showYourAIs = true }
+                .popover(isPresented: $showYourAIs) { yourAIsPopover }
+            NavItem(title: "Knowledge") { openWindow(id: DatabaseView.windowID) }
+            NavItem(icon: "gearshape") { openWindow(id: SettingsView.windowID) }
+        }
+        .padding(.horizontal, 30).padding(.top, 18)
+    }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 9) {
-                OrbMark(size: 15)
-                MonoCaps("For You", size: 10, tracking: 2.6, color: Theme.Ink.label)
-            }
+        VStack(alignment: .leading, spacing: 9) {
             Text(greeting)
                 .font(.system(size: 30, design: .serif).italic())
                 .foregroundStyle(Theme.Ink.statusInk)
-            MonoCaps(Demo.readLine, size: 9.5, tracking: 2.2,
-                     color: Theme.Ink.deepMuted)
+            MonoCaps(Demo.readLine, size: 9.5, tracking: 2.2, color: Theme.Ink.deepMuted)
         }
-        .padding(.leading, 36).padding(.top, 28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.leading, 30)
     }
 
     private var greeting: String {
@@ -78,13 +117,24 @@ struct BriefingsView: View {
         return "\(part), \(Demo.name)."
     }
 
-    // MARK: The scatter
+    private var analysisPopover: some View {
+        AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
+                        analyzeEnabled: analyzeEnabled, modelMissing: modelMissing,
+                        syncedLabel: Demo.synced, pending: Demo.pending,
+                        onAnalyze: { showAnalysis = false; onAnalyze() })
+            .preferredColorScheme(.dark)
+    }
+
+    private var yourAIsPopover: some View {
+        YourAIsPopover(notesRead: Demo.aiNotesRead, logLine: Demo.aiLog,
+                       onConnect: { showYourAIs = false; openWindow(id: ConnectAIsView.windowID) })
+            .preferredColorScheme(.dark)
+    }
+
+    // MARK: The scatter (the suggestion cards)
 
     private func scatter(_ geo: GeometryProxy) -> some View {
-        // Reserve the bottom band for the command bar + footer: lay the scatter into the
-        // top 84% of the height so no card overlaps the glowing PromptBar.
-        let field = CGSize(width: geo.size.width, height: geo.size.height * 0.84)
-        let slots = Self.slots(count: model.entries.count, in: field)
+        let slots = Self.slots(count: model.entries.count, in: geo.size)
         return ZStack {
             ForEach(Array(model.entries.enumerated()), id: \.element.id) { item in
                 DealtCard(
@@ -102,18 +152,59 @@ struct BriefingsView: View {
         }
     }
 
-    /// Organic slot positions per population — pinned, not gridded; reflows as cards leave.
+    /// Organic slot positions per population, laid into the CARD ZONE — the band between the
+    /// top chrome (nav + greeting) and the command-bar dock — so nothing overlaps either.
+    /// Pinned, not gridded; reflows as cards leave. (y-fraction is WITHIN the zone.)
     private static func slots(count: Int, in size: CGSize) -> [CGPoint] {
+        let top = size.height * 0.20
+        let bottom = size.height * 0.86
+        let h = bottom - top
         let f: [(CGFloat, CGFloat)]
         switch count {
-        case 6...: f = [(0.21, 0.40), (0.50, 0.36), (0.79, 0.40), (0.21, 0.74), (0.50, 0.78), (0.79, 0.74)]
-        case 5:    f = [(0.22, 0.40), (0.50, 0.37), (0.78, 0.40), (0.34, 0.75), (0.66, 0.75)]
-        case 4:    f = [(0.28, 0.40), (0.72, 0.40), (0.28, 0.75), (0.72, 0.75)]
-        case 3:    f = [(0.24, 0.57), (0.50, 0.51), (0.76, 0.57)]
-        case 2:    f = [(0.35, 0.55), (0.65, 0.55)]
-        default:   f = [(0.50, 0.55)]
+        case 6...: f = [(0.21, 0.24), (0.50, 0.10), (0.79, 0.16),
+                        (0.21, 0.74), (0.50, 0.80), (0.79, 0.74)]
+        case 5:    f = [(0.22, 0.20), (0.50, 0.08), (0.78, 0.16), (0.34, 0.76), (0.66, 0.76)]
+        case 4:    f = [(0.28, 0.18), (0.72, 0.18), (0.30, 0.76), (0.70, 0.76)]
+        case 3:    f = [(0.24, 0.46), (0.50, 0.32), (0.76, 0.46)]
+        case 2:    f = [(0.35, 0.44), (0.65, 0.44)]
+        default:   f = [(0.50, 0.42)]
         }
-        return f.map { CGPoint(x: $0.0 * size.width, y: $0.1 * size.height) }
+        return f.map { CGPoint(x: $0.0 * size.width, y: top + $0.1 * h) }
+    }
+
+    // MARK: The empty state — the orb's one home
+
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Orb(size: 118)
+            Text("I'm here to help.")
+                .font(.system(size: 22, design: .serif).italic())
+                .foregroundStyle(Theme.Ink.statusInk)
+                .offset(y: -8)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .offset(y: -8)
+        .allowsHitTesting(false)
+    }
+
+    /// A discreet DEV TOOLS handle pinned bottom-right (DX continuity from the old home; the
+    /// Phase-6 Release strip re-hides it). Opens the DevToolsView sheet via RootView.
+    private var devToolsOverlay: some View {
+        Button(action: onShowDevTools) {
+            HStack(spacing: 5) {
+                Image(systemName: "wrench.and.screwdriver").font(.system(size: 8.5))
+                Text("DEV TOOLS")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.6)
+            }
+            .foregroundStyle(Theme.Ink.deepMuted)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .opacity(0.6)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+        .padding(.trailing, 22).padding(.bottom, 13)
     }
 
     // MARK: Floor — the command bar + trust footer
@@ -123,7 +214,7 @@ struct BriefingsView: View {
             PromptBar { text, mode in
                 // DEMO SEAM: real execution hands (text, mode) to CodexCLI — computer use runs a
                 // workspace-write agent; browser use drives the browser. For now, report the intent.
-                Log("ForYou/prompt: [\(mode.rawValue) use] \(text)")
+                Log("Home/prompt: [\(mode.rawValue) use] \(text)")
             }
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
@@ -134,17 +225,6 @@ struct BriefingsView: View {
         .padding(.horizontal, 40)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 16)
-    }
-
-    private var emptyState: some View {
-        VStack(spacing: 13) {
-            OrbMark(size: 26)
-            Text("All quiet.")
-                .font(.system(size: 22, design: .serif).italic())
-                .foregroundStyle(Theme.Ink.statusInk)
-            MonoCaps("Your AI looks out for you", size: 9.5, tracking: 2.4, color: Theme.Ink.deepMuted)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // MARK: The expanded letter (always-mounted layer; see the note at the top)
@@ -180,6 +260,32 @@ struct BriefingsView: View {
     }
 }
 
+// MARK: - Top-bar nav item
+
+private struct NavItem: View {
+    var title: String? = nil
+    var icon: String? = nil
+    var dot: Color? = nil
+    var action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if let dot { Circle().fill(dot).frame(width: 5, height: 5).opacity(0.9) }
+                if let icon { Image(systemName: icon).font(.system(size: 13, weight: .medium)) }
+                if let title { Text(title).font(.system(size: 12.5, weight: .medium)) }
+            }
+            .foregroundStyle(hover ? .white : Theme.Ink.body)
+            .padding(.horizontal, 11).padding(.vertical, 6)
+            .background(Capsule().fill(.white.opacity(hover ? 0.06 : 0)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+    }
+}
+
 // MARK: - The model (deal · run · dismiss)
 
 @MainActor @Observable
@@ -193,7 +299,7 @@ final class ForYouModel {
     }
 
     var entries: [Entry] = []
-    /// Bumped per window visit — in-flight Tasks from a previous visit check it and bail,
+    /// Bumped per appearance — in-flight Tasks from a previous visit check it and bail,
     /// so a re-deal can never be mutated by stale theater/dismiss timers.
     private var visit = 0
 
@@ -265,19 +371,19 @@ final class ForYouModel {
     /// The user's Gmail MCP rides the CodexCLI defaults; `bypassApprovals` lets the connector's
     /// approval-gated `send_email` actually fire headless. Outcome → `Log()` (tail /tmp/sentient-dev.log).
     nonisolated static func fireLiveCodex(_ prompt: String) async {
-        Log("ForYou/codex: firing live codex exec (Anthos → Gmail MCP)…")
+        Log("Home/codex: firing live codex exec (Anthos → Gmail MCP)…")
         do {
             var inv = CodexCLI.Invocation(prompt: prompt)
-            inv.effort = .medium                // an email reply doesn't need xhigh
+            inv.effort = .high                  // gpt-5.5 → high
             inv.bypassApprovals = true          // hosted Gmail send_email is approval-gated → it
                                                 // auto-cancels headless unless we bypass approvals
             inv.timeout = 300
 
             let env = try await CodexCLI.shared.run(inv)
-            Log("ForYou/codex: ✓ finished in \(env.durationMS ?? -1)ms (\(env.numTurns ?? -1) turns) — \(env.result)")
-            Log("ForYou/codex: --- full JSONL (debug) ---\n\(env.raw)\n--- end JSONL ---")
+            Log("Home/codex: ✓ finished in \(env.durationMS ?? -1)ms (\(env.numTurns ?? -1) turns) — \(env.result)")
+            Log("Home/codex: --- full JSONL (debug) ---\n\(env.raw)\n--- end JSONL ---")
         } catch {
-            Log("ForYou/codex: ✗ failed — \(error)")
+            Log("Home/codex: ✗ failed — \(error)")
         }
     }
 
@@ -461,14 +567,20 @@ private struct LetterView: View {
     }
 }
 
-// MARK: - Demo data (the window's own showcase strings — cards live in Briefing.demo)
+// MARK: - Demo data (the home's own showcase strings — cards live in Briefing.demo)
 
 private enum Demo {
     static let name = "Jesai"   // later: the vault portrait's first name
     static let readLine = "While you slept, I read 1,704 things"
+    static let synced = "Synced · 3:41 AM"
+    static let pending = 214
+    static let aiNotesRead = 5
+    static let aiLog = "Tokyo Trip, Visa…"
 }
 
-#Preview("For You — the offerings") {
-    BriefingsView()
-        .frame(width: 1180, height: 800)
+#Preview("Home — the suggestions") {
+    HomeView(thingsUnderstood: 3339,
+             sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
+             analyzeEnabled: true, modelMissing: false)
+        .frame(width: 1180, height: 880)
 }

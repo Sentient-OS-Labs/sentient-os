@@ -27,7 +27,7 @@ source. The "start" button routes a selected Gmail to `GmailConnect` instead of 
   (`after:<epoch>`), then the mark advances. Falls back to initial if never run.
 
 Each weekly/iterative summary becomes one ephemeral **`CycleNote`** in bucket `"gmail"`
-(`kind: .gmail`, `reminderFlagged = has_action_items`). The existing **"tell cloud"** buttons fold
+(`kind: .gmail`, `reminderFlagged = has_action_items`). The existing **"tell cloud"** buttons merge
 them into the vault — `VaultCloud` is source-agnostic. Pointer = run start (a few hours of overlap on
 the next run beats a boundary gap).
 
@@ -46,18 +46,22 @@ The light model carries the Gmail tier; gpt-5.5 carries the knowledge base. Set 
 
 | Call | Model | Effort |
 |---|---|---|
-| Connect-check (`probeConnected`) | `gpt-5.4-mini` | `low` |
-| Gmail reads (`runInitial`/`runIterative`) | `gpt-5.4-mini` | `high` |
-| KB create/update + everything else | `gpt-5.5` | `xhigh` |
+| Connect-check (`probeConnected`) | `gpt-5.4-mini` | `medium` |
+| Gmail reads (`runInitial`/`runIterative`) | `gpt-5.4-mini` | `medium` |
+| Initial vault build (`VaultGenerator`) | `gpt-5.5` | `xhigh` |
+| KB update + proactive + everything else | `gpt-5.5` | `high` |
 
 ⚠️ On a **ChatGPT-account** auth (no API key) only **gpt-5.5** and the **gpt-5.4** family are
 available — `gpt-5.4-spark`, `gpt-5.5-codex`, and the gpt-5/5.5 `-mini`s are all rejected. `gpt-5.4-mini`
-is the light model we landed on for Gmail [MEASURED June 15]. `.xhigh` is the new `Invocation` default.
+is the light model we landed on for Gmail [MEASURED June 15]. `.high` is the `Invocation` default (the initial vault build overrides to `.xhigh`).
 
 ## Gotchas (measured live, June 15)
-- **`--ignore-user-config` does NOT block the connector.** The Gmail tools are account/server-side
-  (`codex_apps/gmail.*`), visible to `codex exec` even with the hermetic flag on. So **no CodexCLI
-  change was needed** — we keep the hermetic default *and* get Gmail.
+- **The Gmail connector works regardless of `--ignore-user-config`.** The Gmail tools are
+  account/server-side (`codex_apps/gmail.*`), visible to `codex exec` whether the user's config is
+  loaded or not — measured live with `--ignore-user-config` ON. So **no CodexCLI change was needed**
+  for Gmail. (Note: `Invocation.includeUserConfig` now defaults to `true`, so by default
+  `--ignore-user-config` is NOT passed and the user's `~/.codex` config + MCP servers ARE loaded —
+  the connector works either way.)
 - **OpenAI strict output schemas require `"additionalProperties": false`** on the object *and* every
   property in `required`, or `codex exec` fails with `invalid_json_schema`. The weekly schema has both.
 - **No `CodexCLI` change at all** — `probeConnected` and the reads use the existing

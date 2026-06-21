@@ -364,10 +364,10 @@ struct DevToolsView: View {
 
     private func cloudUpdate() async -> String {
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
-        guard !notes.isEmpty else { return "✗ no new summaries to fold" }
+        guard !notes.isEmpty else { return "✗ no new summaries to merge" }
         do {
             let n = try await VaultCloud.shared.update(notes: notes)
-            return "✓ folded \(n) notes into the vault"
+            return "✓ merged \(n) notes into the vault"
         } catch {
             return "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
         }

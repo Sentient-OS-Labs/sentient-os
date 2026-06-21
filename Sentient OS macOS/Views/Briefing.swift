@@ -2,7 +2,7 @@
 //  Briefing.swift
 //  Sentient OS macOS
 //
-//  The briefing ("offering") model + the demo set for the For You window. A briefing is an
+//  The briefing (suggestion-card) model + the demo set for the home (HomeView). A briefing is an
 //  OFFER: the AI already did the work (research / draft / plan) and asks one question —
 //  "Should I do this for you?" — clicking it is the user's fire (Privacy Constitution: we
 //  never act unbidden; we offer, they fire).
@@ -10,7 +10,7 @@
 //  THE CODEX SEAM: `codexPrompt` is what real execution sends to the user's own Codex CLI
 //  (`CodexCLI.run` — browser use, computer use, the works — armed with the vault's personal
 //  context). The demo plays the hard-coded `workLog` theater instead; swapping in the real
-//  call is a one-line change at the seam in BriefingsView.
+//  call is a one-line change at the seam in HomeView (ForYouModel.run).
 //
 //  ALL content below is the hard-coded investor-demo set (mined from the real vault for
 //  authenticity). The proactive-intelligence module generates real ones post-launch.
@@ -241,7 +241,7 @@ struct Briefing: Identifiable {
     /// preserved verbatim so it's one line away from returning: drop `Briefing.welcomeGift` back into
     /// `demo`. Its envelope visuals (`EnvelopeFace`, `welcomeGradient`, the `.sealed` phase) are still
     /// intact in BriefingCard.swift. NOTE: re-adding makes a 7-card deck — extend `slots(count:)` in
-    /// BriefingsView (it only defines layouts up to 6), or swap it back in for another card to stay at 6.
+    /// HomeView (it only defines layouts up to 6), or swap it back in for another card to stay at 6.
     static let welcomeGift = Briefing(
         id: "welcome", kind: .welcome,
         kicker: "Welcome · Read across your whole life",

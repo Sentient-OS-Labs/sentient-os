@@ -1,12 +1,16 @@
 # Vault Generation — Stage 2 (the agentic build)
 
-`VaultGenerator.generate(summaries:resume:onProgress:)` turns the on-device survivor
-summaries into the markdown vault at `~/Sentient OS -- The Vault/`, through ONE route:
-`codex exec` via the `CodexCLI` spine — GPT-5.5 **high effort**, `workspace-write` sandbox,
-cwd = a staging dir; the model writes the `.md` files itself with its file tools. Without a
-working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — the free tier is
-the eventual answer for no-codex users; the old direct-Anthropic-API route and its
+`VaultGenerator.generate(notes:resume:onProgress:)` turns the on-device survivor summaries
+(passed as `[CloudNote]`) into the markdown knowledge base at `~/Sentient OS - Knowledge Base/`,
+through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.5` at **`.xhigh` effort**,
+`workspace-write` sandbox, cwd = a staging dir; the model writes the `.md` files itself with its
+file tools. Without a working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — the
+free tier is the eventual answer for no-codex users; the old direct-Anthropic-API route and its
 `Secrets.swift` dev key were deleted June 11 and live in git history).
+
+This is the first build. `Ingestion/VaultCloud.swift` is the iterative system's wrapper around it:
+`VaultCloud.create()` reuses this generator; `VaultCloud.update()` edits the live knowledge base
+in place. (The old `VaultUpdater`/`DaysEndJob` were deleted — `VaultCloud` replaced them.)
 
 ## Why agentic (Arch §5/§6)
 
@@ -19,10 +23,10 @@ the eventual answer for no-codex users; the old direct-Anthropic-API route and i
 
 ## Safety: staging + atomic swap
 
-The run never touches the live vault. It writes into `~/.sentientos-vault-staging-<uuid>`
-(same APFS volume as the vault → the final move is an atomic rename). Only after the run
-succeeds **and** produced >0 notes does the old vault get replaced. A mid-run death (limit,
-crash, kill) leaves the previous vault intact and the staging dir resumable.
+The run never touches the live knowledge base. It writes into `~/.sentientos-vault-staging-<uuid>`
+(in HOME, same APFS volume as the knowledge base → the final move is an atomic rename). Only after
+the run succeeds **and** produced >0 notes does the old knowledge base get replaced. A mid-run death
+(limit, crash, kill) leaves the previous knowledge base intact and the staging dir resumable.
 
 ## Progress
 
@@ -38,12 +42,13 @@ ruthless synthesis, README-first portrait, structure rules, 100–150-note densi
 toward one-note-per-summary when the corpus is smaller than the target; revisit after the
 full-scale (1,704-summary) gate run.
 
-## The welcome briefing
+## The welcome briefing — NOT built (yet)
 
-`writeWelcomeBriefing()` — initial gen's second act: a medium-effort pass over the fresh
-vault (cwd = vault, Briefings dir via `--add-dir`) that writes "What I learned about you"
-into `~/Library/Application Support/SentientOS/Briefings/`. Best-effort, fired alongside the
-post-gen mirror push.
+The day-one "What I learned about you" briefing is **not currently in the code** — there is no
+`writeWelcomeBriefing()` anywhere in `VaultGenerator` (or the rest of the app), and no `Briefings`
+folder helper. A working implementation existed, was deliberately backed out, and belongs with the
+For You / proactive / onboarding work (mine app-repo git `17d5ad2`; rebuild against `CodexCLI`).
+Treat this as a to-build, not a shipped feature.
 
 ## Self-test
 
@@ -54,5 +59,6 @@ SENTIENT_VAULT_ROOT=/tmp/scratch …                                            
 
 ## Siblings on the same spine
 
-The iterative day's-end updater (see `Days-End Job (Living System).md`) rides the same
-`CodexCLI` spine — it edits the live vault in place rather than regenerate.
+The iterative knowledge-base update (`VaultCloud.update()`, see `Ingestion/VaultCloud.swift`) rides
+the same `CodexCLI` spine — it edits the live knowledge base in place (surgical edits) rather than
+regenerate. `VaultCloud.create()` calls straight into this generator for the first build.

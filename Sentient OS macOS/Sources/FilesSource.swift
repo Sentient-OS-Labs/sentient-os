@@ -12,8 +12,8 @@
 //  The model is given the home-relative path (e.g. ~/Downloads/Useless Stuff/x.jpg) + creation
 //  date — the folder structure alone is strong signal for junk/intent.
 //
-//  POINTER (June 11 rewrite + June 12 backfill — Documentation/Pointer Architecture…):
-//  one "(epochSeconds|path)" pointer per folder root (cursorKey = "file:<FileRoot.id>").
+//  POINTER: one per-bucket high-water mark per folder root (bucket "file:<FileRoot.id>"),
+//  held in CycleStore and advanced by IterativeRun — no separate cursor object, no backfill.
 //  A file's date is max(dateAdded, dateModified, nearest moved-in ancestor's dateAdded) —
 //  dateAdded catches downloads with old mtimes, dateModified catches edits, and the ancestor
 //  propagation catches whole folders dragged into a root (their files keep old dates).
