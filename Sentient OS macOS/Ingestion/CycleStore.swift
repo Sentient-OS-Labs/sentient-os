@@ -5,10 +5,12 @@
 //  The iterative system's database — connector-agnostic, with its OWN on-disk container (isolated
 //  from the old `Store`, so its models never schema-wipe the old dev DB). Two models:
 //
-//   - BucketPointer  DURABLE. One row per BUCKET (folder root / chat / "notes"). The HIGH-WATER
-//                    MARK — the newest item processed, as an `ItemKey` (order, tiebreak). Invariant:
-//                    everything ≤ mark is done, everything newer is new. The ONLY state that
-//                    survives a cycle. Initial sets it on completion; iterative climbs it per item.
+//   - BucketPointer  DURABLE. One row per BUCKET (folder root / chat / "notes"). Normally the
+//                    HIGH-WATER MARK — everything ≤ (order, tiebreak) is done, everything newer is
+//                    new. During a bucket's FIRST run it also carries a FLOOR (the oldest item done
+//                    so far, sinking one item at a time) so a crash mid-descent RESUMES below the
+//                    floor instead of restarting; the floor collapses into the mark once the descent
+//                    reaches the bottom. The ONLY state that survives a cycle.
 //   - CycleNote      EPHEMERAL. One survivor summary, wiped at cycle end (the proactive button).
 //                    Junk/sensitive store nothing. `kind` + `sourceID` carry the cloud's trust tag.
 //
@@ -20,21 +22,37 @@ import SwiftData
 
 // MARK: - Models
 
-/// DURABLE — one per bucket. The high-water mark as (order, tiebreak).
+/// DURABLE — one per bucket.
+///
+/// • Everyday state: `(order, tiebreak)` is the HIGH-WATER MARK (everything ≤ it is done); `floor` is nil.
+/// • First-run state, while filling newest→oldest: `(order, tiebreak)` holds the TOP (the newest item
+///   this first run covers — fixed for the whole descent), and `floor` is the oldest item done so far,
+///   sinking one item at a time. Everything between floor and top is done; the descent continues below
+///   the floor. A non-nil floor is the single tell that a first run is mid-flight — so a crash resumes
+///   (below the floor) instead of restarting. On reaching the bottom the floor collapses to nil,
+///   leaving `(order, tiebreak)` as a normal high-water mark.
 @Model
 final class BucketPointer {
     @Attribute(.unique) var bucketKey: String     // "file:<root.id>" / "notes" / "whatsapp:<jid>"
     var order: Double
     var tiebreak: String
+    var floorOrder: Double?                        // non-nil ⇒ first run in progress (this is the FLOOR)
+    var floorTiebreak: String?
     var updatedAt: Date
 
-    init(bucketKey: String, mark: ItemKey, updatedAt: Date = Date()) {
+    init(bucketKey: String, mark: ItemKey, floor: ItemKey? = nil, updatedAt: Date = Date()) {
         self.bucketKey = bucketKey
         self.order = mark.order
         self.tiebreak = mark.tiebreak
+        self.floorOrder = floor?.order
+        self.floorTiebreak = floor?.tiebreak
         self.updatedAt = updatedAt
     }
     var mark: ItemKey { ItemKey(order: order, tiebreak: tiebreak) }
+    var floor: ItemKey? {
+        guard let floorOrder else { return nil }
+        return ItemKey(order: floorOrder, tiebreak: floorTiebreak ?? "")
+    }
 }
 
 /// EPHEMERAL — one survivor summary for one item, this cycle only.
@@ -101,6 +119,19 @@ struct SummaryExport: Codable, Sendable {
     var notes: [CycleNoteItem]
 }
 
+/// The survivor fields for one processed item, handed to an atomic per-item commit (note + marker in
+/// ONE save). nil at a call site = a non-survivor (junk / sensitive / failed) — the marker still
+/// advances past it, but no note is kept (zero trace).
+struct NoteDraft: Sendable {
+    let kind: SourceKind
+    let sourceID: String
+    let folder: String
+    let itemDate: Date
+    let text: String
+    let title: String?
+    let reminderFlagged: Bool
+}
+
 // MARK: - The actor
 
 @ModelActor
@@ -108,17 +139,28 @@ actor CycleStore {
 
     // MARK: Pointers (durable)
 
-    /// The high-water mark for a bucket, or nil if it's never completed an initial run.
+    /// The high-water mark for a bucket, or nil if it's never run.
     func pointer(_ bucketKey: String) -> ItemKey? { row(bucketKey)?.mark }
 
-    /// Every bucket's mark (passed to a connector as the efficiency hint for iterative runs).
-    func allPointers() -> [String: ItemKey] {
-        let rows = (try? modelContext.fetch(FetchDescriptor<BucketPointer>())) ?? []
-        return Dictionary(rows.map { ($0.bucketKey, $0.mark) }, uniquingKeysWith: { a, _ in a })
+    /// A bucket's full durable state, or nil if it's never run: the high-water mark (or, mid-first-run,
+    /// the TOP), plus the FLOOR when a first run is mid-descent. A non-nil floor ⇒ resume that descent
+    /// (strictly below the floor) rather than restart. IterativeRun reads this to pick per-bucket mode.
+    func pointerState(_ bucketKey: String) -> (mark: ItemKey, floor: ItemKey?)? {
+        guard let r = row(bucketKey) else { return nil }
+        return (r.mark, r.floor)
     }
 
-    /// Set/advance a bucket's mark — initial sets it = newest on completion; iterative climbs it per
-    /// item (so a stopped run resumes rather than skips).
+    /// Per-bucket hints handed to connectors for efficient `> mark` listing. A bucket mid-first-run
+    /// (floor set) is OMITTED so its connector returns its FULL set — the descent needs items BELOW
+    /// its top, which a `> mark` hint would hide. IterativeRun still filters/advances authoritatively.
+    func connectorMarks() -> [String: ItemKey] {
+        let rows = (try? modelContext.fetch(FetchDescriptor<BucketPointer>())) ?? []
+        return Dictionary(rows.filter { $0.floor == nil }.map { ($0.bucketKey, $0.mark) },
+                          uniquingKeysWith: { a, _ in a })
+    }
+
+    /// Set a bucket's mark directly (used by the Gmail cloud leg, which stamps a run-time pointer and
+    /// has no on-device descent). On-device runs use the atomic `advance` / `sinkFloor` instead.
     func setPointer(_ bucketKey: String, _ mark: ItemKey) {
         if let r = row(bucketKey) {
             r.order = mark.order; r.tiebreak = mark.tiebreak; r.updatedAt = Date()
@@ -145,9 +187,52 @@ actor CycleStore {
 
     func recordNote(bucketKey: String, kind: SourceKind, sourceID: String, folder: String,
                     itemDate: Date, text: String, title: String?, reminderFlagged: Bool) {
-        modelContext.insert(CycleNote(bucketKey: bucketKey, kind: kind, sourceID: sourceID,
-                                      folder: folder, itemDate: itemDate, text: text, title: title,
-                                      reminderFlagged: reminderFlagged))
+        insertNote(bucketKey: bucketKey,
+                   note: NoteDraft(kind: kind, sourceID: sourceID, folder: folder, itemDate: itemDate,
+                                   text: text, title: title, reminderFlagged: reminderFlagged))
+        try? modelContext.save()
+    }
+
+    private func insertNote(bucketKey: String, note: NoteDraft) {
+        modelContext.insert(CycleNote(bucketKey: bucketKey, kind: note.kind, sourceID: note.sourceID,
+                                      folder: note.folder, itemDate: note.itemDate, text: note.text,
+                                      title: note.title, reminderFlagged: note.reminderFlagged))
+    }
+
+    // MARK: Atomic per-item commits (the crash-safety core — note + marker in ONE save)
+
+    /// EVERYDAY (iterative) — record an optional survivor note AND advance the high-water bookmark to
+    /// `mark`, in one save. No gap between the two writes ⇒ a crash can never leave a note without its
+    /// bookmark (which would re-summarize the item into a duplicate). Clears any floor.
+    func advance(bucketKey: String, note: NoteDraft?, to mark: ItemKey) {
+        if let note { insertNote(bucketKey: bucketKey, note: note) }
+        if let r = row(bucketKey) {
+            r.order = mark.order; r.tiebreak = mark.tiebreak
+            r.floorOrder = nil; r.floorTiebreak = nil; r.updatedAt = Date()
+        } else {
+            modelContext.insert(BucketPointer(bucketKey: bucketKey, mark: mark))
+        }
+        try? modelContext.save()
+    }
+
+    /// FIRST RUN (initial descent) — record an optional survivor note AND sink the floor to `floor`
+    /// (top stays fixed), in one save. Creates the row with `top` on the first step. A crash leaves an
+    /// honest floor → the next run resumes strictly below it.
+    func sinkFloor(bucketKey: String, note: NoteDraft?, top: ItemKey, floor: ItemKey) {
+        if let note { insertNote(bucketKey: bucketKey, note: note) }
+        if let r = row(bucketKey) {
+            r.order = top.order; r.tiebreak = top.tiebreak
+            r.floorOrder = floor.order; r.floorTiebreak = floor.tiebreak; r.updatedAt = Date()
+        } else {
+            modelContext.insert(BucketPointer(bucketKey: bucketKey, mark: top, floor: floor))
+        }
+        try? modelContext.save()
+    }
+
+    /// FIRST RUN done — collapse: clear the floor, leaving `(order, tiebreak)` (the top) as a normal
+    /// high-water mark. From here the bucket is in everyday mode.
+    func collapseFloor(_ bucketKey: String) {
+        if let r = row(bucketKey) { r.floorOrder = nil; r.floorTiebreak = nil; r.updatedAt = Date() }
         try? modelContext.save()
     }
 
@@ -161,6 +246,14 @@ actor CycleStore {
     /// End-of-cycle wipe (fired by the proactive button) — pointers persist, notes do not.
     func wipeAllNotes() {
         try? modelContext.delete(model: CycleNote.self)
+        try? modelContext.save()
+    }
+
+    /// Factory reset — delete EVERY pointer and EVERY note (the dev "Reset everything" button pairs
+    /// this with wiping the vault). After this, the next run is a fresh first run for every bucket.
+    func wipeEverything() {
+        try? modelContext.delete(model: CycleNote.self)
+        try? modelContext.delete(model: BucketPointer.self)
         try? modelContext.save()
     }
 
