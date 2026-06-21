@@ -21,8 +21,11 @@ the loop in `ForYouModel.run` with `CodexCLI.run` on `codexPrompt`, streaming JS
 into the same lines. One swap point, clearly marked.
 
 **All six cards are hard-coded showcase content** (Anthos/Gmail · Luis/Headline ·
-AIM/press · ZFellows · Fareed/a16z-call · the welcome letter), mined from the real vault for
-authenticity. The proactive module generates real ones post-launch.
+AIM/press · ZFellows · Fareed/a16z-call · Daniel/EWOR-call), mined from the real vault for
+authenticity. The proactive module generates real ones post-launch. The original **welcome
+"gift" letter** (the wax-sealed envelope) is parked as `Briefing.welcomeGift` — preserved
+verbatim but kept OUT of the `demo` deck; drop it back in to restore it (its envelope visuals
+in BriefingCard are still intact, and re-adding makes a 7-card deck → extend `slots(count:)`).
 
 ## `Views/BriefingCard.swift` — the card's four lives
 
@@ -43,10 +46,23 @@ under a blinking cursor) → `done` (mint check; the model flies the card away a
   styling, accent-barred draft block with Copy, the offer button lives there too). Esc /
   click-outside / ✕ closes; the scatter blurs behind.
 - Header greeting is hour-aware ("Good morning, Jesai." — name is `Demo.name` until the
-  vault portrait supplies it). Reminders whisper-strip + trust footer on the floor. Empty
-  state: *"All quiet." / YOUR AI LOOKS OUT FOR YOU*.
+  vault portrait supplies it). **Bottom dock** (`bottomDock`): the `PromptBar` command bar,
+  then the trust footer. The scatter is laid into the top 84% of the height so cards clear
+  the bar. Empty state: *"All quiet." / YOUR AI LOOKS OUT FOR YOU*.
 - Scene: its own `Window` (`BriefingsView.windowID`), hidden title bar, 1180×800. Opened by
   the Constellation's briefing satellite (which now shows the latest offer + a `+5` pill).
+
+## `Views/PromptBar.swift` — the "Tell me what you want me to DO" command bar
+
+The one glowing object on the For You floor (jewelry rule): a glassy rounded field on a
+slowly-rotating glow in the **Analyze Now / GlowButton palette** (`GlowHalo.stops`) — via
+`PromptGlow`, the rounded-rect twin of `GlowHalo` (7s ambient spin, soft/tight rim-glow,
+brighter on focus). Left: a `[Computer use | Browser use]`
+segmented `ModeToggle` (defaults to **Computer use**). Middle: the input, whose placeholder
+bolds the verb (*"Tell me what you want me to **DO**"*). Right: a glowing circular `SendButton`
+(arrow-up; white/active when there's text). **Demo seam:** `onSend(text, mode)` just `Log()`s
+today — real execution routes the text + mode to `CodexCLI` (computer use → workspace-write
+agent · browser use → browser-driving agent).
 
 ## Still demo / future
 

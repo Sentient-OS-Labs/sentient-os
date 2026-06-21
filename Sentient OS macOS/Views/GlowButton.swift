@@ -52,7 +52,9 @@ struct GlowHalo: View {
     var reversed: Bool = false
     var colors: [Color]? = nil
 
-    private static let stops: [Color] = [
+    /// The canonical warm→cool AI-gradient stops (shared: the Analyze Now CTA + the For You
+    /// command bar's glow both use these).
+    static let stops: [Color] = [
         Color(red: 0.992, green: 0.886, blue: 0.639),  // #fde2a3 warm yellow
         Color(red: 1.000, green: 0.557, blue: 0.235),  // #ff8e3c orange
         Color(red: 1.000, green: 0.275, blue: 0.275),  // #ff4646 red
