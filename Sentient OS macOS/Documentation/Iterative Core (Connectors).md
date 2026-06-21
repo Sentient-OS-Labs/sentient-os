@@ -21,14 +21,25 @@ A connector is dumb: it lists keyed work-items per bucket and loads one. *All* p
   mark`), `load(Candidate) -> Artifact`. A `Bucket` = `(key, [(ItemKey, Candidate)])`. Work payload +
   content reuse the existing `Candidate`/`Artifact` value types.
 - **`CycleStore`** (`Ingestion/CycleStore.swift`) — `@ModelActor`, own on-disk store
-  (`IterativeCycle.store`). `BucketPointer` (DURABLE high-water mark per bucket) + `CycleNote`
-  (EPHEMERAL survivor, wiped each cycle; carries `kind`+`sourceID` for the cloud's trust tag). API:
-  `pointer/setPointer/clearBucket · recordNote/notes/wipeAllNotes · counts · allPointers`.
-- **`IterativeRun`** (`Ingestion/IterativeRun.swift`) — drives any connector. **initial**: per bucket,
-  clear it, walk items newest→oldest, set the mark = newest *on completion* (interrupted ⇒ mark unset
-  ⇒ iterative says "run initial first"). **iterative**: per bucket, take items `> mark`, walk
-  oldest→newest, climb the mark *per item* (so a stopped run resumes). Reuses `Engine` + `Triage` +
-  the GPU-wedge resilience. Survivors → `CycleNote`; junk/sensitive store nothing.
+  (`IterativeCycle.store`). `BucketPointer` (DURABLE per bucket: the high-water mark, plus an optional
+  **FLOOR** while a first run is mid-descent — see IterativeRun) + `CycleNote` (EPHEMERAL survivor,
+  wiped each cycle; carries `kind`+`sourceID` for the cloud's trust tag). API: `pointer / pointerState
+  / connectorMarks / setPointer / clearBucket · recordNote / notes / wipeAllNotes · counts`.
+  **Crash-safety:** the per-item commits `advance` (iterative: note + mark) and `sinkFloor` (initial:
+  note + floor) each write the survivor note AND the progress marker in ONE save (no gap for a crash to
+  split), plus `collapseFloor` (first run done → floor cleared, mark left at top).
+- **`IterativeRun`** (`Ingestion/IterativeRun.swift`) — drives any connector; **every item commits its
+  (optional) note + its progress marker in ONE atomic store write**, so a crash mid-run resumes without
+  duplicating or skipping. **initial** (top→bottom): per bucket, fill newest→oldest, sinking a **floor**
+  (the oldest item done so far) per item; a crash RESUMES strictly below the floor instead of restarting
+  the folder; on reaching the bottom the floor collapses into the normal high-water mark. (Explicit
+  INITIAL still `clearBucket`s first for a true re-summarize; an `.auto`-chosen initial keeps partial
+  progress.) **iterative** (bottom→top): per bucket, take items `> mark`, walk oldest→newest, advance
+  the mark *per item*. **auto** per bucket: initial if no mark yet OR a first run is mid-descent (floor
+  set → resume it), else iterative. Mid-first-run buckets are hidden from `connectorMarks` so their
+  connector re-lists the full set — the descent needs items *below* the top, which a `> mark` hint would
+  hide. Reuses `Engine` + `Triage` + the GPU-wedge resilience. Survivors → `CycleNote`; junk/sensitive
+  store nothing.
 
 ## The cycle (summaries are disposable)
 *on-device summarize → cloud (make/update KB) → cloud (proactive judge) → next cycle.*
@@ -78,7 +89,9 @@ all of `CycleStore.notes()` regardless of connector.
 
 ## Verify
 `SENTIENT_SELFTEST=fileiter` — deterministic, no model/codex: ItemKey tiebreak · the newer-than-mark
-partition (twin at the boundary) · CycleStore round-trip · `FilesConnector.buckets` skip/keep.
+partition (twin at the boundary) · CycleStore round-trip · atomic `advance` (note+mark in one call) ·
+the first-run **floor** (sink per item, crash mid-descent, resume below the floor, collapse — proving
+no dupes / no lost items / new arrivals excluded) · `FilesConnector.buckets` skip/keep.
 `SENTIENT_SELFTEST=notesiter` — runs the real `NotesConnector` against the live Notes DB (structural
 invariants); needs Full Disk Access (skips gracefully without it).
 `SENTIENT_SELFTEST=chatiter` — runs the real WhatsApp + iMessage connectors over all chats (per-chat

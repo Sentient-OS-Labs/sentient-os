@@ -7,6 +7,9 @@
 //    • ItemKey ordering — the (order, tiebreak) tiebreak.
 //    • The iterative "newer than mark" partition, with a same-order TWIN at the boundary.
 //    • CycleStore round-trip — pointer set/get, clearBucket, recordNote/notes/wipeAllNotes.
+//    • Atomic advance — iterative writes note + mark in one call (no duplicate-on-crash gap).
+//    • First-run FLOOR — sink per item, crash mid-descent, resume strictly below the floor, then
+//      collapse to the normal mark; proves no dupes / no lost items / new arrivals excluded.
 //    • FilesConnector.buckets — keeps allowed files, skips a disallowed extension, prunes a .git repo.
 //
 
@@ -63,6 +66,49 @@ enum SelfTestFileIter {
         check("a note under another bucket exists", await store.counts().notes == 1)
         await store.wipeAllNotes()
         check("wipeAllNotes empties every note (cycle end)", await store.counts().notes == 0)
+
+        emit("\n=== fileiter: atomic advance (iterative — note + mark in one write) ===")
+        func k(_ o: Double) -> ItemKey { ItemKey(date: Date(timeIntervalSince1970: o), tiebreak: "p\(o)") }
+        func draftAt(_ o: Double) -> NoteDraft {
+            NoteDraft(kind: .file, sourceID: "file:/f/\(Int(o)).txt", folder: "Floor",
+                      itemDate: Date(timeIntervalSince1970: o), text: "n\(Int(o))", title: "N\(Int(o))", reminderFlagged: false)
+        }
+        let adv = "file:__adv__"
+        await store.advance(bucketKey: adv, note: NoteDraft(kind: .file, sourceID: "file:/a/2.txt", folder: "Adv",
+                            itemDate: Date(timeIntervalSince1970: 2), text: "two", title: "Two", reminderFlagged: false), to: k(2))
+        check("advance writes the mark", await store.pointer(adv) == k(2))
+        check("advance writes the note in the SAME call (atomic)", await store.counts().notes == 1)
+        await store.advance(bucketKey: adv, note: nil, to: k(3))      // a junk item — mark moves, no note
+        check("advance(note: nil) moves the mark", await store.pointer(adv) == k(3))
+        check("advance(note: nil) keeps NO note (junk → zero trace)", await store.counts().notes == 1)
+        check("a collapsed bucket appears in connectorMarks", await store.connectorMarks()[adv] == k(3))
+        await store.wipeAllNotes(); await store.clearBucket(adv)
+
+        emit("\n=== fileiter: first-run FLOOR — crash mid-descent, then resume ===")
+        let fb = "file:__floor__"
+        // A fresh first run over k5..k1 (top→bottom), top = k5. Sink the floor per item, atomically.
+        await store.sinkFloor(bucketKey: fb, note: draftAt(5), top: k(5), floor: k(5))
+        await store.sinkFloor(bucketKey: fb, note: draftAt(4), top: k(5), floor: k(4))
+        // 💥 crash here — the durable state must be honest: top k5, floor k4.
+        let s1 = await store.pointerState(fb)
+        check("mid-descent state keeps top (k5) and floor (k4)", s1?.mark == k(5) && s1?.floor == k(4))
+        check("mid-first-run bucket is HIDDEN from connectorMarks (forces full re-list)", await store.connectorMarks()[fb] == nil)
+        check("two notes survived the crash (k5, k4)", await store.counts().notes == 2)
+
+        // RESUME: work = key ≤ top AND key < floor, newest→oldest. A new arrival k6 (> top) must NOT
+        // be pulled into this descent (it waits for everyday mode after collapse).
+        let top = s1!.mark, floor = s1!.floor!
+        let resumeWork = [k(6), k(5), k(4), k(3), k(2), k(1)].filter { $0 <= top && $0 < floor }.sorted { $0 > $1 }
+        check("resume picks exactly k3,k2,k1 (below the floor, top→bottom)", resumeWork == [k(3), k(2), k(1)])
+        check("resume excludes the new arrival k6 (> top)", !resumeWork.contains(k(6)))
+        for key in resumeWork { await store.sinkFloor(bucketKey: fb, note: draftAt(key.order), top: top, floor: key) }
+        await store.collapseFloor(fb)
+
+        let s2 = await store.pointerState(fb)
+        check("after collapse: floor cleared, mark = top (k5)", s2?.floor == nil && s2?.mark == k(5))
+        check("collapsed first-run bucket re-appears in connectorMarks", await store.connectorMarks()[fb] == k(5))
+        check("exactly 5 notes — NO duplicates across crash/resume", await store.counts().notes == 5)
+        await store.wipeAllNotes(); await store.clearBucket(fb)
 
         emit("\n=== fileiter: FilesConnector.buckets (skip + keep) ===")
         let fm = FileManager.default

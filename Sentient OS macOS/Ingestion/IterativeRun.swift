@@ -4,15 +4,18 @@
 //
 //  The connector-agnostic on-device orchestrator — the ONE engine path behind BOTH the home
 //  "Analyze Now" takeover and the dev "start on device" buttons (both via ProcessingView). Drives
-//  any Connector through ONE Engine (sized to the biggest connector), per BUCKET:
-//   • .initial   (top→bottom): clear the bucket, walk items newest→oldest, then on completion set
-//                  the bucket's mark = newest. (Interrupted ⇒ mark unset ⇒ iterative says "run
-//                  initial first".)
-//   • .iterative (bottom→top): take items past the mark, walk oldest→newest, climbing the mark per
-//                  item (so a stopped run resumes). No mark yet ⇒ skipped.
-//   • .auto:      per bucket — initial if it has no mark yet, else iterative. This is the home
-//                  button's mode: the first run backfills, every run after just catches up, and a
-//                  freshly-added folder backfills while the rest catch up — all in one pass.
+//  any Connector through ONE Engine (sized to the biggest connector), per BUCKET. Every processed
+//  item commits its (optional) survivor note AND its progress marker in ONE atomic store write — so a
+//  crash mid-run resumes, never duplicates, never skips:
+//   • .initial   (top→bottom): fill the bucket newest→oldest, sinking a FLOOR per item (the oldest
+//                  done so far). A crash RESUMES strictly below the floor instead of restarting; on
+//                  reaching the bottom the floor collapses into the normal high-water mark.
+//   • .iterative (bottom→top): take items past the mark, walk oldest→newest, advancing the mark per
+//                  item. No mark yet (or a first run unfinished) ⇒ skipped — run initial first.
+//   • .auto:      per bucket — initial if it has no mark yet OR a first run is mid-descent (floor
+//                  set, i.e. resume it), else iterative. This is the home button's mode: the first
+//                  run backfills, every run after catches up, a freshly-added folder backfills while
+//                  the rest catch up, and an interrupted first run picks up where it left off.
 //  Reuses Engine + Triage + the GPU-wedge resilience (preemptive + reactive reloads). Survivors →
 //  CycleNote; junk/sensitive store nothing (zero trace). Synchronous generate() only — no streaming.
 //
@@ -75,20 +78,22 @@ struct IterativeRun {
             sinceReload = 0
         }
 
-        // One full attempt at one item: load → generate → decide → (survivor ⇒ recordNote). The
-        // exact prompt is stashed on the progress so ProcessingView's dev pane can show it.
-        func attempt(_ cand: Candidate, connector: any Connector, bucketKey: String) async -> Bool {
+        // One full attempt at one item: load → generate → decide. Returns whether it succeeded and,
+        // for a survivor, the NoteDraft to commit — the loop writes it atomically WITH the marker, so
+        // a crash never leaves a note without its marker. The exact prompt is stashed on the progress
+        // so ProcessingView's dev pane can show it.
+        func attempt(_ cand: Candidate, connector: any Connector) async -> (ok: Bool, draft: NoteDraft?) {
             do {
                 let artifact = try autoreleasepool { try connector.load(cand) }
                 let prompt = Triage.prompt(for: artifact, currentDate: Date())
                 p.lastPrompt = prompt
                 let result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
                 let outcome = Triage.decide(result.text)
+                var draft: NoteDraft?
                 if outcome.verdict == .survivor {
-                    await store.recordNote(
-                        bucketKey: bucketKey, kind: connector.kind, sourceID: cand.id,
-                        folder: cand.metadata["folder"] ?? "", itemDate: cand.itemDate,
-                        text: outcome.summary, title: outcome.title, reminderFlagged: false)
+                    draft = NoteDraft(kind: connector.kind, sourceID: cand.id,
+                                      folder: cand.metadata["folder"] ?? "", itemDate: cand.itemDate,
+                                      text: outcome.summary, title: outcome.title, reminderFlagged: false)
                 }
                 LifetimeStats.bump(outcome.verdict)
                 switch outcome.verdict {
@@ -104,16 +109,17 @@ struct IterativeRun {
                 #if DEBUG
                 Log("• \(cand.metadata["displayPath"] ?? cand.id) → \(outcome.verdict)")
                 #endif
-                return true
+                return (true, draft)
             } catch {
                 p.lastSummary = "(skipped: \(error))"
-                return false
+                return (false, nil)
             }
         }
 
-        // Initial wants everything (we clear + reprocess) → pass [:]. Iterative/auto pass the real
-        // marks so connectors can query efficiently; the run still filters/advances authoritatively.
-        let marks = mode == .initial ? [:] : await store.allPointers()
+        // Explicit INITIAL reprocesses from scratch → pass [:]. Otherwise pass the per-bucket marks as
+        // a connector query hint (connectorMarks omits mid-first-run buckets so their connector returns
+        // the FULL set — the descent needs items below the top); the run still filters authoritatively.
+        let marks = mode == .initial ? [:] : await store.connectorMarks()
 
         runLoop: for connector in connectors {
             if Task.isCancelled { break }
@@ -124,23 +130,45 @@ struct IterativeRun {
             for bucket in buckets {
                 if Task.isCancelled { break runLoop }
 
-                // Per-bucket effective mode: .auto = initial when the bucket has never completed an
-                // initial run (no mark), else iterative — so one "Analyze Now" backfills new buckets
-                // and catches up the rest in a single pass.
-                let mark = await store.pointer(bucket.key)
-                let effective: Mode = (mode == .auto) ? (mark == nil ? .initial : .iterative) : mode
+                var state = await store.pointerState(bucket.key)
 
+                // Per-bucket effective mode. .auto: no state → fresh first run; floor still set → a
+                // first run was interrupted, RESUME it; collapsed (floor nil) → everyday catch-up.
+                let effective: Mode
+                switch mode {
+                case .auto:      effective = (state == nil || state?.floor != nil) ? .initial : .iterative
+                case .initial:   effective = .initial
+                case .iterative: effective = .iterative
+                }
+
+                // Build this bucket's ordered work; for a first run, also capture the fixed TOP.
                 let work: [(key: ItemKey, item: Candidate)]
+                let top: ItemKey?
                 switch effective {
                 case .initial:
-                    await store.clearBucket(bucket.key)
-                    work = bucket.items                                            // newest → oldest
+                    // Explicit INITIAL = full reset (re-summarize everything). An .auto-chosen initial
+                    // (fresh first run OR resuming an interrupted one) keeps its partial progress.
+                    if mode == .initial { await store.clearBucket(bucket.key); state = nil }
+                    let resumeFloor = state?.floor
+                    let descentTop: ItemKey
+                    if let m = state?.mark, resumeFloor != nil {
+                        descentTop = m                                   // resume: top was saved
+                    } else if let newest = bucket.items.first?.key {
+                        descentTop = newest                              // fresh: top = newest
+                    } else {
+                        continue                                         // empty bucket — nothing to do
+                    }
+                    top = descentTop
+                    work = bucket.items
+                        .filter { $0.key <= descentTop && (resumeFloor == nil || $0.key < resumeFloor!) }
+                        .sorted { $0.key > $1.key }                      // newest → oldest (top-down)
                 case .iterative:
-                    guard let mark else {
-                        Log("IterativeRun: \(bucket.key) has no pointer — run initial first; skipping.")
+                    guard let s = state, s.floor == nil else {
+                        Log("IterativeRun: \(bucket.key) — \(state == nil ? "no pointer" : "first run unfinished"); run initial first; skipping.")
                         continue
                     }
-                    work = bucket.items.filter { $0.key > mark }.sorted { $0.key < $1.key }   // oldest → newest
+                    top = nil
+                    work = bucket.items.filter { $0.key > s.mark }.sorted { $0.key < $1.key }   // oldest → newest
                 case .auto:
                     continue   // resolved into .initial / .iterative above; never reached
                 }
@@ -156,7 +184,7 @@ struct IterativeRun {
                     p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
                     p.lastFilePath = w.item.metadata["path"]
 
-                    var ok = await attempt(w.item, connector: connector, bucketKey: bucket.key)
+                    var (ok, draft) = await attempt(w.item, connector: connector)
                     if !ok {
                         consecutiveFailures += 1
                         if consecutiveFailures >= Self.failuresBeforeReload {
@@ -165,19 +193,25 @@ struct IterativeRun {
                                 finished = false; break runLoop
                             }
                             await reloadEngine(); reloadsWithoutProgress += 1; consecutiveFailures = 0
-                            ok = await attempt(w.item, connector: connector, bucketKey: bucket.key)
+                            (ok, draft) = await attempt(w.item, connector: connector)
                         }
                     }
-                    if ok { consecutiveFailures = 0; reloadsWithoutProgress = 0 } else { p.failed += 1 }
+                    if ok { consecutiveFailures = 0; reloadsWithoutProgress = 0 } else { p.failed += 1; draft = nil }
 
-                    if effective == .iterative { await store.setPointer(bucket.key, w.key) }   // climb per item
+                    // ONE atomic store write per item: optional survivor note + marker advance — no gap
+                    // for a crash to land in. Iterative climbs the mark; initial sinks the floor.
+                    switch effective {
+                    case .iterative: await store.advance(bucketKey: bucket.key, note: draft, to: w.key)
+                    case .initial:   await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
+                    case .auto:      break
+                    }
                     sinceReload += 1; p.done += 1
                     onProgress(p)
                 }
 
-                // INITIAL completed this bucket's full descent → everything ≤ newest done → set mark.
-                if effective == .initial, finished, let newest = bucket.items.first?.key {
-                    await store.setPointer(bucket.key, newest)
+                // First run reached the bottom → collapse the floor into the normal high-water mark.
+                if effective == .initial, finished, top != nil {
+                    await store.collapseFloor(bucket.key)
                 }
             }
         }
