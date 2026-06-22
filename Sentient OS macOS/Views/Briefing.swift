@@ -265,4 +265,80 @@ struct Briefing: Identifiable {
             offer: nil,
             doneTitle: "", doneBody: ""),
     ]
+
+    // MARK: - Parked / alternate demo cards (swap-in library)
+    //
+    // Retired or alternate "For You" cards, kept here so they're easy to swap back into the `demo`
+    // deck above. To use one: delete its surrounding /* … */ and move the Briefing(…) into `demo`
+    // (and drop/replace a current card so the count stays 6 — the scatter layouts in HomeView's
+    // `slots(count:)` only define up to 6). Each is self-contained (no shared-constant refs).
+    // Parked = NOT compiled, so these can quietly go stale — re-read before relying on one.
+
+    /* ── EWOR · "Prepare for your call with Daniel, CEO of EWOR." (researched prep card, orchid) ──
+        Briefing(
+            id: "ewor", kind: .plan,
+            kicker: "Prep · 11 AM today · Researched",
+            title: "Prepare for your call with Daniel, CEO of EWOR.",
+            body: "Somya Gupta nominated you for the EWOR Fellowship — and Daniel Dippold, its founder & CEO, wants 15 minutes today at 11 AM. I researched him and EWOR and pulled together what'll get you ready.",
+            letter: """
+            Your EWOR selection interview is today — 11:00–11:15 AM PDT, on Zoom (it moved up from 10:45). Somya Gupta nominated you, and you're meeting Daniel Dippold, EWOR's founder & CEO. He called it casual, but it's 15 minutes and it's selective — so walk in sharp.
+
+            ✦ **Know your room.** Daniel is a mathematician-turned-founder: raised **$100M** in his twenties, angel in **7 unicorns**, and built three organizations still thriving — EWOR, New Now Group, Sigma Squared. He rewards technical depth and outlier conviction — lead with the on-device moat and your all-in, drop-out resolve.
+
+            ✦ **Speak EWOR's language.** They back the **top 0.1%** of founders building transformative tech — up to **€500K** immediate, plus weekly 1:1 coaching from unicorn founders (Adjust, ProGlove, SumUp). No standard playbooks; they tailor to each founder. Frame Sentient as exactly that non-linear, outlier bet.
+
+            ✦ **Your 15-minute arc.** Open with the Reddit moment — **2,500+ waitlist signups in 24 hours, $0 spent**. Then the wedge: consumer free-forever as the loved foothold, the enterprise per-employee intelligence layer as the business. Close on why now, and why you.
+
+            Somya put their name on you — make it land. — **your Sentient**
+            """,
+            detailLabel: "read the prep doc",
+            offer: nil,
+            doneTitle: "", doneBody: ""),
+    */
+
+    /* ── ZFellows · "ZFellows closes in 8 days." (browser-agent registration card, ember) ──
+        Briefing(
+            id: "zfellows", kind: .deadline,
+            kicker: "Deadline · 8 days · Browser agent",
+            title: "ZFellows closes in 8 days.",
+            body: "You bookmarked the Dropout Graduation but never registered. The form needs your name, school, and what you're building — I have all three.",
+            letter: """
+            You bookmarked the ZFellows Dropout Graduation three weeks ago and never registered. It closes in 8 days.
+
+            The form is short: name, school, and what you're building. I have all three — say the word and an agent fills it while you watch.
+            """,
+            detailLabel: nil,
+            offer: "Want an agent to register you?",
+            workLog: ["→ launching a browser agent",
+                      "→ zfellows.com/dropout-graduation",
+                      "→ name: Jesai Tarun · school: UMass Amherst",
+                      "→ building: Sentient OS",
+                      "→ submitting the form…",
+                      "✓ registered — confirmation in your inbox"],
+            doneTitle: "You're registered.",
+            doneBody: "The ZFellows confirmation is in your inbox.",
+            codexPrompt: "Use the browser to open the ZFellows Dropout Graduation registration and submit it for Jesai Tarun, UMass Amherst, building Sentient OS."),
+    */
+
+    /* ── Fareed (ORIGINAL short-letter variant) · alternate to the current rich-letter Fareed card ──
+        Briefing(
+            id: "fareed", kind: .meeting,
+            kicker: "Prep · Tomorrow · Researched",
+            title: "Prepare for your call with Fareed from Speedrun tomorrow.",
+            body: "Remember: Josh Lu wanted Fareed to be your a16z Speedrun partner. I've researched and found that GTM strategy matters a lot to him. Here's a doc that'll help you prepare for your call.",
+            letter: """
+            Remember: Josh Lu wanted Fareed to be your a16z Speedrun partner — and your call is tomorrow. I went through everything and pulled together what'll get you ready.
+
+            ✦ **GTM is his lens.** Across his bets and writing, Fareed weighs go-to-market harder than almost anything. He'll want a crisp distribution story, not just the tech.
+
+            ✦ **Open with the Reddit moment.** 2,500+ waitlist signups in 24 hours from a single post, $0 spent — that's the GTM proof that lands with him. Lead with it.
+
+            ✦ **Have the wedge ready.** Consumer free-forever as the loved wedge; the enterprise per-employee intelligence layer as the business. Expect him to push on how one becomes the other.
+
+            Walk in leading with distribution. — your Sentient
+            """,
+            detailLabel: "read the prep doc",
+            offer: nil,
+            doneTitle: "", doneBody: ""),
+    */
 }
