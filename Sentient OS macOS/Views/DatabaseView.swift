@@ -135,6 +135,7 @@ struct DatabaseView: View {
         case .imessage: return "iMessage"
         case .notes:    return "Notes"
         case .gmail:    return "Gmail"
+        case .calendar: return "Calendar"
         }
     }
 

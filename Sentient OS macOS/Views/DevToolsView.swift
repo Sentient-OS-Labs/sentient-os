@@ -77,6 +77,7 @@ struct DeviceJob: Identifiable {
     let connectors: [any Connector]
     let mode: IterativeRun.Mode
     let runGmail: Bool
+    let runCalendar: Bool
 }
 
 struct DevToolsView: View {
@@ -109,6 +110,9 @@ struct DevToolsView: View {
     @State private var showGmailConnect = false
     @AppStorage("dbg.gmail.connected") private var gmailConnected = false
     @AppStorage("dbg.run.gmail")       private var runGmail = false
+    @State private var showCalendarConnect = false
+    @AppStorage("dbg.calendar.connected") private var calendarConnected = false
+    @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
     // MCP mirror (the hosted Render copy). Local mirrors of MirrorClient's actor state, refreshed
     // when "More" opens and after each action.
@@ -167,10 +171,11 @@ struct DevToolsView: View {
         .sheet(isPresented: $showSummaries) { SummariesView() }
         .sheet(isPresented: $showActionItems) { ProactiveItemsView() }
         .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
+        .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
         .sheet(item: $deviceJob) { job in
             // Same takeover + same engine as the home "Analyze Now" — dev just gets the prompt pane.
             ProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors,
-                           mode: job.mode, runGmail: job.runGmail, showPrompt: true) {
+                           mode: job.mode, runGmail: job.runGmail, runCalendar: job.runCalendar, showPrompt: true) {
                 deviceJob = nil
             }
             .frame(minWidth: 600, minHeight: 680)
@@ -317,7 +322,7 @@ struct DevToolsView: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered).tint(.green)
-            .disabled(deviceJob != nil || run.busy != nil || (Self.modelPath == nil && !(gmailConnected && runGmail)))
+            .disabled(deviceJob != nil || run.busy != nil || (Self.modelPath == nil && !((gmailConnected && runGmail) || (calendarConnected && runCalendar))))
             if let s = run.status[id] {
                 Text(s)
                     .font(.system(.caption2, design: .monospaced))
@@ -332,16 +337,17 @@ struct DevToolsView: View {
     /// from-scratch run is the deliberate "Reset everything" button under More.
     private func startOnDevice(id: String, mode: IterativeRun.Mode) {
         let gmailRun = gmailConnected && runGmail
+        let calendarRun = calendarConnected && runCalendar
         let connectors = RunSource.connectors(from: selectedSources)
-        guard gmailRun || !connectors.isEmpty else {
-            run.status[id] = "✗ select a source above (folder / chat / Apple Notes / Gmail)"; return
+        guard gmailRun || calendarRun || !connectors.isEmpty else {
+            run.status[id] = "✗ select a source above (folder / chat / Apple Notes / Gmail / Calendar)"; return
         }
-        // Device sources need the on-device model; Gmail (cloud) does not.
+        // Device sources need the on-device model; Gmail + Calendar (cloud) do not.
         if !connectors.isEmpty && Self.modelPath == nil {
             run.status[id] = "✗ model not found"; return
         }
         run.status[id] = nil
-        deviceJob = DeviceJob(connectors: connectors, mode: mode, runGmail: gmailRun)
+        deviceJob = DeviceJob(connectors: connectors, mode: mode, runGmail: gmailRun, runCalendar: calendarRun)
     }
 
     private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {
@@ -379,9 +385,14 @@ struct DevToolsView: View {
     private func runProactive(progress: @escaping @Sendable (String) -> Void) async -> String {
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
         guard !notes.isEmpty else { return "✗ no summaries — run an on-device pass first" }
-        progress("Reading the last week + your knowledge base…")
+        var calCtx: String?
+        if calendarConnected {
+            progress("Gathering your live calendar, then analyzing every source…")
+            calCtx = await CalendarConnect.fetchProactiveContext()
+        }
+        progress("Analyzing the last week across every source (files · chats · Notes · Gmail · Calendar)…")
         do {
-            let items = try await Proactive.shared.findActionItems(from: notes)
+            let items = try await Proactive.shared.findActionItems(from: notes, calendarContext: calCtx)
             guard !items.isEmpty else { return "✓ nothing worth surfacing right now" }
             let lines = items.enumerated().map { i, it in
                 "\(i + 1). [\(it.urgency.rawValue)\(it.dueDate.map { " · \($0)" } ?? "")] \(it.title)"
@@ -400,9 +411,14 @@ struct DevToolsView: View {
     private func runResearch(progress: @escaping @Sendable (String) -> Void) async -> String {
         let items = Proactive.latest()
         guard !items.isEmpty else { return "✗ no action items — run “proactive system” (part 1) first" }
-        progress("Verifying + preparing \(items.count) item\(items.count == 1 ? "" : "s") against Gmail, web & your vault…")
+        var calCtx: String?
+        if calendarConnected {
+            progress("Gathering your live calendar, then verifying every item…")
+            calCtx = await CalendarConnect.fetchProactiveContext()
+        }
+        progress("Verifying + preparing \(items.count) item\(items.count == 1 ? "" : "s") against your calendar, Gmail, web & your vault…")
         do {
-            let result = try await ProactiveResearch.shared.researchAndPrepare(items: items)
+            let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, calendarContext: calCtx)
             let readyLines = result.ready.map { "✓ [\($0.kind.rawValue) · \($0.status.rawValue)] \($0.title)\($0.reviewNote.isEmpty ? "" : " ⚠︎ check first")" }
             let dropLines = result.dropped.map { "✗ \($0.title) — \($0.reason)" }
             let body = (readyLines + dropLines).joined(separator: "\n")
@@ -442,10 +458,11 @@ struct DevToolsView: View {
                                openPicker: { showIMessagePicker = true })
                 notesChip
                 gmailChip
+                calendarChip
             }
             .frame(maxWidth: 460)
 
-            Text("The INITIAL / ITERATIVE buttons run every selected source (folders + opted chats + Apple Notes + Gmail) through the iterative core. Select only one to test it alone.")
+            Text("The INITIAL / ITERATIVE buttons run every selected source (folders + opted chats + Apple Notes + Gmail + Calendar) through the iterative core. Select only one to test it alone.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
@@ -480,6 +497,22 @@ struct DevToolsView: View {
         .overlay(Capsule().strokeBorder(on ? .clear : (gmailConnected ? Theme.stroke : Theme.accent.opacity(0.4)), lineWidth: 1))
         .contentShape(Capsule())
         .onTapGesture { showGmailConnect = true }   // always open the popup (connect / select / remove)
+    }
+
+    /// Google Calendar (cloud). Not connected → tap opens the connect popup; connected → tap toggles.
+    private var calendarChip: some View {
+        let on = calendarConnected && runCalendar
+        return HStack(spacing: 6) {
+            Image(systemName: on ? "checkmark.circle.fill" : "calendar").font(.system(size: 11))
+            Text("Calendar").font(.caption.weight(.medium)).lineLimit(1)
+        }
+        .foregroundStyle(on ? .black : (calendarConnected ? Theme.secondary : Theme.accent))
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 11).padding(.vertical, 6)
+        .background(on ? Theme.accent : Color.white.opacity(0.06), in: Capsule())
+        .overlay(Capsule().strokeBorder(on ? .clear : (calendarConnected ? Theme.stroke : Theme.accent.opacity(0.4)), lineWidth: 1))
+        .contentShape(Capsule())
+        .onTapGesture { showCalendarConnect = true }   // always open the popup (connect / select / remove)
     }
 
     private func chatSourceChip(_ name: String, systemImage: String, isOn: Bool, count: Int,
