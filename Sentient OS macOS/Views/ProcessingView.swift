@@ -55,16 +55,17 @@ enum RunSource: Hashable {
 
 struct ProcessingView: View {
     let modelPath: String
-    let connectors: [any Connector]   // the on-device sources to analyze (empty = Gmail-only)
+    let connectors: [any Connector]   // the on-device sources to analyze (empty = cloud-only)
     let mode: IterativeRun.Mode       // home → .auto · dev INITIAL/ITERATIVE buttons → .initial/.iterative
     let runGmail: Bool                // append the cloud Gmail leg (shown in this same takeover)
+    let runCalendar: Bool             // append the cloud Google Calendar leg (same takeover)
     let showPrompt: Bool              // dev: add the left-side prompt pane
     var onDone: () -> Void
 
     init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode,
-         runGmail: Bool = false, showPrompt: Bool = false, onDone: @escaping () -> Void) {
+         runGmail: Bool = false, runCalendar: Bool = false, showPrompt: Bool = false, onDone: @escaping () -> Void) {
         self.modelPath = modelPath; self.connectors = connectors; self.mode = mode
-        self.runGmail = runGmail; self.showPrompt = showPrompt; self.onDone = onDone
+        self.runGmail = runGmail; self.runCalendar = runCalendar; self.showPrompt = showPrompt; self.onDone = onDone
     }
 
     private enum UIState: Equatable { case loadingModel, processing, completed, failed(String) }
@@ -100,11 +101,18 @@ struct ProcessingView: View {
 
     // MARK: States
 
+    /// Cloud-only takeover (no on-device connectors): name the leg we're starting.
+    private var cloudIcon: String { runGmail && !runCalendar ? "envelope" : (runCalendar && !runGmail ? "calendar" : "cloud") }
+    private var cloudLabel: String {
+        runGmail && !runCalendar ? "Connecting to Gmail"
+            : (runCalendar && !runGmail ? "Connecting to Calendar" : "Connecting to the cloud")
+    }
+
     private var loadingView: some View {
         VStack(spacing: 22) {
-            Image(systemName: connectors.isEmpty ? "envelope" : "cpu").font(.system(size: 46))
+            Image(systemName: connectors.isEmpty ? cloudIcon : "cpu").font(.system(size: 46))
                 .foregroundStyle(.white.opacity(0.6)).symbolEffect(.pulse)
-            Text(connectors.isEmpty ? "Connecting to Gmail" : "Loading on-device model")
+            Text(connectors.isEmpty ? cloudLabel : "Loading on-device model")
                 .font(.title3.weight(.semibold)).foregroundStyle(.white)
             ProgressView().tint(.white.opacity(0.4))
         }
@@ -350,6 +358,9 @@ struct ProcessingView: View {
             if runGmail {
                 p = await runGmailLeg(base: p) { continuation.yield($0) }
             }
+            if runCalendar {
+                p = await runCalendarLeg(base: p) { continuation.yield($0) }
+            }
             return p
         }
         runTask = task
@@ -406,6 +417,54 @@ struct ProcessingView: View {
             box.value = p
             yield(p)
             Log("ProcessingView.gmail: ✗ \(error)")
+        }
+        return box.value
+    }
+
+    /// Cloud Google Calendar leg — twin to the Gmail leg: each date window (a month, or the iterative
+    /// since-mark window) maps onto the SAME bar/card, extended past `base` (the prior legs' counts).
+    private func runCalendarLeg(base: RunProgress,
+                                yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
+        let box = ProgressBox(base)
+        let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseJunk = base.junk
+        let onProgress: @Sendable (CalendarConnect.Progress) -> Void = { ev in
+            switch ev {
+            case let .windowStart(step, total, label, prompt):
+                var p = box.value
+                p.total = baseTotal + total
+                p.done  = baseDone + (step - 1)
+                p.lastPrompt = prompt
+                p.lastPath = "Calendar · \(label)"
+                box.value = p
+                yield(p)
+            case let .windowDone(step, total, label, summary, events, keptSoFar):
+                var p = box.value
+                p.total       = baseTotal + total
+                p.done        = baseDone + step
+                p.survivors   = baseKept + keptSoFar
+                p.junk        = baseJunk + (step - keptSoFar)   // a window with nothing notable
+                p.lastTitle   = "Calendar — \(label)"
+                p.lastSummary = summary
+                p.lastVerdict = summary == nil ? .junk : .survivor
+                p.lastFilePath = nil
+                p.lastPath    = "Calendar · \(label)" + (events > 0 ? " · \(events) events" : "")
+                p.lastSeconds = nil
+                box.value = p
+                yield(p)
+            }
+        }
+        do {
+            _ = mode == .iterative ? try await CalendarConnect.runIterative(onProgress: onProgress)
+                                   : try await CalendarConnect.runInitial(onProgress: onProgress)
+        } catch {
+            var p = box.value
+            p.lastTitle = "Calendar failed"
+            p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            p.lastVerdict = .junk
+            p.lastFilePath = nil
+            box.value = p
+            yield(p)
+            Log("ProcessingView.calendar: ✗ \(error)")
         }
         return box.value
     }

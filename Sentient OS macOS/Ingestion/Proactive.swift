@@ -64,7 +64,8 @@ actor Proactive {
     /// hermetic — no file/web/MCP tools (PART 2 does the deep research). Returns the ranked list; it
     /// does not verify, write, or notify. Throws on no-recent / usage-limit / failure so the caller
     /// can surface a clear status.
-    func findActionItems(from notes: [CloudNote], now: Date = Date()) async throws -> [ActionItem] {
+    func findActionItems(from notes: [CloudNote], now: Date = Date(),
+                         calendarContext: String? = nil) async throws -> [ActionItem] {
         // 1. Window the summaries to the last N days (each note carries its own item date).
         let cutoff = now.addingTimeInterval(-Double(Self.lookbackDays) * 86_400)
         func itemDate(_ n: CloudNote) -> Date { n.itemDate ?? .distantPast }
@@ -80,7 +81,7 @@ actor Proactive {
             .appendingPathComponent("sentient-proactive-judge", isDirectory: true)
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(recent: recent, now: now))
+        var inv = CodexCLI.Invocation(prompt: Self.prompt(recent: recent, now: now, calendarContext: calendarContext))
         inv.effort = .high                  // gpt-5.5 → high (this judgment is the product)
         inv.sandbox = .readOnly             // never writes or acts
         inv.cwd = scratch.path              // neutral empty dir — nothing to read
@@ -166,7 +167,7 @@ actor Proactive {
 
     // MARK: The prompt — accuracy-first, detailed (the judgment IS the product)
 
-    private static func prompt(recent: [CloudNote], now: Date) -> String {
+    private static func prompt(recent: [CloudNote], now: Date, calendarContext: String?) -> String {
         let today = todayString(now)
         let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
         var lines: [String] = []
@@ -177,6 +178,23 @@ actor Proactive {
             let title = (n.title?.isEmpty == false) ? n.title! : "(untitled)"
             lines.append("#\(i + 1) · [\(src)] \(loc) · \(when)\n\(title) — \(n.text)")
         }
+
+        // The user's LIVE calendar (last 7 days + next 24h, ALL events), pre-fetched as text so PART 1
+        // stays tool-free/hermetic. Only present when Calendar is connected (CalendarConnect.fetch…).
+        let calendarBlock: String = {
+            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return "" }
+            return """
+
+            ## THE USER'S LIVE CALENDAR (every event — last 7 days + next 24 hours)
+            This is the user's actual calendar right now (not a summary). Use it to ground \
+            time-sensitivity: spot a commitment that's now imminent, a meeting to prepare for, a thing \
+            someone proposed that a free slot makes possible, or a deadline tied to an event. It is \
+            context, not a checklist — surface an item only when it genuinely deserves attention.
+
+            \(ctx)
+
+            """
+        }()
 
         return """
         You are the **Proactive Intelligence** engine of Sentient OS — the single most important part \
@@ -295,7 +313,7 @@ actor Proactive {
         "Notes · running gear", "Calendar", "Gmail · <subject>"). Cite the provenance here.
         - **urgency** — "high", "medium", or "low".
 
-        The last \(lookbackDays) days of summaries follow.
+        \(calendarBlock)The last \(lookbackDays) days of summaries follow.
 
         ---
 

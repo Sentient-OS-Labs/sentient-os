@@ -104,7 +104,8 @@ actor ProactiveResearch {
     /// stale ones; then stage every survivor ready to fire (draft in the user's voice + the execution
     /// recipe). Read-only — it researches and stages, it NEVER fires. Verify-only — it never adds a new
     /// item. Returns the ready + dropped split; throws on no-items / no-vault / usage-limit / failure.
-    func researchAndPrepare(items: [ActionItem], now: Date = Date()) async throws -> ReadyResult {
+    func researchAndPrepare(items: [ActionItem], now: Date = Date(),
+                            calendarContext: String? = nil) async throws -> ReadyResult {
         guard !items.isEmpty else { throw ResError.noItems }
 
         // The vault is a research surface, the source of the user's voice + the facts a draft/form
@@ -112,7 +113,7 @@ actor ProactiveResearch {
         let vault = VaultGenerator.vaultRoot
         guard FileManager.default.fileExists(atPath: vault.path) else { throw ResError.noVault }
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, now: now))
+        var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, now: now, calendarContext: calendarContext))
         inv.effort = .high                  // gpt-5.5 → high (accuracy + the prepared draft are the product)
         inv.sandbox = .readOnly             // verifies + stages — never sends, drafts into a provider, or acts
         inv.cwd = vault.path                // working dir = the knowledge base (a research surface + the voice)
@@ -223,7 +224,7 @@ actor ProactiveResearch {
 
     // MARK: The prompt — verify THEN prepare, accuracy-obsessed, never fires
 
-    private static func prompt(items: [ActionItem], now: Date) -> String {
+    private static func prompt(items: [ActionItem], now: Date, calendarContext: String?) -> String {
         let today = todayString(now)
         var lines: [String] = []
         lines.reserveCapacity(items.count)
@@ -236,6 +237,24 @@ actor ProactiveResearch {
                Cited summaries: \(it.sources.isEmpty ? "—" : it.sources.joined(separator: ", "))
             """)
         }
+
+        // The user's LIVE calendar (last 7 days + next 24h, ALL events), pre-fetched as text. A
+        // grounding surface for verify/prepare — confirm free/busy, an event's real time, what's
+        // imminent. Only present when Calendar is connected (CalendarConnect.fetchProactiveContext).
+        let calendarBlock: String = {
+            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return "" }
+            return """
+
+            ## THE USER'S LIVE CALENDAR (every event — last 7 days + next 24 hours)
+            The user's actual calendar right now (already fetched for you). Use it as a grounding \
+            surface: confirm whether the user is free/busy at a proposed time, get an event's real \
+            date/time right, see what's imminent, or catch that an item is already on the calendar. \
+            Treat it as receipts (it came from the live calendar). You may still call your Calendar \
+            tool to read a specific event in more detail if one is connected.
+
+            \(ctx)
+            """
+        }()
 
         return """
         You are the **Research & Prepare** step of Sentient OS's Proactive Intelligence — PART 2 of 3, \
@@ -362,6 +381,7 @@ actor ProactiveResearch {
         Return FEWER than you were given whenever research warrants it — dropping a stale item is a \
         success, not a failure. Prepare everything that survives right up to the fire line, and stop there.
 
+        \(calendarBlock)
         The action items to research and prepare follow.
 
         ---

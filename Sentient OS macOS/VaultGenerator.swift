@@ -205,6 +205,7 @@ actor VaultGenerator {
     static func locSrc(kind: SourceKind, folder: String, sourceID: String) -> (loc: String, source: String) {
         if kind == .whatsapp { return (folder, "WhatsApp · \(folder)") }
         if kind == .gmail { return (folder, "Gmail — the user's email correspondence") }
+        if kind == .calendar { return (folder, "Calendar — the user's schedule / events") }
         let p = relPath(sourceID)
         let low = p.lowercased()
         if low.contains("icloud~md~obsidian") {                       // the user's own Obsidian vault
