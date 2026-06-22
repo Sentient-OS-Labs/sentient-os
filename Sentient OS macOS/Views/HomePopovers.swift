@@ -109,7 +109,7 @@ struct AnalysisPopover: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
-        .background(GlowHalo(active: analyzeEnabled))
+        .background(GlowHalo(active: analyzeEnabled, intensity: 0.28))
         .disabled(!analyzeEnabled)
     }
 }
@@ -134,7 +134,7 @@ struct YourAIsPopover: View {
             .font(.system(size: 10, design: .monospaced))
             .padding(.top, 7)
 
-            GlowButton(title: "Connect your AIs", systemImage: "link", action: onConnect)
+            GlowButton(title: "Connect your AIs", systemImage: "link", glowIntensity: 0.28, action: onConnect)
                 .padding(.top, 18)
 
             MonoCaps("Your whole life · offered to every AI", size: 8.5, tracking: 1.6,

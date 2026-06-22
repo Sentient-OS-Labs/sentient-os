@@ -153,18 +153,20 @@ struct HomeView: View {
     }
 
     /// Organic slot positions per population, laid into the CARD ZONE — the band between the
-    /// top chrome (nav + greeting) and the command-bar dock — so nothing overlaps either.
-    /// Pinned, not gridded; reflows as cards leave. (y-fraction is WITHIN the zone.)
+    /// top chrome (nav + greeting) and the command-bar dock. The two rows cluster toward the
+    /// vertical centre with a tight, deliberate gap (one composed spread, not two stranded rows)
+    /// and a gentle stagger. Pinned, not gridded; reflows as cards leave. (y-fraction is WITHIN
+    /// the zone.)
     private static func slots(count: Int, in size: CGSize) -> [CGPoint] {
         let top = size.height * 0.20
         let bottom = size.height * 0.86
         let h = bottom - top
         let f: [(CGFloat, CGFloat)]
         switch count {
-        case 6...: f = [(0.21, 0.24), (0.50, 0.10), (0.79, 0.16),
-                        (0.21, 0.74), (0.50, 0.80), (0.79, 0.74)]
-        case 5:    f = [(0.22, 0.20), (0.50, 0.08), (0.78, 0.16), (0.34, 0.76), (0.66, 0.76)]
-        case 4:    f = [(0.28, 0.18), (0.72, 0.18), (0.30, 0.76), (0.70, 0.76)]
+        case 6...: f = [(0.21, 0.24), (0.50, 0.20), (0.79, 0.20),
+                        (0.21, 0.72), (0.50, 0.70), (0.79, 0.66)]
+        case 5:    f = [(0.22, 0.22), (0.50, 0.14), (0.78, 0.19), (0.34, 0.68), (0.66, 0.68)]
+        case 4:    f = [(0.28, 0.22), (0.72, 0.22), (0.30, 0.68), (0.70, 0.68)]
         case 3:    f = [(0.24, 0.46), (0.50, 0.32), (0.76, 0.46)]
         case 2:    f = [(0.35, 0.44), (0.65, 0.44)]
         default:   f = [(0.50, 0.42)]
@@ -211,10 +213,11 @@ struct HomeView: View {
 
     private var bottomDock: some View {
         VStack(spacing: 16) {
-            PromptBar { text, mode in
-                // DEMO SEAM: real execution hands (text, mode) to CodexCLI — computer use runs a
-                // workspace-write agent; browser use drives the browser. For now, report the intent.
-                Log("Home/prompt: [\(mode.rawValue) use] \(text)")
+            PromptBar { _, _ in
+                // DEMO: the command bar fires a FIXED Codex computer-use run (regardless of what's
+                // typed or which mode is picked) — open WhatsApp and message Aditya Hemanth a
+                // 2-paragraph summary of Sentient OS. See ForYouModel.fireComputerUseDemo.
+                Task.detached(priority: .utility) { await ForYouModel.fireComputerUseDemo() }
             }
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
@@ -341,12 +344,13 @@ final class ForYouModel {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
         let v = visit
 
-        // THE CODEX SEAM — LIVE for the Anthos card: actually run `codex exec` on its codexPrompt
-        // (real CodexCLI.run, with the user's Gmail MCP in scope, so the reply truly sends). The
-        // scripted theater below still plays for visual feedback; the real run happens in the
-        // background and its outcome is logged. Other cards stay pure demo — their prompts would
-        // attempt bogus sends.
-        if e.b.id == "anthos", let prompt = e.b.codexPrompt {
+        // THE CODEX SEAM — LIVE for the Anthos + Charles cards: actually run `codex exec` on the
+        // card's codexPrompt (real CodexCLI.run, with the user's Gmail MCP in scope, so the reply
+        // truly sends). The scripted theater below still plays for visual feedback; the real run
+        // happens in the background and its outcome is logged. (Charles replies-all into the real
+        // "EWOR | Introducing Jesai & Charles" thread — see its codexPrompt.) Other cards stay
+        // pure demo — their prompts would attempt bogus sends.
+        if e.b.id == "anthos" || e.b.id == "charles", let prompt = e.b.codexPrompt {
             Task.detached(priority: .utility) { await Self.fireLiveCodex(prompt) }
         }
 
@@ -367,11 +371,12 @@ final class ForYouModel {
         }
     }
 
-    /// Live CODEX SEAM test (Anthos card): run the prompt through the real `codex exec` spine.
-    /// The user's Gmail MCP rides the CodexCLI defaults; `bypassApprovals` lets the connector's
-    /// approval-gated `send_email` actually fire headless. Outcome → `Log()` (tail /tmp/sentient-dev.log).
+    /// Live CODEX SEAM (Anthos + Charles cards): run the card's codexPrompt through the real
+    /// `codex exec` spine. The user's Gmail MCP rides the CodexCLI defaults; `bypassApprovals`
+    /// lets the connector's approval-gated `send_email` actually fire headless. Outcome → `Log()`
+    /// (tail /tmp/sentient-dev.log).
     nonisolated static func fireLiveCodex(_ prompt: String) async {
-        Log("Home/codex: firing live codex exec (Anthos → Gmail MCP)…")
+        Log("Home/codex: firing live codex exec (Gmail MCP send)…")
         do {
             var inv = CodexCLI.Invocation(prompt: prompt)
             inv.effort = .high                  // gpt-5.5 → high
@@ -384,6 +389,36 @@ final class ForYouModel {
             Log("Home/codex: --- full JSONL (debug) ---\n\(env.raw)\n--- end JSONL ---")
         } catch {
             Log("Home/codex: ✗ failed — \(error)")
+        }
+    }
+
+    /// DEMO — the command bar's send button: regardless of what's typed (or the mode), fire a
+    /// Codex COMPUTER-USE run that first READS the user's Sentient OS knowledge base for context,
+    /// then opens WhatsApp and sends Aditya Hemanth a summary of Sentient OS it composes from that
+    /// knowledge base. (Computer use is the WIP CLI path — see `CodexCLI.runComputerUse`.) → `Log()`.
+    nonisolated static func fireComputerUseDemo() async {
+        let kbPath = "/Users/jesaitarun/Sentient OS - Knowledge Base"
+        let prompt = """
+        First, read the user's Sentient OS knowledge base to learn what Sentient OS is. Read the markdown files in "\(kbPath)" — especially "README.md" and "Sentient OS/Product & Vision/Sentient OS - What It Is.md" (the canonical, current product description).
+
+        Then, using computer use, open WhatsApp, go to Aditya Hemanth's chat, and send him a great, warm summary of what Sentient OS is — about two short paragraphs, in Jesai's first-person voice (enthusiastic, with a casual ":)"). Lead with Proactive Intelligence (Sentient *does things for you* — drafts the reply you forgot, registers you for things, runs tasks via browser use and computer use), and mention the private knowledge base offered to all your AIs as the foundation it stands on. Compose the message yourself from the knowledge base — do not ask for confirmation, just send it.
+        """
+        Log("──────── 🖥️ COMPUTER USE · WhatsApp → Aditya Hemanth ────────")
+        Log("CU: launching codex exec (gpt-5.5 · computer use · bypass sandbox)…")
+        Log("CU: prompt ↓\n\(prompt)")
+        Log("──────────────── live codex output ↓ ────────────────")
+        let started = Date()
+        do {
+            let output = try await CodexCLI.shared.runComputerUse(prompt) { line in
+                Log("CU │ \(line)")     // streams each codex line to the Xcode console live
+            }
+            let secs = Int(Date().timeIntervalSince(started))
+            Log("──────── 🖥️ COMPUTER USE ✓ DONE in \(secs)s ────────")
+            Log("CU: final → \(output.suffix(1200))")
+        } catch {
+            let secs = Int(Date().timeIntervalSince(started))
+            Log("──────── 🖥️ COMPUTER USE ✗ FAILED after \(secs)s ────────")
+            Log("CU: \(error)")
         }
     }
 

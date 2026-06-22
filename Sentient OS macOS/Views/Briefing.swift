@@ -93,14 +93,110 @@ struct Briefing: Identifiable {
         Jesai
         """
 
+    /// The EXACT reply we send Charles — shared by the Charles card's draft PREVIEW and its
+    /// `codexPrompt` (the live reply-all into the real "EWOR | Introducing Jesai & Charles"
+    /// thread), so the preview and the sent email can never drift.
+    private static let charlesReply = """
+        Hey Charles,
+
+        Really excited to meet you! :)
+        Thanks so much for making the time.
+
+        I'm in SF (PDT), and I'm happy to work around your schedule. For reference:
+        - I can make any time Monday work, until 4:30 PM
+        - I can make any time Tuesday work
+
+        I'll also send some materials before the call.
+
+        Looking forward to it,
+        Jesai
+        """
+
     static let demo: [Briefing] = [
         Briefing(
-            id: "anthos", kind: .overdue,
-            kicker: "Overdue · 6 days · Gmail",
-            title: "You still haven't replied to Anthos Capital.",
-            body: "Serena emailed six days ago — $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
+            id: "charles", kind: .deadline,
+            kicker: "Reply · 2 days · Gmail",
+            title: "Charles is waiting on your timeslots.",
+            body: "Daniel introduced you to Charles Ferguson — he sold companies to Microsoft and Oracle, pre-seeded Higgsfield, and won an Oscar. I checked your calendar and drafted your reply.",
             letter: """
-            Serena Saxena from Anthos Capital emailed six days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
+            Daniel introduced you to Charles Ferguson for your next EWOR interview — he sold companies to **Microsoft** and **Oracle**, pre-seeded **Higgsfield** (€500M ARR in a year), and won an **Oscar**.
+
+            He cc'd his assistant Emily to schedule and asked for any materials — a deck or a memo. So I checked your calendar for **Monday and Tuesday**, found your open windows, and wrote your reply: a few timeslots and a memo offer.
+            """,
+            draft: Briefing.charlesReply,
+            draftLabel: "Draft reply · Gmail",
+            detailLabel: "read the draft",
+            offer: "Should I send it for you?",
+            workLog: ["→ reading Charles's note",
+                      "→ checking Monday & Tuesday for open slots",
+                      "→ opening Gmail",
+                      "→ composing your reply…",
+                      "✓ sent"],
+            doneTitle: "Sent to Charles.",
+            doneBody: "Emily has your availability — and materials are on the way.",
+            codexPrompt: """
+            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
+
+            Use the Gmail MCP to open the thread titled "EWOR | Introducing Jesai & Charles". In that thread, find the message from Charles Ferguson (chf@cferguson.com) whose body STARTS WITH "Thank you, Daniel, and moving you to bcc." REPLY-ALL to THAT message — include every recipient on it (all To and all Cc: Charles, his assistant Emily, and the EWOR "selection" address) so everyone Charles addressed receives the reply. Reply to CHARLES'S message specifically (NOT Daniel's earlier intro) so the reply respects that Charles moved Daniel to bcc — do not add Daniel. Send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
+
+            \(Briefing.charlesReply)
+
+            Send this reply-all now via the Gmail MCP — the user has already approved it. Do not ask, do not draft-and-wait; complete the send, then report exactly who it went to (the full To and Cc list).
+
+            FORMATTING: send it as an HTML email (set the send tool's content_type to "text/html"). Put each paragraph in its own <p>…</p> tag; render the two "I can make any time…" lines as a <ul><li>…</li></ul> list; write the sign-off as "Looking forward to it,<br>Jesai". Keep every word — including ":)" and "4:30 PM" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph.
+            """),
+
+        Briefing(
+            id: "fareed", kind: .meeting,
+            kicker: "Prep · 4:30 PM tomorrow · Researched",
+            title: "Prepare for your call with Fareed from Speedrun.",
+            body: "Remember: Josh Lu wanted Fareed to be your a16z Speedrun partner. I've researched and found that GTM strategy matters a lot to him. Here's a doc that'll help you prepare for your call.",
+            letter: """
+            Your call with Fareed is tomorrow at 4:30 PM. Josh Lu wanted him as your a16z Speedrun partner — and once I read Fareed's background, it's obvious why. I pulled the highlights that'll get you ready.
+
+            ✦ **Why Josh connected you: he OWNED GTM at Slack.** Fareed was Director of Product for Lifecycle and the revenue owner for Slack's self-serve business — acquisition, activation, retention, monetization: the whole PLG engine at the company that *defined* bottoms-up growth. Sentient's free-forever consumer wedge is exactly his world. Speak his language — growth loops, activation, the path from a loved free product to revenue.
+
+            ✦ **He literally wrote about a thesis behind your product.** His recent post — *"Agent-native products are coming"*: *"Every product on the internet was built for a human with eyes, a cursor, and a credit card. Agents have none of those. The real opportunity is products designed for agents from scratch."* That is core to Sentient — an agent-native knowledge base your whole life feeds, offered to your AIs for Proactive Intelligence. Open here; he'll feel seen, and you'll prove you did the work.
+
+            ✦ **He thinks in product strategy — so be crisp.** At Reforge he built, with Casey Winters, the Product Strategy program that's now their **#1**. Expect him to probe your strategic spine: consumer free-forever as the loved wedge, the enterprise per-employee intelligence layer as the business, the on-device moat that makes both possible. Have the one-becomes-the-other story tight.
+
+            ✦ **Lead with distribution proof.** He loves network effects and growth loops, so the Reddit moment lands hard: **2,500+ waitlist signups in 24 hours, $0 spent.** That's the organic growth-loop evidence he's wired to respond to.
+
+            Walk in as the agent-native, PLG-native founder he's been writing about. — your Sentient
+            """,
+            detailLabel: "read the prep doc",
+            offer: nil,
+            doneTitle: "", doneBody: ""),
+
+        Briefing(
+            id: "aim", kind: .promise,
+            kicker: "Press · Early next week · WhatsApp",
+            title: "AIM India wants your voice.",
+            body: "Supreeth wants to interview you on Apple's Siri AI — and offered to cover the Sentient launch. He asked if you're free early next week. Reply's drafted.",
+            letter: """
+            Supreeth from AIM (Analytics India Magazine) reached out — he wants you as an expert voice on Apple's Siri AI, and offered to cover the Sentient OS launch while he's at it. Two birds.
+
+            He asked if you're free early next week. You are — your week's wide open. Say the word and I'll send your yes.
+            """,
+            draft: "Hi Supreeth! Would love to — early next week works great on my end. And thank you for offering to cover the Sentient OS launch; happy to give you a hands-on look. Talk soon!",
+            draftLabel: "Draft reply · WhatsApp",
+            detailLabel: "read the draft",
+            offer: "Reply & lock it in?",
+            workLog: ["→ opening WhatsApp",
+                      "→ finding Supreeth (AIM India)",
+                      "→ confirming early next week…",
+                      "✓ replied"],
+            doneTitle: "You're on with AIM.",
+            doneBody: "Confirmed for early next week — Supreeth's expecting you.",
+            codexPrompt: "Reply to Supreeth (AIM India) on WhatsApp with the approved draft confirming the interview early next week."),
+
+        Briefing(
+            id: "anthos", kind: .overdue,
+            kicker: "Overdue · 2 days · Gmail",
+            title: "You need to reply to Anthos Capital.",
+            body: "Serena emailed two days ago — $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
+            letter: """
+            Serena Saxena from Anthos Capital emailed two days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
 
             She's in LA and asked for time early this week. You went quiet. Let's fix that — the draft's below, warm and ready.
             """,
@@ -150,115 +246,23 @@ struct Briefing: Identifiable {
             codexPrompt: "Reply to Luis Schmitz on iMessage with the approved draft, then create the calendar event 'Lunch @ Presidio — Jesai x Luis' for next Wednesday 1 PM at 101 Montgomery St (Presidio)."),
 
         Briefing(
-            id: "aim", kind: .promise,
-            kicker: "Press · 10 AM tomorrow · WhatsApp",
-            title: "AIM India wants your voice.",
-            body: "Supreeth wants to interview you on Apple's Siri AI — and offered to cover the Sentient launch. He asked if you're free at 10 AM tomorrow. Reply's drafted.",
+            id: "welcome", kind: .welcome,
+            kicker: "Welcome · Read across your whole life",
+            title: "A gift — connections across your life.",
+            body: "Three patterns you might not have seen yourself — visible only with everything in one place.",
             letter: """
-            Supreeth from AIM (Analytics India Magazine) reached out — he wants you as an expert voice on Apple's Siri AI, and offered to cover the Sentient OS launch while he's at it. Two birds.
+            I read **1,704 things** across your life last night. Three patterns you might not have seen yourself:
 
-            He asked if you're free tomorrow at 10 AM PST. You are — your morning is clear. Say the word and I'll send your yes.
+            ✦ **You never accept defaults.** Your iPhone ran **iPadOS** — WIRED noticed. Macs got **Apple Intelligence** before Apple shipped it, because you ported it. Your playlists skip the charts — and now you're routing around **college** itself.
+
+            ✦ **You spec hardware in numbers and music in feelings.** RAM chosen by the gigabyte for local LLMs; playlists curated for **“mood, tears, goosebumps.”**
+
+            ✦ **Your optimization points outward.** The systems you engineer for yourself show up rebuilt as **study systems for Jacob**, 8,000 miles away.
+
+            I'll keep watch from here. — **your Sentient**
             """,
-            draft: "Hi Supreeth! Would love to — 10 AM PST tomorrow works perfectly. And thank you for offering to cover the Sentient OS launch; happy to give you an early, hands-on look. Talk then!",
-            draftLabel: "Draft reply · WhatsApp",
-            detailLabel: "read the draft",
-            offer: "Reply & lock it in?",
-            workLog: ["→ opening WhatsApp",
-                      "→ finding Supreeth (AIM India)",
-                      "→ confirming 10 AM tomorrow…",
-                      "✓ replied"],
-            doneTitle: "You're on with AIM.",
-            doneBody: "Confirmed for 10 AM — Supreeth's expecting you.",
-            codexPrompt: "Reply to Supreeth (AIM India) on WhatsApp with the approved draft confirming the 10 AM PST interview tomorrow."),
-
-        Briefing(
-            id: "zfellows", kind: .deadline,
-            kicker: "Deadline · 8 days · Browser agent",
-            title: "ZFellows closes in 8 days.",
-            body: "You bookmarked the Dropout Graduation but never registered. The form needs your name, school, and what you're building — I have all three.",
-            letter: """
-            You bookmarked the ZFellows Dropout Graduation three weeks ago and never registered. It closes in 8 days.
-
-            The form is short: name, school, and what you're building. I have all three — say the word and an agent fills it while you watch.
-            """,
-            detailLabel: nil,
-            offer: "Want an agent to register you?",
-            workLog: ["→ launching a browser agent",
-                      "→ zfellows.com/dropout-graduation",
-                      "→ name: Jesai Tarun · school: UMass Amherst",
-                      "→ building: Sentient OS",
-                      "→ submitting the form…",
-                      "✓ registered — confirmation in your inbox"],
-            doneTitle: "You're registered.",
-            doneBody: "The ZFellows confirmation is in your inbox.",
-            codexPrompt: "Use the browser to open the ZFellows Dropout Graduation registration and submit it for Jesai Tarun, UMass Amherst, building Sentient OS."),
-
-        Briefing(
-            id: "fareed", kind: .meeting,
-            kicker: "Prep · 1 PM today · Researched",
-            title: "Prepare for your call with Fareed.",
-            body: "I've researched and found that GTM strategy matters a lot to him. Here's a doc that'll help you prepare for your call.",
-            letter: """
-            Your call with Fareed is today at 1 PM. Josh Lu wanted him as your a16z Speedrun partner — and once I read Fareed's background, it's obvious why. I pulled the highlights that'll get you ready.
-
-            ✦ **Why Josh connected you: he OWNED GTM at Slack.** Fareed was Director of Product for Lifecycle and the revenue owner for Slack's self-serve business — acquisition, activation, retention, monetization: the whole PLG engine at the company that *defined* bottoms-up growth. Sentient's free-forever consumer wedge is exactly his world. Speak his language — growth loops, activation, the path from a loved free product to revenue.
-
-            ✦ **He literally wrote about a thesis behind your product.** His recent post — *"Agent-native products are coming"*: *"Every product on the internet was built for a human with eyes, a cursor, and a credit card. Agents have none of those. The real opportunity is products designed for agents from scratch."* That is core to Sentient — an agent-native knowledge base your whole life feeds, offered to your AIs for Proactive Intelligence. Open here; he'll feel seen, and you'll prove you did the work.
-
-            ✦ **He thinks in product strategy — so be crisp.** At Reforge he built, with Casey Winters, the Product Strategy program that's now their **#1**. Expect him to probe your strategic spine: consumer free-forever as the loved wedge, the enterprise per-employee intelligence layer as the business, the on-device moat that makes both possible. Have the one-becomes-the-other story tight.
-
-            ✦ **Lead with distribution proof.** He loves network effects and growth loops, so the Reddit moment lands hard: **2,500+ waitlist signups in 24 hours, $0 spent.** That's the organic growth-loop evidence he's wired to respond to.
-
-            Walk in as the agent-native, PLG-native founder he's been writing about. — your Sentient
-            """,
-            detailLabel: "read the prep doc",
-            offer: nil,
-            doneTitle: "", doneBody: ""),
-
-        Briefing(
-            id: "ewor", kind: .plan,
-            kicker: "Prep · 11 AM today · Researched",
-            title: "Prepare for your call with Daniel, CEO of EWOR.",
-            body: "Somya Gupta nominated you for the EWOR Fellowship — and Daniel Dippold, its founder & CEO, wants 15 minutes today at 11 AM. I researched him and EWOR and pulled together what'll get you ready.",
-            letter: """
-            Your EWOR selection interview is today — 11:00–11:15 AM PDT, on Zoom (it moved up from 10:45). Somya Gupta nominated you, and you're meeting Daniel Dippold, EWOR's founder & CEO. He called it casual, but it's 15 minutes and it's selective — so walk in sharp.
-
-            ✦ **Know your room.** Daniel is a mathematician-turned-founder: raised **$100M** in his twenties, angel in **7 unicorns**, and built three organizations still thriving — EWOR, New Now Group, Sigma Squared. He rewards technical depth and outlier conviction — lead with the on-device moat and your all-in, drop-out resolve.
-
-            ✦ **Speak EWOR's language.** They back the **top 0.1%** of founders building transformative tech — up to **€500K** immediate, plus weekly 1:1 coaching from unicorn founders (Adjust, ProGlove, SumUp). No standard playbooks; they tailor to each founder. Frame Sentient as exactly that non-linear, outlier bet.
-
-            ✦ **Your 15-minute arc.** Open with the Reddit moment — **2,500+ waitlist signups in 24 hours, $0 spent**. Then the wedge: consumer free-forever as the loved foothold, the enterprise per-employee intelligence layer as the business. Close on why now, and why you.
-
-            Somya put their name on you — make it land. — **your Sentient**
-            """,
-            detailLabel: "read the prep doc",
+            detailLabel: "read it again",
             offer: nil,
             doneTitle: "", doneBody: ""),
     ]
-
-    /// PARKED — the original "gift from your Sentient" welcome letter (the wax-sealed envelope card).
-    /// Deliberately kept OUT of the `demo` deck above so it doesn't show in the UI right now, but
-    /// preserved verbatim so it's one line away from returning: drop `Briefing.welcomeGift` back into
-    /// `demo`. Its envelope visuals (`EnvelopeFace`, `welcomeGradient`, the `.sealed` phase) are still
-    /// intact in BriefingCard.swift. NOTE: re-adding makes a 7-card deck — extend `slots(count:)` in
-    /// HomeView (it only defines layouts up to 6), or swap it back in for another card to stay at 6.
-    static let welcomeGift = Briefing(
-        id: "welcome", kind: .welcome,
-        kicker: "Welcome · Read across your whole life",
-        title: "A gift — connections across your life.",
-        body: "Three patterns you might not have seen yourself — visible only with everything in one place.",
-        letter: """
-        I read **1,704 things** across your life last night. Three patterns you might not have seen yourself:
-
-        ✦ **You never accept defaults.** Your iPhone ran **iPadOS** — WIRED noticed. Macs got **Apple Intelligence** before Apple shipped it, because you ported it. Your playlists skip the charts — and now you're routing around **college** itself.
-
-        ✦ **You spec hardware in numbers and music in feelings.** RAM chosen by the gigabyte for local LLMs; playlists curated for **“mood, tears, goosebumps.”**
-
-        ✦ **Your optimization points outward.** The systems you engineer for yourself show up rebuilt as **study systems for Jacob**, 8,000 miles away.
-
-        I'll keep watch from here. — **your Sentient**
-        """,
-        detailLabel: "read it again",
-        offer: nil,
-        doneTitle: "", doneBody: "")
 }

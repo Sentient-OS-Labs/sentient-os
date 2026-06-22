@@ -16,6 +16,7 @@ struct GlowButton: View {
     var active: Bool = true
     var reversed: Bool = false       // spin the halo the other direction
     var colors: [Color]? = nil       // custom halo palette (nil = default warm stops)
+    var glowIntensity: Double = 0.85 // halo opacity when active (lower = subtler glow)
     let action: () -> Void
 
     var body: some View {
@@ -31,7 +32,7 @@ struct GlowButton: View {
             .overlay(Capsule(style: .continuous).stroke(active ? .clear : Color.white.opacity(0.1), lineWidth: 1))
         }
         .buttonStyle(GlowPressStyle())
-        .background(GlowHalo(active: active, reversed: reversed, colors: colors))
+        .background(GlowHalo(active: active, reversed: reversed, colors: colors, intensity: glowIntensity))
         .disabled(!active)
         .animation(.easeInOut(duration: 0.4), value: active)
     }
@@ -51,6 +52,7 @@ struct GlowHalo: View {
     let active: Bool
     var reversed: Bool = false
     var colors: [Color]? = nil
+    var intensity: Double = 0.85     // halo opacity when active
 
     /// The canonical warm→cool AI-gradient stops (shared: the Analyze Now CTA + the For You
     /// command bar's glow both use these).
@@ -78,7 +80,7 @@ struct GlowHalo: View {
                     .blur(radius: 24)
                     .offset(x: -16, y: -16)
             }
-            .opacity(active ? 0.85 : 0)
+            .opacity(active ? intensity : 0)
             .animation(.easeInOut(duration: 0.6), value: active)
         }
         .allowsHitTesting(false)
