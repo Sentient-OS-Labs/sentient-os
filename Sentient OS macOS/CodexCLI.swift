@@ -227,6 +227,26 @@ actor CodexCLI {
         return try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
     }
 
+    /// DEMO (command-bar computer use): run a raw `codex exec` with the prompt passed as ARGV and
+    /// the minimal flag set that currently makes Codex's computer use work via the CLI —
+    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.5 --skip-git-repo-check`, NO `--json`
+    /// (human-readable output, not JSONL). Each output LINE is pumped to `onLine` AS it arrives, so
+    /// the Xcode console shows codex's play-by-play live. Reuses the sanitized-env / PATH / watchdog
+    /// plumbing; the binary comes from the same discovery (`~/.local/bin/codex` first). Returns the
+    /// full output. Fire-and-forget — computer use is the WIP CLI path.
+    func runComputerUse(_ prompt: String, timeout: TimeInterval = 1_800,
+                        onLine: @escaping @Sendable (String) -> Void) async throws -> String {
+        guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+        let args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
+                    "-m", Model.gpt54mini.rawValue, "--skip-git-repo-check", prompt]
+        let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
+        guard out.status == 0 else {
+            let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+            throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
+        }
+        return out.stdout.isEmpty ? out.stderr : out.stdout
+    }
+
     /// `exec resume` accepts only a subset of `exec`'s flags — no `-s`/`--cd`/`--add-dir`.
     /// [MEASURED] A resumed session's workspace root is the PROCESS cwd (not the remembered
     /// one), so `execute`'s cwd is load-bearing there, and the sandbox rides the
@@ -433,5 +453,83 @@ actor CodexCLI {
 
         if timedOut.withLock({ $0 }) { throw CLIError.timedOut(after: timeout) }
         return ExecResult(status: proc.terminationStatus, stdout: outDrain.text, stderr: errDrain.text)
+    }
+
+    /// Thread-safe append-only text accumulator for the streaming runner.
+    private final class LineSink: @unchecked Sendable {
+        private let lock = NSLock()
+        private var s = ""
+        func append(_ piece: String) { lock.lock(); s += piece; lock.unlock() }
+        var text: String { lock.lock(); defer { lock.unlock() }; return s }
+    }
+
+    /// Streaming sibling of `execute`: same sanitized env / PATH / watchdog, but it pumps each
+    /// output LINE (stdout and stderr) to `onLine` as it arrives — so the console shows codex's
+    /// computer-use play-by-play live — while also accumulating the full text. No stdin (the
+    /// computer-use prompt rides in argv). Byte-level line splitting so multibyte UTF-8 that
+    /// straddles a read boundary never garbles.
+    private static func executeStreaming(binary: String, args: [String], timeout: TimeInterval,
+                                         onLine: @escaping @Sendable (String) -> Void) async throws -> ExecResult {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: binary)
+                proc.arguments = args
+                let binDir = (binary as NSString).deletingLastPathComponent
+                var env: [String: String] = [:]
+                let current = ProcessInfo.processInfo.environment
+                for key in ["HOME", "USER"] where current[key] != nil { env[key] = current[key] }
+                env["PATH"] = [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
+                proc.environment = env
+
+                let outPipe = Pipe(), errPipe = Pipe()
+                proc.standardInput = FileHandle.nullDevice
+                proc.standardOutput = outPipe
+                proc.standardError = errPipe
+
+                let outSink = LineSink(), errSink = LineSink()
+                let group = DispatchGroup()
+                for (pipe, sink, prefix) in [(outPipe, outSink, ""), (errPipe, errSink, "stderr: ")] {
+                    group.enter()
+                    DispatchQueue.global(qos: .utility).async {
+                        var buf = Data()
+                        let handle = pipe.fileHandleForReading
+                        while true {
+                            let chunk = handle.availableData     // blocks until data, empty = EOF
+                            if chunk.isEmpty { break }
+                            buf.append(chunk)
+                            while let nl = buf.firstIndex(of: 0x0A) {
+                                let line = String(decoding: buf[..<nl], as: UTF8.self)
+                                buf = Data(buf[buf.index(after: nl)...])   // fresh 0-based remainder
+                                sink.append(line + "\n")
+                                onLine(prefix + line)
+                            }
+                        }
+                        if !buf.isEmpty {                          // trailing partial line (no newline)
+                            let line = String(decoding: buf, as: UTF8.self)
+                            sink.append(line)
+                            onLine(prefix + line)
+                        }
+                        group.leave()
+                    }
+                }
+
+                do { try proc.run() } catch { cont.resume(throwing: CLIError.launchFailed("\(error)")); return }
+
+                let timedOut = OSAllocatedUnfairLock(initialState: false)
+                let watchdog = DispatchWorkItem { [weak proc] in
+                    timedOut.withLock { $0 = true }; proc?.terminate()
+                }
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
+
+                proc.waitUntilExit()
+                watchdog.cancel()
+                group.wait()
+
+                if timedOut.withLock({ $0 }) { cont.resume(throwing: CLIError.timedOut(after: timeout)); return }
+                cont.resume(returning: ExecResult(status: proc.terminationStatus,
+                                                  stdout: outSink.text, stderr: errSink.text))
+            }
+        }
     }
 }
