@@ -494,6 +494,8 @@ final class CommandRunModel {
         """
         Using \(mode.promptPhrase), \(task)
 
+        NEVER use AppleScript (or osascript, shell automation, etc.) to do your work — use your \(mode.promptPhrase) to do the task.
+
         My knowledge base is at '\(VaultGenerator.vaultRoot.path)'.
         """
     }
