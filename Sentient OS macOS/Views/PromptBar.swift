@@ -29,8 +29,13 @@ nonisolated enum AgentMode: String, CaseIterable {
 }
 
 struct PromptBar: View {
-    /// DEMO SEAM — fired when the user sends. Real execution routes (text, mode) → CodexCLI.
+    /// Fired when the user sends — routes (text, mode) → the command run (CommandRunModel.start).
     var onSend: (String, AgentMode) -> Void = { _, _ in }
+    /// Fired when the user taps STOP during a live run.
+    var onStop: () -> Void = {}
+    /// While running, the bar shows codex's live `statusLine` and the send button becomes STOP.
+    var isRunning: Bool = false
+    var statusLine: String = ""
 
     @State private var text = ""
     @State private var mode: AgentMode = .computer
@@ -40,31 +45,53 @@ struct PromptBar: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            ModeToggle(mode: $mode)
-
-            ZStack(alignment: .leading) {
-                if trimmed.isEmpty { placeholder }
-                TextField("", text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.white)
-                    .tint(Theme.accent)
-                    .lineLimit(1...4)
-                    .focused($focused)
-                    .onSubmit(send)
+            if isRunning {
+                runningArea
+                StopButton(action: onStop)
+            } else {
+                ModeToggle(mode: $mode)
+                inputArea
+                SendButton(active: !trimmed.isEmpty, action: send)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .onTapGesture { focused = true }
-
-            SendButton(active: !trimmed.isEmpty, action: send)
         }
         .padding(.leading, 14)
         .padding(.trailing, 11)
         .padding(.vertical, 11)
         .background(field)
-        .background(PromptGlow(intensity: focused ? 0.55 : 0.32))
+        .background(PromptGlow(intensity: isRunning ? 0.7 : (focused ? 0.55 : 0.32)))
         .animation(.easeInOut(duration: 0.4), value: focused)
+        .animation(.easeInOut(duration: 0.35), value: isRunning)
+    }
+
+    /// Idle: the editable input (bright "DO" placeholder + the text field).
+    private var inputArea: some View {
+        ZStack(alignment: .leading) {
+            if trimmed.isEmpty { placeholder }
+            TextField("", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 14))
+                .foregroundStyle(.white)
+                .tint(Theme.accent)
+                .lineLimit(1...4)
+                .focused($focused)
+                .onSubmit(send)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .onTapGesture { focused = true }
+    }
+
+    /// Running: the living orb + codex's latest line(s) — monospace, dimmed, ≤2 lines.
+    private var runningArea: some View {
+        HStack(spacing: 10) {
+            OrbMark(size: 16)
+            Text(statusLine.isEmpty ? "Working…" : statusLine)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.72))
+                .lineLimit(2).truncationMode(.tail)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(.easeInOut(duration: 0.2), value: statusLine)
+        }
     }
 
     private func send() {
@@ -154,6 +181,26 @@ private struct SendButton: View {
         .shadow(color: Theme.accent.opacity(active ? 0.55 : 0), radius: 11)
         .disabled(!active)
         .animation(.easeInOut(duration: 0.25), value: active)
+    }
+}
+
+// MARK: - The stop button (replaces send while a run is live)
+
+private struct StopButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "stop.fill")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(Color.white.opacity(0.16)))
+                .overlay(Circle().strokeBorder(.white.opacity(0.22), lineWidth: 1))
+        }
+        .buttonStyle(PressScaleStyle())
+        .shadow(color: Theme.accent.opacity(0.40), radius: 9)
+        .help("Stop")
     }
 }
 
