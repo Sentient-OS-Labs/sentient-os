@@ -1,6 +1,7 @@
 # Gmail Connector (Codex)
 
-Gmail is the **lone cloud source**. It can't be read on-device (no local DB), so we both **fetch and
+Gmail is the **first cloud source** (Google Calendar is the second — see `Calendar Connector
+(Codex).md`; same shape). It can't be read on-device (no local DB), so we both **fetch and
 summarize** it through the user's own **Codex Gmail connector** — OpenAI's account-level
 `codex_apps/gmail.*` tools, reached by `codex exec`. No on-device model touches Gmail.
 

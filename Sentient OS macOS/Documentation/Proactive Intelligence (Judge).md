@@ -22,13 +22,19 @@ PART 1 is a **hermetic, summaries-only** Codex call (gpt-5.5, **high** effort �
 call runs high; this judgment is the product) that reads ONE input and ranks it:
 
 - **The last 7 days of summaries** from every source — files, WhatsApp, iMessage, Apple Notes,
-  and Gmail — passed over stdin. Each line: `#n · [source] location · date` then
+  Gmail, and Calendar — passed over stdin. Each line: `#n · [source] location · date` then
   `Title — summary`. "What just happened." (Windowed inside `findActionItems` by each note's
   `itemDate`; the date is reliably present on every summary (`CycleNote.itemDate`).)
+- **The live calendar, when Calendar is connected** — a `## THE USER'S LIVE CALENDAR` block (last 7
+  days + next 24 hours, ALL events) passed as the `calendarContext:` parameter. It's fetched **ahead
+  of time as plain text** (`CalendarConnect.fetchProactiveContext`), so PART 1 still runs with no
+  tools — it just gets the calendar as extra grounding for time-sensitivity (prep for tomorrow's
+  meeting, a free slot that unblocks a proposal). Omitted entirely when Calendar isn't connected.
 
-PART 1 deliberately uses **NO tools** — no vault reads, no Gmail MCP, no web search. The call is run
-hermetic (`includeUserConfig = false`, `webSearch = false`) over a neutral empty scratch dir as `cwd`,
-so even the read-only file tools have nothing to find: it judges from the summaries ALONE. The deep
+PART 1 deliberately uses **NO tools** — no vault reads, no Gmail/Calendar MCP, no web search. The call
+is run hermetic (`includeUserConfig = false`, `webSearch = false`) over a neutral empty scratch dir as
+`cwd`, so even the read-only file tools have nothing to find: it judges from the summaries (plus the
+pre-fetched calendar text) ALONE. The deep
 grounding — vault + Gmail MCP + web — is **PART 2's** job, and PART 2 is **verify-only**: it can
 correct, enrich, or DROP a PART 1 item, but never add a new one. That makes PART 1's shortlist the
 ceiling, so it casts for the genuinely strongest candidates from the summaries (no padding).
@@ -102,8 +108,11 @@ Two inviolable rules, enforced in the prompt AND the invocation:
 
 Research surfaces (all read-only): the **knowledge base** (`cwd` — identity anchor + the user's
 **voice** + the facts a draft/form needs), the **Gmail MCP** if connected (read the live thread; skip
-gracefully + mark `unverified` if absent), **web search** (external facts, identity-matched), and a
-**browser** to *inspect* only if a browser tool is present.
+gracefully + mark `unverified` if absent), **web search** (external facts, identity-matched), the
+**live-calendar context** (the same `calendarContext:` block as PART 1 — pre-fetched receipts to
+confirm free/busy, an event's real time, or that something's already on the calendar; PART 2 may also
+call the Calendar MCP to read a specific event in detail), and a **browser** to *inspect* only if a
+browser tool is present.
 
 `CodexCLI.Invocation`: `effort .high`, `sandbox .readOnly`, `cwd = vault`, `webSearch = true`,
 `includeUserConfig = true`, `bypassApprovals = false`, `outputSchema`, `timeout 1800s`. Output via
