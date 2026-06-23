@@ -66,6 +66,14 @@ struct PermissionsView: View {
 
                 Button("Open Automation Settings") { Permissions.openAutomationSettings() }
                     .buttonStyle(.bordered).tint(.white)
+
+                Spacer()
+
+                // Wipe this app's automation entries → clean slate to re-test granting.
+                Button(role: .destructive, action: revoke) {
+                    Label("Revoke (reset)", systemImage: "trash").font(.caption2)
+                }
+                .buttonStyle(.borderless).controlSize(.small)
             }
 
             if let cuStatus {
@@ -86,6 +94,16 @@ struct PermissionsView: View {
         do {
             let receipt = try Permissions.grantComputerUseAutomation()
             cuStatus = "✓ \(receipt) — now run a computer-use command."
+        } catch {
+            cuStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+        }
+    }
+
+    /// Wipe this app's Automation grants (TCC) so the grant flow can be re-tested from scratch.
+    private func revoke() {
+        do {
+            let n = try Permissions.revokeAutomationGrants()
+            cuStatus = "✓ revoked \(n) automation entr\(n == 1 ? "y" : "ies") for this app — re-grant to test again."
         } catch {
             cuStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
         }
