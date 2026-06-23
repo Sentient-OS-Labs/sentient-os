@@ -36,6 +36,7 @@ struct HomeView: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var model = ForYouModel()
+    @State private var commandRun = CommandRunModel()   // the command bar's live run (stream + STOP)
     // The letter layer is ALWAYS mounted and driven purely by opacity/scale from plain
     // @State — view INSERTION (`if let` overlays) can miss a redraw on macOS hidden-titlebar
     // windows (the "appears only after a resize" bug); opacity changes cannot.
@@ -213,12 +214,10 @@ struct HomeView: View {
 
     private var bottomDock: some View {
         VStack(spacing: 16) {
-            PromptBar { text, mode in
-                // The command bar fires the user's OWN typed task through codex — computer use OR
-                // browser use, where the mode is just a word swapped into the prompt. See
-                // ForYouModel.fireCommand / commandPrompt.
-                Task.detached(priority: .utility) { await ForYouModel.fireCommand(text, mode: mode) }
-            }
+            PromptBar(onSend: { text, mode in commandRun.start(text, mode: mode) },
+                      onStop: { commandRun.stop() },
+                      isRunning: commandRun.isRunning,
+                      statusLine: commandRun.statusLine)
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
                 Text("Private by design. Your files never leave this Mac.")
@@ -392,49 +391,6 @@ final class ForYouModel {
         }
     }
 
-    /// The command bar's send button — fire the user's OWN typed task through codex, picking the
-    /// agent channel by the toggle. Computer use vs browser use is ONLY a word in the prompt
-    /// ("Using <mode.promptPhrase>, …"); both run the same `codex exec` (gpt-5.5, bypass sandbox)
-    /// via `CodexCLI.runAgentCommand`, which streams its play-by-play to the console. → `Log()`.
-    /// (Computer use is the WIP CLI path.)
-    nonisolated static func fireCommand(_ text: String, mode: AgentMode) async {
-        // Computer use spawns codex, which drives Codex's helper over an Apple Event macOS attributes
-        // to US — so the FIRST computer-use run surfaces a one-time "Sentient OS wants to control
-        // Codex Computer Use" consent prompt (Terminal/Warp already hold this grant). Just run it;
-        // codex raises the prompt itself. Approve it once via the command bar or DEV TOOLS →
-        // PERMISSIONS and every later run sails through.
-        let prompt = commandPrompt(task: text, mode: mode)
-        Log("──────── 🤖 \(mode.label.uppercased()) · command bar ────────")
-        Log("CMD: launching codex exec (gpt-5.5 · \(mode.promptPhrase) · bypass sandbox)…")
-        Log("CMD: prompt ↓\n\(prompt)")
-        Log("──────────────── live codex output ↓ ────────────────")
-        let started = Date()
-        do {
-            let output = try await CodexCLI.shared.runAgentCommand(prompt) { line in
-                Log("CMD │ \(line)")     // streams each codex line to the Xcode console live
-            }
-            let secs = Int(Date().timeIntervalSince(started))
-            Log("──────── 🤖 \(mode.label.uppercased()) ✓ DONE in \(secs)s ────────")
-            Log("CMD: final → \(output.suffix(1200))")
-        } catch {
-            let secs = Int(Date().timeIntervalSince(started))
-            Log("──────── 🤖 \(mode.label.uppercased()) ✗ FAILED after \(secs)s ────────")
-            Log("CMD: \(error)")
-        }
-    }
-
-    /// Build the command-bar prompt, mirroring the verified-working CLI command: the toggle swaps
-    /// `mode.promptPhrase` ("computer use" / "browser use"); the typed task fills the rest; and the
-    /// knowledge-base path (resolved from `~`, never hardcoded) rides along so the agent can ground
-    /// the task in the user's life.
-    nonisolated static func commandPrompt(task: String, mode: AgentMode) -> String {
-        """
-        Using \(mode.promptPhrase), \(task)
-
-        My knowledge base is at '\(VaultGenerator.vaultRoot.path)'.
-        """
-    }
-
     /// Send a card flying along `v` (a flick's predicted translation), then reflow the scatter.
     func dismiss(_ id: String, toward v: CGSize) {
         guard entry(id) != nil else { return }
@@ -449,6 +405,97 @@ final class ForYouModel {
                 entries.removeAll { $0.id == id }
             }
         }
+    }
+}
+
+// MARK: - The command bar's run model (live codex stream + STOP)
+
+/// Drives the home command bar: runs the user's typed task through codex (computer / browser use —
+/// the mode is just a word in the prompt), streams the latest output line(s) into `statusLine` for
+/// the bar to show, and `stop()` cancels the run (terminating codex via CodexCLI's cancellation).
+/// One run at a time. Everything also goes to `Log()` (tail /tmp/sentient-dev.log).
+@MainActor @Observable
+final class CommandRunModel {
+    var isRunning = false
+    var statusLine = ""               // the latest 1–2 codex lines, shown in the bar while running
+    private var recent: [String] = []
+    private var task: Task<Void, Never>?
+
+    func start(_ text: String, mode: AgentMode) {
+        guard !isRunning else { return }
+        let task0 = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !task0.isEmpty else { return }
+        isRunning = true
+        recent = []
+        statusLine = "Starting \(mode.promptPhrase)…"
+        let prompt = Self.commandPrompt(task: task0, mode: mode)
+        Log("──────── 🤖 \(mode.label.uppercased()) · command bar ────────")
+        Log("CMD: launching codex exec (gpt-5.5 · \(mode.promptPhrase) · bypass sandbox)…")
+        Log("CMD: prompt ↓\n\(prompt)")
+        Log("──────────────── live codex output ↓ ────────────────")
+        let started = Date()
+        task = Task { [weak self] in
+            do {
+                let out = try await CodexCLI.shared.runAgentCommand(prompt) { line in
+                    Log("CMD │ \(line)")
+                    Task { @MainActor in self?.push(line) }
+                }
+                let secs = Int(Date().timeIntervalSince(started))
+                Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
+                Log("CMD: final → \(out.suffix(1200))")
+                self?.finish(success: true, line: "✓ done")
+            } catch {
+                let secs = Int(Date().timeIntervalSince(started))
+                if Task.isCancelled {
+                    Log("──────── 🤖 ■ STOPPED after \(secs)s ────────")
+                    self?.finish(success: false, line: "■ stopped")
+                } else {
+                    Log("──────── 🤖 ✗ FAILED after \(secs)s ────────")
+                    Log("CMD: \(error)")
+                    self?.finish(success: false, line: "✗ \(Self.short(error))")
+                }
+            }
+        }
+    }
+
+    func stop() {
+        guard isRunning else { return }
+        statusLine = "Stopping…"
+        task?.cancel()
+    }
+
+    private func push(_ line: String) {
+        guard isRunning else { return }
+        let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        recent.append(t)
+        if recent.count > 2 { recent.removeFirst() }
+        statusLine = recent.joined(separator: "\n")
+    }
+
+    private func finish(success: Bool, line: String) {
+        statusLine = line
+        isRunning = false
+        task = nil
+        Task { [weak self] in            // let the final status linger a moment, then clear the bar
+            try? await Task.sleep(for: .seconds(success ? 2.5 : 4.5))
+            if let self, !self.isRunning { self.statusLine = "" }
+        }
+    }
+
+    private static func short(_ error: Error) -> String {
+        String(((error as? LocalizedError)?.errorDescription ?? "\(error)").prefix(160))
+    }
+
+    /// Build the command-bar prompt, mirroring the verified-working CLI command: the toggle swaps
+    /// `mode.promptPhrase` ("computer use" / "browser use"); the typed task fills the rest; and the
+    /// knowledge-base path (resolved from `~`, never hardcoded) rides along as grounding context.
+    nonisolated static func commandPrompt(task: String, mode: AgentMode) -> String {
+        """
+        Using \(mode.promptPhrase), \(task)
+
+        My knowledge base is at '\(VaultGenerator.vaultRoot.path)'.
+        """
     }
 }
 

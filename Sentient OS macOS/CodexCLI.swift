@@ -231,7 +231,7 @@ actor CodexCLI {
     /// is just a word in the prompt the caller builds, NOT a flag here). Runs a raw `codex exec`
     /// with the prompt passed as ARGV and the exact flag set verified to make Codex's computer/
     /// browser use work via the CLI: `--dangerously-bypass-approvals-and-sandbox -m gpt-5.5
-    /// -c model_reasoning_effort="medium" --skip-git-repo-check`, NO `--json` (human-readable
+    /// -c model_reasoning_effort="low" --skip-git-repo-check`, NO `--json` (human-readable
     /// output, not JSONL). Each output LINE is pumped to `onLine` AS it arrives, so the Xcode
     /// console shows codex's play-by-play live. Reuses the sanitized-env / PATH / watchdog plumbing;
     /// the binary comes from the same discovery (`~/.local/bin/codex` first). The user's ~/.codex
@@ -242,7 +242,7 @@ actor CodexCLI {
         guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
         let args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", Model.gpt55.rawValue,
-                    "-c", "model_reasoning_effort=\"medium\"",
+                    "-c", "model_reasoning_effort=\"low\"",
                     "--skip-git-repo-check", prompt]
         let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
         guard out.status == 0 else {
@@ -468,14 +468,25 @@ actor CodexCLI {
         var text: String { lock.lock(); defer { lock.unlock() }; return s }
     }
 
-    /// Streaming sibling of `execute`: same sanitized env / PATH / watchdog, but it pumps each
-    /// output LINE (stdout and stderr) to `onLine` as it arrives — so the console shows codex's
-    /// computer-use play-by-play live — while also accumulating the full text. No stdin (the
-    /// computer-use prompt rides in argv). Byte-level line splitting so multibyte UTF-8 that
-    /// straddles a read boundary never garbles.
+    /// Thread-safe handle to the running child so the Task-cancellation handler (the STOP button)
+    /// can terminate it. Set once the process has launched.
+    private final class ProcHolder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var proc: Process?
+        func set(_ p: Process) { lock.lock(); proc = p; lock.unlock() }
+        func terminate() { lock.lock(); let p = proc; lock.unlock(); if let p, p.isRunning { p.terminate() } }
+    }
+
+    /// Streaming sibling of `execute`: same env / PATH / watchdog, but it pumps each output LINE
+    /// (stdout and stderr) to `onLine` as it arrives — so the console AND the command bar show
+    /// codex's play-by-play live — while accumulating the full text. No stdin (the prompt rides in
+    /// argv). Byte-level line splitting so multibyte UTF-8 across a read boundary never garbles.
+    /// Honors Task cancellation: cancelling the awaiting Task terminates codex (the STOP button).
     private static func executeStreaming(binary: String, args: [String], timeout: TimeInterval,
                                          onLine: @escaping @Sendable (String) -> Void) async throws -> ExecResult {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
+        let holder = ProcHolder()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: binary)
@@ -533,6 +544,7 @@ actor CodexCLI {
                 }
 
                 do { try proc.run() } catch { cont.resume(throwing: CLIError.launchFailed("\(error)")); return }
+                holder.set(proc)        // expose to the cancellation handler (STOP)
 
                 let timedOut = OSAllocatedUnfairLock(initialState: false)
                 let watchdog = DispatchWorkItem { [weak proc] in
@@ -548,6 +560,9 @@ actor CodexCLI {
                 cont.resume(returning: ExecResult(status: proc.terminationStatus,
                                                   stdout: outSink.text, stderr: errSink.text))
             }
+        }
+        } onCancel: {
+            holder.terminate()    // STOP: kill codex → the run resumes with a non-zero exit
         }
     }
 }

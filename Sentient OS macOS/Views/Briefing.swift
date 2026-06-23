@@ -114,37 +114,24 @@ struct Briefing: Identifiable {
 
     static let demo: [Briefing] = [
         Briefing(
-            id: "charles", kind: .deadline,
-            kicker: "Reply · 2 days · Gmail",
-            title: "Charles is waiting on your timeslots.",
-            body: "Daniel introduced you to Charles Ferguson — he sold companies to Microsoft and Oracle, pre-seeded Higgsfield, and won an Oscar. I checked your calendar and drafted your reply.",
+            id: "ewor", kind: .plan,
+            kicker: "Prep · 11 AM today · Researched",
+            title: "Prepare for your call with Daniel, CEO of EWOR.",
+            body: "Somya Gupta nominated you for the EWOR Fellowship — and Daniel Dippold, its founder & CEO, wants 15 minutes today at 11 AM. I researched him and EWOR and pulled together what'll get you ready.",
             letter: """
-            Daniel introduced you to Charles Ferguson for your next EWOR interview — he sold companies to **Microsoft** and **Oracle**, pre-seeded **Higgsfield** (€500M ARR in a year), and won an **Oscar**.
+            Your EWOR selection interview is today — 11:00–11:15 AM PDT, on Zoom (it moved up from 10:45). Somya Gupta nominated you, and you're meeting Daniel Dippold, EWOR's founder & CEO. He called it casual, but it's 15 minutes and it's selective — so walk in sharp.
 
-            He cc'd his assistant Emily to schedule and asked for any materials — a deck or a memo. So I checked your calendar for **Monday and Tuesday**, found your open windows, and wrote your reply: a few timeslots and a memo offer.
+            ✦ **Know your room.** Daniel is a mathematician-turned-founder: raised **$100M** in his twenties, angel in **7 unicorns**, and built three organizations still thriving — EWOR, New Now Group, Sigma Squared. He rewards technical depth and outlier conviction — lead with the on-device moat and your all-in, drop-out resolve.
+
+            ✦ **Speak EWOR's language.** They back the **top 0.1%** of founders building transformative tech — up to **€500K** immediate, plus weekly 1:1 coaching from unicorn founders (Adjust, ProGlove, SumUp). No standard playbooks; they tailor to each founder. Frame Sentient as exactly that non-linear, outlier bet.
+
+            ✦ **Your 15-minute arc.** Open with the Reddit moment — **2,500+ waitlist signups in 24 hours, $0 spent**. Then the wedge: consumer free-forever as the loved foothold, the enterprise per-employee intelligence layer as the business. Close on why now, and why you.
+
+            Somya put their name on you — make it land. — **your Sentient**
             """,
-            draft: Briefing.charlesReply,
-            draftLabel: "Draft reply · Gmail",
-            detailLabel: "read the draft",
-            offer: "Should I send it for you?",
-            workLog: ["→ reading Charles's note",
-                      "→ checking Monday & Tuesday for open slots",
-                      "→ opening Gmail",
-                      "→ composing your reply…",
-                      "✓ sent"],
-            doneTitle: "Sent to Charles.",
-            doneBody: "Emily has your availability — and materials are on the way.",
-            codexPrompt: """
-            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
-
-            Use the Gmail MCP to open the thread titled "EWOR | Introducing Jesai & Charles". In that thread, find the message from Charles Ferguson (chf@cferguson.com) whose body STARTS WITH "Thank you, Daniel, and moving you to bcc." REPLY-ALL to THAT message — include every recipient on it (all To and all Cc: Charles, his assistant Emily, and the EWOR "selection" address) so everyone Charles addressed receives the reply. Reply to CHARLES'S message specifically (NOT Daniel's earlier intro) so the reply respects that Charles moved Daniel to bcc — do not add Daniel. Send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
-
-            \(Briefing.charlesReply)
-
-            Send this reply-all now via the Gmail MCP — the user has already approved it. Do not ask, do not draft-and-wait; complete the send, then report exactly who it went to (the full To and Cc list).
-
-            FORMATTING: send it as an HTML email (set the send tool's content_type to "text/html"). Put each paragraph in its own <p>…</p> tag; render the two "I can make any time…" lines as a <ul><li>…</li></ul> list; write the sign-off as "Looking forward to it,<br>Jesai". Keep every word — including ":)" and "4:30 PM" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph.
-            """),
+            detailLabel: "read the prep doc",
+            offer: nil,
+            doneTitle: "", doneBody: ""),
 
         Briefing(
             id: "fareed", kind: .meeting,
@@ -274,26 +261,41 @@ struct Briefing: Identifiable {
     // `slots(count:)` only define up to 6). Each is self-contained (no shared-constant refs).
     // Parked = NOT compiled, so these can quietly go stale — re-read before relying on one.
 
-    /* ── EWOR · "Prepare for your call with Daniel, CEO of EWOR." (researched prep card, orchid) ──
+    /* ── Charles · "Charles is waiting on your timeslots." — LIVE Gmail reply-all into the real
+       "EWOR | Introducing Jesai & Charles" thread. Uses the `charlesReply` constant above, and the
+       `charles` id is still armed in HomeView's run() seam, so swapping it back in just works. ──
         Briefing(
-            id: "ewor", kind: .plan,
-            kicker: "Prep · 11 AM today · Researched",
-            title: "Prepare for your call with Daniel, CEO of EWOR.",
-            body: "Somya Gupta nominated you for the EWOR Fellowship — and Daniel Dippold, its founder & CEO, wants 15 minutes today at 11 AM. I researched him and EWOR and pulled together what'll get you ready.",
+            id: "charles", kind: .deadline,
+            kicker: "Reply · 2 days · Gmail",
+            title: "Charles is waiting on your timeslots.",
+            body: "Daniel introduced you to Charles Ferguson — he sold companies to Microsoft and Oracle, pre-seeded Higgsfield, and won an Oscar. I checked your calendar and drafted your reply.",
             letter: """
-            Your EWOR selection interview is today — 11:00–11:15 AM PDT, on Zoom (it moved up from 10:45). Somya Gupta nominated you, and you're meeting Daniel Dippold, EWOR's founder & CEO. He called it casual, but it's 15 minutes and it's selective — so walk in sharp.
+            Daniel introduced you to Charles Ferguson for your next EWOR interview — he sold companies to **Microsoft** and **Oracle**, pre-seeded **Higgsfield** (€500M ARR in a year), and won an **Oscar**.
 
-            ✦ **Know your room.** Daniel is a mathematician-turned-founder: raised **$100M** in his twenties, angel in **7 unicorns**, and built three organizations still thriving — EWOR, New Now Group, Sigma Squared. He rewards technical depth and outlier conviction — lead with the on-device moat and your all-in, drop-out resolve.
-
-            ✦ **Speak EWOR's language.** They back the **top 0.1%** of founders building transformative tech — up to **€500K** immediate, plus weekly 1:1 coaching from unicorn founders (Adjust, ProGlove, SumUp). No standard playbooks; they tailor to each founder. Frame Sentient as exactly that non-linear, outlier bet.
-
-            ✦ **Your 15-minute arc.** Open with the Reddit moment — **2,500+ waitlist signups in 24 hours, $0 spent**. Then the wedge: consumer free-forever as the loved foothold, the enterprise per-employee intelligence layer as the business. Close on why now, and why you.
-
-            Somya put their name on you — make it land. — **your Sentient**
+            He cc'd his assistant Emily to schedule and asked for any materials — a deck or a memo. So I checked your calendar for **Monday and Tuesday**, found your open windows, and wrote your reply: a few timeslots and a memo offer.
             """,
-            detailLabel: "read the prep doc",
-            offer: nil,
-            doneTitle: "", doneBody: ""),
+            draft: Briefing.charlesReply,
+            draftLabel: "Draft reply · Gmail",
+            detailLabel: "read the draft",
+            offer: "Should I send it for you?",
+            workLog: ["→ reading Charles's note",
+                      "→ checking Monday & Tuesday for open slots",
+                      "→ opening Gmail",
+                      "→ composing your reply…",
+                      "✓ sent"],
+            doneTitle: "Sent to Charles.",
+            doneBody: "Emily has your availability — and materials are on the way.",
+            codexPrompt: """
+            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
+
+            Use the Gmail MCP to open the thread titled "EWOR | Introducing Jesai & Charles". In that thread, find the message from Charles Ferguson (chf@cferguson.com) whose body STARTS WITH "Thank you, Daniel, and moving you to bcc." REPLY-ALL to THAT message — include every recipient on it (all To and all Cc: Charles, his assistant Emily, and the EWOR "selection" address) so everyone Charles addressed receives the reply. Reply to CHARLES'S message specifically (NOT Daniel's earlier intro) so the reply respects that Charles moved Daniel to bcc — do not add Daniel. Send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
+
+            \(Briefing.charlesReply)
+
+            Send this reply-all now via the Gmail MCP — the user has already approved it. Do not ask, do not draft-and-wait; complete the send, then report exactly who it went to (the full To and Cc list).
+
+            FORMATTING: send it as an HTML email (set the send tool's content_type to "text/html"). Put each paragraph in its own <p>…</p> tag; render the two "I can make any time…" lines as a <ul><li>…</li></ul> list; write the sign-off as "Looking forward to it,<br>Jesai". Keep every word — including ":)" and "4:30 PM" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph.
+            """),
     */
 
     /* ── ZFellows · "ZFellows closes in 8 days." (browser-agent registration card, ember) ──
