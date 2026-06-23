@@ -17,8 +17,151 @@
 
 import Foundation
 import AppKit
+import Security   // SecCode/SecStaticCode → an app's Designated Requirement (the TCC csreq blob)
+import SQLite3    // direct, parameterized write into the user's TCC.db (we already hold Full Disk Access)
 
 enum Permissions {
+
+    // MARK: - Computer use: Automation consent for Codex's helper
+    //
+    // To run computer use we spawn `codex`, so macOS makes *us* (Sentient OS) the TCC-responsible
+    // app for everything it does — and codex talks to its bundled helper (`com.openai.sky.CUAService`,
+    // ~/.codex/computer-use/Codex Computer Use.app) over Apple Events, which is gated by the
+    // Automation grant "Sentient OS → Codex Computer Use". Terminal and Warp already hold it (that's
+    // why a manual run works); a fresh Sentient doesn't, so the first call (`list_apps`) blocks.
+    //
+    // We CANNOT pre-create that grant ourselves: `AEDeterminePermissionToAutomateTarget` returns
+    // procNotFound for this service even while it's running (it exposes no idle Apple Event endpoint),
+    // so there's no prompt to show. The grant is instead created the same way Terminal/Warp got it —
+    // by letting codex drive a REAL computer-use run, which surfaces the one-time consent prompt (now
+    // that we declare NSAppleEventsUsageDescription). The dev Permissions panel runs a tiny benign
+    // probe to trigger exactly that; thereafter every run sails through. See PermissionsView.
+
+    /// Open System Settings → Privacy & Security → Automation (where the grant shows as a toggle
+    /// under "Sentient OS" once it exists).
+    @MainActor
+    static func openAutomationSettings() {
+        let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!
+        NSWorkspace.shared.open(url)
+    }
+
+    // MARK: Granting the Automation entry directly (FDA-powered, device- & signer-agnostic)
+
+    /// The Codex Computer Use helper — the Apple Events TARGET we grant ourselves the right to drive.
+    static let computerUseHelperBundleID = "com.openai.sky.CUAService"
+
+    enum GrantError: LocalizedError {
+        case noFDA, helperNotFound, requirement(String), tcc(String)
+        var errorDescription: String? {
+            switch self {
+            case .noFDA:              return "Full Disk Access is required to write the permission."
+            case .helperNotFound:     return "Couldn't find the Codex Computer Use helper app on disk."
+            case .requirement(let m): return "Couldn't read a code-signature requirement (\(m))."
+            case .tcc(let m):         return "Couldn't write the TCC database (\(m))."
+            }
+        }
+    }
+
+    /// Resolve the installed Codex Computer Use helper (any copy — they share one signed identity).
+    static func computerUseHelperURL() -> URL? {
+        if let u = NSWorkspace.shared.urlForApplication(withBundleIdentifier: computerUseHelperBundleID) { return u }
+        let fallback = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/computer-use/Codex Computer Use.app")
+        return FileManager.default.fileExists(atPath: fallback.path) ? fallback : nil
+    }
+
+    /// Grant THIS running app the Automation right to control the Codex Computer Use helper, by
+    /// writing the `kTCCServiceAppleEvents` row straight into the user's TCC database. Both
+    /// code-requirement blobs (ours + the helper's) are generated at runtime from the live signed
+    /// bundles — so it's correct for ANY signer (your Developer-ID release, a dev cert, or an OSS
+    /// self-build) and writes NOTHING device-specific (boot_uuid stays the schema default 'UNUSED').
+    /// Requires Full Disk Access (the write key, which Sentient holds anyway). Idempotent
+    /// (INSERT OR REPLACE), then reloads tccd. Returns a short receipt.
+    @discardableResult
+    static func grantComputerUseAutomation() throws -> String {
+        guard hasFullDiskAccess() else { throw GrantError.noFDA }
+        guard let helper = computerUseHelperURL() else { throw GrantError.helperNotFound }
+
+        let csreq  = try selfRequirementData()              // our DR     → `csreq`
+        let target = try requirementData(forAppAt: helper)  // helper's DR → `indirect_object_code_identity`
+        let bundleID = Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"
+
+        let dbPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db").path
+
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            let m = db.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed (Full Disk Access?)"
+            sqlite3_close(db); throw GrantError.tcc(m)
+        }
+        defer { sqlite3_close(db) }
+
+        // Only the stable core columns; everything else takes its schema default (incl.
+        // boot_uuid='UNUSED' → nothing device-specific). auth_value 2 = allowed, auth_reason 2 = user consent.
+        let sql = """
+        INSERT OR REPLACE INTO access
+          (service, client, client_type, auth_value, auth_reason, auth_version,
+           csreq, indirect_object_identifier_type, indirect_object_identifier, indirect_object_code_identity, flags)
+        VALUES ('kTCCServiceAppleEvents', ?, 0, 2, 2, 1, ?, 0, ?, ?, 0);
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw GrantError.tcc(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)   // SQLite copies the bytes at bind time
+        sqlite3_bind_text(stmt, 1, bundleID, -1, TRANSIENT)
+        _ = csreq.withUnsafeBytes  { sqlite3_bind_blob(stmt, 2, $0.baseAddress, Int32(csreq.count),  TRANSIENT) }
+        sqlite3_bind_text(stmt, 3, computerUseHelperBundleID, -1, TRANSIENT)
+        _ = target.withUnsafeBytes { sqlite3_bind_blob(stmt, 4, $0.baseAddress, Int32(target.count), TRANSIENT) }
+
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw GrantError.tcc(String(cString: sqlite3_errmsg(db)))
+        }
+
+        reloadTCCD()
+        return "granted \(bundleID) → Codex Computer Use (csreq \(csreq.count)B · target \(target.count)B)"
+    }
+
+    /// Serialize the RUNNING app's Designated Requirement — exactly what TCC stores as `csreq`.
+    private static func selfRequirementData() throws -> Data {
+        var code: SecCode?
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code else { throw GrantError.requirement("SecCodeCopySelf") }
+        var stat: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &stat) == errSecSuccess, let stat else { throw GrantError.requirement("SecCodeCopyStaticCode") }
+        return try requirementData(of: stat)
+    }
+
+    /// Serialize the Designated Requirement of an app bundle on disk.
+    private static func requirementData(forAppAt url: URL) throws -> Data {
+        var stat: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &stat) == errSecSuccess, let stat else {
+            throw GrantError.requirement("SecStaticCodeCreateWithPath")
+        }
+        return try requirementData(of: stat)
+    }
+
+    private static func requirementData(of stat: SecStaticCode) throws -> Data {
+        var req: SecRequirement?
+        guard SecCodeCopyDesignatedRequirement(stat, [], &req) == errSecSuccess, let req else {
+            throw GrantError.requirement("SecCodeCopyDesignatedRequirement")
+        }
+        var data: CFData?
+        guard SecRequirementCopyData(req, [], &data) == errSecSuccess, let data else {
+            throw GrantError.requirement("SecRequirementCopyData")
+        }
+        return data as Data
+    }
+
+    /// Reload the per-user TCC daemon so the new row applies immediately (tccd caches on launch).
+    private static func reloadTCCD() {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        p.arguments = ["tccd"]
+        try? p.run()
+        p.waitUntilExit()
+    }
 
     /// Canonical FDA-gated files. We can READ any of these *only* with Full Disk Access. We try
     /// several because any single one may be absent on a given Mac (no Messages history, no Safari

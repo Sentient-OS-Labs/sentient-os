@@ -227,18 +227,23 @@ actor CodexCLI {
         return try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
     }
 
-    /// DEMO (command-bar computer use): run a raw `codex exec` with the prompt passed as ARGV and
-    /// the minimal flag set that currently makes Codex's computer use work via the CLI —
-    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.5 --skip-git-repo-check`, NO `--json`
-    /// (human-readable output, not JSONL). Each output LINE is pumped to `onLine` AS it arrives, so
-    /// the Xcode console shows codex's play-by-play live. Reuses the sanitized-env / PATH / watchdog
-    /// plumbing; the binary comes from the same discovery (`~/.local/bin/codex` first). Returns the
-    /// full output. Fire-and-forget — computer use is the WIP CLI path.
-    func runComputerUse(_ prompt: String, timeout: TimeInterval = 1_800,
-                        onLine: @escaping @Sendable (String) -> Void) async throws -> String {
+    /// The command bar's "Let me DO stuff for you" spine — computer use AND browser use (the mode
+    /// is just a word in the prompt the caller builds, NOT a flag here). Runs a raw `codex exec`
+    /// with the prompt passed as ARGV and the exact flag set verified to make Codex's computer/
+    /// browser use work via the CLI: `--dangerously-bypass-approvals-and-sandbox -m gpt-5.5
+    /// -c model_reasoning_effort="medium" --skip-git-repo-check`, NO `--json` (human-readable
+    /// output, not JSONL). Each output LINE is pumped to `onLine` AS it arrives, so the Xcode
+    /// console shows codex's play-by-play live. Reuses the sanitized-env / PATH / watchdog plumbing;
+    /// the binary comes from the same discovery (`~/.local/bin/codex` first). The user's ~/.codex
+    /// config + MCP servers load by default (no --ignore-user-config). Returns the full output.
+    /// Computer use is the WIP CLI path.
+    func runAgentCommand(_ prompt: String, timeout: TimeInterval = 1_800,
+                         onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
         let args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                    "-m", Model.gpt54mini.rawValue, "--skip-git-repo-check", prompt]
+                    "-m", Model.gpt55.rawValue,
+                    "-c", "model_reasoning_effort=\"medium\"",
+                    "--skip-git-repo-check", prompt]
         let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
         guard out.status == 0 else {
             let detail = out.stderr.isEmpty ? out.stdout : out.stderr
@@ -475,11 +480,24 @@ actor CodexCLI {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: binary)
                 proc.arguments = args
+                // Computer/browser use drives Codex's bundled GUI helper (SkyComputerUseService),
+                // which codex reaches over an IPC socket living under the per-user $TMPDIR. The
+                // bare HOME/USER env we use for headless codex elsewhere DROPS $TMPDIR (+ the GUI
+                // session/bootstrap vars), so the helper connection hangs at the first call
+                // (`list_apps`). So here we INHERIT the app's full environment — which carries the
+                // real $TMPDIR + session vars, exactly like a Terminal launch — and only overlay a
+                // rich PATH so codex finds the tools it shells out to (node, playwright-cli, the
+                // Codex.app cua_node).
                 let binDir = (binary as NSString).deletingLastPathComponent
-                var env: [String: String] = [:]
-                let current = ProcessInfo.processInfo.environment
-                for key in ["HOME", "USER"] where current[key] != nil { env[key] = current[key] }
-                env["PATH"] = [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
+                var env = ProcessInfo.processInfo.environment
+                let home = env["HOME"] ?? NSHomeDirectory()
+                let richPath = [binDir,
+                                "\(home)/.local/bin",
+                                "/opt/homebrew/bin", "/opt/homebrew/sbin",
+                                "/usr/local/bin",
+                                "/Applications/Codex.app/Contents/Resources/cua_node/bin",
+                                "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
+                env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
                 proc.environment = env
 
                 let outPipe = Pipe(), errPipe = Pipe()

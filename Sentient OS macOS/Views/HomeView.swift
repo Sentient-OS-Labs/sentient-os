@@ -213,11 +213,11 @@ struct HomeView: View {
 
     private var bottomDock: some View {
         VStack(spacing: 16) {
-            PromptBar { _, _ in
-                // DEMO: the command bar fires a FIXED Codex computer-use run (regardless of what's
-                // typed or which mode is picked) — open WhatsApp and message Aditya Hemanth a
-                // 2-paragraph summary of Sentient OS. See ForYouModel.fireComputerUseDemo.
-                Task.detached(priority: .utility) { await ForYouModel.fireComputerUseDemo() }
+            PromptBar { text, mode in
+                // The command bar fires the user's OWN typed task through codex — computer use OR
+                // browser use, where the mode is just a word swapped into the prompt. See
+                // ForYouModel.fireCommand / commandPrompt.
+                Task.detached(priority: .utility) { await ForYouModel.fireCommand(text, mode: mode) }
             }
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
@@ -392,34 +392,47 @@ final class ForYouModel {
         }
     }
 
-    /// DEMO — the command bar's send button: regardless of what's typed (or the mode), fire a
-    /// Codex COMPUTER-USE run that first READS the user's Sentient OS knowledge base for context,
-    /// then opens WhatsApp and sends Aditya Hemanth a summary of Sentient OS it composes from that
-    /// knowledge base. (Computer use is the WIP CLI path — see `CodexCLI.runComputerUse`.) → `Log()`.
-    nonisolated static func fireComputerUseDemo() async {
-        let kbPath = "/Users/jesaitarun/Sentient OS - Knowledge Base"
-        let prompt = """
-        First, read the user's Sentient OS knowledge base to learn what Sentient OS is. Read the markdown files in "\(kbPath)" — especially "README.md" and "Sentient OS/Product & Vision/Sentient OS - What It Is.md" (the canonical, current product description).
-
-        Then, using computer use, open WhatsApp, go to Aditya Hemanth's chat, and send him a great, warm summary of what Sentient OS is — about two short paragraphs, in Jesai's first-person voice (enthusiastic, with a casual ":)"). Lead with Proactive Intelligence (Sentient *does things for you* — drafts the reply you forgot, registers you for things, runs tasks via browser use and computer use), and mention the private knowledge base offered to all your AIs as the foundation it stands on. Compose the message yourself from the knowledge base — do not ask for confirmation, just send it.
-        """
-        Log("──────── 🖥️ COMPUTER USE · WhatsApp → Aditya Hemanth ────────")
-        Log("CU: launching codex exec (gpt-5.5 · computer use · bypass sandbox)…")
-        Log("CU: prompt ↓\n\(prompt)")
+    /// The command bar's send button — fire the user's OWN typed task through codex, picking the
+    /// agent channel by the toggle. Computer use vs browser use is ONLY a word in the prompt
+    /// ("Using <mode.promptPhrase>, …"); both run the same `codex exec` (gpt-5.5, bypass sandbox)
+    /// via `CodexCLI.runAgentCommand`, which streams its play-by-play to the console. → `Log()`.
+    /// (Computer use is the WIP CLI path.)
+    nonisolated static func fireCommand(_ text: String, mode: AgentMode) async {
+        // Computer use spawns codex, which drives Codex's helper over an Apple Event macOS attributes
+        // to US — so the FIRST computer-use run surfaces a one-time "Sentient OS wants to control
+        // Codex Computer Use" consent prompt (Terminal/Warp already hold this grant). Just run it;
+        // codex raises the prompt itself. Approve it once via the command bar or DEV TOOLS →
+        // PERMISSIONS and every later run sails through.
+        let prompt = commandPrompt(task: text, mode: mode)
+        Log("──────── 🤖 \(mode.label.uppercased()) · command bar ────────")
+        Log("CMD: launching codex exec (gpt-5.5 · \(mode.promptPhrase) · bypass sandbox)…")
+        Log("CMD: prompt ↓\n\(prompt)")
         Log("──────────────── live codex output ↓ ────────────────")
         let started = Date()
         do {
-            let output = try await CodexCLI.shared.runComputerUse(prompt) { line in
-                Log("CU │ \(line)")     // streams each codex line to the Xcode console live
+            let output = try await CodexCLI.shared.runAgentCommand(prompt) { line in
+                Log("CMD │ \(line)")     // streams each codex line to the Xcode console live
             }
             let secs = Int(Date().timeIntervalSince(started))
-            Log("──────── 🖥️ COMPUTER USE ✓ DONE in \(secs)s ────────")
-            Log("CU: final → \(output.suffix(1200))")
+            Log("──────── 🤖 \(mode.label.uppercased()) ✓ DONE in \(secs)s ────────")
+            Log("CMD: final → \(output.suffix(1200))")
         } catch {
             let secs = Int(Date().timeIntervalSince(started))
-            Log("──────── 🖥️ COMPUTER USE ✗ FAILED after \(secs)s ────────")
-            Log("CU: \(error)")
+            Log("──────── 🤖 \(mode.label.uppercased()) ✗ FAILED after \(secs)s ────────")
+            Log("CMD: \(error)")
         }
+    }
+
+    /// Build the command-bar prompt, mirroring the verified-working CLI command: the toggle swaps
+    /// `mode.promptPhrase` ("computer use" / "browser use"); the typed task fills the rest; and the
+    /// knowledge-base path (resolved from `~`, never hardcoded) rides along so the agent can ground
+    /// the task in the user's life.
+    nonisolated static func commandPrompt(task: String, mode: AgentMode) -> String {
+        """
+        Using \(mode.promptPhrase), \(task)
+
+        My knowledge base is at '\(VaultGenerator.vaultRoot.path)'.
+        """
     }
 
     /// Send a card flying along `v` (a flick's predicted translation), then reflow the scatter.
