@@ -24,6 +24,9 @@ final class AppState {
 
     var status: Status = .idle
 
+    /// The in-app scheduler — only ever runs while the app is alive (DEV TOOLS "Scheduled run").
+    let scheduler = OvernightScheduler()
+
     private static let onboardingKey = "hasCompletedOnboarding"
     var hasCompletedOnboarding: Bool {
         didSet { UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey) }
@@ -31,5 +34,6 @@ final class AppState {
 
     init() {
         self.hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingKey)
+        scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
     }
 }

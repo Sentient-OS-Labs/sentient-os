@@ -85,6 +85,7 @@ struct DevToolsView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
+    @Environment(AppState.self) private var appState
 
     private static let modelPath = ModelLocator.resolve()
 
@@ -114,6 +115,9 @@ struct DevToolsView: View {
     @State private var showCalendarConnect = false
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
+    // Scheduled run (dev testing — drives OvernightScheduler).
+    @AppStorage(OvernightScheduler.enabledKey) private var schedEnabled = false
+    @AppStorage(OvernightScheduler.minutesKey) private var schedMinutes = OvernightScheduler.defaultMinutes
 
     // MCP mirror (the hosted Render copy). Local mirrors of MirrorClient's actor state, refreshed
     // when "More" opens and after each action.
@@ -132,6 +136,48 @@ struct DevToolsView: View {
         Set(selectedIMessageChatsCSV.split(separator: ",").map(String.init))
     }
 
+    // MARK: Scheduled run (dev testing)
+
+    /// Bridges the stored minutes-since-midnight to/from the DatePicker's Date.
+    private var schedTimeBinding: Binding<Date> {
+        Binding(
+            get: {
+                var c = Calendar.current.dateComponents([.year, .month, .day], from: Date())
+                c.hour = schedMinutes / 60; c.minute = schedMinutes % 60
+                return Calendar.current.date(from: c) ?? Date()
+            },
+            set: { newDate in
+                let c = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                schedMinutes = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+            })
+    }
+
+    private var schedulerSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("SCHEDULED RUN").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
+                Spacer()
+                Toggle("", isOn: $schedEnabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            HStack(spacing: 10) {
+                Text("Wake & process at").font(.caption)
+                    .foregroundStyle(.white.opacity(schedEnabled ? 0.8 : 0.3))
+                DatePicker("", selection: schedTimeBinding, displayedComponents: .hourAndMinute)
+                    .labelsHidden().disabled(!schedEnabled)
+                Spacer()
+                Text(schedEnabled ? appState.scheduler.statusLine : "off")
+                    .font(.caption2.monospaced()).foregroundStyle(Theme.faint)
+            }
+            Text("Wakes the Mac at this time with the lid shut, runs .auto over the selected sources, then sleeps. Runs ONLY while Sentient is open — quit it and the wake is cancelled.")
+                .font(.caption2).foregroundStyle(Theme.faint.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+        .onChange(of: schedEnabled) { _, _ in appState.scheduler.reevaluate() }
+        .onChange(of: schedMinutes) { _, _ in if schedEnabled { appState.scheduler.reevaluate() } }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -144,6 +190,7 @@ struct DevToolsView: View {
             ScrollView {
                 VStack(spacing: 22) {
                     sourcePicker
+                    schedulerSection
 
                     if Self.modelPath == nil {
                         Text("On-device model not found — place \(ModelLocator.fileName) next to the .xcodeproj, or set SENTIENT_MODEL_PATH.")
