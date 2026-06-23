@@ -10,7 +10,7 @@
 
 import SwiftUI
 
-@main
+// Entry point is main.swift (the binary doubles as the root wake helper) — so no @main here.
 struct SentientOSApp: App {
     @State private var appState = AppState()
 
