@@ -124,6 +124,39 @@ enum Permissions {
         return "granted \(bundleID) → Codex Computer Use (csreq \(csreq.count)B · target \(target.count)B)"
     }
 
+    /// DEV: revoke this app's Automation grants — delete Sentient's `kTCCServiceAppleEvents` rows
+    /// (incl. the computer-use grant) from the user's TCC database, so the grant flow can be
+    /// re-tested from a clean slate. Requires Full Disk Access; reloads tccd. Returns rows removed.
+    @discardableResult
+    static func revokeAutomationGrants() throws -> Int {
+        guard hasFullDiskAccess() else { throw GrantError.noFDA }
+        let bundleID = Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"
+        let dbPath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db").path
+
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            let m = db.map { String(cString: sqlite3_errmsg($0)) } ?? "open failed (Full Disk Access?)"
+            sqlite3_close(db); throw GrantError.tcc(m)
+        }
+        defer { sqlite3_close(db) }
+
+        let sql = "DELETE FROM access WHERE service='kTCCServiceAppleEvents' AND client=?;"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw GrantError.tcc(String(cString: sqlite3_errmsg(db)))
+        }
+        defer { sqlite3_finalize(stmt) }
+        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, bundleID, -1, TRANSIENT)
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
+            throw GrantError.tcc(String(cString: sqlite3_errmsg(db)))
+        }
+        let removed = Int(sqlite3_changes(db))
+        reloadTCCD()
+        return removed
+    }
+
     /// Serialize the RUNNING app's Designated Requirement — exactly what TCC stores as `csreq`.
     private static func selfRequirementData() throws -> Data {
         var code: SecCode?
