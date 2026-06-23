@@ -164,6 +164,9 @@ struct DevToolsView: View {
                     .foregroundStyle(.white.opacity(schedEnabled ? 0.8 : 0.3))
                 DatePicker("", selection: schedTimeBinding, displayedComponents: .hourAndMinute)
                     .labelsHidden().disabled(!schedEnabled)
+                Button("Done") { appState.scheduler.commit() }
+                    .controlSize(.small).disabled(!schedEnabled)
+                    .help("Finalize this time — clears every other scheduled wake and arms just this one.")
                 Spacer()
                 Text(schedEnabled ? appState.scheduler.statusLine : "off")
                     .font(.caption2.monospaced()).foregroundStyle(Theme.faint)
@@ -175,7 +178,7 @@ struct DevToolsView: View {
         .padding(12)
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
         .onChange(of: schedEnabled) { _, _ in appState.scheduler.reevaluate() }
-        .onChange(of: schedMinutes) { _, _ in if schedEnabled { appState.scheduler.reevaluate() } }
+        // Changing the time does NOT arm — the user presses "Done" to commit (no duplicate wakes).
     }
 
     var body: some View {

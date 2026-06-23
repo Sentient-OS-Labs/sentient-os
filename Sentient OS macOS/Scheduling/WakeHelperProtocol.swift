@@ -21,9 +21,12 @@ import Foundation
     /// Schedule a one-time system wake at a wall-clock time (epoch seconds). Idempotent — re-arming
     /// the same time never piles up duplicate wakes.
     func armWake(atEpoch epoch: Double, withReply reply: @escaping (Bool) -> Void)
-    /// Cancel any scheduled wake. Also invoked automatically when the app's connection drops (quit /
-    /// crash / force-quit), so a Mac with Sentient closed never wakes on a stale schedule.
+    /// Cancel the wake we last armed. Also invoked automatically when the app's connection drops
+    /// (quit / crash / force-quit), so a Mac with Sentient closed never wakes on a stale schedule.
     func cancelWake(withReply reply: @escaping (Bool) -> Void)
+    /// Wipe EVERY scheduled wake (clean slate) — backs the "Done" button so finalizing a time leaves
+    /// exactly one timer with no duplicates. (System maintenance wakes are auto-rescheduled by macOS.)
+    func cancelAllWakes(withReply reply: @escaping (Bool) -> Void)
 }
 
 /// Shared constants — the names here MUST match the LaunchDaemon plist we install in the bundle.

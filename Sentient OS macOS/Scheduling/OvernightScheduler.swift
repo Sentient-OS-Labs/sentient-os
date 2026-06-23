@@ -34,9 +34,16 @@ final class OvernightScheduler {
     private var loopTask: Task<Void, Never>?
     private var everArmed = false
 
-    /// Re-read the dev settings and (re)start or stop. Call on launch and on any settings change.
+    /// Re-read the dev settings and (re)start or stop. Call on launch and on the on/off toggle.
     func reevaluate() {
         if UserDefaults.standard.bool(forKey: Self.enabledKey) { start() } else { stop() }
+    }
+
+    /// "Done" — finalize the chosen time: restart the loop, which wipes EVERY scheduled wake (clears
+    /// duplicates / stale times) then arms exactly this one. No-op while the feature is off.
+    func commit() {
+        guard UserDefaults.standard.bool(forKey: Self.enabledKey) else { return }
+        start()
     }
 
     private func start() {
@@ -66,12 +73,15 @@ final class OvernightScheduler {
             try? await Task.sleep(for: .seconds(1))   // let launchd settle before the first connection
         }
 
+        // Clean slate: wipe every existing scheduled wake (duplicates / stale), then arm exactly one.
+        everArmed = true
+        _ = await WakeHelperClient.shared.cancelAllWakes()
+
         while !Task.isCancelled {
             let minutes = Self.configuredMinutes
             let target = Self.nextOccurrence(minutesSinceMidnight: minutes)
             statusLine = "armed for \(Self.clock(target))"
             log.line("arming wake for \(target)")
-            everArmed = true
             _ = await WakeHelperClient.shared.armWake(at: target)
 
             // Wait for the target. Re-arm every ~5 min while awake (idempotent — keeps the helper's

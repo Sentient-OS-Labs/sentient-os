@@ -48,6 +48,7 @@ final class WakeHelperClient {
     func endAwake() async -> Bool { await call { $0.endAwake(withReply: $1) } }
     func armWake(at date: Date) async -> Bool { await call { $0.armWake(atEpoch: date.timeIntervalSince1970, withReply: $1) } }
     func cancelWake() async -> Bool { await call { $0.cancelWake(withReply: $1) } }
+    func cancelAllWakes() async -> Bool { await call { $0.cancelAllWakes(withReply: $1) } }
 
     // MARK: - XPC plumbing
 

@@ -100,6 +100,16 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
         queue.async { self.cancelArmed(reason: "explicit"); reply(true) }
     }
 
+    func cancelAllWakes(withReply reply: @escaping (Bool) -> Void) {
+        queue.async {
+            _ = self.pmset(["schedule", "cancelall"])   // wipe every scheduled wake — clean slate
+            self.armedSpec = nil
+            self.persistArmed(nil)
+            self.log("cancelAllWakes (pmset schedule cancelall)")
+            reply(true)
+        }
+    }
+
     // MARK: - Deadman
 
     private func startDeadman(seconds: Int) {
