@@ -55,6 +55,17 @@ final class OvernightScheduler {
 
     private func loop() async {
         let log = SchedulerLog()
+
+        // Make sure the root helper is installed — one-time native password prompt, no Terminal.
+        if !WakeHelperInstaller.isInstalledAndCurrent() {
+            statusLine = "installing helper…"
+            log.line("helper not installed/current — requesting install (admin prompt)")
+            let ok = await WakeHelperInstaller.installAsync()
+            log.line("helper install: \(ok ? "OK" : "declined/failed")")
+            guard ok else { statusLine = "needs your password — toggle off then on to retry"; return }
+            try? await Task.sleep(for: .seconds(1))   // let launchd settle before the first connection
+        }
+
         while !Task.isCancelled {
             let minutes = Self.configuredMinutes
             let target = Self.nextOccurrence(minutesSinceMidnight: minutes)
