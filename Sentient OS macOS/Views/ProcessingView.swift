@@ -381,20 +381,20 @@ struct ProcessingView: View {
         let baseTotal = base.total, baseDone = base.done, baseKept = base.survivors, baseJunk = base.junk
         let onProgress: @Sendable (GmailConnect.Progress) -> Void = { ev in
             switch ev {
-            case let .windowStart(step, total, label, prompt):
+            case let .windowStart(total, label, prompt):
+                // All windows start together (parallel); the bar advances only as they finish below.
                 var p = box.value
                 p.total = baseTotal + total
-                p.done  = baseDone + (step - 1)
                 p.lastPrompt = prompt
                 p.lastPath = "Gmail · \(label)"
                 box.value = p
                 yield(p)
-            case let .windowDone(step, total, label, summary, threads, keptSoFar):
+            case let .windowDone(total, label, summary, threads, completed, keptSoFar):
                 var p = box.value
                 p.total       = baseTotal + total
-                p.done        = baseDone + step
+                p.done        = baseDone + completed
                 p.survivors   = baseKept + keptSoFar
-                p.junk        = baseJunk + (step - keptSoFar)   // a window with nothing notable
+                p.junk        = baseJunk + (completed - keptSoFar)   // a window with nothing notable
                 p.lastTitle   = "Email — \(label)"
                 p.lastSummary = summary
                 p.lastVerdict = summary == nil ? .junk : .survivor

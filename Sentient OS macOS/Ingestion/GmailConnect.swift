@@ -12,9 +12,10 @@
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "gmail"; the existing "tell cloud"
 //  buttons add them to the vault, same as every other source):
-//   • runInitial   — the last month as 4 WEEKLY `codex exec` calls, newest week first. Weekly
-//                    chunking keeps each context window bounded (a heavy inbox measured at ~430
-//                    threads/week; one month in a single call would blow GPT-5.5's 400k input cap).
+//   • runInitial   — the last month as 4 WEEKLY `codex exec` calls, fired IN PARALLEL (one per
+//                    week). Weekly chunking keeps each context window bounded (a heavy inbox
+//                    measured at ~430 threads/week; one month in a single call would blow GPT-5.5's
+//                    400k input cap); running the four concurrently makes the initial read ~4× faster.
 //   • runIterative — everything since the saved high-water mark, in one call, then advance the mark.
 //
 //  The weekly prompt is DELIBERATELY disciplined: a naive "summarize this week" cost 220k tokens for
@@ -44,18 +45,34 @@ enum GmailConnect {
     }
 
     /// Parsed weekly/iterative read result (from the structured codex reply).
-    private struct ReadResult {
+    private struct ReadResult: Sendable {
         let summary: String
         let hasActionItems: Bool
         let threadCount: Int
     }
 
-    /// Structured progress for the dev processing UI — each date window (a week, or the iterative
-    /// since-mark window) STARTING then FINISHING. `prompt` is the exact Codex ask (shown in the
-    /// processing view's PROMPT pane); `summary` is nil when the window had nothing notable.
+    /// One initial-run weekly window: its display label, the exact codex prompt, and the date the
+    /// resulting CycleNote is stamped with (the window's last day).
+    private struct Window: Sendable {
+        let label: String
+        let prompt: String
+        let itemDate: Date
+    }
+
+    /// A finished window paired with its read (nil ⇒ nothing notable) — what each parallel task returns.
+    private struct WindowResult: Sendable {
+        let window: Window
+        let result: ReadResult?
+    }
+
+    /// Structured progress for the dev processing UI. The initial run fires all windows in PARALLEL,
+    /// so events arrive in completion order, not week order: `completed` (windows finished so far,
+    /// 1...total) drives the bar; `keptSoFar` is how many produced a summary. `prompt` is the exact
+    /// Codex ask (shown in the processing view's PROMPT pane); `summary` is nil when nothing notable.
     enum Progress: Sendable {
-        case windowStart(step: Int, total: Int, label: String, prompt: String)
-        case windowDone(step: Int, total: Int, label: String, summary: String?, threads: Int, keptSoFar: Int)
+        case windowStart(total: Int, label: String, prompt: String)
+        case windowDone(total: Int, label: String, summary: String?, threads: Int,
+                        completed: Int, keptSoFar: Int)
     }
 
     // MARK: - Connection probe (the "I'm done" YES/NO check)
@@ -81,8 +98,11 @@ enum GmailConnect {
 
     // MARK: - Initial read (last month → 4 weekly summaries)
 
-    /// Fresh start: wipe the bucket, then read the last 4 weeks newest-first (one summary each).
-    /// Records each into CycleStore; sets the high-water mark to the run-start on completion.
+    /// Fresh start: wipe the bucket, then read the last 4 weeks — all four `codex exec` reads fire
+    /// IN PARALLEL (independent windows, independent subprocesses). Results are collected as they
+    /// finish (completion order) and recorded into CycleStore; the high-water mark is set to the
+    /// run-start once all four complete. Any window failing aborts the run (mark unset → a retry
+    /// re-runs all four after clearBucket), matching the iterative path's all-or-nothing commit.
     @discardableResult
     static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         await CycleStore.shared.clearBucket(bucketKey)
@@ -91,32 +111,52 @@ enum GmailConnect {
         let today = cal.startOfDay(for: runStart)
         guard let tomorrow = cal.date(byAdding: .day, value: 1, to: today) else { throw GmailError.dateMath }
 
-        var recorded = 0
+        // Build all 4 weekly windows up front: [tomorrow − 7·(week+1), tomorrow − 7·week) —
+        // contiguous, no overlap. Their order is now cosmetic; the reads all run together.
+        var windows: [Window] = []
         for week in 0..<initialWeeks {
-            // Window [tomorrow − 7·(week+1), tomorrow − 7·week): contiguous, no overlap, newest first.
             guard let upper = cal.date(byAdding: .day, value: -7 * week, to: tomorrow),
                   let lower = cal.date(byAdding: .day, value: -7 * (week + 1), to: tomorrow) else {
                 throw GmailError.dateMath
             }
             let weekLabel = "week of \(label(lower))"
             let query = "after:\(qDate(lower)) before:\(qDate(upper))"
-            let prompt = weeklyPrompt(query: query, label: weekLabel)
-            onProgress(.windowStart(step: week + 1, total: initialWeeks, label: weekLabel, prompt: prompt))
-            if let r = try await read(prompt: prompt) {
-                let itemDate = cal.date(byAdding: .day, value: -1, to: upper) ?? lower
-                await record(r, itemDate: itemDate, label: weekLabel)
-                recorded += 1
-                onProgress(.windowDone(step: week + 1, total: initialWeeks, label: weekLabel,
-                                       summary: r.summary, threads: r.threadCount, keptSoFar: recorded))
-            } else {
-                onProgress(.windowDone(step: week + 1, total: initialWeeks, label: weekLabel,
-                                       summary: nil, threads: 0, keptSoFar: recorded))
+            let itemDate = cal.date(byAdding: .day, value: -1, to: upper) ?? lower
+            windows.append(Window(label: weekLabel,
+                                  prompt: weeklyPrompt(query: query, label: weekLabel),
+                                  itemDate: itemDate))
+        }
+
+        // Announce every window starting — they all kick off now (parallel fan-out).
+        for w in windows { onProgress(.windowStart(total: initialWeeks, label: w.label, prompt: w.prompt)) }
+
+        // Fan out: one codex exec per window, all concurrent. Collect AS each finishes, then record +
+        // report serially here in the parent — so the counters and the progress box see no races.
+        var recorded = 0, completed = 0
+        try await withThrowingTaskGroup(of: WindowResult.self) { group in
+            for w in windows {
+                group.addTask { WindowResult(window: w, result: try await read(prompt: w.prompt)) }
+            }
+            for try await done in group {
+                completed += 1
+                if let r = done.result {
+                    await record(r, itemDate: done.window.itemDate, label: done.window.label)
+                    recorded += 1
+                    onProgress(.windowDone(total: initialWeeks, label: done.window.label,
+                                           summary: r.summary, threads: r.threadCount,
+                                           completed: completed, keptSoFar: recorded))
+                } else {
+                    onProgress(.windowDone(total: initialWeeks, label: done.window.label,
+                                           summary: nil, threads: 0,
+                                           completed: completed, keptSoFar: recorded))
+                }
             }
         }
+
         // High-water mark = run start. Iterative reads everything after it (a few hours of overlap
         // is harmless — the cloud updater synthesizes — and beats a boundary gap).
         await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
-        Log("GmailConnect.runInitial: ✅ \(recorded)/\(initialWeeks) weekly summaries recorded; pointer → \(runStart)")
+        Log("GmailConnect.runInitial: ✅ \(recorded)/\(initialWeeks) weekly summaries recorded (parallel); pointer → \(runStart)")
         return recorded
     }
 
@@ -135,16 +175,16 @@ enum GmailConnect {
         // Gmail's `after:` accepts an epoch-seconds boundary — precise, no day-rounding.
         let query = "after:\(Int(since.timeIntervalSince1970))"
         let prompt = weeklyPrompt(query: query, label: sinceLabel)
-        onProgress(.windowStart(step: 1, total: 1, label: sinceLabel, prompt: prompt))
+        onProgress(.windowStart(total: 1, label: sinceLabel, prompt: prompt))
         var recorded = 0
         if let r = try await read(prompt: prompt) {
             await record(r, itemDate: runStart, label: sinceLabel)
             recorded = 1
-            onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
-                                   summary: r.summary, threads: r.threadCount, keptSoFar: 1))
+            onProgress(.windowDone(total: 1, label: sinceLabel,
+                                   summary: r.summary, threads: r.threadCount, completed: 1, keptSoFar: 1))
         } else {
-            onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
-                                   summary: nil, threads: 0, keptSoFar: 0))
+            onProgress(.windowDone(total: 1, label: sinceLabel,
+                                   summary: nil, threads: 0, completed: 1, keptSoFar: 0))
         }
         await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
         Log("GmailConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
