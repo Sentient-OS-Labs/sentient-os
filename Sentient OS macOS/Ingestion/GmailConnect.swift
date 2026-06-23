@@ -2,9 +2,10 @@
 //  GmailConnect.swift
 //  Sentient OS macOS
 //
-//  Gmail — the lone CLOUD source. Gmail can't be read on-device, so we both FETCH and SUMMARIZE
-//  through the user's own Codex Gmail connector (account-level `codex_apps/gmail.*`, visible to
-//  `codex exec` even under `--ignore-user-config` — measured live June 15, no CodexCLI change needed).
+//  Gmail — the first CLOUD source (Google Calendar is the second, same shape — see CalendarConnect.swift).
+//  Gmail can't be read on-device, so we both FETCH and SUMMARIZE through the user's own Codex Gmail
+//  connector (account-level `codex_apps/gmail.*`, visible to `codex exec` even under
+//  `--ignore-user-config` — measured live June 15, no CodexCLI change needed).
 //
 //  Connection: the user links Google on OpenAI's connector page (opened from the dev popup); we
 //  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
