@@ -104,6 +104,7 @@ struct DevToolsView: View {
     @State private var showIMessagePicker = false
     @State private var showSummaries = false
     @State private var showActionItems = false
+    @State private var showPermissions = false
     @State private var showMore = false
     @State private var fdaGranted = false
     @State private var resetResult: String?
@@ -160,6 +161,7 @@ struct DevToolsView: View {
                         viewActionItemsButton
                     }
                     mcpToggleButton
+                    permissionsButton
                     moreSection
                 }
                 .padding(24)
@@ -170,6 +172,7 @@ struct DevToolsView: View {
         .background(Theme.bg)
         .sheet(isPresented: $showSummaries) { SummariesView() }
         .sheet(isPresented: $showActionItems) { ProactiveItemsView() }
+        .sheet(isPresented: $showPermissions) { PermissionsView() }
         .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
         .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
         .sheet(item: $deviceJob) { job in
@@ -288,6 +291,17 @@ struct DevToolsView: View {
                 .frame(maxWidth: .infinity, minHeight: 40)
         }
         .buttonStyle(.bordered).tint(.orange)
+    }
+
+    /// Opens the PERMISSIONS panel — request the macOS grants that have no toggle until the app
+    /// asks (today: Automation control of Codex's computer-use helper; plus FDA status).
+    private var permissionsButton: some View {
+        Button { showPermissions = true } label: {
+            Label("PERMISSIONS", systemImage: "hand.raised.fill")
+                .font(.caption.weight(.bold)).tracking(2)
+                .frame(maxWidth: .infinity, minHeight: 40)
+        }
+        .buttonStyle(.bordered).tint(.white)
     }
 
     /// Proactive PART 3 — the executor. Opens the PROACTIVE · EXECUTE window listing the real
