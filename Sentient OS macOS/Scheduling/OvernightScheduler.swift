@@ -10,9 +10,11 @@
 //  engine will back the production auto-3am trigger. When enabled it: arms a wake for the chosen
 //  time → waits (the Task freezes with the Mac, thaws on the scheduled wake) → on wake keeps the Mac
 //  awake (root) + heartbeats → runs IterativeRun `.auto` (initial-if-fresh, iterative-if-caught-up,
-//  PER source) over the connectors selected in the app → releases → the Mac sleeps → re-arms for the
-//  next day. Connector detection goes through the SAME `SourceSelection.current(...)` the dev UI and
-//  Analyze Now use. Everything lands in ~/Library/Logs/SentientOS/scheduler.log.
+//  PER source) over the connectors selected in the app → then files the cycle's survivor summaries
+//  into the knowledge base via codex (VaultCloud: create if none exists yet, else a surgical update)
+//  and pushes the MCP mirror if it's on → releases → the Mac sleeps → re-arms for the next day.
+//  Connector detection goes through the SAME `SourceSelection.current(...)` the dev UI and Analyze
+//  Now use. Everything lands in ~/Library/Logs/SentientOS/scheduler.log.
 //
 
 import Foundation
@@ -130,6 +132,10 @@ final class OvernightScheduler {
         if runGmail    { await cloudLeg("Gmail",    log: log) { try await GmailConnect.runIterative    { _ in } } }
         if runCalendar { await cloudLeg("Calendar", log: log) { try await CalendarConnect.runIterative { _ in } } }
 
+        // FILE this cycle's survivor summaries into the knowledge base (codex) + push the mirror,
+        // while still held awake + heartbeating. Summaries are intentionally NOT wiped afterward.
+        await knowledgeBaseLeg(log: log)
+
         heart.cancel()
         let ended = await WakeHelperClient.shared.endAwake()
         log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
@@ -139,6 +145,33 @@ final class OvernightScheduler {
         log.line("\(name) leg…")
         do { try await body(); log.line("\(name) DONE") }
         catch { log.line("\(name) FAILED: \((error as? LocalizedError)?.errorDescription ?? "\(error)")") }
+    }
+
+    /// Knowledge-base leg: hand this cycle's survivor summaries to codex to build the vault (first run)
+    /// or surgically update the live one, then push the MCP mirror if it's enabled. Build-vs-update is
+    /// decided by whether the vault already exists on disk. Summaries are NOT wiped afterward (the cloud
+    /// step is the second sieve and skips anything already filed). Failures are logged and swallowed so
+    /// the run still reaches its clean awake-release.
+    private func knowledgeBaseLeg(log: SchedulerLog) async {
+        let notes = await CycleStore.shared.notes().map(CloudNote.init)
+        guard !notes.isEmpty else { log.line("knowledge base: no summaries to file — skipping."); return }
+
+        let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
+        log.line("knowledge base: \(exists ? "updating existing" : "creating new") from \(notes.count) summaries via codex…")
+        do {
+            if exists {
+                let merged = try await VaultCloud.shared.update(notes: notes)
+                log.line("knowledge base: ✅ updated — \(merged) summaries merged.")
+            } else {
+                let r = try await VaultCloud.shared.create(notes: notes)
+                log.line("knowledge base: ✅ created — \(r.notes) notes / \(r.folders) folders.")
+            }
+        } catch {
+            log.line("knowledge base FAILED: \((error as? LocalizedError)?.errorDescription ?? "\(error)")")
+            return   // half-edited vault isn't marked dirty, so nothing to push
+        }
+        await VaultCloud.pushIfDirty()   // no-op if the mirror is off; logs its own outcome
+        log.line("knowledge base: mirror push attempted (no-op if mirror disabled).")
     }
 
     // MARK: - Time helpers
