@@ -17,6 +17,12 @@ struct RootView: View {
     @State private var customRoots: [URL] = []   // session-only custom folders (dev picker)
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
     @AppStorage("dev.proactive.realCards") private var realCards = false   // real cards + full-cycle Analyze Now
+    // Cloud sources — same flags the scheduler reads, so Analyze Now processes exactly what an
+    // overnight run would (a no-op until Gmail/Calendar are actually connected + selected).
+    @AppStorage("dbg.gmail.connected")    private var gmailConnected = false
+    @AppStorage("dbg.run.gmail")          private var runGmail = false
+    @AppStorage("dbg.calendar.connected") private var calendarConnected = false
+    @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
     // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
     private static let modelPath = ModelLocator.resolve()
@@ -35,6 +41,8 @@ struct RootView: View {
                 ProcessingView(modelPath: modelPath,
                                connectors: RunSource.connectors(from: selectedSources),
                                mode: .auto,
+                               runGmail: gmailConnected && runGmail,
+                               runCalendar: calendarConnected && runCalendar,
                                fullCycle: realCards) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
                 }
@@ -62,6 +70,7 @@ struct RootView: View {
                 imessage: sources.contains { if case .imessage = $0 { return true } else { return false } },
                 notes: sources.contains(.notes),
                 whatsappAvailable: WhatsAppSource.isInstalled),
+            customRoots: customRoots,
             modelMissing: Self.modelPath == nil,
             realCards: realCards,
             onAnalyze: { withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true } },

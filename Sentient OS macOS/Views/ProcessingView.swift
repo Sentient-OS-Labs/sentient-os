@@ -443,8 +443,11 @@ struct ProcessingView: View {
             }
         }
         do {
-            _ = mode == .iterative ? try await GmailConnect.runIterative(onProgress: onProgress)
-                                   : try await GmailConnect.runInitial(onProgress: onProgress)
+            // Only the explicit force-initial mode does a full re-read; `.auto` and `.iterative` both
+            // use runIterative — which itself falls back to a full initial read when Gmail has no mark
+            // yet. (Same auto behavior the scheduler relies on; keeps every entry point in agreement.)
+            _ = mode == .initial ? try await GmailConnect.runInitial(onProgress: onProgress)
+                                 : try await GmailConnect.runIterative(onProgress: onProgress)
         } catch {
             var p = box.value
             p.lastTitle = "Gmail failed"
@@ -491,8 +494,10 @@ struct ProcessingView: View {
             }
         }
         do {
-            _ = mode == .iterative ? try await CalendarConnect.runIterative(onProgress: onProgress)
-                                   : try await CalendarConnect.runInitial(onProgress: onProgress)
+            // Force-initial only on `.initial`; `.auto`/`.iterative` → runIterative (which falls back
+            // to a full initial read when Calendar has no mark yet). Matches the Gmail leg + scheduler.
+            _ = mode == .initial ? try await CalendarConnect.runInitial(onProgress: onProgress)
+                                 : try await CalendarConnect.runIterative(onProgress: onProgress)
         } catch {
             var p = box.value
             p.lastTitle = "Calendar failed"
@@ -509,7 +514,7 @@ struct ProcessingView: View {
 
 /// Thread-safe holder so the Gmail leg's `@Sendable` progress callback can accumulate onto the
 /// device leg's final counts and hand the final value back (mirrors CodexCLI's PipeDrain pattern).
-private final class ProgressBox: @unchecked Sendable {
+private nonisolated final class ProgressBox: @unchecked Sendable {
     private let lock = NSLock()
     private var p: RunProgress
     init(_ p: RunProgress) { self.p = p }

@@ -10,11 +10,13 @@
 //  engine will back the production auto-3am trigger. When enabled it: arms a wake for the chosen
 //  time → waits (the Task freezes with the Mac, thaws on the scheduled wake) → on wake keeps the Mac
 //  awake (root) + heartbeats → runs IterativeRun `.auto` (initial-if-fresh, iterative-if-caught-up,
-//  PER source) over the connectors selected in the app → then files the cycle's survivor summaries
-//  into the knowledge base via codex (VaultCloud: create if none exists yet, else a surgical update)
-//  and pushes the MCP mirror if it's on → releases → the Mac sleeps → re-arms for the next day.
-//  Connector detection goes through the SAME `SourceSelection.current(...)` the dev UI and Analyze
-//  Now use. Everything lands in ~/Library/Logs/SentientOS/scheduler.log.
+//  PER source) over the connectors selected in the app, plus the Gmail/Calendar legs → then runs the
+//  SAME shared tail the home's Analyze Now runs (`ProactiveCycle`: knowledge base create/update →
+//  MCP mirror push → proactive decide → research → prepare → wipe summaries) → releases → the Mac
+//  sleeps → re-arms for the next day. There is NO scheduler-specific processing path: source
+//  detection goes through the SAME `SourceSelection.current(...)`, the read leg is the SAME
+//  `IterativeRun`, and the tail is the SAME `ProactiveCycle` — so a 3am run and a hand-pressed
+//  Analyze Now do byte-for-byte the same work. Everything lands in ~/Library/Logs/SentientOS/scheduler.log.
 //
 
 import Foundation
@@ -100,7 +102,8 @@ final class OvernightScheduler {
         }
     }
 
-    /// The actual run: keep awake → process the selected connectors with `.auto` → release.
+    /// The actual run: keep awake → read the selected connectors with `.auto` (+ Gmail/Calendar) →
+    /// run the shared `ProactiveCycle` tail (knowledge base → mirror → proactive → wipe) → release.
     private func runProcessing(log: SchedulerLog) async {
         log.line("WOKE at \(Date()) — beginning the run.")
 
@@ -132,9 +135,24 @@ final class OvernightScheduler {
         if runGmail    { await cloudLeg("Gmail",    log: log) { try await GmailConnect.runIterative    { _ in } } }
         if runCalendar { await cloudLeg("Calendar", log: log) { try await CalendarConnect.runIterative { _ in } } }
 
-        // FILE this cycle's survivor summaries into the knowledge base (codex) + push the mirror,
-        // while still held awake + heartbeating. Summaries are intentionally NOT wiped afterward.
-        await knowledgeBaseLeg(log: log)
+        // The shared post-read tail — knowledge base (create/update) → mirror push → proactive
+        // (decide → research → prepare) → wipe summaries. This is the EXACT chain the home's Analyze
+        // Now runs (ProcessingView → ProactiveCycle), so a scheduled run produces the morning's
+        // For-You cards too — there is no scheduler-specific knowledge-base path. Still held awake +
+        // heartbeating throughout (proactive uses codex, same as the KB step already does).
+        if let failure = await ProactiveCycle.shared.run(progress: { phase in
+            Task { @MainActor in
+                switch phase {
+                case .knowledgeBase(let s): log.line("proactive: \(s)")
+                case .deciding:             log.line("proactive: deciding what's worth doing…")
+                case .researching(let n):   log.line("proactive: researching + preparing \(n) item(s)…")
+                case .done(let ready):      log.line("proactive: ✅ cycle done — \(ready) card(s) ready.")
+                case .failed(let m):        log.line("proactive: FAILED — \(m)")
+                }
+            }
+        }) {
+            log.line("proactive cycle ended with a failure (summaries kept for retry): \(failure)")
+        }
 
         heart.cancel()
         let ended = await WakeHelperClient.shared.endAwake()
@@ -145,33 +163,6 @@ final class OvernightScheduler {
         log.line("\(name) leg…")
         do { try await body(); log.line("\(name) DONE") }
         catch { log.line("\(name) FAILED: \((error as? LocalizedError)?.errorDescription ?? "\(error)")") }
-    }
-
-    /// Knowledge-base leg: hand this cycle's survivor summaries to codex to build the vault (first run)
-    /// or surgically update the live one, then push the MCP mirror if it's enabled. Build-vs-update is
-    /// decided by whether the vault already exists on disk. Summaries are NOT wiped afterward (the cloud
-    /// step is the second sieve and skips anything already filed). Failures are logged and swallowed so
-    /// the run still reaches its clean awake-release.
-    private func knowledgeBaseLeg(log: SchedulerLog) async {
-        let notes = await CycleStore.shared.notes().map(CloudNote.init)
-        guard !notes.isEmpty else { log.line("knowledge base: no summaries to file — skipping."); return }
-
-        let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
-        log.line("knowledge base: \(exists ? "updating existing" : "creating new") from \(notes.count) summaries via codex…")
-        do {
-            if exists {
-                let merged = try await VaultCloud.shared.update(notes: notes)
-                log.line("knowledge base: ✅ updated — \(merged) summaries merged.")
-            } else {
-                let r = try await VaultCloud.shared.create(notes: notes)
-                log.line("knowledge base: ✅ created — \(r.notes) notes / \(r.folders) folders.")
-            }
-        } catch {
-            log.line("knowledge base FAILED: \((error as? LocalizedError)?.errorDescription ?? "\(error)")")
-            return   // half-edited vault isn't marked dirty, so nothing to push
-        }
-        await VaultCloud.pushIfDirty()   // no-op if the mirror is off; logs its own outcome
-        log.line("knowledge base: mirror push attempted (no-op if mirror disabled).")
     }
 
     // MARK: - Time helpers
@@ -200,7 +191,9 @@ private final class LogThrottle: @unchecked Sendable {
 }
 
 /// Persistent scheduler log — ~/Library/Logs/SentientOS/scheduler.log, flushed per line so a sudden
-/// sleep loses nothing. The "black box" for diagnosing an empty morning.
+/// sleep loses nothing. The "black box" for diagnosing an empty morning. MainActor-isolated (like the
+/// scheduler that owns it); off-main callers — e.g. ProactiveCycle's progress closure — hop to the
+/// main actor before logging, the same pattern ProcessingView uses.
 final class SchedulerLog {
     private let handle: FileHandle?
     private let fmt: DateFormatter
