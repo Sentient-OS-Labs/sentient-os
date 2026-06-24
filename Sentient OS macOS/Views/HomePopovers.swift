@@ -28,14 +28,28 @@ struct HomeSources {
 
 struct AnalysisPopover: View {
     let thingsUnderstood: Int
-    let sources: HomeSources
-    let analyzeEnabled: Bool
+    let sources: HomeSources               // for whatsappAvailable (hide the chip when WhatsApp isn't installed)
     let modelMissing: Bool
     let syncedLabel: String
     let pending: Int
     var onAnalyze: () -> Void
+    var onPickWhatsApp: () -> Void = {}    // tapping WhatsApp / iMessage opens the chat picker (in HomeView)
+    var onPickIMessage: () -> Void = {}
+
+    // Live source selection — the SAME keys SourceSelection / DevTools use. @AppStorage so a tap toggles
+    // the real selection AND the chip updates instantly. FDA is still enforced at run time (Analyze Now).
+    @AppStorage("dbg.run.downloads")  private var runDownloads = true
+    @AppStorage("dbg.run.desktop")    private var runDesktop = true
+    @AppStorage("dbg.run.documents")  private var runDocuments = true
+    @AppStorage("dbg.run.notes")      private var runNotes = false
+    @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
+    @AppStorage("dbg.imessage.chats") private var imessageCSV = ""
 
     @State private var vault: (notes: Int, domains: Int)?
+
+    private var filesOn: Bool { runDownloads || runDesktop || runDocuments }
+    private var anyArmed: Bool { filesOn || runNotes || !whatsappCSV.isEmpty || !imessageCSV.isEmpty }
+    private var armed: Bool { anyArmed && !modelMissing }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -62,12 +76,12 @@ struct AnalysisPopover: View {
             MonoCaps("Sources", size: 9, tracking: 2.2, color: Theme.Ink.label)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    SourceChip("Files", on: sources.files)
-                    if sources.whatsappAvailable { SourceChip("WhatsApp", on: sources.whatsapp) }
-                    SourceChip("iMessage", on: sources.imessage)
+                    SourceChip("Files", on: filesOn) { toggleFiles() }
+                    if sources.whatsappAvailable { SourceChip("WhatsApp", on: !whatsappCSV.isEmpty, action: onPickWhatsApp) }
+                    SourceChip("iMessage", on: !imessageCSV.isEmpty, action: onPickIMessage)
                 }
                 HStack(spacing: 8) {
-                    SourceChip("Notes", on: sources.notes)
+                    SourceChip("Notes", on: runNotes) { runNotes.toggle() }
                     SourceChip("Gmail", on: false, soon: true)
                 }
             }
@@ -92,25 +106,31 @@ struct AnalysisPopover: View {
     }
     private var runHint: String {
         if modelMissing { return "The on-device model is missing — see Dev Tools" }
-        return analyzeEnabled ? "\(pending) pending · runs when your Mac rests" : "No sources armed"
+        return armed ? "\(pending) pending · runs when your Mac rests" : "No sources armed"
+    }
+
+    /// Files = the three folder roots as a group: any-on → turn all off; all-off → arm the default set.
+    private func toggleFiles() {
+        let on = filesOn
+        runDownloads = !on; runDesktop = !on; runDocuments = !on
     }
 
     private var analyzeButton: some View {
         Button(action: onAnalyze) {
             Text("Analyze Now")
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(analyzeEnabled ? .black : .white.opacity(0.35))
+                .foregroundStyle(armed ? .black : .white.opacity(0.35))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
                 .background(Capsule(style: .continuous)
-                    .fill(analyzeEnabled ? Color.white : Color.white.opacity(0.08)))
+                    .fill(armed ? Color.white : Color.white.opacity(0.08)))
                 .overlay(Capsule(style: .continuous)
-                    .stroke(analyzeEnabled ? .clear : .white.opacity(0.1), lineWidth: 1))
+                    .stroke(armed ? .clear : .white.opacity(0.1), lineWidth: 1))
                 .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
-        .background(GlowHalo(active: analyzeEnabled, intensity: 0.28))
-        .disabled(!analyzeEnabled)
+        .background(GlowHalo(active: armed, intensity: 0.28))
+        .disabled(!armed)
     }
 }
 
@@ -154,20 +174,33 @@ struct SourceChip: View {
     let name: String
     let on: Bool
     var soon = false
+    var action: (() -> Void)? = nil    // tappable when set (toggles a source / opens the chat picker)
 
-    init(_ name: String, on: Bool, soon: Bool = false) {
-        self.name = name; self.on = on; self.soon = soon
+    @State private var hover = false
+
+    init(_ name: String, on: Bool, soon: Bool = false, action: (() -> Void)? = nil) {
+        self.name = name; self.on = on; self.soon = soon; self.action = action
     }
 
     var body: some View {
-        HStack(spacing: 5) {
+        let chip = HStack(spacing: 5) {
             if on { Text("✓").foregroundStyle(Theme.Ink.mint) }
             Text(name).foregroundStyle(soon ? Theme.Ink.deepMuted : on ? Theme.Ink.chipInk : .white.opacity(0.28))
         }
         .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(0.8)
         .padding(.horizontal, 9).padding(.vertical, 4)
+        .background(Capsule().fill(.white.opacity(hover && action != nil ? 0.06 : 0)))
         .overlay(Capsule().strokeBorder(Theme.Ink.chipBorder,
                                         style: StrokeStyle(lineWidth: 1, dash: soon ? [3, 3] : [])))
+        .contentShape(Capsule())
+
+        if let action {
+            Button(action: action) { chip }
+                .buttonStyle(.plain)
+                .onHover { hover = $0 }
+        } else {
+            chip
+        }
     }
 }
 
@@ -191,7 +224,7 @@ enum HomeStats {
 #Preview("Analysis") {
     ZStack { Theme.bg
         AnalysisPopover(thingsUnderstood: 3339, sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
-                        analyzeEnabled: true, modelMissing: false, syncedLabel: "Synced · 3:41 AM",
+                        modelMissing: false, syncedLabel: "Synced · 3:41 AM",
                         pending: 214, onAnalyze: {})
     }.frame(width: 380, height: 460).preferredColorScheme(.dark)
 }

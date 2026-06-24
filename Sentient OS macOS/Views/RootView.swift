@@ -62,7 +62,6 @@ struct RootView: View {
                 imessage: sources.contains { if case .imessage = $0 { return true } else { return false } },
                 notes: sources.contains(.notes),
                 whatsappAvailable: WhatsAppSource.isInstalled),
-            analyzeEnabled: !sources.isEmpty && Self.modelPath != nil,
             modelMissing: Self.modelPath == nil,
             realCards: realCards,
             onAnalyze: { withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true } },

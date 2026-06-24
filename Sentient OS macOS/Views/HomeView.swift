@@ -28,7 +28,6 @@ struct HomeView: View {
     // Live context from RootView (the analyze/source switchboard).
     var thingsUnderstood: Int = 0
     var sources: HomeSources = .init()
-    var analyzeEnabled: Bool = false
     var modelMissing: Bool = false
     var realCards: Bool = false        // true → show real proactive cards from latest(); false → the demo deck
     var onAnalyze: () -> Void = {}
@@ -45,6 +44,14 @@ struct HomeView: View {
     @State private var letterShown = false
     @State private var showAnalysis = false
     @State private var showYourAIs = false
+    @State private var showWhatsAppPicker = false
+    @State private var showIMessagePicker = false
+
+    // Chat selections the Analysis popover's WhatsApp/iMessage chips pick into (same keys as SourceSelection).
+    @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
+    @AppStorage("dbg.run.whatsapp")   private var runWhatsApp = false
+    @AppStorage("dbg.imessage.chats") private var imessageCSV = ""
+    @AppStorage("dbg.run.imessage")   private var runIMessage = false
 
     var body: some View {
         GeometryReader { geo in
@@ -75,6 +82,18 @@ struct HomeView: View {
         }
         .onChange(of: realCards) { _, v in model.beginVisit(realCards: v) }   // toggle flip → re-deal
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
+        .sheet(isPresented: $showWhatsAppPicker) {
+            ChatPicker(sourceName: "WhatsApp", loadChats: { try WhatsAppSource().listChats() },
+                       initialSelection: Set(whatsappCSV.split(separator: ",").map(String.init))) { sel in
+                whatsappCSV = sel.sorted().joined(separator: ","); runWhatsApp = !sel.isEmpty
+            }
+        }
+        .sheet(isPresented: $showIMessagePicker) {
+            ChatPicker(sourceName: "iMessage", loadChats: { try iMessageSource().listChats() },
+                       initialSelection: Set(imessageCSV.split(separator: ",").map(String.init))) { sel in
+                imessageCSV = sel.sorted().joined(separator: ","); runIMessage = !sel.isEmpty
+            }
+        }
     }
 
     // MARK: Chrome — the top-bar nav + the editorial greeting
@@ -122,9 +141,11 @@ struct HomeView: View {
 
     private var analysisPopover: some View {
         AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
-                        analyzeEnabled: analyzeEnabled, modelMissing: modelMissing,
+                        modelMissing: modelMissing,
                         syncedLabel: syncedLabel, pending: realCards ? 0 : Demo.pending,
-                        onAnalyze: { showAnalysis = false; onAnalyze() })
+                        onAnalyze: { showAnalysis = false; onAnalyze() },
+                        onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
+                        onPickIMessage: { showAnalysis = false; showIMessagePicker = true })
             .preferredColorScheme(.dark)
     }
 
@@ -770,6 +791,6 @@ private enum Demo {
 #Preview("Home — the suggestions") {
     HomeView(thingsUnderstood: 3339,
              sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
-             analyzeEnabled: true, modelMissing: false)
+             modelMissing: false)
         .frame(width: 1180, height: 880)
 }
