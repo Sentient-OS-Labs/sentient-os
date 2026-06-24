@@ -60,16 +60,20 @@ struct ProcessingView: View {
     let runGmail: Bool                // append the cloud Gmail leg (shown in this same takeover)
     let runCalendar: Bool             // append the cloud Google Calendar leg (same takeover)
     let showPrompt: Bool              // dev: add the left-side prompt pane
+    let fullCycle: Bool               // real-mode Analyze Now: after the read, run ProactiveCycle (KB + proactive + wipe)
     var onDone: () -> Void
 
     init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode,
-         runGmail: Bool = false, runCalendar: Bool = false, showPrompt: Bool = false, onDone: @escaping () -> Void) {
+         runGmail: Bool = false, runCalendar: Bool = false, showPrompt: Bool = false,
+         fullCycle: Bool = false, onDone: @escaping () -> Void) {
         self.modelPath = modelPath; self.connectors = connectors; self.mode = mode
-        self.runGmail = runGmail; self.runCalendar = runCalendar; self.showPrompt = showPrompt; self.onDone = onDone
+        self.runGmail = runGmail; self.runCalendar = runCalendar; self.showPrompt = showPrompt
+        self.fullCycle = fullCycle; self.onDone = onDone
     }
 
-    private enum UIState: Equatable { case loadingModel, processing, completed, failed(String) }
+    private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(String) }
     @State private var state: UIState = .loadingModel
+    @State private var prepStatus = "Preparing your suggestions…"
     @State private var progress = RunProgress()
     @State private var started = false
     @State private var runTask: Task<RunProgress, Never>?
@@ -83,6 +87,7 @@ struct ProcessingView: View {
                     switch state {
                     case .loadingModel:   loadingView
                     case .processing:     processingContent
+                    case .preparing:      preparingView
                     case .completed:      completedView
                     case .failed(let e):  failedView(e)
                     }
@@ -258,6 +263,21 @@ struct ProcessingView: View {
         .animation(.easeInOut(duration: 0.4), value: progress.done)
     }
 
+    /// Real-mode tail: the read is done; now we're filing into the knowledge base + preparing the
+    /// proactive suggestions. A calm breathing sparkle with the live phase line.
+    private var preparingView: some View {
+        VStack(spacing: 22) {
+            Image(systemName: "sparkles").font(.system(size: 46))
+                .foregroundStyle(.white.opacity(0.65)).symbolEffect(.breathe, options: .speed(0.7))
+            Text(prepStatus)
+                .font(.title3.weight(.semibold)).foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+            Text("Reading what's new, then preparing a few things worth doing.")
+                .font(.caption).foregroundStyle(.white.opacity(0.4))
+            ProgressView().tint(.white.opacity(0.4)).padding(.top, 2)
+        }
+    }
+
     private var completedView: some View {
         VStack(spacing: 22) {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 58))
@@ -369,6 +389,23 @@ struct ProcessingView: View {
             progress = p
         }
         progress = await task.value
+
+        // Real-mode Analyze Now: after the read, file into the knowledge base + run all three proactive
+        // steps + wipe the summaries — surfacing each phase — then reveal the real cards on the home.
+        if fullCycle {
+            withAnimation { state = .preparing }
+            let failure = await ProactiveCycle.shared.run { phase in
+                Task { @MainActor in
+                    switch phase {
+                    case .knowledgeBase(let s): prepStatus = s
+                    case .deciding:             prepStatus = "Deciding what's worth doing…"
+                    case .researching(let n):   prepStatus = "Preparing \(n) suggestion\(n == 1 ? "" : "s")…"
+                    case .done, .failed:        break
+                    }
+                }
+            }
+            if let failure { withAnimation { state = .failed(failure) }; return }
+        }
         withAnimation { state = .completed }
     }
 

@@ -50,11 +50,13 @@ struct Briefing: Identifiable {
     let doneTitle: String
     let doneBody: String
     let codexPrompt: String?    // what real execution hands to CodexCLI (see THE CODEX SEAM above)
+    let accent: Color           // the card's one accent (jewelry rule). Demo: kind.accent; real: per method.
 
     init(id: String, kind: Kind, kicker: String, title: String, body: String,
          letter: String? = nil, draft: String? = nil, draftLabel: String? = nil,
          detailLabel: String? = nil, offer: String? = nil, workLog: [String] = [],
-         doneTitle: String = "", doneBody: String = "", codexPrompt: String? = nil) {
+         doneTitle: String = "", doneBody: String = "", codexPrompt: String? = nil,
+         accent: Color? = nil) {
         self.id = id
         self.kind = kind
         self.kicker = kicker
@@ -69,6 +71,68 @@ struct Briefing: Identifiable {
         self.doneTitle = doneTitle
         self.doneBody = doneBody
         self.codexPrompt = codexPrompt
+        self.accent = accent ?? kind.accent
+    }
+
+    // MARK: Real cards — built from a prepared proactive action (the toggle's real mode)
+
+    /// Map a verified, ready-to-fire `PreparedAction` onto a card. The kicker is the clean
+    /// `METHOD · TARGET` whisper; the accent is the method's signature color (jewelry). Fireable
+    /// methods carry the editable draft + the LLM-written button; research is a read-only briefing.
+    init(from a: PreparedAction) {
+        let isResearch = a.method == .research
+        let content = a.preparedContent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hasContent = !content.isEmpty
+        self.init(
+            id: a.title,                                                   // stable; == PreparedAction.id
+            kind: .plan,                                                   // placeholder; `accent` drives color
+            kicker: Self.kickerLine(method: a.method, target: a.target),
+            title: a.title,
+            body: a.cardSummary,
+            letter: isResearch && hasContent ? content : nil,             // research: the briefing IS the letter
+            draft: !isResearch && hasContent ? content : nil,             // actions: the editable draft block
+            draftLabel: Self.draftLabelText(for: a.method),
+            detailLabel: hasContent ? (a.detailLabel.isEmpty ? "read the draft" : a.detailLabel) : nil,
+            offer: (isResearch || a.buttonText.isEmpty) ? nil : a.buttonText,
+            workLog: [],
+            doneTitle: "Done.",
+            doneBody: "",
+            codexPrompt: nil,
+            accent: Self.accentColor(for: a.method))
+    }
+
+    /// The clean mono-caps kicker: `METHOD · TARGET` (gmail/calendar/research name themselves).
+    static func kickerLine(method: PreparedAction.Method, target: String) -> String {
+        let t = target.trimmingCharacters(in: .whitespaces).uppercased()
+        switch method {
+        case .gmail:    return "GMAIL"
+        case .calendar: return "CALENDAR"
+        case .browser:  return t.isEmpty ? "BROWSER USE" : "BROWSER USE · \(t)"
+        case .computer: return t.isEmpty ? "COMPUTER USE" : "COMPUTER USE · \(t)"
+        case .research: return "RESEARCHED"
+        }
+    }
+
+    /// The method's signature accent (jewelry: one quiet color per card).
+    static func accentColor(for method: PreparedAction.Method) -> Color {
+        switch method {
+        case .gmail:    return Color(red: 1.00, green: 0.42, blue: 0.45)   // ember
+        case .calendar: return Color(red: 0.36, green: 0.55, blue: 1.00)   // cobalt
+        case .browser:  return Color(red: 0.72, green: 0.46, blue: 0.96)   // orchid
+        case .computer: return Color(red: 0.30, green: 0.82, blue: 0.78)   // teal
+        case .research: return Theme.Ink.mint                              // mint
+        }
+    }
+
+    /// The draft-block tag in the expanded letter.
+    static func draftLabelText(for method: PreparedAction.Method) -> String {
+        switch method {
+        case .gmail:    return "Draft email"
+        case .calendar: return "Event"
+        case .browser:  return "What I'll do"
+        case .computer: return "Message"
+        case .research: return "Briefing"
+        }
     }
 
     // MARK: The demo six

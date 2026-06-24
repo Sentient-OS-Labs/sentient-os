@@ -16,7 +16,7 @@
 //  awake loop). The wipe happens ONLY on a fully successful chain — a failure leaves the summaries in
 //  place so a retry can pick up where it stopped. `progress` carries human-readable phases for the UI.
 //
-//  Key method: run(progress:) → Bool  (true = cycle completed; false = a step failed, summaries kept)
+//  Key method: run(progress:) → String?  (nil = cycle completed; a message = the step that failed)
 //
 
 import Foundation
@@ -34,15 +34,19 @@ actor ProactiveCycle {
 
     static let shared = ProactiveCycle()
 
-    /// Run the post-read tail (knowledge base → mirror → proactive → wipe). Returns true on a fully
-    /// successful cycle (summaries wiped), false if a step failed (summaries kept). Never throws — every
-    /// failure is reported through `progress(.failed(…))` so the caller can just render it.
+    /// When the last full cycle finished (UserDefaults) — drives the home's real "Synced · …" stamp.
+    static let lastCycleKey = "proactive.lastCycleAt"
+
+    /// Run the post-read tail (knowledge base → mirror → proactive → wipe). Returns nil on a fully
+    /// successful cycle (summaries wiped), or the failure message if a step errored (summaries kept).
+    /// Never throws — every failure is ALSO reported through `progress(.failed(…))` for the live UI.
     @discardableResult
-    func run(progress: @escaping @Sendable (ProactiveCyclePhase) -> Void) async -> Bool {
+    func run(progress: @escaping @Sendable (ProactiveCyclePhase) -> Void) async -> String? {
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
         guard !notes.isEmpty else {                          // nothing new this cycle — harmless no-op
+            UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
             progress(.done(ready: ProactiveResearch.latest()?.ready.count ?? 0))
-            return true
+            return nil
         }
 
         // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
@@ -52,8 +56,8 @@ actor ProactiveCycle {
             if exists { _ = try await VaultCloud.shared.update(notes: notes) }
             else      { _ = try await VaultCloud.shared.create(notes: notes) }
         } catch {
-            progress(.failed("Knowledge base — \(Self.msg(error))"))
-            return false                                     // half-edited vault isn't dirty; summaries kept
+            let m = "Knowledge base — \(Self.msg(error))"
+            progress(.failed(m)); return m                   // half-edited vault isn't dirty; summaries kept
         }
         await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
 
@@ -70,8 +74,8 @@ actor ProactiveCycle {
         } catch Proactive.ProError.noRecent {
             items = []                                       // nothing recent enough — clear cards, still success
         } catch {
-            progress(.failed("Deciding — \(Self.msg(error))"))
-            return false
+            let m = "Deciding — \(Self.msg(error))"
+            progress(.failed(m)); return m
         }
 
         if items.isEmpty {
@@ -81,15 +85,16 @@ actor ProactiveCycle {
             do {
                 _ = try await ProactiveResearch.shared.researchAndPrepare(items: items, calendarContext: calCtx)
             } catch {
-                progress(.failed("Preparing — \(Self.msg(error))"))
-                return false
+                let m = "Preparing — \(Self.msg(error))"
+                progress(.failed(m)); return m
             }
         }
 
         // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.
         await CycleStore.shared.wipeAllNotes()
+        UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
         progress(.done(ready: ProactiveResearch.latest()?.ready.count ?? 0))
-        return true
+        return nil
     }
 
     private static func msg(_ e: Error) -> String { (e as? LocalizedError)?.errorDescription ?? "\(e)" }

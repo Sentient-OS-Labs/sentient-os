@@ -420,15 +420,19 @@ actor CodexCLI {
                                      customEnv: [String: String] = [:],
                                      extraPathDirs: [String] = [],
                                      onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
-        try await withCheckedThrowingContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
-                                                        cwd: cwd, timeout: timeout,
-                                                        customEnv: customEnv, extraPathDirs: extraPathDirs,
-                                                        onStdoutLine: onStdoutLine)) }
-                catch { cont.resume(throwing: error) }
+        // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
+        let holder = ProcHolder()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
+                                                            cwd: cwd, timeout: timeout,
+                                                            customEnv: customEnv, extraPathDirs: extraPathDirs,
+                                                            onStdoutLine: onStdoutLine, procHolder: holder)) }
+                    catch { cont.resume(throwing: error) }
+                }
             }
-        }
+        } onCancel: { holder.terminate() }
     }
 
     /// Blocking runner (call off-main). GUI-spawned `Process` works with a SANITIZED env —
@@ -438,7 +442,8 @@ actor CodexCLI {
                                 cwd: String?, timeout: TimeInterval,
                                 customEnv: [String: String] = [:],
                                 extraPathDirs: [String] = [],
-                                onStdoutLine: (@Sendable (String) -> Void)? = nil) throws -> ExecResult {
+                                onStdoutLine: (@Sendable (String) -> Void)? = nil,
+                                procHolder: ProcHolder? = nil) throws -> ExecResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = args
@@ -494,6 +499,7 @@ actor CodexCLI {
         }
 
         do { try proc.run() } catch { throw CLIError.launchFailed("\(error)") }
+        procHolder?.set(proc)   // expose to the cancellation handler (a card's STOP)
 
         // Feed the prompt over stdin on its own queue: prompts can be hundreds of KB (whole
         // summary corpora), far beyond the pipe buffer, so the write must overlap the child's

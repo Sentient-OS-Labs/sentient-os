@@ -30,6 +30,7 @@ struct HomeView: View {
     var sources: HomeSources = .init()
     var analyzeEnabled: Bool = false
     var modelMissing: Bool = false
+    var realCards: Bool = false        // true → show real proactive cards from latest(); false → the demo deck
     var onAnalyze: () -> Void = {}
     var onShowDevTools: () -> Void = {}
 
@@ -70,8 +71,9 @@ struct HomeView: View {
         .onAppear {                        // every appearance starts fresh: sealed envelope, full deal
             letter = nil
             letterShown = false
-            model.beginVisit()
+            model.beginVisit(realCards: realCards)
         }
+        .onChange(of: realCards) { _, v in model.beginVisit(realCards: v) }   // toggle flip → re-deal
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
     }
 
@@ -121,9 +123,19 @@ struct HomeView: View {
     private var analysisPopover: some View {
         AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
                         analyzeEnabled: analyzeEnabled, modelMissing: modelMissing,
-                        syncedLabel: Demo.synced, pending: Demo.pending,
+                        syncedLabel: syncedLabel, pending: realCards ? 0 : Demo.pending,
                         onAnalyze: { showAnalysis = false; onAnalyze() })
             .preferredColorScheme(.dark)
+    }
+
+    /// Real mode: the actual last-cycle stamp; demo mode: the showcase string.
+    private var syncedLabel: String {
+        guard realCards else { return Demo.synced }
+        guard let d = UserDefaults.standard.object(forKey: ProactiveCycle.lastCycleKey) as? Date else {
+            return "Not yet analyzed"
+        }
+        let f = DateFormatter(); f.dateFormat = "h:mm a"
+        return "Synced · \(f.string(from: d))"
     }
 
     private var yourAIsPopover: some View {
@@ -148,6 +160,7 @@ struct HomeView: View {
                         model.unsealWelcome()
                         openLetter(item.element.b)
                     },
+                    onStop: { model.stopRun(item.element.id) },
                     onFling: { model.dismiss(item.element.id, toward: $0) })
             }
         }
@@ -238,9 +251,11 @@ struct HomeView: View {
             if let b = letter {
                 LetterView(briefing: b,
                            phase: model.entry(b.id)?.phase ?? .offer,
+                           editable: model.entry(b.id)?.action != nil && b.draft != nil,   // real action card
+                           onCommitEdit: { model.applyEdit(b.id, content: $0) },
                            onOffer: {
                                closeLetter()
-                               model.run(b.id)   // the theater plays out on the card
+                               model.run(b.id)   // real card → fires for real; demo → theater
                            },
                            onClose: closeLetter)
                     .frame(width: 660)
@@ -294,9 +309,11 @@ private struct NavItem: View {
 final class ForYouModel {
     struct Entry: Identifiable {
         let b: Briefing
+        var action: PreparedAction?   // real card → the action to fire (mutable: edits update it); demo → nil
         var phase: BriefingPhase
         var dealt = false
-        var flight: CGSize?       // set = the card is flying off-screen
+        var flight: CGSize?           // set = the card is flying off-screen
+        var liveLines: [String] = []  // real card → codex's live play-by-play
         var id: String { b.id }
     }
 
@@ -304,6 +321,8 @@ final class ForYouModel {
     /// Bumped per appearance — in-flight Tasks from a previous visit check it and bail,
     /// so a re-deal can never be mutated by stale theater/dismiss timers.
     private var visit = 0
+    /// Live real-card fires, keyed by card id, so a card's STOP can cancel exactly its run.
+    private var runTasks: [String: Task<Void, Never>] = [:]
 
     func entry(_ id: String) -> Entry? { entries.first { $0.id == id } }
 
@@ -312,12 +331,19 @@ final class ForYouModel {
         mutate(&entries[i])
     }
 
-    /// A fresh visit: full demo deck, welcome re-sealed, letter closed — then the orb deals
-    /// the cards with staggered springs from above the header.
-    func beginVisit() {
+    /// A fresh visit. Real mode → the verified cards from the latest proactive run (empty → the orb's
+    /// "I'm here to help."). Demo mode → the investor deck (welcome re-sealed). Then the orb deals the
+    /// cards with staggered springs from above the header.
+    func beginVisit(realCards: Bool) {
         visit += 1
         let v = visit
-        entries = Briefing.demo.map { Entry(b: $0, phase: $0.kind == .welcome ? .sealed : .offer) }
+        runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
+        if realCards {
+            let ready = ProactiveResearch.latest()?.ready ?? []
+            entries = ready.map { Entry(b: Briefing(from: $0), action: $0, phase: .offer) }
+        } else {
+            entries = Briefing.demo.map { Entry(b: $0, action: nil, phase: $0.kind == .welcome ? .sealed : .offer) }
+        }
         for (i, e) in entries.enumerated() {
             Task {
                 try? await Task.sleep(for: .seconds(0.25 + Double(i) * 0.11))
@@ -335,10 +361,11 @@ final class ForYouModel {
         update(e.id) { $0.phase = .offer }
     }
 
-    /// Fire the offer. Every card plays the briefing's hard-coded `workLog` theater for visual
-    /// feedback — no card actually sends anything (the live Gmail-MCP wiring was removed).
+    /// Fire the offer. A REAL card runs its action through the executor for real (live-streamed, with
+    /// STOP); a demo card plays the briefing's hard-coded `workLog` theater for visual feedback.
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
+        if let action = e.action { runReal(id, action); return }   // real card → fire for real
         let v = visit
 
         Task {
@@ -356,6 +383,86 @@ final class ForYouModel {
             dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
                                        height: -CGFloat.random(in: 350...560)))
         }
+    }
+
+    /// Fire a REAL card: route its action through the executor, stream codex's play-by-play into the
+    /// card (replacing the demo theater), and on success fly it away + drop it from the persisted set
+    /// so a re-deal won't show it again. `ProactiveExecutor.fire` reads `action.preparedContent`, so a
+    /// draft the user edited in the letter is exactly what gets sent.
+    private func runReal(_ id: String, _ action: PreparedAction) {
+        let v = visit
+        update(id) { $0.phase = .working(0); $0.liveLines = [] }
+        let task = Task {
+            let progress: @Sendable (String) -> Void = { line in
+                Task { @MainActor in
+                    guard self.visit == v else { return }
+                    self.appendLine(id, line)
+                }
+            }
+            let outcome = await ProactiveExecutor.shared.fire(action, progress: progress)
+            guard self.visit == v, !Task.isCancelled else { return }
+            switch outcome {
+            case .fired:
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { self.update(id) { $0.phase = .done } }
+                self.removeFromLatest(id)
+                try? await Task.sleep(for: .seconds(2.6))
+                guard self.visit == v else { return }
+                self.dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
+                                                height: -CGFloat.random(in: 350...560)))
+            case .notFireable(let m), .failed(let m):
+                self.appendLine(id, "✗ \(m)")
+                try? await Task.sleep(for: .seconds(1.4))
+                guard self.visit == v else { return }
+                withAnimation { self.update(id) { $0.phase = .offer } }   // back to offer — edit + retry
+            }
+            self.runTasks[id] = nil
+        }
+        runTasks[id] = task
+    }
+
+    /// STOP a live real-card run: cancel the codex process (CodexCLI honors it) and return to offer.
+    func stopRun(_ id: String) {
+        runTasks[id]?.cancel(); runTasks[id] = nil
+        withAnimation { update(id) { $0.liveLines.append("■ stopped"); $0.phase = .offer } }
+    }
+
+    /// Append one live line to a real card (dedup consecutive duplicates; cap the buffer).
+    private func appendLine(_ id: String, _ line: String) {
+        let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        update(id) {
+            guard $0.liveLines.last != t else { return }   // item.started + .completed can repeat
+            $0.liveLines.append(t)
+            if $0.liveLines.count > 40 { $0.liveLines.removeFirst($0.liveLines.count - 40) }
+        }
+    }
+
+    /// Apply an edited draft to a card (its `preparedContent`) and persist it, so the fire sends it.
+    func applyEdit(_ id: String, content: String) {
+        update(id) {
+            guard let old = $0.action else { return }
+            $0.action = Self.replacingContent(old, with: content)
+        }
+        guard var result = ProactiveResearch.latest() else { return }
+        result = ReadyResult(ready: result.ready.map { $0.id == id ? Self.replacingContent($0, with: content) : $0 },
+                             dropped: result.dropped)
+        ProactiveResearch.saveLatest(result)
+    }
+
+    /// Drop a fired card from the persisted `latest` so a re-deal (next visit) won't show it again.
+    private func removeFromLatest(_ id: String) {
+        guard let result = ProactiveResearch.latest() else { return }
+        ProactiveResearch.saveLatest(ReadyResult(ready: result.ready.filter { $0.id != id },
+                                                 dropped: result.dropped))
+    }
+
+    /// A copy of a PreparedAction with new `preparedContent` (the rest unchanged).
+    private static func replacingContent(_ a: PreparedAction, with content: String) -> PreparedAction {
+        PreparedAction(title: a.title, method: a.method, target: a.target, urgency: a.urgency,
+                       dueDate: a.dueDate, status: a.status, verification: a.verification,
+                       cardSummary: a.cardSummary, preparedContent: content, executionRecipe: a.executionRecipe,
+                       buttonText: a.buttonText, detailLabel: a.detailLabel, sources: a.sources,
+                       reviewNote: a.reviewNote)
     }
 
     /// Send a card flying along `v` (a flick's predicted translation), then reflow the scatter.
@@ -477,6 +584,7 @@ private struct DealtCard: View {
     var onOffer: () -> Void
     var onDetail: () -> Void
     var onOpenEnvelope: () -> Void
+    var onStop: () -> Void
     var onFling: (CGSize) -> Void
 
     @State private var drag: CGSize = .zero
@@ -484,7 +592,8 @@ private struct DealtCard: View {
     var body: some View {
         let j = Self.jitter(entry.id)
         BriefingCard(briefing: entry.b, phase: entry.phase,
-                     onOffer: onOffer, onDetail: onDetail, onOpenEnvelope: onOpenEnvelope)
+                     onOffer: onOffer, onDetail: onDetail, onOpenEnvelope: onOpenEnvelope,
+                     liveLines: entry.liveLines, onStop: entry.action != nil ? onStop : nil)
             .rotationEffect(.degrees(j.rot + drag.width / 24))
             .scaleEffect(entry.dealt ? 1 : 0.7)
             .position(entry.dealt ? CGPoint(x: slot.x + j.dx, y: slot.y + j.dy) : dealFrom)
@@ -521,15 +630,18 @@ private struct DealtCard: View {
 private struct LetterView: View {
     let briefing: Briefing
     let phase: BriefingPhase
+    var editable: Bool = false                       // real card with a draft → the draft is editable
+    var onCommitEdit: (String) -> Void = { _ in }    // persist the edited draft (so it's what fires)
     var onOffer: () -> Void
     var onClose: () -> Void
 
     @State private var copied = false
+    @State private var editedDraft = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
-                MonoCaps(briefing.kicker, size: 10, tracking: 2.2, color: briefing.kind.accent)
+                MonoCaps(briefing.kicker, size: 10, tracking: 2.2, color: briefing.accent)
                 Spacer()
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -555,7 +667,7 @@ private struct LetterView: View {
             }
 
             if let offer = briefing.offer, phase == .offer {
-                OfferButton(label: offer, accent: briefing.kind.accent, action: onOffer)
+                OfferButton(label: offer, accent: briefing.accent, action: onOffer)
                     .padding(.top, 16)
             }
         }
@@ -563,10 +675,11 @@ private struct LetterView: View {
         .background(Theme.Ink.cardBG, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
             .strokeBorder(briefing.kind == .welcome ? BriefingCard.welcomeGradient
-                          : LinearGradient(colors: [briefing.kind.accent.opacity(0.45), .white.opacity(0.06)],
+                          : LinearGradient(colors: [briefing.accent.opacity(0.45), .white.opacity(0.06)],
                                            startPoint: .topLeading, endPoint: .bottomTrailing),
                           lineWidth: 1))
         .shadow(color: .black.opacity(0.6), radius: 40, y: 18)
+        .onAppear { editedDraft = briefing.draft ?? "" }
     }
 
     @ViewBuilder
@@ -576,7 +689,7 @@ private struct LetterView: View {
             let text = item.element.trimmingCharacters(in: .whitespacesAndNewlines)
             if text.hasPrefix("✦ ") {
                 HStack(alignment: .firstTextBaseline, spacing: 9) {
-                    Text("✦").font(.system(size: 12)).foregroundStyle(briefing.kind.accent)
+                    Text("✦").font(.system(size: 12)).foregroundStyle(briefing.accent)
                     Text(Self.inline(String(text.dropFirst(2))))
                         .font(.system(size: 13.5)).foregroundStyle(.white.opacity(0.84)).lineSpacing(4.5)
                 }
@@ -597,16 +710,19 @@ private struct LetterView: View {
     private func draftBlock(_ draft: String) -> some View {
         HStack(alignment: .top, spacing: 0) {
             RoundedRectangle(cornerRadius: 1)
-                .fill(LinearGradient(colors: [briefing.kind.accent, briefing.kind.accent.opacity(0.15)],
+                .fill(LinearGradient(colors: [briefing.accent, briefing.accent.opacity(0.15)],
                                      startPoint: .top, endPoint: .bottom))
                 .frame(width: 2)
             VStack(alignment: .leading, spacing: 9) {
                 HStack {
                     MonoCaps(briefing.draftLabel ?? "Draft", size: 9, tracking: 2.0, color: Theme.Ink.label)
+                    if editable {
+                        Image(systemName: "pencil").font(.system(size: 8.5)).foregroundStyle(briefing.accent.opacity(0.9))
+                    }
                     Spacer()
                     Button {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(draft, forType: .string)
+                        NSPasteboard.general.setString(editable ? editedDraft : draft, forType: .string)
                         copied = true
                         Task { try? await Task.sleep(for: .seconds(2)); copied = false }
                     } label: {
@@ -619,9 +735,18 @@ private struct LetterView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                Text(draft)
-                    .font(.system(size: 13)).foregroundStyle(.white.opacity(0.88)).lineSpacing(4)
-                    .textSelection(.enabled)
+                if editable {
+                    TextEditor(text: $editedDraft)
+                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.92)).lineSpacing(4)
+                        .tint(briefing.accent)
+                        .scrollContentBackground(.hidden)
+                        .frame(minHeight: 90, maxHeight: 300)
+                        .onChange(of: editedDraft) { _, new in onCommitEdit(new) }
+                } else {
+                    Text(draft)
+                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.88)).lineSpacing(4)
+                        .textSelection(.enabled)
+                }
             }
             .padding(14)
         }

@@ -24,6 +24,8 @@ struct BriefingCard: View {
     var onOffer: () -> Void
     var onDetail: () -> Void
     var onOpenEnvelope: () -> Void
+    var liveLines: [String] = []       // real cards: codex's live play-by-play (empty → demo theater)
+    var onStop: (() -> Void)? = nil    // real cards: the per-card STOP
 
     @State private var hovering = false
 
@@ -67,7 +69,7 @@ struct BriefingCard: View {
 
     private var offerFace: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps(briefing.kicker, size: 9.5, tracking: 2.0, color: briefing.kind.accent.opacity(0.95))
+            MonoCaps(briefing.kicker, size: 9.5, tracking: 2.0, color: briefing.accent.opacity(0.95))
             Text(briefing.title)
                 .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
                 .padding(.top, 8)
@@ -76,7 +78,7 @@ struct BriefingCard: View {
                 .padding(.top, 6)
             HStack(spacing: 12) {
                 if let offer = briefing.offer {
-                    OfferButton(label: offer, accent: briefing.kind.accent, action: onOffer)
+                    OfferButton(label: offer, accent: briefing.accent, action: onOffer)
                 }
                 if let detail = briefing.detailLabel {
                     Button(action: onDetail) {
@@ -98,12 +100,33 @@ struct BriefingCard: View {
     private func workingFace(_ visible: Int) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 7) {
-                PulsingDot(color: briefing.kind.accent)
-                MonoCaps("Working", size: 9.5, tracking: 2.0, color: briefing.kind.accent)
+                PulsingDot(color: briefing.accent)
+                MonoCaps("Working", size: 9.5, tracking: 2.0, color: briefing.accent)
+                Spacer(minLength: 0)
+                if let onStop {                          // real cards: a per-card STOP
+                    Button(action: onStop) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "stop.fill").font(.system(size: 7.5))
+                            Text("STOP").font(.system(size: 8.5, weight: .semibold, design: .monospaced)).tracking(1.2)
+                        }
+                        .foregroundStyle(.white.opacity(0.72))
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             Text(briefing.title)
                 .font(.system(size: 20, design: .serif)).foregroundStyle(.white.opacity(0.85))
                 .padding(.top, 8)
+            workLogBody(visible).padding(.top, 10)
+        }
+    }
+
+    /// Demo theater (scripted `workLog` typing in) vs a real run's live codex play-by-play.
+    @ViewBuilder private func workLogBody(_ visible: Int) -> some View {
+        if liveLines.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(0..<min(visible, briefing.workLog.count), id: \.self) { i in
                     let line = briefing.workLog[i]
@@ -112,11 +135,21 @@ struct BriefingCard: View {
                         .foregroundStyle(line.hasPrefix("✓") ? Theme.Ink.mint : .white.opacity(0.72))
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                if visible < briefing.workLog.count {
-                    BlinkingCursor(color: briefing.kind.accent)
+                if visible < briefing.workLog.count { BlinkingCursor(color: briefing.accent) }
+            }
+        } else {
+            let recent = Array(liveLines.suffix(5))
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(recent.enumerated()), id: \.offset) { i, line in
+                    Text(line)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white.opacity(i == recent.count - 1 ? 0.85 : 0.4))
+                        .lineLimit(2).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
-            .padding(.top, 10)
+            .animation(.easeOut(duration: 0.2), value: liveLines.count)
         }
     }
 
@@ -138,7 +171,7 @@ struct BriefingCard: View {
     private var border: LinearGradient {
         if briefing.kind == .welcome { return Self.welcomeGradient }
         return LinearGradient(
-            colors: [briefing.kind.accent.opacity(hovering ? 0.55 : 0.40), .white.opacity(0.05)],
+            colors: [briefing.accent.opacity(hovering ? 0.55 : 0.40), .white.opacity(0.05)],
             startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
@@ -310,4 +343,35 @@ private struct BlinkingCursor: View {
         BriefingCard(briefing: Briefing.demo[5], phase: .sealed,
                      onOffer: {}, onDetail: {}, onOpenEnvelope: {})
     }.frame(width: 420, height: 300)
+}
+
+#Preview("Real card — computer use") {
+    let action = PreparedAction(
+        title: "Reply to Priya about Thursday",
+        method: .computer, target: "Messages", urgency: .high, dueDate: "Thursday",
+        status: .confirmed, verification: "Checked your iMessage thread with Priya.",
+        cardSummary: "Priya asked if you're free Thursday — you are. I drafted a yes to send from Messages.",
+        preparedContent: "Hey Priya! Thursday works great — see you at 2. :)",
+        executionRecipe: "Open Messages → the chat with Priya → send the message above.",
+        buttonText: "Send it for you?", detailLabel: "read the draft",
+        sources: ["iMessage · Priya"], reviewNote: "")
+    return ZStack { Color.black
+        BriefingCard(briefing: Briefing(from: action), phase: .offer,
+                     onOffer: {}, onDetail: {}, onOpenEnvelope: {})
+    }.frame(width: 420, height: 320)
+}
+
+#Preview("Real card — working (live)") {
+    let action = PreparedAction(
+        title: "Register you for ZFellows", method: .browser, target: "ZFellows", urgency: .high,
+        dueDate: "", status: .confirmed, verification: "", cardSummary: "",
+        preparedContent: "", executionRecipe: "x", buttonText: "Register me?", detailLabel: "",
+        sources: [], reviewNote: "")
+    return ZStack { Color.black
+        BriefingCard(briefing: Briefing(from: action), phase: .working(0),
+                     onOffer: {}, onDetail: {}, onOpenEnvelope: {},
+                     liveLines: ["Opening zfellows.com…", "$ playwright-cli open https://zfellows.com",
+                                 "Filling your name + email…", "Submitting the application…"],
+                     onStop: {})
+    }.frame(width: 420, height: 340)
 }

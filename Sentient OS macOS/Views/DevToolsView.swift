@@ -115,6 +115,10 @@ struct DevToolsView: View {
     @State private var showCalendarConnect = false
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
+
+    // Real For-You cards: ON makes Analyze Now run the FULL proactive cycle and the home render real
+    // cards from the latest prepared actions. OFF = the hard-coded investor-demo deck.
+    @AppStorage("dev.proactive.realCards") private var realCards = false
     // Scheduled run (dev testing — drives OvernightScheduler).
     @AppStorage(OvernightScheduler.enabledKey) private var schedEnabled = false
     @AppStorage(OvernightScheduler.minutesKey) private var schedMinutes = OvernightScheduler.defaultMinutes
@@ -181,6 +185,22 @@ struct DevToolsView: View {
         // Changing the time does NOT arm — the user presses "Done" to commit (no duplicate wakes).
     }
 
+    /// Toggle: real For-You cards vs the demo deck. ON also makes Analyze Now run the full cycle.
+    private var realCardsSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("REAL FOR-YOU CARDS").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
+                Spacer()
+                Toggle("", isOn: $realCards).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            }
+            Text("ON: the home shows REAL proactive cards from your processed data, and Analyze Now runs the full cycle — read → knowledge base → decide / research / prepare → wipe summaries. OFF: the hard-coded investor-demo deck.")
+                .font(.caption2).foregroundStyle(Theme.faint.opacity(0.7))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -206,6 +226,7 @@ struct DevToolsView: View {
                         await runResearch(progress: progress)
                     }
                     executeButton
+                    realCardsSection
                     HStack(spacing: 10) {
                         viewSummariesButton
                         viewActionItemsButton
