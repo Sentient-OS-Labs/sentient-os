@@ -28,6 +28,7 @@ struct HomeView: View {
     // Live context from RootView (the analyze/source switchboard).
     var thingsUnderstood: Int = 0
     var sources: HomeSources = .init()
+    var customRoots: [URL] = []        // session folders from RootView — shown in the Analysis popover, like Dev Tools
     var modelMissing: Bool = false
     var realCards: Bool = false        // true → show real proactive cards from latest(); false → the demo deck
     var onAnalyze: () -> Void = {}
@@ -46,6 +47,8 @@ struct HomeView: View {
     @State private var showYourAIs = false
     @State private var showWhatsAppPicker = false
     @State private var showIMessagePicker = false
+    @State private var showGmailConnect = false
+    @State private var showCalendarConnect = false
 
     // Chat selections the Analysis popover's WhatsApp/iMessage chips pick into (same keys as SourceSelection).
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
@@ -94,6 +97,9 @@ struct HomeView: View {
                 imessageCSV = sel.sorted().joined(separator: ","); runIMessage = !sel.isEmpty
             }
         }
+        // Gmail / Calendar connect sheets — the SAME sheets Dev Tools opens (connect / select / remove).
+        .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
+        .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
     }
 
     // MARK: Chrome — the top-bar nav + the editorial greeting
@@ -127,7 +133,7 @@ struct HomeView: View {
             Text(greeting)
                 .font(.system(size: 30, design: .serif).italic())
                 .foregroundStyle(Theme.Ink.statusInk)
-            MonoCaps(Demo.readLine, size: 9.5, tracking: 2.2, color: Theme.Ink.deepMuted)
+            MonoCaps(readLine, size: 9.5, tracking: 2.2, color: Theme.Ink.deepMuted)
         }
         .padding(.leading, 30)
     }
@@ -136,8 +142,27 @@ struct HomeView: View {
         let hour = Calendar.current.component(.hour, from: Date())
         let part = hour < 5 ? "Up late" : hour < 12 ? "Good morning"
                  : hour < 18 ? "Good afternoon" : "Good evening"
-        return "\(part), \(Demo.name)."
+        let name = Self.macFirstName
+        return name.isEmpty ? "\(part)." : "\(part), \(name)."
     }
+
+    /// The mono whisper under the greeting — the REAL lifetime count of things analyzed
+    /// (`thingsUnderstood`, from LifetimeStats), not a hardcoded number.
+    private var readLine: String {
+        let n = thingsUnderstood
+        guard n > 0 else { return "Ready to read your life" }
+        return "I've read \(n.formatted()) thing\(n == 1 ? "" : "s") so far"
+    }
+
+    /// The user's first name from their macOS account — full name's first word (e.g. "Jesai
+    /// Avadhani" → "Jesai"), falling back to the (capitalized) short login name, then to nothing
+    /// (the greeting just drops the name). Resolved once per launch; no account, no network.
+    static let macFirstName: String = {
+        let full = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        if let first = full.split(separator: " ").first, !first.isEmpty { return String(first) }
+        let login = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        return login.isEmpty ? "" : login.capitalized
+    }()
 
     private var analysisPopover: some View {
         AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
@@ -145,7 +170,10 @@ struct HomeView: View {
                         syncedLabel: syncedLabel, pending: realCards ? 0 : Demo.pending,
                         onAnalyze: { showAnalysis = false; onAnalyze() },
                         onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
-                        onPickIMessage: { showAnalysis = false; showIMessagePicker = true })
+                        onPickIMessage: { showAnalysis = false; showIMessagePicker = true },
+                        onPickGmail: { showAnalysis = false; showGmailConnect = true },
+                        onPickCalendar: { showAnalysis = false; showCalendarConnect = true },
+                        customRoots: customRoots)
             .preferredColorScheme(.dark)
     }
 
@@ -160,8 +188,7 @@ struct HomeView: View {
     }
 
     private var yourAIsPopover: some View {
-        YourAIsPopover(notesRead: Demo.aiNotesRead, logLine: Demo.aiLog,
-                       onConnect: { showYourAIs = false; openWindow(id: ConnectAIsView.windowID) })
+        YourAIsPopover()   // self-contained: toggles the real MCP mirror + copies the link / system prompt
             .preferredColorScheme(.dark)
     }
 
@@ -780,12 +807,8 @@ private struct LetterView: View {
 // MARK: - Demo data (the home's own showcase strings — cards live in Briefing.demo)
 
 private enum Demo {
-    static let name = "Jesai"   // later: the vault portrait's first name
-    static let readLine = "While you slept, I read 1,704 things"
     static let synced = "Synced · 3:41 AM"
     static let pending = 214
-    static let aiNotesRead = 5
-    static let aiLog = "Tokyo Trip, Visa…"
 }
 
 #Preview("Home — the suggestions") {

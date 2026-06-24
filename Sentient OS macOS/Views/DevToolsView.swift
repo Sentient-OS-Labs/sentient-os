@@ -696,28 +696,6 @@ struct DevToolsView: View {
 
     // MARK: MCP mirror (opt-in toggle + manual sync — dogfood ahead of the Phase-5 onboarding screen)
 
-    /// The coached system prompt the user pastes into ChatGPT/Claude/Gemini (custom instructions).
-    /// Naming the connector + "always call get_structure" is what reliably makes the client load and
-    /// use the tools — clients lazy-load connector tools behind a search gate (Arch §7 field learnings).
-    static let mcpSystemPrompt = """
-        Use the Sentient OS MCP whenever relevant. It gives you access to the user's personal knowledge \
-        base, created just for you! It's basically an Obsidian vault of notes about their actual life: \
-        their work, projects, plans, relationships, places, preferences, and history, built from their \
-        entire digital life (notes, messages, emails, etc.) using on-device LLMs that analyzed their \
-        whole digital life.
-
-        In fact, using it would help you improve almost anything you need to help the user with!
-
-        ALWAYS call get_structure at the start of ANY chat with the user.
-
-        It returns the folder and file-name index structure of the vault (so you can know if there's \
-        anything you want to read in full), and it also returns the README file of the vault with some \
-        incredible general context. So ALWAYS call this at the start of EVERY chat.
-
-        And yeah, any time you think another file is really relevant to a conversation/prompt, go read \
-        it in full using get_files!
-        """
-
     /// Put a string on the system clipboard.
     private func copyToPasteboard(_ s: String) {
         NSPasteboard.general.clearContents()
@@ -779,7 +757,7 @@ struct DevToolsView: View {
                     }
                     .buttonStyle(.bordered).controlSize(.small).tint(Theme.accent)
                     Button {
-                        copyToPasteboard(Self.mcpSystemPrompt)
+                        copyToPasteboard(MirrorClient.systemPrompt)
                         mirrorStatus = "✓ system prompt copied — paste into the model's custom instructions"
                     } label: {
                         Label("Copy System Prompt", systemImage: "text.quote")
