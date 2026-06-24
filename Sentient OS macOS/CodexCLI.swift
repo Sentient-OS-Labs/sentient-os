@@ -200,7 +200,8 @@ actor CodexCLI {
 
     /// Execute one headless call and return the parsed envelope. Throws typed errors —
     /// notably `.usageLimit` (carrying the session id) so callers can reschedule/resume.
-    func run(_ invocation: Invocation) async throws -> Envelope {
+    func run(_ invocation: Invocation,
+             onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
         let availability = await validate()
         guard case .available(let bin) = availability else {
             throw CLIError.notAvailable(availability)
@@ -217,13 +218,18 @@ actor CodexCLI {
         defer { if let schemaFile { try? FileManager.default.removeItem(atPath: schemaFile) } }
 
         let started = Date()
+        // When a caller wants live play-by-play, adapt each raw --json line into a readable one.
+        let stdoutLine: (@Sendable (String) -> Void)? = onLine.map { sink in
+            { @Sendable raw in if let s = Self.humanLine(fromJSONL: raw) { sink(s) } }
+        }
         let out = try await Self.executeAsync(binary: bin,
                                               args: Self.arguments(for: invocation, schemaFile: schemaFile),
                                               stdinText: invocation.prompt,
                                               cwd: invocation.cwd,
                                               timeout: invocation.timeout,
                                               customEnv: invocation.customEnv,
-                                              extraPathDirs: invocation.extraPathDirs)
+                                              extraPathDirs: invocation.extraPathDirs,
+                                              onStdoutLine: stdoutLine)
         return try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
     }
 
@@ -362,6 +368,36 @@ actor CodexCLI {
         )
     }
 
+    /// Reduce one raw `--json` event line to a short, human-readable play-by-play line for a live UI
+    /// (the For You card / command bar), or nil to skip noise. Tolerant: codex's event shapes vary, so
+    /// it pulls the readable field from the common item types and ignores the rest. The consumer
+    /// dedups (an item can arrive as both `.started` and `.completed`).
+    private static func humanLine(fromJSONL line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let type = obj["type"] as? String,
+              type.hasPrefix("item"),                       // payloads ride item.started/.completed/.updated
+              let item = obj["item"] as? [String: Any] else { return nil }
+        func nonEmpty(_ s: String?) -> String? { (s?.isEmpty == false) ? s : nil }
+        switch item["type"] as? String {
+        case "agent_message":
+            return nonEmpty(item["text"] as? String)
+        case "reasoning":
+            return nonEmpty((item["text"] as? String) ?? (item["summary"] as? String))
+        case "command_execution", "local_shell_call":
+            return nonEmpty(item["command"] as? String).map { "$ \($0)" }
+        case "mcp_tool_call", "tool_call", "function_call":
+            let label = [(item["server"] as? String) ?? "",
+                         (item["tool"] as? String) ?? (item["name"] as? String) ?? ""]
+                .filter { !$0.isEmpty }.joined(separator: ".")
+            return label.isEmpty ? nil : "→ \(label)"
+        case "web_search", "web_search_call":
+            return (item["query"] as? String).map { "🔎 \($0)" } ?? "🔎 searching…"
+        default:
+            return nil
+        }
+    }
+
     // MARK: Process plumbing
 
     struct ExecResult: Sendable {
@@ -382,15 +418,21 @@ actor CodexCLI {
     private static func executeAsync(binary: String, args: [String], stdinText: String?,
                                      cwd: String?, timeout: TimeInterval,
                                      customEnv: [String: String] = [:],
-                                     extraPathDirs: [String] = []) async throws -> ExecResult {
-        try await withCheckedThrowingContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
-                                                        cwd: cwd, timeout: timeout,
-                                                        customEnv: customEnv, extraPathDirs: extraPathDirs)) }
-                catch { cont.resume(throwing: error) }
+                                     extraPathDirs: [String] = [],
+                                     onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
+        // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
+        let holder = ProcHolder()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { cont in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
+                                                            cwd: cwd, timeout: timeout,
+                                                            customEnv: customEnv, extraPathDirs: extraPathDirs,
+                                                            onStdoutLine: onStdoutLine, procHolder: holder)) }
+                    catch { cont.resume(throwing: error) }
+                }
             }
-        }
+        } onCancel: { holder.terminate() }
     }
 
     /// Blocking runner (call off-main). GUI-spawned `Process` works with a SANITIZED env —
@@ -399,7 +441,9 @@ actor CodexCLI {
     private static func execute(binary: String, args: [String], stdinText: String?,
                                 cwd: String?, timeout: TimeInterval,
                                 customEnv: [String: String] = [:],
-                                extraPathDirs: [String] = []) throws -> ExecResult {
+                                extraPathDirs: [String] = [],
+                                onStdoutLine: (@Sendable (String) -> Void)? = nil,
+                                procHolder: ProcHolder? = nil) throws -> ExecResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
         proc.arguments = args
@@ -422,18 +466,40 @@ actor CodexCLI {
         proc.standardOutput = outPipe
         proc.standardError = errPipe
 
-        // Drain both output pipes on their own queues for the process's whole lifetime.
+        // Drain both output pipes on their own queues for the process's whole lifetime. stderr drains
+        // whole; stdout LINE-streams to `onStdoutLine` (when present) so callers see codex's --json
+        // play-by-play live, while still accumulating the full buffer for parseEnvelope.
         let outDrain = PipeDrain(), errDrain = PipeDrain()
         let drained = DispatchGroup()
-        for (pipe, drain) in [(outPipe, outDrain), (errPipe, errDrain)] {
-            drained.enter()
-            DispatchQueue.global(qos: .utility).async {
-                drain.set(pipe.fileHandleForReading.readDataToEndOfFile())
-                drained.leave()
+        drained.enter()
+        DispatchQueue.global(qos: .utility).async {
+            errDrain.set(errPipe.fileHandleForReading.readDataToEndOfFile())
+            drained.leave()
+        }
+        drained.enter()
+        DispatchQueue.global(qos: .utility).async {
+            let handle = outPipe.fileHandleForReading
+            guard let onStdoutLine else {
+                outDrain.set(handle.readDataToEndOfFile())     // no streaming → drain whole
+                drained.leave(); return
             }
+            var buf = Data(), all = Data()                     // byte-level split (multibyte-safe)
+            while true {
+                let chunk = handle.availableData
+                if chunk.isEmpty { break }
+                buf.append(chunk); all.append(chunk)
+                while let nl = buf.firstIndex(of: 0x0A) {
+                    onStdoutLine(String(decoding: buf[..<nl], as: UTF8.self))
+                    buf = Data(buf[buf.index(after: nl)...])
+                }
+            }
+            if !buf.isEmpty { onStdoutLine(String(decoding: buf, as: UTF8.self)) }
+            outDrain.set(all)
+            drained.leave()
         }
 
         do { try proc.run() } catch { throw CLIError.launchFailed("\(error)") }
+        procHolder?.set(proc)   // expose to the cancellation handler (a card's STOP)
 
         // Feed the prompt over stdin on its own queue: prompts can be hundreds of KB (whole
         // summary corpora), far beyond the pipe buffer, so the write must overlap the child's

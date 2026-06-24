@@ -16,6 +16,7 @@ struct RootView: View {
     @State private var showDevTools = false
     @State private var customRoots: [URL] = []   // session-only custom folders (dev picker)
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
+    @AppStorage("dev.proactive.realCards") private var realCards = false   // real cards + full-cycle Analyze Now
 
     // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
     private static let modelPath = ModelLocator.resolve()
@@ -33,7 +34,8 @@ struct RootView: View {
                 // buckets, catch up the rest. (Gmail is a dev-tools leg; the home button is on-device.)
                 ProcessingView(modelPath: modelPath,
                                connectors: RunSource.connectors(from: selectedSources),
-                               mode: .auto) {
+                               mode: .auto,
+                               fullCycle: realCards) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
                 }
                 .transition(.opacity)
@@ -60,8 +62,8 @@ struct RootView: View {
                 imessage: sources.contains { if case .imessage = $0 { return true } else { return false } },
                 notes: sources.contains(.notes),
                 whatsappAvailable: WhatsAppSource.isInstalled),
-            analyzeEnabled: !sources.isEmpty && Self.modelPath != nil,
             modelMissing: Self.modelPath == nil,
+            realCards: realCards,
             onAnalyze: { withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true } },
             onShowDevTools: { showDevTools = true })
     }
