@@ -496,6 +496,7 @@ struct DevToolsView: View {
     private func runResearch(progress: @escaping @Sendable (String) -> Void) async -> String {
         let items = Proactive.latest()
         guard !items.isEmpty else { return "✗ no action items — run “proactive system” (part 1) first" }
+        let notes = await CycleStore.shared.notes().map(CloudNote.init)   // same corpus PART 1 saw
         var calCtx: String?
         if calendarConnected {
             progress("Gathering your live calendar, then verifying every item…")
@@ -503,7 +504,7 @@ struct DevToolsView: View {
         }
         progress("Verifying + preparing \(items.count) item\(items.count == 1 ? "" : "s") against your calendar, Gmail, web & your vault…")
         do {
-            let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, calendarContext: calCtx)
+            let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx)
             let readyLines = result.ready.map { "✓ [\($0.method.rawValue) · \($0.status.rawValue)] \($0.title)\($0.reviewNote.isEmpty ? "" : " ⚠︎ check first")" }
             let dropLines = result.dropped.map { "✗ \($0.title) — \($0.reason)" }
             let body = (readyLines + dropLines).joined(separator: "\n")

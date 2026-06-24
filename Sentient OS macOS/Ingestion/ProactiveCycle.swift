@@ -83,7 +83,7 @@ actor ProactiveCycle {
         } else {
             progress(.researching(items.count))
             do {
-                _ = try await ProactiveResearch.shared.researchAndPrepare(items: items, calendarContext: calCtx)
+                _ = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx)
             } catch {
                 let m = "Preparing — \(Self.msg(error))"
                 progress(.failed(m)); return m
