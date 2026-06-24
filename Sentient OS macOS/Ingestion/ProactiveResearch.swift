@@ -115,16 +115,17 @@ actor ProactiveResearch {
     /// stale ones; then stage every survivor ready to fire (draft in the user's voice + the execution
     /// recipe). Read-only — it researches and stages, it NEVER fires. Verify-only — it never adds a new
     /// item. Returns the ready + dropped split; throws on no-items / no-vault / usage-limit / failure.
-    func researchAndPrepare(items: [ActionItem], now: Date = Date(),
+    func researchAndPrepare(items: [ActionItem], notes: [CloudNote] = [], now: Date = Date(),
                             calendarContext: String? = nil) async throws -> ReadyResult {
         guard !items.isEmpty else { throw ResError.noItems }
+        let recent = Proactive.recent(from: notes, now: now)   // the SAME last-week corpus PART 1 saw
 
         // The vault is a research surface, the source of the user's voice + the facts a draft/form
         // needs, AND the agent's cwd (Read/Glob/Grep over the knowledge base).
         let vault = VaultGenerator.vaultRoot
         guard FileManager.default.fileExists(atPath: vault.path) else { throw ResError.noVault }
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, now: now, calendarContext: calendarContext))
+        var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, recent: recent, now: now, calendarContext: calendarContext))
         inv.effort = .high                  // gpt-5.5 → high (accuracy + the prepared draft are the product)
         inv.sandbox = .readOnly             // verifies + stages — never sends, drafts into a provider, or acts
         inv.cwd = vault.path                // working dir = the knowledge base (a research surface + the voice)
@@ -243,7 +244,7 @@ actor ProactiveResearch {
 
     // MARK: The prompt — verify THEN prepare, accuracy-obsessed, never fires
 
-    private static func prompt(items: [ActionItem], now: Date, calendarContext: String?) -> String {
+    private static func prompt(items: [ActionItem], recent: [CloudNote], now: Date, calendarContext: String?) -> String {
         let today = todayString(now)
         var lines: [String] = []
         lines.reserveCapacity(items.count)
@@ -272,6 +273,24 @@ actor ProactiveResearch {
             tool to read a specific event in more detail if one is connected.
 
             \(ctx)
+            """
+        }()
+
+        // The FULL last-week summary corpus — the exact context PART 1 saw. PART 2 now gets it too, so it
+        // can understand each item in full context instead of only PART 1's one-line distillation.
+        let summariesBlock: String = {
+            guard !recent.isEmpty else { return "" }
+            return """
+
+            ## THE FULL LAST-WEEK CONTEXT — the SAME summaries PART 1 saw
+            Below is the ENTIRE corpus of the user's last \(Proactive.lookbackDays) days of summaries \
+            across every source — the exact context PART 1 read when it picked the items. Use it as deep \
+            background: understand each item in its full context, notice related signals PART 1 didn't \
+            spell out, pull in extra facts a draft needs, and ground your verification. These are \
+            distilled summaries (already PII-stripped), NOT live data — still confirm time-sensitive \
+            facts against the live sources (Gmail, web, calendar). The items to work follow after.
+
+            \(Proactive.summaryLines(recent))
             """
         }()
 
@@ -309,6 +328,8 @@ actor ProactiveResearch {
         feel the pull to "just send it to be helpful" — do not. Staging it perfectly IS the job.
 
         ## YOUR SURFACES (all READ-ONLY — you only gather, never act)
+        You ALSO have the **full last-week summary corpus** (at the end of this message — the same \
+        context PART 1 saw) as background. Beyond that, gather live from:
         1. **The knowledge base** — your working directory IS the user's whole life as an Obsidian-style \
         markdown vault. Read the root `README.md`, then grep/read the notes about the people, projects, \
         and commitments involved. It's three things at once: your **identity anchor** (is a Gmail/web \
@@ -428,6 +449,7 @@ actor ProactiveResearch {
         line, and stop there.
 
         \(calendarBlock)
+        \(summariesBlock)
         The action items to research and prepare follow.
 
         ---

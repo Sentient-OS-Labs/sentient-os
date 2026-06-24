@@ -59,6 +59,28 @@ actor Proactive {
         }
     }
 
+    // MARK: Summary windowing (shared with PART 2 so both reason over the SAME corpus)
+
+    /// The last-`lookbackDays` summaries, newest first — the exact window the judge reasons over, and
+    /// the same background PART 2 now gets. Defined once here so the windowing can never drift.
+    static func recent(from notes: [CloudNote], now: Date = Date()) -> [CloudNote] {
+        let cutoff = now.addingTimeInterval(-Double(lookbackDays) * 86_400)
+        func itemDate(_ n: CloudNote) -> Date { n.itemDate ?? .distantPast }
+        return notes.filter { itemDate($0) >= cutoff }.sorted { itemDate($0) > itemDate($1) }
+    }
+
+    /// Render summaries as the numbered prompt block both parts show:
+    /// `#n · [source] location · date` then `title — summary`.
+    static func summaryLines(_ notes: [CloudNote]) -> String {
+        let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
+        return notes.enumerated().map { i, n in
+            let (loc, src) = VaultGenerator.locSrc(kind: n.kind, folder: n.folder, sourceID: n.sourceID)
+            let when = n.itemDate.map { df.string(from: $0) } ?? "undated"
+            let title = (n.title?.isEmpty == false) ? n.title! : "(untitled)"
+            return "#\(i + 1) · [\(src)] \(loc) · \(when)\n\(title) — \(n.text)"
+        }.joined(separator: "\n\n")
+    }
+
     // MARK: The judge
 
     /// Find the top action items across the last week of summaries. PART 1 is summaries-only and
@@ -67,12 +89,8 @@ actor Proactive {
     /// can surface a clear status.
     func findActionItems(from notes: [CloudNote], now: Date = Date(),
                          calendarContext: String? = nil) async throws -> [ActionItem] {
-        // 1. Window the summaries to the last N days (each note carries its own item date).
-        let cutoff = now.addingTimeInterval(-Double(Self.lookbackDays) * 86_400)
-        func itemDate(_ n: CloudNote) -> Date { n.itemDate ?? .distantPast }
-        let recent: [CloudNote] = notes
-            .filter { itemDate($0) >= cutoff }
-            .sorted { itemDate($0) > itemDate($1) }            // newest first
+        // 1. Window the summaries to the last N days (shared with PART 2 via Self.recent).
+        let recent = Self.recent(from: notes, now: now)
         guard !recent.isEmpty else { throw ProError.noRecent }
 
         // 2. One hermetic Codex call: summaries over stdin, NO tools. A neutral empty scratch dir is
@@ -170,15 +188,6 @@ actor Proactive {
 
     private static func prompt(recent: [CloudNote], now: Date, calendarContext: String?) -> String {
         let today = todayString(now)
-        let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
-        var lines: [String] = []
-        lines.reserveCapacity(recent.count)
-        for (i, n) in recent.enumerated() {
-            let (loc, src) = VaultGenerator.locSrc(kind: n.kind, folder: n.folder, sourceID: n.sourceID)
-            let when = n.itemDate.map { df.string(from: $0) } ?? "undated"
-            let title = (n.title?.isEmpty == false) ? n.title! : "(untitled)"
-            lines.append("#\(i + 1) · [\(src)] \(loc) · \(when)\n\(title) — \(n.text)")
-        }
 
         // The user's LIVE calendar (last 7 days + next 24h, ALL events), pre-fetched as text so PART 1
         // stays tool-free/hermetic. Only present when Calendar is connected (CalendarConnect.fetch…).
@@ -322,7 +331,7 @@ actor Proactive {
 
         ---
 
-        \(lines.joined(separator: "\n\n"))
+        \(Self.summaryLines(recent))
         """
     }
 
