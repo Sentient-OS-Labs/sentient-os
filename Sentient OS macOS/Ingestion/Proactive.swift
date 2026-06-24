@@ -41,9 +41,10 @@ actor Proactive {
 
     static let shared = Proactive()
 
-    /// How far back the judge looks, and the most items it will ever surface (scarcity = taste).
+    /// How far back the judge looks. PART 1 casts a WIDER net (up to 8 candidates); PART 2 verifies
+    /// them against the live world and prunes to the strongest ≤5 — that's where scarcity = taste.
     static let lookbackDays = 7
-    static let maxItems = 5
+    static let maxItems = 8
 
     enum ProError: LocalizedError {
         case noRecent
@@ -296,10 +297,11 @@ actor Proactive {
 
         ## Rank, then cut
         Rank by (impact to THIS user) × (time-sensitivity) × (how clearly actionable it is). Return AT \
-        MOST \(maxItems). Return FEWER — even zero — if there genuinely aren't that many worth \
-        surfacing. NEVER pad. Pick the genuinely strongest items regardless of which source they come \
-        from — do NOT force a spread; a deep, well-evidenced single-source item beats a shallow one \
-        every time.
+        MOST \(maxItems) candidates. A later step verifies each one against the live world and keeps \
+        only the ~5 strongest, so it's fine to surface a slightly wider set of GENUINE candidates here \
+        — but still NEVER pad: return FEWER (even zero) if there aren't that many worth surfacing. Pick \
+        the genuinely strongest items regardless of which source they come from — do NOT force a \
+        spread; a deep, well-evidenced single-source item beats a shallow one every time.
 
         ## Output
         Return ONLY the structured object defined by the output schema — no prose around it. For each \

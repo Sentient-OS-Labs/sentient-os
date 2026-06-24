@@ -89,6 +89,10 @@ actor ProactiveResearch {
 
     static let shared = ProactiveResearch()
 
+    /// The most ready cards PART 2 ever returns. It verifies PART 1's wider net (up to 8) and prunes
+    /// to the strongest few — scarcity is taste. Enforced in the prompt AND as a code backstop.
+    static let maxReady = 5
+
     enum ResError: LocalizedError {
         case noItems
         case noVault
@@ -133,7 +137,9 @@ actor ProactiveResearch {
         Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, Gmail MCP + web, never fire)…")
         do {
             let env = try await CodexCLI.shared.run(inv)
-            let result = Self.parse(env.result)
+            let parsed = Self.parse(env.result)
+            // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
+            let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)
             Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
             for (i, a) in result.ready.enumerated() {
                 Log("  READY #\(i + 1) [\(a.method.rawValue)\(a.target.isEmpty ? "" : " · \(a.target)") · \(a.status.rawValue)\(a.dueDate.map { " · due \($0)" } ?? "")] \(a.title)\n      button: \(a.buttonText.isEmpty ? "(none)" : a.buttonText) · link: \(a.detailLabel)\n      card: \(a.cardSummary)\n      checked: \(a.verification)\n      content: \(a.preparedContent)\n      recipe: \(a.executionRecipe)\n      review: \(a.reviewNote.isEmpty ? "(none — fully ready)" : a.reviewNote)\n      src: \(a.sources.joined(separator: " | "))")
@@ -415,8 +421,11 @@ actor ProactiveResearch {
         fully ready.
         `dropped` — the items verification killed: **title** + **reason** (what the live source showed).
 
-        Return FEWER than you were given whenever research warrants it — dropping a stale item is a \
-        success, not a failure. Prepare everything that survives right up to the fire line, and stop there.
+        You receive up to 8 candidate items. Return AT MOST \(Self.maxReady) READY cards — the \
+        strongest, most useful, most time-sensitive of what survives. Dropping a stale item is a \
+        success, not a failure; and if MORE than \(Self.maxReady) survive verification, keep only the \
+        \(Self.maxReady) strongest and cut the rest. Prepare everything you keep right up to the fire \
+        line, and stop there.
 
         \(calendarBlock)
         The action items to research and prepare follow.
