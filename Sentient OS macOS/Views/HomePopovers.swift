@@ -47,8 +47,9 @@ struct AnalysisPopover: View {
 
     @State private var vault: (notes: Int, domains: Int)?
 
-    private var filesOn: Bool { runDownloads || runDesktop || runDocuments }
-    private var anyArmed: Bool { filesOn || runNotes || !whatsappCSV.isEmpty || !imessageCSV.isEmpty }
+    private var anyArmed: Bool {
+        runDownloads || runDesktop || runDocuments || runNotes || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
+    }
     private var armed: Bool { anyArmed && !modelMissing }
 
     var body: some View {
@@ -76,7 +77,11 @@ struct AnalysisPopover: View {
             MonoCaps("Sources", size: 9, tracking: 2.2, color: Theme.Ink.label)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
-                    SourceChip("Files", on: filesOn) { toggleFiles() }
+                    SourceChip("Downloads", on: runDownloads) { runDownloads.toggle() }
+                    SourceChip("Desktop",   on: runDesktop)   { runDesktop.toggle() }
+                    SourceChip("Documents", on: runDocuments) { runDocuments.toggle() }
+                }
+                HStack(spacing: 8) {
                     if sources.whatsappAvailable { SourceChip("WhatsApp", on: !whatsappCSV.isEmpty, action: onPickWhatsApp) }
                     SourceChip("iMessage", on: !imessageCSV.isEmpty, action: onPickIMessage)
                 }
@@ -107,12 +112,6 @@ struct AnalysisPopover: View {
     private var runHint: String {
         if modelMissing { return "The on-device model is missing — see Dev Tools" }
         return armed ? "\(pending) pending · runs when your Mac rests" : "No sources armed"
-    }
-
-    /// Files = the three folder roots as a group: any-on → turn all off; all-off → arm the default set.
-    private func toggleFiles() {
-        let on = filesOn
-        runDownloads = !on; runDesktop = !on; runDocuments = !on
     }
 
     private var analyzeButton: some View {
