@@ -247,11 +247,14 @@ actor Proactive {
 
         ## What an ACTION ITEM is
         Something the user should DO, DECIDE, PREPARE FOR, or BE AWARE OF soon — concrete, time-relevant, \
-        and ideally something that could be acted on. Sentient will SOON be able to take these actions \
-        for the user (draft and send a reply, fill a form in the browser, schedule a meeting, send a \
-        message). For now your job is DETECTION + framing: identify the item and describe the EXACT \
-        next action as a precise, ready-to-execute step — so it's ready the instant the action \
-        infrastructure ships. Do not actually perform anything; just detect and frame.
+        and ideally something Sentient can ACT ON for them. Sentient can already take REAL action: send \
+        an email through their Gmail, add an event to their calendar, drive a logged-in WEBSITE in a \
+        real browser (register, RSVP, buy, fill a form), drive their MAC directly via computer use \
+        (send a WhatsApp/iMessage, act in a native app like Notion), or research and write something up. \
+        Favor items that map onto one of those — but a purely informational "you should be aware of \
+        this" is still valid when it genuinely matters. Your job here is DETECTION + framing: identify \
+        the item and the EXACT next action. Do not perform anything; just detect and frame (a later \
+        step verifies, prepares, and fires).
 
         ## Examples of the kinds to look for
         (Illustrative and HYPOTHETICAL — learn the SHAPE, NOT these specific details. They generalize \

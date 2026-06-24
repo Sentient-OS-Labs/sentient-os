@@ -36,29 +36,36 @@ import Foundation
 /// For You UI + PART 3 (the executor) consume.
 struct PreparedAction: Sendable, Identifiable, Codable {
     let title: String
-    let kind: Kind
+    let method: Method             // the ONE channel PART 3 fires this through (model-picked)
+    let target: String             // the app/site this acts in, for the card kicker ("LinkedIn",
+                                   // "Notion"); "" for gmail/calendar/research (the method names itself)
     let urgency: ActionItem.Urgency
     let dueDate: String?
     let status: Status             // the verify verdict (confirmed / updated / unverified)
     let verification: String       // WHAT was checked + WHAT each live source said (receipts)
     let cardSummary: String        // human-facing: what this is + what the fire button will do
-    let preparedContent: String    // the reviewable artifact: the drafted email/message/event/briefing
-    let executionRecipe: String    // the exact, deterministic steps PART 3 runs ("none" for research/reminder)
+    let preparedContent: String    // the VERBATIM sendable artifact the user reviews + EDITS (the drafted
+                                   // email/message/event/briefing) — the single source of truth the
+                                   // executor sends; the user's edits to this are what actually fire
+    let executionRecipe: String    // ROUTING ONLY: which thread/recipient/chat/app/URL + which field
+                                   // takes which content. References preparedContent, never duplicates
+                                   // the body. "none" for research.
+    let buttonText: String         // LLM-written fire CTA ("Should I send it for you?"); "" = no fire (research)
+    let detailLabel: String        // LLM-written "read the …" link ("read the draft", "read the brief")
     let sources: [String]          // grounding receipts (vault notes, the thread, web results)
     let reviewNote: String         // what to double-check/decide before firing; "" if fully ready
 
     enum Status: String, Sendable, Codable { case confirmed, updated, unverified }
 
-    /// The action surface PART 3 will fire. `research` (a briefing to read) and `reminder` (a real
-    /// task only the user can do, e.g. a phone call) carry no fire — `executionRecipe == "none"`.
-    enum Kind: String, Sendable, Codable {
-        case emailReply = "email_reply"
-        case emailNew   = "email_new"
-        case message
-        case calendar
-        case browser
-        case research
-        case reminder
+    /// The ONE channel PART 3 fires this action through — the model picks it. Folds the old seven
+    /// kinds: email_reply/email_new → .gmail · message → .computer (sends via Messages/WhatsApp) ·
+    /// reminder → .research (surfaced, no fire). `research` carries no fire (`executionRecipe == "none"`).
+    enum Method: String, Sendable, Codable {
+        case browser    // a cookie-auth website task via our playwright + the user's own cookies
+        case computer   // drives the Mac (native apps, sending a chat message) via codex computer use
+        case gmail      // the user's Gmail MCP via codex
+        case calendar   // the user's Calendar MCP via codex
+        case research   // informational briefing — nothing to fire
     }
     var id: String { title }
 }
@@ -129,7 +136,7 @@ actor ProactiveResearch {
             let result = Self.parse(env.result)
             Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
             for (i, a) in result.ready.enumerated() {
-                Log("  READY #\(i + 1) [\(a.kind.rawValue) · \(a.status.rawValue)\(a.dueDate.map { " · due \($0)" } ?? "")] \(a.title)\n      card: \(a.cardSummary)\n      checked: \(a.verification)\n      content: \(a.preparedContent)\n      recipe: \(a.executionRecipe)\n      review: \(a.reviewNote.isEmpty ? "(none — fully ready)" : a.reviewNote)\n      src: \(a.sources.joined(separator: " | "))")
+                Log("  READY #\(i + 1) [\(a.method.rawValue)\(a.target.isEmpty ? "" : " · \(a.target)") · \(a.status.rawValue)\(a.dueDate.map { " · due \($0)" } ?? "")] \(a.title)\n      button: \(a.buttonText.isEmpty ? "(none)" : a.buttonText) · link: \(a.detailLabel)\n      card: \(a.cardSummary)\n      checked: \(a.verification)\n      content: \(a.preparedContent)\n      recipe: \(a.executionRecipe)\n      review: \(a.reviewNote.isEmpty ? "(none — fully ready)" : a.reviewNote)\n      src: \(a.sources.joined(separator: " | "))")
             }
             for d in result.dropped {
                 Log("  DROP \(d.title) — \(d.reason)")
@@ -168,7 +175,8 @@ actor ProactiveResearch {
     {"type":"object","additionalProperties":false,"properties":{\
     "ready":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
     "title":{"type":"string"},\
-    "kind":{"type":"string","enum":["email_reply","email_new","message","calendar","browser","research","reminder"]},\
+    "method":{"type":"string","enum":["browser","computer","gmail","calendar","research"]},\
+    "target":{"type":"string"},\
     "urgency":{"type":"string","enum":["high","medium","low"]},\
     "due_date":{"type":"string"},\
     "status":{"type":"string","enum":["confirmed","updated","unverified"]},\
@@ -176,9 +184,11 @@ actor ProactiveResearch {
     "card_summary":{"type":"string"},\
     "prepared_content":{"type":"string"},\
     "execution_recipe":{"type":"string"},\
+    "button_text":{"type":"string"},\
+    "detail_label":{"type":"string"},\
     "sources":{"type":"array","items":{"type":"string"}},\
     "review_note":{"type":"string"}},\
-    "required":["title","kind","urgency","due_date","status","verification","card_summary","prepared_content","execution_recipe","sources","review_note"]}},\
+    "required":["title","method","target","urgency","due_date","status","verification","card_summary","prepared_content","execution_recipe","button_text","detail_label","sources","review_note"]}},\
     "dropped":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
     "title":{"type":"string"},\
     "reason":{"type":"string"}},\
@@ -203,7 +213,8 @@ actor ProactiveResearch {
             let due = (d["due_date"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             return PreparedAction(
                 title: title,
-                kind: PreparedAction.Kind(rawValue: (d["kind"] as? String)?.lowercased() ?? "reminder") ?? .reminder,
+                method: PreparedAction.Method(rawValue: (d["method"] as? String)?.lowercased() ?? "research") ?? .research,
+                target: ((d["target"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 urgency: ActionItem.Urgency(rawValue: (d["urgency"] as? String)?.lowercased() ?? "medium") ?? .medium,
                 dueDate: (due?.isEmpty == false) ? due : nil,
                 status: PreparedAction.Status(rawValue: (d["status"] as? String)?.lowercased() ?? "unverified") ?? .unverified,
@@ -211,6 +222,8 @@ actor ProactiveResearch {
                 cardSummary: (d["card_summary"] as? String) ?? "",
                 preparedContent: (d["prepared_content"] as? String) ?? "",
                 executionRecipe: (d["execution_recipe"] as? String) ?? "",
+                buttonText: ((d["button_text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                detailLabel: ((d["detail_label"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 sources: (d["sources"] as? [String]) ?? [],
                 reviewNote: (d["review_note"] as? String) ?? "")
         }
@@ -320,9 +333,10 @@ actor ProactiveResearch {
         **Then prepare every survivor** to ready-to-fire:
         - Gather everything the action needs — the thread, the form's fields, the facts — until nothing \
         is missing.
-        - Compose `prepared_content`: the artifact the user reviews/approves, in the user's own voice \
-        wherever it's something they'd say.
-        - Write `execution_recipe`: the exact, deterministic steps PART 3 runs.
+        - Compose `prepared_content`: the VERBATIM artifact the user reviews/approves/EDITS — and that \
+        fires exactly as written — in the user's own voice wherever it's something they'd say.
+        - Write `execution_recipe`: ROUTING only (where the action goes), referencing `prepared_content` \
+        — never restate the message body in the recipe.
         - If something irreversible genuinely can't be resolved (an unknown recipient, a real either/or \
         choice), prepare everything else and put exactly what the user must check/decide in \
         `review_note` — never guess on the irreversible specifics.
@@ -331,19 +345,31 @@ actor ProactiveResearch {
         You work ONLY the items handed to you below. **Never invent a brand-new action item** — \
         discovery already happened in PART 1.
 
-        ## ALL ACTION KINDS (set `kind`)
-        - **email_reply / email_new** — the full drafted message (subject + body), recipient(s), and \
-        the thread it belongs to.
-        - **message** — a drafted WhatsApp/iMessage reply, word-for-word, to the right chat.
-        - **calendar** — the event (title, start/end, attendees, notes), ready to add.
-        - **browser** — a task done in a browser (register, RSVP, fill an application, buy): the exact \
-        URL, the ordered steps, and EVERY field value (from the vault/your research), so the fire step \
-        (Playwright/browser-use) just runs it.
-        - **research** — informational, not an action: write the tidy briefing the user wanted (a trip \
-        plan, a comparison, the answer). No fire; `execution_recipe` = "none".
-        - **reminder** — a real task only the user can do manually (e.g. a phone call) with nothing to \
-        automate. No fire; `execution_recipe` = "none". (Use this instead of dropping a real-but-\
-        unautomatable item.)
+        ## THE FIVE METHODS (set `method`) — pick the ONE channel that fires this action
+        You decide HOW Sentient carries out each action. Pick exactly one method:
+        - **gmail** — anything in the user's email (a reply or a brand-new message). \
+        `prepared_content` = the full draft (subject + body); `execution_recipe` = recipient(s) + the \
+        exact thread it belongs to.
+        - **calendar** — add or change an event on the user's calendar. `prepared_content` = the event \
+        the user reviews (title, start/end, attendees, notes); `execution_recipe` = those fields, structured.
+        - **browser** — a task on a COOKIE-AUTH WEBSITE the user is already logged into (register, \
+        RSVP, fill an application, buy, post on X/LinkedIn/Reddit/Amazon/GitHub). Sentient drives a \
+        real browser with the user's OWN session. `execution_recipe` = the exact URL + ordered steps + \
+        which field gets which value; `prepared_content` = the content/values the user reviews.
+        - **computer** — drives the user's Mac directly (their own computer use): SEND a WhatsApp / \
+        iMessage (via the Messages app), act in a native desktop app (e.g. Notion), or anything a \
+        browser can't. `prepared_content` = the exact text/message to send; `execution_recipe` = which \
+        app + which chat/where, step by step. (The fire step NEVER uses AppleScript/Terminal — only \
+        computer use.)
+        - **research** — informational only: write the briefing the user wanted (a trip plan, a \
+        comparison, prepped notes for a call). Nothing fires — `execution_recipe` = "none", \
+        `button_text` = "".
+
+        **Browser vs computer:** doable on a logged-in WEBSITE → **browser**; needs a NATIVE Mac app \
+        or sending a chat message → **computer**. Email and calendar ALWAYS use **gmail** / \
+        **calendar** (never browser/computer). A drafted WhatsApp/iMessage reply → **computer** (it \
+        sends via Messages). A real task only the user can do by hand with nothing to automate (e.g. a \
+        phone call) → **research** (surface it; don't drop it).
 
         ## ACCURACY & VOICE (this will go out under the user's name)
         - Ground every draft and every field value in real evidence (the vault, the thread, verified \
@@ -358,7 +384,10 @@ actor ProactiveResearch {
         Return ONLY the structured object defined by the schema — no prose around it.
         `ready` — the survivors, each staged to fire. For each:
         - **title** — short, specific headline (≤ ~8 words).
-        - **kind** — one of the seven above.
+        - **method** — one of the five above (the single channel that fires this).
+        - **target** — the app or website this acts in, as a short brand name for the card label \
+        ("LinkedIn", "Notion", "Amazon"). REQUIRED for **browser** and **computer**; leave "" for \
+        gmail / calendar / research (the method names itself).
         - **urgency** — "high" / "medium" / "low".
         - **due_date** — the real VERIFIED date in plain words, or "" if none / unverified.
         - **status** — "confirmed" / "updated" / "unverified".
@@ -366,12 +395,20 @@ actor ProactiveResearch {
         receipts, separating what you VERIFIED from what remains inferred.
         - **card_summary** — one or two lines the user reads in For You: what this is + what the button \
         will do ("Send this reply to Dana confirming Thursday").
-        - **prepared_content** — the full artifact to review/approve (the drafted email subject+body, \
-        the message text, the event details, or the briefing write-up).
-        - **execution_recipe** — the exact, deterministic steps PART 3 runs (recipients + subject + \
-        body + thread for email; the chat + text for a message; the event fields for calendar; the URL \
-        + ordered steps + every field value for browser; "none" for research/reminder). Complete enough \
-        that firing needs no further thought.
+        - **prepared_content** — the EXACT artifact that will be sent/used, in the user's own voice. \
+        This is what the user reviews AND CAN EDIT, and this is what fires VERBATIM — so make it \
+        complete and final: the full email subject+body, the full message text, the event details, or \
+        the briefing write-up. (Edits the user makes here are exactly what gets sent.)
+        - **execution_recipe** — ROUTING ONLY: where the action goes, not its words. Recipient(s) + the \
+        exact thread for **gmail**; the app + which chat for **computer**; the structured event fields \
+        for **calendar**; the URL + ordered steps + which field takes which value for **browser**. Do \
+        NOT restate the message body here — it lives in `prepared_content` and is sent from there. \
+        "none" for research.
+        - **button_text** — the one-tap fire button's label, specific to THIS action and in the user's \
+        framing ("Should I send it for you?", "Reply & add it to your calendar?", "Register me?"). \
+        Leave "" for research (it has no fire button).
+        - **detail_label** — the quiet link that opens the full draft to read/edit ("read the draft", \
+        "read the brief", "read the prep doc").
         - **sources** — the evidence you relied on, each by name, incl. what you verified against (e.g. \
         "Gmail · thread with Dana (6/16)", "Web · venue on-sale page", "Vault · People/Dana.md").
         - **review_note** — what (if anything) the user should double-check/decide before firing; "" if \

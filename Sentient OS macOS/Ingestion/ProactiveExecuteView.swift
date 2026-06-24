@@ -70,7 +70,7 @@ struct ProactiveExecuteView: View {
         let isExpanded = expanded.contains(a.id)
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                kindBadge(a.kind)
+                methodBadge(a.method)
                 statusBadge(a.status)
                 if let due = a.dueDate, !due.isEmpty {
                     Label(due, systemImage: "calendar").font(.caption2.weight(.medium)).foregroundStyle(Theme.secondary)
@@ -123,14 +123,14 @@ struct ProactiveExecuteView: View {
     }
 
     private func fireButton(_ a: PreparedAction) -> some View {
-        let fireable = ProactiveExecutor.isFireable(a.kind)
+        let fireable = ProactiveExecutor.isFireable(a.method)
         return Button {
             fire(a)
         } label: {
             HStack(spacing: 6) {
                 if model.busy == a.id { ProgressView().controlSize(.small) }
-                else { Image(systemName: fireIcon(a.kind)) }
-                Text(fireLabel(a.kind)).font(.caption.weight(.semibold))
+                else { Image(systemName: fireIcon(a.method)) }
+                Text(fireLabel(a.method)).font(.caption.weight(.semibold))
             }
             .frame(minWidth: 150, minHeight: 30)
         }
@@ -176,16 +176,14 @@ struct ProactiveExecuteView: View {
 
     // MARK: badges
 
-    private func kindBadge(_ k: PreparedAction.Kind) -> some View {
+    private func methodBadge(_ m: PreparedAction.Method) -> some View {
         let (label, color): (String, Color) = {
-            switch k {
-            case .emailReply: return ("EMAIL REPLY", Color(red: 1.00, green: 0.50, blue: 0.18))
-            case .emailNew:   return ("EMAIL", Color(red: 1.00, green: 0.50, blue: 0.18))
-            case .message:    return ("MESSAGE", Color(red: 0.28, green: 0.84, blue: 0.67))
-            case .calendar:   return ("CALENDAR", Color(red: 0.36, green: 0.55, blue: 1.00))
-            case .browser:    return ("BROWSER", Color(red: 0.72, green: 0.46, blue: 0.96))
-            case .research:   return ("RESEARCH", Theme.secondary)
-            case .reminder:   return ("REMINDER", Theme.secondary)
+            switch m {
+            case .gmail:    return ("GMAIL", Color(red: 1.00, green: 0.50, blue: 0.18))
+            case .calendar: return ("CALENDAR", Color(red: 0.36, green: 0.55, blue: 1.00))
+            case .browser:  return ("BROWSER USE", Color(red: 0.72, green: 0.46, blue: 0.96))
+            case .computer: return ("COMPUTER USE", Color(red: 0.28, green: 0.84, blue: 0.67))
+            case .research: return ("RESEARCHED", Theme.secondary)
             }
         }()
         return Text(label).font(.system(size: 8, weight: .bold)).tracking(1)
@@ -248,22 +246,23 @@ struct ProactiveExecuteView: View {
         return Theme.secondary
     }
 
-    private func fireLabel(_ k: PreparedAction.Kind) -> String {
-        switch k {
-        case .emailReply, .emailNew: return "Send it for you"
-        case .browser:               return "Let an agent do it"
-        case .calendar:              return "Add to calendar"
-        case .message:               return "No send channel"
-        case .research, .reminder:   return "Nothing to fire"
+    private func fireLabel(_ m: PreparedAction.Method) -> String {
+        switch m {
+        case .gmail:    return "Send it for you"
+        case .browser:  return "Let an agent do it"
+        case .computer: return "Run on your Mac"
+        case .calendar: return "Add to calendar"
+        case .research: return "Nothing to fire"
         }
     }
 
-    private func fireIcon(_ k: PreparedAction.Kind) -> String {
-        switch k {
-        case .emailReply, .emailNew: return "paperplane.fill"
-        case .browser:               return "globe"
-        case .calendar:              return "calendar.badge.plus"
-        default:                     return "minus.circle"
+    private func fireIcon(_ m: PreparedAction.Method) -> String {
+        switch m {
+        case .gmail:    return "paperplane.fill"
+        case .browser:  return "globe"
+        case .computer: return "desktopcomputer"
+        case .calendar: return "calendar.badge.plus"
+        case .research: return "minus.circle"
         }
     }
 }

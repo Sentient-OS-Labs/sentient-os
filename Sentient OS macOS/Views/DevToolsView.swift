@@ -483,7 +483,7 @@ struct DevToolsView: View {
         progress("Verifying + preparing \(items.count) item\(items.count == 1 ? "" : "s") against your calendar, Gmail, web & your vault…")
         do {
             let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, calendarContext: calCtx)
-            let readyLines = result.ready.map { "✓ [\($0.kind.rawValue) · \($0.status.rawValue)] \($0.title)\($0.reviewNote.isEmpty ? "" : " ⚠︎ check first")" }
+            let readyLines = result.ready.map { "✓ [\($0.method.rawValue) · \($0.status.rawValue)] \($0.title)\($0.reviewNote.isEmpty ? "" : " ⚠︎ check first")" }
             let dropLines = result.dropped.map { "✗ \($0.title) — \($0.reason)" }
             let body = (readyLines + dropLines).joined(separator: "\n")
             return "✓ ready \(result.ready.count), dropped \(result.dropped.count) (full detail in console):\n" + (body.isEmpty ? "(nothing)" : body)
