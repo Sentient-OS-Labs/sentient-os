@@ -335,23 +335,11 @@ final class ForYouModel {
         update(e.id) { $0.phase = .offer }
     }
 
-    /// Fire the offer. THE CODEX SEAM: most cards play the briefing's hard-coded `workLog`
-    /// theater, but the Anthos card is wired LIVE — it actually runs `CodexCLI.shared.run(...)`
-    /// on its `codexPrompt` (via `fireLiveCodex`, a real Gmail-MCP send) while the theater plays
-    /// for show; the real outcome is logged. Streaming JSONL into `working(n)` is the next step.
+    /// Fire the offer. Every card plays the briefing's hard-coded `workLog` theater for visual
+    /// feedback — no card actually sends anything (the live Gmail-MCP wiring was removed).
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
         let v = visit
-
-        // THE CODEX SEAM — LIVE for the Anthos + Charles cards: actually run `codex exec` on the
-        // card's codexPrompt (real CodexCLI.run, with the user's Gmail MCP in scope, so the reply
-        // truly sends). The scripted theater below still plays for visual feedback; the real run
-        // happens in the background and its outcome is logged. (Charles replies-all into the real
-        // "EWOR | Introducing Jesai & Charles" thread — see its codexPrompt.) Other cards stay
-        // pure demo — their prompts would attempt bogus sends.
-        if e.b.id == "anthos" || e.b.id == "charles", let prompt = e.b.codexPrompt {
-            Task.detached(priority: .utility) { await Self.fireLiveCodex(prompt) }
-        }
 
         Task {
             withAnimation(.easeInOut(duration: 0.3)) { update(id) { $0.phase = .working(0) } }
@@ -367,27 +355,6 @@ final class ForYouModel {
             guard self.visit == v else { return }
             dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
                                        height: -CGFloat.random(in: 350...560)))
-        }
-    }
-
-    /// Live CODEX SEAM (Anthos + Charles cards): run the card's codexPrompt through the real
-    /// `codex exec` spine. The user's Gmail MCP rides the CodexCLI defaults; `bypassApprovals`
-    /// lets the connector's approval-gated `send_email` actually fire headless. Outcome → `Log()`
-    /// (tail /tmp/sentient-dev.log).
-    nonisolated static func fireLiveCodex(_ prompt: String) async {
-        Log("Home/codex: firing live codex exec (Gmail MCP send)…")
-        do {
-            var inv = CodexCLI.Invocation(prompt: prompt)
-            inv.effort = .high                  // gpt-5.5 → high
-            inv.bypassApprovals = true          // hosted Gmail send_email is approval-gated → it
-                                                // auto-cancels headless unless we bypass approvals
-            inv.timeout = 300
-
-            let env = try await CodexCLI.shared.run(inv)
-            Log("Home/codex: ✓ finished in \(env.durationMS ?? -1)ms (\(env.numTurns ?? -1) turns) — \(env.result)")
-            Log("Home/codex: --- full JSONL (debug) ---\n\(env.raw)\n--- end JSONL ---")
-        } catch {
-            Log("Home/codex: ✗ failed — \(error)")
         }
     }
 

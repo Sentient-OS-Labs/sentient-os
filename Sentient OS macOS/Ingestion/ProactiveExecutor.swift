@@ -72,7 +72,7 @@ actor ProactiveExecutor {
         !recipe.isEmpty && recipe.lowercased() != "none"
     }
 
-    // MARK: Gmail channel  (generalizes HomeView's ForYouModel.fireLiveCodex)
+    // MARK: Gmail channel
 
     private func fireGmail(recipe: String, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         progress("Sending via your Gmail connector…")
