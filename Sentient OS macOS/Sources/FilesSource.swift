@@ -13,18 +13,17 @@
 //  date — the folder structure alone is strong signal for junk/intent.
 //
 //  POINTER: one per-bucket high-water mark per folder root (bucket "file:<FileRoot.id>"),
-//  held in CycleStore and advanced by IterativeRun — no separate cursor object, no backfill.
-//  A file's date is max(dateAdded, dateModified, nearest moved-in ancestor's dateAdded) —
-//  dateAdded catches downloads with old mtimes, dateModified catches edits, and the ancestor
-//  propagation catches whole folders dragged into a root (their files keep old dates).
-//  Guards: a future-date clamp (clock weirdness can't poison the pointer). Ordering: incremental runs ascend
-//  (oldest-first); a root's FIRST run (no pointer yet) is a BACKFILL — newest-first descent
-//  tracked by a BackfillCursor [lo, hi] interval, resumable, with the root cap as a TOTAL
-//  budget across interruptions. New files arriving mid-backfill process before the dig resumes.
+//  held in CycleStore and advanced by IterativeRun — no separate cursor object, no backfill engine.
+//  eligibleFiles() keys each file on its pure addedToDirectoryDate (future-clamped, so a bad clock
+//  can't poison the pointer) and returns the eligible set NEWEST-FIRST; IterativeRun's pointer (a
+//  high-water mark, plus a floor while a first run is mid-descent) decides new-vs-done — so edits
+//  never reprocess and a stopped run resumes.
 //
-//  Skipping & caps (see Documentation/Files Source (Skipping & Caps).md): code repos and
-//  machine-generated datasets are pruned at the walk level (`pruneReason`), and `scan` bounds
-//  every run — newest 1,000 per root, 300 per directory, 1-year age cutoff for Downloads.
+//  Skipping & caps (see Documentation/Files Source (Skipping & Caps).md): three free layers, no
+//  inference — subtree pruning (`pruneReason`: code repos, datasets, data/markup dumps), per-file
+//  rejects (`fileRejectReason`: camera roll, lock/temp, boilerplate, empty, oversize), and caps
+//  (newest 1,000/root · 100/dir · Downloads 1-year). The walk is bounded too — max depth 3, symlinks
+//  skipped — and content extraction is timeout-guarded in IterativeRun.
 //
 
 import Foundation
@@ -42,7 +41,7 @@ struct FilesSource: Sendable {
     let maxAge: TimeInterval?    // drop files older than this (nil = no age cutoff)
 
     init(root: URL, label: String, cursorKey: String? = nil,
-         perDirectoryCap: Int = 300, maxAge: TimeInterval? = nil) {
+         perDirectoryCap: Int = 100, maxAge: TimeInterval? = nil) {
         self.root = root
         self.label = label
         self.cursorKey = cursorKey ?? "file:custom:" + root.path
@@ -52,6 +51,8 @@ struct FilesSource: Sendable {
 
     static let allowedExtensions: Set<String> = ["pdf", "doc", "docx", "md", "txt", "png", "jpg", "jpeg", "heic"]
     static let perRootCap = 1_000   // connector limit (June 10): newest 1,000 per root, every root
+    static let maxWalkDepth = 3                     // don't explore past 3 subfolder levels (bounds a pathological tree)
+    static let maxFileBytes = 100 * 1_024 * 1_024   // skip files over ~100 MB — hang guard (never even open a giant file)
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic"]
     private static let maxContentChars = 8_000
     private static let pdfPageLimit = 3
@@ -85,12 +86,17 @@ struct FilesSource: Sendable {
         "Makefile", "makefile", "CMakeLists.txt", "mix.exs", "deno.json", "build.sbt",
     ]
 
-    /// Source-code extensions for the density heuristic — a folder that's mostly these is a code
-    /// project even without a recognized manifest.
+    /// Extensions for the density heuristic — a folder that's mostly these is a code project or a
+    /// bulk data/markup dump (even without a manifest), so its few readable stragglers (a README, a
+    /// stray screenshot) are project noise, not a life. The data/markup ones aren't in
+    /// `allowedExtensions`, so they're never read as files anyway — listing them here only governs
+    /// the subtree-skip decision (if >half a folder is JSON/HTML/notebooks, walking in is noise).
     private static let codeExtensions: Set<String> = [
         "py", "js", "jsx", "ts", "tsx", "mjs", "c", "h", "cpp", "cc", "hpp", "m", "mm",
         "swift", "java", "kt", "rs", "go", "rb", "php", "cs", "scala", "sh", "lua",
         "dart", "vue", "svelte", "sql", "pl", "r",
+        // Data / markup — bulk presence signals a project or data dump, not personal content.
+        "json", "html", "htm", "css", "scss", "less", "ipynb", "xml", "yaml", "yml", "toml",
     ]
 
     /// Why this directory's whole subtree is skipped — nil means walk in. Reads the directory
@@ -159,6 +165,45 @@ struct FilesSource: Sendable {
         return patterns.contains { base.range(of: $0, options: .regularExpression) != nil }
     }
 
+    // MARK: File-level rejects (content-free — name & size only; decided 2026-06-25)
+
+    /// Obvious noise we refuse from the NAME and SIZE alone — never by reading the file. Every item
+    /// rejected here is one model call saved. Runs per file in eligibleFiles(), after the extension
+    /// whitelist. (Subtree-level skips live in pruneReason; this is the per-file companion.)
+    static func fileRejectReason(name: String, ext: String, size: Int?) -> String? {
+        // App lock / temp owner files (e.g. Word's "~$Report.docx") — garbage content.
+        if name.hasPrefix("~$") || name.hasPrefix(".~") { return "lock/temp file" }
+        // Empty stub — a model call for nothing.
+        if let size, size == 0 { return "empty file" }
+        // Hang guard — refuse to even open something huge (a 2 GB PDF can stall the run).
+        if let size, size > maxFileBytes { return "oversize" }
+        // Boilerplate that ships inside downloaded tools/zips — never the user's own life.
+        if boilerplateNames.contains((name as NSString).deletingPathExtension.lowercased()) {
+            return "boilerplate doc"
+        }
+        // Camera-roll photos — describing random pictures adds nothing (decided: drop outright).
+        // Screenshots are deliberately NOT here: a screenshot can hold a ticket/address/confirmation.
+        if imageExtensions.contains(ext), isCameraRollName(name) { return "camera roll" }
+        return nil
+    }
+
+    /// Boilerplate filenames bundled with software/downloads — matched on the basename, any extension.
+    /// (A real code repo is already pruned by .git/manifest; this catches a loose README/LICENSE that
+    /// got unzipped into Downloads on its own.)
+    private static let boilerplateNames: Set<String> = [
+        "readme", "license", "licence", "copying", "notice",
+        "changelog", "authors", "contributing", "code_of_conduct", "eula",
+    ]
+
+    /// Phone/camera photo filenames — the signature of a camera roll, not a life: iPhone (IMG_),
+    /// Pixel (PXL_), generic cameras (DSC/DSCN/DSCF), GoPro (GOPR), panoramas, motion photos, burst
+    /// shots, and WhatsApp media (IMG-…-WA…). Screenshots are deliberately excluded (kept as keepers).
+    private static func isCameraRollName(_ name: String) -> Bool {
+        let base = (name as NSString).deletingPathExtension.lowercased()
+        let camera = ["img_", "img-", "pxl_", "dsc", "mvimg", "pano", "gopr", "burst"]
+        return camera.contains { base.hasPrefix($0) }
+    }
+
     // MARK: Pointer encoding — "(epochSeconds|path)", path = same-second tiebreak
 
     static func pointerValue(date: Date, path: String) -> String {
@@ -169,7 +214,7 @@ struct FilesSource: Sendable {
 
     /// The current eligible set for this root, for the iterative system (IterativeRun via
     /// FilesConnector). Same
-    /// skip rules (`pruneReason`) and caps (`cappedNewestFirst`: 1,000/root · 300/dir · Downloads
+    /// skip rules (`pruneReason`) and caps (`cappedNewestFirst`: 1,000/root · 100/dir · Downloads
     /// 1-yr) as `scan`, but deliberately DIFFERENT in two ways:
     ///   • keyed on PURE `addedToDirectoryDate` (a file's "date added" — what Finder shows), NOT
     ///     scan's max(dateAdded, mtime, ancestor). The interval pointer reprocesses nothing on
@@ -179,8 +224,9 @@ struct FilesSource: Sendable {
     /// (itemDate, path)). Reuse `load(_:)` for content extraction.
     func eligibleFiles() -> [Candidate] {
         let now = Date()
-        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey,
-                                         .creationDateKey, .addedToDirectoryDateKey]
+        let rootDepth = root.pathComponents.count
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey,
+                                         .fileSizeKey, .creationDateKey, .addedToDirectoryDateKey]
         guard let enumerator = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: Array(keys),
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
@@ -189,12 +235,23 @@ struct FilesSource: Sendable {
         var rows: [(candidate: Candidate, sortKey: Double)] = []
         for case let url as URL in enumerator {
             let vals = try? url.resourceValues(forKeys: keys)
+            // Never follow symlinks — they can form loops that never finish the walk.
+            if vals?.isSymbolicLink == true { enumerator.skipDescendants(); continue }
             if vals?.isDirectory == true {
-                if Self.pruneReason(url) != nil { enumerator.skipDescendants() }
+                // Skip the subtree if it's noise (pruneReason) OR too deep (bounds a pathological tree).
+                if Self.pruneReason(url) != nil
+                    || url.pathComponents.count - rootDepth > Self.maxWalkDepth {
+                    enumerator.skipDescendants()
+                }
                 continue   // directories are never candidates themselves
             }
-            guard vals?.isRegularFile == true,
-                  Self.allowedExtensions.contains(url.pathExtension.lowercased()) else { continue }
+            guard vals?.isRegularFile == true else { continue }
+            let ext = url.pathExtension.lowercased()
+            guard Self.allowedExtensions.contains(ext) else { continue }
+            // Content-free per-file rejects (camera roll, lock/temp, boilerplate, empty, oversize).
+            if Self.fileRejectReason(name: url.lastPathComponent, ext: ext, size: vals?.fileSize) != nil {
+                continue
+            }
 
             // Pure date added, future-clamped. A file with no recorded date-added sorts to the
             // bottom (.distantPast) rather than poisoning the newest end.
@@ -219,7 +276,7 @@ struct FilesSource: Sendable {
 
     /// Newest-first selection under the connector caps (June 10–11 decisions):
     ///  • optional age cutoff (Downloads: 1 year — downloads age into junk; keepers elsewhere don't)
-    ///  • per-directory cap (300, every root) — the bulk-dump backstop
+    ///  • per-directory cap (100, every root) — the bulk-dump backstop
     ///  • `budget` — the per-root cap, or what's left of a backfill's descent budget
     private func cappedNewestFirst(_ rows: [(candidate: Candidate, sortKey: Double)],
                                    budget: Int, now: Date) -> [Candidate] {
