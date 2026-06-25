@@ -180,7 +180,7 @@ struct Briefing: Identifiable {
         Briefing(
             id: "charles", kind: .deadline,
             kicker: "Reply · 2 days · Gmail",
-            title: "Charles is waiting on your timeslots.",
+            title: "Charles from EWOR is waiting on your timeslots.",
             body: "Daniel introduced you to Charles Ferguson — he sold companies to Microsoft and Oracle, pre-seeded Higgsfield, and won an Oscar. I checked your calendar and drafted your reply.",
             letter: """
             Daniel introduced you to Charles Ferguson for your next EWOR interview — he sold companies to **Microsoft** and **Oracle**, pre-seeded **Higgsfield** (€500M ARR in a year), and won an **Oscar**.
@@ -255,36 +255,29 @@ struct Briefing: Identifiable {
             codexPrompt: "Reply to Supreeth (AIM India) on WhatsApp with the approved draft confirming the interview early next week."),
 
         Briefing(
-            id: "anthos", kind: .overdue,
-            kicker: "Overdue · 2 days · Gmail",
-            title: "You need to reply to Anthos Capital.",
-            body: "Serena emailed two days ago — $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
+            id: "ssn", kind: .promise,
+            kicker: "Researched",
+            title: "Prep Social Security Appointment",
+            body: "Your SSA appointment is tomorrow at 1:10 PM. This opens the prep checklist and arrival plan; nothing gets sent.",
             letter: """
-            Serena Saxena from Anthos Capital emailed two days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
+            Your Social Security Administration appointment is tomorrow at 1:10 PM. This is a read-only prep — nothing gets sent or scheduled.
 
-            She's in LA and asked for time early this week. You went quiet. Let's fix that — the draft's below, warm and ready.
+            Bring (originals, not photocopies)
+            - Passport and your current F-1 visa
+            - Most recent I-94 (print it from the CBP site)
+            - I-20, with the employment-authorization page signed
+            - Your on-campus job offer / authorization letter
+            - A completed SS-5 application (download from ssa.gov)
+
+            Arrival plan
+            - The office runs long — arrive about 20 minutes early, take a number, and fill the SS-5 while you wait.
+            - No card same-day: it's mailed in ~10–14 business days, so confirm the address on file is your current one.
+
+            I'll nudge you tomorrow morning. — your Sentient
             """,
-            draft: Briefing.anthosReply,
-            draftLabel: "Draft · Gmail",
-            detailLabel: "read the draft",
-            offer: "Should I send it for you?",
-            workLog: ["→ reading Serena's note",
-                      "→ opening Gmail",
-                      "→ composing your reply…",
-                      "✓ sent"],
-            doneTitle: "Sent to Anthos.",
-            doneBody: "Serena has your reply — Friday, or early next week.",
-            codexPrompt: """
-            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
-
-            Use the Gmail MCP to reply to the email from jesaitarun@gmail.com with the subject "Sentient OS test". Reply in that thread and send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
-
-            \(Briefing.anthosReply)
-
-            Send this reply now via the Gmail MCP — the user has already approved this send. Do not ask, do not draft-and-wait; complete the send and confirm it went out.
-
-            IMPORTANT — formatting: send it as an HTML email. Set the send tool's content_type to "text/html" and format the body as clean HTML so it reflows naturally in the reader's inbox: put EACH paragraph above inside its own <p>…</p> tag, and write the sign-off as "Best,<br>Jesai". Keep every word — including ":)", the "—" em-dash, "*acts*", and "(Friday)" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph; plain text gets hard-wrapped mid-sentence, which is the ugly formatting we're fixing.
-            """),
+            detailLabel: "read the prep checklist",
+            offer: nil,
+            doneTitle: "", doneBody: ""),
 
         Briefing(
             id: "luis", kind: .meeting,
@@ -337,6 +330,41 @@ struct Briefing: Identifiable {
     // (and drop/replace a current card so the count stays 6 — the scatter layouts in HomeView's
     // `slots(count:)` only define up to 6). Each is self-contained (no shared-constant refs).
     // Parked = NOT compiled, so these can quietly go stale — re-read before relying on one.
+
+    /* ── Anthos · "You need to reply to Anthos Capital." — LIVE Gmail send. Uses the `anthosReply`
+       constant above; the `anthos` id is still armed in HomeView's run() seam, so it works on swap-in. ──
+        Briefing(
+            id: "anthos", kind: .overdue,
+            kicker: "Overdue · 2 days · Gmail",
+            title: "You need to reply to Anthos Capital.",
+            body: "Serena emailed two days ago — $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
+            letter: """
+            Serena Saxena from Anthos Capital emailed two days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
+
+            She's in LA and asked for time early this week. You went quiet. Let's fix that — the draft's below, warm and ready.
+            """,
+            draft: Briefing.anthosReply,
+            draftLabel: "Draft · Gmail",
+            detailLabel: "read the draft",
+            offer: "Should I send it for you?",
+            workLog: ["→ reading Serena's note",
+                      "→ opening Gmail",
+                      "→ composing your reply…",
+                      "✓ sent"],
+            doneTitle: "Sent to Anthos.",
+            doneBody: "Serena has your reply — Friday, or early next week.",
+            codexPrompt: """
+            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
+
+            Use the Gmail MCP to reply to the email from jesaitarun@gmail.com with the subject "Sentient OS test". Reply in that thread and send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
+
+            \(Briefing.anthosReply)
+
+            Send this reply now via the Gmail MCP — the user has already approved this send. Do not ask, do not draft-and-wait; complete the send and confirm it went out.
+
+            IMPORTANT — formatting: send it as an HTML email. Set the send tool's content_type to "text/html" and format the body as clean HTML so it reflows naturally in the reader's inbox: put EACH paragraph above inside its own <p>…</p> tag, and write the sign-off as "Best,<br>Jesai". Keep every word — including ":)", the "—" em-dash, "*acts*", and "(Friday)" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph; plain text gets hard-wrapped mid-sentence, which is the ugly formatting we're fixing.
+            """),
+    */
 
     /* ── EWOR · "Prepare for your call with Daniel, CEO of EWOR." (researched prep card, orchid) ──
         Briefing(
