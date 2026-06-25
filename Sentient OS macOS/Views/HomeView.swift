@@ -300,6 +300,9 @@ struct HomeView: View {
                 LetterView(briefing: b,
                            phase: model.entry(b.id)?.phase ?? .offer,
                            editable: model.entry(b.id)?.action != nil && b.draft != nil,   // real action card
+                           // The LIVE content for THIS card (reflects any prior edit) — seeds the editor
+                           // per briefing so a reused letter view never shows the previous card's draft.
+                           liveDraft: model.entry(b.id)?.action?.preparedContent ?? b.draft ?? "",
                            onCommitEdit: { model.applyEdit(b.id, content: $0) },
                            onOffer: {
                                closeLetter()
@@ -679,12 +682,23 @@ private struct LetterView: View {
     let briefing: Briefing
     let phase: BriefingPhase
     var editable: Bool = false                       // real card with a draft → the draft is editable
+    var liveDraft: String = ""                       // THIS card's current content (seeds the editor)
     var onCommitEdit: (String) -> Void = { _ in }    // persist the edited draft (so it's what fires)
     var onOffer: () -> Void
     var onClose: () -> Void
 
     @State private var copied = false
-    @State private var editedDraft = ""
+    @State private var editedDraft = ""        // the live editor text
+    @State private var savedDraft = ""         // the last COMMITTED text — drift from editedDraft = unsaved edits
+
+    /// There are unsaved edits to commit.
+    private var isDirty: Bool { editable && editedDraft != savedDraft }
+
+    /// Commit the current draft so it persists + is what fires.
+    private func commitEdit() {
+        onCommitEdit(editedDraft)
+        savedDraft = editedDraft
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -715,7 +729,10 @@ private struct LetterView: View {
             }
 
             if let offer = briefing.offer, phase == .offer {
-                OfferButton(label: offer, accent: briefing.accent, action: onOffer)
+                OfferButton(label: offer, accent: briefing.accent, action: {
+                    if editable { commitEdit() }   // fire what's shown — commit any unsaved edit first
+                    onOffer()
+                })
                     .padding(.top, 16)
             }
         }
@@ -727,7 +744,12 @@ private struct LetterView: View {
                                            startPoint: .topLeading, endPoint: .bottomTrailing),
                           lineWidth: 1))
         .shadow(color: .black.opacity(0.6), radius: 40, y: 18)
-        .onAppear { editedDraft = briefing.draft ?? "" }
+        // Seed the editor from THIS card's live content — on first appear AND every time a different
+        // briefing opens. The letter layer is always-mounted and REUSED across cards (stable identity),
+        // so .onAppear fires only once; without the .onChange a second card would show the first card's
+        // draft. editedDraft + savedDraft start equal (a freshly-opened card has no unsaved edits).
+        .onAppear { editedDraft = liveDraft; savedDraft = liveDraft }
+        .onChange(of: briefing.id) { _, _ in editedDraft = liveDraft; savedDraft = liveDraft; copied = false }
     }
 
     @ViewBuilder
@@ -762,12 +784,26 @@ private struct LetterView: View {
                                      startPoint: .top, endPoint: .bottom))
                 .frame(width: 2)
             VStack(alignment: .leading, spacing: 9) {
-                HStack {
+                HStack(spacing: 14) {
                     MonoCaps(briefing.draftLabel ?? "Draft", size: 9, tracking: 2.0, color: Theme.Ink.label)
                     if editable {
                         Image(systemName: "pencil").font(.system(size: 8.5)).foregroundStyle(briefing.accent.opacity(0.9))
                     }
                     Spacer()
+                    // Save — explicit so the user KNOWS the edit is persisted + is what fires. "Save"
+                    // (accent) when there are unsaved edits; "Saved" (mint, disabled) when in sync.
+                    if editable {
+                        Button(action: commitEdit) {
+                            HStack(spacing: 5) {
+                                Image(systemName: isDirty ? "square.and.arrow.down" : "checkmark").font(.system(size: 9.5))
+                                Text(isDirty ? "Save" : "Saved").font(.system(size: 11, weight: isDirty ? .semibold : .regular))
+                            }
+                            .foregroundStyle(isDirty ? briefing.accent : Theme.Ink.mint)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!isDirty)
+                    }
                     Button {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(editable ? editedDraft : draft, forType: .string)
@@ -789,7 +825,6 @@ private struct LetterView: View {
                         .tint(briefing.accent)
                         .scrollContentBackground(.hidden)
                         .frame(minHeight: 90, maxHeight: 300)
-                        .onChange(of: editedDraft) { _, new in onCommitEdit(new) }
                 } else {
                     Text(draft)
                         .font(.system(size: 13)).foregroundStyle(.white.opacity(0.88)).lineSpacing(4)
