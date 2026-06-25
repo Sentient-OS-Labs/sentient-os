@@ -22,6 +22,38 @@
 
 import Foundation
 
+// MARK: - Per-item extraction timeout (Arch §H — one corrupt/huge file must never hang the run)
+
+private struct ExtractionTimeout: Error { let seconds: Double }
+
+/// Holds the racing continuation behind a lock so it resumes exactly once, and so the `@Sendable`
+/// dispatch closures capture this (`@unchecked Sendable`) box instead of the continuation directly.
+private final class TimeoutBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<T, Error>?
+    init(_ c: CheckedContinuation<T, Error>) { cont = c }
+    func resume(_ result: Result<T, Error>) {
+        lock.lock(); let c = cont; cont = nil; lock.unlock()
+        c?.resume(with: result)
+    }
+}
+
+/// Runs blocking `work` with a hard wall-clock cap, resolving to whichever wins — the work
+/// finishing or the deadline. On timeout it throws `ExtractionTimeout` and the run moves on; a
+/// truly-hung synchronous extractor keeps running on its background thread (sync work can't be
+/// force-killed) but never blocks the pipeline. FilesSource's size ceiling is the first-line guard
+/// against this; the timeout is the backstop for a small-but-corrupt file.
+private func withExtractionTimeout<T: Sendable>(_ seconds: Double,
+                                                _ work: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
+        let box = TimeoutBox(cont)
+        DispatchQueue.global(qos: .utility).async { box.resume(Result { try work() }) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
+            box.resume(.failure(ExtractionTimeout(seconds: seconds)))
+        }
+    }
+}
+
 /// Live progress for one analysis run — the bar, the verdict counts, and the most-recently-processed
 /// item (its prompt/title/summary/verdict). Every snapshot is internally consistent: all the `last*`
 /// fields describe the SAME item, so a UI can show them together without desync. Read by ProcessingView.
@@ -51,6 +83,7 @@ struct IterativeRun {
     private static let preemptiveReloadEvery = 40
     private static let failuresBeforeReload = 3
     private static let maxReloadsWithoutProgress = 4
+    private static let extractionTimeoutSeconds: Double = 30   // Arch §H: one file's content extraction can't hang the run
 
     /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The caller
     /// passes every selected source at once; per-connector load + kind ride along per bucket.
@@ -84,7 +117,9 @@ struct IterativeRun {
         // so ProcessingView's dev pane can show it.
         func attempt(_ cand: Candidate, connector: any Connector) async -> (ok: Bool, draft: NoteDraft?) {
             do {
-                let artifact = try autoreleasepool { try connector.load(cand) }
+                let artifact = try await withExtractionTimeout(Self.extractionTimeoutSeconds) {
+                    try autoreleasepool { try connector.load(cand) }
+                }
                 let prompt = Triage.prompt(for: artifact, currentDate: Date())
                 p.lastPrompt = prompt
                 let result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
