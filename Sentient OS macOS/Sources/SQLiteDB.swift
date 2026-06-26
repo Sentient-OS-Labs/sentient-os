@@ -15,8 +15,8 @@ import Foundation
 import SQLite3
 
 /// `nonisolated` (the project defaults declarations to @MainActor): these are pure utilities that
-/// work on a throwaway temp copy, so DB reads can run off-main — e.g. from the background
-/// ProactiveExecutor actor (CookieDecryptor). @MainActor sources can still call them freely.
+/// work on a throwaway temp copy, so DB reads can run off-main — e.g. from the background ingestion
+/// connectors that read each source's SQLite DB. @MainActor sources can still call them freely.
 nonisolated enum SQLiteDB {
     enum DBError: Error, CustomStringConvertible {
         case missingFile(String)

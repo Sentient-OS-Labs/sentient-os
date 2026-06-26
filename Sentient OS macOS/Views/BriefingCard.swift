@@ -363,15 +363,15 @@ private struct BlinkingCursor: View {
 
 #Preview("Real card — working (live)") {
     let action = PreparedAction(
-        title: "Register you for ZFellows", method: .browser, target: "ZFellows", urgency: .high,
+        title: "Register you for ZFellows", method: .computer, target: "ZFellows", urgency: .high,
         dueDate: "", status: .confirmed, verification: "", cardSummary: "",
         preparedContent: "", executionRecipe: "x", buttonText: "Register me?", detailLabel: "",
         sources: [], reviewNote: "")
     return ZStack { Color.black
         BriefingCard(briefing: Briefing(from: action), phase: .working(0),
                      onOffer: {}, onDetail: {}, onOpenEnvelope: {},
-                     liveLines: ["Opening zfellows.com…", "$ playwright-cli open https://zfellows.com",
-                                 "Filling your name + email…", "Submitting the application…"],
+                     liveLines: ["Opening zfellows.com…", "Filling your name + email…",
+                                 "Submitting the application…"],
                      onStop: {})
     }.frame(width: 420, height: 340)
 }

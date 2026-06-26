@@ -73,12 +73,6 @@ actor CodexCLI {
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
         var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
-        var customEnv: [String: String] = [:]  // extra env vars merged into the sanitized child env
-                                               // (e.g. PLAYWRIGHT_MCP_STORAGE_STATE for the browser
-                                               // executor). PATH is reserved — use extraPathDirs.
-        var extraPathDirs: [String] = []       // dirs PREPENDED to the child PATH (e.g. the
-                                               // playwright-cli / node bin dir) so codex's shell can
-                                               // find tools it shells out to.
 
         init(prompt: String) { self.prompt = prompt }
     }
@@ -227,22 +221,19 @@ actor CodexCLI {
                                               stdinText: invocation.prompt,
                                               cwd: invocation.cwd,
                                               timeout: invocation.timeout,
-                                              customEnv: invocation.customEnv,
-                                              extraPathDirs: invocation.extraPathDirs,
                                               onStdoutLine: stdoutLine)
         return try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
     }
 
-    /// The command bar's "Let me DO stuff for you" spine — computer use AND browser use (the mode
-    /// is just a word in the prompt the caller builds, NOT a flag here). Runs a raw `codex exec`
-    /// with the prompt passed as ARGV and the exact flag set verified to make Codex's computer/
-    /// browser use work via the CLI: `--dangerously-bypass-approvals-and-sandbox -m gpt-5.5
-    /// -c model_reasoning_effort="low" --skip-git-repo-check`, NO `--json` (human-readable
-    /// output, not JSONL). Each output LINE is pumped to `onLine` AS it arrives, so the Xcode
-    /// console shows codex's play-by-play live. Reuses the sanitized-env / PATH / watchdog plumbing;
-    /// the binary comes from the same discovery (`~/.local/bin/codex` first). The user's ~/.codex
-    /// config + MCP servers load by default (no --ignore-user-config). Returns the full output.
-    /// Computer use is the WIP CLI path.
+    /// The command bar's "Let me DO stuff for you" spine — computer use (the "computer use" phrase is
+    /// built into the prompt by the caller, NOT a flag here). Runs a raw `codex exec` with the prompt
+    /// passed as ARGV and the exact flag set verified to make Codex's computer use work via the CLI:
+    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.5 -c model_reasoning_effort="low"
+    /// --skip-git-repo-check`, NO `--json` (human-readable output, not JSONL). Each output LINE is
+    /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
+    /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
+    /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
+    /// --ignore-user-config). Returns the full output. Computer use is the WIP CLI path.
     func runAgentCommand(_ prompt: String, timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
@@ -417,8 +408,6 @@ actor CodexCLI {
 
     private static func executeAsync(binary: String, args: [String], stdinText: String?,
                                      cwd: String?, timeout: TimeInterval,
-                                     customEnv: [String: String] = [:],
-                                     extraPathDirs: [String] = [],
                                      onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
         let holder = ProcHolder()
@@ -427,7 +416,6 @@ actor CodexCLI {
                 DispatchQueue.global(qos: .userInitiated).async {
                     do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
                                                             cwd: cwd, timeout: timeout,
-                                                            customEnv: customEnv, extraPathDirs: extraPathDirs,
                                                             onStdoutLine: onStdoutLine, procHolder: holder)) }
                     catch { cont.resume(throwing: error) }
                 }
@@ -440,8 +428,6 @@ actor CodexCLI {
     /// ~/.codex (resolved via HOME), no TTY needed (Arch §5, measured).
     private static func execute(binary: String, args: [String], stdinText: String?,
                                 cwd: String?, timeout: TimeInterval,
-                                customEnv: [String: String] = [:],
-                                extraPathDirs: [String] = [],
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,
                                 procHolder: ProcHolder? = nil) throws -> ExecResult {
         let proc = Process()
@@ -449,15 +435,12 @@ actor CodexCLI {
         proc.arguments = args
         // The binary's OWN directory leads the sanitized PATH: npm installs are
         // `#!/usr/bin/env node` shims, and (in the nvm layout) `node` sits right next to
-        // them — without this, the shim exec-fails even when found. `extraPathDirs` go in FRONT of
-        // it (e.g. so codex's shell finds a `playwright-cli` it shells out to).
+        // them — without this, the shim exec-fails even when found.
         let binDir = (binary as NSString).deletingLastPathComponent
         var env: [String: String] = [:]
         let current = ProcessInfo.processInfo.environment
         for key in ["HOME", "USER"] where current[key] != nil { env[key] = current[key] }
-        for (k, v) in customEnv { env[k] = v }                 // app-supplied extras (PLAYWRIGHT_MCP_*)
-        // PATH is set LAST so customEnv can't accidentally clobber it; extraPathDirs lead.
-        env["PATH"] = (extraPathDirs + [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"]).joined(separator: ":")
+        env["PATH"] = [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         proc.environment = env
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
@@ -557,14 +540,13 @@ actor CodexCLI {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: binary)
                 proc.arguments = args
-                // Computer/browser use drives Codex's bundled GUI helper (SkyComputerUseService),
-                // which codex reaches over an IPC socket living under the per-user $TMPDIR. The
-                // bare HOME/USER env we use for headless codex elsewhere DROPS $TMPDIR (+ the GUI
-                // session/bootstrap vars), so the helper connection hangs at the first call
-                // (`list_apps`). So here we INHERIT the app's full environment — which carries the
-                // real $TMPDIR + session vars, exactly like a Terminal launch — and only overlay a
-                // rich PATH so codex finds the tools it shells out to (node, playwright-cli, the
-                // Codex.app cua_node).
+                // Computer use drives Codex's bundled GUI helper (SkyComputerUseService), which codex
+                // reaches over an IPC socket living under the per-user $TMPDIR. The bare HOME/USER env
+                // we use for headless codex elsewhere DROPS $TMPDIR (+ the GUI session/bootstrap vars),
+                // so the helper connection hangs at the first call (`list_apps`). So here we INHERIT
+                // the app's full environment — which carries the real $TMPDIR + session vars, exactly
+                // like a Terminal launch — and only overlay a rich PATH so codex finds the tools it
+                // shells out to (node, the Codex.app cua_node).
                 let binDir = (binary as NSString).deletingLastPathComponent
                 var env = ProcessInfo.processInfo.environment
                 let home = env["HOME"] ?? NSHomeDirectory()

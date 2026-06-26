@@ -28,10 +28,7 @@ build overrides to `.xhigh`, the Gmail tier to `.medium`) · `sandbox` (`.readOn
 Gmail MCP, on every call; set `false` for a hermetic run) · `bypassApprovals` (default `false`;
 `true` → `--dangerously-bypass-approvals-and-sandbox`, the only way a hosted-connector WRITE tool
 like Gmail `send_email` fires headless — TRUSTED prompts only, no sandbox) · `outputSchema`
-(JSON-Schema string → temp file → `--output-schema`) · `resumeSessionID` · `timeout` (default 1 h)
-· `customEnv` (extra env vars merged into the sanitized child env, e.g.
-`PLAYWRIGHT_MCP_STORAGE_STATE`; PATH is reserved) · `extraPathDirs` (dirs prepended to the child
-PATH so codex's shell can find tools it shells out to).
+(JSON-Schema string → temp file → `--output-schema`) · `resumeSessionID` · `timeout` (default 1 h).
 
 `Envelope`: `result` (final agent message) · `sessionID` (thread id — the resume handle) ·
 `numTurns` (completed items) · `durationMS` (wall clock, measured here) · `inputTokens` /
