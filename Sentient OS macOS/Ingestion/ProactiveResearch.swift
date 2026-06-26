@@ -19,7 +19,7 @@
 //      means a connector WRITE would auto-cancel headless anyway (codex/Gmail permissioning findings).
 //
 //  Output: ready-to-fire `PreparedAction`s (carrying the verify verdict + the prepared draft + a
-//  deterministic `execution_recipe` — the contract PART 3 / the Playwright-browser-use executor runs)
+//  deterministic `execution_recipe` — the routing contract PART 3's executor runs)
 //  plus the `dropped` items. Verify-only on discovery: it never invents a NEW item (that's PART 1).
 //
 //  Key methods:
@@ -61,8 +61,8 @@ struct PreparedAction: Sendable, Identifiable, Codable {
     /// kinds: email_reply/email_new → .gmail · message → .computer (sends via Messages/WhatsApp) ·
     /// reminder → .research (surfaced, no fire). `research` carries no fire (`executionRecipe == "none"`).
     enum Method: String, Sendable, Codable {
-        case browser    // a cookie-auth website task via our playwright + the user's own cookies
-        case computer   // drives the Mac (native apps, sending a chat message) via codex computer use
+        case computer   // drives the Mac via codex computer use — native apps, sending a chat message,
+                        // AND logged-in website tasks (register/RSVP/buy/fill a form) via the real browser
         case gmail      // the user's Gmail MCP via codex
         case calendar   // the user's Calendar MCP via codex
         case research   // informational briefing — nothing to fire
@@ -182,7 +182,7 @@ actor ProactiveResearch {
     {"type":"object","additionalProperties":false,"properties":{\
     "ready":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
     "title":{"type":"string"},\
-    "method":{"type":"string","enum":["browser","computer","gmail","calendar","research"]},\
+    "method":{"type":"string","enum":["computer","gmail","calendar","research"]},\
     "target":{"type":"string"},\
     "urgency":{"type":"string","enum":["high","medium","low"]},\
     "due_date":{"type":"string"},\
@@ -340,9 +340,7 @@ actor ProactiveResearch {
         draft, reply, label, archive, or modify.** No Gmail tool available → skip gracefully, say so, \
         mark `unverified` — never pretend.
         3. **Web search** — ground external facts (on-sale/event dates, deadlines, hours, price, a \
-        form's required fields), identity-matched.
-        4. **The browser, IF a browser tool is available** — navigate and INSPECT a page to understand \
-        a task (what a form asks, where the controls are) so your recipe is exact. **Inspect only — \
+        form's required fields, what a registration page asks for), identity-matched. **Look up only — \
         never submit/pay/confirm.**
         If a tool you'd need isn't available, go as far as you can and say in `review_note`/the recipe \
         what the fire step will have to handle.
@@ -372,31 +370,28 @@ actor ProactiveResearch {
         You work ONLY the items handed to you below. **Never invent a brand-new action item** — \
         discovery already happened in PART 1.
 
-        ## THE FIVE METHODS (set `method`) — pick the ONE channel that fires this action
+        ## THE FOUR METHODS (set `method`) — pick the ONE channel that fires this action
         You decide HOW Sentient carries out each action. Pick exactly one method:
         - **gmail** — anything in the user's email (a reply or a brand-new message). \
         `prepared_content` = the full draft (subject + body); `execution_recipe` = recipient(s) + the \
         exact thread it belongs to.
         - **calendar** — add or change an event on the user's calendar. `prepared_content` = the event \
         the user reviews (title, start/end, attendees, notes); `execution_recipe` = those fields, structured.
-        - **browser** — a task on a COOKIE-AUTH WEBSITE the user is already logged into (register, \
-        RSVP, fill an application, buy, post on X/LinkedIn/Reddit/Amazon/GitHub). Sentient drives a \
-        real browser with the user's OWN session. `execution_recipe` = the exact URL + ordered steps + \
-        which field gets which value; `prepared_content` = the content/values the user reviews.
-        - **computer** — drives the user's Mac directly (their own computer use): SEND a WhatsApp / \
-        iMessage (via the Messages app), act in a native desktop app (e.g. Notion), or anything a \
-        browser can't. `prepared_content` = the exact text/message to send; `execution_recipe` = which \
-        app + which chat/where, step by step. (The fire step NEVER uses AppleScript/Terminal — only \
-        computer use.)
+        - **computer** — drives the user's Mac directly (their own computer use): act in a native \
+        desktop app (e.g. Notion), SEND a WhatsApp / iMessage (via the Messages app), OR do a task on a \
+        WEBSITE the user is already logged into by driving their real browser (register, RSVP, fill an \
+        application, buy, post on X/LinkedIn/Reddit/Amazon/GitHub). `prepared_content` = the exact \
+        text/values the user reviews; `execution_recipe` = which app or URL + which chat/where + ordered \
+        steps (and which field takes which value for a web form). (The fire step NEVER uses \
+        AppleScript/Terminal — only computer use.)
         - **research** — informational only: write the briefing the user wanted (a trip plan, a \
         comparison, prepped notes for a call). Nothing fires — `execution_recipe` = "none", \
         `button_text` = "".
 
-        **Browser vs computer:** doable on a logged-in WEBSITE → **browser**; needs a NATIVE Mac app \
-        or sending a chat message → **computer**. Email and calendar ALWAYS use **gmail** / \
-        **calendar** (never browser/computer). A drafted WhatsApp/iMessage reply → **computer** (it \
-        sends via Messages). A real task only the user can do by hand with nothing to automate (e.g. a \
-        phone call) → **research** (surface it; don't drop it).
+        **Which method:** email → **gmail**; calendar events → **calendar**; everything Sentient ACTS \
+        on for the user — a native Mac app, a chat message (WhatsApp/iMessage via Messages), or a \
+        logged-in website — → **computer**. A real task only the user can do by hand with nothing to \
+        automate (e.g. a phone call) → **research** (surface it; don't drop it).
 
         ## ACCURACY & VOICE (this will go out under the user's name)
         - Ground every draft and every field value in real evidence (the vault, the thread, verified \
@@ -411,9 +406,9 @@ actor ProactiveResearch {
         Return ONLY the structured object defined by the schema — no prose around it.
         `ready` — the survivors, each staged to fire. For each:
         - **title** — short, specific headline (≤ ~8 words).
-        - **method** — one of the five above (the single channel that fires this).
+        - **method** — one of the four above (the single channel that fires this).
         - **target** — the app or website this acts in, as a short brand name for the card label \
-        ("LinkedIn", "Notion", "Amazon"). REQUIRED for **browser** and **computer**; leave "" for \
+        ("LinkedIn", "Notion", "Amazon"). REQUIRED for **computer**; leave "" for \
         gmail / calendar / research (the method names itself).
         - **urgency** — "high" / "medium" / "low".
         - **due_date** — the real VERIFIED date in plain words, or "" if none / unverified.
@@ -427,10 +422,10 @@ actor ProactiveResearch {
         complete and final: the full email subject+body, the full message text, the event details, or \
         the briefing write-up. (Edits the user makes here are exactly what gets sent.)
         - **execution_recipe** — ROUTING ONLY: where the action goes, not its words. Recipient(s) + the \
-        exact thread for **gmail**; the app + which chat for **computer**; the structured event fields \
-        for **calendar**; the URL + ordered steps + which field takes which value for **browser**. Do \
-        NOT restate the message body here — it lives in `prepared_content` and is sent from there. \
-        "none" for research.
+        exact thread for **gmail**; the structured event fields for **calendar**; for **computer**, the \
+        app or URL + which chat/where + ordered steps (and which field takes which value for a web \
+        form). Do NOT restate the message body here — it lives in `prepared_content` and is sent from \
+        there. "none" for research.
         - **button_text** — the one-tap fire button's label, specific to THIS action and in the user's \
         framing ("Should I send it for you?", "Reply & add it to your calendar?", "Register me?"). \
         Leave "" for research (it has no fire button).

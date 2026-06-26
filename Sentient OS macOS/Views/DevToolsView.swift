@@ -377,7 +377,7 @@ struct DevToolsView: View {
 
     /// Proactive PART 3 — the executor. Opens the PROACTIVE · EXECUTE window listing the real
     /// ready-to-fire actions from the latest PART 2 run, each with a working FIRE button (Gmail MCP
-    /// send / headless Playwright browser / calendar MCP). Real execution — no mock theater.
+    /// send / computer use / calendar MCP). Real execution — no mock theater.
     private var executeButton: some View {
         Button { openWindow(id: ProactiveExecuteView.windowID) } label: {
             HStack(spacing: 7) {

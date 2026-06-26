@@ -25,8 +25,8 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
   the center with *"I'm here to help."* (a launchpad, not a dead end — your eye drops straight to the
   command bar). The orb appears **only** here (plus the separate ProcessingView takeover); Settings
   and Connect use the static `OrbMark` glyph instead.
-- **The dock:** the `PromptBar` command bar ("Tell me what you want me to DO" · Computer use / Browser
-  use · send) + the trust footer. A small `DEV TOOLS` handle is pinned bottom-right (`devToolsOverlay`
+- **The dock:** the `PromptBar` command bar ("Tell me what you want me to DO" · Computer use · send)
+  + the trust footer. A small `DEV TOOLS` handle is pinned bottom-right (`devToolsOverlay`
   → the DevToolsView sheet; the Release strip re-hides it).
 - **The letter layer:** an always-mounted overlay (opacity/scale-driven — view *insertion* can miss a
   redraw on hidden-titlebar windows) that expands a card into a typeset reading view.
@@ -66,11 +66,10 @@ back to its card with a STOP button, is the next step.
 
 ## The command bar — "Let me DO stuff for you"
 
-`PromptBar` has two modes — **Computer use** (the default) and **Browser use** — picked by a small
-segmented toggle. Today `onSend(text, mode)` is a demo seam: it just logs the intent
-(`Log("Home/prompt: …")` in `HomeView`). Wiring it to real execution — computer use via a
-workspace-write Codex agent, browser use via the proactive executor (`ProactiveExecutor`, which drives
-a headless Playwright Chromium) — is pending.
+`PromptBar` has a single mode — **Computer use** — shown as a one-option segmented control (Browser
+use was removed). `onSend(text, mode)` is wired live: `HomeView` builds "Using computer use, <task>…"
+and runs it through `CodexCLI.runAgentCommand`, streaming codex's play-by-play back into the bar with
+a STOP button. (Computer use is the WIP Codex-CLI path.)
 
 ## The other windows
 

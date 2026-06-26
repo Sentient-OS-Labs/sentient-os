@@ -8,7 +8,7 @@ knowledge-base build/update, never concurrently (two agentic jobs over the same 
   knowledge base) AND stages every survivor **ready to fire** (draft + execution recipe), in one
   read-only pass. `ProactiveResearch.swift`.
 - **PART 3 — Fire (the executor)**: the single write-capable step — on the user's one-button press it
-  runs a `PreparedAction`'s recipe with `bypassApprovals`. ✅ built — `ProactiveExecutor.swift` (deep dive: the Browser Automation doc).
+  runs a `PreparedAction`'s recipe with `bypassApprovals`. ✅ built — `ProactiveExecutor.swift`.
 
 **The whole read-only/safe world is Parts 1–2; the one dangerous, write-capable step is PART 3** — the
 pipeline lines up exactly on the permission boundary. The later tiers (reminders, the For You surface,
@@ -71,8 +71,8 @@ moat, but it's used to **ground** each item, not to filter or diversify the outp
 - **Judge from the summaries ALONE** — PART 1 is hermetic and has no tools, so the prompt tells the
   model explicitly it has no vault/Gmail/web to lean on. The deep grounding (reading the knowledge
   base + the live sources) is PART 2's job.
-- **Detection, not execution (for now)** — frame the exact next action (draft reply, fill a form via
-  a browser agent, schedule, send) as ready-to-execute; the action infra ships later.
+- **Detection, not execution (for now)** — frame the exact next action (draft reply, fill a form,
+  schedule, send) as ready-to-execute; the action infra ships later.
 - An **illustrative example catalogue** (hypothetical — overdue reply, cross-tool meeting, a promise
   made, a deadline+form, a renewal/expiry, a self-written to-do, a plan forming across a group) teaches
   the SHAPE and the contextual reasoning, not specific facts.
@@ -111,28 +111,25 @@ Research surfaces (all read-only): the **knowledge base** (`cwd` — identity an
 gracefully + mark `unverified` if absent), **web search** (external facts, identity-matched), the
 **live-calendar context** (the same `calendarContext:` block as PART 1 — pre-fetched receipts to
 confirm free/busy, an event's real time, or that something's already on the calendar; PART 2 may also
-call the Calendar MCP to read a specific event in detail), and a **browser** to *inspect* only if a
-browser tool is present.
+call the Calendar MCP to read a specific event in detail).
 
 `CodexCLI.Invocation`: `effort .high`, `sandbox .readOnly`, `cwd = vault`, `webSearch = true`,
 `includeUserConfig = true`, `bypassApprovals = false`, `outputSchema`, `timeout 1800s`. Output via
 `--output-schema`: `{ready:[{title, kind, urgency, due_date, status, verification, card_summary,
-prepared_content, execution_recipe, sources, review_note}], dropped:[{title, reason}]}`. `kind` ∈
-`email_reply` / `email_new` / `message` / `calendar` / `browser` / `research` / `reminder` (the last
-two carry no fire — `execution_recipe = "none"`; `reminder` absorbs a real-but-unautomatable item
-rather than dropping it). `status` ∈ confirmed / updated / unverified. The `execution_recipe` is **the
-contract PART 3 consumes**. Errors typed (`ResError`): `noItems`, `noVault`, `usageLimit`, `failed`.
-⚠️ If PART 2 ever needs to *drive* a browser (not just inspect), revisit `.readOnly` — but real browser
-actions belong in PART 3 (the executor), not here.
+prepared_content, execution_recipe, sources, review_note}], dropped:[{title, reason}]}`. `method` ∈
+`gmail` / `calendar` / `computer` / `research` — `computer` covers native-app actions, chat sends, AND
+logged-in website tasks (register/RSVP/buy/fill a form, driven via the user's real browser); `research`
+carries no fire (`execution_recipe = "none"` — it absorbs a real-but-unautomatable item rather than
+dropping it). `status` ∈ confirmed / updated / unverified. The `execution_recipe` is **the contract
+PART 3 consumes**. Errors typed (`ResError`): `noItems`, `noVault`, `usageLimit`, `failed`.
 
 ## PART 3 — Fire / the executor (✅ built — `Ingestion/ProactiveExecutor.swift`)
 
 The single write-capable step: on the user's one-button press it takes a `PreparedAction`'s
 `execution_recipe` and actually performs it. **`bypassApprovals = true`** (the only thing that lets an
-approval-gated connector write fire headless — codex/Gmail findings), routed by kind — email via the
-Gmail MCP, **browser use** via [microsoft/playwright-cli](https://github.com/microsoft/playwright-cli)
-driving a real browser with the user's own decrypted cookies (`CookieDecryptor` + `PlaywrightCLI`),
-calendar via a calendar MCP. (Deep dive: the Browser Automation doc.) The HomeView "send it" Gmail send
+approval-gated connector write fire headless — codex/Gmail findings), routed by method — email via the
+Gmail MCP, **computer use** via the Codex CLI (`runAgentCommand`), which also drives the user's real
+browser for logged-in website tasks, and calendar via a calendar MCP. The HomeView "send it" Gmail send
 (`ForYouModel.fireLiveCodex`) was the first live proof.
 
 ⚠️ **Security:** `bypassApprovals` removes the whole sandbox, and the recipe was authored by an LLM

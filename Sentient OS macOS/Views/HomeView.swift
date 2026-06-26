@@ -6,7 +6,7 @@
 //  open Sentient straight into this. The morning run (1 min after wake) leaves a scatter of
 //  SUGGESTION CARDS here — each one the AI already did the work for ("Should I send it for
 //  you?"); clicking is the user's fire (Privacy Constitution: we offer, they fire). A command
-//  bar at the foot lets you ask it to DO anything (computer / browser use).
+//  bar at the foot lets you ask it to DO anything (computer use).
 //
 //  The chrome is deliberately quiet: a wordmark, and four doors at the top-right —
 //  Analysis ▾ and Your AIs ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
@@ -535,8 +535,8 @@ final class ForYouModel {
 
 // MARK: - The command bar's run model (live codex stream + STOP)
 
-/// Drives the home command bar: runs the user's typed task through codex (computer / browser use —
-/// the mode is just a word in the prompt), streams the latest output line(s) into `statusLine` for
+/// Drives the home command bar: runs the user's typed task through codex (computer use — the mode
+/// phrase is just a word in the prompt), streams the latest output line(s) into `statusLine` for
 /// the bar to show, and `stop()` cancels the run (terminating codex via CodexCLI's cancellation).
 /// One run at a time. Everything also goes to `Log()` (tail /tmp/sentient-dev.log).
 @MainActor @Observable
@@ -612,9 +612,9 @@ final class CommandRunModel {
         String(((error as? LocalizedError)?.errorDescription ?? "\(error)").prefix(160))
     }
 
-    /// Build the command-bar prompt, mirroring the verified-working CLI command: the toggle swaps
-    /// `mode.promptPhrase` ("computer use" / "browser use"); the typed task fills the rest; and the
-    /// knowledge-base path (resolved from `~`, never hardcoded) rides along as grounding context.
+    /// Build the command-bar prompt, mirroring the verified-working CLI command: `mode.promptPhrase`
+    /// ("computer use") leads, the typed task fills the rest, and the knowledge-base path (resolved
+    /// from `~`, never hardcoded) rides along as grounding context.
     nonisolated static func commandPrompt(task: String, mode: AgentMode) -> String {
         """
         Using \(mode.promptPhrase), \(task)
