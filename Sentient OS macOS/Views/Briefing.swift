@@ -101,6 +101,33 @@ struct Briefing: Identifiable {
             accent: Self.accentColor(for: a.method))
     }
 
+    /// The welcome "gift" card — built straight from the generated Markdown letter (`GiftLetter` writes
+    /// the whole thing: real cross-life patterns in plain English, title and all). The model opens with
+    /// its own "# Title"; we promote that to the card title so the expanded letter never shows two
+    /// titles, and the rest becomes the letter body. The envelope/letter UX keys off `kind == .welcome`.
+    init(fromGiftMarkdown markdown: String) {
+        var title = "A gift — connections across your life."
+        var lines = markdown.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
+        if let i = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            let head = lines[i].trimmingCharacters(in: .whitespaces)
+            if head.hasPrefix("# ") {
+                let t = String(head.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty { title = t }
+                lines.removeSubrange(0...i)
+            }
+        }
+        let body = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(
+            id: "welcome", kind: .welcome,
+            kicker: "Welcome · Read across your whole life",
+            title: title,
+            body: "A letter from your Sentient.",
+            letter: body,
+            detailLabel: "read it",
+            offer: nil,
+            doneTitle: "", doneBody: "")
+    }
+
     /// The clean mono-caps kicker: `METHOD · TARGET` (gmail/calendar/research name themselves).
     static func kickerLine(method: PreparedAction.Method, target: String) -> String {
         let t = target.trimmingCharacters(in: .whitespaces).uppercased()

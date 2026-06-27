@@ -61,6 +61,14 @@ actor ProactiveCycle {
         }
         await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
 
+        // 2.5) The welcome "gift" — write it ONCE, the first time a knowledge base exists to read.
+        //      Best-effort: it's a delight, never load-bearing, so a failure never fails the cycle.
+        if GiftLetter.latest() == nil {
+            progress(.knowledgeBase("Writing your welcome…"))
+            do { _ = try await GiftLetter.shared.generate() }
+            catch { Log("GiftLetter: welcome skipped — \(Self.msg(error))") }
+        }
+
         // 3) Proactive — decide, then research + prepare. Inject the live calendar when connected.
         var calCtx: String?
         if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") {

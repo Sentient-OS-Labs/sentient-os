@@ -390,8 +390,15 @@ final class ForYouModel {
         let v = visit
         runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         if realCards {
+            var built: [Entry] = []
+            // The day-one welcome "gift" leads the deck as a sealed envelope (generated from the user's
+            // own knowledge base by the proactive cycle; absent until that's run once).
+            if let gift = GiftLetter.latest() {
+                built.append(Entry(b: Briefing(fromGiftMarkdown: gift), action: nil, phase: .sealed))
+            }
             let ready = ProactiveResearch.latest()?.ready ?? []
-            entries = ready.map { Entry(b: Briefing(from: $0), action: $0, phase: .offer) }
+            built.append(contentsOf: ready.map { Entry(b: Briefing(from: $0), action: $0, phase: .offer) })
+            entries = built
         } else {
             entries = Briefing.demo.map { Entry(b: $0, action: nil, phase: $0.kind == .welcome ? .sealed : .offer) }
         }
@@ -752,22 +759,66 @@ private struct LetterView: View {
         .onChange(of: briefing.id) { _, _ in editedDraft = liveDraft; savedDraft = liveDraft; copied = false }
     }
 
+    /// The letter body, rendered line-by-line. Supports the editorial Markdown subset our letters use:
+    /// `##`/`###` section headings, `✦ ` accent bullets, a closing sign-off line, and plain paragraphs
+    /// (with `**bold**` inline). A blank line is a paragraph break. (`# H1` is promoted to the card
+    /// title upstream, but we still render one defensively.)
     @ViewBuilder
     private var paragraphs: some View {
-        let parts = (briefing.letter ?? briefing.body).components(separatedBy: "\n\n")
-        ForEach(Array(parts.enumerated()), id: \.offset) { item in
-            let text = item.element.trimmingCharacters(in: .whitespacesAndNewlines)
-            if text.hasPrefix("✦ ") {
-                HStack(alignment: .firstTextBaseline, spacing: 9) {
-                    Text("✦").font(.system(size: 12)).foregroundStyle(briefing.accent)
-                    Text(Self.inline(String(text.dropFirst(2))))
-                        .font(.system(size: 13.5)).foregroundStyle(.white.opacity(0.84)).lineSpacing(4.5)
-                }
-            } else {
-                Text(Self.inline(text))
-                    .font(.system(size: 14)).foregroundStyle(.white.opacity(0.84)).lineSpacing(5)
+        let lines = (briefing.letter ?? briefing.body).components(separatedBy: "\n")
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, raw in
+                letterBlock(raw.trimmingCharacters(in: .whitespaces))
             }
         }
+    }
+
+    @ViewBuilder
+    private func letterBlock(_ line: String) -> some View {
+        if line.isEmpty {
+            Color.clear.frame(height: 2)                              // a paragraph break
+        } else if line.hasPrefix("### ") {
+            Text(Self.inline(String(line.dropFirst(4))))             // soulful subhead (serif italic)
+                .font(.system(size: 16, design: .serif).italic())
+                .foregroundStyle(.white.opacity(0.92))
+                .padding(.top, 6)
+        } else if line.hasPrefix("## ") {
+            MonoCaps(String(line.dropFirst(3)).uppercased(), size: 10, tracking: 2.2,
+                     color: briefing.accent.opacity(0.95))           // section whisper (mono-caps)
+                .padding(.top, 12)
+        } else if line.hasPrefix("# ") {
+            Text(Self.inline(String(line.dropFirst(2))))             // a stray title, defensive
+                .font(.system(size: 22, design: .serif)).foregroundStyle(.white)
+                .padding(.top, 4)
+        } else if let bullet = Self.bulletText(line) {
+            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                Text("✦").font(.system(size: 12)).foregroundStyle(briefing.accent)
+                Text(Self.inline(bullet))
+                    .font(.system(size: 13.5)).foregroundStyle(.white.opacity(0.84)).lineSpacing(4.5)
+            }
+        } else if Self.isSignoff(line) {
+            Text(Self.inline(line))                                  // "-- Your Sentient"
+                .font(.system(size: 13, design: .serif).italic())
+                .foregroundStyle(.white.opacity(0.55))
+                .padding(.top, 10)
+        } else {
+            Text(Self.inline(line))
+                .font(.system(size: 14)).foregroundStyle(.white.opacity(0.84)).lineSpacing(5)
+        }
+    }
+
+    /// "✦ …" (tolerating a stray word-joiner / nbsp the model sometimes slips in) → the bullet's text;
+    /// nil if the line isn't a bullet.
+    private static func bulletText(_ line: String) -> String? {
+        guard line.first == "✦" else { return nil }
+        let rest = line.dropFirst().drop { $0 == " " || $0 == "\t" || $0 == "\u{2060}" || $0 == "\u{00A0}" }
+        return rest.isEmpty ? nil : String(rest)
+    }
+
+    /// A closing line like "-- Your Sentient" / "— your Sentient" (line-start only, so inline em-dashes
+    /// mid-paragraph aren't mistaken for a sign-off).
+    private static func isSignoff(_ line: String) -> Bool {
+        line.hasPrefix("--") || line.hasPrefix("—") || line.hasPrefix("– ")
     }
 
     /// Inline-markdown parse (**bold** etc.) so letters can carry a skimmable bold rail.
@@ -851,4 +902,30 @@ private enum Demo {
              sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
              modelMissing: false)
         .frame(width: 1180, height: 880)
+}
+
+#Preview("Gift letter") {
+    let sample = """
+    # The System Builder's Map
+
+    I just analyzed your entire digital life to understand you. So much stands out :)
+    ### Something you might not know about yourself
+
+    **Your real pattern is turning recurring ambiguity into reusable systems.**
+    In IB Math AA HL you built decision-tree guides; for Jacob you made timetables, exam calendars, and custom AI prompts. Sentient OS is the same reflex at startup scale.
+
+    ## Also noticed
+
+    ✦ Your breakout projects keep starting from Apple-shaped constraints: Writing Tools as an Apple Intelligence port, iPadOS on iPhone, and Sentient's on-device layer.
+    ✦ You care about assistants having the right operating manual: you maintain tailored prompts across ChatGPT, Claude, Gemini, and Perplexity.
+    ✦ Your public credibility is unusually concrete: 30,000+ Writing Tools users, 28+ publications, WIRED coverage, and a 2025 UMass Tech Challenge win.
+
+    -- Your Sentient
+    """
+    return ZStack { Color.black.ignoresSafeArea()
+        LetterView(briefing: Briefing(fromGiftMarkdown: sample), phase: .offer,
+                   onOffer: {}, onClose: {})
+            .frame(width: 560)
+            .padding(40)
+    }
 }
