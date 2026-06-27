@@ -296,6 +296,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Sentient OS uses Automation so the computer-use agent you ask it to run can control apps on your Mac on your behalf.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sentient OS listens when you hold the right Command key, so you can speak the task you want done.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Sentient OS turns what you say — on your Mac — into the task you want it to do for you.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -331,6 +333,8 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Sentient OS uses Automation so the computer-use agent you ask it to run can control apps on your Mac on your behalf.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sentient OS listens when you hold the right Command key, so you can speak the task you want done.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Sentient OS turns what you say — on your Mac — into the task you want it to do for you.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
