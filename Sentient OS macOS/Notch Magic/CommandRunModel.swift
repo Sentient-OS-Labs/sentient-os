@@ -2,9 +2,8 @@
 //  CommandRunModel.swift
 //  Sentient OS macOS
 //
-//  Runs ONE "do this for me" task through the user's codex (computer / browser use — the mode is only
-//  a word in the prompt), streaming codex's latest output line(s) into `statusLine`. `stop()` cancels
-//  the run (CodexCLI terminates codex). One run at a time.
+//  Runs ONE "do this for me" task through the user's codex (computer use), streaming codex's latest
+//  output line(s) into `statusLine`. `stop()` cancels the run (CodexCLI terminates codex). One run at a time.
 //
 //  Both ways to start a task — the home command bar AND the right-⌘ hotkey — drive the SAME instance
 //  (owned by CommandCoordinator), so the prompt bar and the notch are two views of one run. `onFinished`
@@ -184,10 +183,10 @@ final class CommandRunModel {
         String(((error as? LocalizedError)?.errorDescription ?? "\(error)").prefix(160))
     }
 
-    /// Build the command prompt: the toggle swaps `mode.promptPhrase` ("computer use" / "browser use") and
-    /// the typed/spoken task fills the rest. The agent is told to do the TASK via computer/browser use (not
-    /// AppleScript GUI-scripting), and to read the knowledge base (path resolved from `~`) with its
-    /// shell/file tools — NOT by opening it in a GUI app like Obsidian.
+    /// Build the command prompt: `mode.promptPhrase` ("computer use") leads and the typed/spoken task fills
+    /// the rest. The agent is told to do the TASK via computer use (not AppleScript GUI-scripting), and to
+    /// read the knowledge base (path resolved from `~`) with its shell/file tools — NOT by opening it in a
+    /// GUI app like Obsidian.
     nonisolated static func commandPrompt(task: String, mode: AgentMode) -> String {
         """
         Using \(mode.promptPhrase), \(task)

@@ -6,11 +6,10 @@
 //  window — the one glowing object on the screen (the jewelry rule). A slow, soft conic
 //  AI-gradient glow (the Analyze Now / GlowButton palette, GlowHalo.stops) hugs a glassy
 //  rounded field:
-//    [ Computer use | Browser use ]  ·  the prompt input (verb "DO" bolded bright)  ·  ◯↑ send
-//  The mode selector defaults to Computer use. `onSend(text, mode)` is wired LIVE: HomeView builds
-//  "Using <mode.promptPhrase>, <text>.  My knowledge base is at …" and runs it through
-//  CodexCLI.runAgentCommand (codex exec, gpt-5.5, bypass sandbox). Computer vs browser use is ONLY
-//  the word swapped into the prompt — same invocation either way.
+//    [ Computer use ]  ·  the prompt input (verb "DO" bolded bright)  ·  ◯↑ send
+//  `onSend(text, mode)` is wired LIVE: HomeView builds "Using <mode.promptPhrase>, <text>.
+//  My knowledge base is at …" and runs it through CodexCLI.runAgentCommand (codex exec, gpt-5.5,
+//  bypass sandbox).
 //
 //  Key pieces: PromptBar (the bar) · ModeToggle (the segmented selector) · SendButton ·
 //  PromptGlow (the rounded-rect twin of GlowButton's GlowHalo).
@@ -20,12 +19,11 @@ import SwiftUI
 
 /// What the agent is allowed to drive when it acts on the user's request.
 nonisolated enum AgentMode: String, CaseIterable {
-    case computer, browser
-    var label: String { self == .computer ? "Computer use" : "Browser use" }
-    var icon: String { self == .computer ? "desktopcomputer" : "globe" }
-    /// The ONE thing the toggle changes in the command-bar prompt: "Using <promptPhrase>, <task>".
-    /// Both phrases run the same `codex exec` (CodexCLI.runAgentCommand) — the word picks the channel.
-    var promptPhrase: String { self == .computer ? "computer use" : "browser use" }
+    case computer
+    var label: String { "Computer use" }
+    var icon: String { "desktopcomputer" }
+    /// The command-bar prompt phrase: "Using <promptPhrase>, <task>" — fed to CodexCLI.runAgentCommand.
+    var promptPhrase: String { "computer use" }
 }
 
 struct PromptBar: View {
@@ -122,7 +120,7 @@ struct PromptBar: View {
     }
 }
 
-// MARK: - The Computer / Browser use selector
+// MARK: - The Computer use selector
 
 private struct ModeToggle: View {
     @Binding var mode: AgentMode

@@ -18,7 +18,7 @@
 
 All funnel through **`CommandCoordinator` → `CommandRunModel` → `CodexCLI.runAgentCommand`**, and the notch is a live view of `coordinator.phase` (+ `coordinator.run`). The notch is the Mac's "face" coming alive — it descends from the bezel **glowing**, shows what it heard (or lets you type), then streams the work — *Thinking through your task*, **Remembering** the notes it reads from your knowledge base, the actions — with a STOP button, and retracts.
 
-The right-⌘ hotkey **only ever triggers computer use**. The notch shows for **computer use only** (browser-use prompts run but don't raise it — one-line flip in `submit()`, see §6).
+Every command is **computer use** (the dedicated browser-use channel was removed — see the root architecture doc §7), and the notch shows for all of them.
 
 ---
 
@@ -104,7 +104,7 @@ enum NotchPhase { hidden · opening · listening · transcribing · typing · ru
 ```swift
 func submit(_ text:, mode: AgentMode, source: TriggerSource)   // .promptBar | .voice
 ```
-It guards one-run-at-a-time, sets `readBack` for voice (timed in §8), calls `run.start`, and `setPhase(mode == .computer ? .running : .hidden)`. (To raise the notch for browser-use too, change that line.)
+It guards one-run-at-a-time, sets `readBack` for voice (timed in §8), calls `run.start`, and `setPhase(.running)` — every command is computer use, which raises the notch.
 
 **The hotkey flow — press OPENS, then it branches to voice or type:**
 - `voicePressBegan()` (onPress, from idle only — `isInteracting` blocks a fresh press mid-interaction): `setPhase(.opening)` *immediately* (the "pull it open" feel). Start the mic **only if `VoiceCapture.isAuthorized`** — never PROMPT on a press.
@@ -227,7 +227,6 @@ The morph is a longer, bouncier spring; the read-back→work swap is a blur-diss
 ### D. Deferred touches (each its own focused pass)
 - **Behind-mic color dance:** a small blurred colored glow *behind the mic icon* in the listening state (distinct from the edge glow — the `.opening`→`.listening` "lean in" is the hook).
 - **Hover-haptic:** a trackpad haptic (`NSHapticFeedbackManager`) when the cursor crosses the notch's boundary.
-- **Browser-use → notch:** flip the one line in `submit()` so browser-use also raises the notch (deferred until browser use is confirmed working).
 - **2-line status:** the bar now shows a tight ONE status line (for compactness); if a 2-line codex narration matters, widen `captionHeight` / show the last 2.
 - **Multi-task "↓ N tasks":** today it's one run at a time; the future is a stack you pull down (per-task rows + STOPs). Big change to the coordinator (a list of runs) + the notch.
 

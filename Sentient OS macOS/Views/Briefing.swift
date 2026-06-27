@@ -8,7 +8,7 @@
 //  never act unbidden; we offer, they fire).
 //
 //  THE CODEX SEAM: `codexPrompt` is what real execution sends to the user's own Codex CLI
-//  (`CodexCLI.run` — browser use, computer use, the works — armed with the vault's personal
+//  (`CodexCLI.run` — computer use, the connectors, the works — armed with the vault's personal
 //  context). The demo plays the hard-coded `workLog` theater instead; swapping in the real
 //  call is a one-line change at the seam in HomeView (ForYouModel.run).
 //
@@ -101,13 +101,39 @@ struct Briefing: Identifiable {
             accent: Self.accentColor(for: a.method))
     }
 
+    /// The welcome "gift" card — built straight from the generated Markdown letter (`GiftLetter` writes
+    /// the whole thing: real cross-life patterns in plain English, title and all). The model opens with
+    /// its own "# Title"; we promote that to the card title so the expanded letter never shows two
+    /// titles, and the rest becomes the letter body. The envelope/letter UX keys off `kind == .welcome`.
+    init(fromGiftMarkdown markdown: String) {
+        var title = "A gift — connections across your life."
+        var lines = markdown.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
+        if let i = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            let head = lines[i].trimmingCharacters(in: .whitespaces)
+            if head.hasPrefix("# ") {
+                let t = String(head.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+                if !t.isEmpty { title = t }
+                lines.removeSubrange(0...i)
+            }
+        }
+        let body = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(
+            id: "welcome", kind: .welcome,
+            kicker: "Welcome · Read across your whole life",
+            title: title,
+            body: "A letter from your Sentient.",
+            letter: body,
+            detailLabel: "read it",
+            offer: nil,
+            doneTitle: "", doneBody: "")
+    }
+
     /// The clean mono-caps kicker: `METHOD · TARGET` (gmail/calendar/research name themselves).
     static func kickerLine(method: PreparedAction.Method, target: String) -> String {
         let t = target.trimmingCharacters(in: .whitespaces).uppercased()
         switch method {
         case .gmail:    return "GMAIL"
         case .calendar: return "CALENDAR"
-        case .browser:  return t.isEmpty ? "BROWSER USE" : "BROWSER USE · \(t)"
         case .computer: return t.isEmpty ? "COMPUTER USE" : "COMPUTER USE · \(t)"
         case .research: return "RESEARCHED"
         }
@@ -118,7 +144,6 @@ struct Briefing: Identifiable {
         switch method {
         case .gmail:    return Color(red: 1.00, green: 0.42, blue: 0.45)   // ember
         case .calendar: return Color(red: 0.36, green: 0.55, blue: 1.00)   // cobalt
-        case .browser:  return Color(red: 0.72, green: 0.46, blue: 0.96)   // orchid
         case .computer: return Color(red: 0.30, green: 0.82, blue: 0.78)   // teal
         case .research: return Theme.Ink.mint                              // mint
         }
@@ -129,8 +154,7 @@ struct Briefing: Identifiable {
         switch method {
         case .gmail:    return "Draft email"
         case .calendar: return "Event"
-        case .browser:  return "What I'll do"
-        case .computer: return "Message"
+        case .computer: return "What I'll do"
         case .research: return "Briefing"
         }
     }
@@ -149,7 +173,7 @@ struct Briefing: Identifiable {
 
         I'm using our core on-device processing moat to build a knowledge base for all your LLMs from your entire life. And cooler still, what I call Proactive Intelligence:
 
-        Sentient, with its continuous free on-device compute, understands your entire life and then *acts* on it for you (backed by that rich knowledge base!). It does this through computer use and browser use.
+        Sentient, with its continuous free on-device compute, understands your entire life and then *acts* on it for you (backed by that rich knowledge base!). It does this through computer use.
 
         I'd love to show you live any time you're free. Would tomorrow (Friday) work? If not, happy to chat early next week.
 
@@ -386,30 +410,6 @@ struct Briefing: Identifiable {
             detailLabel: "read the prep doc",
             offer: nil,
             doneTitle: "", doneBody: ""),
-    */
-
-    /* ── ZFellows · "ZFellows closes in 8 days." (browser-agent registration card, ember) ──
-        Briefing(
-            id: "zfellows", kind: .deadline,
-            kicker: "Deadline · 8 days · Browser agent",
-            title: "ZFellows closes in 8 days.",
-            body: "You bookmarked the Dropout Graduation but never registered. The form needs your name, school, and what you're building — I have all three.",
-            letter: """
-            You bookmarked the ZFellows Dropout Graduation three weeks ago and never registered. It closes in 8 days.
-
-            The form is short: name, school, and what you're building. I have all three — say the word and an agent fills it while you watch.
-            """,
-            detailLabel: nil,
-            offer: "Want an agent to register you?",
-            workLog: ["→ launching a browser agent",
-                      "→ zfellows.com/dropout-graduation",
-                      "→ name: Jesai Tarun · school: UMass Amherst",
-                      "→ building: Sentient OS",
-                      "→ submitting the form…",
-                      "✓ registered — confirmation in your inbox"],
-            doneTitle: "You're registered.",
-            doneBody: "The ZFellows confirmation is in your inbox.",
-            codexPrompt: "Use the browser to open the ZFellows Dropout Graduation registration and submit it for Jesai Tarun, UMass Amherst, building Sentient OS."),
     */
 
     /* ── Fareed (ORIGINAL short-letter variant) · alternate to the current rich-letter Fareed card ──

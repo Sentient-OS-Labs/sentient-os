@@ -258,9 +258,9 @@ actor Proactive {
         ## What an ACTION ITEM is
         Something the user should DO, DECIDE, PREPARE FOR, or BE AWARE OF soon — concrete, time-relevant, \
         and ideally something Sentient can ACT ON for them. Sentient can already take REAL action: send \
-        an email through their Gmail, add an event to their calendar, drive a logged-in WEBSITE in a \
-        real browser (register, RSVP, buy, fill a form), drive their MAC directly via computer use \
-        (send a WhatsApp/iMessage, act in a native app like Notion), or research and write something up. \
+        an email through their Gmail, add an event to their calendar, drive their MAC directly via \
+        computer use (register/RSVP/buy/fill a form on a logged-in website, send a WhatsApp/iMessage, \
+        act in a native app like Notion), or research and write something up. \
         Favor items that map onto one of those — but a purely informational "you should be aware of \
         this" is still valid when it genuinely matters. Your job here is DETECTION + framing: identify \
         the item and the EXACT next action. Do not perform anything; just detect and frame (a later \

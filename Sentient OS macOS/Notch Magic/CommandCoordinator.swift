@@ -10,8 +10,8 @@
 //
 //  Hotkey path: press → notch OPENS + mic (if already authorized) · still-held @250ms → committed
 //  listening · release(hold) → transcribe → submit(.voice) · release(tap) → a focused TYPE field →
-//  submit. Prompt-bar path: submit(.promptBar). The notch shows for COMPUTER use only (browser → wired
-//  later). Doc: Documentation/Notch Magic/.
+//  submit. Prompt-bar path: submit(.promptBar). Every command is computer use, which raises the notch.
+//  Doc: Documentation/Notch Magic/.
 //
 
 import Foundation
@@ -76,8 +76,8 @@ final class CommandCoordinator {
 
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
         run.start(trimmed, mode: mode)
-        // The notch is for computer use today; a browser-use prompt runs but doesn't raise the notch.
-        setPhase(mode == .computer ? .running : .hidden)
+        // Every command is computer use, which raises the notch.
+        setPhase(.running)
         Log("▶︎ submit [\(source)] \(mode.label): \(trimmed)")
     }
 
@@ -195,7 +195,7 @@ final class CommandCoordinator {
 
     private func runFinished(_ outcome: CommandRunModel.Outcome) {
         clearReadBack()
-        // Only flourish if the notch was actually up (computer use). Browser runs never raised it.
+        // Only flourish if the notch is actually up (a stop/dismiss may have already hidden it).
         guard phase == .running else { setPhase(.hidden); return }
         setPhase(.finishing(outcome))
         scheduleHide(after: 2.5)

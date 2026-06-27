@@ -6,7 +6,7 @@
 //  "proactive EXECUTE" button. Lists the REAL ready-to-fire `PreparedAction`s from the most recent
 //  PART 2 run (ProactiveResearch.latest) — exactly what Step 1 (judge) + Step 2 (research+prepare)
 //  produced — each with its draft + recipe and a working FIRE button that calls ProactiveExecutor
-//  for real (Gmail MCP send / headless Playwright browser / calendar MCP). No mock theater: the
+//  for real (Gmail MCP send / computer use / calendar MCP). No mock theater: the
 //  status line shows the actual codex outcome. Sibling to ProactiveItemsView (VIEW ACTION ITEMS).
 //
 
@@ -181,7 +181,6 @@ struct ProactiveExecuteView: View {
             switch m {
             case .gmail:    return ("GMAIL", Color(red: 1.00, green: 0.50, blue: 0.18))
             case .calendar: return ("CALENDAR", Color(red: 0.36, green: 0.55, blue: 1.00))
-            case .browser:  return ("BROWSER USE", Color(red: 0.72, green: 0.46, blue: 0.96))
             case .computer: return ("COMPUTER USE", Color(red: 0.28, green: 0.84, blue: 0.67))
             case .research: return ("RESEARCHED", Theme.secondary)
             }
@@ -249,7 +248,6 @@ struct ProactiveExecuteView: View {
     private func fireLabel(_ m: PreparedAction.Method) -> String {
         switch m {
         case .gmail:    return "Send it for you"
-        case .browser:  return "Let an agent do it"
         case .computer: return "Run on your Mac"
         case .calendar: return "Add to calendar"
         case .research: return "Nothing to fire"
@@ -259,7 +257,6 @@ struct ProactiveExecuteView: View {
     private func fireIcon(_ m: PreparedAction.Method) -> String {
         switch m {
         case .gmail:    return "paperplane.fill"
-        case .browser:  return "globe"
         case .computer: return "desktopcomputer"
         case .calendar: return "calendar.badge.plus"
         case .research: return "minus.circle"
