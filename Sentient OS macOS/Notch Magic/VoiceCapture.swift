@@ -1,0 +1,120 @@
+//
+//  VoiceCapture.swift
+//  Sentient OS macOS
+//
+//  The voice front-end for the right-⌘ hotkey: requests microphone + speech permission (once, lazily,
+//  on first hold), picks the OS-appropriate transcription engine, and exposes start / stopAndTranscribe
+//  / cancel. Today only the macOS 26 engine (SpeechAnalyzerEngine) exists; older macOS reports
+//  unavailable. Audio never touches disk — it streams through the on-device model in memory.
+//
+//  Key methods: prewarm() · start() · stopAndTranscribe() · cancel().
+//
+
+import Foundation
+import AVFoundation
+import Speech
+
+@MainActor
+final class VoiceCapture {
+    private var engine: (any QuickTranscriptionEngine)?
+
+    /// Voice works on every supported macOS (15+): SpeechAnalyzer on 26+, SFSpeechRecognizer below.
+    static let isAvailable = true
+
+    /// True only when BOTH mic and speech are ALREADY granted — lets a press start the mic with no
+    /// prompt (a tap-to-type must never trigger a permission dialog; first-use prompting waits for a hold).
+    static var isAuthorized: Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            && SFSpeechRecognizer.authorizationStatus() == .authorized
+    }
+
+    /// How long one capture may run before we force-finalize — the active engine's hard limit.
+    static var maxCaptureDuration: TimeInterval {
+        if #available(macOS 26, *) { return SpeechAnalyzerEngine.maxUtteranceDuration }
+        return SFSpeechRecognizerEngine.maxUtteranceDuration
+    }
+
+    /// Install the on-device speech model ahead of first use (best-effort, off-main).
+    func prewarm() {
+        if #available(macOS 26, *) {
+            Task { await SpeechAnalyzerEngine.prewarm() }   // SFSpeechRecognizer needs no model prewarm
+        }
+    }
+
+    // MARK: Capture
+
+    func start() async throws {
+        guard await authorize() else { throw VoiceError.notAuthorized }
+        let engine = Self.makeEngine()
+        self.engine = engine
+        do {
+            try await engine.start()
+        } catch {
+            self.engine = nil
+            throw error
+        }
+    }
+
+    func stopAndTranscribe() async throws -> String {
+        guard let engine else { return "" }
+        defer { self.engine = nil }
+        return Self.correctMishears(try await engine.stopAndTranscribe())
+    }
+
+    /// Fix the speech model's common brand mishears the moment transcription completes — before the
+    /// transcript is shown or fired. It reliably hears "Sentient" as "ascension"; swap it back. Whole-word
+    /// and case-insensitive, preserving the match's leading-letter case ("Ascension" → "Sentient").
+    static func correctMishears(_ text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: "\\bascension\\b", options: [.caseInsensitive])
+        else { return text }
+        let result = NSMutableString(string: text)
+        for match in regex.matches(in: text, range: NSRange(location: 0, length: result.length)).reversed() {
+            let capitalized = result.substring(with: match.range).first?.isUppercase == true
+            result.replaceCharacters(in: match.range, with: capitalized ? "Sentient" : "sentient")
+        }
+        return result as String
+    }
+
+    func cancel() {
+        engine?.cancel()
+        engine = nil
+    }
+
+    // MARK: Engine selection
+
+    private static func makeEngine() -> any QuickTranscriptionEngine {
+        if #available(macOS 26, *) { return SpeechAnalyzerEngine() }
+        return SFSpeechRecognizerEngine()
+    }
+
+    // MARK: Permissions (lazy, on first hold)
+
+    /// Microphone (always needed) + speech recognition (the Speech framework gate). Each prompts only
+    /// the first time. Returns false if either is denied / restricted.
+    private func authorize() async -> Bool {
+        guard await requestMicrophone() else { Log("voice: microphone access denied"); return false }
+        guard await requestSpeech() else { Log("voice: speech-recognition access denied"); return false }
+        return true
+    }
+
+    private func requestMicrophone() async -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
+        default: return false
+        }
+    }
+
+    private func requestSpeech() async -> Bool {
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized: return true
+        case .notDetermined:
+            return await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { status in
+                    continuation.resume(returning: status == .authorized)
+                }
+            }
+        default: return false
+        }
+    }
+}

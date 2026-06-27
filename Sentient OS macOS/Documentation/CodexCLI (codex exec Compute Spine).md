@@ -8,6 +8,11 @@ direct-Anthropic-API route (deleted, along with `Secrets.swift`) and no free tie
 Replaced `ClaudeCLI`/`claude -p` on June 11 (clean kill — same actor shape, same `Process`
 plumbing).
 
+> Codex's bundled **`computer-use`** skill (the confirmation policy that decides when the agent stops
+> before sending/clicking) is patched to a relaxed, human-in-the-loop policy — runbook (where the file
+> lives, what to search for, what to replace it with) in
+> `Documentation/Computer-Use Skill Patch (Confirmation Policy).md`. Re-apply after a plugin update.
+
 ## Surface
 
 - `CodexCLI.locateBinary()` — known paths (`~/.local/bin/codex`, `/opt/homebrew/bin/codex`,

@@ -106,6 +106,7 @@ struct DevToolsView: View {
     @State private var showSummaries = false
     @State private var showActionItems = false
     @State private var showPermissions = false
+    @State private var showHotkeyLab = false
     @State private var showMore = false
     @State private var fdaGranted = false
     @State private var resetResult: String?
@@ -233,6 +234,7 @@ struct DevToolsView: View {
                     }
                     mcpToggleButton
                     permissionsButton
+                    hotkeyLabButton
                     moreSection
                 }
                 .padding(24)
@@ -244,6 +246,7 @@ struct DevToolsView: View {
         .sheet(isPresented: $showSummaries) { SummariesView() }
         .sheet(isPresented: $showActionItems) { ProactiveItemsView() }
         .sheet(isPresented: $showPermissions) { PermissionsView() }
+        .sheet(isPresented: $showHotkeyLab) { HotkeyLabView() }
         .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
         .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
         .sheet(item: $deviceJob) { job in
@@ -369,6 +372,17 @@ struct DevToolsView: View {
     private var permissionsButton: some View {
         Button { showPermissions = true } label: {
             Label("PERMISSIONS", systemImage: "hand.raised.fill")
+                .font(.caption.weight(.bold)).tracking(2)
+                .frame(maxWidth: .infinity, minHeight: 40)
+        }
+        .buttonStyle(.bordered).tint(.white)
+    }
+
+    /// Opens the HOTKEY LAB — the dev bench for choosing the global computer-use trigger (bare right ⌘
+    /// via a listen-only tap vs a zero-permission Carbon combo). Measurement only; fires nothing.
+    private var hotkeyLabButton: some View {
+        Button { showHotkeyLab = true } label: {
+            Label("HOTKEY LAB", systemImage: "keyboard")
                 .font(.caption.weight(.bold)).tracking(2)
                 .frame(maxWidth: .infinity, minHeight: 40)
         }
