@@ -2,17 +2,21 @@
 //  RightCommandMonitor.swift
 //  Sentient OS macOS
 //
-//  Global "hold the right ⌘ key" trigger for push-to-talk — ZERO permissions. A listen-only
-//  CGEventTap masking ONLY `flagsChanged` (modifier transitions, which macOS does not gate; only
-//  keyDown/keyUp need Input Monitoring). Right ⌘'s live state is read from the device-dependent flag
-//  bit (0x10) on EVERY event, so press/release self-heals even if an individual event is dropped.
+//  Global notch triggers via a SINGLE listen-only CGEventTap — ZERO permissions:
+//   • hold / tap the RIGHT ⌘ (push-to-talk · tap-to-type) — read from the device-dependent flag bit
+//     (0x10) on every `flagsChanged`, so press/release self-heals even if an event is dropped.
+//   • press ESC anywhere — to cancel / dismiss the notch globally (onEscape).
 //
-//  Emits: onPress (right ⌘ down) · onHoldConfirmed (still down at the hold threshold — the moment the
-//  notch should reveal) · onRelease(held:) (right ⌘ up, with the hold duration). Reliability: re-enables
-//  a system-disabled tap, re-arms on wake, and a periodic health check reconciles a missed release +
-//  rebuilds a dead tap. Doc: Documentation/Notch Magic/Hotkey Detection.md.
+//  Modifiers (⌘) ride `flagsChanged`, which macOS doesn't gate. Esc is a regular key (keyDown) — long
+//  ASSUMED to need Input Monitoring, but MEASURED (macOS Tahoe, Input Monitoring OFF, app unfocused) to
+//  flow through a LISTEN-ONLY tap with no permission, no prompt, no Settings entry. ⚠️ Re-verify on the
+//  macOS-15 floor before launch. We filter to Esc inside the C callback, so only Esc hops to the main
+//  actor (never every keystroke), and the tap stays listen-only so keys always pass through untouched.
 //
-//  Lift-and-replace of the proven DEV bench (Views/HotkeyLabView.swift).
+//  Emits: onPress (right ⌘ down) · onHoldConfirmed (still down at the hold threshold) · onRelease(held:)
+//  (right ⌘ up, with duration) · onEscape (Esc pressed). Reliability: re-enables a system-disabled tap,
+//  re-arms on wake, and a periodic health check reconciles a missed release + rebuilds a dead tap.
+//  Doc: Documentation/Notch Magic/Notch Magic.md.
 //
 
 import AppKit
@@ -27,9 +31,17 @@ private nonisolated func rightCommandTapCallback(_ proxy: CGEventTapProxy, _ typ
                                                  _ event: CGEvent, _ refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
     guard let refcon else { return Unmanaged.passUnretained(event) }
     let monitor = Unmanaged<RightCommandMonitor>.fromOpaque(refcon).takeUnretainedValue()
-    let flags = event.flags.rawValue
-    let t = type
-    Task { @MainActor in monitor.handle(type: t, flags: flags) }
+    if type == .keyDown {
+        // Filter to Esc HERE (synchronously, cheaply) so a global keyDown mask never floods the main
+        // actor — we hop over only for the one key we care about.
+        if event.getIntegerValueField(.keyboardEventKeycode) == RightCommandMonitor.escKeyCode {
+            Task { @MainActor in monitor.handleEscape() }
+        }
+    } else {
+        let flags = event.flags.rawValue
+        let t = type
+        Task { @MainActor in monitor.handle(type: t, flags: flags) }
+    }
     return Unmanaged.passUnretained(event)   // listen-only: return the event unchanged
 }
 
@@ -40,6 +52,9 @@ final class RightCommandMonitor {
 
     /// Device-dependent right-⌘ bit (NX_DEVICERCMDKEYMASK) — the true right-⌘ state on every event.
     private static let rightCommandBit: UInt64 = 0x10
+    /// Esc's virtual keycode (kVK_Escape) — a regular key, caught as keyDown to cancel the notch. `nonisolated`
+    /// so the C event-tap callback (which runs off the main actor) can read it to filter for Esc.
+    nonisolated static let escKeyCode: Int64 = 53
     /// The generic ⌘ bit — used only for the conservative "missed release" reconcile.
     private static let commandBit: UInt64 = CGEventFlags.maskCommand.rawValue
 
@@ -50,6 +65,7 @@ final class RightCommandMonitor {
     var onPress: (() -> Void)?
     var onHoldConfirmed: (() -> Void)?
     var onRelease: ((TimeInterval) -> Void)?
+    var onEscape: (() -> Void)?              // Esc pressed anywhere — used to cancel / dismiss the notch
 
     private var port: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -94,7 +110,10 @@ final class RightCommandMonitor {
 
     private func installTap() {
         teardownTap()
-        let mask = CGEventMask(1) << UInt64(CGEventType.flagsChanged.rawValue)   // ONLY flagsChanged
+        // flagsChanged (right-⌘, a modifier) + keyDown (for Esc). Both flow through a listen-only tap with
+        // no permission — measured on Tahoe (the keyDown half was the surprise; re-verify on macOS 15).
+        let mask = (CGEventMask(1) << UInt64(CGEventType.flagsChanged.rawValue))
+                 | (CGEventMask(1) << UInt64(CGEventType.keyDown.rawValue))
         guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                            options: .listenOnly, eventsOfInterest: mask,
                                            callback: rightCommandTapCallback,
@@ -138,6 +157,9 @@ final class RightCommandMonitor {
             break
         }
     }
+
+    /// Esc pressed anywhere (already filtered to keycode 53 in the C callback) → fire the cancel hook.
+    func handleEscape() { onEscape?() }
 
     private func beginPress() {
         downAt = Date()
