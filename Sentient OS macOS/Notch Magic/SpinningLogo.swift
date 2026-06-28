@@ -19,13 +19,28 @@ struct SpinningLogo: View {
     @State private var anchorAngle: Double = 0
     @State private var anchorTime: Double = Date().timeIntervalSinceReferenceDate
 
-    private static func period(fast: Bool) -> Double { fast ? 4 : 13 }   // seconds / revolution
+    private static func period(fast: Bool) -> Double { fast ? 2 : 13 }   // seconds / revolution (2s = the fast "processing" spin)
+
+    /// The ring's palette: the brand spectrum (GlowHalo.stops) with ONE change — the pale warm-yellow
+    /// (#fde2a3) is deepened to a saturated gold. That stop is a very light cream AND it spans the wrap
+    /// seam (it's both the first stop and the duplicated last one), so it paints a wide pale arc that, at
+    /// this tight ring scale on OLED black, reads as a near-WHITE spot breaking the rainbow. Deepening just
+    /// that stop keeps the wheel fully colorful and truer to the app icon. The shared GlowHalo.stops is
+    /// untouched, so the edge glow / CTA / website spinner are unchanged. (Tune `gold` if it wants to be
+    /// lighter/deeper.)
+    private static let bandStops: [Color] = {
+        let gold = Color(red: 0.97, green: 0.70, blue: 0.24)   // deeper & more saturated than #fde2a3 → reads gold, not white
+        var s = GlowHalo.stops
+        s[0] = gold
+        s[s.count - 1] = gold                                  // the wrap seam shares the warm stop
+        return s
+    }()
 
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { ctx in
             let t = ctx.date.timeIntervalSinceReferenceDate
             let angle = anchorAngle + (t - anchorTime) / Self.period(fast: fast) * 360
-            let spectrum = AngularGradient(colors: GlowHalo.stops, center: .center, angle: .degrees(angle))
+            let spectrum = AngularGradient(colors: Self.bandStops, center: .center, angle: .degrees(angle))
             ZStack {
                 // Big, bright colored neon glow — several ADDITIVE passes (wide → tight) so it really reads.
                 // 1. Soft colored bloom (additive) — the neon bleed around the ring.
@@ -34,8 +49,8 @@ struct SpinningLogo: View {
                 //    logo's real colour, bold and fully visible like the app icon (the old heavy blur was
                 //    washing it out).
                 Circle().stroke(spectrum, lineWidth: size * 0.17).blur(radius: size * 0.008)
-                // 3. A thin white ring — just for the shape.
-                Circle().stroke(.white, lineWidth: max(1.0, size * 0.028)).blur(radius: size * 0.005)
+                // 3. A thin white ring — just for the shape (kept extra-fine; floor governs at notch size).
+                Circle().stroke(.white, lineWidth: max(0.75, size * 0.028)).blur(radius: size * 0.005)
                 // 4. The white planet — with a tiny additive glow so it reads as lit, not flat.
                 Circle().fill(.white).frame(width: size * 0.50, height: size * 0.50)
                     .blur(radius: size * 0.07).blendMode(.plusLighter).opacity(0.6)

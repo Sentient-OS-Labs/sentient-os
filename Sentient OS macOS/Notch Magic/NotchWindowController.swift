@@ -30,13 +30,16 @@ final class NotchWindowController {
     private var typingKeyAt = Date.distantPast
     /// Polls the cursor while interactive to toggle `ignoresMouseEvents` (silhouette-only click-through).
     private var mouseTimer: Timer?
+    /// Local key monitor: Esc cancels the notch's pending input (type field / voice capture). See §4.
+    private var keyMonitor: Any?
 
     /// Extra room around the largest notch state so the morph's bounce-overshoot + the glow bloom never
     /// clip at the fixed window's edge. The notch is centered + top-anchored inside this canvas.
     private static let canvasHSlack: CGFloat = 140
     private static let canvasVSlack: CGFloat = 90
-    /// After going hidden, wait for the SwiftUI retract animation to play before ordering the window out.
-    private static let settleDelay: Double = 0.5
+    /// After going hidden, wait for the SwiftUI retract animation to fully play (the shell collapses into the
+    /// cutout and merges) before ordering the window out — so the window never hard-cuts a still-visible notch.
+    private static let settleDelay: Double = 0.6
 
     /// Re-asserted on EVERY reveal — macOS drops `.canJoinAllSpaces` when a window is re-ordered, which
     /// otherwise strands the overlay on a single Space. (.fullScreenAuxiliary → also over fullscreen apps.)
@@ -49,8 +52,24 @@ final class NotchWindowController {
         Task { @MainActor [weak self] in
             self?.build()
             self?.installObservers()
+            self?.installKeyMonitor()
             self?.observePhase()
             self?.applyPhase()          // sync the initial state (hidden → stays ordered out)
+        }
+    }
+
+    /// Esc handling has two halves. THE GLOBAL half lives in `RightCommandMonitor.onEscape` (a listen-only
+    /// keyDown tap) and covers the states where we're NOT the key window — a voice capture / a running
+    /// transcript over another app. THIS local half exists for the ONE thing the global tap can't do: while
+    /// the TYPE FIELD is focused (our key panel), it consumes Esc *before* the text field so dismissing never
+    /// beeps. A LOCAL monitor needs no permission (it only sees events already routed to us); `cancelCurrent()`
+    /// returns true when it handled the Esc → we swallow it (nil) so the field doesn't also act on it.
+    private func installKeyMonitor() {
+        guard keyMonitor == nil else { return }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }   // 53 = Esc (keep the non-Sendable event off-isolation)
+            let consumed = MainActor.assumeIsolated { self?.coordinator.cancelCurrent() ?? false }
+            return consumed ? nil : event
         }
     }
 
@@ -253,7 +272,10 @@ final class NotchWindowController {
         if coordinator.phase != .hidden { reveal(makeKey: coordinator.phase == .typing) }
     }
 
-    deinit { observers.forEach { NotificationCenter.default.removeObserver($0) } }
+    deinit {
+        observers.forEach { NotificationCenter.default.removeObserver($0) }
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+    }
 
     // MARK: Screen helpers
 

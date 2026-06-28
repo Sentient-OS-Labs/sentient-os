@@ -1,10 +1,10 @@
-# 🪄 Notch Magic — Implementation & Handoff
+# 🪄 Notch Magic — Implementation
 
-**You are a fresh Claude picking this up. You have NO prior context — this doc is your complete context. Read it fully before touching code.** It covers what the feature is, every file, and the hard-won lessons (please don't re-break them). The interaction, the window, the glow, and the core animations are **built and confirmed working on Jesai's bezel**; §12 is what's left, §13 is productionization.
+Documentation for **Notch Magic** — Sentient OS's global hold-to-talk / tap-to-type hotkey and the living notch overlay that shows the AI working. It covers what the feature is, every file, and the hard-won lessons (please don't re-break them). The whole feature — the interaction, the window, the glow, the animations, the Esc/⌘ dismiss — is **built and confirmed working on Jesai's bezel**; §12 is an optional polish backlog, §13 is what's left before launch.
 
-> **How to verify your work:** build through the **Xcode MCP `BuildProject`** (same signing as the Run button) and sweep `GetBuildLog` for warnings. **`RenderPreview` does NOT work on this target** — it has to launch the whole app and times out (see §9). So for anything *visual/animated*, build clean, then **ask Jesai to run it and screenshot/screen-record** — the notch lives on his physical bezel and is all motion; that's the only real test.
+> **How to verify a change:** build through the **Xcode MCP `BuildProject`** (same signing as the Run button) and sweep `GetBuildLog` for warnings. **`RenderPreview` does NOT work on this target** — it has to launch the whole app and times out (see §9). So for anything *visual/animated*, build clean, then **ask Jesai to run it and screenshot/screen-record** — the notch lives on his physical bezel and is all motion; that's the only real test.
 
-> **Design language** (so the notch stays *us*): OLED black as a material · the AI spectrum is `GlowHalo.stops` in `Views/GlowButton.swift` (warm→cool: `#fde2a3 #ff8e3c #ff4646 #e8388f #9b48d4 #6c5ce5 #4a90e2` + wrap — the *same* stops the website logo spins) · serif italic for soul, monospace for the machine whisper · motion is physics, not UI. The logo target is the **app icon** (a thick vibrant color ring + white planet dot).
+> **Design language** (so the notch stays *us*): OLED black as a material · the AI spectrum is `GlowHalo.stops` in `Views/GlowButton.swift` (warm→cool: `#fde2a3 #ff8e3c #ff4646 #e8388f #9b48d4 #6c5ce5 #4a90e2` + wrap — the *same* stops the website logo spins) · serif italic for soul, monospace for the machine whisper · motion is physics, not UI. The logo target is the **app icon** (a thick vibrant color ring + white planet dot); on the notch it deepens that pale first stop to a saturated gold so the tight ring reads as a full rainbow (§8).
 
 ---
 
@@ -43,13 +43,13 @@ Every command is **computer use** (the dedicated browser-use channel was removed
 
 | File | Job |
 |---|---|
-| **`RightCommandMonitor.swift`** | Zero-permission global right-⌘ detector (a `flagsChanged`-only `CGEventTap`). Emits `onPress` / `onHoldConfirmed` / `onRelease(held:)`. Self-healing. |
+| **`RightCommandMonitor.swift`** | Zero-permission global key tap (`flagsChanged` + `keyDown`): the right-⌘ trigger AND global Esc. Emits `onPress` / `onHoldConfirmed` / `onRelease(held:)` / `onEscape`. Self-healing. |
 | **`QuickTranscriptionEngine.swift`** | The protocol both speech engines conform to + `VoiceError`. |
 | **`SpeechAnalyzerEngine.swift`** | macOS **26+** speech-to-text (`SpeechAnalyzer` + `SpeechTranscriber`, on-device, in-memory). |
 | **`SFSpeechRecognizerEngine.swift`** | macOS **15** fallback (`SFSpeechRecognizer`, server-capable). |
 | **`VoiceCapture.swift`** | Façade: mic + speech permissions, engine selection, `prewarm` / `start` / `stopAndTranscribe` / `cancel`. |
 | **`CommandRunModel.swift`** | Runs ONE codex task; **cleans codex's raw human-readable stream** into the bar's `statusLine` + the `remembering` state (§6); `stop()`, `onFinished(Outcome)`. |
-| **`CommandCoordinator.swift`** | The brain: owns the run + hotkey + voice, drives `phase` (`NotchPhase`), the press→branch flow, `submit()` / `submitTyped()` / `dismissTyping()`. |
+| **`CommandCoordinator.swift`** | The brain: owns the run + hotkey + voice, drives `phase` (`NotchPhase`), the press→branch flow, `submit()` / `submitTyped()` / `dismissTyping()` / `cancelCurrent()` / `stop()`. |
 | **`NotchSpace.swift`** | SkyLight private-API wrapper — pins the panel into a top-level window-server space so it's fixed over the notch on every Space. |
 | **`NotchWindowController.swift`** | The `NSPanel` host: a **fixed canvas** flush at the bezel; click-through by toggling `ignoresMouseEvents` per cursor position; all-Spaces; observers. Also `NotchPanel`, `NotchHostingView`, the `NSScreen.notchSize`/`displayID` extension. |
 | **`NotchShape.swift`** | The silhouette `Shape` (animatable corner radii) **+ `NotchSkirtShape`** — its open twin (sides + rounded bottom + concave top corners, no flat top edge) that the glow strokes. |
@@ -62,17 +62,22 @@ There is still a **DEV bench** `Views/HotkeyLabView.swift` (DEV TOOLS → HOTKEY
 
 ---
 
-## 4. The hotkey — `RightCommandMonitor`
+## 4. The hotkey + global Esc — `RightCommandMonitor`
 
-**The headline: detecting the right ⌘ needs ZERO permissions, forever.** macOS gates `keyDown`/`keyUp` (the letters you type) behind Input Monitoring — but **NOT `flagsChanged`** (modifier transitions). Right ⌘ is a modifier, so a *listen-only* `CGEventTap` masking **only `flagsChanged`** sees it globally with no prompt, no Settings entry, no Accessibility — even in the notarized, Finder-launched app.
+ONE listen-only `CGEventTap` (zero permissions) drives two things: the right-⌘ trigger and a global Esc to cancel/dismiss the notch.
 
-- **The one ironclad rule:** never add `keyDown`/`keyUp` to the global mask. That's the gated half. (Tap-to-type captures typing in our *own* focused `TextField`, not via a global tap.)
-- **Ground-truth state:** on every `flagsChanged`, we read the **device-dependent right-⌘ bit** (`NX_DEVICERCMDKEYMASK = 0x10`) from `event.flags`. So press/release self-heals even if an individual event is dropped (we never toggle a fragile keycode set).
+**Right ⌘ needs ZERO permissions** because it's a *modifier* — it rides `flagsChanged`, which macOS doesn't gate. A listen-only tap masking `flagsChanged` sees it globally with no prompt, no Settings entry, no Accessibility — even in the notarized, Finder-launched app.
+
+**Esc is a regular key (`keyDown`) — and the long-held "keyDown is gated" assumption turned out to be WRONG.** [MEASURED, macOS Tahoe, Input Monitoring OFF, app unfocused] a **listen-only** tap masking `keyDown` receives keystrokes globally with no permission, no prompt, no Settings entry. So we add `keyDown` to the same tap and watch for Esc (keycode 53). ⚠️ This was measured only on Tahoe (26); the deploy floor is macOS 15 — **re-verify on a 15 machine before launch** (§13). If it's gated there, fall back to a right-⌘-tap cancel (a modifier is always free).
+
+- **Esc is filtered in the C callback:** the mask now catches *every* keystroke, so the trampoline checks `keyboardEventKeycode == escKeyCode (53)` synchronously and only hops to the main actor for Esc — never per keystroke. The tap stays **listen-only**, so keys always pass through untouched (an Esc reaches whatever app you're in too — harmless, and the price of staying permission-free; see §6).
+- **Ground-truth right-⌘ state:** on every `flagsChanged`, read the **device-dependent right-⌘ bit** (`NX_DEVICERCMDKEYMASK = 0x10`) from `event.flags`. So press/release self-heals even if an event is dropped (we never toggle a fragile keycode set).
 - **Hold vs tap:** `holdThreshold = 0.25s`. `onHoldConfirmed` fires at 250ms if still held; `onRelease(held:)` reports the duration. The coordinator turns a held release into voice, a quick release into the type field (§6).
+- **Callbacks:** `onPress` · `onHoldConfirmed` · `onRelease(held:)` · **`onEscape`** (Esc pressed → the coordinator's `cancelCurrent()`, §6).
 - **Reliability:** re-enable on `.tapDisabledBy…`; re-arm on `NSWorkspace.didWake`; a 1.5s health timer rebuilds a dead tap and reconciles a missed release against `CGEventSource.flagsState(.combinedSessionState)`; a `maxHold` safety force-releases a stuck hold (set by the coordinator to the engine's transcription cap — see §5).
-- The C trampoline must be `nonisolated` (project builds with `-default-isolation=MainActor`; an actor-isolated func can't be a `@convention(c)` pointer) and hops to `@MainActor` to call `handle(type:flags:)`.
+- The C trampoline must be `nonisolated` (project builds with `-default-isolation=MainActor`; an actor-isolated func can't be a `@convention(c)` pointer) and hops to `@MainActor` to call `handle(type:flags:)` / `handleEscape()`. `escKeyCode` is `nonisolated static` so the off-main callback can read it.
 
-Keycodes for reference: right ⌘ = 54, left ⌘ = 55 (we use the *flag bit*, not the keycode).
+Keycodes for reference: right ⌘ = 54, left ⌘ = 55 (we use the *flag bit*, not the keycode), Esc = 53.
 
 ---
 
@@ -110,9 +115,18 @@ It guards one-run-at-a-time, sets `readBack` for voice (timed in §8), calls `ru
 - `voicePressBegan()` (onPress, from idle only — `isInteracting` blocks a fresh press mid-interaction): `setPhase(.opening)` *immediately* (the "pull it open" feel). Start the mic **only if `VoiceCapture.isAuthorized`** — never PROMPT on a press.
 - `voiceHoldConfirmed()` (@250ms): `setPhase(.listening)` — committed to voice (the "lean in"); start the mic now if perms weren't pre-granted (the only first-use prompt path).
 - `voiceReleased(held:)` from `.opening`/`.listening`: `held ≥ 0.25` → `finalizeVoice()` (→ `.transcribing` → `stopAndTranscribe()` → empty? `flash` : `submit(.voice)`); else `beginTyping()` (cancel the mic → `setPhase(.typing)`).
-- **Tap-to-type:** `submitTyped(_)` (⏎ in the notch field) → `submit(.computer, .promptBar)`; `dismissTyping()` (Esc · click-away · empty-⏎) → `.hidden`.
+- **Tap-to-type:** `submitTyped(_)` (⏎ in the notch field) → `submit(.computer, .promptBar)`; `dismissTyping()` (click-away · empty-⏎) → `.hidden`. A **right-⌘ tap while the field is open** also dismisses it (`voicePressBegan` toggles it closed instead of opening a fresh interaction).
 
-**Run completion** (`run.onFinished`): if `phase == .running` → `.finishing(outcome)` → `scheduleHide(2.5)`.
+**Esc — `cancelCurrent()` backs out of whatever the notch is doing**, mirroring the obvious one-tap action per state (it returns whether it consumed the Esc):
+- **typing** → `dismissTyping()`.
+- **opening / listening** → drop the voice capture, `.hidden` (a later key release then fires nothing).
+- **running, ONLY while the voice transcript is still on screen** (`readBack != nil && remembering == nil`) → cancel the run and **dismiss INSTANTLY** (the "you misheard me, redo" case — no "Stopped" flourish). Once the transcript dissolves into the working / "Remembering" line, Esc is left ALONE so it stays free for the user's own apps.
+
+Two routes feed it: the **global** Esc tap (`RightCommandMonitor.onEscape`, §4) handles every state where we're *not* the key window (a voice capture / a transcript over another app); a **local** key monitor in the window (§7) owns the *typing* field, where it can consume Esc before the text field so dismissing never beeps. The global route skips `.typing` so the two never race.
+
+**STOP is transcript-aware too — `stop()` unifies both.** A STOP click (or Esc) *while the transcript shows* dismisses instantly: it sets `.hidden` first, so `runFinished` sees a non-running phase and skips the flourish — while the run is still cancelled underneath. Once computer use is working, STOP halts it with the honest "Stopped" beat. The STOP button (`onStop`) and Esc both route through `stop()`, so they behave identically.
+
+**Run completion** (`run.onFinished`): if `phase == .running` → `.finishing(outcome)` → `scheduleHide(1.5)` (the ✓/stopped/✗ flourish; a non-running phase skips straight to `.hidden`). Notices (`flash`, e.g. "didn't catch that") hold **1.5s** too.
 
 **Plumbing:** `setPhase` bumps `phaseToken`; `scheduleHide`/`flash`/`setReadBack` capture the token and only fire if unchanged — a delayed transition can never clobber a newer one.
 
@@ -138,13 +152,15 @@ This is where most of the hard bugs were fought and won. The window is a **FIXED
 
 **(d) Typing needs a key window.** Entering `.typing`, `reveal(makeKey: true)` → `makeKeyAndOrderFront`: the `.nonactivatingPanel` becomes key (takes keystrokes) WITHOUT bringing the app forward over what you're using. A `didResignKey` observer (guarded against the focus-setup race via `typingKeyAt`) dismisses the field on click-away. `NotchPanel.constrainFrameRect` is overridden so the window can sit flush at the very top (over the menu bar).
 
+**(e) Esc for the type field (local key monitor).** `installKeyMonitor()` adds an `NSEvent.addLocalMonitorForEvents(.keyDown)` that, on Esc, calls `coordinator.cancelCurrent()` and swallows the event when handled. A LOCAL monitor needs no permission (it only sees events already routed to our key panel) and fires *before* the text field, so dismissing the type field never beeps. The other states' Esc is handled globally (§4); this exists only for the consume-before-the-field case. `settleDelay = 0.6s` — long enough for the dismiss *retract* (§8) to finish merging into the cutout before the window orders out.
+
 Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the notch shows in screen recordings — Jesai chose recordability). Observers (`didChangeScreenParameters`, `activeSpaceDidChange`, `didWake`, `didActivateApplication`) re-place the canvas on the menu-bar display (`CGMainDisplayID`, not `NSScreen.main`) and re-`reveal()`; `host.update(metrics:)` re-renders on display change.
 
 ---
 
 ## 8. The notch visual — `NotchView` / `NotchContent` / `NotchShape` / `SpinningLogo`
 
-`NotchView` is a thin binder reading `coordinator`; `NotchContent` is the pure, previewable visual (`phase, readBack, statusLine, remembering, metrics, onStop, onSubmitText, onCancelText`).
+`NotchView` is a thin binder reading `coordinator`; `NotchContent` is the pure, previewable visual (`phase, readBack, statusLine, remembering, metrics, onStop, onSubmitText`). Esc-to-dismiss isn't a `NotchContent` callback — it's caught globally (§4) + by the window's local key monitor (§7).
 
 **The shape sits FLUSH at the bezel.** `NotchShape`'s concave top corners (the genuine-notch flare into the screen edge) are now VISIBLE — the window's top is at the screen edge and the shape's top edge lands on it (the old `topBleed` that shoved the top off-screen is gone). `NotchSkirtShape` is its open twin: the visible perimeter (concave top corners → sides → rounded bottom) but NOT the flat top edge — the glow strokes this, so it warps up into the corners yet never lights the bezel line.
 
@@ -153,8 +169,9 @@ Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the not
 - **opening/listening/transcribing:** `width = baseWidth + 76`, `height = baseHeight + notchBottomCover` — a small **`+2`** cover, because `auxiliaryTopLeftArea.height` reports a hair shallower than the notch's real cutout, so the mic state (the only one sized to ~`baseHeight`; every other state is taller and overshoots) would otherwise let the hardware lip peek below. Radii = the real notch radius (`top: baseHeight/3 - 4`, `bottom: baseHeight/3`).
 - **running/finishing:** `runningHeight(caption:) = baseHeight + caption + bottomPad` — `caption` is the read-back's measured height (grows to fit, below) or the tight one-line status (`captionHeight 18`). `topPad 0` + zero VStack spacing so the text sits right under the hardware notch; `bottomPad 4`.
 - **typing:** wider + one focusable field row.
+- **hidden (the dismiss RETRACT):** size collapses to the **exact hardware notch** (`hardwareNotch`, with the real notch radius), and the black shell stays **opaque** (`shellOpacity = 1`) while only the *content* fades. So on dismiss the shell morphs back into the real cutout and **merges with it** — a physical "suck back into the notch," then the window orders out invisibly (`settleDelay 0.6s`). No fade. (On a notch-less display there's nothing to merge into, so `shellOpacity` fades it instead.)
 
-**Layout (camera-flanking):** a top row (`SpinningLogo` · `Spacer(centerGap 64)` · `rightControl`) at the camera band, then the caption / type-field row. `hPad 18` clearance. `rightControl` cross-fades between mic (opening calmer → listening "leans in") · spinner (transcribing) · the `TextField` (typing) · `NotchStopButton` (running) · outcome glyph (finishing).
+**Layout (camera-flanking):** a top row (`SpinningLogo` · `Spacer(centerGap 64)` · `rightControl`) at the camera band, then the caption / type-field row. `hPad 18` clearance. The logo AND every `rightControl` fill the **same `controlSlot` (17pt) square**, so the two flanks are twinned in size and on one optical center axis — no per-state drift. `rightControl` cross-fades between **the mic at 14pt** (opening calmer → listening "leans in") · spinner (transcribing) · the `TextField` (typing) · `NotchStopButton` (running) · outcome glyph (finishing).
 
 **The running caption is 3-way** (`runningCaptionKey` = remembering ▸ read-back ▸ status), swapped with a **fancy blur-dissolve-pop** (`.blurDissolve` = blur + fade + a spring scale, on `.spring(duration: 0.7, bounce: 0.35)`):
 - **Read-back** — the heard instruction, serif italic, in **curly quotes**; the notch **grows DOWN to fit the whole thing** (measured via `NSString.boundingRect` on the same quoted string, capped at `maxReadBackLines 10`) and lingers **4–9s scaled by line count** (`NotchMetrics.readBackDuration`), then dissolves to the work line.
@@ -166,9 +183,10 @@ Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the not
 **The edge glow** (`glow` ×3 → `glowLayer`): a rotating `AngularGradient(GlowHalo.stops)` **masked by `NotchSkirtShape.stroke`** — the mask lives in the body so it morphs in LOCKSTEP with the black fill (no "separate entity" pop-in). Three layers (wide soft halo + dense halo behind the fill, crisp bright rim over it) make it thick + vivid. It's **always present**, fading via `.opacity(glowStrength)` so the edges light up in place; `glowStrength` is non-zero for **every visible state** (opening/listening/typing/running…), so the notch glows from the moment it's summoned. ⚠️ Each layer expands its gradient `(lineWidth/2 + blur + 6)` past every edge (`.padding(-m)` + `.mask(skirt.padding(m))`) so the BOTTOM edge isn't thinner than the sides (the gradient must reach beyond the stroke + blur on ALL sides, and the bottom edge sits at the frame edge).
 
 **`SpinningLogo`** (matches the app icon — a thick vibrant color ring + white planet):
-- Layers: a soft **single** additive bloom · the **thick, SHARP, saturated color band** (`stroke` at `lineWidth size*0.17`, almost no blur — *this* is the visible color) · a thin white ring (`size*0.028`, "just for shape") · the white planet (`size*0.36`) with a tiny additive glow.
-- ⚠️ **One additive pass only for the color.** Stacking multiple `.plusLighter` passes blew the pale first stop (`#fde2a3`) past white → a "white thick part" swept around as it spun. One pass on black = the true color.
-- The spin is **wall-clock** via `TimelineView` (no per-frame `@State`); speed is `period(fast)` (13s idle, 4s when `fast == .running`); an **anchor** (`anchorAngle`/`anchorTime`, re-based in `onChange(of: fast)`) keeps the colors from jumping when the speed changes.
+- Layers: a soft **single** additive bloom · the **thick, SHARP, saturated color band** (`stroke` at `lineWidth size*0.17`, almost no blur — *this* is the visible color) · a thin white ring (`max(0.75, size*0.028)`, "just for shape", kept extra-fine — the floor governs at notch size) · the white planet (`size*0.36`) with a tiny additive glow.
+- **Palette = `bandStops`, NOT raw `GlowHalo.stops`:** the brand spectrum with one change — the pale warm-yellow seam stop (`#fde2a3`) deepened to a saturated **gold `(0.97, 0.70, 0.24)`**. That stop is a very light cream *and* spans the wrap seam (it's both the first stop and the duplicated last), so at this tight ring scale it otherwise reads as a near-WHITE arc that breaks the rainbow. Deepening just that one stop — locally; the shared `GlowHalo.stops` (edge glow, CTAs, website spinner) is untouched — keeps the wheel fully colorful and truer to the app icon.
+- ⚠️ **One additive pass only for the color.** Stacking multiple `.plusLighter` passes blew the pale stop past white → a "white thick part" swept around as it spun. One pass on black = the true color.
+- The spin is **wall-clock** via `TimelineView` (no per-frame `@State`); speed is `period(fast)` — **13s idle, 2s when `fast == .running`** (the fast "processing" spin); an **anchor** (`anchorAngle`/`anchorTime`, re-based in `onChange(of: fast)`) keeps the colors from jumping when the speed changes.
 - ⚠️ **`.transaction { $0.animation = nil }`** on the logo is load-bearing: without it the notch's morph spring interpolates the gradient angle on a speed change and **reverse-spins the logo** for the morph's duration.
 
 ---
@@ -185,7 +203,9 @@ Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the not
 8. **Per-frame discipline:** `TimelineView` wall-clock, **no `@State` writes per frame**. The notch is small so the glow/logo blurs are OK.
 9. **`RenderPreview` is broken on this target** (it launches the whole app → 30s timeout). Build to verify; test motion live.
 10. **Build hygiene** (`3_Dev_Notes_and_Rules.md`): isolate CLI builds (`-derivedDataPath /tmp/...`) or prefer the Xcode MCP `BuildProject`. Synchronized file groups auto-join a `.swift` dropped into `Notch Magic/`.
-11. **Default-MainActor isolation** is on. Off-main code (the audio tap, the CGEvent trampoline) must be `nonisolated` and capture locals, not `self`.
+11. **Default-MainActor isolation** is on. Off-main code (the audio tap, the CGEvent trampoline) must be `nonisolated` and capture locals, not `self`. A `static let` the off-main callback reads (e.g. `escKeyCode`) must be `nonisolated static`.
+12. **The dismiss is a RETRACT, not a fade.** On `.hidden`, the black shell stays opaque and morphs to the *exact hardware-notch silhouette* (size + radius), so it merges into the real cutout and the window orders out invisibly — a physical "suck back in." Only the inner content fades. (Notch-less displays fade — there's nothing to merge into.) An earlier flat opacity fade read as cheap; don't go back.
+13. **Listen-only `keyDown` is NOT gated** [MEASURED, macOS Tahoe, Input Monitoring off, app unfocused] — the long-assumed "keyDown needs Input Monitoring" was wrong, so we catch Esc on the same zero-permission tap (filtered in the C callback so we never flood the main actor). This **overturns the old "never mask keyDown" rule.** ⚠️ Verify on the macOS-15 floor before launch (§13); if gated there, fall back to a right-⌘-tap cancel.
 
 ---
 
@@ -208,8 +228,9 @@ All of the below is **confirmed working on Jesai's bezel** (live screenshots/rec
 - **The window:** fixed canvas, flush at the bezel (concave corners visible), no detach during morphs; **click-through bulletproof** (cursor-position toggle — verified clicks pass through the glow + everywhere but the notch); typing takes keystrokes without activating the app.
 - **The glow:** thick, vivid, layered, all around the silhouette (incl. corners), alive from the moment the notch appears.
 - **Remembering:** gradient "Remembering ‹note›" surfaces the knowledge-base reads; status stream is filtered clean (no CLI chrome / `stderr:` / prompt echo).
-- **The logo** matches the app icon; spin glitch fixed.
-- **Not yet done:** §12 deferred touches; productionization (§13). Reduced-motion + VoiceOver coded but unverified.
+- **The logo** matches the app icon — twinned to the right control in a shared 17pt slot, the warm seam stop deepened to gold (no white spot), the white ring extra-fine, spinning 2× faster while processing.
+- **Dismiss & Esc:** the notch *retracts/merges into the cutout* on dismiss (no fade); Esc cancels globally (type field · listening · transcript), a right-⌘ tap closes the type field, and STOP/Esc dismiss the transcript instantly while still halting live computer use with the "Stopped" beat.
+- **Not yet done:** §12 polish backlog; productionization (§13). Reduced-motion + VoiceOver coded but unverified.
 
 ---
 
@@ -221,10 +242,13 @@ Press opens the notch instantly (`.opening`); hold → voice; tap → a focused 
 ### ✅ B. Edge glow — **DONE (significantly improved)**
 Thick, layered (3 passes), vivid, all around the silhouette incl. the concave corners, alive from the moment the notch appears, masked so it morphs in lockstep. (§8.)
 
-### ◐ C. Animations — **mostly done**
-The morph is a longer, bouncier spring; the read-back→work swap is a blur-dissolve-pop; work lines morph in place (`.contentTransition(.interpolate)`); the notch grows/shrinks to fit the read-back. Still open if you want more: the bezel-descend stagger, retract polish, content stagger — Dynamic-Island-grade.
+### ✅ C. Animations — **DONE**
+The morph is a longer, bouncier spring; the read-back→work swap is a blur-dissolve-pop; work lines morph in place (`.contentTransition(.interpolate)`); the notch grows/shrinks to fit the read-back; and the **dismiss retracts/merges into the cutout** (§8) instead of fading. Optional if you ever want more: a bezel-descend stagger, content stagger — Dynamic-Island-grade.
 
-### D. Deferred touches (each its own focused pass)
+### ✅ D. Dismiss everywhere (Esc · ⌘ · STOP) — **DONE**
+Esc cancels/dismisses globally via the zero-permission `keyDown` tap (§4) — the type field, listening, and the voice transcript; a right-⌘ tap closes the type field; STOP and Esc both dismiss the transcript INSTANTLY (no flourish) yet halt live computer use with the "Stopped" beat (§6). Computer-use Esc is left for the user's own apps. (⚠️ verify the keyDown tap on macOS 15, §13.)
+
+### E. Deferred touches (each its own focused pass)
 - **Behind-mic color dance:** a small blurred colored glow *behind the mic icon* in the listening state (distinct from the edge glow — the `.opening`→`.listening` "lean in" is the hook).
 - **Hover-haptic:** a trackpad haptic (`NSHapticFeedbackManager`) when the cursor crosses the notch's boundary.
 - **2-line status:** the bar now shows a tight ONE status line (for compactness); if a 2-line codex narration matters, widen `captionHeight` / show the last 2.
@@ -237,10 +261,11 @@ The morph is a longer, bouncier spring; the read-back→work swap is a blur-diss
 - **Arm the hotkey only after onboarding** — `CommandCoordinator.start()` is called unconditionally in `AppState.init` today (so it's testable). Gate it on `hasCompletedOnboarding`.
 - **Trim the Speech permission** if `SpeechAnalyzer` works mic-only (drop `VoiceCapture.requestSpeech()`; keep the Info.plist key).
 - **Smoke-test the macOS-15 voice fallback** on an old Mac.
+- **Verify global Esc on macOS 15.** The listen-only `keyDown` tap is measured permission-free on Tahoe only; confirm Esc still flows (app unfocused, Input Monitoring off) on the 15 floor — same old-Mac trip as the voice fallback. If gated there, fall back to a right-⌘-tap cancel (a modifier is always free).
 - **Confirm** the SkyLight pin + order-out never leaves the notch stuck visible when idle.
 - **Reduced-motion / VoiceOver** sanity pass.
 - **Retire the dev bench** `Views/HotkeyLabView.swift` + its DEV TOOLS → HOTKEY LAB button once the real hotkey is proven.
 
 ---
 
-*Keep this doc true: when you ship an upgrade and it's confirmed working, update the relevant section. This is the only context the next Claude gets.* 🖤
+*Keep this doc true: when you change Notch Magic and confirm it works, update the relevant section.* 🖤

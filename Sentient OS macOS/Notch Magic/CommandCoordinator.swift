@@ -61,6 +61,12 @@ final class CommandCoordinator {
         hotkey.onPress = { [weak self] in self?.voicePressBegan() }
         hotkey.onHoldConfirmed = { [weak self] in self?.voiceHoldConfirmed() }
         hotkey.onRelease = { [weak self] held in self?.voiceReleased(held: held) }
+        // Global Esc → cancel/dismiss the notch. Skips .typing: that's owned by the window's LOCAL key
+        // monitor, which can consume Esc before the text field (no beep) — here we'd only race it.
+        hotkey.onEscape = { [weak self] in
+            guard let self, self.phase != .typing else { return }
+            self.cancelCurrent()
+        }
         hotkey.start()
         voice.prewarm()
         run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
@@ -81,7 +87,13 @@ final class CommandCoordinator {
         Log("▶︎ submit [\(source)] \(mode.label): \(trimmed)")
     }
 
-    func stop() { run.stop() }
+    /// Cancel the running task. A STOP (or Esc) WHILE THE TRANSCRIPT IS SHOWN means "you misheard me — redo":
+    /// dismiss INSTANTLY with no "Stopped" flourish (hiding first makes `runFinished` skip it). Once computer
+    /// use is actually working, STOP halts it with the honest "Stopped" beat. Either way the run is cancelled.
+    func stop() {
+        if phase == .running, readBack != nil, run.remembering == nil { setPhase(.hidden) }
+        run.stop()
+    }
 
     // MARK: Voice + tap-to-type (hotkey) path
     //
@@ -91,6 +103,8 @@ final class CommandCoordinator {
 
     private func voicePressBegan() {
         guard VoiceCapture.isAvailable else { return }
+        // A right-⌘ tap while the type field is open toggles it closed (no action) — a quick way to back out.
+        if phase == .typing { dismissTyping(); return }
         guard !run.isRunning, !isInteracting else { Log("hotkey ignored — busy"); return }
         setPhase(.opening)                                // you're pulling it open — reveal the instant you press
         if VoiceCapture.isAuthorized { startCapture() }   // never PROMPT on a press; defer to hold-confirm
@@ -183,6 +197,38 @@ final class CommandCoordinator {
         Log("notch typing dismissed")
     }
 
+    /// Esc — back out of whatever the notch is doing, mirroring the obvious one-tap action for each state:
+    /// dismiss the type field · abandon an open/listening voice capture (so a later release fires nothing) ·
+    /// or, ONLY while the voice transcript is still on screen, cancel the just-fired run and dismiss INSTANTLY
+    /// (no "Stopped" flourish — that's reserved for interrupting live computer use via STOP) so a misheard
+    /// command can be killed and redone at a glance. The instant the transcript dissolves into the working /
+    /// "Remembering" line, Esc is left ALONE — computer use is now quietly running and the user needs Esc for
+    /// their own apps. Returns whether it consumed the Esc (so the key monitor swallows it). Caught GLOBALLY
+    /// via RightCommandMonitor.onEscape (typing is handled by the window's local consuming monitor instead).
+    @discardableResult
+    func cancelCurrent() -> Bool {
+        switch phase {
+        case .typing:
+            dismissTyping()
+            return true
+        case .opening, .listening:
+            listening = false
+            voiceStartTask?.cancel(); voiceStartTask = nil
+            voice.cancel()
+            setPhase(.hidden)
+            Log("notch voice capture cancelled (Esc)")
+            return true
+        // Only while the transcript is actually shown (readBack up AND not yet replaced by "Remembering") —
+        // not once computer use is working, so Esc stays free for the user's own apps then.
+        case .running where readBack != nil && run.remembering == nil:
+            stop()                       // transcript shown → stop() dismisses instantly (no flourish), run cancelled
+            Log("notch transcript cancelled (Esc) — immediate dismiss")
+            return true
+        default:
+            return false
+        }
+    }
+
     /// True while a voice/tap interaction is mid-flight — a fresh press is ignored until it resolves.
     private var isInteracting: Bool {
         switch phase {
@@ -198,7 +244,7 @@ final class CommandCoordinator {
         // Only flourish if the notch is actually up (a stop/dismiss may have already hidden it).
         guard phase == .running else { setPhase(.hidden); return }
         setPhase(.finishing(outcome))
-        scheduleHide(after: 2.5)
+        scheduleHide(after: 1.5)         // a quick ✓/stopped/✗ flourish, then retract
     }
 
     // MARK: Phase + read-back plumbing (generation-guarded so a delayed change never clobbers a newer one)
@@ -220,7 +266,7 @@ final class CommandCoordinator {
 
     private func flash(_ message: String) {
         setPhase(.notice(message))
-        scheduleHide(after: 2.0)
+        scheduleHide(after: 1.5)
     }
 
     private func setReadBack(_ text: String) {

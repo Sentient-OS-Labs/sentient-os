@@ -28,6 +28,7 @@ struct NotchMetrics: Equatable {
     var captionHeight: CGFloat { 18 }          // the status text row — kept tight so the notch stays short
     var centerGap: CGFloat { 64 }              // keep logo/control clear of the camera
     var hPad: CGFloat { 18 }                   // clearance so the logo/mic clear the rounded corners
+    var controlSlot: CGFloat { 17 }            // the square both the logo AND every right control fill, so they twin exactly (same size, same optical center)
     var topPad: CGFloat { 0 }
     var bottomPad: CGFloat { 4 }
     var fieldRowHeight: CGFloat { 30 }         // the tap-to-type field row (below the camera band)
@@ -49,7 +50,11 @@ struct NotchMetrics: Equatable {
     func size(for phase: NotchPhase, readBack: String? = nil, remembering: String? = nil) -> CGSize {
         switch phase {
         case .hidden:
-            return CGSize(width: baseWidth, height: baseHeight)
+            // Retract target: collapse to the EXACT hardware notch (radius matched in `radii`) so the black
+            // shell merges seamlessly into the real cutout, then orders out invisibly — a physical retract,
+            // not a fade. (A notch-less display has nothing to merge into → the view fades instead, see
+            // `shellOpacity`; base size keeps that fallback sane.)
+            return hardwareNotch ?? CGSize(width: baseWidth, height: baseHeight)
         case .opening, .listening, .transcribing:
             return CGSize(width: baseWidth + 76, height: baseHeight + notchBottomCover)   // fully fill the hardware notch
         case .typing:
@@ -67,9 +72,10 @@ struct NotchMetrics: Equatable {
 
     func radii(for phase: NotchPhase) -> (top: CGFloat, bottom: CGFloat) {
         switch phase {
-        case .opening, .listening, .transcribing:
+        case .opening, .listening, .transcribing, .hidden:
             // The macOS notch's OWN corner radius (DynamicNotch's tuned match: baseHeight / 3), so at
-            // the real notch height the mic state reads as the genuine notch.
+            // the real notch height the mic state reads as the genuine notch — and the hidden state
+            // collapses to that same shape so it merges cleanly into the physical cutout on dismiss.
             let r = baseHeight / 3
             return (top: max(r - 4, 0), bottom: r)
         default:
@@ -141,8 +147,7 @@ struct NotchView: View {
                      remembering: coordinator.run.remembering,
                      metrics: metrics,
                      onStop: { coordinator.stop() },
-                     onSubmitText: { coordinator.submitTyped($0) },
-                     onCancelText: { coordinator.dismissTyping() })
+                     onSubmitText: { coordinator.submitTyped($0) })
     }
 }
 
@@ -156,7 +161,6 @@ struct NotchContent: View {
     let metrics: NotchMetrics
     var onStop: () -> Void = {}
     var onSubmitText: (String) -> Void = { _ in }
-    var onCancelText: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draft = ""
@@ -178,13 +182,14 @@ struct NotchContent: View {
                 .allowsHitTesting(false)
             glow(radii, lineWidth: 3,  blur: 0.6, strength: 1.0)   // crisp bright rim, over the fill
             content(size: size)
+                .opacity(visible ? 1 : 0)              // icons + caption dissolve as the shell retracts into the cutout
                 .clipShape(NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom))
         }
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .combine)        // on the notch itself, never the full canvas
         .accessibilityLabel(a11yLabel)
         .scaleEffect(visible ? 1 : 0.94, anchor: .top)
-        .opacity(visible ? 1 : 0)
+        .opacity(shellOpacity)                           // shell stays opaque & MERGES into a real notch on dismiss (fades only if there's none)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(morph, value: phase)
         .animation(morph, value: readBack)               // grow/shrink the notch as the read-back appears/clears
@@ -210,9 +215,10 @@ struct NotchContent: View {
     private func content(size: CGSize) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                SpinningLogo(size: 17, fast: phase == .running)
+                SpinningLogo(size: metrics.controlSlot, fast: phase == .running)
                 Spacer(minLength: metrics.centerGap)
                 rightControl
+                    .frame(width: metrics.controlSlot, height: metrics.controlSlot)   // same square as the logo → twinned size + center axis
                     .id(controlKey)
                     .transition(.opacity.combined(with: .scale(scale: 0.7)))
             }
@@ -240,7 +246,7 @@ struct NotchContent: View {
             // Shared identity (controlKey) → .opening intensifies INTO .listening (a gentle "lean in"),
             // never a cross-fade. The full behind-mic color dance is a later polish pass.
             Image(systemName: "mic.fill")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(.white.opacity(phase == .listening ? 0.92 : 0.5))
                 .scaleEffect(phase == .listening ? 1 : 0.9)
                 .allowsHitTesting(false)
@@ -279,7 +285,6 @@ struct NotchContent: View {
                 .tint(Theme.accent)
                 .focused($fieldFocused)
                 .onSubmit { let t = draft; draft = ""; onSubmitText(t) }
-                .onExitCommand { onCancelText() }   // Esc
         }
     }
 
@@ -414,6 +419,15 @@ struct NotchContent: View {
         case .finishing: return 0.9
         default:         return 1.0   // alive from the moment the notch appears — opening, listening, typing, running…
         }
+    }
+
+    /// The black shell's opacity. On dismiss into a REAL notch it stays fully opaque — the shape collapses to
+    /// the cutout's exact silhouette and merges (then the window orders out invisibly), so the retract reads
+    /// as a physical "suck back into the notch", never a fade. With no hardware notch there's nothing to merge
+    /// into, so the shell simply fades out. (The inner content + glow dissolve on their own regardless.)
+    private var shellOpacity: Double {
+        if phase != .hidden { return 1 }
+        return metrics.hasPhysicalNotch ? 1 : 0
     }
 
     // MARK: Helpers
