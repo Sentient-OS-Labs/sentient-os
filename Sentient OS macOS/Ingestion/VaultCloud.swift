@@ -203,7 +203,7 @@ actor VaultCloud {
         do not re-read the whole vault.
         - **Rewrite only what changed.** Prefer editing an existing note over creating a new one; \
         create a new note ONLY when no existing note fits, following the existing folder structure \
-        and naming style (`Domain/Specific — Topic.md`, frontmatter included).
+        and naming style (`Domain/Specific — Topic.md`, no frontmatter — open with the `# Title` H1).
         - **Never delete notes wholesale**, never reorganize folders, never rename existing notes \
         (links point at them). Keep every `[[wikilink]]` intact; add new ones where a new item \
         genuinely connects.

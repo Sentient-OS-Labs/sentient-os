@@ -291,14 +291,9 @@ You are running inside the vault's (currently empty) working directory. CREATE t
 
 - Write the root `README.md` FIRST (the portrait + map), then every note at its vault-relative path, e.g. `Startup/Fundraising — Term Sheets.md`. Parent folders are created automatically by the paths you write.
 - Create ONLY `.md` files, ONLY inside the working directory — never absolute paths, never `..`.
-- Every note starts with frontmatter:
+- **No frontmatter — no YAML header, no `tags`, no `refs`.** Every note opens directly with its `# <Title>` H1, then a rich markdown body:
 
 ```
----
-title: <human-readable title>
-tags: [<a-few>, <kebab-case>, <tags>]
-refs: [<the #index numbers this note synthesizes>]
----
 # <Title>
 
 <rich markdown body — use [[Other Note Title]] wikilinks freely to connect the graph.>
