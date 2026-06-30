@@ -12,7 +12,9 @@ import Foundation
 import SwiftUI
 
 if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
-    WakeHelper.run()        // root LaunchDaemon mode — never returns
+    CrashReporting.start(.wakeHelper)   // crash reporting for the root overnight path
+    WakeHelper.run()                    // root LaunchDaemon mode — never returns
 } else {
-    SentientOSApp.main()    // normal GUI app
+    CrashReporting.start(.app)          // crash reporting for the GUI app
+    SentientOSApp.main()                // normal GUI app
 }

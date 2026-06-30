@@ -716,11 +716,36 @@ struct DevToolsView: View {
 
                     fdaPane
                     mirrorPane
+                    #if DEBUG
+                    crashTestPane
+                    #endif
                 }
                 .padding(.top, 4)
             }
         }
     }
+
+    #if DEBUG
+    /// Sentry verification (DEBUG only): one tap to confirm crash reports actually reach the
+    /// dashboard once a real DSN is pasted into CrashReporting.swift. "Send test event" reports a
+    /// non-fatal error; "Force crash" hard-crashes the app so the native crash handler fires —
+    /// the report lands on the NEXT launch. Both no-op silently if no DSN is set.
+    private var crashTestPane: some View {
+        VStack(spacing: 4) {
+            Text("SENTRY").font(.system(.caption2, design: .monospaced)).foregroundStyle(Theme.secondary)
+            HStack(spacing: 8) {
+                Button { CrashReporting.sendTestEvent() } label: {
+                    Label("Send test event", systemImage: "paperplane")
+                }
+                .buttonStyle(.bordered)
+                Button(role: .destructive) { CrashReporting.forceCrash() } label: {
+                    Label("Force crash", systemImage: "exclamationmark.triangle")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+    }
+    #endif
 
     // MARK: MCP mirror (opt-in toggle + manual sync — dogfood ahead of the Phase-5 onboarding screen)
 
