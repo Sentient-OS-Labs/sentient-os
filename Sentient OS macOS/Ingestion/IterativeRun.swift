@@ -28,13 +28,20 @@ private struct ExtractionTimeout: Error { let seconds: Double }
 
 /// Holds the racing continuation behind a lock so it resumes exactly once, and so the `@Sendable`
 /// dispatch closures capture this (`@unchecked Sendable`) box instead of the continuation directly.
-private final class TimeoutBox<T>: @unchecked Sendable {
+///
+/// Deliberately NON-GENERIC. A generic `TimeoutBox<T>` crashes the Swift optimizer — the
+/// `EarlyPerfInliner` pass infinite-recurses on the generic class's `deinit` layout under `-O`,
+/// which segfaults swift-frontend and breaks EVERY Release/Archive build (Debug is `-Onone`, so it
+/// builds fine — the bug hides until you ship). We erase the element type at the boundary below: the
+/// box stores a `fire` closure that already captures the typed continuation, so only an erased
+/// `Result<Any, Error>` crosses the box. The success value is always a `T`, so the downcast is total.
+private final class TimeoutBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var cont: CheckedContinuation<T, Error>?
-    init(_ c: CheckedContinuation<T, Error>) { cont = c }
-    func resume(_ result: Result<T, Error>) {
-        lock.lock(); let c = cont; cont = nil; lock.unlock()
-        c?.resume(with: result)
+    private var fire: ((Result<Any, Error>) -> Void)?
+    init(_ fire: @escaping (Result<Any, Error>) -> Void) { self.fire = fire }
+    func resume(_ result: Result<Any, Error>) {
+        lock.lock(); let f = fire; fire = nil; lock.unlock()
+        f?(result)
     }
 }
 
@@ -46,8 +53,10 @@ private final class TimeoutBox<T>: @unchecked Sendable {
 private func withExtractionTimeout<T: Sendable>(_ seconds: Double,
                                                 _ work: @escaping @Sendable () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
-        let box = TimeoutBox(cont)
-        DispatchQueue.global(qos: .utility).async { box.resume(Result { try work() }) }
+        // Erase T here so TimeoutBox stays non-generic (see its note). The success value is always
+        // a T, so the downcast in `map` is total.
+        let box = TimeoutBox { result in cont.resume(with: result.map { $0 as! T }) }
+        DispatchQueue.global(qos: .utility).async { box.resume(Result { try work() as Any }) }
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
             box.resume(.failure(ExtractionTimeout(seconds: seconds)))
         }
