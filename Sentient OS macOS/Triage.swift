@@ -135,27 +135,36 @@ enum Triage {
 
     /// The full outcome: the verdict + the model's title/summary, shown during processing for ANY
     /// verdict. Survivors carry a non-empty summary; junk/sensitive are dropped (zero trace).
+    /// WHY an item landed where it did — §7.13, so the diagnostics can tell a garbled model reply
+    /// (`parseFailed`) apart from a genuine junk verdict (`modelJunk`) apart from an empty summary,
+    /// all of which used to increment the same opaque junk counter ("why so much junk?").
+    enum Reason: String, Sendable { case survivor, sensitive, modelJunk, emptySummary, parseFailed }
+
     struct Outcome {
         let verdict: Verdict
         let title: String?
         let summary: String
+        let reason: Reason
     }
 
     static func decide(_ responseText: String) -> Outcome {
         guard let r = parse(responseText) else {
-            return Outcome(verdict: .junk, title: nil, summary: "")   // fail-closed
+            return Outcome(verdict: .junk, title: nil, summary: "", reason: .parseFailed)   // fail-closed
         }
         let summary = r.summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedTitle = r.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = trimmedTitle.isEmpty ? nil : trimmedTitle
 
         if r.sensitive {
-            return Outcome(verdict: .sensitive, title: title, summary: summary)
+            return Outcome(verdict: .sensitive, title: title, summary: summary, reason: .sensitive)
         }
-        if r.junk || summary.isEmpty {
-            return Outcome(verdict: .junk, title: title, summary: summary)
+        if r.junk {
+            return Outcome(verdict: .junk, title: title, summary: summary, reason: .modelJunk)
         }
-        return Outcome(verdict: .survivor, title: title, summary: summary)
+        if summary.isEmpty {
+            return Outcome(verdict: .junk, title: title, summary: summary, reason: .emptySummary)
+        }
+        return Outcome(verdict: .survivor, title: title, summary: summary, reason: .survivor)
     }
 
     // MARK: Lenient JSON parsing

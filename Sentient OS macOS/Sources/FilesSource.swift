@@ -271,7 +271,12 @@ struct FilesSource: Sendable {
                                       itemDate: added, metadata: meta)
             rows.append((candidate, added.timeIntervalSince1970))
         }
-        return cappedNewestFirst(rows, budget: Self.perRootCap, now: now)
+        let kept = cappedNewestFirst(rows, budget: Self.perRootCap, now: now)
+        // §7.8: per-root yield collapse — if a root that used to surface many files suddenly yields
+        // zero, an over-skip regression (a new prune/cap bug, like B8) is silently eating it. Keyed
+        // per root (cursorKey = "file:<root.id>"), the Files anomaly grain.
+        SourceHealth.checkListingCollapse(source: "files", bucketKey: cursorKey, count: kept.count)
+        return kept
     }
 
     /// Newest-first selection under the connector caps (June 10–11 decisions):
