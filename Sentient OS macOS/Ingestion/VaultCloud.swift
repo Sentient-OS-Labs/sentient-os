@@ -207,6 +207,15 @@ actor VaultCloud {
             await MainActor.run { VaultActivity.shared.vaultDirty = false }
             Log("VaultCloud: mirror pushed ✓")
         } catch {
+            // §7.18: this swallows + retries forever, leaving the mirror stale (the user's AIs read
+            // old data). Emit the HTTP status only — never the response body (MirrorError.http's 2nd
+            // arg embeds it). Status 0 = no HTTP response (B4); "n/a" = a non-HTTP error (zip/network).
+            var status = "n/a"
+            if case MirrorClient.MirrorError.http(let code, _) = error { status = String(code) }
+            CrashReporting.captureEvent("mirror.push_failed", level: .warning,
+                tags: ["error": String(describing: type(of: error))],
+                extra: ["http_status": status],
+                fingerprint: ["mirror", "push_failed"])
             Log("VaultCloud: mirror push failed — \((error as? LocalizedError)?.errorDescription ?? "\(error)") (retries next trigger)")
         }
     }

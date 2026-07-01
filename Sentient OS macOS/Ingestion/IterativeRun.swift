@@ -73,6 +73,7 @@ struct RunProgress: Sendable {
     var junk = 0
     var sensitive = 0
     var failed = 0
+    var parseFailures = 0          // §7.13: junk that was actually a garbled/unparseable model reply
     var lastPath: String?
     var lastFilePath: String?      // absolute path (for the thumbnail)
     var lastPrompt: String?        // the EXACT prompt fed to the model for this item (dev prompt pane)
@@ -112,7 +113,14 @@ struct IterativeRun {
 
         let engine = Engine(modelPath: modelPath, maxNumTokens: connectors.map(\.maxTokens).max() ?? 4096)
         do { try await engine.load() } catch {
+            // §7.1/F1 + §7.12: a load failure here silently yields a 0-item run (the whole overnight
+            // batch does nothing). Escalate to an event — error TYPE only, plus whether the model
+            // file resolved (never the path).
             Log("IterativeRun: engine load failed — \(error)")
+            CrashReporting.captureEvent("engine.load_failed", level: .error,
+                tags: ["error": String(describing: type(of: error))],
+                extra: ["model_present": String(ModelLocator.resolve() != nil)],
+                fingerprint: ["engine", "load_failed"])
             return p
         }
 
@@ -154,6 +162,7 @@ struct IterativeRun {
                 case .junk:      p.junk += 1
                 case .sensitive: p.sensitive += 1
                 }
+                if outcome.reason == .parseFailed { p.parseFailures += 1 }   // §7.13
                 p.lastTitle = outcome.title
                 p.lastSummary = outcome.summary.isEmpty ? nil : outcome.summary
                 p.lastVerdict = outcome.verdict
@@ -178,7 +187,15 @@ struct IterativeRun {
             if Task.isCancelled { break }
             let buckets: [Bucket]
             do { buckets = try connector.buckets(since: marks) }
-            catch { Log("IterativeRun: buckets() failed for \(connector.kind) — \(error)"); continue }
+            catch {
+                // §7.1/F2: this drops the ENTIRE source silently (FDA denied / DB-copy failed). Event
+                // with the source + error TYPE only (the message can embed a path).
+                Log("IterativeRun: buckets() failed for \(connector.kind) — \(error)")
+                CrashReporting.captureEvent("source.dropped", level: .error,
+                    tags: ["source": connector.kind.rawValue, "error": String(describing: type(of: error))],
+                    fingerprint: ["source", "dropped", connector.kind.rawValue])
+                continue
+            }
 
             // §5: each SOURCE gets a 60-minute wall-clock budget spanning all its buckets. On overrun
             // we stop THIS source and move to the next — every item's mark commits atomically, so a
@@ -258,7 +275,15 @@ struct IterativeRun {
                         consecutiveFailures += 1
                         if consecutiveFailures >= Self.failuresBeforeReload {
                             guard reloadsWithoutProgress < Self.maxReloadsWithoutProgress else {
+                                // §7.1/F9: the GPU-wedge cascade the reloads couldn't clear — the run
+                                // gives up here. One event with the counts (never 1,544 per-item ones).
                                 Log("IterativeRun: engine not recovering after \(reloadsWithoutProgress) reloads — stopping.")
+                                CrashReporting.captureEvent("engine.hard_stop", level: .error,
+                                    tags: ["source": connector.kind.rawValue],
+                                    extra: ["reloads_without_progress": String(reloadsWithoutProgress),
+                                            "consecutive_failures": String(consecutiveFailures),
+                                            "processed": String(processedThisConnector)],
+                                    fingerprint: ["engine", "hard_stop"])
                                 finished = false; break runLoop
                             }
                             await reloadEngine(); reloadsWithoutProgress += 1; consecutiveFailures = 0
@@ -285,6 +310,16 @@ struct IterativeRun {
             }
         }
         await engine.unload()
+
+        // §7.13: with a real sample, a high share of junk that was actually GARBLED model output
+        // (not genuine junk) is the "why so much junk?" tripwire — a decode/prompt/format regression.
+        // Gated to runs with enough items so a 0–3-item iterative run can't false-fire.
+        if p.done >= 30, p.parseFailures * 100 / p.done >= 20 {
+            CrashReporting.captureEvent("triage.parse_failure_spike", level: .warning,
+                extra: ["parse_failures": String(p.parseFailures), "done": String(p.done),
+                        "junk": String(p.junk)],
+                fingerprint: ["triage", "parse_failure_spike"])
+        }
         return p
     }
 }
