@@ -76,6 +76,7 @@ actor ProactiveExecutor {
     private func fireGmail(routing: String, content: String, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         progress("Sending via your Gmail connector…")
         var inv = CodexCLI.Invocation(prompt: Self.gmailWrapper(routing: routing, content: content))
+        inv.feature = "gmail-write"
         inv.effort = .high                   // gpt-5.5 → high
         inv.bypassApprovals = true           // hosted Gmail send_email is approval-gated → bypass to fire
         inv.includeUserConfig = true         // load the user's Gmail MCP
@@ -90,6 +91,7 @@ actor ProactiveExecutor {
     private func fireCalendar(routing: String, content: String, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         progress("Adding to your calendar…")
         var inv = CodexCLI.Invocation(prompt: Self.calendarWrapper(routing: routing, content: content))
+        inv.feature = "calendar-write"
         inv.effort = .high                   // gpt-5.5 → high
         inv.bypassApprovals = true
         inv.includeUserConfig = true

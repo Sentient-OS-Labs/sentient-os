@@ -109,6 +109,7 @@ actor VaultGenerator {
         }
 
         var invocation = CodexCLI.Invocation(prompt: prompt)
+        invocation.feature = "vault"
         invocation.effort = .xhigh                           // KB build gets the deepest pass (gpt-5.5)
         invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir
         invocation.cwd = staging.path

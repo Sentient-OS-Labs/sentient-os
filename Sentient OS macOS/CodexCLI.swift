@@ -75,6 +75,9 @@ actor CodexCLI {
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
         var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
+        var feature: String = "unknown"        // §7.9: which caller — so a codex.failure is attributable
+                                               // (gmail / calendar / vault / proactive / …). Diagnostics
+                                               // tag ONLY; never affects the run.
 
         init(prompt: String) { self.prompt = prompt }
     }
@@ -276,6 +279,20 @@ actor CodexCLI {
     /// notably `.usageLimit` (carrying the session id) so callers can reschedule/resume.
     func run(_ invocation: Invocation,
              onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
+        let t0 = Date()   // §7.9: for the codex.failure duration on the throw path
+        do {
+            return try await runInner(invocation, onLine: onLine)
+        } catch {
+            Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
+                                  model: invocation.model, effort: invocation.effort,
+                                  resumed: invocation.resumeSessionID != nil,
+                                  durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+            throw error
+        }
+    }
+
+    private func runInner(_ invocation: Invocation,
+                          onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
         let availability = await validate()
         guard case .available(let bin) = availability else {
             throw CLIError.notAvailable(availability)
@@ -316,17 +333,47 @@ actor CodexCLI {
     /// --ignore-user-config). Returns the full output. Computer use is the WIP CLI path.
     func runAgentCommand(_ prompt: String, timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
-        guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-        let args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                    "-m", Model.gpt55.rawValue,
-                    "-c", "model_reasoning_effort=\"low\"",
-                    "--skip-git-repo-check", prompt]
-        let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
-        guard out.status == 0 else {
-            let detail = out.stderr.isEmpty ? out.stdout : out.stderr
-            throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
+        let t0 = Date()
+        do {
+            guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+            let args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
+                        "-m", Model.gpt55.rawValue,
+                        "-c", "model_reasoning_effort=\"low\"",
+                        "--skip-git-repo-check", prompt]
+            let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
+            guard out.status == 0 else {
+                let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+                throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
+            }
+            return out.stdout.isEmpty ? out.stderr : out.stdout
+        } catch {
+            // §7.9: computer-use runs are the highest-risk executions (bypass-sandbox). Case name only.
+            Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
+                                  model: .gpt55, effort: .low, resumed: false,
+                                  durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+            throw error
         }
-        return out.stdout.isEmpty ? out.stderr : out.stdout
+    }
+
+    /// Emit a structured codex failure — the CLIError CASE NAME only (never `.message`/stderr/prompt,
+    /// which embed user content). One seam for the whole cloud spine; `feature` makes it attributable.
+    private static func emitCodexFailure(event: String, _ error: Error, feature: String,
+                                         model: Model, effort: Effort, resumed: Bool, durationMS: Int) {
+        let caseName: String
+        let level: CrashReporting.DiagLevel
+        switch error {
+        case CLIError.usageLimit:   (caseName, level) = ("usageLimit", .info)      // expected, not a defect
+        case CLIError.notAvailable: (caseName, level) = ("notAvailable", .warning)
+        case CLIError.timedOut:     (caseName, level) = ("timedOut", .warning)
+        case CLIError.launchFailed: (caseName, level) = ("launchFailed", .error)
+        case CLIError.exitFailure:  (caseName, level) = ("exitFailure", .error)
+        case CLIError.badEnvelope:  (caseName, level) = ("badEnvelope", .error)
+        default:                    (caseName, level) = (String(describing: type(of: error)), .error)
+        }
+        CrashReporting.captureEvent(event, level: level,
+            tags: ["feature": feature, "error": caseName, "model": model.rawValue],
+            extra: ["effort": effort.rawValue, "resumed": String(resumed), "duration_ms": String(durationMS)],
+            fingerprint: ["codex", feature, caseName])
     }
 
     /// `exec resume` accepts only a subset of `exec`'s flags — no `-s`/`--cd`/`--add-dir`.

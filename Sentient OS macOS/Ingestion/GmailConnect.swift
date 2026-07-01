@@ -80,6 +80,7 @@ enum GmailConnect {
     /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
     static func probeConnected() async -> Bool {
         var inv = CodexCLI.Invocation(prompt: probePrompt)
+        inv.feature = "gmail"
         inv.model = .gpt54mini               // light model for the connect-check
         inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly
@@ -195,6 +196,7 @@ enum GmailConnect {
 
     private static func read(prompt: String) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
+        inv.feature = "gmail"
         inv.model = .gpt54mini               // light model for the high-volume Gmail reads
         inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)

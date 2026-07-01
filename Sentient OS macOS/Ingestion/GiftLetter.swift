@@ -56,6 +56,7 @@ actor GiftLetter {
         defer { try? fm.removeItem(at: giftFile) }     // never leave it behind, on ANY exit path
 
         var inv = CodexCLI.Invocation(prompt: Self.prompt(vaultPath: vault.path))
+        inv.feature = "giftletter"
         inv.effort = .high                  // the gift should feel like magic — give it the deep pass
         inv.sandbox = .workspaceWrite       // it WRITES "Gift from Sentient.md" into the vault folder
         inv.cwd = vault.path                // the knowledge base is the working dir → reads + writes here

@@ -69,6 +69,7 @@ enum CalendarConnect {
     /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
     static func probeConnected() async -> Bool {
         var inv = CodexCLI.Invocation(prompt: probePrompt)
+        inv.feature = "calendar"
         inv.model = .gpt54mini               // light model for the connect-check
         inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly
@@ -168,6 +169,7 @@ enum CalendarConnect {
     /// the read fails (proactive then runs without calendar context). Read-only; no bypass needed.
     static func fetchProactiveContext() async -> String? {
         var inv = CodexCLI.Invocation(prompt: proactiveFetchPrompt)
+        inv.feature = "calendar-proactive"
         inv.model = .gpt54mini
         inv.effort = .medium
         inv.sandbox = .readOnly
@@ -197,6 +199,7 @@ enum CalendarConnect {
 
     private static func read(prompt: String) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
+        inv.feature = "calendar"
         inv.model = .gpt54mini               // light model — calendar data is small + structured
         inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly              // we only read the calendar + return text (no writes)
