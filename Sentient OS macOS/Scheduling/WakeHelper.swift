@@ -75,8 +75,16 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
 
     func endAwake(withReply reply: @escaping (Bool) -> Void) {
         queue.async {
-            self.cancelDeadman()
+            // Restore normal sleep FIRST; only stand the deadman down if it actually succeeded.
+            // If pmset fails we deliberately KEEP the deadman armed so it will later force
+            // disablesleep 0 — cancelling it first (the old order) on a pmset failure would leave
+            // the Mac awake all day, the exact failure the deadman exists to prevent (B5).
             let ok = self.pmset(["-a", "disablesleep", "0"])
+            if ok {
+                self.cancelDeadman()
+            } else {
+                self.log("endAwake: pmset disablesleep 0 FAILED — leaving deadman armed as backstop")
+            }
             self.log("endAwake ok=\(ok)")
             reply(ok)
         }

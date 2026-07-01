@@ -768,7 +768,7 @@ struct DevToolsView: View {
                         await MirrorClient.shared.disable()
                         mirrorStatus = "✓ MCP mirror OFF — cloud copy deleted (link kept)"
                     } else {
-                        _ = await MirrorClient.shared.enable()
+                        _ = try await MirrorClient.shared.enable()   // throws → surfaced by runMirror's catch
                         do {
                             try await MirrorClient.shared.push()
                             VaultActivity.shared.vaultDirty = false
