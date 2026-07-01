@@ -28,7 +28,6 @@ This is NOT "catch every error." It is: **total crash coverage (already live) + 
 **Non-goals (explicitly)**
 - Not wiring every `throw`/`return nil` in the codebase (there are hundreds). Most "failures" are *normal* (a junk verdict, a quiet Gmail week, an empty bucket, an attachment-only iMessage row). Capturing them would blow Sentry quota, bury signal, and widen the PII surface.
 - Not a metrics/analytics product. This is failure diagnostics.
-- **No further iMessage diagnostics (DE-SCOPED 2026-07-01).** The shipped decode-rate + listing-collapse sensor (§7.4) is the entire extent for iMessage — do not add per-stage counters, a `RunDiagnostics` handoff, or new iMessage events. Where the plan elsewhere leans on iMessage (e.g. the AddressBook resolution rate, §7.6), that dependency is dropped.
 
 **What's already total (no work needed):** native crashes (signals + unhandled exceptions) are caught exhaustively by the Sentry crash handler shipped in PR #81 — including in code we never audited. If it crashes the process, it's reported.
 
@@ -289,10 +288,15 @@ No blob decode (ZTEXT is plaintext); "decode" failures = query degradation + win
 - **Anomaly:** `lastListingCount` (windows) collapse to 0, or `named_groups → 0`.
 - **Iterative:** `buckets()` ignores the mark (ChatConnectors:21 always calls `eligibleWindows()`) → full sample every run. ✅
 
-### 7.4 iMessageSource.swift — ✅ SHIPPED, then DE-SCOPED (no further iMessage diagnostics)
-**Decision (2026-07-01): iMessage is excluded from any FURTHER diagnostics work.** What shipped in P2 (#83) is the extent — do not add per-stage counters, a `RunDiagnostics` handoff, or anything else here.
-**Shipped:** in `eligibleWindows()`, count typedstream decode **attempts** (rows where `text` is NULL and `attributedBody` exists) vs **successes** (decoded non-empty); emit `imessage.decode.degraded` (fingerprint `["imessage","decode_degraded"]`) when `attempts ≥ 50` and the rate `< 50%` (below the old 90% target to stay quiet on attachment-heavy accounts — the Apple-typedstream-change tripwire still fires at ~0%). Plus a per-source `SourceHealth.checkListingCollapse(source: "imessage", …)`. The `typedstreamText` decoder itself is unchanged.
-**Not verified on real `chat.db`** — the threshold/rate math is a first-cut; validate on a real run if iMessage is ever revisited.
+### 7.4 iMessageSource.swift (listing-phase decode)
+- **`typedstreamText` (~191–208) `return nil` counter sites (each a distinct reason):** ~194 no marker (attachment-only — expected bulk), ~197 preamble EOF, ~200 0x81-length EOF, ~206 length ≤0/overrun, ~207 UTF-8 fail (implicit — add an explicit check to count it).
+- **Consumer ratio site:** ~154–155 (`body = text ?? typedstreamText(blob)`, then the `guard`) — capture **attempts (rows with attributedBody) vs successes (non-nil bodies)** = the decode rate.
+- Also count: ~103 null-guid chat drop; ~153/166–167/181 compactMap nils.
+- **Handoff:** before the return at **~182**, keyed `SourceKind.imessage`: `{typedstream_attempts, typedstream_success, fail_no_marker, fail_preamble_eof, fail_len_eof, fail_len_zero, fail_utf8, chats_in, chats_out}`.
+- **Event:** `imessage.decode.degraded` when rate < 90% (rolling). Include `first_len_byte` hex (structure) on first failure.
+- **Fingerprint:** macOS version.
+- **Anomaly:** decode-rate collapse (the Apple-typedstream-change tripwire).
+- **Iterative:** full sample every run (decode at listing). ✅
 
 ### 7.5 NotesSource.swift (listing-phase decode — 5 stages)
 - **`decodeBody` (~90–96) per-stage `nil` sites:** ~91 gunzip (internal: ~102 bad-magic/small, ~106 FEXTRA EOF, ~115 header overrun, ~130 inflate-init, ~144 inflate-process), ~92 field-2 (document), ~93 field-3 (note), ~94 field-2 (text), ~95 UTF-8. `firstMessage` internal bails ~165/169/171/175/179/182/185.
@@ -305,7 +309,7 @@ No blob decode (ZTEXT is plaintext); "decode" failures = query degradation + win
 ### 7.6 AddressBookNames.swift (resolution rate)
 - **Counter sites:** the three `try?` `forEachRow` at **~63/70/75** (ZABCDRECORD / ZABCDPHONENUMBER / ZABCDEMAILADDRESS) — silent → **0 names resolved** (everyone shows as raw phone). ~57/59 store copy/reader `try?`.
 - **Events:** `addressbook.no_store path_version=v22` (the `v22 → v23` file rename); breadcrumb on each query failure with **table name + `sqlite3_errmsg`** (schema string, safe).
-- **Signal:** the resolution rate (`named_via_contacts / total_handles`) — a collapse means this file broke or the book is empty. *(The plan originally computed this inside iMessage, where handles resolve; that path is dropped — iMessage is de-scoped from diagnostics (§7.4). If AddressBook is ever instrumented, compute the rate here in `AddressBookNames` instead.)*
+- **Signal:** the resolution rate (`named_via_contacts / total_handles`) is best computed **in iMessage** (where handles are resolved) — a collapse means this file broke or the book is empty.
 
 ### 7.7 SQLiteDB.swift (the DB chokepoint)
 - **`forEachRow`'s `.prepare` throw carries `sqlite3_errmsg`** (a SQL/schema string, **no user content**) — the uniform "column X renamed" detector for **all 4 DB sources**. Surface it at the throw (~73) or catch sites: event `db.schema_error db=<basename> msg=<errmsg>`.
@@ -474,8 +478,9 @@ Each phase → build → **remind Aditya/Jesai to test it** → they confirm →
 | Atomic saves (D) | CycleStore ~215, ~229, ~236, ~170 | wrap `try? save()` |
 | row() cascade (B9) | CycleStore ~181–183 | capture-on-throw |
 | WhatsApp decode counters + handoff | WhatsApp ~60, ~64, ~159, ~169–170, ~184, ~194; return ~185 | RunDiagnostics(whatsapp) |
+| iMessage typedstream counters + ratio + handoff | iMessage ~194/197/200/206/207; consumer ~154–155; return ~182 | RunDiagnostics(imessage) |
 | Notes decode-by-stage + undownloaded split + handoff | Notes ~91(→102/106/115/130/144)/92/93/94/95; split ~64; return ~84 | RunDiagnostics(notes) |
-| AddressBook query counters | AddressBook ~63/70/75 | events + resolution rate in AddressBookNames (NOT iMessage — de-scoped) |
+| AddressBook query counters | AddressBook ~63/70/75 | events + resolution rate in iMessage |
 | SQLite schema-error chokepoint | SQLiteDB ~73 (`.prepare`), fix ~47 (`-wal`) | event `db.schema_error` |
 | Files skip-histogram (split prune/depth) + whitelisted_lost + handoff | Files ~239/242(split)/250/252/287/288/291; return ~274 + ~281–296 | RunDiagnostics(file, root.id) |
 | Files extraction split | Files pdf/word/plain (`extractText`), images ~349/356/366 | extraction_failed vs empty |
