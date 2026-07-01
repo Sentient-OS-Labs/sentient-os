@@ -142,8 +142,25 @@ struct WhatsAppSource: Sendable {
                                    name: Self.displayName(r.text(1), jid: jid, members: members[r.int(0)]),
                                    isGroup: jid.hasSuffix("@g.us"))
         }
+
+        // §7.3: WhatsApp is installed but the session query returned zero rows — the classic
+        // NULL-guard landmine (one NULL in the sessionFilter subquery hides EVERY group). A schema
+        // change would trip this on day one.
+        if Self.isInstalled, chats.isEmpty {
+            CrashReporting.captureEvent("whatsapp.zero_sessions_despite_install", level: .error,
+                tags: ["source": "whatsapp"], fingerprint: ["whatsapp", "zero_sessions"])
+        }
+
         let analyzedPKs = chats.values.filter { chatJIDs == nil || chatJIDs!.contains($0.jid) }.map(\.pk)
-        guard !analyzedPKs.isEmpty else { return [] }
+        guard !analyzedPKs.isEmpty else {
+            // Opted into specific chats but none matched a live session — filter/schema drift, not
+            // the ordinary "opted into nothing" (which leaves chatJIDs empty and is silent).
+            if let jids = chatJIDs, !jids.isEmpty, !chats.isEmpty {
+                CrashReporting.captureEvent("whatsapp.no_opted_in_chats", level: .warning,
+                    tags: ["source": "whatsapp"], fingerprint: ["whatsapp", "no_opted_in"])
+            }
+            return []
+        }
 
         let floor = ChatWindowing.lookbackFloor.timeIntervalSinceReferenceDate
         var byChat: [Int64: [ChatMessage]] = [:]
@@ -166,7 +183,7 @@ struct WhatsAppSource: Sendable {
                 text: String((r.text(3) ?? "").prefix(ChatWindowing.maxMessageChars))))
         }
 
-        return byChat.compactMap { (chatPK, msgs) -> Bucket? in
+        let buckets: [Bucket] = byChat.compactMap { (chatPK, msgs) -> Bucket? in
             guard let chat = chats[chatPK] else { return nil }
             let items = ChatWindowing.windows(of: msgs).filter { !$0.isEmpty }.map { win -> (key: ItemKey, item: Candidate) in
                 let cand = Candidate(
@@ -183,6 +200,12 @@ struct WhatsAppSource: Sendable {
             }
             return items.isEmpty ? nil : Bucket(key: "whatsapp:\(chat.jid)", items: items.sorted { $0.key > $1.key })
         }
+
+        // §8/R1: anomaly keys off the full listing count (windows across opted-in chats), sampled
+        // every run — a collapse to zero from a healthy count is the silent-breakage tripwire.
+        SourceHealth.checkListingCollapse(source: "whatsapp", bucketKey: "whatsapp",
+                                          count: buckets.reduce(0) { $0 + $1.items.count })
+        return buckets
     }
 
     // MARK: Sender labels
