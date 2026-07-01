@@ -93,6 +93,7 @@ struct IterativeRun {
     private static let failuresBeforeReload = 3
     private static let maxReloadsWithoutProgress = 4
     private static let extractionTimeoutSeconds: Double = 30   // Arch §H: one file's content extraction can't hang the run
+    private static let sourceTimeCapSeconds: Double = 3600     // §5: a source gets ≤60 min wall-clock, then we move on (progress is per-item atomic, so it just resumes next run)
 
     /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The caller
     /// passes every selected source at once; per-connector load + kind ride along per bucket.
@@ -171,7 +172,13 @@ struct IterativeRun {
             do { buckets = try connector.buckets(since: marks) }
             catch { Log("IterativeRun: buckets() failed for \(connector.kind) — \(error)"); continue }
 
-            for bucket in buckets {
+            // §5: each SOURCE gets a 60-minute wall-clock budget spanning all its buckets. On overrun
+            // we stop THIS source and move to the next — every item's mark commits atomically, so a
+            // cut-off source just resumes next run. `processedThisConnector` feeds the cap event.
+            let connectorDeadline = Date().addingTimeInterval(Self.sourceTimeCapSeconds)
+            var processedThisConnector = 0
+
+            bucketLoop: for bucket in buckets {
                 if Task.isCancelled { break runLoop }
 
                 var state = await store.pointerState(bucket.key)
@@ -223,6 +230,16 @@ struct IterativeRun {
                 var finished = true
                 for w in work {
                     if Task.isCancelled { finished = false; break runLoop }
+                    // §5: source over its 60-min budget → stop this source (all its buckets), next source.
+                    if Date() >= connectorDeadline {
+                        Log("IterativeRun: \(connector.kind) hit the \(Int(Self.sourceTimeCapSeconds))s cap after \(processedThisConnector) items — moving to next source")
+                        CrashReporting.captureEvent("source.hit_time_cap", level: .warning,
+                            tags: ["source": connector.kind.rawValue],
+                            extra: ["processed": String(processedThisConnector),
+                                    "cap_seconds": String(Int(Self.sourceTimeCapSeconds))])
+                        finished = false
+                        break bucketLoop
+                    }
                     if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine() }
 
                     p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
@@ -249,7 +266,7 @@ struct IterativeRun {
                     case .initial:   await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
                     case .auto:      break
                     }
-                    sinceReload += 1; p.done += 1
+                    sinceReload += 1; p.done += 1; processedThisConnector += 1
                     onProgress(p)
                 }
 
