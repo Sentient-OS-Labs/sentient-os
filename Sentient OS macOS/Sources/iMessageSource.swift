@@ -140,6 +140,8 @@ struct iMessageSource: Sendable {
         guard !analyzedROWIDs.isEmpty else { return [] }
 
         var byChat: [Int64: [ChatMessage]] = [:]
+        var tsAttempts = 0   // §7.4: rows whose body lives in attributedBody (text == NULL, blob present)
+        var tsSuccess = 0    //        of those, how many the typedstream heuristic decoded
         try reader.forEachRow("""
             SELECT m.ROWID, m.date, m.is_from_me, m.text, m.attributedBody, m.chat_id, h.id
             FROM (SELECT message.ROWID, date, is_from_me, text, attributedBody, handle_id, cmj.chat_id
@@ -151,7 +153,12 @@ struct iMessageSource: Sendable {
             ORDER BY m.chat_id, m.ROWID
             """) { r in
             guard let chat = chats[r.int(5)] else { return }
-            let body = r.text(3) ?? r.blob(4).flatMap(Self.typedstreamText)
+            var body = r.text(3)
+            if body == nil, let blob = r.blob(4) {
+                tsAttempts += 1
+                body = Self.typedstreamText(blob)
+                if let b = body, !b.trimmingCharacters(in: .whitespaces).isEmpty { tsSuccess += 1 }
+            }
             guard let body, !body.trimmingCharacters(in: .whitespaces).isEmpty else { return }
             let isFromMe = r.int(2) == 1
             let sender: String
@@ -163,7 +170,21 @@ struct iMessageSource: Sendable {
                 isFromMe: isFromMe, text: String(body.prefix(ChatWindowing.maxMessageChars))))
         }
 
-        return byChat.compactMap { (chatROWID, msgs) -> Bucket? in
+        // §7.4: the Apple-typedstream-change tripwire. A healthy decoder is ~99.97% ([MEASURED]);
+        // attachment-only rows push it down but rarely below ~50%, so a collapse under 50% (with a
+        // real sample) means Apple changed the format. Threshold is intentionally below the doc's
+        // 90% to stay quiet on attachment-heavy accounts while still catching the ~0% break.
+        if tsAttempts >= 50 {
+            let pct = tsSuccess * 100 / tsAttempts
+            if pct < 50 {
+                CrashReporting.captureEvent("imessage.decode.degraded", level: .error,
+                    tags: ["source": "imessage"],
+                    extra: ["attempts": String(tsAttempts), "success_pct": String(pct)],
+                    fingerprint: ["imessage", "decode_degraded"])
+            }
+        }
+
+        let buckets: [Bucket] = byChat.compactMap { (chatROWID, msgs) -> Bucket? in
             guard let chat = chats[chatROWID] else { return nil }
             let items = ChatWindowing.windows(of: msgs).filter { !$0.isEmpty }.map { win -> (key: ItemKey, item: Candidate) in
                 let cand = Candidate(
@@ -180,6 +201,10 @@ struct iMessageSource: Sendable {
             }
             return items.isEmpty ? nil : Bucket(key: "imessage:\(chat.guid)", items: items.sorted { $0.key > $1.key })
         }
+
+        SourceHealth.checkListingCollapse(source: "imessage", bucketKey: "imessage",
+                                          count: buckets.reduce(0) { $0 + $1.items.count })
+        return buckets
     }
 
     // MARK: The typedstream heuristic — deliberately NOT a full parser (Arch §4)

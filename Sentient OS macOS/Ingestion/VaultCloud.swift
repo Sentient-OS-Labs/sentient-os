@@ -144,6 +144,7 @@ actor VaultCloud {
         } else {
             invocation = CodexCLI.Invocation(prompt: Self.updatePrompt(skeleton: Self.skeleton(of: vault), notes: notes))
         }
+        invocation.feature = "vault"
         invocation.effort = .high                                     // incremental KB update (gpt-5.5 → high)
         invocation.sandbox = .workspaceWrite                         // edits confined to the vault
         invocation.cwd = vault.path

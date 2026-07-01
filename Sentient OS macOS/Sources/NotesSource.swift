@@ -51,6 +51,10 @@ struct NotesSource: Sendable {
             if let t = r.text(1) { folders[r.int(0)] = t }
         }
 
+        // §7.5: split the two very different drops the old single guard merged — an undownloaded
+        // iCloud note (blob == nil) vs a real decode error (blob present, decodeBody failed) — so an
+        // Apple container change (decode collapse) is distinguishable from "nothing downloaded".
+        var scanned = 0, blobNull = 0, decodeFail = 0
         var out: [Candidate] = []
         try reader.forEachRow("""
             SELECT o.ZIDENTIFIER, o.ZTITLE1,
@@ -60,8 +64,10 @@ struct NotesSource: Sendable {
             WHERE o.ZISPASSWORDPROTECTED IS NOT 1 AND o.ZMARKEDFORDELETION IS NOT 1
             ORDER BY created DESC LIMIT \(Self.maxNotes)
             """) { r in
+            scanned += 1
             guard let id = r.text(0) else { return }
-            guard let blob = r.blob(4), let decoded = Self.decodeBody(blob) else { return }   // fail-closed
+            guard let blob = r.blob(4) else { blobNull += 1; return }                            // undownloaded iCloud note
+            guard let decoded = Self.decodeBody(blob) else { decodeFail += 1; return }           // real decode error
             let body = decoded.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !body.isEmpty else { return }                                                 // attachment-only / blank
 
@@ -81,6 +87,23 @@ struct NotesSource: Sendable {
                     "noteText": String(body.prefix(Self.maxContentChars)),
                 ]))
         }
+
+        // §7.5: among DOWNLOADED notes (blob present), did decode collapse? Healthy is ~100%
+        // ([MEASURED]); a sharp drop means Apple changed the gzip/protobuf container. Undownloaded
+        // notes are excluded from the denominator so an un-synced Mac doesn't false-fire.
+        let attempts = scanned - blobNull
+        if attempts >= 30 {
+            let pct = (attempts - decodeFail) * 100 / attempts
+            if pct < 50 {
+                CrashReporting.captureEvent("notes.decode.degraded", level: .error,
+                    tags: ["source": "notes"],
+                    extra: ["attempts": String(attempts), "success_pct": String(pct),
+                            "undownloaded": String(blobNull)],
+                    fingerprint: ["notes", "decode_degraded"])
+            }
+        }
+
+        SourceHealth.checkListingCollapse(source: "notes", bucketKey: "notes", count: out.count)
         return out   // newest-created first (the SQL ORDER)
     }
 
