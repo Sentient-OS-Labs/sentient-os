@@ -41,7 +41,7 @@ This is NOT "catch every error." It is: **total crash coverage (already live) + 
 - `start(_ role: Role)` — boots Sentry once per process (`app` / `wakeHelper`), sets options inside `SentrySDK.start { options in … }`. DSN is a public-safe constant. Guarded by a `private static var started` bool.
 - `breadcrumb(_ message:)` — called by **every** `Log()` call (`Log.swift`), so the recent log trail rides every event. `guard started else { return }`.
 - `capture(_ error: Error)` — non-fatal error capture. **Called from nowhere in the engine today.**
-- `sendTestEvent()` / `forceCrash()` — DEBUG-only dev buttons (DevToolsView SENTRY pane).
+- *(Removed 2026-07-01: the `sendTestEvent()`/`forceCrash()` DEBUG dev buttons + the `startForDevTest()` bypass — Sentry is Release-only with no debug path; verify from a Release build.)*
 
 The whole diagnostics build is: **wire the failure points into `capture`/a new `captureEvent`, add the accumulator + storage + opt-in + scrubber, and fix the bugs.**
 
@@ -133,7 +133,7 @@ Reads/writes are sync + thread-safe (UserDefaults) so the off-main decoders and 
 
 **DECIDED (2026-07-01): Sentry runs in RELEASE builds only, never DEBUG.** A build-config gate that sits **on top of** the opt-out flag — both must pass for anything to reach Sentry. Our own dev machines run the Debug build day-to-day (Dev Notes §two-builds), and we don't want dev crashes, self-test noise, or half-finished-feature errors polluting the production dashboard (or the release-health / session metrics).
 - **Implementation:** wrap the actual `SentrySDK.start` body in `#if !DEBUG`. In DEBUG, `start()` returns early *without* setting `started = true`, so every downstream call stays a zero-cost no-op via the existing `guard started`. (Today `start()` sets `options.environment = "debug"/"release"` but boots the SDK either way — the change is to not boot at all in DEBUG.)
-- **⚠️ Dev-button interaction:** the DEBUG-only `sendTestEvent()` / `forceCrash()` (SENTRY dev pane) need `started == true`, so a plain `#if !DEBUG` guard would make them dead. Keep them testable by having those two dev entry points call a **`startForDevTest()`** that boots the SDK explicitly (bypassing both the `#if !DEBUG` and the opt-out flag) — so a dev can still verify the Sentry pipeline from a Debug build on demand, but nothing auto-reports in DEBUG. Alternatively drop the dev buttons entirely and verify only from a Release/TestFlight build; confirm which you prefer.
+- **No debug bypass (DECIDED 2026-07-01, verified):** Sentry NEVER initializes in a Debug build — `boot()` is reachable only via `start()` under `#if !DEBUG`. The old `startForDevTest()` escape hatch and the DEBUG-only `sendTestEvent()`/`forceCrash()` dev buttons (DevToolsView SENTRY pane) were **removed**. Verify the pipeline from a **Release build** (the diagnostics self-test proved: a Release build boots Sentry via the real `start(.app)` and events land in the dashboard; a Debug build sends zero).
 - The `environment` tag stays (`"debug"` only ever appears via the explicit dev-test path, `"release"` for real traffic), so the dashboard can still filter.
 
 ### 4.6 The `beforeSend` scrubber (the bouncer — defense in depth)
@@ -505,7 +505,7 @@ Each phase → build → **remind Aditya/Jesai to test it** → they confirm →
 3. **Curated + catch-all vs more-exhaustive throw-site coverage?** (§1) — ✅ **Curated + catch-all.**
 4. **Identity: mirror token (hashed), a separate anonymous install-id, or fully unlinked?** — ✅ **Separate anonymous install-id** (a random UUID, independent of the mirror token; §4.11).
 5. **Where should this doc ultimately live?** — ✅ **Stays in `Documentation/`.** It's the plan; once P0–P3 ship, fold the true per-feature docs alongside `Crash Reporting (Sentry).md` and keep this as the archived design record.
-6. **Which build configs report to Sentry?** — ✅ **Release only, never Debug** (§4.5). Build-config gate on top of the opt-out flag; dev buttons keep an explicit `startForDevTest()` escape hatch. *(Confirm the dev-button choice — keep-with-escape-hatch vs remove entirely.)*
+6. **Which build configs report to Sentry?** — ✅ **Release only, never Debug** (§4.5), with **NO debug bypass** (the `startForDevTest()` hatch + `sendTestEvent()`/`forceCrash()` dev buttons were removed — verified: Release sends, Debug sends zero). Build-config gate sits on top of the opt-out flag.
 
 ---
 

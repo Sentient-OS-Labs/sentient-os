@@ -9,8 +9,8 @@
 //  report arrives carrying the recent log trail that led to it.
 //
 //  Two hard gates decide whether ANYTHING reaches Sentry (Documentation/Source Diagnostics …):
-//   1. RELEASE builds only — `start()` no-ops in DEBUG (dev crashes / self-test noise never ship).
-//      `startForDevTest()` is the one DEBUG escape hatch, for verifying the pipeline by hand.
+//   1. RELEASE builds only — `start()` no-ops in DEBUG. There is NO debug bypass: Sentry never
+//      initializes in a Debug build, so verify the pipeline from a Release build.
 //   2. Opt-OUT switch — `diagnosticsEnabled` (default ON); the single "Share anonymous diagnostics"
 //      toggle in Settings gates ALL reporting, crashes included.
 //  Privacy is upheld by construction, not by the switch: `captureEvent` only ever takes
@@ -18,7 +18,7 @@
 //  backstop. Events carry an anonymous per-install id (a random UUID, never the mirror token).
 //
 //  Key members:
-//   - start(_:) / startForDevTest()   → boot Sentry (gated) / boot for a DEBUG hand-test
+//   - start(_:)                       → boot Sentry (Release-only, opt-out gated)
 //   - captureEvent(_:level:tags:extra:fingerprint:)  → structured, PII-free diagnostics event
 //   - capture(_:) / breadcrumb(_:)    → non-fatal error / the Log() trail
 //   - diagnosticsEnabled              → the opt-out reader (off-main safe)
@@ -81,19 +81,14 @@ enum CrashReporting {
             return
         }
         #if DEBUG
-        Log("CrashReporting: DEBUG build — Sentry disabled (use startForDevTest() to verify the pipeline)")
+        Log("CrashReporting: DEBUG build — Sentry disabled (Release-only; verify from a Release build)")
         #else
         boot(role)
         #endif
     }
 
-    #if DEBUG
-    /// The one DEBUG escape hatch: boot Sentry regardless of the release/opt-out gates so a dev can
-    /// verify the pipeline from a Debug build (the SENTRY dev pane). Never called in normal flow.
-    static func startForDevTest() { boot(.app) }
-    #endif
-
-    /// The actual SDK boot. Bypasses the release/opt-out gates (its callers apply them).
+    /// The actual SDK boot. Reached ONLY via `start()` in a Release build (there is no DEBUG bypass —
+    /// Sentry never initializes in Debug; verify the pipeline from a Release build).
     private static func boot(_ role: Role) {
         guard !started else { return }
         guard !dsn.isEmpty, !dsn.hasPrefix("PASTE_") else {
@@ -244,23 +239,4 @@ enum CrashReporting {
             (re("[A-Za-z0-9_\\-]{24,}"), "<token>"),                          // long tokens / base64 blobs
         ]
     }()
-
-    #if DEBUG
-    /// DEV verification: send a non-fatal test event (lands in the dashboard within seconds).
-    static func sendTestEvent() {
-        startForDevTest()
-        guard started else { Log("CrashReporting.sendTestEvent: Sentry not started (no DSN?)"); return }
-        SentrySDK.capture(message: "Sentry test event from DEV TOOLS")
-        Log("CrashReporting: sent test event")
-    }
-
-    /// DEV verification: hard-crash so the native crash handler fires. The report lands on the NEXT
-    /// launch (that's how crash capture works). Only ever called from the DEBUG dev button.
-    static func forceCrash() {
-        startForDevTest()
-        guard started else { Log("CrashReporting.forceCrash: Sentry not started (no DSN?)"); return }
-        Log("CrashReporting: forcing a test crash now")
-        SentrySDK.crash()
-    }
-    #endif
 }
