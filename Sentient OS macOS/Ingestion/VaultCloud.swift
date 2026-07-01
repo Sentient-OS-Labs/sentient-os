@@ -43,10 +43,34 @@ actor VaultCloud {
 
     static let shared = VaultCloud()
 
-    // In-memory resume handles (an app restart just starts fresh — correct, since the cycle's notes
-    // stay in CycleStore until the proactive button wipes them).
+    // In-memory resume handle for create (an app restart just starts fresh — correct, since the
+    // cycle's notes stay in CycleStore until the proactive button wipes them).
     private var createResume: VaultGenerator.ResumeToken?
+
+    // Update's resume handle is DURABLE (UserDefaults, B1): the update path edits the LIVE vault, so
+    // a crash/quit mid-merge must be resumable across a restart — otherwise a half-merged vault is
+    // silently abandoned. Loaded on init; routed through setMidEdit() so memory + disk never diverge.
     private var updateResumeSessionID: String?
+    private static let midEditKey = "vault.update.midEditSessionID"
+
+    init() {
+        updateResumeSessionID = UserDefaults.standard.string(forKey: Self.midEditKey)
+    }
+
+    /// Set (or clear) the durable mid-edit resume handle, keeping memory and UserDefaults in sync.
+    private func setMidEdit(_ sessionID: String?) {
+        updateResumeSessionID = sessionID
+        if let sessionID { UserDefaults.standard.set(sessionID, forKey: Self.midEditKey) }
+        else { UserDefaults.standard.removeObject(forKey: Self.midEditKey) }
+    }
+
+    /// The vault's same-volume backup sibling (`…/Sentient OS - Knowledge Base.bak`). Same volume →
+    /// FileManager copy/move are reliable (no cross-volume failures). Built explicitly rather than
+    /// via `appendingPathExtension` (which misbehaves on a trailing-slash directory URL).
+    private static func backupURL(for vault: URL) -> URL {
+        vault.deletingLastPathComponent()
+            .appendingPathComponent(vault.lastPathComponent + ".bak", isDirectory: true)
+    }
 
     enum CloudError: LocalizedError {
         case empty
@@ -88,14 +112,25 @@ actor VaultCloud {
         guard !notes.isEmpty else { return 0 }
         let fm = FileManager.default
         let vault = VaultGenerator.vaultRoot
+        let backup = Self.backupURL(for: vault)
+
+        // Crash-restore recovery (B1): if a prior run died between removing the vault and copying
+        // the backup back in, the vault is missing but the durable .bak survives — restore it before
+        // anything else, so a partial restore is never permanent.
+        if !fm.fileExists(atPath: vault.path), fm.fileExists(atPath: backup.path) {
+            Log("VaultCloud.update: vault missing but backup present — restoring from .bak")
+            try? fm.copyItem(at: backup, to: vault)
+        }
         guard fm.fileExists(atPath: vault.path) else { throw CloudError.noVault }
 
-        // Safety net: snapshot the vault (KBs). Restored on a thrown error; NOT on a usage limit
-        // (a resume continues the half-edited state, which is exactly what's on disk).
-        let snapshot = fm.temporaryDirectory.appendingPathComponent("vault-snapshot-\(UUID().uuidString)", isDirectory: true)
-        try? fm.removeItem(at: snapshot)
-        try fm.copyItem(at: vault, to: snapshot)
-        defer { try? fm.removeItem(at: snapshot) }
+        // Safety net (B1): a DURABLE pre-edit backup as a same-volume sibling (.bak). Unlike the old
+        // temp snapshot, it is NEVER auto-deleted (no `defer`) — it must outlive a failed restore so
+        // we can never end up with neither a vault nor a backup. Reuse an existing .bak (left by a
+        // usage-limit pause or a crash) — it already holds the clean pre-edit state; overwriting it
+        // with a half-edited vault would throw the good copy away.
+        if !fm.fileExists(atPath: backup.path) {
+            try fm.copyItem(at: vault, to: backup)
+        }
 
         var invocation: CodexCLI.Invocation
         if let updateResumeSessionID {
@@ -117,17 +152,32 @@ actor VaultCloud {
         Log("VaultCloud.update: merging \(notes.count) notes into the vault…")
         do {
             let envelope = try await CodexCLI.shared.run(invocation)
-            updateResumeSessionID = nil
+            setMidEdit(nil)
+            try? fm.removeItem(at: backup)                           // verified success → drop the backup
             await markDirty()
             Log("VaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1)) — \(envelope.result.prefix(120))")
             return notes.count
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
-            updateResumeSessionID = sessionID                        // resume later; vault left as-is
+            // Resume later; the vault is left half-edited on disk (a resume continues it) and the
+            // .bak is KEPT as the recovery point until the resume commits. The session id is now
+            // durable, so a restart before the resume doesn't silently abandon the merge.
+            setMidEdit(sessionID)
             throw CloudError.usageLimit(message)
         } catch {
-            updateResumeSessionID = nil
-            try? fm.removeItem(at: vault)                            // mid-edit failure → restore
-            try? fm.moveItem(at: snapshot, to: vault)
+            setMidEdit(nil)
+            // Mid-edit failure → restore the pre-edit vault from the durable backup. removeItem then
+            // COPY (never move) and delete .bak ONLY after the copy verifiably succeeds — so a failed
+            // restore always leaves .bak intact and recoverable, never the B1 total loss.
+            do {
+                try fm.removeItem(at: vault)
+                try fm.copyItem(at: backup, to: vault)
+                try? fm.removeItem(at: backup)
+                Log("VaultCloud.update: restored vault from backup after error")
+            } catch let restoreError {
+                // .bak is still on disk; the top-of-method recovery will restore it next run.
+                Log("VaultCloud.update: ⚠️ restore FAILED — backup preserved (.bak), recoverable next run: \(restoreError)")
+                CrashReporting.capture(restoreError)                 // TODO(P2): structured `vault_restore_failed`
+            }
             throw CloudError.failed("\(error)")
         }
     }

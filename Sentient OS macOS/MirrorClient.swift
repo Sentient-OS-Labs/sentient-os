@@ -62,16 +62,21 @@ actor MirrorClient {
 
     enum MirrorError: LocalizedError {
         case notEnabled
-        case http(Int, String)
+        case http(Int, String)          // status 0 = no HTTP response at all (proxy / captive portal)
         case zipFailed(String)
         case noVault
+        case tokenGenerationFailed      // SecRandomCopyBytes failed — never mint a weak/zero token (B3)
+        case keychainWriteFailed        // SecItemAdd failed — don't hand out a URL for an unstored token (B3)
 
         var errorDescription: String? {
             switch self {
-            case .notEnabled:          return "The cloud mirror isn't turned on."
-            case .http(let c, let b):  return "Mirror server returned HTTP \(c). \(b.prefix(200))"
-            case .zipFailed(let m):    return "Couldn't package the vault: \(m)"
-            case .noVault:             return "There's no vault on disk to mirror yet."
+            case .notEnabled:            return "The cloud mirror isn't turned on."
+            case .http(0, _):            return "Couldn't reach the mirror server (no HTTP response — proxy or captive portal?)."
+            case .http(let c, let b):    return "Mirror server returned HTTP \(c). \(b.prefix(200))"
+            case .zipFailed(let m):      return "Couldn't package the vault: \(m)"
+            case .noVault:               return "There's no vault on disk to mirror yet."
+            case .tokenGenerationFailed: return "Couldn't generate a secure mirror key. Please try again."
+            case .keychainWriteFailed:   return "Couldn't save the mirror key to the Keychain. Please try again."
             }
         }
     }
@@ -92,10 +97,14 @@ actor MirrorClient {
     /// Opt in: mint the token if absent (idempotent — an existing token is kept, so the share URL
     /// is stable) and flip mirroring ON. Returns the share URL.
     @discardableResult
-    func enable() -> String {
-        if Keychain.read(Self.tokenKey) == nil { Keychain.set(Self.tokenKey, Self.mintToken()) }
+    func enable() throws -> String {
+        if Keychain.read(Self.tokenKey) == nil {
+            let token = try Self.mintToken()                         // throws rather than mint a weak token (B3)
+            guard Keychain.set(Self.tokenKey, token) else { throw MirrorError.keychainWriteFailed }
+        }
         UserDefaults.standard.set(true, forKey: Self.enabledKey)
-        return shareURL!
+        guard let url = shareURL else { throw MirrorError.keychainWriteFailed }   // token didn't read back
+        return url
     }
 
     /// The user-facing MCP connector URL, or nil if not enabled. This is what "Copy MCP Link"
@@ -163,9 +172,13 @@ actor MirrorClient {
 
     /// 32 random bytes → base64url (43 chars, no padding) — inside the server's [32,64] window
     /// and URL-safe, so it drops straight into the path.
-    private static func mintToken() -> String {
+    private static func mintToken() throws -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        // B3: on failure SecRandomCopyBytes leaves `bytes` all-zero → a predictable identity. Fail
+        // loudly instead of ever minting a weak token.
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
+            throw MirrorError.tokenGenerationFailed
+        }
         return Data(bytes).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
@@ -173,7 +186,9 @@ actor MirrorClient {
     }
 
     private static func check(_ resp: URLResponse, _ data: Data) throws {
-        guard let http = resp as? HTTPURLResponse else { return }
+        // B4: a non-HTTP response (captive portal / transparent proxy returning something odd) must
+        // NOT count as success — that would mark a never-synced vault as synced and clear vaultDirty.
+        guard let http = resp as? HTTPURLResponse else { throw MirrorError.http(0, "non-HTTP response") }
         guard (200..<300).contains(http.statusCode) else {
             throw MirrorError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
         }
@@ -215,7 +230,8 @@ actor MirrorClient {
 enum Keychain {
     private static let service = "ai.sentient-os.app"
 
-    static func set(_ key: String, _ value: String) {
+    @discardableResult
+    static func set(_ key: String, _ value: String) -> Bool {
         delete(key)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -224,7 +240,7 @@ enum Keychain {
             kSecValueData as String: Data(value.utf8),
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess   // B3: surface a failed persist
     }
 
     static func read(_ key: String) -> String? {

@@ -22,7 +22,7 @@
 //  Skipping & caps (see Documentation/Files Source (Skipping & Caps).md): three free layers, no
 //  inference — subtree pruning (`pruneReason`: code repos, datasets, data/markup dumps), per-file
 //  rejects (`fileRejectReason`: camera roll, lock/temp, boilerplate, empty, oversize), and caps
-//  (newest 1,000/root · 100/dir · Downloads 1-year). The walk is bounded too — max depth 3, symlinks
+//  (newest 1,000/root · 300/dir · Downloads 1-year). The walk is bounded too — max depth 3, symlinks
 //  skipped — and content extraction is timeout-guarded in IterativeRun.
 //
 
@@ -41,7 +41,7 @@ struct FilesSource: Sendable {
     let maxAge: TimeInterval?    // drop files older than this (nil = no age cutoff)
 
     init(root: URL, label: String, cursorKey: String? = nil,
-         perDirectoryCap: Int = 100, maxAge: TimeInterval? = nil) {
+         perDirectoryCap: Int = 300, maxAge: TimeInterval? = nil) {
         self.root = root
         self.label = label
         self.cursorKey = cursorKey ?? "file:custom:" + root.path
@@ -214,7 +214,7 @@ struct FilesSource: Sendable {
 
     /// The current eligible set for this root, for the iterative system (IterativeRun via
     /// FilesConnector). Same
-    /// skip rules (`pruneReason`) and caps (`cappedNewestFirst`: 1,000/root · 100/dir · Downloads
+    /// skip rules (`pruneReason`) and caps (`cappedNewestFirst`: 1,000/root · 300/dir · Downloads
     /// 1-yr) as `scan`, but deliberately DIFFERENT in two ways:
     ///   • keyed on PURE `addedToDirectoryDate` (a file's "date added" — what Finder shows), NOT
     ///     scan's max(dateAdded, mtime, ancestor). The interval pointer reprocesses nothing on
@@ -276,7 +276,7 @@ struct FilesSource: Sendable {
 
     /// Newest-first selection under the connector caps (June 10–11 decisions):
     ///  • optional age cutoff (Downloads: 1 year — downloads age into junk; keepers elsewhere don't)
-    ///  • per-directory cap (100, every root) — the bulk-dump backstop
+    ///  • per-directory cap (300, every root) — the bulk-dump backstop
     ///  • `budget` — the per-root cap, or what's left of a backfill's descent budget
     private func cappedNewestFirst(_ rows: [(candidate: Candidate, sortKey: Double)],
                                    budget: Int, now: Date) -> [Candidate] {

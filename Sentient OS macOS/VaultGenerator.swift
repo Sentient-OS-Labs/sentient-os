@@ -152,10 +152,25 @@ actor VaultGenerator {
         }
 
         // Success → swap the staging dir into place (the only moment the old vault is touched).
+        // B2: rename the old vault aside to a same-volume .bak FIRST, move staging in, then delete
+        // .bak only on success — restoring it if the move throws (disk full / permissions), so the
+        // swap can never leave zero vaults on disk.
         onProgress(.materializing(notes: notes))
         let root = Self.vaultRoot
-        try? fm.removeItem(at: root)
-        try fm.moveItem(at: staging, to: root)
+        let backup = root.deletingLastPathComponent()
+            .appendingPathComponent(root.lastPathComponent + ".bak", isDirectory: true)
+        try? fm.removeItem(at: backup)
+        let hadVault = fm.fileExists(atPath: root.path)
+        if hadVault { try fm.moveItem(at: root, to: backup) }
+        do {
+            try fm.moveItem(at: staging, to: root)
+        } catch {
+            if hadVault { try? fm.moveItem(at: backup, to: root) }   // restore the previous vault
+            Log("VaultGenerator: ❌ swap failed, restored previous vault — \(error)")
+            CrashReporting.capture(error)                            // TODO(P2): structured `vault_swap_failed`
+            throw error
+        }
+        try? fm.removeItem(at: backup)                               // verified success → drop the backup
         Log("VaultGenerator: ✅ vault swapped into place — \(notes) notes at \(root.path)")
 
         return Result(notes: notes, folders: folders,
