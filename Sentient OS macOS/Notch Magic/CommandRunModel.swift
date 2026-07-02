@@ -50,20 +50,27 @@ final class CommandRunModel {
         let prompt = Self.commandPrompt(task: task0, mode: mode)
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
         Log("CMD: launching codex exec (gpt-5.5 · \(mode.promptPhrase) · bypass sandbox)…")
+        #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
+                    // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
         Log("CMD: prompt ↓\n\(prompt)")
+        #endif
         Log("──────────────── live codex output ↓ ────────────────")
         let started = Date()
         task = Task { [weak self] in
             do {
                 let out = try await CodexCLI.shared.runAgentCommand(prompt) { line in
                     Task { @MainActor in
+                        #if DEBUG
                         Log("CMD │ \(line)")
+                        #endif
                         self?.push(line)
                     }
                 }
                 let secs = Int(Date().timeIntervalSince(started))
                 Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
+                #if DEBUG
                 Log("CMD: final → \(out.suffix(1200))")
+                #endif
                 self?.complete(.success, line: "✓ done")
             } catch {
                 let secs = Int(Date().timeIntervalSince(started))
