@@ -45,7 +45,10 @@ nonisolated enum SQLiteDB {
         let dst = dir.appendingPathComponent(name)
         try fm.copyItem(atPath: dbPath, toPath: dst.path)
         for sib in ["-wal", "-shm"] where fm.fileExists(atPath: dbPath + sib) {
-            try? fm.copyItem(atPath: dbPath + sib, toPath: dst.path + sib)
+            // §7.7: a swallowed `-wal` copy → SQLite can't replay the latest rows → looks like "no new
+            // data" (silent stale reads). Surface it (breadcrumb via Log) instead of `try?`-hiding it.
+            do { try fm.copyItem(atPath: dbPath + sib, toPath: dst.path + sib) }
+            catch { Log("SQLiteDB: \(name)\(sib) copy failed (may read stale) — \(error)") }
         }
         return (dst, dir)
     }
@@ -56,8 +59,10 @@ nonisolated enum SQLiteDB {
 /// copied `-wal` — the most reliable way to see the very latest rows.
 nonisolated final class SQLiteReader {
     private var db: OpaquePointer?
+    private let dbName: String   // the DB basename (chat.db / ChatStorage.sqlite / …) — a diagnostics tag
 
     init(path: String) throws {
+        dbName = URL(fileURLWithPath: path).lastPathComponent
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
             let msg = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
             sqlite3_close(db); db = nil
@@ -71,7 +76,15 @@ nonisolated final class SQLiteReader {
     func forEachRow(_ sql: String, _ row: (Row) throws -> Void) throws {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw SQLiteDB.DBError.prepare(String(cString: sqlite3_errmsg(db)))
+            // §7.7: our SQL is static (no user input), so a prepare failure = a SCHEMA change — the
+            // "Apple/Meta renamed a column" tripwire, uniform across all 4 DB sources. The errmsg is a
+            // schema string ("no such column: ZFOO"), never row content (allowlisted, §10).
+            let errmsg = String(cString: sqlite3_errmsg(db))
+            CrashReporting.captureEvent("db.schema_error", level: .error,
+                tags: ["db": dbName],
+                extra: ["msg": String(errmsg.prefix(200))],
+                fingerprint: ["db", "schema_error", dbName])
+            throw SQLiteDB.DBError.prepare(errmsg)
         }
         defer { sqlite3_finalize(stmt) }
         while sqlite3_step(stmt) == SQLITE_ROW { try row(Row(stmt!)) }
