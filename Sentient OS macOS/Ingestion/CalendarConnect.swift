@@ -219,16 +219,32 @@ enum CalendarConnect {
     }
 
     /// Tolerant parse of the structured read reply (output-schema makes `result` the JSON; fence-safe).
+    /// §7.11: SHAPE MISMATCH (no JSON, or the required `notable` key absent — despite the output-schema)
+    /// is a codex/schema regression → event; a QUIET window (`notable:false` / empty summary) is normal
+    /// → silent. Distinguishes a broken Calendar leg from an empty calendar.
     private static func parse(_ result: String) -> ReadResult? {
         guard let span = jsonSpan(result),
               let data = span.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let notable = obj["notable"] as? Bool else { return nil }
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            shapeMismatch(missing: "json", len: result.count)
+            return nil
+        }
+        guard let notable = obj["notable"] as? Bool else {
+            shapeMismatch(missing: "notable", len: result.count)    // key names only — never values
+            return nil
+        }
+        // From here a nil return is a QUIET window — NOT an anomaly, so no event.
         guard notable, let summary = obj["summary"] as? String,
               !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return ReadResult(summary: summary,
                           hasActionItems: obj["has_action_items"] as? Bool ?? false,
                           eventCount: obj["event_count"] as? Int ?? 0)
+    }
+
+    private static func shapeMismatch(missing: String, len: Int) {
+        CrashReporting.captureEvent("calendar.parse.shape_mismatch", level: .warning,
+            tags: ["source": "calendar"], extra: ["missing": missing, "result_len": String(len)],
+            fingerprint: ["calendar", "parse", "shape_mismatch"])
     }
 
     /// Widest `{ … }` span in a possibly-fenced reply.
