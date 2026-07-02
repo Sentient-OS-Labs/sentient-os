@@ -26,6 +26,13 @@ enum AddressBookNames {
             .appendingPathComponent("Library/Application Support/AddressBook")
 
         var stores = [abRoot.appendingPathComponent("AddressBook-v22.abcddb").path]
+        // §7.6: the ROOT store being absent is the classic `v22 → v23` file-rename tripwire — contact
+        // resolution then silently returns nothing (everyone shows as a raw phone/email). (A column
+        // rename is caught separately by SQLiteDB's `db.schema_error`, §7.7.)
+        if !fm.fileExists(atPath: stores[0]) {
+            CrashReporting.captureEvent("addressbook.no_store", level: .warning,
+                tags: ["path_version": "v22"], fingerprint: ["addressbook", "no_store"])
+        }
         let sourcesDir = abRoot.appendingPathComponent("Sources")
         if let accounts = try? fm.contentsOfDirectory(at: sourcesDir, includingPropertiesForKeys: nil) {
             stores += accounts.map { $0.appendingPathComponent("AddressBook-v22.abcddb").path }

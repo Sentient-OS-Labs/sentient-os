@@ -68,6 +68,7 @@ final class CodexSetup {
         } catch {
             installed = CodexCLI.locateBinary() != nil
             installStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+            stepFailed(.install, error, binaryFound: installed)   // "installer ran, binary missing" if false
         }
         installing = false
     }
@@ -106,6 +107,7 @@ final class CodexSetup {
         } catch {
             loggingIn = false
             loginStatusLine = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+            stepFailed(.login, error)
         }
     }
 
@@ -161,6 +163,7 @@ final class CodexSetup {
         } catch {
             computerUseReady = ComputerUseSetup.isInstalled
             computerUseStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+            stepFailed(.computerUse, error)
         }
         settingUpComputerUse = false
     }
@@ -169,6 +172,17 @@ final class CodexSetup {
 
     /// The three setup steps, in order.
     enum Step: String, Sendable { case install, login, computerUse }
+
+    /// §7.24: a setup step failed — error TYPE only (never the streamed installer/login lines, which
+    /// embed paths/account hints). `binary_found` on install is the specific "installer ran, binary
+    /// missing" signal. Called from each step's catch.
+    private func stepFailed(_ step: Step, _ error: Error, binaryFound: Bool? = nil) {
+        var extra: [String: String] = [:]
+        if let binaryFound { extra["binary_found"] = String(binaryFound) }
+        CrashReporting.captureEvent("codex_setup.step_failed", level: .warning,
+            tags: ["step": step.rawValue, "error": String(describing: type(of: error))],
+            extra: extra, fingerprint: ["codex_setup", "step_failed", step.rawValue])
+    }
 
     /// Authoritative, FRESH check of all three steps: re-detects the binary on disk, runs
     /// `codex login status`, and re-checks the computer-use bootstrap — then returns the steps
