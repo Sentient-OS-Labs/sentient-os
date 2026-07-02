@@ -175,7 +175,7 @@ struct Briefing: Identifiable {
 
         Sentient, with its continuous free on-device compute, understands your entire life and then *acts* on it for you (backed by that rich knowledge base!). It does this through computer use.
 
-        I'd love to show you live any time you're free. Would tomorrow (Friday) work? If not, happy to chat early next week.
+        I'd love to show you live any time you're free. Would Friday work? If not, happy to chat early next week.
 
         Best,
         Jesai
@@ -235,26 +235,36 @@ struct Briefing: Identifiable {
             """),
 
         Briefing(
-            id: "fareed", kind: .meeting,
-            kicker: "Prep · 4:30 PM tomorrow · Researched",
-            title: "Prepare for your call with Fareed from Speedrun.",
-            body: "Remember: Josh Lu wanted Fareed to be your a16z Speedrun partner. I've researched and found that GTM strategy matters a lot to him. Here's a doc that'll help you prepare for your call.",
+            id: "anthos", kind: .overdue,
+            kicker: "Overdue · 2 days · Gmail",
+            title: "You need to reply to Anthos Capital.",
+            body: "Serena emailed two days ago — $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
             letter: """
-            Your call with Fareed is tomorrow at 4:30 PM. Josh Lu wanted him as your a16z Speedrun partner — and once I read Fareed's background, it's obvious why. I pulled the highlights that'll get you ready.
+            Serena Saxena from Anthos Capital emailed two days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
 
-            ✦ **Why Josh connected you: he OWNED GTM at Slack.** Fareed was Director of Product for Lifecycle and the revenue owner for Slack's self-serve business — acquisition, activation, retention, monetization: the whole PLG engine at the company that *defined* bottoms-up growth. Sentient's free-forever consumer wedge is exactly his world. Speak his language — growth loops, activation, the path from a loved free product to revenue.
-
-            ✦ **He literally wrote about a thesis behind your product.** His recent post — *"Agent-native products are coming"*: *"Every product on the internet was built for a human with eyes, a cursor, and a credit card. Agents have none of those. The real opportunity is products designed for agents from scratch."* That is core to Sentient — an agent-native knowledge base your whole life feeds, offered to your AIs for Proactive Intelligence. Open here; he'll feel seen, and you'll prove you did the work.
-
-            ✦ **He thinks in product strategy — so be crisp.** At Reforge he built, with Casey Winters, the Product Strategy program that's now their **#1**. Expect him to probe your strategic spine: consumer free-forever as the loved wedge, the enterprise per-employee intelligence layer as the business, the on-device moat that makes both possible. Have the one-becomes-the-other story tight.
-
-            ✦ **Lead with distribution proof.** He loves network effects and growth loops, so the Reddit moment lands hard: **2,500+ waitlist signups in 24 hours, $0 spent.** That's the organic growth-loop evidence he's wired to respond to.
-
-            Walk in as the agent-native, PLG-native founder he's been writing about. — your Sentient
+            She's in LA and asked for time early this week. You went quiet. Let's fix that — the draft's below, warm and ready.
             """,
-            detailLabel: "read the prep doc",
-            offer: nil,
-            doneTitle: "", doneBody: ""),
+            draft: Briefing.anthosReply,
+            draftLabel: "Draft · Gmail",
+            detailLabel: "read the draft",
+            offer: "Should I send it for you?",
+            workLog: ["→ reading Serena's note",
+                      "→ opening Gmail",
+                      "→ composing your reply…",
+                      "✓ sent"],
+            doneTitle: "Sent to Anthos.",
+            doneBody: "Serena has your reply — Friday, or early next week.",
+            codexPrompt: """
+            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
+
+            Use the Gmail MCP to reply to the email from jesaitarun@gmail.com with the subject "Sentient OS test". Reply in that thread and send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
+
+            \(Briefing.anthosReply)
+
+            Send this reply now via the Gmail MCP — the user has already approved this send. Do not ask, do not draft-and-wait; complete the send and confirm it went out.
+
+            IMPORTANT — formatting: send it as an HTML email. Set the send tool's content_type to "text/html" and format the body as clean HTML so it reflows naturally in the reader's inbox: put EACH paragraph above inside its own <p>…</p> tag, and write the sign-off as "Best,<br>Jesai". Keep every word — including ":)", the "—" em-dash, "*acts*", and "Friday" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph; plain text gets hard-wrapped mid-sentence, which is the ugly formatting we're fixing.
+            """),
 
         Briefing(
             id: "aim", kind: .promise,
@@ -304,27 +314,28 @@ struct Briefing: Identifiable {
             doneTitle: "", doneBody: ""),
 
         Briefing(
-            id: "luis", kind: .meeting,
-            kicker: "Meeting · iMessage + Calendar",
-            title: "Luis invited you to lunch at Headline.",
-            body: "He proposed next Wednesday at 1 PM. I checked your calendar — you're free. Should I reply and add it to your cal?",
+            id: "supabase", kind: .deadline,
+            kicker: "Renew · Friday · Computer use",
+            title: "Your Supabase project expires Friday.",
+            body: "The free-tier database behind Sentient pauses this Friday after a week idle — and it's the one holding your 2,500+ waitlist signups. I can renew it in your dashboard. Want me to?",
             letter: """
-            Luis Schmitz invited you to lunch at Headline next Wednesday at 1 PM, at their Presidio office. I checked your calendar: you're free, with nothing for two hours on either side.
+            Supabase flagged your **sentient-os** project: it's set to pause this **Friday**. Free-tier projects pause after 7 days of inactivity, and once paused the database goes offline until you restore it — and this is the one holding your **2,500+ waitlist signups**, so I'd rather not let it lapse.
 
-            Worth remembering: their HQ is 101 Montgomery Street in the Presidio — NOT the Montgomery in Downtown. I'll remind you that morning.
+            I'll handle it the way you would: open your Supabase dashboard in your own logged-in browser, go to **sentient-os**, and restore it — nothing touched but the renew button, and nothing leaves this Mac. One tap and you're back online.
             """,
-            draft: "Hi Luis! Wednesday at 1 PM works perfectly — see you at the Presidio. Looking forward to it!",
-            draftLabel: "Draft reply · iMessage",
-            detailLabel: "read the draft",
-            offer: "Reply & add it to your calendar?",
-            workLog: ["→ opening Messages",
-                      "→ replying to Luis…",
-                      "→ adding Wednesday 1:00 PM to Calendar",
-                      "→ location: the Presidio (101 Montgomery St)",
-                      "✓ replied & scheduled"],
-            doneTitle: "Wednesday's locked in.",
-            doneBody: "Replied to Luis · lunch on your calendar — the Presidio one.",
-            codexPrompt: "Reply to Luis Schmitz on iMessage with the approved draft, then create the calendar event 'Lunch @ Presidio — Jesai x Luis' for next Wednesday 1 PM at 101 Montgomery St (Presidio)."),
+            draft: "Open your Supabase dashboard → project 'sentient-os' → restore project → confirm it's back on the free tier.",
+            draftLabel: "What I'll do · Computer use",
+            detailLabel: "read the plan",
+            offer: "Renew it for you?",
+            workLog: ["→ opening your Supabase dashboard",
+                      "→ finding project 'sentient-os'",
+                      "→ restoring the paused project…",
+                      "→ confirming it's back on the free tier",
+                      "✓ renewed — back online"],
+            doneTitle: "Supabase renewed.",
+            doneBody: "Your database is back online — waitlist safe, still free tier.",
+            codexPrompt: "Use computer use to open the user's Supabase dashboard in their own logged-in browser, open the 'sentient-os' project, and restore/renew it so it doesn't pause. Confirm it's back online, then report what you did.",
+            accent: Color(red: 0.36, green: 0.55, blue: 1.00)),   // cobalt (Luis's old blue)
 
         Briefing(
             id: "welcome", kind: .welcome,
@@ -355,39 +366,29 @@ struct Briefing: Identifiable {
     // `slots(count:)` only define up to 6). Each is self-contained (no shared-constant refs).
     // Parked = NOT compiled, so these can quietly go stale — re-read before relying on one.
 
-    /* ── Anthos · "You need to reply to Anthos Capital." — LIVE Gmail send. Uses the `anthosReply`
-       constant above; the `anthos` id is still armed in HomeView's run() seam, so it works on swap-in. ──
+    /* ── Fareed (RICH-letter variant) · "Prepare for your call with Fareed from Speedrun." — the
+       researched prep card (cobalt) that lived in the demo deck before Anthos took its slot. ──
         Briefing(
-            id: "anthos", kind: .overdue,
-            kicker: "Overdue · 2 days · Gmail",
-            title: "You need to reply to Anthos Capital.",
-            body: "Serena emailed two days ago — $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
+            id: "fareed", kind: .meeting,
+            kicker: "Prep · 4:30 PM tomorrow · Researched",
+            title: "Prepare for your call with Fareed from Speedrun.",
+            body: "Remember: Josh Lu wanted Fareed to be your a16z Speedrun partner. I've researched and found that GTM strategy matters a lot to him. Here's a doc that'll help you prepare for your call.",
             letter: """
-            Serena Saxena from Anthos Capital emailed two days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
+            Your call with Fareed is tomorrow at 4:30 PM. Josh Lu wanted him as your a16z Speedrun partner — and once I read Fareed's background, it's obvious why. I pulled the highlights that'll get you ready.
 
-            She's in LA and asked for time early this week. You went quiet. Let's fix that — the draft's below, warm and ready.
+            ✦ **Why Josh connected you: he OWNED GTM at Slack.** Fareed was Director of Product for Lifecycle and the revenue owner for Slack's self-serve business — acquisition, activation, retention, monetization: the whole PLG engine at the company that *defined* bottoms-up growth. Sentient's free-forever consumer wedge is exactly his world. Speak his language — growth loops, activation, the path from a loved free product to revenue.
+
+            ✦ **He literally wrote about a thesis behind your product.** His recent post — *"Agent-native products are coming"*: *"Every product on the internet was built for a human with eyes, a cursor, and a credit card. Agents have none of those. The real opportunity is products designed for agents from scratch."* That is core to Sentient — an agent-native knowledge base your whole life feeds, offered to your AIs for Proactive Intelligence. Open here; he'll feel seen, and you'll prove you did the work.
+
+            ✦ **He thinks in product strategy — so be crisp.** At Reforge he built, with Casey Winters, the Product Strategy program that's now their **#1**. Expect him to probe your strategic spine: consumer free-forever as the loved wedge, the enterprise per-employee intelligence layer as the business, the on-device moat that makes both possible. Have the one-becomes-the-other story tight.
+
+            ✦ **Lead with distribution proof.** He loves network effects and growth loops, so the Reddit moment lands hard: **2,500+ waitlist signups in 24 hours, $0 spent.** That's the organic growth-loop evidence he's wired to respond to.
+
+            Walk in as the agent-native, PLG-native founder he's been writing about. — your Sentient
             """,
-            draft: Briefing.anthosReply,
-            draftLabel: "Draft · Gmail",
-            detailLabel: "read the draft",
-            offer: "Should I send it for you?",
-            workLog: ["→ reading Serena's note",
-                      "→ opening Gmail",
-                      "→ composing your reply…",
-                      "✓ sent"],
-            doneTitle: "Sent to Anthos.",
-            doneBody: "Serena has your reply — Friday, or early next week.",
-            codexPrompt: """
-            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
-
-            Use the Gmail MCP to reply to the email from jesaitarun@gmail.com with the subject "Sentient OS test". Reply in that thread and send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
-
-            \(Briefing.anthosReply)
-
-            Send this reply now via the Gmail MCP — the user has already approved this send. Do not ask, do not draft-and-wait; complete the send and confirm it went out.
-
-            IMPORTANT — formatting: send it as an HTML email. Set the send tool's content_type to "text/html" and format the body as clean HTML so it reflows naturally in the reader's inbox: put EACH paragraph above inside its own <p>…</p> tag, and write the sign-off as "Best,<br>Jesai". Keep every word — including ":)", the "—" em-dash, "*acts*", and "(Friday)" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph; plain text gets hard-wrapped mid-sentence, which is the ugly formatting we're fixing.
-            """),
+            detailLabel: "read the prep doc",
+            offer: nil,
+            doneTitle: "", doneBody: ""),
     */
 
     /* ── EWOR · "Prepare for your call with Daniel, CEO of EWOR." (researched prep card, orchid) ──
@@ -432,5 +433,31 @@ struct Briefing: Identifiable {
             detailLabel: "read the prep doc",
             offer: nil,
             doneTitle: "", doneBody: ""),
+    */
+
+    /* ── Luis · "Luis invited you to lunch at Headline." (meeting card, cobalt · iMessage + Calendar)
+       — lived in the demo deck before the Supabase computer-use card took its slot. ──
+        Briefing(
+            id: "luis", kind: .meeting,
+            kicker: "Meeting · iMessage + Calendar",
+            title: "Luis invited you to lunch at Headline.",
+            body: "He proposed next Wednesday at 1 PM. I checked your calendar — you're free. Should I reply and add it to your cal?",
+            letter: """
+            Luis Schmitz invited you to lunch at Headline next Wednesday at 1 PM, at their Presidio office. I checked your calendar: you're free, with nothing for two hours on either side.
+
+            Worth remembering: their HQ is 101 Montgomery Street in the Presidio — NOT the Montgomery in Downtown. I'll remind you that morning.
+            """,
+            draft: "Hi Luis! Wednesday at 1 PM works perfectly — see you at the Presidio. Looking forward to it!",
+            draftLabel: "Draft reply · iMessage",
+            detailLabel: "read the draft",
+            offer: "Reply & add it to your calendar?",
+            workLog: ["→ opening Messages",
+                      "→ replying to Luis…",
+                      "→ adding Wednesday 1:00 PM to Calendar",
+                      "→ location: the Presidio (101 Montgomery St)",
+                      "✓ replied & scheduled"],
+            doneTitle: "Wednesday's locked in.",
+            doneBody: "Replied to Luis · lunch on your calendar — the Presidio one.",
+            codexPrompt: "Reply to Luis Schmitz on iMessage with the approved draft, then create the calendar event 'Lunch @ Presidio — Jesai x Luis' for next Wednesday 1 PM at 101 Montgomery St (Presidio)."),
     */
 }

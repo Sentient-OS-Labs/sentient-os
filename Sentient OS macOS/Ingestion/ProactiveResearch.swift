@@ -180,6 +180,9 @@ actor ProactiveResearch {
         return result
     }
 
+    /// Forget the last prepared deck (the dev "Reset everything" path) — the home's "For You" empties.
+    static func clear() { UserDefaults.standard.removeObject(forKey: latestKey) }
+
     // MARK: Output schema (the `--output-schema` contract)
 
     private static let schema = """

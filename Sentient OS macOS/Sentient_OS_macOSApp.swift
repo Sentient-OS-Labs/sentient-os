@@ -39,12 +39,12 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 760, height: 820)
 
-        // The knowledge inspector is its OWN resizable window (native traffic-light controls,
-        // closed with the red button) — not a sheet. Single-instance; `openWindow` brings it up.
-        // Title is intentionally blank: the in-app serif "Knowledge" header is the title, so we
-        // don't want the native titlebar repeating it.
-        Window("", id: DatabaseView.windowID) {
-            DatabaseView()
+        // The Knowledge reader is its OWN resizable window (native traffic-light controls, closed
+        // with the red button) — an Obsidian-style browser over the on-disk markdown vault.
+        // Single-instance; `openWindow` brings it up. Title is intentionally blank: the in-app
+        // serif "Knowledge" header is the title, so we don't want the native titlebar repeating it.
+        Window("", id: KnowledgeView.windowID) {
+            KnowledgeView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
         }

@@ -97,6 +97,9 @@ actor GiftLetter {
         return (s?.isEmpty == false) ? s : nil
     }
 
+    /// Forget the welcome letter (the dev "Reset everything" path) — so it's rewritten next cycle.
+    static func clear() { UserDefaults.standard.removeObject(forKey: latestKey) }
+
     // MARK: Output cleanup
 
     /// Strip a wrapping ```/```markdown fence if the model added one around the whole letter.

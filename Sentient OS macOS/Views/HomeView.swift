@@ -122,7 +122,7 @@ struct HomeView: View {
                 .popover(isPresented: $showAnalysis) { analysisPopover }
             NavItem(title: "Your AIs") { showYourAIs = true }
                 .popover(isPresented: $showYourAIs) { yourAIsPopover }
-            NavItem(title: "Knowledge") { openWindow(id: DatabaseView.windowID) }
+            NavItem(title: "Knowledge") { openWindow(id: KnowledgeView.windowID) }
             NavItem(icon: "gearshape") { openWindow(id: SettingsView.windowID) }
         }
         .padding(.horizontal, 30).padding(.top, 18)

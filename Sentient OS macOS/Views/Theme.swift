@@ -11,11 +11,19 @@ import SwiftUI
 
 enum Theme {
     static let bg = Color.black
+    /// The Knowledge sidebar surface — a subtle WARM (orange-tinted) lift off the OLED-black reading
+    /// pane, so the folder panel reads as its own warm chrome. Same brightness as a neutral panel
+    /// would be, just warm (r > g > b).
+    static let panel = Color(red: 0.102, green: 0.074, blue: 0.052)
     static let elevated = Color.white.opacity(0.05)
     static let stroke = Color.white.opacity(0.09)
     static let secondary = Color.white.opacity(0.55)
     static let faint = Color.white.opacity(0.32)
     static let accent = Color(red: 0.62, green: 0.55, blue: 1.0)   // soft violet glow
+    /// The Knowledge viewer's warm accent — a soft amber-orange (#ffae6b), leaning gold not red, for
+    /// wikilinks, bullets, and the selected-note glow. Gives the reading surface its own calm
+    /// identity instead of the app's violet.
+    static let knowledgeAccent = Color(red: 1.0, green: 0.682, blue: 0.42)
 
     /// "Magic" cool palette for the Stage-2 vault CTA glow — teal · cyan · blue · indigo · purple.
     static let magicGlow: [Color] = [

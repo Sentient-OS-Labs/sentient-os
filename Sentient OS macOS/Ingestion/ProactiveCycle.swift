@@ -37,6 +37,16 @@ actor ProactiveCycle {
     /// When the last full cycle finished (UserDefaults) — drives the home's real "Synced · …" stamp.
     static let lastCycleKey = "proactive.lastCycleAt"
 
+    /// Wipe every persisted trace of the proactive layer — the decide-stage decisions, the prepared
+    /// cards, the welcome "gift", and the "Synced · …" stamp — so the home's "For You" deck comes back
+    /// empty. Used by the dev "Reset everything", alongside the cycle-store + knowledge-base wipe.
+    static func resetAll() {
+        Proactive.clear()
+        ProactiveResearch.clear()
+        GiftLetter.clear()
+        UserDefaults.standard.removeObject(forKey: lastCycleKey)
+    }
+
     /// Run the post-read tail (knowledge base → mirror → proactive → wipe). Returns nil on a fully
     /// successful cycle (summaries wiped), or the failure message if a step errored (summaries kept).
     /// Never throws — every failure is ALSO reported through `progress(.failed(…))` for the live UI.
