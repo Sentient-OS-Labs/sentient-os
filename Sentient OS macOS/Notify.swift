@@ -33,11 +33,30 @@ enum Notify {
     static func now(title: String, body: String) async {
         guard !suppressed else { return }
         await requestPermissionIfNeeded()
+        let center = UNUserNotificationCenter.current()
+
+        // §7.23: a denied/undetermined permission means proactive reminders silently never fire —
+        // surface it (auth status only; NEVER the title/body).
+        let status = await center.notificationSettings().authorizationStatus
+        guard status == .authorized || status == .provisional else {
+            Log("Notify: not authorized (status \(status.rawValue)) — reminder suppressed")
+            CrashReporting.captureEvent("notify.not_authorized", level: .warning,
+                tags: ["auth_status": String(status.rawValue)],
+                fingerprint: ["notify", "not_authorized"])
+            return
+        }
+
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
-        try? await UNUserNotificationCenter.current().add(
-            UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        do {
+            try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        } catch {
+            Log("Notify: add failed — \(error)")
+            CrashReporting.captureEvent("notify.add_failed", level: .warning,
+                tags: ["error": String(describing: type(of: error))],
+                fingerprint: ["notify", "add_failed"])
+        }
     }
 }
