@@ -15,7 +15,7 @@
 //  newest→oldest (sinking a crash-resume floor), an interrupted one picks up where it stopped, a
 //  finished one catches up. "start on device (bottom→top)" forces .iterative (files past the mark,
 //  oldest→newest). Neither wipes anything — a from-scratch run is the deliberate "Reset everything"
-//  button under "More" (clears pointers + summaries + the knowledge base). "tell cloud" hands the
+//  button under "More" (clears pointers + summaries + the knowledge base + proactive cards). "tell cloud" hands the
 //  cycle's summaries to Codex (create / surgical update). "proactive system" sends the
 //  reminder-flagged summaries to the placeholder proactive pass. All of it runs through the
 //  self-contained stack (IterativeRun · VaultCloud · CycleStore).
@@ -691,7 +691,7 @@ struct DevToolsView: View {
                 VStack(spacing: 12) {
                     VStack(spacing: 4) {
                         Button(role: .destructive) { Task { await runReset() } } label: {
-                            Label("Reset everything (pointers · summaries · knowledge base)", systemImage: "trash")
+                            Label("Reset everything (pointers · summaries · knowledge base · cards)", systemImage: "trash")
                         }
                         .buttonStyle(.bordered)
                         if let resetResult {
@@ -888,15 +888,18 @@ struct DevToolsView: View {
         .padding(14).frame(maxWidth: 460).glassCard()
     }
 
-    /// Factory reset — wipe EVERY pointer + summary (the iterative cycle store) AND the knowledge base
-    /// (the vault), so the next "start / resume" run is a fresh first run that rebuilds everything from
-    /// scratch. The deliberate, separate alternative to the (now non-destructive) start button.
+    /// Factory reset — wipe EVERY pointer + summary (the iterative cycle store), the knowledge base
+    /// (the vault), AND every persisted proactive trace (decisions, prepared cards, the welcome gift),
+    /// so the next "start / resume" run is a fresh first run that rebuilds everything from scratch and
+    /// the home's "For You" deck comes back empty. The deliberate, separate alternative to the (now
+    /// non-destructive) start button.
     @MainActor
     private func runReset() async {
         await CycleStore.shared.wipeEverything()
         try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
-        Log("DevTools: RESET — wiped the cycle store + the knowledge base at \(VaultGenerator.vaultRoot.path)")
+        ProactiveCycle.resetAll()
+        Log("DevTools: RESET — wiped the cycle store + the knowledge base + proactive cards at \(VaultGenerator.vaultRoot.path)")
         let c = await CycleStore.shared.counts()
-        resetResult = "✓ reset — cycle store + knowledge base wiped (notes \(c.notes))"
+        resetResult = "✓ reset — cycle store + knowledge base + proactive cards wiped (notes \(c.notes))"
     }
 }

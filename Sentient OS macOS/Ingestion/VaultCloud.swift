@@ -201,9 +201,12 @@ actor VaultCloud {
         item. A run where nothing is worth merging is a perfectly good run; reply "0".
         - **Explore only the notes you need.** Search the tree to find where each new item belongs; \
         do not re-read the whole vault.
-        - **Rewrite only what changed.** Prefer editing an existing note over creating a new one; \
-        create a new note ONLY when no existing note fits, following the existing folder structure \
-        and naming style (`Domain/Specific — Topic.md`, no frontmatter — open with the `# Title` H1).
+        - **Consolidate, hard — as much as possible, fold new items into EXISTING notes.** Editing \
+        an existing note is almost always better than spawning a new one; a sprawl of tiny new notes \
+        is exactly what we're avoiding. You CAN create a new note (or, rarely, a new folder) when an \
+        item genuinely belongs nowhere that already exists — but treat that as the exception, not the \
+        reflex. When you do, follow the existing folder structure and naming style \
+        (`Domain/Specific — Topic.md`, no frontmatter — open with the `# Title` H1).
         - **Never delete notes wholesale**, never reorganize folders, never rename existing notes \
         (links point at them). Keep every `[[wikilink]]` intact; add new ones where a new item \
         genuinely connects.

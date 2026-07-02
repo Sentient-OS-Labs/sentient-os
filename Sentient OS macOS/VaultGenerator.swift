@@ -272,6 +272,8 @@ This vault will be read by AIs that **state these facts back to people as truth.
 ## Scope & density target
 Aim for a **focused, high-signal vault — roughly 100–150 notes.** Synthesize aggressively; concise but dense (every sentence earns its place). Cover every meaningful theme; skip the noise. "Comprehensive" means *coverage of what matters*, not transcribing every screenshot.
 
+**Do NOT create a dump of too many individual `.md` files.** Under a significant topic, a few (~3) substantial notes are *way* better than ten tiny ones. **Consolidation is key** — the knowledge base must not start out messy, and **every note must deserve to be there.** Before you write a single note, **brainstorm the *perfect* filesystem structure FIRST.**
+
 ## Structure rules (hard constraints)
 - **Root folders are top-level life domains**, derived from THIS user's data. Roots contain **only subfolders**, never notes directly.
 - **Every content note lives at depth ≥ 2.** The single exception is the root `README.md`.
