@@ -40,8 +40,10 @@ actor VaultGenerator {
     }
 
     /// Everything needed to pick up an agentic run after a usage limit: the Codex session
-    /// and the staging dir whose already-written notes survive untouched.
-    struct ResumeToken: Sendable {
+    /// and the staging dir whose already-written notes survive untouched. Codable so VaultCloud can
+    /// PERSIST it (UserDefaults) — a durable resume for both build and update survives an app restart
+    /// (B11), not just an in-session retry.
+    struct ResumeToken: Sendable, Codable {
         let sessionID: String?
         let stagingPath: String
     }
@@ -70,6 +72,81 @@ actor VaultGenerator {
             .appendingPathComponent("Sentient OS - Knowledge Base", isDirectory: true)
     }
 
+    // MARK: - Staging + atomic swap (B11 — shared by build AND update)
+
+    static let stagingPrefix = ".sentientos-vault-staging-"
+
+    /// Where staging dirs live: a SIBLING of the vault, so staging and vault are always on the same
+    /// volume (an atomic swap/move needs that) — true for both the real HOME vault and a scratch
+    /// `SENTIENT_VAULT_ROOT` test dir.
+    static var stagingParent: URL { vaultRoot.deletingLastPathComponent() }
+
+    /// A fresh staging dir. `seedFrom` (the live vault, for UPDATE) is copied in so codex has the
+    /// existing notes to edit; nil (for BUILD) leaves it empty. Sweeps orphaned staging dirs first.
+    static func newStagingDir(seedFrom: URL? = nil) throws -> URL {
+        let fm = FileManager.default
+        sweepOrphanStaging(keeping: nil)
+        let dir = stagingParent.appendingPathComponent(stagingPrefix + UUID().uuidString, isDirectory: true)
+        if let seedFrom, fm.fileExists(atPath: seedFrom.path) {
+            try fm.copyItem(at: seedFrom, to: dir)                  // dir is created AS a copy of the vault
+        } else {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        return dir
+    }
+
+    /// Delete leftover staging dirs from crashed/abandoned runs (they otherwise leak forever),
+    /// except `keeping` (a live resume's dir).
+    static func sweepOrphanStaging(keeping: URL?) {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: stagingParent.path) else { return }
+        let keepPath = keeping?.standardizedFileURL.path
+        for name in entries where name.hasPrefix(stagingPrefix) {
+            let url = stagingParent.appendingPathComponent(name, isDirectory: true)
+            if url.standardizedFileURL.path == keepPath { continue }   // compare resolved paths (trailing-slash safe)
+            try? fm.removeItem(at: url)
+        }
+    }
+
+    /// Atomically replace the real vault with `staging`. `replaceItemAt` is a true same-volume atomic
+    /// swap — the vault ends up with staging's contents and the old vault is removed as one operation;
+    /// on ANY throw the existing vault is left intact (and staging survives for a retry). Falls back to
+    /// a plain move when no vault exists yet (first build).
+    static func swapStagingIntoVault(_ staging: URL) throws {
+        let fm = FileManager.default
+        let root = vaultRoot
+        if fm.fileExists(atPath: root.path) {
+            _ = try fm.replaceItemAt(root, withItemAt: staging)
+        } else {
+            try fm.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.moveItem(at: staging, to: root)
+        }
+    }
+
+    /// Run codex in `staging` (workspace-write), polling the staging `.md` count for progress, and
+    /// mapping a usage limit to a resumable `VaultError.usageLimit` carrying the staging path. Shared
+    /// by build + update so both get identical resume semantics.
+    func runCodexInStaging(_ invocation: CodexCLI.Invocation, staging: URL,
+                           onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> CodexCLI.Envelope {
+        onProgress(.calling)
+        let poller = Task.detached {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(2))
+                if Task.isCancelled { break }
+                onProgress(.writing(notes: Self.census(of: staging).notes))
+            }
+        }
+        defer { poller.cancel() }
+        do {
+            return try await CodexCLI.shared.run(invocation)
+        } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
+            // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
+            Log("VaultGenerator: ⚠️ usage limit (session \(sessionID ?? "nil")); staging kept for resume — \(message.prefix(160))")
+            throw VaultError.usageLimit(message: message,
+                                        resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
+        }
+    }
+
     // MARK: - The agentic build (codex exec)
 
     /// Generate the whole vault through the user's own Codex CLI (the compute waterfall's
@@ -85,15 +162,13 @@ actor VaultGenerator {
         onProgress(.gathering(notes.count))
         let fm = FileManager.default
 
-        // Staging lives in HOME (same APFS volume as the vault) so the final swap is an
-        // atomic rename — a mid-run death never touches the existing vault.
+        // Build works in a throwaway staging dir (empty), swapped into the real vault only on success
+        // (B11 helpers) — a mid-run death never touches the existing vault. Resume reuses its dir.
         let staging: URL
         if let resume {
             staging = URL(fileURLWithPath: resume.stagingPath, isDirectory: true)
         } else {
-            staging = fm.homeDirectoryForCurrentUser
-                .appendingPathComponent(".sentientos-vault-staging-\(UUID().uuidString)", isDirectory: true)
-            try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+            staging = try Self.newStagingDir()
         }
 
         let prompt: String
@@ -109,6 +184,7 @@ actor VaultGenerator {
         }
 
         var invocation = CodexCLI.Invocation(prompt: prompt)
+        invocation.feature = "vault"
         invocation.effort = .xhigh                           // KB build gets the deepest pass (gpt-5.5)
         invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir
         invocation.cwd = staging.path
@@ -116,33 +192,8 @@ actor VaultGenerator {
         invocation.timeout = 3_600
 
         Log("VaultGenerator: \(resume == nil ? "starting" : "RESUMING") initial generation — \(notes.count) summaries → \(staging.lastPathComponent)")
-        onProgress(.calling)
 
-        // Progress = the files themselves: poll the staging dir's .md count. Honest, and
-        // completely decoupled from the CLI's output format.
-        let poller = Task.detached {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(2))
-                if Task.isCancelled { break }
-                onProgress(.writing(notes: Self.census(of: staging).notes))
-            }
-        }
-        defer { poller.cancel() }
-
-        let envelope: CodexCLI.Envelope
-        do {
-            envelope = try await CodexCLI.shared.run(invocation)
-        } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
-            // Staging is deliberately KEPT — the resume token points at it.
-            Log("VaultGenerator: ⚠️ usage limit mid-generation (session \(sessionID ?? "nil"), staging kept) — \(message.prefix(160))")
-            throw VaultError.usageLimit(message: message,
-                                        resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
-        } catch {
-            // Any other failure: vault untouched; staging kept on disk for post-mortems.
-            Log("VaultGenerator: ❌ generation failed (staging kept at \(staging.lastPathComponent)) — \(error)")
-            throw error
-        }
-        poller.cancel()
+        let envelope = try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress)
 
         let (notes, folders) = Self.census(of: staging)
         Log("VaultGenerator: codex finished (turns \(envelope.numTurns ?? -1), \(envelope.durationMS ?? -1)ms) — \(notes) notes / \(folders) folders in staging")
@@ -151,17 +202,22 @@ actor VaultGenerator {
             throw VaultError.empty
         }
 
-        // Success → swap the staging dir into place (the only moment the old vault is touched).
+        // Success → atomically swap staging into the real vault (the only moment the old vault is
+        // touched); on any throw the vault is left intact (B11 swapStagingIntoVault).
         onProgress(.materializing(notes: notes))
-        let root = Self.vaultRoot
-        try? fm.removeItem(at: root)
-        try fm.moveItem(at: staging, to: root)
-        Log("VaultGenerator: ✅ vault swapped into place — \(notes) notes at \(root.path)")
+        do {
+            try Self.swapStagingIntoVault(staging)
+        } catch {
+            Log("VaultGenerator: ❌ swap failed, vault left intact — \(error)")
+            CrashReporting.capture(error)                            // TODO(P2): structured `vault_swap_failed`
+            throw error
+        }
+        Log("VaultGenerator: ✅ vault swapped into place — \(notes) notes at \(Self.vaultRoot.path)")
 
         return Result(notes: notes, folders: folders,
                       inputTokens: envelope.inputTokens ?? 0,
                       outputTokens: envelope.outputTokens ?? 0,
-                      vaultPath: root.path)
+                      vaultPath: Self.vaultRoot.path)
     }
 
     /// Count the .md notes (and folders containing them) under a directory.

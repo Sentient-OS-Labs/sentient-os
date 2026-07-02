@@ -259,13 +259,15 @@ struct YourAIsPopover: View {
                 await MirrorClient.shared.disable()
                 flash("Mirror off · cloud copy deleted")
             } else {
-                _ = await MirrorClient.shared.enable()
                 do {
+                    _ = try await MirrorClient.shared.enable()
                     try await MirrorClient.shared.push()
                     VaultActivity.shared.vaultDirty = false
                     flash("On · your knowledge is live")
                 } catch MirrorClient.MirrorError.noVault {
                     flash("On · syncs on your first analysis")
+                } catch MirrorClient.MirrorError.tokenGenerationFailed, MirrorClient.MirrorError.keychainWriteFailed {
+                    flash("Couldn't turn on — try again")
                 } catch {
                     flash("On · sync will retry")
                 }

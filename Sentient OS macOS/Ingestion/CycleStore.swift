@@ -162,12 +162,11 @@ actor CycleStore {
     /// Set a bucket's mark directly (used by the Gmail cloud leg, which stamps a run-time pointer and
     /// has no on-device descent). On-device runs use the atomic `advance` / `sinkFloor` instead.
     func setPointer(_ bucketKey: String, _ mark: ItemKey) {
-        if let r = row(bucketKey) {
+        commit(bucketKey: bucketKey, note: nil, apply: { r in
             r.order = mark.order; r.tiebreak = mark.tiebreak; r.updatedAt = Date()
-        } else {
-            modelContext.insert(BucketPointer(bucketKey: bucketKey, mark: mark))
-        }
-        try? modelContext.save()
+        }, make: {
+            BucketPointer(bucketKey: bucketKey, mark: mark)
+        })
     }
 
     /// Initial reset for one bucket: drop its pointer AND its ephemeral notes (fresh top→bottom).
@@ -177,10 +176,54 @@ actor CycleStore {
         try? modelContext.save()
     }
 
-    private func row(_ bucketKey: String) -> BucketPointer? {
-        (try? modelContext.fetch(
+    /// Throwing fetch — lets write paths tell "no row exists" apart from "the fetch failed" (B9). A
+    /// swallowed failure here is what let the insert-branch fire on a row that DID exist, colliding on
+    /// the @unique key and losing the mark forever.
+    private func fetchRow(_ bucketKey: String) throws -> BucketPointer? {
+        try modelContext.fetch(
             FetchDescriptor<BucketPointer>(predicate: #Predicate { $0.bucketKey == bucketKey })
-        ))?.first
+        ).first
+    }
+
+    /// Read-only convenience (pointer / pointerState). A failed fetch degrades to nil (re-listing),
+    /// but is now surfaced instead of silently swallowed.
+    private func row(_ bucketKey: String) -> BucketPointer? {
+        do { return try fetchRow(bucketKey) }
+        catch {
+            Log("CycleStore.row(\(bucketKey)) fetch failed: \(error)")
+            CrashReporting.capture(error)
+            return nil
+        }
+    }
+
+    /// The collision-safe update-or-insert for a bucket's pointer, committing an optional survivor
+    /// note in the SAME save (the crash-safety atomicity). B9: a fetch or save failure no longer
+    /// swallows the mark — on failure we roll back, then retry as an explicit update of the row that
+    /// actually exists (the unique-collision case), so a bucket can't reprocess forever.
+    private func commit(bucketKey: String, note: NoteDraft?,
+                        apply: (BucketPointer) -> Void, make: () -> BucketPointer) {
+        func attempt() throws {
+            if let note { insertNote(bucketKey: bucketKey, note: note) }
+            if let r = try fetchRow(bucketKey) { apply(r) }
+            else { modelContext.insert(make()) }
+            try modelContext.save()
+        }
+        do { try attempt() }
+        catch {
+            Log("CycleStore.commit(\(bucketKey)) failed: \(error) — rolling back, retrying as update")
+            CrashReporting.capture(error)
+            modelContext.rollback()
+            do {
+                if let note { insertNote(bucketKey: bucketKey, note: note) }
+                if let r = try fetchRow(bucketKey) { apply(r) }
+                else { modelContext.insert(make()) }   // genuinely no row → last-resort insert
+                try modelContext.save()
+            } catch {
+                modelContext.rollback()
+                Log("CycleStore.commit(\(bucketKey)) recovery failed: \(error) — mark NOT persisted this item")
+                CrashReporting.capture(error)
+            }
+        }
     }
 
     // MARK: Notes (ephemeral)
@@ -205,35 +248,38 @@ actor CycleStore {
     /// `mark`, in one save. No gap between the two writes ⇒ a crash can never leave a note without its
     /// bookmark (which would re-summarize the item into a duplicate). Clears any floor.
     func advance(bucketKey: String, note: NoteDraft?, to mark: ItemKey) {
-        if let note { insertNote(bucketKey: bucketKey, note: note) }
-        if let r = row(bucketKey) {
+        commit(bucketKey: bucketKey, note: note, apply: { r in
             r.order = mark.order; r.tiebreak = mark.tiebreak
             r.floorOrder = nil; r.floorTiebreak = nil; r.updatedAt = Date()
-        } else {
-            modelContext.insert(BucketPointer(bucketKey: bucketKey, mark: mark))
-        }
-        try? modelContext.save()
+        }, make: {
+            BucketPointer(bucketKey: bucketKey, mark: mark)
+        })
     }
 
     /// FIRST RUN (initial descent) — record an optional survivor note AND sink the floor to `floor`
     /// (top stays fixed), in one save. Creates the row with `top` on the first step. A crash leaves an
     /// honest floor → the next run resumes strictly below it.
     func sinkFloor(bucketKey: String, note: NoteDraft?, top: ItemKey, floor: ItemKey) {
-        if let note { insertNote(bucketKey: bucketKey, note: note) }
-        if let r = row(bucketKey) {
+        commit(bucketKey: bucketKey, note: note, apply: { r in
             r.order = top.order; r.tiebreak = top.tiebreak
             r.floorOrder = floor.order; r.floorTiebreak = floor.tiebreak; r.updatedAt = Date()
-        } else {
-            modelContext.insert(BucketPointer(bucketKey: bucketKey, mark: top, floor: floor))
-        }
-        try? modelContext.save()
+        }, make: {
+            BucketPointer(bucketKey: bucketKey, mark: top, floor: floor)
+        })
     }
 
     /// FIRST RUN done — collapse: clear the floor, leaving `(order, tiebreak)` (the top) as a normal
-    /// high-water mark. From here the bucket is in everyday mode.
+    /// high-water mark. From here the bucket is in everyday mode. (Mutates an existing row only — no
+    /// insert — so it can't hit the unique-collision path; still capture a swallowed save, since a
+    /// stuck floor would re-run the descent and re-summarize already-done items.)
     func collapseFloor(_ bucketKey: String) {
-        if let r = row(bucketKey) { r.floorOrder = nil; r.floorTiebreak = nil; r.updatedAt = Date() }
-        try? modelContext.save()
+        do {
+            if let r = try fetchRow(bucketKey) { r.floorOrder = nil; r.floorTiebreak = nil; r.updatedAt = Date() }
+            try modelContext.save()
+        } catch {
+            Log("CycleStore.collapseFloor(\(bucketKey)) failed: \(error)")
+            CrashReporting.capture(error)
+        }
     }
 
     /// Every current-cycle note, newest first (VIEW SUMMARIES + the cloud corpus).

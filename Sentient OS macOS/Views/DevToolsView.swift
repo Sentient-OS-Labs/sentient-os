@@ -107,6 +107,7 @@ struct DevToolsView: View {
     @State private var showActionItems = false
     @State private var showPermissions = false
     @State private var showHotkeyLab = false
+    @State private var showCodexSetup = false
     @State private var showMore = false
     @State private var fdaGranted = false
     @State private var resetResult: String?
@@ -202,6 +203,17 @@ struct DevToolsView: View {
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// Opens the one CODEX SETUP window (install · log in · computer use) — all three steps live in
+    /// `CodexSetupView`, driven by the shared `CodexSetup` engine (the same code onboarding will use).
+    private var codexSetupButton: some View {
+        Button { showCodexSetup = true } label: {
+            Label("CODEX SETUP", systemImage: "cpu")
+                .font(.caption.weight(.bold)).tracking(2)
+                .frame(maxWidth: .infinity, minHeight: 40)
+        }
+        .buttonStyle(.bordered).tint(.green)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -233,6 +245,7 @@ struct DevToolsView: View {
                         viewActionItemsButton
                     }
                     mcpToggleButton
+                    codexSetupButton
                     permissionsButton
                     hotkeyLabButton
                     moreSection
@@ -247,6 +260,7 @@ struct DevToolsView: View {
         .sheet(isPresented: $showActionItems) { ProactiveItemsView() }
         .sheet(isPresented: $showPermissions) { PermissionsView() }
         .sheet(isPresented: $showHotkeyLab) { HotkeyLabView() }
+        .sheet(isPresented: $showCodexSetup) { CodexSetupView() }
         .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
         .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
         .sheet(item: $deviceJob) { job in
@@ -729,7 +743,7 @@ struct DevToolsView: View {
                         await MirrorClient.shared.disable()
                         mirrorStatus = "✓ MCP mirror OFF — cloud copy deleted (link kept)"
                     } else {
-                        _ = await MirrorClient.shared.enable()
+                        _ = try await MirrorClient.shared.enable()   // throws → surfaced by runMirror's catch
                         do {
                             try await MirrorClient.shared.push()
                             VaultActivity.shared.vaultDirty = false
@@ -898,7 +912,7 @@ struct DevToolsView: View {
         await CycleStore.shared.wipeEverything()
         try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
         ProactiveCycle.resetAll()
-        Log("DevTools: RESET — wiped the cycle store + the knowledge base + proactive cards at \(VaultGenerator.vaultRoot.path)")
+        Log("DevTools: RESET — wiped the cycle store + the knowledge base + proactive cards (\(VaultGenerator.vaultRoot.lastPathComponent))")   // B7: folder name, not the home path
         let c = await CycleStore.shared.counts()
         resetResult = "✓ reset — cycle store + knowledge base + proactive cards wiped (notes \(c.notes))"
     }

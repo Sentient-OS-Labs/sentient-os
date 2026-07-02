@@ -43,10 +43,44 @@ actor VaultCloud {
 
     static let shared = VaultCloud()
 
-    // In-memory resume handles (an app restart just starts fresh — correct, since the cycle's notes
-    // stay in CycleStore until the proactive button wipes them).
+    // DURABLE resume handles for BOTH build and update (B11): each carries a codex session id + the
+    // staging dir holding the work-in-progress, persisted to UserDefaults so a usage limit or an app
+    // restart RESUMES instead of re-running the expensive codex call from scratch. Both the build and
+    // update paths now stage-then-swap (the live vault is never mutated mid-run), so a lost handle is
+    // only wasteful, never corrupting.
     private var createResume: VaultGenerator.ResumeToken?
-    private var updateResumeSessionID: String?
+    private var updateResume: VaultGenerator.ResumeToken?
+    private static let createResumeKey = "vault.create.resume"
+    private static let updateResumeKey = "vault.update.resume"
+
+    init() {
+        createResume = Self.loadResume(Self.createResumeKey)
+        updateResume = Self.loadResume(Self.updateResumeKey)
+    }
+
+    /// Load a persisted resume token, discarding it (and its stale key) if it can't actually resume:
+    /// no session id to reopen, or the staging dir is gone (deleted / disk cleaned).
+    private static func loadResume(_ key: String) -> VaultGenerator.ResumeToken? {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let t = try? JSONDecoder().decode(VaultGenerator.ResumeToken.self, from: data),
+              t.sessionID != nil, FileManager.default.fileExists(atPath: t.stagingPath) else {
+            UserDefaults.standard.removeObject(forKey: key)
+            return nil
+        }
+        return t
+    }
+
+    private func setCreateResume(_ t: VaultGenerator.ResumeToken?) { createResume = t; Self.persistResume(t, Self.createResumeKey) }
+    private func setUpdateResume(_ t: VaultGenerator.ResumeToken?) { updateResume = t; Self.persistResume(t, Self.updateResumeKey) }
+
+    /// Persist (only a resumable token — one with a session id) or clear the handle on disk.
+    private static func persistResume(_ t: VaultGenerator.ResumeToken?, _ key: String) {
+        if let t, t.sessionID != nil, let data = try? JSONEncoder().encode(t) {
+            UserDefaults.standard.set(data, forKey: key)
+        } else {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
 
     enum CloudError: LocalizedError {
         case empty
@@ -71,11 +105,11 @@ actor VaultCloud {
         guard !notes.isEmpty else { throw CloudError.empty }
         do {
             let result = try await VaultGenerator().generate(notes: notes, resume: createResume, onProgress: onProgress)
-            createResume = nil
+            setCreateResume(nil)
             await markDirty()
             return result
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
-            createResume = resume
+            setCreateResume(resume)   // DURABLE now (B11) — a restart resumes the build over its staging dir
             throw CloudError.usageLimit(message)
         }
     }
@@ -83,6 +117,11 @@ actor VaultCloud {
     // MARK: Update — "go update knowledge base"
 
     /// Merge the current cycle's notes into the existing vault. Returns the number of notes sent.
+    ///
+    /// STAGE-THEN-SWAP (B11): codex edits a COPY of the vault in a staging dir; the LIVE vault is
+    /// never touched until an atomic swap on success. A usage limit / crash / non-fatal failure can't
+    /// corrupt the real vault — worst case the staging copy is discarded (or kept for a durable
+    /// resume). This replaced the old in-place edit + `.bak` restore (B1), which is now obsolete.
     @discardableResult
     func update(notes: [CloudNote]) async throws -> Int {
         guard !notes.isEmpty else { return 0 }
@@ -90,44 +129,50 @@ actor VaultCloud {
         let vault = VaultGenerator.vaultRoot
         guard fm.fileExists(atPath: vault.path) else { throw CloudError.noVault }
 
-        // Safety net: snapshot the vault (KBs). Restored on a thrown error; NOT on a usage limit
-        // (a resume continues the half-edited state, which is exactly what's on disk).
-        let snapshot = fm.temporaryDirectory.appendingPathComponent("vault-snapshot-\(UUID().uuidString)", isDirectory: true)
-        try? fm.removeItem(at: snapshot)
-        try fm.copyItem(at: vault, to: snapshot)
-        defer { try? fm.removeItem(at: snapshot) }
-
-        var invocation: CodexCLI.Invocation
-        if let updateResumeSessionID {
-            var inv = CodexCLI.Invocation(prompt: """
+        // Reuse the resume's staging dir (loadResume already verified it exists + has a session), else
+        // seed a fresh staging dir with a COPY of the live vault so codex has the notes to edit.
+        let staging: URL
+        let inv: CodexCLI.Invocation
+        if let token = updateResume {
+            staging = URL(fileURLWithPath: token.stagingPath, isDirectory: true)
+            var i = CodexCLI.Invocation(prompt: """
                 Continue merging the new items into the vault exactly where you left off — the edits \
-                you already made are still on disk. When everything is merged, reply with one line: \
-                the number of notes you created or edited.
+                you already made are still in the working directory. When everything is merged, reply \
+                with one line: the number of notes you created or edited.
                 """)
-            inv.resumeSessionID = updateResumeSessionID
-            invocation = inv
+            i.resumeSessionID = token.sessionID
+            inv = i
         } else {
-            invocation = CodexCLI.Invocation(prompt: Self.updatePrompt(skeleton: Self.skeleton(of: vault), notes: notes))
+            staging = try VaultGenerator.newStagingDir(seedFrom: vault)
+            inv = CodexCLI.Invocation(prompt: Self.updatePrompt(skeleton: Self.skeleton(of: staging), notes: notes))
         }
-        invocation.effort = .high                                     // incremental KB update (gpt-5.5 → high)
-        invocation.sandbox = .workspaceWrite                         // edits confined to the vault
-        invocation.cwd = vault.path
+        var invocation = inv
+        invocation.feature = "vault"
+        invocation.effort = .high                                    // incremental KB update (gpt-5.5 → high)
+        invocation.sandbox = .workspaceWrite                        // edits confined to the staging dir
+        invocation.cwd = staging.path
         invocation.timeout = 1_800
 
-        Log("VaultCloud.update: merging \(notes.count) notes into the vault…")
+        Log("VaultCloud.update: merging \(notes.count) notes in staging (\(updateResume == nil ? "fresh" : "resume"))…")
         do {
-            let envelope = try await CodexCLI.shared.run(invocation)
-            updateResumeSessionID = nil
+            let envelope = try await VaultGenerator().runCodexInStaging(invocation, staging: staging)
+            // TODO(editor): swap-time freshness check — if the live vault changed since we copied it
+            // (the future Knowledge editor), skip the swap and re-run next cycle. Moot today (single
+            // writer). See Documentation/Source Diagnostics & Hardening (Sentry).md §6/B11.
+            try VaultGenerator.swapStagingIntoVault(staging)        // atomic; live vault untouched until here
+            setUpdateResume(nil)
             await markDirty()
             Log("VaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1)) — \(envelope.result.prefix(120))")
             return notes.count
-        } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
-            updateResumeSessionID = sessionID                        // resume later; vault left as-is
+        } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
+            // Staging is kept; the live vault was never touched. Durable resume continues next run.
+            setUpdateResume(resume)
             throw CloudError.usageLimit(message)
         } catch {
-            updateResumeSessionID = nil
-            try? fm.removeItem(at: vault)                            // mid-edit failure → restore
-            try? fm.moveItem(at: snapshot, to: vault)
+            // Any other failure: discard the staging copy; the live vault was NEVER modified — no
+            // restore dance needed (the whole point of stage-then-swap).
+            setUpdateResume(nil)
+            try? fm.removeItem(at: staging)
             throw CloudError.failed("\(error)")
         }
     }
@@ -156,6 +201,15 @@ actor VaultCloud {
             await MainActor.run { VaultActivity.shared.vaultDirty = false }
             Log("VaultCloud: mirror pushed ✓")
         } catch {
+            // §7.18: this swallows + retries forever, leaving the mirror stale (the user's AIs read
+            // old data). Emit the HTTP status only — never the response body (MirrorError.http's 2nd
+            // arg embeds it). Status 0 = no HTTP response (B4); "n/a" = a non-HTTP error (zip/network).
+            var status = "n/a"
+            if case MirrorClient.MirrorError.http(let code, _) = error { status = String(code) }
+            CrashReporting.captureEvent("mirror.push_failed", level: .warning,
+                tags: ["error": String(describing: type(of: error))],
+                extra: ["http_status": status],
+                fingerprint: ["mirror", "push_failed"])
             Log("VaultCloud: mirror push failed — \((error as? LocalizedError)?.errorDescription ?? "\(error)") (retries next trigger)")
         }
     }

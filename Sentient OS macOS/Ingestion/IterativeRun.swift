@@ -28,13 +28,20 @@ private struct ExtractionTimeout: Error { let seconds: Double }
 
 /// Holds the racing continuation behind a lock so it resumes exactly once, and so the `@Sendable`
 /// dispatch closures capture this (`@unchecked Sendable`) box instead of the continuation directly.
-private final class TimeoutBox<T>: @unchecked Sendable {
+///
+/// Deliberately NON-GENERIC. A generic `TimeoutBox<T>` crashes the Swift optimizer — the
+/// `EarlyPerfInliner` pass infinite-recurses on the generic class's `deinit` layout under `-O`,
+/// which segfaults swift-frontend and breaks EVERY Release/Archive build (Debug is `-Onone`, so it
+/// builds fine — the bug hides until you ship). We erase the element type at the boundary below: the
+/// box stores a `fire` closure that already captures the typed continuation, so only an erased
+/// `Result<Any, Error>` crosses the box. The success value is always a `T`, so the downcast is total.
+private final class TimeoutBox: @unchecked Sendable {
     private let lock = NSLock()
-    private var cont: CheckedContinuation<T, Error>?
-    init(_ c: CheckedContinuation<T, Error>) { cont = c }
-    func resume(_ result: Result<T, Error>) {
-        lock.lock(); let c = cont; cont = nil; lock.unlock()
-        c?.resume(with: result)
+    private var fire: ((Result<Any, Error>) -> Void)?
+    init(_ fire: @escaping (Result<Any, Error>) -> Void) { self.fire = fire }
+    func resume(_ result: Result<Any, Error>) {
+        lock.lock(); let f = fire; fire = nil; lock.unlock()
+        f?(result)
     }
 }
 
@@ -46,8 +53,10 @@ private final class TimeoutBox<T>: @unchecked Sendable {
 private func withExtractionTimeout<T: Sendable>(_ seconds: Double,
                                                 _ work: @escaping @Sendable () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
-        let box = TimeoutBox(cont)
-        DispatchQueue.global(qos: .utility).async { box.resume(Result { try work() }) }
+        // Erase T here so TimeoutBox stays non-generic (see its note). The success value is always
+        // a T, so the downcast in `map` is total.
+        let box = TimeoutBox { result in cont.resume(with: result.map { $0 as! T }) }
+        DispatchQueue.global(qos: .utility).async { box.resume(Result { try work() as Any }) }
         DispatchQueue.global().asyncAfter(deadline: .now() + seconds) {
             box.resume(.failure(ExtractionTimeout(seconds: seconds)))
         }
@@ -64,6 +73,7 @@ struct RunProgress: Sendable {
     var junk = 0
     var sensitive = 0
     var failed = 0
+    var parseFailures = 0          // §7.13: junk that was actually a garbled/unparseable model reply
     var lastPath: String?
     var lastFilePath: String?      // absolute path (for the thumbnail)
     var lastPrompt: String?        // the EXACT prompt fed to the model for this item (dev prompt pane)
@@ -84,6 +94,7 @@ struct IterativeRun {
     private static let failuresBeforeReload = 3
     private static let maxReloadsWithoutProgress = 4
     private static let extractionTimeoutSeconds: Double = 30   // Arch §H: one file's content extraction can't hang the run
+    private static let sourceTimeCapSeconds: Double = 3600     // §5: a source gets ≤60 min wall-clock, then we move on (progress is per-item atomic, so it just resumes next run)
 
     /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The caller
     /// passes every selected source at once; per-connector load + kind ride along per bucket.
@@ -92,9 +103,24 @@ struct IterativeRun {
              onProgress: @Sendable @escaping (RunProgress) -> Void = { _ in }) async -> RunProgress {
         var p = RunProgress()
         guard !connectors.isEmpty else { return p }
+
+        // §7.22: if this run includes a DB source (WhatsApp/iMessage/Notes need Full Disk Access),
+        // report the FDA probe when it isn't cleanly granted — the top "empty morning" signal (a 3am
+        // run that silently reads nothing because TCC denied us). Once per run, structure only.
+        if connectors.contains(where: { [.whatsapp, .imessage, .notes].contains($0.kind) }) {
+            Permissions.reportProbe()
+        }
+
         let engine = Engine(modelPath: modelPath, maxNumTokens: connectors.map(\.maxTokens).max() ?? 4096)
         do { try await engine.load() } catch {
+            // §7.1/F1 + §7.12: a load failure here silently yields a 0-item run (the whole overnight
+            // batch does nothing). Escalate to an event — error TYPE only, plus whether the model
+            // file resolved (never the path).
             Log("IterativeRun: engine load failed — \(error)")
+            CrashReporting.captureEvent("engine.load_failed", level: .error,
+                tags: ["error": String(describing: type(of: error))],
+                extra: ["model_present": String(ModelLocator.resolve() != nil)],
+                fingerprint: ["engine", "load_failed"])
             return p
         }
 
@@ -136,6 +162,7 @@ struct IterativeRun {
                 case .junk:      p.junk += 1
                 case .sensitive: p.sensitive += 1
                 }
+                if outcome.reason == .parseFailed { p.parseFailures += 1 }   // §7.13
                 p.lastTitle = outcome.title
                 p.lastSummary = outcome.summary.isEmpty ? nil : outcome.summary
                 p.lastVerdict = outcome.verdict
@@ -160,9 +187,23 @@ struct IterativeRun {
             if Task.isCancelled { break }
             let buckets: [Bucket]
             do { buckets = try connector.buckets(since: marks) }
-            catch { Log("IterativeRun: buckets() failed for \(connector.kind) — \(error)"); continue }
+            catch {
+                // §7.1/F2: this drops the ENTIRE source silently (FDA denied / DB-copy failed). Event
+                // with the source + error TYPE only (the message can embed a path).
+                Log("IterativeRun: buckets() failed for \(connector.kind) — \(error)")
+                CrashReporting.captureEvent("source.dropped", level: .error,
+                    tags: ["source": connector.kind.rawValue, "error": String(describing: type(of: error))],
+                    fingerprint: ["source", "dropped", connector.kind.rawValue])
+                continue
+            }
 
-            for bucket in buckets {
+            // §5: each SOURCE gets a 60-minute wall-clock budget spanning all its buckets. On overrun
+            // we stop THIS source and move to the next — every item's mark commits atomically, so a
+            // cut-off source just resumes next run. `processedThisConnector` feeds the cap event.
+            let connectorDeadline = Date().addingTimeInterval(Self.sourceTimeCapSeconds)
+            var processedThisConnector = 0
+
+            bucketLoop: for bucket in buckets {
                 if Task.isCancelled { break runLoop }
 
                 var state = await store.pointerState(bucket.key)
@@ -214,6 +255,16 @@ struct IterativeRun {
                 var finished = true
                 for w in work {
                     if Task.isCancelled { finished = false; break runLoop }
+                    // §5: source over its 60-min budget → stop this source (all its buckets), next source.
+                    if Date() >= connectorDeadline {
+                        Log("IterativeRun: \(connector.kind) hit the \(Int(Self.sourceTimeCapSeconds))s cap after \(processedThisConnector) items — moving to next source")
+                        CrashReporting.captureEvent("source.hit_time_cap", level: .warning,
+                            tags: ["source": connector.kind.rawValue],
+                            extra: ["processed": String(processedThisConnector),
+                                    "cap_seconds": String(Int(Self.sourceTimeCapSeconds))])
+                        finished = false
+                        break bucketLoop
+                    }
                     if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine() }
 
                     p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
@@ -224,7 +275,15 @@ struct IterativeRun {
                         consecutiveFailures += 1
                         if consecutiveFailures >= Self.failuresBeforeReload {
                             guard reloadsWithoutProgress < Self.maxReloadsWithoutProgress else {
+                                // §7.1/F9: the GPU-wedge cascade the reloads couldn't clear — the run
+                                // gives up here. One event with the counts (never 1,544 per-item ones).
                                 Log("IterativeRun: engine not recovering after \(reloadsWithoutProgress) reloads — stopping.")
+                                CrashReporting.captureEvent("engine.hard_stop", level: .error,
+                                    tags: ["source": connector.kind.rawValue],
+                                    extra: ["reloads_without_progress": String(reloadsWithoutProgress),
+                                            "consecutive_failures": String(consecutiveFailures),
+                                            "processed": String(processedThisConnector)],
+                                    fingerprint: ["engine", "hard_stop"])
                                 finished = false; break runLoop
                             }
                             await reloadEngine(); reloadsWithoutProgress += 1; consecutiveFailures = 0
@@ -240,7 +299,7 @@ struct IterativeRun {
                     case .initial:   await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
                     case .auto:      break
                     }
-                    sinceReload += 1; p.done += 1
+                    sinceReload += 1; p.done += 1; processedThisConnector += 1
                     onProgress(p)
                 }
 
@@ -251,6 +310,16 @@ struct IterativeRun {
             }
         }
         await engine.unload()
+
+        // §7.13: with a real sample, a high share of junk that was actually GARBLED model output
+        // (not genuine junk) is the "why so much junk?" tripwire — a decode/prompt/format regression.
+        // Gated to runs with enough items so a 0–3-item iterative run can't false-fire.
+        if p.done >= 30, p.parseFailures * 100 / p.done >= 20 {
+            CrashReporting.captureEvent("triage.parse_failure_spike", level: .warning,
+                extra: ["parse_failures": String(p.parseFailures), "done": String(p.done),
+                        "junk": String(p.junk)],
+                fingerprint: ["triage", "parse_failure_spike"])
+        }
         return p
     }
 }

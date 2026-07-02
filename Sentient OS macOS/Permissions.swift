@@ -199,27 +199,46 @@ enum Permissions {
     /// Canonical FDA-gated files. We can READ any of these *only* with Full Disk Access. We try
     /// several because any single one may be absent on a given Mac (no Messages history, no Safari
     /// bookmarks…): the first one that actually exists is our verdict.
-    private static var fdaProbePaths: [String] {
+    private static var fdaProbePaths: [(label: String, path: String)] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return [
-            "\(home)/Library/Messages/chat.db",            // iMessage DB — the classic FDA probe
-            "\(home)/Library/Safari/Bookmarks.plist",      // Safari — usually present
-            "\(home)/Library/Application Support/com.apple.TCC/TCC.db",
+            ("imessage", "\(home)/Library/Messages/chat.db"),            // the classic FDA probe
+            ("safari",   "\(home)/Library/Safari/Bookmarks.plist"),      // usually present
+            ("tcc",      "\(home)/Library/Application Support/com.apple.TCC/TCC.db"),
         ]
     }
 
-    /// True iff Full Disk Access is granted to *this* process (i.e. we can read a protected file).
-    /// Logic: open each probe read-only — success ⇒ granted; a clear EPERM/EACCES ⇒ denied;
-    /// ENOENT (file genuinely absent) ⇒ try the next. Nothing to probe ⇒ assume not granted
-    /// (the grant flow is idempotent, so a false negative is harmless).
-    static func hasFullDiskAccess() -> Bool {
-        for path in fdaProbePaths {
-            let fd = open(path, O_RDONLY)
-            if fd >= 0 { close(fd); return true }
-            if errno == EPERM || errno == EACCES { return false }
+    /// The full result of the FDA probe (§7.22): whether it's granted, WHICH probe decided it, and
+    /// the last errno. The errno + `none` combo is what tells true-denial (EPERM/EACCES) apart from
+    /// Terminal-TCC-attribution / all-probes-missing (ENOENT / none) — the single highest-value
+    /// empty-morning signal, which the plain Bool throws away.
+    static func fdaProbeDetail() -> (granted: Bool, matched: String, errno: Int32) {
+        var lastErrno: Int32 = 0
+        for probe in fdaProbePaths {
+            let fd = open(probe.path, O_RDONLY)
+            if fd >= 0 { close(fd); return (true, probe.label, 0) }
+            lastErrno = errno
+            if errno == EPERM || errno == EACCES { return (false, probe.label, errno) }
             // else (e.g. ENOENT) — this probe isn't present; try the next.
         }
-        return false
+        return (false, "none", lastErrno)
+    }
+
+    /// True iff Full Disk Access is granted to *this* process (i.e. we can read a protected file).
+    /// Nothing to probe ⇒ assume not granted (the grant flow is idempotent, so a false negative is
+    /// harmless).
+    static func hasFullDiskAccess() -> Bool { fdaProbeDetail().granted }
+
+    /// Emit the FDA probe as a diagnostics event when it's NOT cleanly granted — the actionable
+    /// empty-morning case (a 3am run that silently reads nothing from the DB sources). Structure only:
+    /// no paths, just the probe label + errno. Call once at run/arm time, not per item.
+    static func reportProbe() {
+        let d = fdaProbeDetail()
+        guard !d.granted else { return }   // clean grant is the healthy case — don't spam
+        CrashReporting.captureEvent("fda.probe", level: .warning,
+            tags: ["result": "denied", "which_probe": d.matched],
+            extra: ["errno": String(d.errno)],
+            fingerprint: ["fda", "probe", d.matched])
     }
 
     /// Open System Settings → Privacy & Security → Full Disk Access. We cannot toggle the switch

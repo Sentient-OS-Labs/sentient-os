@@ -80,6 +80,7 @@ enum GmailConnect {
     /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
     static func probeConnected() async -> Bool {
         var inv = CodexCLI.Invocation(prompt: probePrompt)
+        inv.feature = "gmail"
         inv.model = .gpt54mini               // light model for the connect-check
         inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly
@@ -195,6 +196,7 @@ enum GmailConnect {
 
     private static func read(prompt: String) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
+        inv.feature = "gmail"
         inv.model = .gpt54mini               // light model for the high-volume Gmail reads
         inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)
@@ -213,19 +215,35 @@ enum GmailConnect {
     }
 
     /// Tolerant parse of the structured reply (output-schema makes `result` the JSON; still fence-safe).
+    /// §7.10: SHAPE MISMATCH (JSON won't parse, or the required `notable` key is absent — despite the
+    /// output-schema) is a codex/schema regression → event. A QUIET week (`notable:false` / empty
+    /// summary) is normal → silent. Distinguishing them stops a broken Gmail leg from hiding as "quiet".
     private static func parse(_ result: String) -> ReadResult? {
         let span: String
         if let s = result.firstIndex(of: "{"), let e = result.lastIndex(of: "}"), s < e {
             span = String(result[s...e])
         } else { span = result }
         guard let data = span.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let notable = obj["notable"] as? Bool else { return nil }
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            shapeMismatch(missing: "json", len: result.count)
+            return nil
+        }
+        guard let notable = obj["notable"] as? Bool else {
+            shapeMismatch(missing: "notable", len: result.count)    // key names only — never values
+            return nil
+        }
+        // From here a nil return is a QUIET week — NOT an anomaly, so no event.
         guard notable, let summary = obj["summary"] as? String,
               !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return ReadResult(summary: summary,
                           hasActionItems: obj["has_action_items"] as? Bool ?? false,
                           threadCount: obj["thread_count"] as? Int ?? 0)
+    }
+
+    private static func shapeMismatch(missing: String, len: Int) {
+        CrashReporting.captureEvent("gmail.parse.shape_mismatch", level: .warning,
+            tags: ["source": "gmail"], extra: ["missing": missing, "result_len": String(len)],
+            fingerprint: ["gmail", "parse", "shape_mismatch"])
     }
 
     // MARK: - Date helpers

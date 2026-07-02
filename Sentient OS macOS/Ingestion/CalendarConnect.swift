@@ -69,6 +69,7 @@ enum CalendarConnect {
     /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
     static func probeConnected() async -> Bool {
         var inv = CodexCLI.Invocation(prompt: probePrompt)
+        inv.feature = "calendar"
         inv.model = .gpt54mini               // light model for the connect-check
         inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly
@@ -168,6 +169,7 @@ enum CalendarConnect {
     /// the read fails (proactive then runs without calendar context). Read-only; no bypass needed.
     static func fetchProactiveContext() async -> String? {
         var inv = CodexCLI.Invocation(prompt: proactiveFetchPrompt)
+        inv.feature = "calendar-proactive"
         inv.model = .gpt54mini
         inv.effort = .medium
         inv.sandbox = .readOnly
@@ -197,6 +199,7 @@ enum CalendarConnect {
 
     private static func read(prompt: String) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
+        inv.feature = "calendar"
         inv.model = .gpt54mini               // light model — calendar data is small + structured
         inv.effort = .medium                 // gpt-5.4-mini → medium
         inv.sandbox = .readOnly              // we only read the calendar + return text (no writes)
@@ -216,16 +219,32 @@ enum CalendarConnect {
     }
 
     /// Tolerant parse of the structured read reply (output-schema makes `result` the JSON; fence-safe).
+    /// §7.11: SHAPE MISMATCH (no JSON, or the required `notable` key absent — despite the output-schema)
+    /// is a codex/schema regression → event; a QUIET window (`notable:false` / empty summary) is normal
+    /// → silent. Distinguishes a broken Calendar leg from an empty calendar.
     private static func parse(_ result: String) -> ReadResult? {
         guard let span = jsonSpan(result),
               let data = span.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let notable = obj["notable"] as? Bool else { return nil }
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            shapeMismatch(missing: "json", len: result.count)
+            return nil
+        }
+        guard let notable = obj["notable"] as? Bool else {
+            shapeMismatch(missing: "notable", len: result.count)    // key names only — never values
+            return nil
+        }
+        // From here a nil return is a QUIET window — NOT an anomaly, so no event.
         guard notable, let summary = obj["summary"] as? String,
               !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return ReadResult(summary: summary,
                           hasActionItems: obj["has_action_items"] as? Bool ?? false,
                           eventCount: obj["event_count"] as? Int ?? 0)
+    }
+
+    private static func shapeMismatch(missing: String, len: Int) {
+        CrashReporting.captureEvent("calendar.parse.shape_mismatch", level: .warning,
+            tags: ["source": "calendar"], extra: ["missing": missing, "result_len": String(len)],
+            fingerprint: ["calendar", "parse", "shape_mismatch"])
     }
 
     /// Widest `{ … }` span in a possibly-fenced reply.

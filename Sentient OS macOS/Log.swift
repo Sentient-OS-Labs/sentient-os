@@ -15,6 +15,7 @@ import Foundation
 func Log(_ items: Any..., separator: String = " ", terminator: String = "\n") {
     let message = items.map { String(describing: $0) }.joined(separator: separator)
     print(message, terminator: terminator)
+    CrashReporting.breadcrumb(message)   // trail of recent log lines, attached to any crash report
     #if DEBUG
     LogFile.shared.append(message)
     #endif

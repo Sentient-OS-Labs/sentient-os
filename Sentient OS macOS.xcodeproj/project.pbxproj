@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5AB7600D2FD12ABE00149A7F /* LiteRTLM */; };
+		5AE5710001000000000000A1 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 5AE5710001000000000000A2 /* Sentry */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +29,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */,
+				5AE5710001000000000000A1 /* Sentry in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -61,6 +63,7 @@
 				5A3F390E2FD0F43300DD835E /* Frameworks */,
 				5A3F390F2FD0F43300DD835E /* Resources */,
 				5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */,
+				5AE5710001000000000000B1 /* Upload dSYMs to Sentry */,
 			);
 			buildRules = (
 			);
@@ -72,6 +75,7 @@
 			name = "Sentient OS macOS";
 			packageProductDependencies = (
 				5AB7600D2FD12ABE00149A7F /* LiteRTLM */,
+				5AE5710001000000000000A2 /* Sentry */,
 			);
 			productName = "Sentient OS macOS";
 			productReference = 5A3F39112FD0F43300DD835E /* Sentient OS.app */;
@@ -103,6 +107,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				5AB7600C2FD12ABE00149A7F /* XCLocalSwiftPackageReference "Vendor/LiteRTLM" */,
+				5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5A3F39122FD0F43300DD835E /* Products */;
@@ -143,6 +148,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "# Sentient OS bundle-trim phase (runs before the final app code-sign, so the seal stays\n# valid). Two jobs, both shrinking the shipped .app:\n#\n# 1) Thin the prebuilt LiteRT-LM dylib to the app's ARCHS. Google ships CLiteRTLM_mac as a\n#    fat arm64+x86_64 binary (~127MB); arm64-only roughly halves the .app. ARCHS=arm64\n#    only governs code Xcode COMPILES -- a checksum-pinned remote SwiftPM binary is copied\n#    in whole, so we strip it here. Idempotent (skips an already-thin slice) + re-signs.\n# 2) Drop the internal engineering docs the synchronized file group sweeps in from\n#    Documentation/. They're public in the repo and never read at runtime; ~150KB of dead\n#    weight. Globbed so future docs are dropped automatically.\nset -e\n\nDYLIB=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libCLiteRTLM_mac.dylib\"\nif [ -f \"$DYLIB\" ]; then\n  THINNED=0\n  for arch in $(lipo -archs \"$DYLIB\"); do\n    case \" $ARCHS \" in\n      *\" $arch \"*) ;;\n      *) echo \"Thinning libCLiteRTLM_mac.dylib: removing $arch\"; lipo -remove \"$arch\" \"$DYLIB\" -output \"$DYLIB\"; THINNED=1 ;;\n    esac\n  done\n  if [ \"$THINNED\" = \"1\" ]; then\n    # Re-sign with the SAME options Xcode used, so a notarized Release stays valid: hardened\n    # runtime when enabled, plus a secure timestamp for Developer ID (distribution) signing\n    # only -- Apple Development / adhoc dev builds need neither (and skip the network round-trip).\n    SIGN_OPTS=\"\"\n    [ \"$ENABLE_HARDENED_RUNTIME\" = \"YES\" ] && SIGN_OPTS=\"--options runtime\"\n    case \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" in \"Developer ID\"*) SIGN_OPTS=\"$SIGN_OPTS --timestamp\" ;; esac\n    echo \"Re-signing thinned libCLiteRTLM_mac.dylib ($SIGN_OPTS)\"\n    codesign --force $SIGN_OPTS --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$DYLIB\"\n  fi\nelse\n  echo \"warning: libCLiteRTLM_mac.dylib not found at $DYLIB -- skipping arch thinning\"\nfi\n\nRES=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -d \"$RES\" ]; then\n  find \"$RES\" -name \"*.md\" -print -delete\nfi\n";
+		};
+		5AE5710001000000000000B1 /* Upload dSYMs to Sentry */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Upload dSYMs to Sentry";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Upload the app's dSYM to Sentry so RELEASE crash reports symbolicate to real function\n# names + line numbers (Debug builds have symbols locally, so this is Release-only). Reads\n# auth + org/project from the gitignored .sentryclirc at SRCROOT. Every guard EXITS 0 so a\n# missing token, missing sentry-cli, or a failed upload NEVER breaks the build -- Debug\n# builds, OSS clones, and CI without the config just skip it. Doc: Documentation/Crash Reporting (Sentry).md\nif [ \"${CONFIGURATION}\" != \"Release\" ]; then\n  echo \"Sentry: skipping dSYM upload (CONFIGURATION=${CONFIGURATION})\"\n  exit 0\nfi\nSENTRY_CLI=\"$(command -v sentry-cli || echo /opt/homebrew/bin/sentry-cli)\"\nif [ ! -x \"$SENTRY_CLI\" ]; then\n  echo \"warning: sentry-cli not found -- skipping Sentry dSYM upload (brew install getsentry/tools/sentry-cli)\"\n  exit 0\nfi\ncd \"${SRCROOT}\" || exit 0\nif [ ! -f .sentryclirc ] && [ -z \"${SENTRY_AUTH_TOKEN}\" ]; then\n  echo \"warning: no .sentryclirc or SENTRY_AUTH_TOKEN -- skipping Sentry dSYM upload\"\n  exit 0\nfi\necho \"Sentry: uploading dSYMs from ${DWARF_DSYM_FOLDER_PATH}\"\n\"$SENTRY_CLI\" debug-files upload --include-sources \"${DWARF_DSYM_FOLDER_PATH}\" || echo \"warning: Sentry dSYM upload failed (continuing build)\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -288,7 +312,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = YJ8AZR3G5Q;
+				DEVELOPMENT_TEAM = 42S6TS9N7N;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -325,7 +349,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = YJ8AZR3G5Q;
+				DEVELOPMENT_TEAM = 42S6TS9N7N;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -383,10 +407,26 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		5AB7600D2FD12ABE00149A7F /* LiteRTLM */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = LiteRTLM;
+		};
+		5AE5710001000000000000A2 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

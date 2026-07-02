@@ -126,6 +126,7 @@ actor ProactiveResearch {
         guard FileManager.default.fileExists(atPath: vault.path) else { throw ResError.noVault }
 
         var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, recent: recent, now: now, calendarContext: calendarContext))
+        inv.feature = "proactive-research"
         inv.effort = .high                  // gpt-5.5 → high (accuracy + the prepared draft are the product)
         inv.sandbox = .readOnly             // verifies + stages — never sends, drafts into a provider, or acts
         inv.cwd = vault.path                // working dir = the knowledge base (a research surface + the voice)
@@ -142,12 +143,15 @@ actor ProactiveResearch {
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
             let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)
             Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
+            #if DEBUG   // B7: the per-item detail carries preparedContent/titles/recipes (the user's life) —
+                        // DEBUG-only so it can NEVER become a Release breadcrumb (Sentry is Release-only).
             for (i, a) in result.ready.enumerated() {
                 Log("  READY #\(i + 1) [\(a.method.rawValue)\(a.target.isEmpty ? "" : " · \(a.target)") · \(a.status.rawValue)\(a.dueDate.map { " · due \($0)" } ?? "")] \(a.title)\n      button: \(a.buttonText.isEmpty ? "(none)" : a.buttonText) · link: \(a.detailLabel)\n      card: \(a.cardSummary)\n      checked: \(a.verification)\n      content: \(a.preparedContent)\n      recipe: \(a.executionRecipe)\n      review: \(a.reviewNote.isEmpty ? "(none — fully ready)" : a.reviewNote)\n      src: \(a.sources.joined(separator: " | "))")
             }
             for d in result.dropped {
                 Log("  DROP \(d.title) — \(d.reason)")
             }
+            #endif
             Self.saveLatest(result)
             return result
         } catch let CodexCLI.CLIError.usageLimit(message, _) {

@@ -11,6 +11,8 @@
 //
 //  Key methods:
 //   - CodexCLI.locateBinary()  → cached absolute-path discovery (known paths + zsh -lc which)
+//   - install(onLine:)         → run OpenAI's standalone installer (the codex-setup onboarding step)
+//   - startLogin / loginStatus → step 2: interactive `codex login` (browser) + the status check
 //   - validate(force:)         → Availability via ping (cached per launch)
 //   - run(_:)                  → Envelope (blocking JSONL mode)
 //
@@ -73,6 +75,9 @@ actor CodexCLI {
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
         var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
+        var feature: String = "unknown"        // §7.9: which caller — so a codex.failure is attributable
+                                               // (gmail / calendar / vault / proactive / …). Diagnostics
+                                               // tag ONLY; never affects the run.
 
         init(prompt: String) { self.prompt = prompt }
     }
@@ -161,6 +166,84 @@ actor CodexCLI {
             .first { $0.hasPrefix("/") && fm.isExecutableFile(atPath: $0) }
     }
 
+    // MARK: Install
+
+    /// Install the Codex CLI via OpenAI's official standalone installer (Arch §5 — the codex-setup
+    /// onboarding step). Runs `curl … install.sh | CODEX_NON_INTERACTIVE=1 sh` as ONE shell pipeline
+    /// (the `|` only exists inside a shell) and streams every output line to `onLine` (the console +
+    /// the setup UI). The script drops the binary at `~/.local/bin/codex` — the first path
+    /// `locateBinary()` checks. Success = the binary is actually present afterward, NOT the shell's
+    /// exit code: a `curl | sh` pipeline reports the trailing `sh`'s status, so a failed download
+    /// (no network) can still "exit 0" with nothing installed. Throws if codex isn't found after the
+    /// run. (Installed ≠ logged in — auth is the next step; detection-first is the caller's job.)
+    static func install(onLine: @escaping @Sendable (String) -> Void) async throws {
+        let pipeline = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+        let out = try await executeStreaming(binary: "/bin/sh", args: ["-c", pipeline],
+                                             timeout: 300, onLine: onLine)
+        UserDefaults.standard.removeObject(forKey: pathCacheKey)   // force a fresh discovery scan
+        guard locateBinary() != nil else {
+            let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+            let msg = detail.isEmpty
+                ? "Codex not found after install — check your network connection."
+                : String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(600))
+            throw CLIError.exitFailure(code: out.status, message: msg)
+        }
+    }
+
+    // MARK: Login (setup step 2)
+
+    /// Begin the interactive login. Launches `codex login` as a BACKGROUND process: it starts a
+    /// localhost OAuth callback server and opens the user's browser to the OpenAI sign-in, then
+    /// self-exits once the redirect lands and `~/.codex/auth.json` is written. Streams its output to
+    /// `onLine` (the auth URL prints here as a fallback if the browser auto-open ever fails). Returns
+    /// the running Process so the caller can terminate it on cancel/restart. MUST NOT be awaited to
+    /// completion — the flow waits on the user finishing in the browser, then `loginStatus()`.
+    /// Inherits the app's full env + rich PATH (`richEnvironment`) so the browser launch + GUI
+    /// session vars are intact, exactly like a Terminal `codex login`.
+    static func startLogin(onLine: @escaping @Sendable (String) -> Void) throws -> Process {
+        guard let bin = locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: bin)
+        proc.arguments = ["login"]
+        proc.environment = richEnvironment(binDir: (bin as NSString).deletingLastPathComponent)
+        proc.standardInput = FileHandle.nullDevice
+        let outPipe = Pipe(), errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+        // Drain both pipes line-by-line until the process exits (EOF). No await: the queues simply
+        // finish on their own when `codex login` ends. Byte-level split keeps multibyte UTF-8 intact.
+        for (pipe, prefix) in [(outPipe, ""), (errPipe, "stderr: ")] {
+            DispatchQueue.global(qos: .utility).async {
+                var buf = Data()
+                let handle = pipe.fileHandleForReading
+                while true {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { break }
+                    buf.append(chunk)
+                    while let nl = buf.firstIndex(of: 0x0A) {
+                        onLine(prefix + String(decoding: buf[..<nl], as: UTF8.self))
+                        buf = Data(buf[buf.index(after: nl)...])
+                    }
+                }
+                if !buf.isEmpty { onLine(prefix + String(decoding: buf, as: UTF8.self)) }
+            }
+        }
+        do { try proc.run() } catch { throw CLIError.launchFailed("\(error)") }
+        return proc
+    }
+
+    /// Step 2 ground-truth check — `codex login status`. [MEASURED v0.142.3] exit 0 = logged in;
+    /// exit 1 + "Not logged in" = not. Exit status is the primary signal, with an output scan as a
+    /// backstop. Uses the bare-env `executeAsync` (status only reads `~/.codex/auth.json` via HOME).
+    static func loginStatus() async -> Bool {
+        guard let bin = locateBinary() else { return false }
+        guard let out = try? await executeAsync(binary: bin, args: ["login", "status"],
+                                                stdinText: nil, cwd: nil, timeout: 30) else { return false }
+        if out.status == 0 { return true }
+        let lowered = (out.stdout + out.stderr).lowercased()
+        return lowered.contains("logged in") && !lowered.contains("not logged in")
+    }
+
     // MARK: Validation
 
     private var cachedAvailability: Availability?
@@ -196,6 +279,20 @@ actor CodexCLI {
     /// notably `.usageLimit` (carrying the session id) so callers can reschedule/resume.
     func run(_ invocation: Invocation,
              onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
+        let t0 = Date()   // §7.9: for the codex.failure duration on the throw path
+        do {
+            return try await runInner(invocation, onLine: onLine)
+        } catch {
+            Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
+                                  model: invocation.model, effort: invocation.effort,
+                                  resumed: invocation.resumeSessionID != nil,
+                                  durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+            throw error
+        }
+    }
+
+    private func runInner(_ invocation: Invocation,
+                          onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
         let availability = await validate()
         guard case .available(let bin) = availability else {
             throw CLIError.notAvailable(availability)
@@ -236,17 +333,47 @@ actor CodexCLI {
     /// --ignore-user-config). Returns the full output. Computer use is the WIP CLI path.
     func runAgentCommand(_ prompt: String, timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
-        guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-        let args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                    "-m", Model.gpt55.rawValue,
-                    "-c", "model_reasoning_effort=\"low\"",
-                    "--skip-git-repo-check", prompt]
-        let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
-        guard out.status == 0 else {
-            let detail = out.stderr.isEmpty ? out.stdout : out.stderr
-            throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
+        let t0 = Date()
+        do {
+            guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+            let args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
+                        "-m", Model.gpt55.rawValue,
+                        "-c", "model_reasoning_effort=\"low\"",
+                        "--skip-git-repo-check", prompt]
+            let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
+            guard out.status == 0 else {
+                let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+                throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
+            }
+            return out.stdout.isEmpty ? out.stderr : out.stdout
+        } catch {
+            // §7.9: computer-use runs are the highest-risk executions (bypass-sandbox). Case name only.
+            Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
+                                  model: .gpt55, effort: .low, resumed: false,
+                                  durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+            throw error
         }
-        return out.stdout.isEmpty ? out.stderr : out.stdout
+    }
+
+    /// Emit a structured codex failure — the CLIError CASE NAME only (never `.message`/stderr/prompt,
+    /// which embed user content). One seam for the whole cloud spine; `feature` makes it attributable.
+    private static func emitCodexFailure(event: String, _ error: Error, feature: String,
+                                         model: Model, effort: Effort, resumed: Bool, durationMS: Int) {
+        let caseName: String
+        let level: CrashReporting.DiagLevel
+        switch error {
+        case CLIError.usageLimit:   (caseName, level) = ("usageLimit", .info)      // expected, not a defect
+        case CLIError.notAvailable: (caseName, level) = ("notAvailable", .warning)
+        case CLIError.timedOut:     (caseName, level) = ("timedOut", .warning)
+        case CLIError.launchFailed: (caseName, level) = ("launchFailed", .error)
+        case CLIError.exitFailure:  (caseName, level) = ("exitFailure", .error)
+        case CLIError.badEnvelope:  (caseName, level) = ("badEnvelope", .error)
+        default:                    (caseName, level) = (String(describing: type(of: error)), .error)
+        }
+        CrashReporting.captureEvent(event, level: level,
+            tags: ["feature": feature, "error": caseName, "model": model.rawValue],
+            extra: ["effort": effort.rawValue, "resumed": String(resumed), "duration_ms": String(durationMS)],
+            fingerprint: ["codex", feature, caseName])
     }
 
     /// `exec resume` accepts only a subset of `exec`'s flags — no `-s`/`--cd`/`--add-dir`.
@@ -397,6 +524,24 @@ actor CodexCLI {
         let stderr: String
     }
 
+    /// Full inherited environment + a rich PATH, for the codex calls that need the real GUI session
+    /// context (NOT the bare HOME/USER env `execute` uses). Computer use needs the inherited $TMPDIR
+    /// + session/bootstrap vars (its `SkyComputerUseService` IPC socket lives under $TMPDIR, so the
+    /// bare env hangs at `list_apps`); `codex login` needs the same so the browser launch works. The
+    /// binary's own dir leads PATH (npm shims `#!/usr/bin/env node` right next to themselves).
+    private static func richEnvironment(binDir: String) -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        let home = env["HOME"] ?? NSHomeDirectory()
+        let richPath = [binDir,
+                        "\(home)/.local/bin",
+                        "/opt/homebrew/bin", "/opt/homebrew/sbin",
+                        "/usr/local/bin",
+                        "/Applications/Codex.app/Contents/Resources/cua_node/bin",
+                        "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
+        env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
+        return env
+    }
+
     /// Thread-safe byte sink so each pipe drains concurrently with the running child —
     /// a full 64 KB pipe buffer would otherwise deadlock both processes.
     private final class PipeDrain: @unchecked Sendable {
@@ -540,24 +685,10 @@ actor CodexCLI {
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: binary)
                 proc.arguments = args
-                // Computer use drives Codex's bundled GUI helper (SkyComputerUseService), which codex
-                // reaches over an IPC socket living under the per-user $TMPDIR. The bare HOME/USER env
-                // we use for headless codex elsewhere DROPS $TMPDIR (+ the GUI session/bootstrap vars),
-                // so the helper connection hangs at the first call (`list_apps`). So here we INHERIT
-                // the app's full environment — which carries the real $TMPDIR + session vars, exactly
-                // like a Terminal launch — and only overlay a rich PATH so codex finds the tools it
-                // shells out to (node, the Codex.app cua_node).
-                let binDir = (binary as NSString).deletingLastPathComponent
-                var env = ProcessInfo.processInfo.environment
-                let home = env["HOME"] ?? NSHomeDirectory()
-                let richPath = [binDir,
-                                "\(home)/.local/bin",
-                                "/opt/homebrew/bin", "/opt/homebrew/sbin",
-                                "/usr/local/bin",
-                                "/Applications/Codex.app/Contents/Resources/cua_node/bin",
-                                "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
-                env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
-                proc.environment = env
+                // Full inherited env + rich PATH (see richEnvironment): computer use needs the real
+                // $TMPDIR + GUI session vars (its helper IPC socket lives under $TMPDIR), and so does
+                // `codex login`'s browser launch — the bare HOME/USER env `execute` uses won't do.
+                proc.environment = richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
 
                 let outPipe = Pipe(), errPipe = Pipe()
                 proc.standardInput = FileHandle.nullDevice
