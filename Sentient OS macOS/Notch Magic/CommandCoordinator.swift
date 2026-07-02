@@ -84,7 +84,10 @@ final class CommandCoordinator {
         run.start(trimmed, mode: mode)
         // Every command is computer use, which raises the notch.
         setPhase(.running)
-        Log("▶︎ submit [\(source)] \(mode.label): \(trimmed)")
+        Log("▶︎ submit [\(source)] \(mode.label) (\(trimmed.count) chars)")   // B7: length, not the command text
+        #if DEBUG
+        Log("   cmd ↓ \(trimmed)")
+        #endif
     }
 
     /// Cancel the running task. A STOP (or Esc) WHILE THE TRANSCRIPT IS SHOWN means "you misheard me — redo":
@@ -157,7 +160,10 @@ final class CommandCoordinator {
                     Log("🗣️ heard nothing")
                     self.flash("didn’t catch that")
                 } else {
-                    Log("🗣️ heard: \(text)")
+                    Log("🗣️ heard (\(text.count) chars)")   // B7: length, not the raw transcript
+                    #if DEBUG
+                    Log("   heard ↓ \(text)")
+                    #endif
                     self.submit(text, mode: .computer, source: .voice)
                 }
             } catch {

@@ -909,7 +909,7 @@ struct DevToolsView: View {
     private func runReset() async {
         await CycleStore.shared.wipeEverything()
         try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
-        Log("DevTools: RESET — wiped the cycle store + the knowledge base at \(VaultGenerator.vaultRoot.path)")
+        Log("DevTools: RESET — wiped the cycle store + the knowledge base (\(VaultGenerator.vaultRoot.lastPathComponent))")   // B7: folder name, not the home path
         let c = await CycleStore.shared.counts()
         resetResult = "✓ reset — cycle store + knowledge base wiped (notes \(c.notes))"
     }

@@ -107,7 +107,7 @@ actor ProactiveExecutor {
                               progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         do {
             let env = try await CodexCLI.shared.run(inv) { progress($0) }   // live play-by-play
-            Log("ProactiveExecutor/\(channel): ✓ \(env.result)")
+            Log("ProactiveExecutor/\(channel): ✓ (\(env.result.count) chars)")   // B7: length, not content (codex's reply can echo the email/action)
             if env.result.uppercased().hasPrefix("COULD NOT") {
                 return .failed(String(env.result.dropFirst("COULD NOT:".count).trimmingCharacters(in: .whitespaces)))
             }
@@ -130,7 +130,7 @@ actor ProactiveExecutor {
                                                                 timeout: 900) { line in progress(line) }
             let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let final = lines.last ?? "Done on your Mac."
-            Log("ProactiveExecutor/computer: ✓ \(final.suffix(300))")
+            Log("ProactiveExecutor/computer: ✓ (\(final.count) chars)")   // B7: length, not content (computer-use output)
             if final.uppercased().hasPrefix("COULD NOT") {
                 return .failed(String(final.dropFirst("COULD NOT:".count).trimmingCharacters(in: .whitespaces)))
             }
