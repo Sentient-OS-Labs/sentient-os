@@ -41,6 +41,19 @@ final class WakeHelperClient {
         try? await service.unregister()
     }
 
+    /// Live registration status of the root daemon (`.enabled` = approved & ready · `.requiresApproval`
+    /// = registered, waiting for the user in System Settings · `.notRegistered` = never registered ·
+    /// `.notFound` = the bundled plist is missing / the build isn't signed for it). Read on every check
+    /// so a mid-session approval/revoke in System Settings is seen immediately.
+    var status: SMAppService.Status { SMAppService.daemon(plistName: WakeHelperConfig.daemonPlistName).status }
+
+    /// True once the user has approved the daemon and it's ready to accept XPC.
+    var isReady: Bool { status == .enabled }
+
+    /// Open System Settings > General > Login Items, where the user approves the daemon. Called by the
+    /// setup UX when `register()` returns `.requiresApproval`.
+    func openLoginItemsSettings() { SMAppService.openSystemSettingsLoginItems() }
+
     // MARK: - The four ops
 
     func beginAwake(timeout: Int = 7200) async -> Bool { await call { $0.beginAwake(timeoutSeconds: timeout, withReply: $1) } }

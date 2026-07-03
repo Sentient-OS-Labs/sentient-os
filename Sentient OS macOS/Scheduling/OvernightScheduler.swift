@@ -20,6 +20,7 @@
 //
 
 import Foundation
+import ServiceManagement
 
 @MainActor
 @Observable
@@ -28,20 +29,63 @@ final class OvernightScheduler {
     /// One-line status for the dev UI ("off" / "armed for 4:00 PM" / "running…").
     var statusLine = "off"
 
-    static let enabledKey = "dbg.scheduler.enabled"
-    static let minutesKey = "dbg.scheduler.minutes"   // minutes since midnight
-    static let defaultMinutes = 3 * 60                // 3:00 AM — the production overnight time (the dev
-                                                     // UI can override `minutesKey` for testing)
+    /// Set true when the 18h auto-enable wants to arm but the prerequisites (approved root helper +
+    /// launch-at-login) aren't in place yet. The setup UX (dev section today, onboarding later) reads
+    /// this to prompt the user; it clears itself once auto-enable succeeds.
+    var needsSchedulerSetup = false
+
+    // The DEV toggle (testing) and the PRODUCTION flag are separate keys but either one runs the
+    // scheduler. The dev toggle is hand-flipped in DevToolsView; the production flag is what the 18h
+    // auto-enable (and a future Settings switch) writes. Keeping them apart means a dev testing the
+    // toggle never trips the production auto-enable latch, and vice-versa.
+    static let enabledKey = "dbg.scheduler.enabled"        // DEV toggle
+    static let prodEnabledKey = "scheduler.enabled"         // PRODUCTION flag (auto-enable / Settings)
+    static let minutesKey = "dbg.scheduler.minutes"        // minutes since midnight
+    static let defaultMinutes = 3 * 60                     // 3:00 AM — the production overnight time (the dev
+                                                          // UI can override `minutesKey` for testing)
+
+    // 18h auto-enable state (all UserDefaults; survive restarts).
+    static let firstCycleAtKey = "scheduler.firstCycleCompletedAt"   // Double epoch — set ONCE
+    static let autoEnableFiredKey = "scheduler.autoEnableFired"      // latch — flip prod ON at most once
+    static let autoEnableDelayKey = "scheduler.autoEnableDelaySeconds"  // dev override of the 18h wait
+    static let defaultAutoEnableDelay: TimeInterval = 18 * 3600      // 18 hours after initial finishes
 
     /// The configured time-of-day in minutes since midnight (shared default so the UI and the loop agree).
-    static var configuredMinutes: Int { (UserDefaults.standard.object(forKey: minutesKey) as? Int) ?? defaultMinutes }
+    nonisolated static var configuredMinutes: Int { (UserDefaults.standard.object(forKey: minutesKey) as? Int) ?? defaultMinutes }
+
+    /// The auto-enable wait (default 18h; a dev key shortens it for testing). (Pure UserDefaults read.)
+    nonisolated static var autoEnableDelay: TimeInterval {
+        let v = UserDefaults.standard.double(forKey: autoEnableDelayKey)
+        return v > 0 ? v : defaultAutoEnableDelay
+    }
+
+    /// When the first full ProactiveCycle finished (nil until it has). Set once via `noteFirstCycleCompleted`.
+    nonisolated static var firstCycleCompletedAt: Date? {
+        let t = UserDefaults.standard.double(forKey: firstCycleAtKey)
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
+    }
+
+    /// The instant the scheduler should auto-enable (first-cycle-completion + the wait). Nil until initial done.
+    nonisolated static var autoEnableFireDate: Date? { firstCycleCompletedAt.map { $0.addingTimeInterval(autoEnableDelay) } }
+
+    /// Stamp "initial processing finished" exactly once — called from ProactiveCycle on the first full,
+    /// successful cycle (knowledge base now exists). Nonisolated: it's a single UserDefaults write, safe
+    /// from the cycle actor. Later calls are ignored, so the 18h clock starts at the TRUE first finish.
+    nonisolated static func noteFirstCycleCompleted() {
+        let d = UserDefaults.standard
+        guard d.double(forKey: firstCycleAtKey) == 0 else { return }
+        d.set(Date().timeIntervalSince1970, forKey: firstCycleAtKey)
+        Log("Scheduler: first full cycle done — 18h auto-enable clock started (fires \(Date().addingTimeInterval(autoEnableDelay)))")
+    }
 
     private var loopTask: Task<Void, Never>?
+    private var autoEnableTask: Task<Void, Never>?
     private var everArmed = false
 
-    /// Re-read the dev settings and (re)start or stop. Call on launch and on the on/off toggle.
+    /// Run if EITHER the dev toggle or the production flag is on. Call on launch and on any toggle.
     func reevaluate() {
-        if UserDefaults.standard.bool(forKey: Self.enabledKey) { start() } else { stop() }
+        let on = UserDefaults.standard.bool(forKey: Self.enabledKey) || UserDefaults.standard.bool(forKey: Self.prodEnabledKey)
+        if on { start() } else { stop() }
     }
 
     /// "Done" — finalize the chosen time: restart the loop, which wipes EVERY scheduled wake (clears
@@ -63,20 +107,104 @@ final class OvernightScheduler {
             everArmed = false
             Task { _ = await WakeHelperClient.shared.cancelWake() }
         }
+        // NB: the auto-enable timer is deliberately NOT cancelled here — it must keep waiting to flip
+        // the scheduler ON even while it's currently off (that's the whole point of auto-enable).
+    }
+
+    // MARK: - 18h auto-enable
+
+    /// Decide whether to auto-enable the production scheduler. Idempotent + safe to call repeatedly —
+    /// from launch (AppState.init), right after any cycle finishes, and from the one-shot timer it arms.
+    /// Fires at most once (a latch), never fights a user who toggled the scheduler off, and only arms
+    /// when the prerequisites (approved root helper + launch-at-login) are in place — otherwise it flags
+    /// `needsSchedulerSetup` for the setup UX and retries on the next tick.
+    func maybeAutoEnable() {
+        let d = UserDefaults.standard
+        guard !d.bool(forKey: Self.autoEnableFiredKey) else { return }      // already handled once
+
+        // The user already turned the scheduler on (dev or prod) — latch and never auto-touch it.
+        if d.bool(forKey: Self.enabledKey) || d.bool(forKey: Self.prodEnabledKey) {
+            d.set(true, forKey: Self.autoEnableFiredKey); return
+        }
+
+        guard let fireAt = Self.autoEnableFireDate else { return }          // initial not finished yet
+        if Date() < fireAt { armAutoEnableTimer(at: fireAt); return }       // not time yet — wait
+
+        // Time's up. Only enable if the overnight run can actually happen: approved helper + login item.
+        guard WakeHelperClient.shared.isReady else {
+            needsSchedulerSetup = true                                      // surface setup; retry next tick
+            Log("Scheduler: 18h elapsed but root helper not approved — awaiting setup")
+            return
+        }
+        LoginItem.enable()                                                  // ensure the app relaunches to host 3am
+        d.set(true, forKey: Self.prodEnabledKey)
+        d.set(true, forKey: Self.autoEnableFiredKey)
+        needsSchedulerSetup = false
+        Log("Scheduler: 18h elapsed + prerequisites met — auto-enabled overnight processing")
+        Analytics.signal("Scheduler.autoEnabled")
+        reevaluate()
+    }
+
+    /// Arm a one-shot wake-up for the auto-enable moment (so it fires even if the app just sits open
+    /// past the 18h mark). Replaces any pending timer; the timer just re-invokes maybeAutoEnable().
+    private func armAutoEnableTimer(at fireAt: Date) {
+        autoEnableTask?.cancel()
+        let delay = max(1, fireAt.timeIntervalSinceNow)
+        autoEnableTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            self?.maybeAutoEnable()
+        }
+    }
+
+    // MARK: - Helper readiness
+
+    /// Ensure the root daemon is registered & approved before arming. Returns true when it's ready to
+    /// accept XPC. PRODUCTION path: SMAppService (one-click System Settings approval, no password) —
+    /// `.enabled` means go, `.requiresApproval` bails and lets the setup UX walk the user through it.
+    /// DEBUG dev builds (unsigned, or the plist not bundled → `.notFound`) fall back to the proven
+    /// admin-password installer so testing keeps working without a signed distribution build.
+    private func ensureHelperReady(log: SchedulerLog) async -> Bool {
+        let client = WakeHelperClient.shared
+        if client.isReady { return true }
+
+        let status = client.register()   // may surface the System Settings approval prompt
+        log.line("helper SMAppService status after register: \(status.rawValue)")
+        switch status {
+        case .enabled:
+            try? await Task.sleep(for: .seconds(1))   // let launchd settle before the first connection
+            needsSchedulerSetup = false
+            return true
+        case .requiresApproval:
+            needsSchedulerSetup = true
+            statusLine = "approve in System Settings"
+            log.line("helper needs approval in System Settings > Login Items — awaiting user")
+            return false
+        default:   // .notRegistered / .notFound — plist not bundled or build not signed for SMAppService
+            #if DEBUG
+            log.line("SMAppService unavailable (\(status.rawValue)) — DEBUG fallback to admin-password installer")
+            if !WakeHelperInstaller.isInstalledAndCurrent() {
+                statusLine = "installing helper…"
+                let ok = await WakeHelperInstaller.installAsync()
+                log.line("helper install (admin): \(ok ? "OK" : "declined/failed")")
+                guard ok else { statusLine = "needs your password — toggle off then on to retry"; return false }
+                try? await Task.sleep(for: .seconds(1))
+            }
+            return true
+            #else
+            needsSchedulerSetup = true
+            statusLine = "helper unavailable"
+            log.line("helper unavailable in Release (status \(status.rawValue)) — awaiting setup")
+            return false
+            #endif
+        }
     }
 
     private func loop() async {
         let log = SchedulerLog()
 
-        // Make sure the root helper is installed — one-time native password prompt, no Terminal.
-        if !WakeHelperInstaller.isInstalledAndCurrent() {
-            statusLine = "installing helper…"
-            log.line("helper not installed/current — requesting install (admin prompt)")
-            let ok = await WakeHelperInstaller.installAsync()
-            log.line("helper install: \(ok ? "OK" : "declined/failed")")
-            guard ok else { statusLine = "needs your password — toggle off then on to retry"; return }
-            try? await Task.sleep(for: .seconds(1))   // let launchd settle before the first connection
-        }
+        // Make sure the root wake helper is installed & approved before arming any wake.
+        guard await ensureHelperReady(log: log) else { return }
 
         // Clean slate: wipe every existing scheduled wake (duplicates / stale), then arm exactly one.
         everArmed = true

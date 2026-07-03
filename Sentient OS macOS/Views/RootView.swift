@@ -12,6 +12,7 @@
 import SwiftUI
 
 struct RootView: View {
+    @Environment(AppState.self) private var appState
     @State private var isProcessing = false
     @State private var showDevTools = false
     @State private var customRoots: [URL] = []   // session-only custom folders (dev picker)
@@ -45,6 +46,7 @@ struct RootView: View {
                                runCalendar: calendarConnected && runCalendar,
                                fullCycle: realCards) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
+                    appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 18h clock
                 }
                 .transition(.opacity)
             } else {

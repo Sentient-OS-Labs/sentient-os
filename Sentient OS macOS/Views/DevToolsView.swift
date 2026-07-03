@@ -26,6 +26,7 @@
 
 import SwiftUI
 import AppKit
+import ServiceManagement
 
 /// One-shot reader of the dev source-picker prefs (same keys as the @AppStorage below; defaults
 /// must match: folder toggles ON, DB sources OFF). RootView uses it for Analyze Now; this sheet
@@ -124,6 +125,10 @@ struct DevToolsView: View {
     // Scheduled run (dev testing — drives OvernightScheduler).
     @AppStorage(OvernightScheduler.enabledKey) private var schedEnabled = false
     @AppStorage(OvernightScheduler.minutesKey) private var schedMinutes = OvernightScheduler.defaultMinutes
+    // 18h auto-enable dev override (0 = the real 18h) + live prerequisite statuses (refreshed on appear).
+    @AppStorage(OvernightScheduler.autoEnableDelayKey) private var autoEnableDelayOverride: Double = 0
+    @State private var helperStatusLabel = "—"
+    @State private var loginItemEnabled = false
 
     // MCP mirror (the hosted Render copy). Local mirrors of MirrorClient's actor state, refreshed
     // when "More" opens and after each action.
@@ -158,10 +163,16 @@ struct DevToolsView: View {
             })
     }
 
-    private var schedulerSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    // The whole overnight-processing dev surface: the scheduled-run time control PLUS the production
+    // prerequisites (root helper approval, launch-at-login) and the 18h auto-enable state + overrides.
+    // The real UX ships in onboarding/Settings later; this is the dev cockpit for all of it.
+    private var overnightSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("OVERNIGHT PROCESSING").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
+
+            // 1) Scheduled run — the dev toggle + wake time (moved here from the old "SCHEDULED RUN" card).
             HStack {
-                Text("SCHEDULED RUN").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
+                Text("Scheduled run (dev)").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
                 Spacer()
                 Toggle("", isOn: $schedEnabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
@@ -177,14 +188,106 @@ struct DevToolsView: View {
                 Text(schedEnabled ? appState.scheduler.statusLine : "off")
                     .font(.caption2.monospaced()).foregroundStyle(Theme.faint)
             }
-            Text("Wakes the Mac at this time with the lid shut, runs .auto over the selected sources, then sleeps. Runs ONLY while Sentient is open — quit it and the wake is cancelled.")
+
+            Divider().overlay(.white.opacity(0.06))
+
+            // 2) Root wake helper — the SMAppService daemon (production install path). register() may
+            //    surface the System Settings approval; the deep-link button jumps there.
+            HStack {
+                Text("Root wake helper").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
+                Spacer()
+                Text(helperStatusLabel).font(.caption2.monospaced()).foregroundStyle(Theme.faint)
+            }
+            HStack(spacing: 8) {
+                Button("Register / Approve") { _ = WakeHelperClient.shared.register(); refreshStatuses() }
+                    .controlSize(.small)
+                Button("Open Login Items") { WakeHelperClient.shared.openLoginItemsSettings() }
+                    .controlSize(.small)
+                Button("Refresh") { refreshStatuses() }.controlSize(.small)
+            }
+
+            // 3) Launch at login — the app must be running at 3am to host the scheduler.
+            HStack {
+                Text("Launch at login").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
+                Spacer()
+                Toggle("", isOn: $loginItemEnabled).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                    .onChange(of: loginItemEnabled) { _, on in
+                        if on { LoginItem.enable() } else { Task { await LoginItem.disable() } }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { refreshStatuses() }
+                    }
+            }
+
+            Divider().overlay(.white.opacity(0.06))
+
+            // 4) 18h auto-enable — the actual feature: flip production ON 18h after the first full cycle,
+            //    once the helper is approved + launch-at-login is on. Dev buttons make it testable now.
+            Text("18h auto-enable").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.8))
+            Text(autoEnableStatusText).font(.caption2.monospaced()).foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Button("Simulate initial done") {
+                    UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: OvernightScheduler.firstCycleAtKey)
+                    appState.scheduler.maybeAutoEnable(); refreshStatuses()
+                }.controlSize(.small)
+                Button("Run check now") { appState.scheduler.maybeAutoEnable(); refreshStatuses() }.controlSize(.small)
+                Button("Reset") { resetAutoEnable() }.controlSize(.small)
+            }
+            HStack(spacing: 8) {
+                Text("Delay override (sec, 0 = 18h)").font(.caption2).foregroundStyle(Theme.faint)
+                TextField("0", value: $autoEnableDelayOverride, format: .number)
+                    .frame(width: 80).textFieldStyle(.roundedBorder).controlSize(.small)
+            }
+
+            Text("Auto-enables the overnight scheduler 18h after the first full cycle — but only once the root helper is approved AND launch-at-login is on (else it flags \"needs setup\" and retries). Runs ONLY while Sentient is open. Toggles above are dev overrides.")
                 .font(.caption2).foregroundStyle(Theme.faint.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
         .onChange(of: schedEnabled) { _, _ in appState.scheduler.reevaluate() }
+        .onAppear { refreshStatuses() }
         // Changing the time does NOT arm — the user presses "Done" to commit (no duplicate wakes).
+    }
+
+    /// Live prerequisite readout for the dev section (the user can approve/revoke in System Settings).
+    private func refreshStatuses() {
+        helperStatusLabel = Self.statusLabel(WakeHelperClient.shared.status)
+        loginItemEnabled = LoginItem.isEnabled
+    }
+
+    /// Clear every 18h auto-enable trace so the flow can be re-tested from scratch.
+    private func resetAutoEnable() {
+        let d = UserDefaults.standard
+        d.removeObject(forKey: OvernightScheduler.firstCycleAtKey)
+        d.removeObject(forKey: OvernightScheduler.autoEnableFiredKey)
+        d.removeObject(forKey: OvernightScheduler.prodEnabledKey)
+        appState.scheduler.needsSchedulerSetup = false
+        appState.scheduler.reevaluate()
+        refreshStatuses()
+    }
+
+    private var autoEnableStatusText: String {
+        let fired = UserDefaults.standard.bool(forKey: OvernightScheduler.autoEnableFiredKey)
+        guard let done = OvernightScheduler.firstCycleCompletedAt, let fireAt = OvernightScheduler.autoEnableFireDate else {
+            return "initial not finished yet — clock not started"
+        }
+        let firedTxt = fired ? " · fired ✓" : ""
+        let setupTxt = appState.scheduler.needsSchedulerSetup ? " · NEEDS SETUP" : ""
+        return "initial done \(Self.shortStamp(done)) · fires \(Self.shortStamp(fireAt))\(firedTxt)\(setupTxt)"
+    }
+
+    private static func statusLabel(_ s: SMAppService.Status) -> String {
+        switch s {
+        case .enabled:          return "enabled ✓"
+        case .requiresApproval: return "needs approval"
+        case .notRegistered:    return "not registered"
+        case .notFound:         return "not found (unsigned/dev)"
+        @unknown default:       return "unknown"
+        }
+    }
+
+    private static func shortStamp(_ d: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "MMM d, h:mm a"; return f.string(from: d)
     }
 
     /// Toggle: real For-You cards vs the demo deck. ON also makes Analyze Now run the full cycle.
@@ -226,7 +329,7 @@ struct DevToolsView: View {
             ScrollView {
                 VStack(spacing: 22) {
                     sourcePicker
-                    schedulerSection
+                    overnightSection
 
                     if Self.modelPath == nil {
                         Text("On-device model not found — place \(ModelLocator.fileName) next to the .xcodeproj, or set SENTIENT_MODEL_PATH.")

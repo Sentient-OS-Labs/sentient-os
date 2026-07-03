@@ -8,13 +8,29 @@
 
 /* Begin PBXBuildFile section */
 		5A7E1D0002000000000000B1 /* TelemetryDeck in Frameworks */ = {isa = PBXBuildFile; productRef = 5A7E1D0002000000000000B2 /* TelemetryDeck */; };
+		5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.plist in Copy wake-helper daemon plist */ = {isa = PBXBuildFile; fileRef = 5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */; };
 		5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5AB7600D2FD12ABE00149A7F /* LiteRTLM */; };
 		5AE5710001000000000000A1 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 5AE5710001000000000000A2 /* Sentry */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		5A7E1D0003000000000000C1 /* Copy wake-helper daemon plist */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchDaemons;
+			dstSubfolderSpec = 1;
+			files = (
+				5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.plist in Copy wake-helper daemon plist */,
+			);
+			name = "Copy wake-helper daemon plist";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		5A3F39112FD0F43300DD835E /* Sentient OS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Sentient OS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A5167160C0F16AB00000001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "jesai.Sentient-OS-macOS.WakeHelper.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -44,6 +60,7 @@
 			children = (
 				5A3F39132FD0F43300DD835E /* Sentient OS macOS */,
 				5A5167160C0F16AB00000001 /* Signing.xcconfig */,
+				5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */,
 				5A3F39122FD0F43300DD835E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -66,6 +83,7 @@
 				5A3F390D2FD0F43300DD835E /* Sources */,
 				5A3F390E2FD0F43300DD835E /* Frameworks */,
 				5A3F390F2FD0F43300DD835E /* Resources */,
+				5A7E1D0003000000000000C1 /* Copy wake-helper daemon plist */,
 				5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */,
 				5AE5710001000000000000B1 /* Upload dSYMs to Sentry */,
 			);
