@@ -6,6 +6,8 @@
 //  Lists the chats ACTIVE within the scan window (newest first, with message counts), with
 //  search + per-chat checkboxes + bulk All-DMs / All-groups / Clear. "Done" hands the selected
 //  chat ids (JIDs / GUIDs) back to the caller, which persists them and lights up the source chip.
+//  DMs from numbers not in the user's contacts (ChatInfo.isSaved == false — iMessage only) hide
+//  behind the "Show unsaved numbers" checkbox, off by default; a selected chat is never hidden.
 //
 
 import SwiftUI
@@ -20,6 +22,7 @@ struct ChatPicker: View {
     @State private var chats: [ChatInfo] = []
     @State private var selection: Set<String>
     @State private var search = ""
+    @State private var showUnsaved = false
     @State private var loaded = false
     @State private var loadError: String?
 
@@ -32,9 +35,15 @@ struct ChatPicker: View {
         _selection = State(initialValue: initialSelection)
     }
 
-    private var filtered: [ChatInfo] {
-        search.isEmpty ? chats : chats.filter { $0.name.localizedCaseInsensitiveContains(search) }
+    /// What the list shows: saved chats always; unsaved numbers only with the toggle on —
+    /// except ones already selected, which must never be invisibly opted in.
+    private var visible: [ChatInfo] {
+        chats.filter { showUnsaved || $0.isSaved || selection.contains($0.id) }
     }
+    private var filtered: [ChatInfo] {
+        search.isEmpty ? visible : visible.filter { $0.name.localizedCaseInsensitiveContains(search) }
+    }
+    private var unsavedCount: Int { chats.count { !$0.isSaved } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -53,7 +62,7 @@ struct ChatPicker: View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Choose chats & groups").font(.serif(24)).italic().foregroundStyle(.white)
             Text(loaded
-                 ? "\(selection.count) selected · \(chats.count) active in the last \(ChatWindowing.lookbackDays) days"
+                 ? "\(selection.count) selected · \(visible.count) active in the last \(ChatWindowing.lookbackDays) days"
                  : "Reading your chats…")
                 .font(.footnote).foregroundStyle(Theme.secondary)
         }
@@ -74,9 +83,24 @@ struct ChatPicker: View {
                 bulk("All groups") { for c in filtered where c.isGroup  { selection.insert(c.id) } }
                 bulk("Clear")      { selection.removeAll() }
                 Spacer()
+                if unsavedCount > 0 { unsavedToggle }
             }
         }
         .padding(.horizontal, 20).padding(.bottom, 12)
+    }
+
+    /// The "show unsaved numbers" checkbox — mirrors the row checkmarks (accent when on).
+    private var unsavedToggle: some View {
+        Button { withAnimation(.easeOut(duration: 0.15)) { showUnsaved.toggle() } } label: {
+            HStack(spacing: 6) {
+                Image(systemName: showUnsaved ? "checkmark.square.fill" : "square")
+                    .font(.system(size: 13)).foregroundStyle(showUnsaved ? Theme.accent : Theme.faint)
+                Text("Show unsaved numbers (\(unsavedCount))")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(showUnsaved ? .white : Theme.secondary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private func bulk(_ title: String, _ action: @escaping () -> Void) -> some View {
@@ -103,6 +127,15 @@ struct ChatPicker: View {
             centered {
                 Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(Theme.faint)
                 Text("No active chats in the last \(ChatWindowing.lookbackDays) days").foregroundStyle(Theme.secondary)
+            }
+        } else if filtered.isEmpty {
+            centered {
+                Image(systemName: "person.crop.circle.badge.questionmark").font(.largeTitle).foregroundStyle(Theme.faint)
+                Text(search.isEmpty
+                     ? "Only unsaved numbers were active — tap “Unsaved numbers” to show them"
+                     : "No chats match “\(search)”")
+                    .font(.callout).foregroundStyle(Theme.secondary)
+                    .multilineTextAlignment(.center).padding(.horizontal, 40)
             }
         } else {
             ScrollView {
@@ -167,4 +200,27 @@ struct ChatPicker: View {
         }
         loaded = true
     }
+}
+
+#Preview("Mixed saved & unsaved (iMessage)") {
+    ChatPicker(
+        sourceName: "iMessage",
+        loadChats: { [
+            ChatInfo(id: "1", name: "Jesai UMass USA", isGroup: false, messageCount: 16,
+                     lastActive: .now.addingTimeInterval(-3 * 86400)),
+            ChatInfo(id: "2", name: "+14154042744", isGroup: false, messageCount: 2,
+                     lastActive: .now.addingTimeInterval(-7 * 86400), isSaved: false),
+            ChatInfo(id: "3", name: "+917428192241 & +19121366030", isGroup: true, messageCount: 1,
+                     lastActive: .now.addingTimeInterval(-8 * 86400)),
+            ChatInfo(id: "4", name: "Aryaman UMass, Gurmeher SF Ditto & 1 others", isGroup: true,
+                     messageCount: 50, lastActive: .now.addingTimeInterval(-14 * 86400)),
+            ChatInfo(id: "5", name: "Aarit UMass", isGroup: false, messageCount: 19,
+                     lastActive: .now.addingTimeInterval(-21 * 86400)),
+            ChatInfo(id: "6", name: "262966", isGroup: false, messageCount: 1,
+                     lastActive: .now.addingTimeInterval(-40 * 86400), isSaved: false),
+            ChatInfo(id: "7", name: "39781", isGroup: false, messageCount: 1,
+                     lastActive: .now.addingTimeInterval(-42 * 86400), isSaved: false),
+        ] },
+        initialSelection: ["2"],   // a selected unsaved number — must stay visible with the toggle off
+        onDone: { _ in })
 }

@@ -57,6 +57,7 @@ struct iMessageSource: Sendable {
         let guid: String          // the stable opt-in key
         let name: String          // resolved display name (never a blank)
         let isGroup: Bool         // chat.style 43 = group, 45 = DM
+        let isSaved: Bool         // DM partner in contacts / explicit display_name; groups always true
     }
 
     /// Active chats (analyzable messages within the lookback) for the picker — newest first.
@@ -79,7 +80,8 @@ struct iMessageSource: Sendable {
                                  name: chat.name,
                                  isGroup: chat.isGroup,
                                  messageCount: Int(r.int(1)),
-                                 lastActive: Self.date(fromAppleNS: r.int(2))),
+                                 lastActive: Self.date(fromAppleNS: r.int(2)),
+                                 isSaved: chat.isSaved),
                         r.int(2)))
         }
         return out.map(\.info)
@@ -114,14 +116,17 @@ struct iMessageSource: Sendable {
             let explicit = (r.text(3) ?? "").trimmingCharacters(in: .whitespaces)
             let identifier = r.text(4) ?? guid
             let name: String
+            var isSaved = true
             if !explicit.isEmpty {
                 name = explicit
             } else if isGroup {
                 name = ChatWindowing.groupName(of: (members[r.int(0)] ?? []).map { resolved($0, contacts) })
             } else {
-                name = resolved(identifier, contacts)
+                let contact = AddressBookNames.resolve(identifier, in: contacts)
+                name = contact ?? identifier
+                isSaved = contact != nil
             }
-            out[r.int(0)] = Chat(rowid: r.int(0), guid: guid, name: name, isGroup: isGroup)
+            out[r.int(0)] = Chat(rowid: r.int(0), guid: guid, name: name, isGroup: isGroup, isSaved: isSaved)
         }
         return out
     }
