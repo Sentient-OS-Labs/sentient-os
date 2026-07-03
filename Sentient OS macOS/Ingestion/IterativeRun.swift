@@ -133,11 +133,12 @@ struct IterativeRun {
         var consecutiveFailures = 0
         var reloadsWithoutProgress = 0
 
-        func reloadEngine() async {
+        func reloadEngine(reason: String) async {
             p.lastFilePath = nil; p.lastVerdict = nil
             p.lastTitle = "Resetting on-device engine…"
             p.lastSummary = "The GPU runtime needs a quick reset — resuming shortly."
             onProgress(p)
+            Analytics.signal("Engine.reloaded", parameters: ["reason": reason])   // GPU-wedge self-heal health metric
             try? await engine.reload()
             sinceReload = 0
         }
@@ -277,7 +278,7 @@ struct IterativeRun {
                         finished = false
                         break bucketLoop
                     }
-                    if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine() }
+                    if sinceReload >= Self.preemptiveReloadEvery { await reloadEngine(reason: "preemptive") }
 
                     p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
                     p.lastFilePath = w.item.metadata["path"]
@@ -300,7 +301,7 @@ struct IterativeRun {
                                     fingerprint: ["engine", "hard_stop"])
                                 finished = false; break runLoop
                             }
-                            await reloadEngine(); reloadsWithoutProgress += 1; consecutiveFailures = 0
+                            await reloadEngine(reason: "reactive"); reloadsWithoutProgress += 1; consecutiveFailures = 0
                             result = await attempt(w.item, connector: connector)   // retry once on a fresh engine
                         }
                     }
@@ -350,6 +351,12 @@ struct IterativeRun {
         // §7.8/B10: the rolling Files extraction-rate (a `.pdf`/`.doc` decoder rotting) — checked once
         // at run-end over the whole window, so it fires even though a single iterative run adds 0–3 files.
         SourceHealth.checkExtractionRate()
+
+        // The on-device read finished — counts only (never any content), so we can see the brain working.
+        Analytics.signal("Processing.completed", parameters: [
+            "mode": "\(mode)", "total": "\(p.done)", "survivors": "\(p.survivors)",
+            "junk": "\(p.junk)", "sensitive": "\(p.sensitive)", "failed": "\(p.failed)",
+        ])
         return p
     }
 }

@@ -104,6 +104,7 @@ actor MirrorClient {
         }
         UserDefaults.standard.set(true, forKey: Self.enabledKey)
         guard let url = shareURL else { throw MirrorError.keychainWriteFailed }   // token didn't read back
+        Analytics.signal("Mirror.enabled")
         return url
     }
 
@@ -132,6 +133,7 @@ actor MirrorClient {
         req.timeoutInterval = 120
         let (data, resp) = try await URLSession.shared.upload(for: req, fromFile: zip)
         try Self.check(resp, data)
+        Analytics.signal("Mirror.pushed")
     }
 
     /// The one-click delete — removes the cloud copy (and its access log). The local vault
@@ -149,6 +151,7 @@ actor MirrorClient {
     /// not break those connectors). Best-effort on the network call; the local OFF always sticks.
     func disable() async {
         UserDefaults.standard.set(false, forKey: Self.enabledKey)
+        Analytics.signal("Mirror.disabled")
         try? await deleteRemote()
     }
 

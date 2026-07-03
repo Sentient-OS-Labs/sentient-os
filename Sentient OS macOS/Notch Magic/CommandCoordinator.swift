@@ -81,6 +81,7 @@ final class CommandCoordinator {
         guard !run.isRunning else { Log("submit ignored — a task is already running"); return }
 
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
+        Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label])   // count only, never the text
         run.start(trimmed, mode: mode, source: source.rawValue)
         // Every command is computer use, which raises the notch.
         setPhase(.running)

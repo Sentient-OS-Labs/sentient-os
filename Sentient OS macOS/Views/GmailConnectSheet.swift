@@ -70,6 +70,7 @@ struct GmailConnectSheet: View {
                 HStack(spacing: 12) {
                     Button("Cancel") { dismiss() }.buttonStyle(.bordered)
                     Button(selected ? "Done" : "Finish") {
+                        if !connected { Analytics.signal("Source.connected", parameters: ["source": "gmail"]) }
                         connected = true
                         selected = true            // include Gmail in INITIAL / ITERATIVE runs
                         dismiss()

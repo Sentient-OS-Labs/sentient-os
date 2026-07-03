@@ -107,6 +107,7 @@ final class OvernightScheduler {
     /// run the shared `ProactiveCycle` tail (knowledge base → mirror → proactive → wipe) → release.
     private func runProcessing(log: SchedulerLog) async {
         log.line("WOKE at \(Date()) — beginning the run.")
+        Analytics.signal("Scheduler.overnightStarted")   // the 3am wake fired and we're processing
 
         // DETECT — identical to the dev UI / Analyze Now (the shared SourceSelection reader).
         let fda = Permissions.hasFullDiskAccess()
@@ -125,6 +126,7 @@ final class OvernightScheduler {
         log.line("power: ac=\(PowerState.onACPower()) lowPower=\(PowerState.lowPowerMode) thermal=\(PowerState.thermalLabel)")
         if let blocked = PowerState.overnightBlockReason() {
             log.line("GATED — \(blocked); skipping this run (retry next night).")
+            Analytics.signal("Scheduler.gated", parameters: ["reason": blocked])
             CrashReporting.captureEvent("overnight.gated", level: .info,
                 tags: ["reason": blocked],
                 extra: ["thermal": PowerState.thermalLabel],
@@ -171,6 +173,7 @@ final class OvernightScheduler {
         heart.cancel()
         let ended = await WakeHelperClient.shared.endAwake()
         log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
+        Analytics.signal("Scheduler.overnightCompleted")   // the nightly run finished cleanly
     }
 
     private func cloudLeg(_ name: String, log: SchedulerLog, _ body: () async throws -> Void) async {
