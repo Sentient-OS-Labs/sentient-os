@@ -29,7 +29,7 @@ enum NotchPhase: Equatable {
 }
 
 /// Where a task came from — voice gets a 4–9s read-back grace (scaled to length); typed doesn't.
-enum TriggerSource { case promptBar, voice }
+enum TriggerSource: String { case promptBar, voice }
 
 @MainActor @Observable
 final class CommandCoordinator {
@@ -81,7 +81,7 @@ final class CommandCoordinator {
         guard !run.isRunning else { Log("submit ignored — a task is already running"); return }
 
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
-        run.start(trimmed, mode: mode)
+        run.start(trimmed, mode: mode, source: source.rawValue)
         // Every command is computer use, which raises the notch.
         setPhase(.running)
         Log("▶︎ submit [\(source)] \(mode.label) (\(trimmed.count) chars)")   // B7: length, not the command text
