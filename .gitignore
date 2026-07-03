@@ -27,3 +27,6 @@ build/
 # Each dev/CI keeps their own; the Release build phase reads it. org/project are non-secret.
 .sentryclirc
 
+# Per-developer signing override (see Signing.xcconfig) — each dev's own DEVELOPMENT_TEAM.
+Signing.local.xcconfig
+
