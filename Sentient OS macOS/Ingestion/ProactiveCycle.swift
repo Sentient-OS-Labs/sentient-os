@@ -117,6 +117,7 @@ actor ProactiveCycle {
         // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.
         await CycleStore.shared.wipeAllNotes()
         UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
+        OvernightScheduler.noteFirstCycleCompleted()   // "initial processing ended" → start the 18h auto-enable clock (once)
         progress(.done(ready: ProactiveResearch.latest()?.ready.count ?? 0))
         return nil
     }

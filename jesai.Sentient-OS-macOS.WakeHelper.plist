@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  SMAppService LaunchDaemon plist for the root wake helper. Bundled into the app at
+  Contents/Library/LaunchDaemons/ (Copy Files build phase) so SMAppService.daemon(plistName:) can
+  find and register it — a one-click System Settings approval, no admin password.
+
+  The "helper" is THIS app's own executable relaunched with --wake-helper (main.swift branches on it
+  before SwiftUI), so BundleProgram points at the main binary and ProgramArguments passes the flag.
+  Label + MachServices must match WakeHelperConfig (machServiceName / daemonPlistName).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>jesai.Sentient-OS-macOS.WakeHelper</string>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/Sentient OS</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>Contents/MacOS/Sentient OS</string>
+        <string>--wake-helper</string>
+    </array>
+    <key>MachServices</key>
+    <dict>
+        <key>jesai.Sentient-OS-macOS.WakeHelper</key>
+        <true/>
+    </dict>
+    <key>KeepAlive</key>
+    <false/>
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

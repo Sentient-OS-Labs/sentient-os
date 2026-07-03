@@ -46,6 +46,7 @@ final class AppState {
         self.hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingKey)
         self.notch = NotchWindowController(coordinator: commandCoordinator)
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
+        scheduler.maybeAutoEnable()   // 18h after initial: flip the overnight scheduler on (or arm the timer)
         commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
         notch.start()                // raise the notch overlay window
     }
