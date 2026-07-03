@@ -70,6 +70,16 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 520, height: 560)
 
+        // Overnight Processing — the dev cockpit for the 3am scheduler (helper approval, launch-at-
+        // login, 18h auto-enable, manual arm). Opened from DEV TOOLS → "Overnight Processing…".
+        Window("Overnight Processing", id: OvernightDevView.windowID) {
+            OvernightDevView()
+                .environment(appState)
+                .preferredColorScheme(.dark)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 720, height: 780)
+
         MenuBarExtra("Sentient OS", systemImage: "brain.head.profile") {
             MenuBarView()
                 .environment(appState)
