@@ -26,6 +26,10 @@ import Foundation
 
 private struct ExtractionTimeout: Error { let seconds: Double }
 
+/// The outcome of one item attempt (B10): a survivor draft (or nil), a CONTENT-extraction failure
+/// (the file is bad — engine is fine), or a GENERATE failure (the GPU-wedge path → reload).
+private enum AttemptResult { case ok(NoteDraft?), extractionFailed, generateFailed }
+
 /// Holds the racing continuation behind a lock so it resumes exactly once, and so the `@Sendable`
 /// dispatch closures capture this (`@unchecked Sendable`) box instead of the continuation directly.
 ///
@@ -74,6 +78,7 @@ struct RunProgress: Sendable {
     var sensitive = 0
     var failed = 0
     var parseFailures = 0          // §7.13: junk that was actually a garbled/unparseable model reply
+    var extractionFailed = 0       // §7.8/B10: item whose CONTENT extraction failed (corrupt file), not the engine
     var lastPath: String?
     var lastFilePath: String?      // absolute path (for the thumbnail)
     var lastPrompt: String?        // the EXACT prompt fed to the model for this item (dev prompt pane)
@@ -137,15 +142,22 @@ struct IterativeRun {
             sinceReload = 0
         }
 
-        // One full attempt at one item: load → generate → decide. Returns whether it succeeded and,
-        // for a survivor, the NoteDraft to commit — the loop writes it atomically WITH the marker, so
-        // a crash never leaves a note without its marker. The exact prompt is stashed on the progress
-        // so ProcessingView's dev pane can show it.
-        func attempt(_ cand: Candidate, connector: any Connector) async -> (ok: Bool, draft: NoteDraft?) {
+        // One full attempt at one item. B10: EXTRACTION (connector.load — a corrupt/huge file) and
+        // GENERATE (engine.generate — the GPU wedge) are split into two catches so the loop can tell
+        // them apart: an extraction failure means the FILE is bad, not the engine, so it must NOT
+        // trigger an engine reload (the old single catch wasted reloads on corrupt PDFs), and it feeds
+        // the Files extraction-rate sensor. A survivor's NoteDraft is committed atomically WITH the mark.
+        func attempt(_ cand: Candidate, connector: any Connector) async -> AttemptResult {
+            let artifact: Artifact
             do {
-                let artifact = try await withExtractionTimeout(Self.extractionTimeoutSeconds) {
+                artifact = try await withExtractionTimeout(Self.extractionTimeoutSeconds) {
                     try autoreleasepool { try connector.load(cand) }
                 }
+            } catch {
+                p.lastSummary = "(extraction skipped: \(error))"
+                return .extractionFailed
+            }
+            do {
                 let prompt = Triage.prompt(for: artifact, currentDate: Date())
                 p.lastPrompt = prompt
                 let result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
@@ -171,10 +183,10 @@ struct IterativeRun {
                 #if DEBUG
                 Log("• \(cand.metadata["displayPath"] ?? cand.id) → \(outcome.verdict)")
                 #endif
-                return (true, draft)
+                return .ok(draft)
             } catch {
-                p.lastSummary = "(skipped: \(error))"
-                return (false, nil)
+                p.lastSummary = "(generate skipped: \(error))"
+                return .generateFailed
             }
         }
 
@@ -270,8 +282,10 @@ struct IterativeRun {
                     p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
                     p.lastFilePath = w.item.metadata["path"]
 
-                    var (ok, draft) = await attempt(w.item, connector: connector)
-                    if !ok {
+                    var result = await attempt(w.item, connector: connector)
+                    // B10: only a GENERATE failure implicates the engine → the GPU-wedge reload path.
+                    // An extraction failure means the file is bad; the engine is fine — never reload for it.
+                    if case .generateFailed = result {
                         consecutiveFailures += 1
                         if consecutiveFailures >= Self.failuresBeforeReload {
                             guard reloadsWithoutProgress < Self.maxReloadsWithoutProgress else {
@@ -287,10 +301,22 @@ struct IterativeRun {
                                 finished = false; break runLoop
                             }
                             await reloadEngine(); reloadsWithoutProgress += 1; consecutiveFailures = 0
-                            (ok, draft) = await attempt(w.item, connector: connector)
+                            result = await attempt(w.item, connector: connector)   // retry once on a fresh engine
                         }
                     }
-                    if ok { consecutiveFailures = 0; reloadsWithoutProgress = 0 } else { p.failed += 1; draft = nil }
+                    // §7.8/B10: for FILE items, extraction succeeded unless it was the extraction that
+                    // failed (a generate failure still means the content extracted fine). Feeds the
+                    // rolling extraction-rate sensor.
+                    if connector.kind == .file {
+                        if case .extractionFailed = result { SourceHealth.recordExtraction(succeeded: false) }
+                        else { SourceHealth.recordExtraction(succeeded: true) }
+                    }
+                    let draft: NoteDraft?
+                    switch result {
+                    case .ok(let d):        consecutiveFailures = 0; reloadsWithoutProgress = 0; draft = d
+                    case .extractionFailed: p.failed += 1; p.extractionFailed += 1; draft = nil   // no reload
+                    case .generateFailed:   p.failed += 1; draft = nil
+                    }
 
                     // ONE atomic store write per item: optional survivor note + marker advance — no gap
                     // for a crash to land in. Iterative climbs the mark; initial sinks the floor.
@@ -320,6 +346,10 @@ struct IterativeRun {
                         "junk": String(p.junk)],
                 fingerprint: ["triage", "parse_failure_spike"])
         }
+
+        // §7.8/B10: the rolling Files extraction-rate (a `.pdf`/`.doc` decoder rotting) — checked once
+        // at run-end over the whole window, so it fires even though a single iterative run adds 0–3 files.
+        SourceHealth.checkExtractionRate()
         return p
     }
 }
