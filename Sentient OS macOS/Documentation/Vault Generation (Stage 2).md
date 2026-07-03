@@ -9,8 +9,10 @@ free tier is the eventual answer for no-codex users; the old direct-Anthropic-AP
 `Secrets.swift` dev key were deleted June 11 and live in git history).
 
 This is the first build. `Ingestion/VaultCloud.swift` is the iterative system's wrapper around it:
-`VaultCloud.create()` reuses this generator; `VaultCloud.update()` edits the live knowledge base
-in place. (The old `VaultUpdater`/`DaysEndJob` were deleted — `VaultCloud` replaced them.)
+`VaultCloud.create()` reuses this generator; `VaultCloud.update()` merges each cycle's new notes.
+**[UPDATED 2026-07-02, B11] Both build AND update now stage-then-swap** (update no longer edits the
+live vault in place — see below). (The old `VaultUpdater`/`DaysEndJob` were deleted — `VaultCloud`
+replaced them.)
 
 ## Why agentic (Arch §5/§6)
 
@@ -21,12 +23,36 @@ in place. (The old `VaultUpdater`/`DaysEndJob` were deleted — `VaultCloud` rep
   ⚠️ On resume the workspace root is the PROCESS cwd (CodexCLI sets it from `Invocation.cwd`).
 - **Free at the margin** — the user's own ChatGPT subscription does the work.
 
-## Safety: staging + atomic swap
+## Safety: staging + atomic swap (BOTH build & update — B11, 2026-07-02)
 
-The run never touches the live knowledge base. It writes into `~/.sentientos-vault-staging-<uuid>`
-(in HOME, same APFS volume as the knowledge base → the final move is an atomic rename). Only after
-the run succeeds **and** produced >0 notes does the old knowledge base get replaced. A mid-run death
-(limit, crash, kill) leaves the previous knowledge base intact and the staging dir resumable.
+Neither build nor update ever touches the live knowledge base mid-run. Shared helpers on
+`VaultGenerator`:
+- **`newStagingDir(seedFrom:)`** — a `.sentientos-vault-staging-<uuid>` dir **sibling of the vault**
+  (same volume as the vault, so an atomic swap works even under a `SENTIENT_VAULT_ROOT` scratch dir).
+  **Build** seeds it empty; **update** seeds it with a **copy of the current vault** so codex has the
+  existing notes to edit. It first **sweeps orphaned staging dirs** (they used to leak).
+- **`swapStagingIntoVault`** — `FileManager.replaceItemAt` (a true same-volume atomic replace); on any
+  throw the existing vault is left intact.
+- **`runCodexInStaging`** — the shared codex run (progress poller + usage-limit → `ResumeToken`).
+
+Only after the run succeeds (build: >0 notes; update: passes the freshness check) is the swap done.
+A mid-run death (limit / crash / kill) leaves the previous vault untouched and the staging dir resumable.
+
+**Durable resume for BOTH** — `VaultCloud` persists the `ResumeToken(sessionID, stagingPath[, vaultFingerprint])`
+to UserDefaults (`vault.create.resume` / `vault.update.resume`), loaded in `init`, discarded if the
+staging dir is gone or there's no session. So a usage limit **or an app restart** resumes over staging
+instead of re-running the expensive `xhigh` build from scratch. (`ResumeToken` is `Codable`.)
+
+**Update freshness check (concurrent editor edits)** — the Knowledge editor writes note files directly
+into the live vault, so `update()` guards against clobbering a user edit: it (a) **skips** the merge if
+`VaultActivity.editorBusy` at start, and (b) captures `VaultGenerator.vaultFingerprint(vault)` (a
+SHA-256 over each `.md`'s `relpath|size|mtime`) at seed time — carried in the resume token — and at
+swap time, if the live vault's fingerprint changed (the user saved a note during the run), it **aborts
+the swap** (discards staging, emits `vault.update.stale_swap_averted`, re-runs next cycle) rather than
+overwrite the edit.
+
+*(This replaced the pre-B11 update path, which edited the live vault in place with a `.bak` restore —
+that whole choreography, B1, is now deleted.)*
 
 ## Progress
 
