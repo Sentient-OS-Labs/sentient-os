@@ -36,6 +36,10 @@ struct ChatInfo: Sendable, Identifiable {
     let isGroup: Bool
     let messageCount: Int
     let lastActive: Date
+    /// DM partner resolves to a contact (or the chat carries a real display name). Unsaved
+    /// numbers are hidden by default behind ChatPicker's "Unsaved numbers" toggle; groups
+    /// always count as saved. Defaulted true — WhatsApp names come from the DB itself.
+    var isSaved: Bool = true
 }
 
 enum ChatWindowing {

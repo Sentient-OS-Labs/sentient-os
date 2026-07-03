@@ -13,7 +13,7 @@ the iterative pipeline. Needs Full Disk Access.
 | `Ingestion/Connectors/ChatConnectors.swift` | `iMessageConnector` (+ `WhatsAppConnector`): wraps `eligibleWindows()` for the `Connector` protocol; `load()` returns the window text |
 | `Sources/ChatWindowing.swift` | Shared chat machinery (WhatsApp + iMessage): `ChatMessage`, `ChatInfo`, byte-budget `windows()`, `format()`, the connector limits |
 | `Sources/AddressBookNames.swift` | Raw handles (`+1415…` / emails) → contact names, read straight from the AddressBook SQLite stores (FDA covers them — deliberately **no** Contacts-framework permission prompt) |
-| `Views/ChatPicker.swift` | The shared opt-in sheet; takes a source name + a `listChats` loader |
+| `Views/ChatPicker.swift` | The shared opt-in sheet; takes a source name + a `listChats` loader. Soft-hides unsaved-number DMs (below) behind a default-off "Show unsaved numbers" checkbox |
 
 ## chat.db facts (the ones that bite)
 
@@ -39,6 +39,14 @@ the iterative pipeline. Needs Full Disk Access.
   iMessage twin of WhatsApp's `ZSESSIONTYPE` whitelist. Without it, OTP/promo shortcodes flood the
   picker and the pipeline. [MEASURED on a real dual-SIM DB: 749 chat rows, only 164 Messages-visible;
   the picker collapsed 106 → 45 active chats, matching the Messages sidebar exactly.]
+- **Unsaved numbers are a second, softer tier** (survive the guard — Messages shows them — but are
+  rarely worth analyzing): a DM whose handle resolves to no contact AND has no explicit
+  `display_name` gets `ChatInfo.isSaved = false` (groups are always "saved" — deliberate). The
+  picker hides those rows behind its default-off "Show unsaved numbers" checkbox; an already-
+  selected chat is never hidden, and "All DMs" only sweeps the visible list. Data still flows if
+  opted in — this is picker presentation, not a pipeline filter. WhatsApp never sets the flag
+  (its names come from the DB), so the checkbox simply never appears there. Note Siri's
+  "Maybe: …" names live outside the AddressBook stores → those count as unsaved.
 - **Limits (`ChatWindowing`):** 90-day floor AND newest-100k cap, both in SQL — an inner subquery
   filters to the opted-in chats, applies `WHERE date >= floor`, then `ORDER BY date DESC LIMIT
   100000` to cap across them; the outer `ORDER BY chat_id, ROWID` restores per-chat ascending
