@@ -59,6 +59,14 @@ struct PromptBar: View {
         .background(PromptGlow(intensity: isRunning ? 0.7 : (focused ? 0.55 : 0.32)))
         .animation(.easeInOut(duration: 0.4), value: focused)
         .animation(.easeInOut(duration: 0.35), value: isRunning)
+        // Launch focus lands HERE, not on the top bar's first button (the orange ring on
+        // "Analysis"). defaultFocus declares it; the delayed onAppear claim backs it up —
+        // AppKit assigns the window's initial key view a beat after SwiftUI's appear, so an
+        // immediate `focused = true` can get stomped.
+        .defaultFocus($focused, true)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focused = true }
+        }
     }
 
     /// Idle: the editable input (bright "DO" placeholder + the text field).

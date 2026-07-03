@@ -46,6 +46,7 @@ struct KnowledgeView: View {
     @State private var pendingNav: PendingNav?
     @State private var showDiscardPrompt = false
     @FocusState private var editorFocused: Bool
+    @FocusState private var searchFocused: Bool
 
     // The new-note / new-folder name prompt (raised by the right-click menus).
     @State private var showCreatePrompt = false
@@ -66,6 +67,13 @@ struct KnowledgeView: View {
         .frame(minWidth: 900, minHeight: 600)
         .background(Theme.bg)
         .background(WindowChrome())   // transparent titlebar from launch (no "grey until resize")
+        // Window-open focus lands in the search box, not the sidebar's "+" button. defaultFocus
+        // declares it; the delayed onAppear claim backs it up (AppKit assigns the initial key
+        // view a beat after SwiftUI's appear — same pattern as PromptBar's launch focus).
+        .defaultFocus($searchFocused, true)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { searchFocused = true }
+        }
         .task { await loadVault() }
         .alert("You have unsaved edits", isPresented: $showDiscardPrompt) {
             Button("Save") { promptSave() }
@@ -396,6 +404,7 @@ struct KnowledgeView: View {
             TextField("Search notes", text: $search)
                 .textFieldStyle(.plain).foregroundStyle(.white).font(.system(size: 13))
                 .tint(Theme.knowledgeAccent)
+                .focused($searchFocused)
             if !search.isEmpty {
                 Button { search = "" } label: {
                     Image(systemName: "xmark.circle.fill").font(.system(size: 12)).foregroundStyle(Theme.faint)
