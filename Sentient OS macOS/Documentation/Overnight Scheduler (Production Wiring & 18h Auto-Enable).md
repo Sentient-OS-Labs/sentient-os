@@ -53,9 +53,12 @@ admin-password path:
   flag setup and bail (approval is async + user-driven). **DEBUG dev builds** (unsigned → `.notFound`)
   fall back to the proven admin-password `WakeHelperInstaller`, so testing works without a signed build.
 
-> ⚠️ SMAppService approval only works on a **signed Developer ID build launched from `/Applications`** —
-> not an unsigned dev binary. The registration *logic* is complete and gated; the approval round-trip
-> lights up once the app is signed + distributed.
+> **Signing:** SMAppService approval works on **any validly-signed build** — the standard Apple
+> Development signature Xcode puts on every Run/Debug build is enough (verified: "Register / Approve"
+> flips the helper to `enabled ✓` on a normal dev build). It does **NOT** need Developer ID,
+> notarization, or `/Applications`. Only a *fully unsigned* binary (e.g. a `CODE_SIGNING_ALLOWED=NO`
+> CLI build) returns `.notFound` — which is why the headless CLI verify can't exercise it, but the
+> Xcode build can.
 
 ## B — Launch at login
 
@@ -73,14 +76,18 @@ Keeping them separate means a dev testing the toggle never trips the production 
 
 ## Dev UI
 
-DevToolsView → **OVERNIGHT PROCESSING** section (folds in the old scheduled-run time control):
-- Scheduled run toggle + wake time + status.
-- **Root wake helper** — Register/Approve, Open Login Items, live status, Refresh.
-- **Launch at login** — toggle + live status.
-- **18h auto-enable** — a live readout (initial-done time, fire time, fired/needs-setup), plus dev
-  buttons: *Simulate initial done*, *Run check now*, *Reset*, and a delay override (seconds, 0 = 18h).
+DEV TOOLS → **Overnight Processing…** opens `OvernightDevView` in its **own window** — a simple
+top-to-bottom checklist (not a cramped inline panel). A live status panel (helper + login item polled
+every 2s, so approving in System Settings updates without a refresh) sits above four steps:
+- **① Approve the root helper** — one "Approve helper" button that registers the daemon *and* jumps to
+  System Settings to flip it on; shows `enabled ✓` when done.
+- **② Launch at login** — a single toggle.
+- **③ Test the 18h auto-enable** — a plain-language readout of what will happen, a **Wait** picker
+  (18h real / 10s / 60s) to shorten the delay, and *Simulate first analyze done* / *Run check now* / *Reset*.
+- **④ Manual arm (bypass)** — the time picker + on/off for a direct end-to-end wake test.
 
-This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to the same seams.
+This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to the same seams
+(`WakeHelperClient` / `LoginItem` / `OvernightScheduler`).
 
 ## Verification
 
@@ -88,8 +95,8 @@ This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to th
 - The **auto-enable state machine** was driven headlessly (11/11 checks): stamp-once, delay math, the
   "not yet" hold, the prerequisite gate (unmet → flags setup, does not flip, does not latch → retries),
   the "user already enabled" latch, and latch-blocks-re-enable.
-- What needs a **signed build** to exercise (not verifiable on an unsigned dev binary): the actual
-  System Settings approval of the daemon and the login-item registration round-trip.
+- The **approval round-trip** is confirmed working on a normal Xcode Debug build (`enabled ✓`) — it
+  just isn't reachable from the *unsigned* headless CLI verify (that returns `.notFound`).
 
 ## Files
 
@@ -100,4 +107,6 @@ This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to th
 - `jesai.Sentient-OS-macOS.WakeHelper.plist` (project root) — the bundled SMAppService daemon plist + its Copy Files phase.
 - `Ingestion/ProactiveCycle.swift` — stamps "initial finished".
 - `AppState.swift` / `Views/RootView.swift` — call `maybeAutoEnable()` at launch / after each cycle.
-- `Views/DevToolsView.swift` — the OVERNIGHT PROCESSING dev section.
+- `Views/OvernightDevView.swift` — the standalone dev window (checklist + live status).
+- `Views/DevToolsView.swift` — the "Overnight Processing…" button that opens it.
+- `Sentient_OS_macOSApp.swift` — the `OvernightDevView` window scene.
