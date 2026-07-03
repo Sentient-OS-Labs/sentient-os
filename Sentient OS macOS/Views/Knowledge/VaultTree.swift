@@ -61,10 +61,9 @@ struct KnowledgeVault {
                 if name.hasPrefix(".") { continue }   // .obsidian, .DS_Store, dotfiles (belt + suspenders)
                 let isFolder = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
                 if isFolder {
-                    let kids = scan(url)
-                    if !kids.isEmpty {                 // hide empty folders
-                        folders.append(VaultNode(url: url, name: name, isFolder: true, children: kids))
-                    }
+                    // Show ALL subfolders, including empty ones — so a folder the user just created
+                    // in the viewer (empty until they add notes) appears in the tree.
+                    folders.append(VaultNode(url: url, name: name, isFolder: true, children: scan(url)))
                 } else if url.pathExtension.lowercased() == "md" {
                     let stem = url.deletingPathExtension().lastPathComponent
                     index[stem.lowercased()] = url

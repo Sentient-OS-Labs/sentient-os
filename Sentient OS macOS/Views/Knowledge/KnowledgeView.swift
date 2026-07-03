@@ -2,14 +2,15 @@
 //  KnowledgeView.swift
 //  Sentient OS macOS
 //
-//  The Knowledge window — a minimal Obsidian-style reader over the real markdown vault
-//  (~/Sentient OS - Knowledge Base/). A two-pane split: a folder tree on the left (with a pinned
-//  "Overview" = the root README, search, and disclosure folders), and a rendered-markdown reader
-//  on the right. [[Wikilinks]] are clickable and jump between notes; a back/forward pair in the
-//  reader bar walks the navigation history. Read-only — editing + the graph view come later.
+//  The Knowledge window — a minimal Obsidian-style reader / editor / manager over the real markdown
+//  vault (~/Sentient OS - Knowledge Base/). Two-pane split: a folder tree (pinned "Overview" = the
+//  root README, search, disclosure folders; create via the header "+", a folder-hover "+", or
+//  right-click) and a rendered-markdown reader on the right. [[Wikilinks]] jump between notes (Back walks the trail);
+//  the titlebar carries Edit / Delete (→ Trash) / Reveal in Finder. Every edit/create/delete commits
+//  locally and DEBOUNCE-syncs to the cloud MCP (VaultActivity.markChanged → the sidebar status line).
 //
-//  This replaced the old DatabaseView (a dev CycleStore-summaries inspector, still reachable from
-//  Dev Tools via SummariesView). Data: VaultTree.swift · rendering: MarkdownView.swift.
+//  Replaced the old DatabaseView (a dev CycleStore-summaries inspector, still in Dev Tools via
+//  SummariesView). Data: VaultTree.swift · rendering: MarkdownView.swift.
 //  Doc: Documentation/Knowledge Viewer.md
 //
 
@@ -36,17 +37,21 @@ struct KnowledgeView: View {
 
     // The markdown editor. `editing` swaps the rendered reader for a TextEditor over the RAW file
     // (frontmatter + H1 included — we edit the real bytes); `editText` is the live buffer and
-    // `savedText` the last-committed copy (drift = unsaved edits). `syncing` is the mirror push in
-    // flight; `mirrorEnabled` decides whether Save also syncs to the cloud MCP. `pendingNav` parks a
-    // note-switch waiting on the unsaved-edits prompt.
+    // `savedText` the last-committed copy (drift = unsaved edits). `mirrorEnabled` gates the header's
+    // sync-status line. `pendingNav` parks a note-switch waiting on the unsaved-edits prompt.
     @State private var editing = false
     @State private var editText = ""
     @State private var savedText = ""
-    @State private var syncing = false
     @State private var mirrorEnabled = false
     @State private var pendingNav: PendingNav?
     @State private var showDiscardPrompt = false
     @FocusState private var editorFocused: Bool
+
+    // The new-note / new-folder name prompt (raised by the right-click menus).
+    @State private var showCreatePrompt = false
+    @State private var createIsFolder = false
+    @State private var createParent: URL?     // nil = the vault root
+    @State private var createName = ""
 
     /// A navigation parked behind the unsaved-edits prompt.
     private enum PendingNav { case open(URL), follow(URL), back }
@@ -63,11 +68,16 @@ struct KnowledgeView: View {
         .background(WindowChrome())   // transparent titlebar from launch (no "grey until resize")
         .task { await loadVault() }
         .alert("You have unsaved edits", isPresented: $showDiscardPrompt) {
-            Button(mirrorEnabled ? "Save & Sync" : "Save") { promptSave() }
+            Button("Save") { promptSave() }
             Button("Discard", role: .destructive) { promptDiscard() }
             Button("Cancel", role: .cancel) { pendingNav = nil }
         } message: {
-            Text("Save\(mirrorEnabled ? " and sync" : "") your changes to this note, or discard them?")
+            Text("Save your changes to this note, or discard them?")
+        }
+        .alert(createIsFolder ? "New folder" : "New note", isPresented: $showCreatePrompt) {
+            TextField(createIsFolder ? "Folder name" : "Note name", text: $createName)
+            Button("Create") { performCreate() }
+            Button("Cancel", role: .cancel) {}
         }
     }
 
@@ -150,9 +160,9 @@ struct KnowledgeView: View {
         if isDirty { pendingNav = nil; showDiscardPrompt = true } else { exitEdit() }
     }
 
-    /// Commit the buffer to disk and (if the mirror is on) sync the whole vault to the cloud MCP, then
-    /// leave edit mode. No changes → just leave (no needless write/sync). `completion` runs once the
-    /// save+sync settles — the unsaved-edits prompt uses it to continue a parked note-switch.
+    /// Commit the buffer to disk and leave edit mode. Cloud sync is DEBOUNCED (markChanged), so Save
+    /// is instant locally — no per-note spinner; the sidebar's status line shows the sync. No changes
+    /// → just leave. `completion` continues a parked note-switch from the unsaved-edits prompt.
     private func save(then completion: (() -> Void)? = nil) {
         guard editing, let url = selection else { completion?(); return }
         guard editText != savedText else { exitEdit(); completion?(); return }
@@ -164,20 +174,9 @@ struct KnowledgeView: View {
         }
         savedText = editText
         note = KnowledgeVault.read(url)            // refresh the rendered view behind us
-        VaultActivity.shared.vaultDirty = true     // a vault change is now pending a mirror push
-
-        guard mirrorEnabled else { exitEdit(); completion?(); return }
-
-        syncing = true
-        Task {   // inherits the main actor; state writes after the await are safe
-            var ok = true
-            do { try await MirrorClient.shared.push() }
-            catch { ok = false; Log("Knowledge editor: sync failed — \((error as? LocalizedError)?.errorDescription ?? "\(error)")") }
-            if ok { VaultActivity.shared.vaultDirty = false }   // else stays dirty → pushIfDirty retries later
-            syncing = false
-            exitEdit()
-            completion?()
-        }
+        exitEdit()
+        VaultActivity.shared.markChanged()         // schedules the debounced mirror sync
+        completion?()
     }
 
     private func exitEdit() {
@@ -198,6 +197,92 @@ struct KnowledgeView: View {
         }
     }
 
+    // MARK: Managing the vault (create / delete → macOS Trash · all debounce-synced)
+
+    /// Re-scan the vault after a filesystem change. URLs are stable, so `expanded`/`selection` survive
+    /// (a now-missing selection is handled by the caller).
+    private func reloadVault() { vault = KnowledgeVault.load() }
+
+    /// Move a note to the macOS Trash (recoverable). If it was the open note, land on Overview.
+    private func deleteNote(_ url: URL) {
+        guard url != vault?.readme else { return }   // never trash the vault index
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            Log("Knowledge: delete failed — \(error.localizedDescription)")
+            return
+        }
+        let wasOpen = (url == selection)
+        reloadVault()
+        if wasOpen {
+            if let r = vault?.readme { open(r) }
+            else { selection = nil; note = nil; history = []; historyIndex = -1 }
+        }
+        VaultActivity.shared.markChanged()
+    }
+
+    /// Raise the name prompt for a new note/folder inside `parent` (nil = the vault root).
+    private func promptCreate(folder: Bool, in parent: URL?) {
+        createIsFolder = folder; createParent = parent; createName = ""; showCreatePrompt = true
+    }
+
+    private func performCreate() {
+        let dir = createParent ?? vault?.root ?? VaultGenerator.vaultRoot
+        if createIsFolder { createFolder(named: createName, in: dir) }
+        else { createNote(named: createName, in: dir) }
+    }
+
+    private func createNote(named raw: String, in dir: URL) {
+        let url = Self.uniqueURL(in: dir, name: Self.cleanName(raw, fallback: "Untitled"), ext: "md")
+        let title = url.deletingPathExtension().lastPathComponent
+        do {
+            try "# \(title)\n\n".write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            Log("Knowledge: create note failed — \(error.localizedDescription)")
+            return
+        }
+        reloadVault()
+        if let v = vault { expanded.formUnion(v.ancestors(of: url)) }   // reveal its folder chain
+        open(url)
+        beginEdit()                        // drop straight into typing the body
+        VaultActivity.shared.markChanged()
+    }
+
+    private func createFolder(named raw: String, in dir: URL) {
+        let url = Self.uniqueURL(in: dir, name: Self.cleanName(raw, fallback: "New Folder"), ext: nil)
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        } catch {
+            Log("Knowledge: create folder failed — \(error.localizedDescription)")
+            return
+        }
+        reloadVault()
+        if let v = vault { expanded.formUnion(v.ancestors(of: url)) }   // reveal the parent chain
+        expanded.insert(url)                                            // and open the new folder
+        VaultActivity.shared.markChanged()
+    }
+
+    /// A safe filename from user input: swap path separators, trim, cap length; fall back if empty.
+    private static func cleanName(_ raw: String, fallback: String) -> String {
+        let s = raw.replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? fallback : String(s.prefix(120))
+    }
+
+    /// `dir/name.ext` (or `dir/name` for a folder), suffixing " 2", " 3"… if it already exists — so we
+    /// never overwrite.
+    private static func uniqueURL(in dir: URL, name: String, ext: String?) -> URL {
+        func make(_ n: String) -> URL {
+            let base = dir.appendingPathComponent(n, isDirectory: ext == nil)
+            return ext.map { base.appendingPathExtension($0) } ?? base
+        }
+        var candidate = make(name)
+        var i = 2
+        while FileManager.default.fileExists(atPath: candidate.path) { candidate = make("\(name) \(i)"); i += 1 }
+        return candidate
+    }
+
     private var searchResults: [VaultNode] {
         guard let v = vault, !search.isEmpty else { return [] }
         return v.allNotes.filter { $0.name.localizedCaseInsensitiveContains(search) }
@@ -210,26 +295,99 @@ struct KnowledgeView: View {
             sidebarHeader
             searchField
             ScrollView { sidebarList }
+                .contextMenu {   // right-click empty sidebar space → create at the vault ROOT
+                    Button { promptCreate(folder: false, in: nil) } label: { Label("New Note", systemImage: "doc.badge.plus") }
+                    Button { promptCreate(folder: true, in: nil) } label: { Label("New Folder", systemImage: "folder.badge.plus") }
+                }
         }
         .background(Theme.panel)   // subtle elevated chrome — distinct from the black reading pane
     }
 
+    /// Left inset that lines the subtitle up under the "Knowledge" wordmark (past the orb + its gap).
+    private let wordmarkInset: CGFloat = 23   // OrbMark(15) + HStack spacing(8)
+
     private var sidebarHeader: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 8) {
-                OrbMark(size: 15)
-                Text("Knowledge").font(.system(size: 22, design: .serif)).italic().foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {   // title + count = one tight block
+                HStack(spacing: 8) {
+                    OrbMark(size: 15)
+                    Text("Knowledge").font(.system(size: 22, design: .serif)).italic().foregroundStyle(.white)
+                    Spacer()
+                    newMenu   // the always-visible "you can create things here" affordance
+                }
+                .frame(maxWidth: .infinity)
+                Text(countText).font(.system(size: 11.5, weight: .medium)).foregroundStyle(Theme.secondary)
+                    .padding(.leading, wordmarkInset)   // under "Knowledge", not under the orb
             }
-            MonoCaps(subtitle, size: 8.5, tracking: 2, color: Theme.Ink.deepMuted)
+            statusLine.padding(.leading, wordmarkInset)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18).padding(.top, 18).padding(.bottom, 12)
     }
 
-    private var subtitle: String {
-        guard let v = vault else { return "Private · on this Mac" }
-        let n = v.titleIndex.count
-        return "\(n) note\(n == 1 ? "" : "s") · private to this Mac"
+    private var countText: String {
+        let n = vault?.titleIndex.count ?? 0
+        return "\(n) note\(n == 1 ? "" : "s")"
+    }
+
+    /// The quiet "+" in the header — the discoverable face of creation (folders also grow a
+    /// hover "+", and right-click remains the power path). Creates at the vault root.
+    private var newMenu: some View {
+        Menu {
+            Button { promptCreate(folder: false, in: nil) } label: { Label("New Note", systemImage: "doc.badge.plus") }
+            Button { promptCreate(folder: true, in: nil) } label: { Label("New Folder", systemImage: "folder.badge.plus") }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Theme.secondary)
+                .frame(width: 24, height: 24)
+                .background(Circle().fill(.white.opacity(0.06)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("New note or folder")
+    }
+
+    /// The line under the count: "Saved locally on this Mac" (mirror off) or the live cloud-MCP sync
+    /// state — a glowing status dot (white at rest, warm accent while working; a spinner while pushing)
+    /// then the state with an inline, single-color "(🔒 E2E Encrypted)". @Observable → re-renders live.
+    /// (E2E Encrypted is surfaced now, implemented later.)
+    @ViewBuilder
+    private var statusLine: some View {
+        if mirrorEnabled {
+            switch VaultActivity.shared.syncState {
+            case .synced:  cloudStatus("Synced to Cloud MCP", color: Theme.secondary, dot: .white, spinner: false)
+            case .pending: cloudStatus("Will sync soon", color: Theme.knowledgeAccent, dot: Theme.knowledgeAccent, spinner: false)
+            case .syncing: cloudStatus("Syncing to Cloud MCP", color: Theme.knowledgeAccent, dot: Theme.knowledgeAccent, spinner: true)
+            }
+        } else {
+            HStack(spacing: 7) {
+                Circle().fill(Theme.faint).frame(width: 6, height: 6)
+                Text("Saved locally on this Mac").font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
+            }
+        }
+    }
+
+    /// A leading status glyph (a glowing dot, or a spinner while syncing) + "<verb> (🔒 E2E Encrypted)"
+    /// as one single-colored line — the lock is inline in the Text so it tints with everything else.
+    private func cloudStatus(_ verb: String, color: Color, dot: Color, spinner: Bool) -> some View {
+        HStack(spacing: 7) {
+            if spinner {
+                ProgressView().controlSize(.small).scaleEffect(0.5).frame(width: 6, height: 6)
+            } else {
+                Circle().fill(dot).frame(width: 6, height: 6)
+                    .shadow(color: dot.opacity(0.6), radius: 2.5)
+            }
+            HStack(spacing: 6) {
+                Text(verb)
+                Rectangle().fill(color.opacity(0.35)).frame(width: 1, height: 11)   // subtle divider
+                Text("\(Image(systemName: "lock.fill")) E2E Encrypted")
+            }
+            .font(.system(size: 11.5))
+            .foregroundStyle(color)
+        }
     }
 
     private var searchField: some View {
@@ -260,15 +418,18 @@ struct KnowledgeView: View {
                     OverviewRow(selected: selection == readme) { requestOpen(readme) }
                 }
                 ForEach(vault?.nodes ?? []) { node in
-                    NodeRow(node: node, depth: 0, expanded: $expanded,
-                            selection: selection, onSelect: { requestOpen($0) })
+                    NodeRow(node: node, depth: 0, expanded: $expanded, selection: selection,
+                            onSelect: { requestOpen($0) },
+                            onCreate: { promptCreate(folder: $1, in: $0) },
+                            onDelete: { deleteNote($0) })
                 }
             } else if searchResults.isEmpty {
                 Text("No matches").font(.system(size: 12)).foregroundStyle(Theme.faint)
                     .padding(.horizontal, 12).padding(.top, 14)
             } else {
                 ForEach(searchResults) { node in
-                    NoteRow(title: node.name, depth: 0, selected: node.url == selection) {
+                    NoteRow(url: node.url, title: node.name, depth: 0, selected: node.url == selection,
+                            onDelete: { deleteNote($0) }) {
                         requestOpen(node.url)
                     }
                 }
@@ -297,10 +458,24 @@ struct KnowledgeView: View {
                 if selection != nil {
                     ToolbarItemGroup(placement: .primaryAction) {
                         editToolbarItem
+                        if !editing { deleteToolbarButton }
                         revealToolbarButton
                     }
                 }
             }
+    }
+
+    /// Move the open note to the macOS Trash (icon-only, between Edit and Reveal — reading mode only).
+    /// Hidden for the README/Overview — the vault's index shouldn't be one misclick from gone.
+    @ViewBuilder
+    private var deleteToolbarButton: some View {
+        if let url = selection, url != vault?.readme {
+            Button(role: .destructive) { deleteNote(url) } label: {
+                Label("Move to Trash", systemImage: "trash")
+            }
+            .labelStyle(.iconOnly)
+            .help("Move to Trash")
+        }
     }
 
     @ViewBuilder
@@ -316,21 +491,13 @@ struct KnowledgeView: View {
         }
     }
 
-    /// The Edit ⟷ Save toggle in the titlebar (left of Reveal in Finder). In edit mode it commits and,
-    /// if the user mirrors to the cloud MCP, syncs — showing a spinner while that push is in flight.
+    /// The Edit ⟷ Save toggle in the titlebar. Save commits locally; the mirror sync is DEBOUNCED
+    /// (see the sidebar's status line), so there's no per-note spinner here.
     @ViewBuilder
     private var editToolbarItem: some View {
-        if syncing {
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text("Syncing").font(.system(size: 12))
-            }
-            .foregroundStyle(Theme.secondary)
-        } else if editing {
-            Button { save() } label: {
-                Label(mirrorEnabled ? "Save & Sync to Cloud MCP" : "Save", systemImage: "checkmark")
-            }
-            .labelStyle(.titleAndIcon)
+        if editing {
+            Button { save() } label: { Label("Save", systemImage: "checkmark") }
+                .labelStyle(.titleAndIcon)
         } else {
             Button { beginEdit() } label: { Label("Edit", systemImage: "square.and.pencil") }
                 .labelStyle(.titleAndIcon)
@@ -441,40 +608,72 @@ private struct OverviewRow: View {
 
 /// A folder row: a chevron + folder glyph that toggles its disclosure.
 private struct FolderRow: View {
+    let url: URL
     let name: String
     let depth: Int
     let isOpen: Bool
+    let onCreate: (URL, Bool) -> Void
     let toggle: () -> Void
     @State private var hover = false
 
     var body: some View {
-        Button(action: toggle) {
-            HStack(spacing: 7) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.faint)
-                    .rotationEffect(.degrees(isOpen ? 90 : 0)).frame(width: 10)
-                Image(systemName: isOpen ? "folder.fill" : "folder")
-                    .font(.system(size: 10.5)).foregroundStyle(Theme.secondary).frame(width: 14)
-                Text(name)
-                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 0)
+        // The disclosure button and the hover "+" sit SIDE BY SIDE (a Menu nested inside a Button's
+        // label wouldn't receive clicks reliably); the row background spans both.
+        HStack(spacing: 0) {
+            Button(action: toggle) {
+                HStack(spacing: 7) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.faint)
+                        .rotationEffect(.degrees(isOpen ? 90 : 0)).frame(width: 10)
+                    Image(systemName: isOpen ? "folder.fill" : "folder")
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.secondary).frame(width: 14)
+                    Text(name)
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1).truncationMode(.tail)
+                    Spacer(minLength: 0)
+                }
+                .padding(.vertical, 5)
+                .padding(.leading, CGFloat(depth) * 14 + 8)
+                .contentShape(Rectangle())
             }
-            .padding(.vertical, 5).padding(.trailing, 8)
-            .padding(.leading, CGFloat(depth) * 14 + 8)
-            .background(rowBackground(selected: false, hover: hover))
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            // Hover-reveal "+" → create inside THIS folder (zero clutter until the cursor is here).
+            Menu {
+                Button { onCreate(url, false) } label: { Label("New Note", systemImage: "doc.badge.plus") }
+                Button { onCreate(url, true) } label: { Label("New Folder", systemImage: "folder.badge.plus") }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(Theme.secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .opacity(hover ? 1 : 0)
+            .padding(.trailing, 6)
+            .help("New note or folder in \(name)")
         }
-        .buttonStyle(.plain)
+        .background(rowBackground(selected: false, hover: hover))
         .onHover { hover = $0 }
+        .contextMenu {   // create INSIDE this folder
+            Button { onCreate(url, false) } label: { Label("New Note", systemImage: "doc.badge.plus") }
+            Button { onCreate(url, true) } label: { Label("New Folder", systemImage: "folder.badge.plus") }
+            Divider()
+            Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: { Label("Reveal in Finder", systemImage: "folder") }
+        }
     }
 }
 
 /// A note (leaf) row: a doc glyph + title, accent when selected.
 private struct NoteRow: View {
+    let url: URL
     let title: String
     let depth: Int
     let selected: Bool
+    let onDelete: (URL) -> Void
     let onSelect: () -> Void
     @State private var hover = false
 
@@ -498,6 +697,11 @@ private struct NoteRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        .contextMenu {
+            Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: { Label("Reveal in Finder", systemImage: "folder") }
+            Divider()
+            Button(role: .destructive) { onDelete(url) } label: { Label("Move to Trash", systemImage: "trash") }
+        }
     }
 }
 
@@ -509,13 +713,15 @@ private struct NodeRow: View {
     @Binding var expanded: Set<URL>
     let selection: URL?
     let onSelect: (URL) -> Void
+    let onCreate: (URL, Bool) -> Void   // (parent folder, isFolder)
+    let onDelete: (URL) -> Void
 
     private var isOpen: Bool { expanded.contains(node.url) }
 
     var body: some View {
         if node.isFolder {
             VStack(alignment: .leading, spacing: 1) {
-                FolderRow(name: node.name, depth: depth, isOpen: isOpen) {
+                FolderRow(url: node.url, name: node.name, depth: depth, isOpen: isOpen, onCreate: onCreate) {
                     withAnimation(.easeInOut(duration: 0.22)) {
                         if isOpen { expanded.remove(node.url) } else { expanded.insert(node.url) }
                     }
@@ -528,7 +734,8 @@ private struct NodeRow: View {
                         VStack(alignment: .leading, spacing: 1) {
                             ForEach(node.children) { child in
                                 NodeRow(node: child, depth: depth + 1, expanded: $expanded,
-                                        selection: selection, onSelect: onSelect)
+                                        selection: selection, onSelect: onSelect,
+                                        onCreate: onCreate, onDelete: onDelete)
                             }
                         }
                         .transition(.accordion)
@@ -537,7 +744,8 @@ private struct NodeRow: View {
                 .clipped()
             }
         } else {
-            NoteRow(title: node.name, depth: depth, selected: node.url == selection) {
+            NoteRow(url: node.url, title: node.name, depth: depth, selected: node.url == selection,
+                    onDelete: onDelete) {
                 onSelect(node.url)
             }
         }
