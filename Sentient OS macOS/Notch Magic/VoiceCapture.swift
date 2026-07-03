@@ -92,12 +92,20 @@ final class VoiceCapture {
     /// Microphone (always needed) + speech recognition (the Speech framework gate). Each prompts only
     /// the first time. Returns false if either is denied / restricted.
     private func authorize() async -> Bool {
-        guard await requestMicrophone() else { Log("voice: microphone access denied"); return false }
-        guard await requestSpeech() else { Log("voice: speech-recognition access denied"); return false }
+        guard await Self.requestMicrophone() else { Log("voice: microphone access denied"); return false }
+        guard await Self.requestSpeech() else { Log("voice: speech-recognition access denied"); return false }
         return true
     }
 
-    private func requestMicrophone() async -> Bool {
+    /// Request mic + speech, surfacing the system prompts on first ask. Public entry point for the dev
+    /// Permissions panel; the live capture path uses `authorize()`, which calls the same two requests.
+    @discardableResult
+    static func requestPermissions() async -> Bool {
+        guard await requestMicrophone() else { return false }
+        return await requestSpeech()
+    }
+
+    private static func requestMicrophone() async -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return true
         case .notDetermined: return await AVCaptureDevice.requestAccess(for: .audio)
@@ -105,7 +113,7 @@ final class VoiceCapture {
         }
     }
 
-    private func requestSpeech() async -> Bool {
+    private static func requestSpeech() async -> Bool {
         switch SFSpeechRecognizer.authorizationStatus() {
         case .authorized: return true
         case .notDetermined:

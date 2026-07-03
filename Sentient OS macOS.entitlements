@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Sentient OS entitlements.
+
+	  The app runs with the Hardened Runtime ON and the App Sandbox OFF (Full Disk Access needs a
+	  non-sandboxed app). Under the Hardened Runtime, microphone access is blocked BEFORE the TCC
+	  prompt unless the app carries the audio-input capability — without it, "Grant microphone" does
+	  nothing and the app never appears in System Settings › Privacy › Microphone. This entitlement
+	  is a Hardened Runtime capability: freely usable, no provisioning profile, works for any signer.
+
+	  It covers both the mic and Speech recognition (which records from the same input). Screen
+	  Recording needs no entitlement (TCC-only), and the Codex computer-use Apple Events are sent by
+	  the spawned `codex` process, not by Sentient, so no automation entitlement is needed here.
+
+	  Note: `com.apple.security.files.user-selected.read-only` is still auto-injected by the
+	  ENABLE_USER_SELECTED_FILES=readonly build setting and merged in at sign time; it's an inert
+	  template leftover (see Architecture §11) and isn't repeated here.
+	-->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>
