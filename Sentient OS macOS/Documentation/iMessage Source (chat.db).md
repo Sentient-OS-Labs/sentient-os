@@ -29,6 +29,16 @@ the iterative pipeline. Needs Full Disk Access.
 - **Group vs DM:** `chat.style` 43 = group, 45 = DM. Opt-in key = `chat.guid` (stable).
   Sender per message via `handle.id` (E.164 phone or email — chat.db stores **no names**, hence
   AddressBookNames). Unnamed groups get a participant roll-up name ("Alex, Sam & 2 others").
+- **Hidden chats: `chat.is_filtered` is a category code, NOT a bool** — 0 = known sender,
+  1 = unknown sender (both shown in Messages' main list), 2 = Spam, 3+ = the iOS SMS-filter
+  category chats (Promotions / Transactions + Finance/Orders/Reminders subtypes; the category is
+  baked into `chat_identifier` as a suffix — `56249(smsfp)`, `53849(smsft_fi)` — one chat row per
+  sender-category). iOS 26 rolled those folders out to everyone (not just India SIMs), and Messages
+  in iCloud syncs the rows into the Mac's chat.db even though **no Mac UI ever shows them**.
+  `chats()` therefore keeps only `is_filtered <= 1` (+ `is_blackholed = 0` defensively) — the
+  iMessage twin of WhatsApp's `ZSESSIONTYPE` whitelist. Without it, OTP/promo shortcodes flood the
+  picker and the pipeline. [MEASURED on a real dual-SIM DB: 749 chat rows, only 164 Messages-visible;
+  the picker collapsed 106 → 45 active chats, matching the Messages sidebar exactly.]
 - **Limits (`ChatWindowing`):** 90-day floor AND newest-100k cap, both in SQL — an inner subquery
   filters to the opted-in chats, applies `WHERE date >= floor`, then `ORDER BY date DESC LIMIT
   100000` to cap across them; the outer `ORDER BY chat_id, ROWID` restores per-chat ascending
