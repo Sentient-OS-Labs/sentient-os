@@ -15,8 +15,9 @@
 //
 //  Key methods: listChats() (picker rows) · eligibleWindows(). Limits per ChatWindowing:
 //  90-day floor AND newest-100k cap. Tapbacks (associated_message_type != 0) and system items
-//  (item_type != 0) are filtered in SQL — they'd spam every window otherwise. Incrementality:
-//  a per-chat high-water mark (max ROWID) per bucket "imessage:<guid>", held in CycleStore.
+//  (item_type != 0) are filtered in SQL — they'd spam every window otherwise. Chats Messages
+//  hides are excluded too (chat.is_filtered >= 2: Spam + the iOS SMS-filter category chats).
+//  Incrementality: a per-chat high-water mark (max ROWID) per bucket "imessage:<guid>", in CycleStore.
 //
 
 import Foundation
@@ -98,8 +99,16 @@ struct iMessageSource: Sendable {
             if let handle = r.text(1) { members[r.int(0), default: []].append(handle) }
         }
 
+        // Only chats Messages itself shows: is_filtered 0 (known sender) / 1 (unknown sender).
+        // 2 = Spam; 3+ = the iOS SMS-filter category chats (Promotions "(smsfp)", Transactions
+        // "(smsft*)") — synced into chat.db by Messages in iCloud but hidden by every Apple UI
+        // on the Mac. Without this guard OTP/promo shortcodes flood the picker and the pipeline
+        // (iMessage's equivalent of WhatsApp's ZSESSIONTYPE whitelist). is_blackholed is defensive.
         var out: [Int64: Chat] = [:]
-        try reader.forEachRow("SELECT ROWID, guid, style, display_name, chat_identifier FROM chat") { r in
+        try reader.forEachRow("""
+            SELECT ROWID, guid, style, display_name, chat_identifier FROM chat
+            WHERE COALESCE(is_filtered, 0) <= 1 AND COALESCE(is_blackholed, 0) = 0
+            """) { r in
             guard let guid = r.text(1) else { return }
             let isGroup = r.int(2) == 43
             let explicit = (r.text(3) ?? "").trimmingCharacters(in: .whitespaces)
