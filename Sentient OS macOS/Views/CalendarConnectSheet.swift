@@ -69,6 +69,7 @@ struct CalendarConnectSheet: View {
                 HStack(spacing: 12) {
                     Button("Cancel") { dismiss() }.buttonStyle(.bordered)
                     Button(selected ? "Done" : "Finish") {
+                        if !connected { Analytics.signal("Source.connected", parameters: ["source": "calendar"]) }
                         connected = true
                         selected = true            // include Calendar in INITIAL / ITERATIVE runs
                         dismiss()

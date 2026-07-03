@@ -35,12 +35,16 @@ final class CommandRunModel {
     private var section = ""                      // codex's current output section (user/codex/exec/…) — for filtering the bar
     private var task: Task<Void, Never>?
     private var rememberClear: Task<Void, Never>?   // keeps "Remembering" up ≥1.5s so its bloom completes
+    private var source = "command"                // who triggered this run (promptBar / voice) — scoreboard tag
+    private var runStarted = Date()              // for the scoreboard duration
 
-    func start(_ text: String, mode: AgentMode) {
+    func start(_ text: String, mode: AgentMode, source: String = "command") {
         guard !isRunning else { return }
         let task0 = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !task0.isEmpty else { return }
         self.mode = mode
+        self.source = source
+        self.runStarted = Date()
         isRunning = true
         recent = []
         section = ""
@@ -175,6 +179,13 @@ final class CommandRunModel {
     }
 
     private func complete(_ outcome: Outcome, line: String) {
+        // §7.19: feed the executor scoreboard (this IS the command-bar / voice computer-use path).
+        // Skip .stopped — that's a user cancel, not a health outcome. `fired` = codex exited 0
+        // (claimed done), NOT verified.
+        if let board: ExecutorScoreboard.Outcome = (outcome == .success ? .fired : (outcome == .failed ? .failed : nil)) {
+            ExecutorScoreboard.record(method: "computer", source: source, outcome: board,
+                                      durationS: Date().timeIntervalSince(runStarted))
+        }
         clearRemembering()
         statusLine = line
         isRunning = false

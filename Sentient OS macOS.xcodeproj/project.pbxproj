@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5A7E1D0002000000000000B1 /* TelemetryDeck in Frameworks */ = {isa = PBXBuildFile; productRef = 5A7E1D0002000000000000B2 /* TelemetryDeck */; };
 		5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5AB7600D2FD12ABE00149A7F /* LiteRTLM */; };
 		5AE5710001000000000000A1 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 5AE5710001000000000000A2 /* Sentry */; };
 /* End PBXBuildFile section */
@@ -30,6 +31,7 @@
 			files = (
 				5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */,
 				5AE5710001000000000000A1 /* Sentry in Frameworks */,
+				5A7E1D0002000000000000B1 /* TelemetryDeck in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -76,6 +78,7 @@
 			packageProductDependencies = (
 				5AB7600D2FD12ABE00149A7F /* LiteRTLM */,
 				5AE5710001000000000000A2 /* Sentry */,
+				5A7E1D0002000000000000B2 /* TelemetryDeck */,
 			);
 			productName = "Sentient OS macOS";
 			productReference = 5A3F39112FD0F43300DD835E /* Sentient OS.app */;
@@ -108,6 +111,7 @@
 			packageReferences = (
 				5AB7600C2FD12ABE00149A7F /* XCLocalSwiftPackageReference "Vendor/LiteRTLM" */,
 				5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+				5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5A3F39122FD0F43300DD835E /* Products */;
@@ -408,6 +412,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/TelemetryDeck/SwiftSDK";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
 		5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
@@ -419,6 +431,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		5A7E1D0002000000000000B2 /* TelemetryDeck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */;
+			productName = TelemetryDeck;
+		};
 		5AB7600D2FD12ABE00149A7F /* LiteRTLM */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = LiteRTLM;

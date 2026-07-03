@@ -16,5 +16,6 @@ if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
     WakeHelper.run()                    // root LaunchDaemon mode — never returns
 } else {
     CrashReporting.start(.app)          // crash reporting for the GUI app
+    Analytics.start()                   // product analytics (TelemetryDeck) — GUI app only
     SentientOSApp.main()                // normal GUI app
 }

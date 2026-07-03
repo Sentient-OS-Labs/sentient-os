@@ -30,7 +30,8 @@ final class OvernightScheduler {
 
     static let enabledKey = "dbg.scheduler.enabled"
     static let minutesKey = "dbg.scheduler.minutes"   // minutes since midnight
-    static let defaultMinutes = 16 * 60               // 4:00 PM — shared by the UI default and the reader
+    static let defaultMinutes = 3 * 60                // 3:00 AM — the production overnight time (the dev
+                                                     // UI can override `minutesKey` for testing)
 
     /// The configured time-of-day in minutes since midnight (shared default so the UI and the loop agree).
     static var configuredMinutes: Int { (UserDefaults.standard.object(forKey: minutesKey) as? Int) ?? defaultMinutes }
@@ -106,6 +107,7 @@ final class OvernightScheduler {
     /// run the shared `ProactiveCycle` tail (knowledge base → mirror → proactive → wipe) → release.
     private func runProcessing(log: SchedulerLog) async {
         log.line("WOKE at \(Date()) — beginning the run.")
+        Analytics.signal("Scheduler.overnightStarted")   // the 3am wake fired and we're processing
 
         // DETECT — identical to the dev UI / Analyze Now (the shared SourceSelection reader).
         let fda = Permissions.hasFullDiskAccess()
@@ -117,6 +119,20 @@ final class OvernightScheduler {
         guard !connectors.isEmpty || runGmail || runCalendar else { log.line("nothing enabled — skipping run."); return }
         let modelPath = ModelLocator.resolve()
         if !connectors.isEmpty && modelPath == nil { log.line("model not found — skipping run."); return }
+
+        // B6: go/no-go gate — a lid-shut 3am run holds the Mac fully awake + hammers the GPU, so only
+        // when it's safe (on AC, not Low Power, not thermally critical). Skip otherwise; the wake is
+        // already re-armed for tomorrow by the loop, so we just try again next night.
+        log.line("power: ac=\(PowerState.onACPower()) lowPower=\(PowerState.lowPowerMode) thermal=\(PowerState.thermalLabel)")
+        if let blocked = PowerState.overnightBlockReason() {
+            log.line("GATED — \(blocked); skipping this run (retry next night).")
+            Analytics.signal("Scheduler.gated", parameters: ["reason": blocked])
+            CrashReporting.captureEvent("overnight.gated", level: .info,
+                tags: ["reason": blocked],
+                extra: ["thermal": PowerState.thermalLabel],
+                fingerprint: ["overnight", "gated", blocked])
+            return
+        }
 
         let began = await WakeHelperClient.shared.beginAwake(timeout: 1800)
         log.line("beginAwake (disablesleep 1): \(began ? "OK" : "FAILED")")
@@ -157,6 +173,7 @@ final class OvernightScheduler {
         heart.cancel()
         let ended = await WakeHelperClient.shared.endAwake()
         log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
+        Analytics.signal("Scheduler.overnightCompleted")   // the nightly run finished cleanly
     }
 
     private func cloudLeg(_ name: String, log: SchedulerLog, _ body: () async throws -> Void) async {
