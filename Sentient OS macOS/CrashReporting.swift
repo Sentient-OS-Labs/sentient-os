@@ -236,7 +236,10 @@ enum CrashReporting {
             (re("/Users/[^/\\s\"']+"), "/Users/<redacted>"),                 // home-dir paths
             (re("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"), "<email>"),
             (re("\\+?\\d[\\d ()\\-]{7,}\\d"), "<phone>"),                     // 9+ digit runs w/ separators
-            (re("[A-Za-z0-9_\\-]{24,}"), "<token>"),                          // long tokens / base64 blobs
+            // Long tokens / base64 blobs — but ONLY high-entropy runs (≥1 uppercase or digit). This
+            // spares snake_case identifiers like our own event names (`zero_sessions_despite_install`),
+            // which a plain `{24,}` rule wrongly redacted. Real tokens/hashes always carry entropy.
+            (re("(?=[A-Za-z0-9_\\-]{24,})[A-Za-z0-9_\\-]*[A-Z0-9][A-Za-z0-9_\\-]*"), "<token>"),
         ]
     }()
 }

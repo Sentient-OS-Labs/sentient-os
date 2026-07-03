@@ -1,10 +1,14 @@
 # Source Diagnostics & Hardening (Sentry) — Implementation Plan
 
-> **STATUS: NOT YET BUILT. This is a design + implementation handoff for the next session.**
-> It describes work to *do*, not work that exists. The only Sentry code that exists today is
-> `CrashReporting.swift` (crash + error + performance reporting, shipped in PR #81 — see
-> `Documentation/Crash Reporting (Sentry).md`). Everything in §4 onward is greenfield.
-> Line numbers are a snapshot from the audit (2026-06-30) and will drift — always re-grep before editing.
+> **⚠️ MOSTLY SHIPPED (2026-07-03). This is the original PLAN + per-bug history — kept as the design
+> record.** For the **as-built** system (gating, the full event catalog, the PII firewall, how to add
+> an event, and the real-hardware verification), read **`Documentation/Diagnostics (Sentry).md`** — that
+> is the source of truth. This file's per-item status tags (✅ built / ⏳ deferred) remain accurate;
+> the prose below is the reasoning that got us there. Native crashes: `Crash Reporting (Sentry).md`.
+> Line numbers are a 2026-06-30 snapshot and have drifted — re-grep before editing.
+>
+> **Still not built:** the full `OvernightReport` (§7.20), voice internals (§7.21), `SMAppService`
+> onboarding + Release codesign-gate enforcement, and the minor leftovers (§7.14, DMG trail, skip-histogram).
 
 ---
 
