@@ -129,12 +129,24 @@ actor VaultCloud {
         let vault = VaultGenerator.vaultRoot
         guard fm.fileExists(atPath: vault.path) else { throw CloudError.noVault }
 
+        // Edit-sync seam: don't start a merge while the user is actively editing in the Knowledge
+        // editor — skip and let the notes ride to the next cycle (they stay in CycleStore). Saves an
+        // expensive codex call that the freshness check below would just abort anyway.
+        if await MainActor.run(body: { VaultActivity.shared.editorBusy }) {
+            Log("VaultCloud.update: editor busy — skipping this cycle (notes retried next run)")
+            return 0
+        }
+
         // Reuse the resume's staging dir (loadResume already verified it exists + has a session), else
         // seed a fresh staging dir with a COPY of the live vault so codex has the notes to edit.
+        // `baseline` is the live vault's fingerprint at seed time — the freshness check compares
+        // against it at swap; carried in the resume token so it survives a usage-limit resume.
         let staging: URL
+        let baseline: String
         let inv: CodexCLI.Invocation
         if let token = updateResume {
             staging = URL(fileURLWithPath: token.stagingPath, isDirectory: true)
+            baseline = token.vaultFingerprint ?? VaultGenerator.vaultFingerprint(vault)
             var i = CodexCLI.Invocation(prompt: """
                 Continue merging the new items into the vault exactly where you left off — the edits \
                 you already made are still in the working directory. When everything is merged, reply \
@@ -144,6 +156,7 @@ actor VaultCloud {
             inv = i
         } else {
             staging = try VaultGenerator.newStagingDir(seedFrom: vault)
+            baseline = VaultGenerator.vaultFingerprint(vault)       // captured at seed (vault == staging)
             inv = CodexCLI.Invocation(prompt: Self.updatePrompt(skeleton: Self.skeleton(of: staging), notes: notes))
         }
         var invocation = inv
@@ -156,17 +169,29 @@ actor VaultCloud {
         Log("VaultCloud.update: merging \(notes.count) notes in staging (\(updateResume == nil ? "fresh" : "resume"))…")
         do {
             let envelope = try await VaultGenerator().runCodexInStaging(invocation, staging: staging)
-            // TODO(editor): swap-time freshness check — if the live vault changed since we copied it
-            // (the future Knowledge editor), skip the swap and re-run next cycle. Moot today (single
-            // writer). See Documentation/Source Diagnostics & Hardening (Sentry).md §6/B11.
+            // Freshness check (B11): did the live vault change under us — i.e. did the user save a note
+            // in the Knowledge editor during the run? If so, our staging snapshot is stale and swapping
+            // would CLOBBER their edit. Discard staging instead; the notes stay in CycleStore and the
+            // next cycle re-seeds from the now-current vault (their edit included).
+            guard VaultGenerator.vaultFingerprint(vault) == baseline else {
+                Log("VaultCloud.update: ⚠️ vault changed during the run (editor?) — swap aborted, re-run next cycle")
+                CrashReporting.captureEvent("vault.update.stale_swap_averted", level: .info,
+                    fingerprint: ["vault", "update", "stale_swap_averted"])
+                setUpdateResume(nil)
+                try? fm.removeItem(at: staging)
+                return 0
+            }
             try VaultGenerator.swapStagingIntoVault(staging)        // atomic; live vault untouched until here
             setUpdateResume(nil)
             await markDirty()
             Log("VaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1)) — \(envelope.result.prefix(120))")
             return notes.count
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
-            // Staging is kept; the live vault was never touched. Durable resume continues next run.
-            setUpdateResume(resume)
+            // Staging is kept; the live vault was never touched. Carry the seed baseline forward so a
+            // resume's swap still detects a concurrent editor edit. Durable resume continues next run.
+            setUpdateResume(VaultGenerator.ResumeToken(sessionID: resume.sessionID,
+                                                       stagingPath: resume.stagingPath,
+                                                       vaultFingerprint: baseline))
             throw CloudError.usageLimit(message)
         } catch {
             // Any other failure: discard the staging copy; the live vault was NEVER modified — no

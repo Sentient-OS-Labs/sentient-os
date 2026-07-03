@@ -21,6 +21,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 actor VaultGenerator {
 
@@ -46,6 +47,10 @@ actor VaultGenerator {
     struct ResumeToken: Sendable, Codable {
         let sessionID: String?
         let stagingPath: String
+        /// UPDATE only (B11 freshness check): the live vault's fingerprint captured when staging was
+        /// seeded, carried across a usage-limit resume so the swap can still detect a concurrent
+        /// editor edit made during the (possibly multi-attempt) run. nil for a build.
+        var vaultFingerprint: String? = nil
     }
 
     enum VaultError: LocalizedError {
@@ -121,6 +126,26 @@ actor VaultGenerator {
             try fm.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.moveItem(at: staging, to: root)
         }
+    }
+
+    /// A stable content fingerprint of the vault — SHA-256 over each `.md` file's `relpath|size|mtime`,
+    /// sorted. Cheap (no file reads), and stable across runs/restarts (so it can ride in a resume
+    /// token). Used by the UPDATE freshness check (B11): if this changes between seeding staging and
+    /// the swap, the user's Knowledge editor wrote a note under us and the swap must be aborted.
+    static func vaultFingerprint(_ root: URL) -> String {
+        let fm = FileManager.default
+        let paths = ((try? fm.subpathsOfDirectory(atPath: root.path)) ?? [])
+            .filter { $0.hasSuffix(".md") && !$0.contains("/.") }.sorted()
+        var parts: [String] = []
+        parts.reserveCapacity(paths.count)
+        for p in paths {
+            let attrs = try? fm.attributesOfItem(atPath: root.appendingPathComponent(p).path)
+            let size = (attrs?[.size] as? Int) ?? -1
+            let mtime = (attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? -1
+            parts.append("\(p)|\(size)|\(mtime)")
+        }
+        let digest = SHA256.hash(data: Data(parts.joined(separator: "\n").utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Run codex in `staging` (workspace-write), polling the staging `.md` count for progress, and
