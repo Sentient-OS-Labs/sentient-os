@@ -36,7 +36,10 @@ final class AppState {
 
     private static let onboardingKey = "hasCompletedOnboarding"
     var hasCompletedOnboarding: Bool {
-        didSet { UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey) }
+        didSet {
+            UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey)
+            if hasCompletedOnboarding, !oldValue { Analytics.signal("Onboarding.completed") }
+        }
     }
 
     init() {

@@ -85,7 +85,10 @@ struct SettingsView: View {
         .background(Theme.Ink.cardBG, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
             .strokeBorder(.white.opacity(0.06), lineWidth: 1))
-        .onChange(of: diagnosticsEnabled) { _, _ in CrashReporting.applyEnabledChange() }
+        .onChange(of: diagnosticsEnabled) { _, _ in
+            CrashReporting.applyEnabledChange()
+            Analytics.applyEnabledChange()
+        }
     }
 
     private var appVersion: String {

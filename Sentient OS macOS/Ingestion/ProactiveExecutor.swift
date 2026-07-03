@@ -72,6 +72,14 @@ actor ProactiveExecutor {
         ExecutorScoreboard.record(method: action.method.rawValue, source: "proactive_card",
             outcome: r.board, durationS: Date().timeIntervalSince(t0),
             statusPresent: r.statusPresent, errorClass: r.errorClass)
+        // The single most important number: a user fired a real action — which channel, did it land.
+        let landed: String
+        switch r.outcome {
+        case .fired:       landed = "fired"
+        case .notFireable: landed = "not_fireable"
+        case .failed:      landed = "failed"
+        }
+        Analytics.signal("Proactive.actionFired", parameters: ["method": action.method.rawValue, "outcome": landed])
         return r.outcome
     }
 

@@ -65,8 +65,11 @@ actor ProactiveCycle {
         do {
             if exists { _ = try await VaultCloud.shared.update(notes: notes) }
             else      { _ = try await VaultCloud.shared.create(notes: notes) }
+            Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
+                             parameters: ["newSummaries": "\(notes.count)"])
         } catch {
             let m = "Knowledge base — \(Self.msg(error))"
+            Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
             progress(.failed(m)); return m                   // half-edited vault isn't dirty; summaries kept
         }
         await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
@@ -95,13 +98,16 @@ actor ProactiveCycle {
             let m = "Deciding — \(Self.msg(error))"
             progress(.failed(m)); return m
         }
+        Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
 
         if items.isEmpty {
             ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // clear any stale cards
         } else {
             progress(.researching(items.count))
             do {
-                _ = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx)
+                let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx)
+                Analytics.signal("Proactive.prepared", parameters: [
+                    "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"])
             } catch {
                 let m = "Preparing — \(Self.msg(error))"
                 progress(.failed(m)); return m
