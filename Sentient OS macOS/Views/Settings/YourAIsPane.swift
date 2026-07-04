@@ -44,15 +44,33 @@ struct YourAIsPane: View {
         .task { await refresh() }
     }
 
-    // MARK: - The story (value first, then the privacy explainer)
+    // MARK: - The story (value first, then four scannable privacy pillars — never a wall of text)
 
     private var intro: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base and decide what's relevant, making them dramatically more helpful about your actual life.")
                 .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-            SettingsProse("Private by design: your real files never leave this Mac. Your AIs only ever see short summaries with personal details stripped out, organized into your knowledge base. It's end-to-end encrypted; no one, not even Sentient's developers, can read it. There is no account, one secret link only you hold is the key, and if you stop using Sentient, your cloud copy deletes itself within 30 days. Even the cloud backend is open source, so anyone can verify all of this.")
+            VStack(alignment: .leading, spacing: 9) {
+                pillar("lock.shield", "Your real files never leave this Mac. Your AIs only see short summaries, personal details stripped.")
+                pillar("lock.fill", "End-to-end encrypted: no one, not even Sentient's developers, can read your knowledge base.")
+                pillar("key.fill", "No account. One secret link only you hold; leave Sentient and the cloud copy deletes itself in 30 days.")
+                pillar("chevron.left.forwardslash.chevron.right", "Even the cloud backend is open source. Verify everything.")
+            }
+        }
+    }
+
+    private func pillar(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.Ink.green.opacity(0.8))
+                .frame(width: 15)
+            Text(text)
+                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
+                .lineSpacing(2.5)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -104,13 +122,10 @@ struct YourAIsPane: View {
         }
     }
 
-    // MARK: - The hero: the guided setup
+    // MARK: - The hero: the guided setup (settings-scale glow — a gradient ring, not the home's sun)
 
     private var heroButton: some View {
-        GlowButton(title: "Connect your AIs", systemImage: "sparkles") {
-            openWindow(id: ConnectAIsView.windowID)
-        }
-        .frame(maxWidth: 340)
+        ConnectCTA { openWindow(id: ConnectAIsView.windowID) }
     }
 
     // MARK: - Activity
@@ -149,6 +164,32 @@ struct YourAIsPane: View {
         enabled = await MirrorClient.shared.isEnabled
         loaded = true
         if enabled { stats = try? await MirrorClient.shared.stats() }
+    }
+}
+
+/// The pane's compact glow CTA: a dark capsule with the AI-gradient as a thin ring + a soft
+/// halo behind it. Jewelry at settings scale — deliberately NOT the home's big white GlowButton.
+private struct ConnectCTA: View {
+    let action: () -> Void
+
+    private var gradient: AngularGradient {
+        AngularGradient(colors: GlowHalo.stops, center: .center)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").font(.system(size: 12, weight: .semibold))
+                Text("Connect your AIs").font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 22).padding(.vertical, 10)
+            .background(Capsule().fill(Theme.Ink.cardBG))
+            .overlay(Capsule().strokeBorder(gradient, lineWidth: 1.2))
+            .background(Capsule().fill(gradient).blur(radius: 9).opacity(0.38))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressScaleStyle())
     }
 }
 
