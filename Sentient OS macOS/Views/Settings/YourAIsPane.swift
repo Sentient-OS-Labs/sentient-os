@@ -48,7 +48,7 @@ struct YourAIsPane: View {
 
     private var intro: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base, making them dramatically more helpful about your actual life.")
+            Text("Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base, making them dramatically more helpful.")
                 .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
