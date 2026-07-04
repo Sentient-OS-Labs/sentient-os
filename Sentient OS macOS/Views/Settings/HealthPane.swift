@@ -37,6 +37,8 @@ struct HealthPane: View {
 
     @State private var showCodexSetup = false
     @State private var codexExpanded = false
+    @State private var checked = false        // first full probe done (codex login check is seconds)
+    @State private var revealed = false       // drives the rise-in cascade after the first probe
 
     private enum DaemonState { case ready, awaitingApproval, notSetUp }
     private enum MicSpeechState { case granted, notAsked, denied }
@@ -61,18 +63,30 @@ struct HealthPane: View {
         SettingsPane(title: "Permissions & Health.",
                      whisper: allGreen ? "All clear. Your Sentient is healthy."
                                        : "Everything green means everything works.") {
-            VStack(alignment: .leading, spacing: 30) {
-                sentientGroup
-                if codexAllGreen {
-                    SettingsGroup(label: "Codex") { codexSummaryLine }
-                    if codexExpanded {
-                        codexSetupGroup
-                        codexPermissionsGroup
+            if !checked {
+                checkingLine
+            } else {
+                VStack(alignment: .leading, spacing: 30) {
+                    sentientGroup
+                    Group {
+                        if codexAllGreen {
+                            VStack(alignment: .leading, spacing: 30) {
+                                SettingsGroup(label: "Codex") { codexSummaryLine }
+                                if codexExpanded {
+                                    codexSetupGroup
+                                    codexPermissionsGroup
+                                }
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: 30) {
+                                codexSetupGroup
+                                if showCodexPermissions { codexPermissionsGroup }
+                            }
+                        }
                     }
-                } else {
-                    codexSetupGroup
-                    if showCodexPermissions { codexPermissionsGroup }
+                    .rise(5, revealed: revealed)
                 }
+                .task { revealed = true }
             }
         }
         .task {
@@ -90,34 +104,50 @@ struct HealthPane: View {
 
     // MARK: - SENTIENT (severity order)
 
+    /// The first probe's stand-in — the codex login check shells out and takes seconds; without
+    /// this the full board flashes and re-collapses.
+    private var checkingLine: some View {
+        HStack(spacing: 10) {
+            ProgressView().controlSize(.small)
+            Text("Checking your Sentient…")
+                .font(.serif(12.5, weight: .regular)).italic()
+                .foregroundStyle(Theme.Ink.body)
+        }
+        .padding(.top, 10)
+    }
+
     private var sentientGroup: some View {
         SettingsGroup(label: "Sentient") {
             VStack(alignment: .leading, spacing: 2) {
-                StatusLine(title: "Full Disk Access",
-                           health: fdaGranted ? .ok : .bad,
-                           note: fdaGranted ? "granted" : "not granted",
-                           fixTitle: "Grant…") {
-                    Permissions.openFullDiskAccessSettings()
-                }
-                if !fdaGranted {
-                    HStack(spacing: 6) {
-                        SettingsProse("WhatsApp, iMessage & Notes stay unreadable without it. After granting:")
-                        Button { Permissions.relaunch() } label: {
-                            Text("Relaunch Sentient")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(Theme.Ink.bright)
-                                .underline(true, color: Theme.Ink.deepMuted)
-                        }
-                        .buttonStyle(PressScaleStyle())
+                VStack(alignment: .leading, spacing: 2) {
+                    StatusLine(title: "Full Disk Access",
+                               health: fdaGranted ? .ok : .bad,
+                               note: fdaGranted ? "granted" : "not granted",
+                               fixTitle: "Grant…") {
+                        Permissions.openFullDiskAccessSettings()
                     }
-                    .padding(.bottom, 6)
+                    if !fdaGranted {
+                        HStack(spacing: 6) {
+                            SettingsProse("WhatsApp, iMessage & Notes stay unreadable without it. After granting:")
+                            Button { Permissions.relaunch() } label: {
+                                Text("Relaunch Sentient")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(Theme.Ink.bright)
+                                    .underline(true, color: Theme.Ink.deepMuted)
+                            }
+                            .buttonStyle(PressScaleStyle())
+                        }
+                        .padding(.bottom, 6)
+                    }
                 }
+                .rise(0, revealed: revealed)
                 StatusLine(title: "Overnight wake",
                            health: daemon == .ready ? .ok : .bad,
                            note: daemonNote,
                            fixTitle: daemon == .awaitingApproval ? "Approve…" : "Set Up…") {
                     fixDaemon()
                 }
+                .rise(1, revealed: revealed)
                 StatusLine(title: "Launch at login",
                            health: loginOn ? .ok : .warn,
                            note: loginOn ? "on" : "off",
@@ -125,18 +155,21 @@ struct HealthPane: View {
                     LoginItem.enable()
                     loginOn = LoginItem.isEnabled
                 }
+                .rise(2, revealed: revealed)
                 StatusLine(title: "Microphone & Speech",
                            health: micSpeechHealth,
                            note: micSpeechNote,
                            fixTitle: micSpeech == .notAsked ? "Allow…" : "Fix…") {
                     fixMicSpeech()
                 }
+                .rise(3, revealed: revealed)
                 StatusLine(title: "Notifications",
                            health: notifHealth,
                            note: notifNote,
                            fixTitle: notifStatus == .notDetermined ? "Allow…" : "Fix…") {
                     fixNotifications()
                 }
+                .rise(4, revealed: revealed)
             }
         }
     }
@@ -359,6 +392,18 @@ struct HealthPane: View {
                 clientBundleID: Permissions.computerUseHelperBundleID)
         }
         await codex.refreshLoginStatus()   // last — it shells out to `codex login status`
+        withAnimation(.easeOut(duration: 0.2)) { checked = true }   // first probe done → reveal
+    }
+}
+
+/// The gentle rise-in: each element starts a touch lower and transparent, then swoops up into
+/// place with a small stagger — subtle, physics-flavored, over in under half a second.
+private extension View {
+    func rise(_ index: Int, revealed: Bool) -> some View {
+        self.opacity(revealed ? 1 : 0)
+            .offset(y: revealed ? 0 : 14)
+            .animation(.spring(response: 0.45, dampingFraction: 0.85)
+                .delay(Double(index) * 0.055), value: revealed)
     }
 }
 
