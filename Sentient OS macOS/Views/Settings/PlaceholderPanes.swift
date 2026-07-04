@@ -73,42 +73,6 @@ struct ProactivePanePlaceholder: View {
     }
 }
 
-struct YourAIsPanePlaceholder: View {
-    var body: some View {
-        SettingsPane(title: "Your AIs.",
-                     whisper: "Your knowledge base, offered to every AI you already use.") {
-            VStack(alignment: .leading, spacing: 30) {
-                SettingsGroup(label: "Cloud Sync", badge: "coming soon") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SettingToggleLine(title: "Offer your knowledge base to your AIs",
-                                          sub: "ChatGPT and Claude read it over MCP — no account, and a 30-day lease that cleans up after itself.",
-                                          isOn: .constant(true))
-                            .disabled(true)
-                        HStack(spacing: 10) {
-                            Text("mcp.sentient-os.ai/u/••••••••••••/mcp")
-                                .font(.system(size: 11.5, design: .monospaced))
-                                .foregroundStyle(Theme.Ink.bright)
-                                .padding(.horizontal, 12).padding(.vertical, 7)
-                                .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
-                            MonoCaps("Copy", size: 8.5, tracking: 1.6, color: Theme.Ink.label)
-                        }
-                    }
-                }
-                SettingsGroup(label: "Activity", badge: "coming soon") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("ChatGPT read 5 notes yesterday.")
-                            .font(.serif(13, weight: .regular)).italic()
-                            .foregroundStyle(Theme.Ink.body)
-                        Text("Delete the cloud copy…")
-                            .font(.system(size: 11.5, weight: .medium))
-                            .foregroundStyle(Color(red: 1.0, green: 0.45, blue: 0.45).opacity(0.85))
-                    }
-                }
-            }
-        }
-    }
-}
-
 struct HealthPanePlaceholder: View {
     var body: some View {
         SettingsPane(title: "Permissions & Health.",

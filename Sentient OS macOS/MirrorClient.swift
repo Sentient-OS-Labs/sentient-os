@@ -155,6 +155,19 @@ actor MirrorClient {
         try? await deleteRemote()
     }
 
+    /// Mint a NEW token — the remediation if a share URL ever leaks. Deletes the cloud copy under
+    /// the OLD token (best-effort), replaces the Keychain identity, and re-pushes if mirroring is on
+    /// so the new URL serves immediately. The old URL dies: the user must update their connectors.
+    func regenerateToken() async throws -> String {
+        try? await deleteRemote()
+        let token = try Self.mintToken()
+        guard Keychain.set(Self.tokenKey, token) else { throw MirrorError.keychainWriteFailed }
+        Analytics.signal("Mirror.regenerated")
+        guard let url = shareURL else { throw MirrorError.keychainWriteFailed }
+        if isEnabled { try? await push() }
+        return url
+    }
+
     /// The "your AIs read N notes" numbers for the home screen. nil if not enabled / no vault yet.
     func stats() async throws -> Stats {
         guard let token = Keychain.read(Self.tokenKey) else { throw MirrorError.notEnabled }

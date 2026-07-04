@@ -115,7 +115,7 @@ struct SettingsView: View {
                 switch selection {
                 case .sources:   SourcesPanePlaceholder()
                 case .proactive: ProactivePanePlaceholder()
-                case .yourAIs:   YourAIsPanePlaceholder()
+                case .yourAIs:   YourAIsPane()
                 case .system:    SystemPane()
                 case .health:    HealthPanePlaceholder()
                 }
