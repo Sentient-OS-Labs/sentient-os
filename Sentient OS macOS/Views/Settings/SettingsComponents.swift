@@ -126,9 +126,10 @@ struct ChipFlow: Layout {
 }
 
 /// A source/option pill — the connector form (the Analysis popover's chips, grown up a size).
-/// The tiny mint dot is the on-state; `detail` carries counts ("12 chats"). Pure action chips
-/// ("+ Add Folder") pass `isAction: true`: no status dot, a dashed border, and a slightly
-/// lifted fill, so they read as "do something" rather than as a source.
+/// ON is a small celebration: a mint wash + mint ring + the mint dot (the verdict color for
+/// "kept"), so a selected source visibly counts. `detail` carries counts ("12 chats"). Pure
+/// action chips ("+ Add Folder") pass `isAction: true`: no dot, a bright dashed border, white
+/// ink — an invitation, not a source.
 struct SettingsChip: View {
     let label: String
     var detail: String? = nil
@@ -145,21 +146,22 @@ struct SettingsChip: View {
                         .frame(width: 5, height: 5)
                 }
                 Text(label)
-                    .font(.system(size: 12, weight: on ? .medium : .regular))
-                    .foregroundStyle(isAction ? Theme.Ink.bright : (on ? Theme.Ink.statusInk : Theme.Ink.chipInk))
+                    .font(.system(size: 12, weight: on || isAction ? .medium : .regular))
+                    .foregroundStyle(isAction || on ? .white : Theme.Ink.chipInk)
                 if let detail {
-                    Text(detail).font(.system(size: 10.5)).foregroundStyle(Theme.Ink.label)
+                    Text(detail).font(.system(size: 10.5))
+                        .foregroundStyle(on ? Theme.Ink.mint.opacity(0.85) : Theme.Ink.label)
                 }
             }
             .padding(.horizontal, 13).padding(.vertical, 7)
-            .background(isAction ? Color.white.opacity(0.035) : (on ? Theme.elevated : Color.clear),
+            .background(isAction ? Color.white.opacity(0.05) : (on ? Theme.Ink.mint.opacity(0.13) : Color.clear),
                         in: Capsule())
             .overlay {
                 if isAction {
-                    Capsule().strokeBorder(Color.white.opacity(0.18),
+                    Capsule().strokeBorder(Color.white.opacity(0.32),
                                            style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 } else {
-                    Capsule().strokeBorder(on ? Color.white.opacity(0.16) : Theme.Ink.chipBorder,
+                    Capsule().strokeBorder(on ? Theme.Ink.mint.opacity(0.38) : Theme.Ink.chipBorder,
                                            lineWidth: 1)
                 }
             }
