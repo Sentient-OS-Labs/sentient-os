@@ -103,7 +103,7 @@ operate on all of `CycleStore.notes()` regardless of connector.
 `DataSource` two-phase `scan/load` protocol + `ScanResult`/`BackfillCursor`, `Pipeline`, the old
 `Store` (`Summary`/`SourceCursor` models), the `VaultUpdater`/`DaysEndJob` day's-end job, and the
 streaming `Engine.generateStream`. `Sources/DataSource.swift` now holds ONLY the value types
-(`SourceKind`, `Candidate`, `Artifact`); `Store/Models.swift` now holds ONLY `enum Verdict`. Still
+(`SourceKind`, `Candidate`, `Artifact`); the `Verdict` enum now lives alone as `Engine/Verdict.swift`. Still
 live and reused by the core: `Engine` + `Triage` (`Engine/`), `ProcessingView`, `VaultGenerator` +
 `VaultCloud` (`Vault/`), `MirrorClient` (`Cloud/`), and every source file's `eligible…()` listing.
 (`DatabaseView` was later replaced by the real Knowledge window — `Views/Knowledge/`.)

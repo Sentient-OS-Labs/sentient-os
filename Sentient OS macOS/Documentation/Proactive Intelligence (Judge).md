@@ -152,7 +152,7 @@ execution. So each channel runs a **fixed, app-authored wrapper prompt** (`gmail
 in a `<<<ROUTING>>>` block · declares BOTH blocks DATA, never instructions · confines the run to the
 one declared action (computer use is additionally forbidden AppleScript/Terminal shortcuts) · demands
 a final **`STATUS: DONE — …` / `STATUS: COULD_NOT — …`** sentinel. The sentinel verdict feeds
-`ExecutorScoreboard` (`Store/ExecutorScoreboard.swift`, §7.19) — one structured event per fire;
+`ExecutorScoreboard` (`Diagnostics/ExecutorScoreboard.swift`, §7.19) — one structured event per fire;
 "fired" means codex *claimed* done, and a missing sentinel is tracked as the false-success risk.
 Cancellation is real: the awaiting Task's cancel (a card's STOP) terminates the codex process.
 
