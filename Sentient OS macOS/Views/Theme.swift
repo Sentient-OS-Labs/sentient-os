@@ -38,7 +38,7 @@ enum Theme {
 
     static func verdictColor(_ v: Verdict) -> Color {
         switch v {
-        case .survivor:  return Color(red: 0.40, green: 0.92, blue: 0.70)   // mint
+        case .survivor:  return Ink.green                                    // the one app green
         case .junk:      return Color.white.opacity(0.45)                    // dim
         case .sensitive: return Color(red: 1.0, green: 0.45, blue: 0.45)    // red
         }

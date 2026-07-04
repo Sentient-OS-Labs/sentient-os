@@ -157,7 +157,7 @@ struct DevToolsView: View {
                 .font(.caption.weight(.bold)).tracking(2)
                 .frame(maxWidth: .infinity, minHeight: 40)
         }
-        .buttonStyle(.bordered).tint(.green)
+        .buttonStyle(.bordered).tint(Theme.Ink.green)
     }
 
     var body: some View {
@@ -302,7 +302,7 @@ struct DevToolsView: View {
             if let s = run.status[id] {
                 Text(s)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(s.hasPrefix("✓") ? .green : s.hasPrefix("✗") ? .red : Theme.secondary)
+                    .foregroundStyle(s.hasPrefix("✓") ? Theme.Ink.green : s.hasPrefix("✗") ? .red : Theme.secondary)
                     .multilineTextAlignment(.center).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -380,12 +380,12 @@ struct DevToolsView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.bordered).tint(.green)
+            .buttonStyle(.bordered).tint(Theme.Ink.green)
             .disabled(deviceJob != nil || run.busy != nil || (Self.modelPath == nil && !((gmailConnected && runGmail) || (calendarConnected && runCalendar))))
             if let s = run.status[id] {
                 Text(s)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(s.hasPrefix("✓") ? .green : s.hasPrefix("✗") ? .red : Theme.secondary)
+                    .foregroundStyle(s.hasPrefix("✓") ? Theme.Ink.green : s.hasPrefix("✗") ? .red : Theme.secondary)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -656,7 +656,7 @@ struct DevToolsView: View {
                         .buttonStyle(.bordered)
                         if let resetResult {
                             Text(resetResult).font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(resetResult.hasPrefix("✓") ? .green : .red)
+                                .foregroundStyle(resetResult.hasPrefix("✓") ? Theme.Ink.green : .red)
                         }
                     }
 
@@ -711,12 +711,12 @@ struct DevToolsView: View {
                     Text(mirrorEnabled ? "ON" : "OFF")
                         .font(.caption2.weight(.bold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill((mirrorEnabled ? Color.green : Theme.secondary).opacity(0.22)))
-                        .foregroundStyle(mirrorEnabled ? .green : Theme.secondary)
+                        .background(Capsule().fill((mirrorEnabled ? Theme.Ink.green : Theme.secondary).opacity(0.22)))
+                        .foregroundStyle(mirrorEnabled ? Theme.Ink.green : Theme.secondary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 40)
             }
-            .buttonStyle(.bordered).tint(mirrorEnabled ? .green : Theme.secondary)
+            .buttonStyle(.bordered).tint(mirrorEnabled ? Theme.Ink.green : Theme.secondary)
             .disabled(mirrorBusy)
 
             if mirrorEnabled, let url = mirrorURL {
@@ -767,7 +767,7 @@ struct DevToolsView: View {
             if let mirrorStatus {
                 Text(mirrorStatus)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(mirrorStatus.hasPrefix("✓") ? .green : mirrorStatus.hasPrefix("✗") ? .red : Theme.secondary)
+                    .foregroundStyle(mirrorStatus.hasPrefix("✓") ? Theme.Ink.green : mirrorStatus.hasPrefix("✗") ? .red : Theme.secondary)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }

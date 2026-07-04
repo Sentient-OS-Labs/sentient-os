@@ -595,7 +595,7 @@ private struct GlowProgressBar: View {
         Color(red: 0.91, green: 0.30, blue: 0.62),  // pink
         Color(red: 0.62, green: 0.40, blue: 0.95),  // violet
         Color(red: 0.36, green: 0.55, blue: 0.98),  // blue
-        Color(red: 0.30, green: 0.85, blue: 0.65),  // mint
+        Color(red: 0.29, green: 0.87, blue: 0.50),  // green (Ink.green)
     ]
 
     /// Stops tiled twice with explicit locations → the gradient is periodic over `band` points,

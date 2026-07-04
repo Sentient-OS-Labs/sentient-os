@@ -56,7 +56,7 @@ struct GmailConnectSheet: View {
                         Text("Couldn't see Gmail yet. Finish connecting on the page, then tap “I'm done” again.")
                             .foregroundStyle(.orange)
                     case .connected:
-                        Label("Gmail connected", systemImage: "checkmark.seal.fill").foregroundStyle(.green)
+                        Label("Gmail connected", systemImage: "checkmark.seal.fill").foregroundStyle(Theme.Ink.green)
                     default:
                         Text("After connecting on the page, come back and tap “I'm done”.")
                             .foregroundStyle(Theme.faint)
@@ -75,7 +75,7 @@ struct GmailConnectSheet: View {
                         selected = true            // include Gmail in INITIAL / ITERATIVE runs
                         dismiss()
                     }
-                    .buttonStyle(.borderedProminent).tint(.green)
+                    .buttonStyle(.borderedProminent).tint(Theme.Ink.green)
                     .disabled(phase != .connected)
                 }
                 if connected && selected {
