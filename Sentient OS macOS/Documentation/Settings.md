@@ -107,12 +107,25 @@ probe (the codex login check shells out and takes seconds), then rows cascade in
 staggered rise). Severity-ordered rows, each with an `InfoTip` (tiny info icon; hover 0.15s
 opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
 
-- **SENTIENT:** Full Disk Access (grant deep-link + relaunch link) · Overnight wake (🟢 = the
-  installed daemon plist points at THIS binary; fix runs `WakeHelperInstaller.installAsync()` —
-  **[DECIDED 2026-07-04] the password install IS production**, no Login Items migration) ·
-  Launch at login (yellow when off) · Microphone & Speech (one row: `VoiceCapture.
-  requestPermissions()` asks both; denied deep-links to the actual blocker) · Notifications
-  (yellow when off, never red — the morning briefing is optional).
+- **ON-DEVICE INTELLIGENCE** (the analysis machinery): Full Disk Access (grant deep-link +
+  relaunch link) · Overnight wake (🟢 = the installed daemon plist points at THIS binary; fix runs
+  `WakeHelperInstaller.installAsync()` — **[DECIDED 2026-07-04] the password install IS
+  production**, no Login Items migration) · Launch at login (yellow when off).
+- **SIDEKICK & PROACTIVE** (the magic's grants — lazy-asked, yellow while not-asked/off; only an explicit mic/speech DENIAL goes red):
+  Microphone & Speech (one row: `VoiceCapture.requestPermissions()` asks both; denied deep-links
+  to the actual blocker) · **Screen Recording** (Sentient's OWN grant — Sidekick snaps a screen
+  still per command, `Notch Magic/ScreenCapture.swift`; commands run text-only without it; fix =
+  `CGRequestScreenCaptureAccess`, which prompts only on the first-ever ask, else the Settings
+  deep-link; there's no macOS API to tell "never asked" from "denied") · Notifications (the
+  morning briefing note).
+
+  **The lazy-grant policy (Sidekick permissions):** nothing is requested at launch or as an
+  onboarding step. The mic + speech prompts surface the FIRST time the user holds the hotkey
+  (`VoiceCapture.authorize`, on a confirmed hold — never on a tap); the screen-recording ask joins
+  that same first-invoke moment when the onboarding gating lands (the wiring that arms Sidekick
+  only after initial processing — [WIP]). Until then this pane's "Allow…" rows are where the
+  grants happen; Sidekick degrades gracefully without them (voice needs mic; the screen still is
+  skipped).
 - **SET UP CODEX:** CLI / ChatGPT account / computer use — all red when missing; every fix opens
   the shared `CodexSetupView` (statuses re-probe when the sheet closes).
 - **CODEX PERMISSIONS:** the helper's Accessibility + Screen Recording — system-TCC, read via

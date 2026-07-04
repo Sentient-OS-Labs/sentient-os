@@ -49,25 +49,26 @@ A connector is dumb: it lists keyed work-items per bucket and loads one. *All* p
 ## The cycle (summaries are disposable)
 *on-device summarize → cloud (make/update KB) → cloud (proactive judge) → next cycle.*
 `CycleNote`s are ephemeral, so "tell cloud" just sends whatever exists (no "which are new?"
-bookkeeping). Only the per-bucket mark persists. `CycleStore.wipeAllNotes()` is the cycle-end wipe.
-It is NOT fired by the proactive button — that judge is read-only and re-runnable for prompt tuning
-(`DevToolsView.runProactive` only reads `CycleStore.notes()`). Today the only wipe trigger is the dev
-**Reset** action (`runReset`, which also clears the selected roots' pointers). Where the wipe belongs
-in the real trigger sequence is a later wiring decision.
+bookkeeping). Only the per-bucket mark persists. `CycleStore.wipeAllNotes()` is the cycle-end wipe,
+fired by **`ProactiveCycle`** (`Proactive/ProactiveCycle.swift`) as step 4 of the shared post-read
+tail (KB → mirror → proactive → wipe) — and ONLY on a fully successful chain, so a failed step keeps
+the summaries for retry. The dev "proactive system" button stays read-only/re-runnable for prompt
+tuning; the dev **Reset everything** (→ the shared `FactoryReset`) wipes notes AND pointers.
 
-## The cloud — `VaultCloud` (`Ingestion/VaultCloud.swift`)
+## The cloud — `VaultCloud` (`Vault/VaultCloud.swift`)
 Connector-agnostic; operates on `CycleStore.notes()` regardless of source. The cycle's notes become
 `CloudNote`s (`VaultGenerator.locSrc(kind:folder:sourceID:)` derives each note's per-source trust tag).
 - `create` — "go make knowledge base exist": reuses `VaultGenerator().generate(notes:)` (staging dir +
   atomic swap + usage-limit resume).
-- `update` — "go update knowledge base": surgical edits on the live vault (eval-validated prompt
-  lifted verbatim from the old VaultUpdater; that updater is itself deleted).
+- `update` — "go update knowledge base": surgical edits over a staged COPY of the vault, atomically
+  swapped in on success with a freshness check against concurrent Knowledge-editor edits (B11 — see
+  `Vault Generation (Stage 2).md`; the eval-validated prompt was lifted from the old VaultUpdater).
 - After create/update, `VaultCloud` only **marks the vault dirty** (`markDirty()` → `VaultActivity.vaultDirty`).
   It does NOT push. MCP sync is a SEPARATE step: the dev **MCP SYNC** button (`MirrorClient.push`) plus
   `VaultCloud.pushIfDirty()` run once on app launch as the catch-up. (To re-couple auto-push after a
   KB update, `markDirty()` just calls `pushIfDirty()`.)
 
-Proactive intelligence is **its own module** (`Ingestion/Proactive.swift`) — the read-only judge over
+Proactive intelligence is **its own module** (`Proactive/Proactive.swift`) — the read-only judge over
 the last week of `CycleStore.notes()` + the live vault. See its doc.
 
 ## Connectors
@@ -87,7 +88,9 @@ the last week of `CycleStore.notes()` + the live vault. See its doc.
 All four on-device source families run on the core, and the home's **Analyze Now** already routes
 through `IterativeRun` (mode `.auto`) via the shared `ProcessingView`. **Remaining (out of scope
 here):** add the automatic scheduler that calls these same entry points on its own clock.
-Gmail/Calendar are the later cloud family (Gmail rides along as a cloud leg through `GmailConnect`).
+Gmail and Calendar are the cloud family — they ride the same `CycleStore` as cloud legs
+(`Sources/GmailConnect.swift` / `Sources/CalendarConnect.swift`, shown in the same takeover), and
+the 3am scheduler runs both after the on-device leg.
 
 `ProcessingView.connectors(from:)` turns the selected `RunSource`s into core connectors —
 both the home Analyze Now and the dev start-on-device buttons share that one path. The dev cockpit
@@ -100,11 +103,13 @@ operate on all of `CycleStore.notes()` regardless of connector.
 `DataSource` two-phase `scan/load` protocol + `ScanResult`/`BackfillCursor`, `Pipeline`, the old
 `Store` (`Summary`/`SourceCursor` models), the `VaultUpdater`/`DaysEndJob` day's-end job, and the
 streaming `Engine.generateStream`. `Sources/DataSource.swift` now holds ONLY the value types
-(`SourceKind`, `Candidate`, `Artifact`); `Store/Models.swift` now holds ONLY `enum Verdict`. Still
-live and reused by the core: `Engine`, `Triage`, `ProcessingView`, `DatabaseView`, `VaultGenerator`
-(at the project root), `MirrorClient`, and every source file's `eligible…()` listing.
+(`SourceKind`, `Candidate`, `Artifact`); the `Verdict` enum now lives alone as `Engine/Verdict.swift`. Still
+live and reused by the core: `Engine` + `Triage` (`Engine/`), `ProcessingView`, `VaultGenerator` +
+`VaultCloud` (`Vault/`), `MirrorClient` (`Cloud/`), and every source file's `eligible…()` listing.
+(`DatabaseView` was later replaced by the real Knowledge window — `Views/Knowledge/`.)
 
 ## Verify
+*(These modes are scaffolding — recreate the harness per `Self-Testing (Eval Harness).md`; `Self Tests - Temp/` is kept empty.)*
 `SENTIENT_SELFTEST=fileiter` — deterministic, no model/codex: ItemKey tiebreak · the newer-than-mark
 partition (twin at the boundary) · CycleStore round-trip · `FilesConnector.buckets` skip/keep.
 `SENTIENT_SELFTEST=notesiter` — runs the real `NotesConnector` against the live Notes DB (structural

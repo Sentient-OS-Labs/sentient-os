@@ -2,7 +2,7 @@
 //  NotesSource.swift
 //  Sentient OS macOS
 //
-//  Reads Apple Notes' local store, NoteStore.sqlite (Arch §4, [MEASURED]: the
+//  Reads Apple Notes' local store, NoteStore.sqlite (the
 //  gunzip → protobuf 2→3→2 recipe decoded 100% of real notes — 249 in research, 87/87 on a
 //  live Mac during this build). One note = one Artifact through the file-flavored triage
 //  prompt — no windows, no picker; the newest-1000 cap + triage do the filtering.
@@ -16,6 +16,7 @@
 //  edited note is NOT re-summarized (its creation date doesn't move). High-water mark in CycleStore.
 //  Locked (ZISPASSWORDPROTECTED) and deleted (ZMARKEDFORDELETION) notes are skipped in SQL.
 //  Requires Full Disk Access. Key methods: eligibleNotes() · decodeBody(_:).
+//  Doc: Documentation/Apple Notes Source (NoteStore).md
 //
 
 import Foundation

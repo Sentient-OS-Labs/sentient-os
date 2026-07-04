@@ -2,7 +2,7 @@
 //  Proactive.swift
 //  Sentient OS macOS
 //
-//  Proactive Intelligence — its OWN module + trigger (Arch §6), sequenced AFTER a knowledge-base
+//  Proactive Intelligence — its OWN module, sequenced AFTER a knowledge-base
 //  build/update, never concurrently. This is PART 1 of 3: the JUDGE.
 //
 //  The proactive pipeline runs in three steps, each its own prompt: PART 1 (this file) finds the top

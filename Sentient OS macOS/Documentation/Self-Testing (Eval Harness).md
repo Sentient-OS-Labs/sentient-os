@@ -35,7 +35,7 @@ enum SelfTest {
 ```
 
 ### 2. The hook
-Re-add the one-line call in the app's `@main` struct (`Sentient_OS_macOSApp.swift`), under `#if DEBUG`,
+Re-add the one-line call in the app struct (`App/Sentient_OS_macOSApp.swift` — note: `@main` itself is `App/main.swift`, which branches into the wake helper first), under `#if DEBUG`,
 so it runs before the UI launches:
 
 ```swift
@@ -84,7 +84,7 @@ Self-tests launch the **Debug binary directly**, not through Xcode's Run.
    ```
    It runs the test, prints to stdout (and `/tmp/sentient-dev.log` via `Log()`), and `exit(0)`s before
    any window opens. Notifications are auto-silenced while `SENTIENT_SELFTEST` is set (`Notify.swift`).
-3. **Inspect, iterate, then DELETE the test** when the behavior is nailed (Phase-6 "Release strip"
+3. **Inspect, iterate, then DELETE the test** when the behavior is nailed (the "Release strip"
    enforces an empty folder; don't let scaffolding rot).
 
 ## Past modes you can recreate on demand

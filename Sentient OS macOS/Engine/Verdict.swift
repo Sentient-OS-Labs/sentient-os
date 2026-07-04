@@ -1,10 +1,10 @@
 //
-//  Models.swift
+//  Verdict.swift
 //  Sentient OS macOS
 //
-//  The on-device triage verdict — the "bouncer" decision for each artifact. (The former SwiftData
-//  persistence models, Summary + SourceCursor, were removed when the old Store/Pipeline retired;
-//  the live store is CycleStore — Ingestion/CycleStore.swift — which owns its own @Models.)
+//  The on-device triage verdict — the "bouncer" decision for each artifact (Triage.decide maps a
+//  model reply onto it). Was the last survivor of the old Store/Models.swift; the live database is
+//  CycleStore (Ingestion/CycleStore.swift), which owns its own @Models.
 //
 
 import Foundation

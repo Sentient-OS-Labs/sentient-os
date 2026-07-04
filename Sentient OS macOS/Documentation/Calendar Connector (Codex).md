@@ -6,8 +6,8 @@ Calendar connector** — OpenAI's account-level `codex_apps/google_calendar.*` t
 `search_events`, `read_event`, and the write tools `create_event` / `delete_event`), reached by
 `codex exec`. No on-device model touches the calendar.
 
-Code: `Ingestion/CalendarConnect.swift` · UI: `Views/CalendarConnectSheet.swift` + the Calendar chip in
-`Views/DevToolsView.swift`. The add-event **write** path is separate — `ProactiveExecutor.fireCalendar`.
+Code: `Sources/CalendarConnect.swift` · UI: `Views/CalendarConnectSheet.swift` + the Calendar chip in
+`Views/Dev/DevToolsView.swift`. The add-event **write** path is separate — `ProactiveExecutor.fireCalendar`.
 
 ## How a user connects
 1. **Calendar chip** in the dev SOURCES grid → opens the connect popup.
@@ -97,6 +97,6 @@ the proactive fetch) — calendar data is small and structured. The **write** (e
 
 ## Not yet / next
 - **Dev-only surface** (the `dbg.calendar.*` prefs + the chip in DevToolsView), exactly like Gmail. The
-  real onboarding/connectors UI is Phase 5.
-- **Scheduler wiring:** when the real proactive trigger lands, it should fetch the calendar context
-  **once** and pass it to both PART 1 and PART 2 (the two dev buttons each fetch independently today).
+  connect sheet is also reachable from the home's Analysis popover and Settings → Knowledge Sources; the dedicated onboarding moment is still to build.
+- ~~Scheduler wiring~~ ✅ done — `ProactiveCycle` fetches the calendar context **once** and hands it
+  to both PART 1 and PART 2 (only the two standalone dev buttons still fetch independently).

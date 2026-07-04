@@ -63,7 +63,7 @@ the mark climbs as windows process). The window id `imessage:c<chatROWID>:<first
 survives only as a stable `Candidate.id`. The `cursorKey`/`cursorValue` the source still sets are
 vestigial — nothing reads them.
 
-## Self-tests (`Self Tests - Temp/`, all need FDA on the *spawning* terminal)
+## Self-tests (recreate per `Self-Testing (Eval Harness).md` — `Self Tests - Temp/` is kept empty; all need FDA on the *spawning* terminal)
 
 - `SENTIENT_SELFTEST=imdecode` — decode-rate stats on the real chat.db (no model, no content
   printed; rows with both `text` and blob act as ground truth).

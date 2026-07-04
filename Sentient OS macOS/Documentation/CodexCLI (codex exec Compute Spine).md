@@ -1,10 +1,12 @@
 # CodexCLI — the `codex exec` compute spine
 
-One actor (`CodexCLI.swift`), the spine EVERY cloud feature calls: knowledge-base creation
-(`VaultGenerator`), knowledge-base updates (`VaultCloud`), the Gmail connector reads, the
-welcome briefing, and proactive intelligence. It piggybacks on the user's own Codex CLI
+One actor (`Cloud/CodexCLI.swift`), the spine EVERY cloud feature calls: knowledge-base creation
+(`VaultGenerator`), knowledge-base updates (`VaultCloud`), the Gmail/Calendar connector reads, the
+welcome gift letter, proactive intelligence, and every computer-use run (the command bar, Sidekick,
+and the executor's `computer` channel). It piggybacks on the user's own Codex CLI
 (their ChatGPT subscription pays). It is the app's ONLY cloud-model path — there is no
-direct-Anthropic-API route (deleted, along with `Secrets.swift`) and no free tier yet.
+direct-Anthropic-API route (deleted, along with `Secrets.swift`) and NO Sentient-hosted
+fallback: a ChatGPT subscription is a hard requirement of the product.
 Replaced `ClaudeCLI`/`claude -p` on June 11 (clean kill — same actor shape, same `Process`
 plumbing).
 
@@ -20,9 +22,27 @@ plumbing).
   npm-under-nvm hides the binary in a versioned dir), then a login `zsh -lic "which codex"`
   (interactive — `.zshrc` is where nvm/asdf init; `-lc` alone never sources it). Cached in
   UserDefaults (`codexcli.binaryPath`), re-verified on every read.
+- `install(onLine:)` — runs OpenAI's official standalone installer (`curl … install.sh |
+  CODEX_NON_INTERACTIVE=1 sh`) streaming its output; success = the binary is actually present after
+  (a `curl | sh` pipeline can exit 0 with nothing installed). The `CodexSetup` engine's step 1.
+- `startLogin(onLine:)` / `loginStatus()` — step 2: spawns `codex login` as a background process (it
+  opens the browser + runs the localhost OAuth callback server, self-exits once `~/.codex/auth.json`
+  lands); `loginStatus()` is the ground-truth `codex login status` check (exit 0 = logged in).
 - `validate(force:)` — ping (`Reply with exactly: PIGGYBACK_OK`, 30 s), cached per app launch;
   `force: true` re-probes (the installer flow).
-- `run(Invocation) → Envelope` — one headless call, typed errors.
+- `run(Invocation) → Envelope` — one headless `--json` call, typed errors. An optional `onLine:`
+  streams a human-readable play-by-play (each JSONL item reduced by `humanLine` — agent messages,
+  `$ command`s, `→ mcp.tool`s, `🔎 search`es) for live UIs (the For You cards).
+- `runAgentCommand(_:timeout:onLine:)` — **the computer-use spine** (the command bar, Sidekick, and
+  the executor's `computer` channel): a raw `codex exec` with the exact flag set measured to make
+  Codex's computer use work on the CLI (`--dangerously-bypass-approvals-and-sandbox`, gpt-5.5,
+  `model_reasoning_effort=low`, NO `--json` — human-readable output, prompt in argv), streaming each
+  output line live. ⚠️ It runs with the FULL inherited environment + a rich PATH
+  (`richEnvironment`) — computer use's helper IPC socket lives under the real `$TMPDIR`, so the
+  sanitized env that's right for every other call would hang it at `list_apps`. `codex login` needs
+  the same for its browser launch.
+- **Cancellation is real:** cancelling the awaiting Task (a card's STOP, the notch's stop button)
+  terminates the codex child process via a `withTaskCancellationHandler` + process holder.
 
 `Invocation`: `prompt` (always over **stdin**, never argv) · `model` (`.gpt55` = `gpt-5.5`, the
 default for knowledge-base work and everything else / `.gpt54mini` = `gpt-5.4-mini`, the Gmail
@@ -91,10 +111,19 @@ ChatGPT-plan limit message is still unverified — refine the markers during dog
   Code's `~/.claude/`). `--ephemeral` exists if a job should ever skip persistence; nothing
   uses it today because resume is worth more.
 - This spine is the ONLY cloud-model path in the app (the old direct-Anthropic-API fallback
-  and `Secrets.swift` were deleted June 11 — git history has them). No codex = no cloud
-  organize until the free tier ships.
+  and `Secrets.swift` were deleted June 11 — git history has them). No codex = no cloud work;
+  a ChatGPT subscription is a hard requirement — there is no free tier and never will be.
+
+## Diagnostics
+
+Every failed `run` emits a structured `codex.failure` event and every failed `runAgentCommand` a
+`codex.agent_command` event (§7.9) — the CLIError CASE NAME only (never the message/stderr/prompt,
+which embed user content), tagged with the calling `Invocation.feature` (gmail / calendar / vault /
+proactive / computer / …) so a broken spine is attributable per feature.
 
 ## Self-test
+
+*(Recreate the harness first — see `Self-Testing (Eval Harness).md`; `Self Tests - Temp/` is kept empty.)*
 
 ```sh
 SENTIENT_SELFTEST=codexcli "<app>/Contents/MacOS/Sentient OS"

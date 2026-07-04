@@ -2,12 +2,12 @@
 //  VaultGenerator.swift
 //  Sentient OS macOS
 //
-//  Stage 2 — the cloud vault (Arch §6). Takes the on-device survivor summaries and has the
-//  user's own Codex CLI (via CodexCLI, Arch §5) organize them into an Obsidian-style
+//  Stage 2 — the cloud vault. Takes the on-device survivor summaries and has the
+//  user's own Codex CLI (via CodexCLI) organize them into an Obsidian-style
 //  markdown vault at "~/Sentient OS - Knowledge Base/": the model WRITES the .md files itself
 //  (file tools, sandbox-scoped to a staging dir), which sidesteps per-message output caps
 //  and makes usage-limit resume natural. The old vault is only replaced on success
-//  (staging → atomic swap). No codex = no cloud organize until the free tier ships.
+//  (staging → atomic swap). No codex = no cloud work — a ChatGPT subscription is a hard requirement (no Sentient-hosted fallback).
 //
 //  The prompt core is the product of a multi-cycle eval against real data: truth/
 //  attribution guardrails, source-trust tiers, ruthless synthesis, a root README portrait
@@ -310,7 +310,8 @@ actor VaultGenerator {
 
 }
 
-// MARK: - The locked Stage-2 prompt core (validated over a multi-cycle eval; Arch §6)
+// MARK: - The locked Stage-2 prompt core (validated over a multi-cycle eval — receipts in
+// Documentation/Vault Generation (Stage 2).md)
 // The output section (agenticOutputInstructions) follows it.
 
 private let vaultPromptCore = """

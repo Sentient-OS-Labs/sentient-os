@@ -2,8 +2,8 @@
 //  iMessageSource.swift
 //  Sentient OS macOS
 //
-//  Reads the Mac's iMessage store, ~/Library/Messages/chat.db (Arch §4, [MEASURED]:
-//  the typedstream heuristic decoded 99.97% of 12,017 real messages). Same shape as WhatsApp:
+//  Reads the Mac's iMessage store, ~/Library/Messages/chat.db (the typedstream heuristic
+//  decoded 99.97% of 12,017 real messages). Same shape as WhatsApp:
 //  WAL-safe COPY → EXTRACT → DELETE, conversation windows via ChatWindowing, opt-in per chat
 //  (chat GUIDs), group/DM routed to the matching triage prompt.
 //
@@ -18,6 +18,7 @@
 //  (item_type != 0) are filtered in SQL — they'd spam every window otherwise. Chats Messages
 //  hides are excluded too (chat.is_filtered >= 2: Spam + the iOS SMS-filter category chats).
 //  Incrementality: a per-chat high-water mark (max ROWID) per bucket "imessage:<guid>", in CycleStore.
+//  Doc: Documentation/iMessage Source (chat.db).md
 //
 
 import Foundation
@@ -35,7 +36,7 @@ struct iMessageSource: Sendable {
             .appendingPathComponent("Library/Messages/chat.db").path
     }
 
-    /// Apple's ns-since-2001 message epoch ↔ Date (Arch §4 epoch cheat-sheet).
+    /// Apple's message epoch ↔ Date: nanoseconds since 2001-01-01.
     private static func date(fromAppleNS ns: Int64) -> Date {
         Date(timeIntervalSinceReferenceDate: Double(ns) / 1e9)
     }
@@ -221,7 +222,7 @@ struct iMessageSource: Sendable {
         return buckets
     }
 
-    // MARK: The typedstream heuristic — deliberately NOT a full parser (Arch §4)
+    // MARK: The typedstream heuristic — deliberately NOT a full parser
 
     /// Extract the message body from an `attributedBody` typedstream blob: find the NSString /
     /// NSMutableString class marker, skip the 5-byte preamble, read the length (one byte, or

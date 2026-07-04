@@ -4,11 +4,11 @@
 (passed as `[CloudNote]`) into the markdown knowledge base at `~/Sentient OS - Knowledge Base/`,
 through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.5` at **`.xhigh` effort**,
 `workspace-write` sandbox, cwd = a staging dir; the model writes the `.md` files itself with its
-file tools. Without a working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — the
-free tier is the eventual answer for no-codex users; the old direct-Anthropic-API route and its
+file tools. Without a working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — a ChatGPT
+subscription is a hard requirement; the old direct-Anthropic-API route and its
 `Secrets.swift` dev key were deleted June 11 and live in git history).
 
-This is the first build. `Ingestion/VaultCloud.swift` is the iterative system's wrapper around it:
+This is the first build. `Vault/VaultCloud.swift` is the iterative system's wrapper around it:
 `VaultCloud.create()` reuses this generator; `VaultCloud.update()` merges each cycle's new notes.
 **[UPDATED 2026-07-02, B11] Both build AND update now stage-then-swap** (update no longer edits the
 live vault in place — see below). (The old `VaultUpdater`/`DaysEndJob` were deleted — `VaultCloud`
@@ -57,7 +57,8 @@ that whole choreography, B1, is now deleted.)*
 ## Progress
 
 Progress is the filesystem itself: a 2s poll of the staging dir's `.md` count →
-`Progress.writing(notes:)` → VaultView's "N notes written…". No CLI stream parsing.
+`Progress.writing(notes:)` → the caller's status line (Dev Tools shows "… writing N notes"; the
+home's takeover shows the preparing phase). No CLI stream parsing.
 
 ## The prompt
 
@@ -68,15 +69,17 @@ ruthless synthesis, README-first portrait, structure rules, 100–150-note densi
 toward one-note-per-summary when the corpus is smaller than the target; revisit after the
 full-scale (1,704-summary) gate run.
 
-## The welcome briefing — NOT built (yet)
+## The welcome letter — ✅ built (as `Proactive/GiftLetter.swift`)
 
-The day-one "What I learned about you" briefing is **not currently in the code** — there is no
-`writeWelcomeBriefing()` anywhere in `VaultGenerator` (or the rest of the app), and no `Briefings`
-folder helper. A working implementation existed, was deliberately backed out, and belongs with the
-For You / proactive / onboarding work (mine app-repo git `17d5ad2`; rebuild against `CodexCLI`).
-Treat this as a to-build, not a shipped feature.
+The day-one "letter from Sentient" is now real: `GiftLetter.generate()` runs one hermetic codex call
+over the finished knowledge base (it reads the vault, writes `Gift from Sentient.md`, we read it back,
+persist it, and delete the file so nothing strays into the vault or the mirror). `ProactiveCycle`
+writes it ONCE, the first time a knowledge base exists; the home renders it as the sealed envelope
+card. See `Proactive Intelligence (Judge).md` §The welcome gift.
 
 ## Self-test
+
+*(Recreate the harness first — see `Self-Testing (Eval Harness).md`; `Self Tests - Temp/` is kept empty.)*
 
 ```sh
 SENTIENT_SELFTEST=vault SENTIENT_SELFTEST_N=8 "<app>/Contents/MacOS/Sentient OS"   # tiny subset
@@ -85,6 +88,7 @@ SENTIENT_VAULT_ROOT=/tmp/scratch …                                            
 
 ## Siblings on the same spine
 
-The iterative knowledge-base update (`VaultCloud.update()`, see `Ingestion/VaultCloud.swift`) rides
-the same `CodexCLI` spine — it edits the live knowledge base in place (surgical edits) rather than
-regenerate. `VaultCloud.create()` calls straight into this generator for the first build.
+The iterative knowledge-base update (`VaultCloud.update()`, see `Vault/VaultCloud.swift`) rides the
+same `CodexCLI` spine — surgical edits over a staged COPY of the vault, atomically swapped in on
+success (B11, above). `VaultCloud.create()` calls straight into this generator for the first build.
+Both live in `Vault/` alongside `VaultActivity` (the dirty-flag / debounced-mirror-sync seam).

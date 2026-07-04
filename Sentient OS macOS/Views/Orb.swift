@@ -3,7 +3,7 @@
 //  Sentient OS macOS
 //
 //  The living orb — the brand's heartbeat and the literal center of the Constellation home
-//  (Arch §9; design bar: UI_Inspiration/01 + README). The logo, made dimensional: a dark
+//  (design bar: UI_Inspiration/01 + README). The logo, made dimensional: a dark
 //  glassy planet with the white dot glowing as a heart inside it, wrapped in a tilted ring of
 //  orbiting light. The ring is truly 3D — depth-sorted across two Canvases sandwiching the
 //  planet (it passes behind AND in front), Keplerian (inner particles orbit faster), with two

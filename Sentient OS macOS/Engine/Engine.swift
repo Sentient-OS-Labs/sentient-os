@@ -6,10 +6,9 @@
 //  the LiteRTLM 0.13.1 Swift API (NOT ported from the iOS app). One `Engine` actor owns one
 //  native LiteRTLM.Engine for a batch; create/drop a Conversation per artifact.
 //
-//  Phase 1a status: minimal baseline spike — GPU (Metal) backend, CPU vision executor,
-//  model-recommended sampling, NO speculative decoding yet (we'll layer MTP in WITH
-//  measurement once the baseline is proven). Download flow, the engine lifecycle for the
-//  overnight batch, and timing/telemetry come next.
+//  Config: GPU (Metal) backend for text AND vision, speculative decoding (MTP) on, low-temp
+//  sampling for stable JSON verdicts, and the full GPU-wedge recovery lifecycle (unload →
+//  ~1s settle → reload). See the Arch doc §2 for the measured decisions behind each knob.
 //
 //  Naming note: this module's `Engine` (the wrapper) vs Google's `LiteRTLM.Engine` (the
 //  native actor) — the latter is always referenced fully-qualified below.

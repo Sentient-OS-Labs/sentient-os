@@ -2,7 +2,7 @@
 //  AppState.swift
 //  Sentient OS macOS
 //
-//  @Observable @MainActor global UI state (Arch §2.3): onboarding flags + live pipeline
+//  @Observable @MainActor global UI state: onboarding flags + live pipeline
 //  status — the single source of truth the SwiftUI window and MenuBarExtra observe.
 //  Only the onboarding flag is persisted (UserDefaults); everything else is live runtime state.
 //

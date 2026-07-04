@@ -52,7 +52,12 @@ for step in await codex.whatsNeeded() {        // e.g. [.computerUse] if 1 & 2 a
 - **No TCC here.** Accessibility / Screen-Recording consent for the helper is a separate UX step — the
   bootstrap writes none.
 
+## Who drives it today
+- **Dev Tools → CODEX SETUP** (`Views/CodexSetupView.swift`) — the three step cards.
+- **Settings → Permissions & Health** — the SET UP CODEX rows' fix buttons open the same
+  `CodexSetupView` sheet; statuses re-probe when it closes.
+- **Onboarding** (to build) presents its own polished screens over this same engine.
+
 ## Status
-Engine + dev button are built and compile clean. The computer-use bootstrap is proven end-to-end manually
-(plain CLI + DMG-extracted files → `codex exec` drove computer use). The **button's own click-through**
-should still be smoke-tested in the dev UI before the onboarding screen leans on it.
+Engine + both UIs are built and working; the computer-use bootstrap is proven end-to-end (the plain
+CLI + DMG-extracted files drive real computer use — see the bootstrap doc).

@@ -1,6 +1,6 @@
 //
 //  ProactiveCycle.swift
-//  Sentient OS macOS  ·  Ingestion/
+//  Sentient OS macOS  ·  Proactive/
 //
 //  The shared TAIL of a full processing cycle, run AFTER the on-device read leg (IterativeRun +
 //  Gmail/Calendar) has filled CycleStore with this cycle's survivor summaries. One ordered chain,

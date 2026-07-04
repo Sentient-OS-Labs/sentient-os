@@ -75,9 +75,10 @@ Applied newest-first (by date-added) after the walk, in `cappedNewestFirst`:
 
 - **Age cutoff** — Downloads only: files older than **1 year** are dropped (old downloads are noise;
   old Desktop/Documents files can be keepers). `FilesSource.maxAge`.
-- **Per-directory cap** — **100, every root** (any one directory contributes at most this many,
+- **Per-directory cap** — **300, every root** (any one directory contributes at most this many,
   newest win — the blunt backstop for bulk dumps the heuristics miss). `FilesSource.perDirectoryCap`.
-  *(Was briefly 300 for Downloads, June 11; back to 100 across the board on 2026-06-25.)*
+  ⚠️ Don't lower it casually: a 100/dir cap was the B8 over-skip bug — real folders (e.g. a busy
+  screenshots dir) silently lost their older keepers.
 - **Per-root cap** — newest **1,000** per root, every root. `FilesSource.perRootCap`.
 
 `FileRoot.source` builds the correctly-configured `FilesSource` for each root — use it instead of
@@ -85,8 +86,8 @@ constructing `FilesSource` by hand.
 
 ## Thresholds are [STARTING POINT]
 
-The density/dataset numbers (10 / majority · 100 / 90% / 80%) and the new walk/size/cap numbers
-(depth 3 · 100/dir · ~100 MB · 30 s) were tuned on real runs but are judgment calls. Tune with
+The density/dataset numbers (10 / majority · 100 / 90% / 80%) and the walk/size/cap numbers
+(depth 3 · 300/dir · ~100 MB · 30 s) were tuned on real runs but are judgment calls. Tune with
 evidence, not vibes.
 
 ## Self-test
@@ -102,4 +103,4 @@ which folders get pruned and why.
 Downloads waterfall: 21,364 raw whitelisted files → 5,286 after pruning → 551 after the 1-year cutoff
 → 324 after caps; Desktop 19,216 → 582 → 375. 218 Downloads subtrees pruned (an ML dataset + course
 repos); the Documents Obsidian vault fully kept. (Re-run `skipcensus` for current numbers — the
-per-file rejects and 100/dir cap now cut further.)
+per-file rejects and the caps have changed since.)

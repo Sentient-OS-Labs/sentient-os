@@ -396,8 +396,8 @@ struct FilesSource: Sendable {
 
 /// A user folder the Files pipeline can analyze. The dev picker (RootView) offers the three
 /// standard folders plus any number of custom-chosen ones; each selected root becomes its own
-/// `FilesSource` pass with its OWN pointer. Arch §3.4: "suggest Desktop + Downloads, but the
-/// user chooses the folders."
+/// `FilesSource` pass with its OWN pointer. The product rule: "suggest Desktop + Downloads,
+/// but the user chooses the folders."
 enum FileRoot: Hashable, Identifiable {
     case downloads
     case desktop

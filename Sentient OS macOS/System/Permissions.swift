@@ -2,7 +2,7 @@
 //  Permissions.swift
 //  Sentient OS macOS
 //
-//  Full Disk Access (FDA) gate (Arch §7.1). The DB sources (WhatsApp / iMessage / Notes) read
+//  Full Disk Access (FDA) gate. The DB sources (WhatsApp / iMessage / Notes) read
 //  TCC-protected databases that are simply unreadable without FDA — and there is NO API to
 //  *request* it. So the flow is:
 //    DETECT   — try reading a known FDA-gated file; a permission error ⇒ not granted.
@@ -12,7 +12,7 @@
 //  Files (~/Downloads, Desktop, Documents) do NOT need this — they use the standard per-folder
 //  TCC prompt. FDA is specifically the unlock for the database sources (Phase 3).
 //
-//  NOTE: the probe paths + Settings URLs are per Arch §7.1 and flagged there for per-OS testing.
+//  NOTE: the probe paths + Settings deep-link URLs may need re-testing on each new macOS.
 //
 
 import Foundation

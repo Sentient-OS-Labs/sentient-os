@@ -3,7 +3,7 @@
 The **Knowledge** window — what the home's "Knowledge" nav item opens. A minimal Obsidian-style
 surface over the real on-disk vault (`~/Sentient OS - Knowledge Base/`, resolved via
 `VaultGenerator.vaultRoot`). It replaced the old `DatabaseView` (a dev CycleStore-summaries
-inspector; that job still lives in Dev Tools via `Ingestion/SummariesView.swift`).
+inspector; that job still lives in Dev Tools via `Views/Dev/SummariesView.swift`).
 
 **Files (`Views/Knowledge/`):**
 - `VaultTree.swift` — data. Scans the vault into a `VaultNode` tree (folders incl. empty ones,

@@ -20,7 +20,7 @@ struct RootView: View {
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
-    @AppStorage("dev.proactive.realCards") private var realCards = false   // real cards + full-cycle Analyze Now
+    @AppStorage("dev.proactive.realCards") private var realCards = true   // DEFAULT: real cards + full-cycle Analyze Now (dev toggle OFF = the investor demo deck)
     // Cloud sources — same flags the scheduler reads, so Analyze Now processes exactly what an
     // overnight run would (a no-op until Gmail/Calendar are actually connected + selected).
     @AppStorage("dbg.gmail.connected")    private var gmailConnected = false

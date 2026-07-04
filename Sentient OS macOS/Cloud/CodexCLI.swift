@@ -2,12 +2,13 @@
 //  CodexCLI.swift
 //  Sentient OS macOS
 //
-//  The `codex exec` wrapper service (Arch §5) — the compute spine for ALL cloud-model work:
+//  The `codex exec` wrapper service — the compute spine for ALL cloud-model work:
 //  vault generation, daily updates, proactive intelligence. Discovers the user's Codex CLI
 //  binary, validates it with a quick ping, and runs headless prompts via `Process`:
 //  prompt over STDIN (never argv — macOS ARG_MAX is 1 MB), `--json` JSONL events back,
 //  sandbox/effort/cwd scoping, and typed usage-limit errors that carry the session (thread)
-//  id so callers can reschedule and resume. All mechanics receipt-verified live (Arch §5).
+//  id so callers can reschedule and resume. All mechanics receipt-verified live (receipts in
+//  the doc below).
 //
 //  Key methods:
 //   - CodexCLI.locateBinary()  → cached absolute-path discovery (known paths + zsh -lc which)
@@ -168,7 +169,7 @@ actor CodexCLI {
 
     // MARK: Install
 
-    /// Install the Codex CLI via OpenAI's official standalone installer (Arch §5 — the codex-setup
+    /// Install the Codex CLI via OpenAI's official standalone installer (the codex-setup
     /// onboarding step). Runs `curl … install.sh | CODEX_NON_INTERACTIVE=1 sh` as ONE shell pipeline
     /// (the `|` only exists inside a shell) and streams every output line to `onLine` (the console +
     /// the setup UI). The script drops the binary at `~/.local/bin/codex` — the first path
@@ -330,7 +331,7 @@ actor CodexCLI {
     /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
     /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
     /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
-    /// --ignore-user-config). Returns the full output. Computer use is the WIP CLI path.
+    /// --ignore-user-config). Returns the full output.
     ///
     /// `imagePath` (optional): a screenshot of the user's screen, attached with `codex exec -i <file>`
     /// so the agent SEES what they're looking at (the notch/command-bar path passes one; the proactive
@@ -576,7 +577,7 @@ actor CodexCLI {
 
     /// Blocking runner (call off-main). GUI-spawned `Process` works with a SANITIZED env —
     /// just HOME/USER + the system PATH and the absolute binary path; codex's auth lives in
-    /// ~/.codex (resolved via HOME), no TTY needed (Arch §5, measured).
+    /// ~/.codex (resolved via HOME), no TTY needed (measured — receipts in the CodexCLI doc).
     private static func execute(binary: String, args: [String], stdinText: String?,
                                 cwd: String?, timeout: TimeInterval,
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,

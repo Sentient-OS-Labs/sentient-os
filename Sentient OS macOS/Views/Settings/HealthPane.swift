@@ -28,6 +28,7 @@ struct HealthPane: View {
     @State private var daemon: DaemonState = .notSetUp
     @State private var loginOn = LoginItem.isEnabled
     @State private var micSpeech: MicSpeechState = .notAsked
+    @State private var screenRec = Permissions.hasScreenRecording()   // Sentient's own grant — Sidekick's screen context
     @State private var notifStatus: UNAuthorizationStatus = .notDetermined
 
     // The Codex helper's system-TCC grants (read via FDA; shown once computer use exists)
@@ -52,7 +53,7 @@ struct HealthPane: View {
     }
 
     private var allGreen: Bool {
-        fdaGranted && daemon == .ready && loginOn && micSpeech == .granted
+        fdaGranted && daemon == .ready && loginOn && micSpeech == .granted && screenRec
             && (notifStatus == .authorized || notifStatus == .provisional)
             && codex.installed && codex.loggedIn && codex.computerUseReady
             && (!showCodexPermissions || (helperAccessibility && helperScreenRecording))
@@ -66,9 +67,10 @@ struct HealthPane: View {
                 checkingLine
             } else {
                 VStack(alignment: .leading, spacing: 30) {
-                    sentientGroup
+                    onDeviceGroup
+                    sidekickGroup
                     SettingsHairline()
-                        .rise(5, revealed: revealed)
+                        .rise(6, revealed: revealed)
                     Group {
                         if codexAllGreen && !codexExpanded {
                             SettingsGroup(label: "Codex") { codexSummaryLine }
@@ -79,7 +81,7 @@ struct HealthPane: View {
                             }
                         }
                     }
-                    .rise(6, revealed: revealed)
+                    .rise(7, revealed: revealed)
                 }
                 .task { revealed = true }
             }
@@ -111,8 +113,8 @@ struct HealthPane: View {
         .padding(.top, 10)
     }
 
-    private var sentientGroup: some View {
-        SettingsGroup(label: "Sentient") {
+    private var onDeviceGroup: some View {
+        SettingsGroup(label: "On-device Intelligence") {
             VStack(alignment: .leading, spacing: 2) {
                 VStack(alignment: .leading, spacing: 2) {
                     StatusLine(title: "Full Disk Access",
@@ -154,6 +156,13 @@ struct HealthPane: View {
                     loginOn = LoginItem.isEnabled
                 }
                 .rise(2, revealed: revealed)
+            }
+        }
+    }
+
+    private var sidekickGroup: some View {
+        SettingsGroup(label: "Sidekick & Proactive") {
+            VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Microphone & Speech",
                            health: micSpeechHealth,
                            note: micSpeechNote,
@@ -162,6 +171,14 @@ struct HealthPane: View {
                     fixMicSpeech()
                 }
                 .rise(3, revealed: revealed)
+                StatusLine(title: "Screen Recording",
+                           health: screenRec ? .ok : .warn,
+                           note: screenRec ? "granted" : "not granted",
+                           tip: "Lets Sidekick snap a still of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}). Without it, Sidekick may not know which open app to start controlling to help you. Takes effect after you restart Sentient.",
+                           fixTitle: "Allow…") {
+                    fixScreenRecording()
+                }
+                .rise(4, revealed: revealed)
                 StatusLine(title: "Notifications",
                            health: notifHealth,
                            note: notifNote,
@@ -169,7 +186,7 @@ struct HealthPane: View {
                            fixTitle: notifStatus == .notDetermined ? "Allow…" : "Fix…") {
                     fixNotifications()
                 }
-                .rise(4, revealed: revealed)
+                .rise(5, revealed: revealed)
             }
         }
     }
@@ -232,6 +249,19 @@ struct HealthPane: View {
                 Permissions.openSpeechRecognitionSettings()
             }
         }
+    }
+
+    // MARK: Screen Recording (Sentient's own grant — Sidekick's screen context)
+
+    /// `CGRequestScreenCaptureAccess` prompts only on the FIRST ever ask (and adds Sentient to the
+    /// list); once denied it returns false silently, so the fallback is the Settings deep-link.
+    /// There is no macOS API to tell "never asked" from "denied" (the preflight is a plain Bool).
+    private func fixScreenRecording() {
+        guard !screenRec else { return }
+        if !Permissions.requestScreenRecording() {
+            Permissions.openScreenRecordingSettings()
+        }
+        screenRec = Permissions.hasScreenRecording()
     }
 
     private func refreshMicSpeech() {
@@ -378,6 +408,7 @@ struct HealthPane: View {
         loginOn = LoginItem.isEnabled
         refreshDaemon()
         refreshMicSpeech()
+        screenRec = Permissions.hasScreenRecording()
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         codex.refreshInstalled()
         codex.refreshComputerUse()

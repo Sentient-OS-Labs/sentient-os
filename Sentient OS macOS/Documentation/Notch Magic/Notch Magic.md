@@ -59,9 +59,9 @@ Every command is **computer use** (the dedicated browser-use channel was removed
 | **`SpinningLogo.swift`** | The 2D spectrum-ring logo (matches the app icon). |
 | **`NotchView.swift`** | `NotchView` (binder) + `NotchContent` (the pure visual: morph, phases, layered edge glow, the read-back / Remembering / status captions) + `NotchMetrics` (per-phase sizing) + `NotchStopButton` + the `.blurDissolve` transition. |
 
-Edits outside this folder: `AppState.swift` (owns/starts the two objects), `Views/HomeView.swift` (`PromptBar` drives `appState.commandCoordinator`), `CodexCLI.swift` (`runAgentCommand` gained an optional `imagePath` → `codex exec -i`, §6a), `Permissions.swift` (`hasScreenRecording()`, already present), and the project's `INFOPLIST_KEY_NSMicrophoneUsageDescription` + `INFOPLIST_KEY_NSSpeechRecognitionUsageDescription` build settings.
+Edits outside this folder: `AppState.swift` (owns/starts the two objects), `Views/HomeView.swift` (`PromptBar` drives `appState.commandCoordinator`), `Cloud/CodexCLI.swift` (`runAgentCommand` gained an optional `imagePath` → `codex exec -i`, §6a), `System/Permissions.swift` (`hasScreenRecording()`, already present), and the project's `INFOPLIST_KEY_NSMicrophoneUsageDescription` + `INFOPLIST_KEY_NSSpeechRecognitionUsageDescription` build settings.
 
-There is still a **DEV bench** `Views/HotkeyLabView.swift` (DEV TOOLS → HOTKEY LAB) — the original proof of the hotkey tap. It's superseded by `RightCommandMonitor`; **retire it** once you're confident (see §13).
+There is still a **DEV bench** `Views/Dev/HotkeyLabView.swift` (DEV TOOLS → HOTKEY LAB) — the original proof of the hotkey tap. It's superseded by `RightCommandMonitor`; **retire it** once you're confident (see §13).
 
 ---
 
@@ -87,7 +87,7 @@ Keycodes for reference: right ⌘ = 54, left ⌘ = 55 (we use the *flag bit*, no
 ## 5. Voice + transcription
 
 `VoiceCapture` is the façade the coordinator talks to. It:
-- **Permissions:** microphone (`AVCaptureDevice`) + speech (`SFSpeechRecognizer`). A static **`isAuthorized`** lets a *press* start the mic only when both are ALREADY granted — so a tap-to-type never throws a mic dialog; the first-use prompt waits for a confirmed hold (§6). Both Info.plist usage strings are set in the build settings. ⚠️ The Speech framework **crashes** without `NSSpeechRecognitionUsageDescription`, so that key is mandatory. *(Open question: on-device `SpeechAnalyzer` may not need the speech grant — if mic-only works, drop `requestSpeech()`. See §13.)*
+- **Permissions — LAZY-GRANTED, by policy:** Sidekick's grants (microphone + speech, and Sentient's own Screen Recording for the §6a still) are never requested at launch or in onboarding — the ask happens the first time the user actually invokes Sidekick (after initial processing, once the onboarding gating in §13 lands). Today: microphone (`AVCaptureDevice`) + speech (`SFSpeechRecognizer`) prompt on the first confirmed HOLD — a static **`isAuthorized`** lets a *press* start the mic only when both are ALREADY granted, so a tap-to-type never throws a mic dialog (§6); the screen-recording ask is currently Settings-only (Permissions & Health → "Allow…" — `grab()` itself never prompts, §6a). Both Info.plist usage strings are set in the build settings. ⚠️ The Speech framework **crashes** without `NSSpeechRecognitionUsageDescription`, so that key is mandatory. *(Open question: on-device `SpeechAnalyzer` may not need the speech grant — if mic-only works, drop `requestSpeech()`. See §13.)*
 - **Picks the engine:** `SpeechAnalyzerEngine` on macOS 26+, else `SFSpeechRecognizerEngine`. `isAvailable` is always true (we support 15+).
 - **`prewarm()`** at arm-time installs the on-device model so the first hold is instant.
 - **`correctMishears(_)`** fixes the speech model's known brand mishears the moment transcription finishes (before the transcript is shown or fired) — it reliably hears "Sentient" as "ascension", so that whole word is swapped back (case-preserving, whole-word).
@@ -278,7 +278,7 @@ Esc cancels/dismisses globally via the zero-permission `keyDown` tap (§4) — t
 - **Verify global Esc on macOS 15.** The listen-only `keyDown` tap is measured permission-free on Tahoe only; confirm Esc still flows (app unfocused, Input Monitoring off) on the 15 floor — same old-Mac trip as the voice fallback. If gated there, fall back to a right-⌘-tap cancel (a modifier is always free).
 - **Confirm** the SkyLight pin + order-out never leaves the notch stuck visible when idle.
 - **Reduced-motion / VoiceOver** sanity pass.
-- **Retire the dev bench** `Views/HotkeyLabView.swift` + its DEV TOOLS → HOTKEY LAB button once the real hotkey is proven.
+- **Retire the dev bench** `Views/Dev/HotkeyLabView.swift` + its DEV TOOLS → HOTKEY LAB button once the real hotkey is proven.
 - **Screenshot polish (§6a), each its own small pass:** downscale the frame (~1440px wide) to cut upload/latency/tokens · **exclude our own notch overlay** from the shot (ScreenCaptureKit `SCContentFilter` window-exclusion, vs the current `screencapture` CLI) · **multi-display** — capture the display the user is actually on (or attach all via `-i`'s variadic), not just the main one · reconsider the **home command-bar path**, where the frame is usually just Sentient's own UI (skip it there, or capture the display behind).
 
 ---

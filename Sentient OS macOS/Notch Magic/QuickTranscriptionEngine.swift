@@ -2,11 +2,9 @@
 //  QuickTranscriptionEngine.swift
 //  Sentient OS macOS
 //
-//  The seam between VoiceCapture and a concrete speech-to-text backend, so the macOS 26 engine
-//  (SpeechAnalyzerEngine) and a future macOS 15 engine (SFSpeechRecognizer) are swappable. We capture
+//  The seam between VoiceCapture and a concrete speech-to-text backend: SpeechAnalyzerEngine on
+//  macOS 26+, SFSpeechRecognizerEngine on macOS 15 — both behind this one protocol. We capture
 //  the whole utterance and return ONE final, high-quality transcript — no streaming partials.
-//
-//  Only the macOS 26 engine is implemented for now; older macOS reports unavailable.
 //
 
 import Foundation

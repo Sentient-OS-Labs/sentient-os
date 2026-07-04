@@ -9,7 +9,7 @@
 //                 with surgical edits on the live vault (eval-validated prompt lifted from the old
 //                 VaultUpdater; no store queue — the cycle's notes are wiped wholesale each cycle).
 //
-//  Proactive intelligence is its OWN module — see Proactive.swift (Arch §6: own module + trigger).
+//  Proactive intelligence is its OWN module — see Proactive/ (ProactiveCycle owns the sequencing).
 //  Connector-agnostic: operates on `CycleStore.notes()` regardless of source (files / notes / chats).
 //  Create/update only MARK the vault dirty; MCP sync is a SEPARATE step (the dev "MCP SYNC" button →
 //  MirrorClient.push, plus pushIfDirty() as the on-launch catch-up). Re-couple in markDirty() later.

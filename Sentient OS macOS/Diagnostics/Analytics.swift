@@ -21,7 +21,7 @@
 //   - signal(_:parameters:)   → send one product event (no-op until started / when opted out)
 //   - applyEnabledChange()    → react to a mid-session flip of the shared opt-out switch
 //
-//  Doc: Documentation/Crash Reporting (Sentry).md (the twin) — an Analytics doc lands once wired end-to-end.
+//  Doc: Documentation/Product Analytics (TelemetryDeck).md · twin: Documentation/Crash Reporting (Sentry).md
 //
 
 import Foundation

@@ -89,9 +89,9 @@ struct DevToolsView: View {
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
-    // Real For-You cards: ON makes Analyze Now run the FULL proactive cycle and the home render real
-    // cards from the latest prepared actions. OFF = the hard-coded investor-demo deck.
-    @AppStorage("dev.proactive.realCards") private var realCards = false
+    // Real For-You cards — ON by default (decided 2026-07-05). OFF = the hard-coded investor-demo
+    // deck (pitch mode); the deck itself gets scrubbed before the repo goes public.
+    @AppStorage("dev.proactive.realCards") private var realCards = true
 
     // MCP mirror (the hosted Render copy). Local mirrors of MirrorClient's actor state, refreshed
     // when "More" opens and after each action.
@@ -141,7 +141,7 @@ struct DevToolsView: View {
                 Spacer()
                 Toggle("", isOn: $realCards).labelsHidden().toggleStyle(.switch).controlSize(.small)
             }
-            Text("ON: the home shows REAL proactive cards from your processed data, and Analyze Now runs the full cycle — read → knowledge base → decide / research / prepare → wipe summaries. OFF: the hard-coded investor-demo deck.")
+            Text("ON (the default): the home shows REAL proactive cards from your processed data, and Analyze Now runs the full cycle — read → knowledge base → decide / research / prepare → wipe summaries. OFF: the hard-coded investor-demo deck (pitch mode).")
                 .font(.caption2).foregroundStyle(Theme.faint.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
         }
