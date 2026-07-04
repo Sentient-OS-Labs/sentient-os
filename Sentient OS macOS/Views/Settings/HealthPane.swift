@@ -118,7 +118,7 @@ struct HealthPane: View {
                     StatusLine(title: "Full Disk Access",
                                health: fdaGranted ? .ok : .bad,
                                note: fdaGranted ? "granted" : "not granted",
-                               tip: "Lets Sentient read the databases WhatsApp, iMessage, and Notes keep on this Mac. Everything is read locally; nothing leaves your Mac.",
+                               tip: "Lets Sentient read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac. Everything is read locally; nothing leaves your Mac.",
                                fixTitle: "Grant…") {
                         Permissions.openFullDiskAccessSettings()
                     }
@@ -140,7 +140,7 @@ struct HealthPane: View {
                 StatusLine(title: "Overnight wake",
                            health: daemon == .ready ? .ok : .bad,
                            note: daemonNote,
-                           tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient can work while you sleep. Installed once with your password.",
+                           tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient can work while you sleep. It only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
                            fixTitle: "Set Up…") {
                     fixDaemon()
                 }
@@ -148,7 +148,7 @@ struct HealthPane: View {
                 StatusLine(title: "Launch at login",
                            health: loginOn ? .ok : .warn,
                            note: loginOn ? "on" : "off",
-                           tip: "Starts Sentient quietly in your menu bar when you log in, so the overnight run can happen.",
+                           tip: "Starts Sentient quietly in your menu bar when you log in, so the overnight run can happen and your Sentient can stay alive.",
                            fixTitle: "Turn On") {
                     LoginItem.enable()
                     loginOn = LoginItem.isEnabled
@@ -311,7 +311,7 @@ struct HealthPane: View {
                 StatusLine(title: "Codex CLI",
                            health: codex.installed ? .ok : .bad,
                            note: codex.installed ? "installed" : "not installed",
-                           tip: "OpenAI's Codex command line tool. Sentient runs its cloud steps through it, paid for by your own ChatGPT plan.",
+                           tip: "OpenAI's official Codex command line tool. Sentient runs its cloud steps through it, using your own ChatGPT subscription.",
                            fixTitle: "Install…") { showCodexSetup = true }
                 StatusLine(title: "ChatGPT account",
                            health: codex.loggedIn ? .ok : .bad,
