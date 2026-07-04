@@ -107,16 +107,17 @@ probe (the codex login check shells out and takes seconds), then rows cascade in
 staggered rise). Severity-ordered rows, each with an `InfoTip` (tiny info icon; hover 0.15s
 opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
 
-- **SENTIENT:** Full Disk Access (grant deep-link + relaunch link) · Overnight wake (🟢 = the
-  installed daemon plist points at THIS binary; fix runs `WakeHelperInstaller.installAsync()` —
-  **[DECIDED 2026-07-04] the password install IS production**, no Login Items migration) ·
-  Launch at login (yellow when off) · Microphone & Speech (one row: `VoiceCapture.
-  requestPermissions()` asks both; denied deep-links to the actual blocker) · **Screen Recording**
-  (Sentient's OWN grant — Sidekick snaps a screen still per command, `Notch Magic/ScreenCapture.
-  swift`; yellow when off — commands run text-only without it; fix = `CGRequestScreenCaptureAccess`,
-  which prompts only on the first-ever ask, else the Settings deep-link; there's no macOS API to
-  tell "never asked" from "denied") · Notifications (yellow when off, never red — the morning
-  briefing is optional).
+- **ON-DEVICE INTELLIGENCE** (the analysis machinery): Full Disk Access (grant deep-link +
+  relaunch link) · Overnight wake (🟢 = the installed daemon plist points at THIS binary; fix runs
+  `WakeHelperInstaller.installAsync()` — **[DECIDED 2026-07-04] the password install IS
+  production**, no Login Items migration) · Launch at login (yellow when off).
+- **SIDEKICK & PROACTIVE** (the magic's grants — all optional-tier, yellow never red):
+  Microphone & Speech (one row: `VoiceCapture.requestPermissions()` asks both; denied deep-links
+  to the actual blocker) · **Screen Recording** (Sentient's OWN grant — Sidekick snaps a screen
+  still per command, `Notch Magic/ScreenCapture.swift`; commands run text-only without it; fix =
+  `CGRequestScreenCaptureAccess`, which prompts only on the first-ever ask, else the Settings
+  deep-link; there's no macOS API to tell "never asked" from "denied") · Notifications (the
+  morning briefing note).
 
   **The lazy-grant policy (Sidekick permissions):** nothing is requested at launch or as an
   onboarding step. The mic + speech prompts surface the FIRST time the user holds the hotkey

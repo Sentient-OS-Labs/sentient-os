@@ -67,7 +67,8 @@ struct HealthPane: View {
                 checkingLine
             } else {
                 VStack(alignment: .leading, spacing: 30) {
-                    sentientGroup
+                    onDeviceGroup
+                    sidekickGroup
                     SettingsHairline()
                         .rise(6, revealed: revealed)
                     Group {
@@ -112,8 +113,8 @@ struct HealthPane: View {
         .padding(.top, 10)
     }
 
-    private var sentientGroup: some View {
-        SettingsGroup(label: "Sentient") {
+    private var onDeviceGroup: some View {
+        SettingsGroup(label: "On-device Intelligence") {
             VStack(alignment: .leading, spacing: 2) {
                 VStack(alignment: .leading, spacing: 2) {
                     StatusLine(title: "Full Disk Access",
@@ -155,6 +156,13 @@ struct HealthPane: View {
                     loginOn = LoginItem.isEnabled
                 }
                 .rise(2, revealed: revealed)
+            }
+        }
+    }
+
+    private var sidekickGroup: some View {
+        SettingsGroup(label: "Sidekick & Proactive") {
+            VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Microphone & Speech",
                            health: micSpeechHealth,
                            note: micSpeechNote,
