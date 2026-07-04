@@ -30,6 +30,7 @@ struct YourAIsPane: View {
                 cloudSyncGroup
                 if enabled && loaded {
                     heroButton
+                        .padding(.top, -14)   // belongs to the Cloud Sync group, not floating between groups
                     activityGroup
                 } else if loaded {
                     localOnlyProse
