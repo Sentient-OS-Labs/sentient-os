@@ -2,10 +2,11 @@
 //  YourAIsPane.swift
 //  Sentient OS macOS
 //
-//  Settings → Your AIs: the hosted MCP mirror, wired to MirrorClient. The share toggle (off =
-//  deletes the cloud copy, token kept so the URL survives re-enabling), the secret URL (masked;
-//  copy + regenerate), the connect guide + system prompt, and the live activity stats. When
-//  sharing is off, the local-only story takes the stage.
+//  Settings → Your AIs: the value + privacy story up top, the share toggle (off = confirm, then
+//  the cloud copy is deleted; the token is kept so the link survives re-enabling), and the HERO:
+//  the glowing "Connect your AIs" button → the real guided setup (ConnectAIsView), which owns the
+//  secret link + system prompt. Live activity from /stats below. Regenerate lives in MirrorClient
+//  only (a support/dev remediation; a UI button was a footgun that bricks every connector).
 //
 
 import SwiftUI
@@ -15,22 +16,20 @@ struct YourAIsPane: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var enabled = false
-    @State private var shareURL: String?
     @State private var stats: MirrorClient.Stats?
     @State private var loaded = false
     @State private var busy = false                // a network call is in flight — freeze the toggle
     @State private var confirmOff = false
-    @State private var confirmRegenerate = false
-    @State private var copied = false
     @State private var errorLine: String?
 
     var body: some View {
         SettingsPane(title: "Your AIs.",
                      whisper: "Your knowledge base, offered to every AI you already use.") {
             VStack(alignment: .leading, spacing: 30) {
+                intro
                 cloudSyncGroup
                 if enabled && loaded {
-                    urlGroup
+                    heroButton
                     activityGroup
                 } else if loaded {
                     localOnlyProse
@@ -45,12 +44,24 @@ struct YourAIsPane: View {
         .task { await refresh() }
     }
 
+    // MARK: - The story (value first, then the privacy explainer)
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base and decide what's relevant, making them dramatically more helpful about your actual life.")
+                .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+            SettingsProse("Private by design: your real files never leave this Mac. Your AIs only ever see short summaries with personal details stripped out, organized into your knowledge base. It's end-to-end encrypted; no one, not even Sentient's developers, can read it. There is no account, one secret link only you hold is the key, and if you stop using Sentient, your cloud copy deletes itself within 30 days. Even the cloud backend is open source, so anyone can verify all of this.")
+        }
+    }
+
     // MARK: - The share toggle
 
     private var cloudSyncGroup: some View {
         SettingsGroup(label: "Cloud Sync") {
             SettingToggleLine(title: "Offer your knowledge base to your AIs",
-                              sub: "ChatGPT and Claude read it over MCP. No account, just a secret link with a 30-day lease that cleans up after itself.",
+                              sub: "ChatGPT and Claude read it over MCP. No account, just a private link that only you hold.",
                               isOn: $enabled)
                 .disabled(busy || !loaded)
         }
@@ -73,9 +84,8 @@ struct YourAIsPane: View {
         busy = true; errorLine = nil
         Task {
             do {
-                let url = try await MirrorClient.shared.enable()
+                _ = try await MirrorClient.shared.enable()
                 try? await MirrorClient.shared.push()      // best-effort first fill (no vault yet is fine)
-                shareURL = url
             } catch {
                 enabled = false
                 errorLine = (error as? LocalizedError)?.errorDescription ?? "\(error)"
@@ -94,72 +104,13 @@ struct YourAIsPane: View {
         }
     }
 
-    // MARK: - The secret URL
+    // MARK: - The hero: the guided setup
 
-    private var urlGroup: some View {
-        SettingsGroup(label: "Your Secret Link") {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 9) {
-                    Text(maskedURL)
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(Theme.Ink.bright)
-                        .lineLimit(1)
-                        .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(Color.white.opacity(0.03), in: Capsule())
-                        .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
-                    SettingsPillButton(title: copied ? "Copied ✓" : "Copy",
-                                       tint: copied ? Theme.Ink.green : Theme.Ink.bright) { copyURL() }
-                    SettingsPillButton(title: "Regenerate…") { confirmRegenerate = true }
-                        .disabled(busy)
-                }
-                SettingsProse("This link is your whole identity; there's no account behind it. Paste it into ChatGPT or Claude as a connector, and treat it like a password.")
-                HStack(spacing: 16) {
-                    quietLink("How to connect your AIs") { openWindow(id: ConnectAIsView.windowID) }
-                    quietLink("Copy the system prompt") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(MirrorClient.systemPrompt, forType: .string)
-                    }
-                }
-            }
+    private var heroButton: some View {
+        GlowButton(title: "Connect your AIs", systemImage: "sparkles") {
+            openWindow(id: ConnectAIsView.windowID)
         }
-        .alert("Regenerate your secret link?", isPresented: $confirmRegenerate) {
-            Button("Cancel", role: .cancel) {}
-            Button("Regenerate", role: .destructive) { regenerate() }
-        } message: {
-            Text("The old link stops working immediately, and every AI you've connected will need the new one. Do this if the link ever leaks.")
-        }
-    }
-
-    private var maskedURL: String {
-        // ⚠️ "/mcp" must be searched BACKWARDS: the host "https://mcp.sentient-os.ai" itself
-        // contains "/mcp" (second slash + host), and a forward hit put `end` before the token —
-        // an inverted range that crashed the pane. Guard the order defensively regardless.
-        guard let url = shareURL,
-              let range = url.range(of: "/u/"),
-              let end = url.range(of: "/mcp", options: .backwards),
-              range.upperBound <= end.lowerBound else { return "mcp.sentient-os.ai/u/…/mcp" }
-        let token = url[range.upperBound..<end.lowerBound]
-        let host = url.replacingOccurrences(of: "https://", with: "")
-            .replacingOccurrences(of: "http://", with: "")     // dev SENTIENT_MIRROR_BASE override
-            .prefix(while: { $0 != "/" })
-        return "\(host)/u/\(token.prefix(4))••••••••/mcp"
-    }
-
-    private func copyURL() {
-        guard let url = shareURL else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url, forType: .string)
-        copied = true
-        Task { try? await Task.sleep(for: .seconds(1.8)); copied = false }
-    }
-
-    private func regenerate() {
-        busy = true; errorLine = nil
-        Task {
-            do { shareURL = try await MirrorClient.shared.regenerateToken() }
-            catch { errorLine = (error as? LocalizedError)?.errorDescription ?? "\(error)" }
-            busy = false
-        }
+        .frame(maxWidth: 340)
     }
 
     // MARK: - Activity
@@ -192,22 +143,10 @@ struct YourAIsPane: View {
         }
     }
 
-    // MARK: - Helpers
-
-    private func quietLink(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Text(title).font(.system(size: 11, weight: .medium))
-                Image(systemName: "chevron.right").font(.system(size: 7.5, weight: .semibold))
-            }
-            .foregroundStyle(Theme.Ink.label)
-        }
-        .buttonStyle(PressScaleStyle())
-    }
+    // MARK: - Probes
 
     private func refresh() async {
         enabled = await MirrorClient.shared.isEnabled
-        shareURL = await MirrorClient.shared.shareURL
         loaded = true
         if enabled { stats = try? await MirrorClient.shared.stats() }
     }

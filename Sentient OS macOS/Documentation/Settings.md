@@ -14,9 +14,11 @@ pieces (`SettingsComponents.swift`).
    consumes the values yet**. The proactive/Sidekick prompts learn to read them with the
    prompt-refinement work, and the Right ⌥ choice additionally needs `RightCommandMonitor`
    support (it listens for right-⌘ only today).
-2. **"How to connect your AIs"** (Your AIs pane) — opens `ConnectAIsView`, which is a pretty
-   explainer stub, self-labeled "Guided setup · coming soon". The real two-step guided flow is
-   future work.
+2. **The E2E encryption claim front-runs the code** — the Your AIs privacy blurb says the cloud
+   copy is end-to-end encrypted and unreadable even by Sentient's devs. That is LAUNCH truth,
+   decided 2026-07-04: the mirror stores plaintext markdown today, and the "mcp encryption"
+   backlog item (Aditya) MUST ship before launch or the copy must change. Do not soften the copy;
+   ship the encryption.
 3. **The morning notification** — the Notifications permission row is real, but nothing in the app
    *sends* notifications yet (`Notify.now()` has zero call sites). The "Proactive Intelligence is
    ready" morning note ships with the reminders/scheduler work; the permission ask then moves to
@@ -73,11 +75,18 @@ Autosaving standing instructions + Sidekick's shortcut key and standing context.
 consumed — see the NOT-wired list above.
 
 ### Your AIs (`YourAIsPane.swift`)
-`MirrorClient` end-to-end: the share toggle (OFF = confirm dialog → `disable()`, which deletes
-the cloud copy but keeps the token), the masked secret link (Copy + **Regenerate** →
-`regenerateToken()`, the leak remediation: old copy deleted, new identity minted, re-pushed),
-live `stats()` activity, connect-guide links, and the local-only story when sharing is off.
-⚠️ The maskedURL must search "/mcp" BACKWARDS: the host `https://mcp.sentient-os.ai` itself
+The story leads: a value blurb (your ChatGPT/Claude, phone apps included, read the knowledge
+base and choose what's relevant) then the plain-language privacy explainer (local-first,
+PII-stripped summaries only, E2E-encrypted [see the NOT-wired list], no accounts, the 30-day
+self-delete in plain words, open-source backend). Then the share toggle (OFF = confirm dialog →
+`disable()`, which deletes the cloud copy but keeps the token), and the pane's HERO: the glowing
+**Connect your AIs** `GlowButton` → **`ConnectAIsView`, now the REAL guided setup**: step 1 =
+the masked link (`MirrorClient.maskedURL`) + Copy, step 2 = Copy the system prompt, closing with
+the magic line ("ask it: what do you know about me?"); a sharing-off state points back at
+Settings. Live `stats()` activity below; local-only story when sharing is off.
+**Regenerate was removed from the UI** (a footgun that bricks every connector the user set up) —
+`MirrorClient.regenerateToken()` remains as a backend/support remediation.
+⚠️ `maskedURL` must search "/mcp" BACKWARDS: the host `https://mcp.sentient-os.ai` itself
 contains "/mcp", and a forward hit inverts the range (a shipped-then-fixed crash).
 
 ### System (`SystemPane.swift`)
