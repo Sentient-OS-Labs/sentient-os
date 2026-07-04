@@ -171,6 +171,7 @@ enum Permissions {
     // MARK: - Settings deep-links (we can't flip these toggles; the user does)
 
     @MainActor static func openMicrophoneSettings() { openPrivacy("Privacy_Microphone") }
+    @MainActor static func openSpeechRecognitionSettings() { openPrivacy("Privacy_SpeechRecognition") }
     @MainActor static func openScreenRecordingSettings() { openPrivacy("Privacy_ScreenCapture") }
     @MainActor static func openAccessibilitySettings() { openPrivacy("Privacy_Accessibility") }
     @MainActor static func openAutomationSettings() { openPrivacy("Privacy_Automation") }
