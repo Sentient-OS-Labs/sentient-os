@@ -89,7 +89,7 @@ All four on-device source families run on the core, and the home's **Analyze Now
 through `IterativeRun` (mode `.auto`) via the shared `ProcessingView`. **Remaining (out of scope
 here):** add the automatic scheduler that calls these same entry points on its own clock.
 Gmail and Calendar are the cloud family — they ride the same `CycleStore` as cloud legs
-(`Ingestion/GmailConnect.swift` / `Ingestion/CalendarConnect.swift`, shown in the same takeover), and
+(`Sources/GmailConnect.swift` / `Sources/CalendarConnect.swift`, shown in the same takeover), and
 the 3am scheduler runs both after the on-device leg.
 
 `ProcessingView.connectors(from:)` turns the selected `RunSource`s into core connectors —

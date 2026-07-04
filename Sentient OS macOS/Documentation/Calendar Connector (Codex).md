@@ -6,7 +6,7 @@ Calendar connector** — OpenAI's account-level `codex_apps/google_calendar.*` t
 `search_events`, `read_event`, and the write tools `create_event` / `delete_event`), reached by
 `codex exec`. No on-device model touches the calendar.
 
-Code: `Ingestion/CalendarConnect.swift` · UI: `Views/CalendarConnectSheet.swift` + the Calendar chip in
+Code: `Sources/CalendarConnect.swift` · UI: `Views/CalendarConnectSheet.swift` + the Calendar chip in
 `Views/Dev/DevToolsView.swift`. The add-event **write** path is separate — `ProactiveExecutor.fireCalendar`.
 
 ## How a user connects

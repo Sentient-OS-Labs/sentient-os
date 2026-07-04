@@ -5,7 +5,7 @@ Gmail is the **first cloud source** (Google Calendar is the second — see `Cale
 summarize** it through the user's own **Codex Gmail connector** — OpenAI's account-level
 `codex_apps/gmail.*` tools, reached by `codex exec`. No on-device model touches Gmail.
 
-Code: `Ingestion/GmailConnect.swift` · UI: `Views/GmailConnectSheet.swift` + the Gmail chip in
+Code: `Sources/GmailConnect.swift` · UI: `Views/GmailConnectSheet.swift` + the Gmail chip in
 `Views/Dev/DevToolsView.swift`.
 
 ## How a user connects
