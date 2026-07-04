@@ -2,7 +2,7 @@
 //  WhatsAppSource.swift
 //  Sentient OS macOS
 //
-//  Reads WhatsApp's local ChatStorage.sqlite (Arch §3.1, [MEASURED]). It's unencrypted
+//  Reads WhatsApp's local ChatStorage.sqlite. It's unencrypted
 //  plaintext in WAL mode → we WAL-safe COPY → EXTRACT → DELETE immediately (privacy: a plaintext
 //  copy of the whole chat history never lingers).
 //

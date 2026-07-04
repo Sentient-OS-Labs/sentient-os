@@ -2,8 +2,8 @@
 //  MenuBarView.swift
 //  Sentient OS macOS
 //
-//  Glanceable overnight status in the macOS menu bar (Arch §7.3). Phase-0 stub — the richer
-//  status ("412 / 3,000 · paused (in use)") arrives with the scheduler in Phase 4.
+//  Glanceable status in the macOS menu bar. A stub today (status line + Quit) — the richer
+//  dropdown ("412 / 3,000 · paused (in use)") is still to build.
 //
 
 import SwiftUI

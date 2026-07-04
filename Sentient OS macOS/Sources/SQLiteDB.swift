@@ -3,7 +3,7 @@
 //  Sentient OS macOS
 //
 //  Minimal read access for the database sources (WhatsApp / iMessage / Notes), plus the
-//  WAL-safe copy (Arch §3.5). The live DBs are open by their owning apps in WAL mode, so we
+//  WAL-safe copy. The live DBs are open by their owning apps in WAL mode, so we
 //  NEVER read them in place: copy the DB + its `-wal`/`-shm` siblings into a fresh temp dir,
 //  read the copy, and delete it. For the DB sources we delete it *immediately* after extraction
 //  so a plaintext copy of someone's messages never lingers on disk.

@@ -22,7 +22,7 @@
 
 import Foundation
 
-// MARK: - Per-item extraction timeout (Arch §H — one corrupt/huge file must never hang the run)
+// MARK: - Per-item extraction timeout (one corrupt/huge file must never hang the run)
 
 private struct ExtractionTimeout: Error { let seconds: Double }
 
@@ -98,7 +98,7 @@ struct IterativeRun {
     private static let preemptiveReloadEvery = 40
     private static let failuresBeforeReload = 3
     private static let maxReloadsWithoutProgress = 4
-    private static let extractionTimeoutSeconds: Double = 30   // Arch §H: one file's content extraction can't hang the run
+    private static let extractionTimeoutSeconds: Double = 30   // one file's content extraction can't hang the run
     private static let sourceTimeCapSeconds: Double = 3600     // §5: a source gets ≤60 min wall-clock, then we move on (progress is per-item atomic, so it just resumes next run)
 
     /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The caller

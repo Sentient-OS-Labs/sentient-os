@@ -2,14 +2,14 @@
 //  Triage.swift
 //  Sentient OS macOS
 //
-//  The on-device "bouncer" (Arch §5.2). The model is asked to write the SUMMARY first (so it
+//  The on-device "bouncer". The model is asked to write the SUMMARY first (so it
 //  actually understands the file before judging), THEN a short title, THEN the junk flag, and
 //  only-if-applicable a sensitive flag. We parse that compact JSON and map it to a
 //  Verdict + the model's title/summary (Outcome).
 //
 //  FAIL-CLOSED: anything we can't confidently parse is treated as JUNK (dropped), never a
 //  survivor — so a malformed parse can never leak content into the cloud vault. Sensitivity
-//  regex backstops (Arch §5.2) come later (Phase 5); for now we trust the model's flag.
+//  regex backstops are a pre-launch hardening task; for now we trust the model's flag.
 //
 
 import Foundation

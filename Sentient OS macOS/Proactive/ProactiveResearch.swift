@@ -2,7 +2,7 @@
 //  ProactiveResearch.swift
 //  Sentient OS macOS
 //
-//  Proactive Intelligence — PART 2 of 3: RESEARCH & PREPARE (Arch §6), the heart of the feature.
+//  Proactive Intelligence — PART 2 of 3: RESEARCH & PREPARE, the heart of the feature.
 //  PART 1 (Proactive.swift) finds the top action items from the summaries alone. PART 2 (this file)
 //  does two things, in order, for each item — all READ-ONLY, in ONE agentic pass:
 //    1. VERIFY it against the LIVE world (the Gmail MCP if connected + web + the knowledge base) —

@@ -2,7 +2,7 @@
 //  MirrorClient.swift
 //  Sentient OS macOS
 //
-//  The app side of the hosted MCP mirror (Arch §7). Mirrors the local vault to our one
+//  The app side of the hosted MCP mirror. Mirrors the local vault to our one
 //  persistent backend so the user's ChatGPT/Claude can read it over MCP. Opt-in, opt-out,
 //  one-click delete — the Mac's vault is always canonical; the mirror is a disposable copy.
 //
@@ -14,7 +14,7 @@
 //   PII-stripped. The token is minted once on opt-in and kept in the Keychain; losing it is a
 //   non-event (mint a new one, re-push; the orphaned cloud copy expires on its 30-day lease).
 //
-//  Sync = whole-vault zip-replace (Arch §7): POST /vault sends the entire vault as a zip
+//  Sync = whole-vault zip-replace: POST /vault sends the entire vault as a zip
 //  (~KBs of markdown) on any change; DELETE /vault is the one-click delete.
 //
 //  Doc: Documentation/MCP Mirror Client.md
@@ -33,7 +33,8 @@ actor MirrorClient {
 
     /// The coached system prompt the user pastes into ChatGPT/Claude/Gemini (custom instructions).
     /// Naming the connector + "always call get_structure" is what reliably makes the client load and
-    /// use the tools — clients lazy-load connector tools behind a search gate (Arch §7 field learnings).
+    /// use the tools — clients lazy-load connector tools behind a search gate (field lessons in
+    /// Documentation/MCP Mirror Client.md).
     /// Lives here (the MCP owner) so every surface that offers "Copy System Prompt" shares one copy.
     static let systemPrompt = """
         Use the Sentient OS MCP whenever relevant. It gives you access to the user's personal knowledge \

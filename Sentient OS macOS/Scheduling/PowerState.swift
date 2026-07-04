@@ -1,7 +1,8 @@
 //
 //  PowerState.swift  ·  Scheduling/
 //
-//  The overnight run's go/no-go gates (Arch §9 / B6). A lid-shut 3am run holds the Mac fully awake
+//  The overnight run's go/no-go gates (B6; doc: Documentation/Overnight Scheduler (3am Wake).md).
+//  A lid-shut 3am run holds the Mac fully awake
 //  and hammers the GPU, so we only do it when it's safe: on AC power, not in Low Power Mode, and not
 //  already thermally critical. Thermal is a START condition only (we don't abort a run that heats up
 //  mid-flight — lid-shut runs hotter; we just log it). Pure reads, no side effects.
