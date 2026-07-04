@@ -145,15 +145,9 @@ struct HealthPane: View {
         SettingsGroup(label: "Danger Zone") {
             VStack(alignment: .leading, spacing: 10) {
                 SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, and all suggestions. You'll start over from scratch, including the initial processing. Your cloud copy isn't touched; the next processing run simply replaces it.")
-                Button { confirmReset = true } label: {
-                    Text(resetting ? "Erasing…" : "Reset Sentient…")
-                        .font(.system(size: 11.5, weight: .medium))
-                        .foregroundStyle(Self.dangerRed)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .overlay(Capsule().strokeBorder(Self.dangerRed.opacity(0.4), lineWidth: 1))
-                }
-                .buttonStyle(PressScaleStyle())
-                .disabled(resetting)
+                SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
+                                   tint: Self.dangerRed) { confirmReset = true }
+                    .disabled(resetting)
                 if resetDone {
                     Text("Reset complete. Sentient is a blank slate.")
                         .font(.serif(11.5, weight: .regular)).italic()

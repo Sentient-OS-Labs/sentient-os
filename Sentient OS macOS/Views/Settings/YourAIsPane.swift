@@ -99,26 +99,21 @@ struct YourAIsPane: View {
     private var urlGroup: some View {
         SettingsGroup(label: "Your Secret Link") {
             VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 12) {
+                HStack(spacing: 9) {
                     Text(maskedURL)
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(Theme.Ink.bright)
                         .lineLimit(1)
                         .padding(.horizontal, 12).padding(.vertical, 7)
+                        .background(Color.white.opacity(0.03), in: Capsule())
                         .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
-                    Button { copyURL() } label: {
-                        MonoCaps(copied ? "Copied ✓" : "Copy", size: 8.5, tracking: 1.6,
-                                 color: copied ? Theme.Ink.mint : Theme.Ink.bright)
-                    }
-                    .buttonStyle(PressScaleStyle())
-                    Button { confirmRegenerate = true } label: {
-                        MonoCaps("Regenerate", size: 8.5, tracking: 1.6, color: Theme.Ink.label)
-                    }
-                    .buttonStyle(PressScaleStyle())
-                    .disabled(busy)
+                    SettingsPillButton(title: copied ? "Copied ✓" : "Copy",
+                                       tint: copied ? Theme.Ink.mint : Theme.Ink.bright) { copyURL() }
+                    SettingsPillButton(title: "Regenerate…") { confirmRegenerate = true }
+                        .disabled(busy)
                 }
                 SettingsProse("This link is your whole identity; there's no account behind it. Paste it into ChatGPT or Claude as a connector, and treat it like a password.")
-                HStack(spacing: 18) {
+                HStack(spacing: 16) {
                     quietLink("How to connect your AIs") { openWindow(id: ConnectAIsView.windowID) }
                     quietLink("Copy the system prompt") {
                         NSPasteboard.general.clearContents()
@@ -201,10 +196,11 @@ struct YourAIsPane: View {
 
     private func quietLink(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.Ink.label)
-                .underline(true, color: Theme.Ink.deepMuted)
+            HStack(spacing: 4) {
+                Text(title).font(.system(size: 11, weight: .medium))
+                Image(systemName: "chevron.right").font(.system(size: 7.5, weight: .semibold))
+            }
+            .foregroundStyle(Theme.Ink.label)
         }
         .buttonStyle(PressScaleStyle())
     }

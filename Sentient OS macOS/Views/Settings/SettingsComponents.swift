@@ -88,9 +88,31 @@ struct SettingToggleLine: View {
             }
             Spacer(minLength: 12)
             Toggle("", isOn: $isOn)
-                .labelsHidden().toggleStyle(.switch).tint(Theme.Ink.bright)
+                .labelsHidden().toggleStyle(.switch).tint(Theme.Ink.mint)
         }
         .padding(.vertical, 5)
+    }
+}
+
+/// A small capsule button — the standard quiet action (Fix…, Copy, Regenerate…). `tint` carries
+/// the danger/success variants; the default is bright ink with a hairline ring.
+struct SettingsPillButton: View {
+    let title: String
+    var tint: Color = Theme.Ink.bright
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(tint)
+                .padding(.horizontal, 11).padding(.vertical, 5)
+                .overlay(Capsule().strokeBorder(
+                    tint == Theme.Ink.bright ? Color.white.opacity(0.16) : tint.opacity(0.4),
+                    lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(PressScaleStyle())
     }
 }
 
@@ -198,14 +220,7 @@ struct StatusLine: View {
             MonoCaps(note, size: 8.5, tracking: 1.6,
                      color: health == .ok ? Theme.Ink.label : dot)
             if health != .ok, let fix {
-                Button(action: fix) {
-                    Text(fixTitle)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Theme.Ink.bright)
-                        .padding(.horizontal, 10).padding(.vertical, 4)
-                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
-                }
-                .buttonStyle(PressScaleStyle())
+                SettingsPillButton(title: fixTitle, action: fix)
             }
         }
         .padding(.vertical, 6)
@@ -220,16 +235,18 @@ struct SettingsTextBox: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
+            // Placeholder insets must mirror the editor's first line exactly: the editor sits at
+            // (horizontal 7 + NSTextView's ~5pt line-fragment padding, vertical 8) → (12, 8).
             if text.isEmpty {
                 Text(placeholder)
                     .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.deepMuted)
-                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .padding(.horizontal, 12).padding(.vertical, 8)
                     .allowsHitTesting(false)
             }
             TextEditor(text: $text)
                 .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.statusInk)
                 .scrollContentBackground(.hidden)
-                .padding(.horizontal, 7).padding(.vertical, 2)
+                .padding(.horizontal, 7).padding(.vertical, 8)
         }
         .frame(minHeight: 64)
         .background(Color.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
