@@ -1,17 +1,72 @@
-# Overnight Scheduler — Production Wiring & 18h Auto-Enable
+# Overnight Scheduler — the 3am Wake
 
 The overnight scheduler wakes the Mac at 3am (lid shut), runs the exact same pipeline as the home's
-Analyze Now (`IterativeRun .auto` → `ProactiveCycle`), then sleeps — so a fresh "For You" briefing is
-waiting when you open the lid. The wake *mechanism* was already proven on real hardware; this doc
-covers the **production wiring** that turns it from a dev toggle into something that arms itself:
+Analyze Now (`IterativeRun .auto` + the Gmail/Calendar legs → `ProactiveCycle`), then sleeps — so a
+fresh "For You" briefing is waiting when you open the lid. This doc is the whole scheduler story:
+the proven wake mechanism, the root privilege model, the nightly run, and the production wiring
+(install · login item · enable flags · the 18h auto-enable).
 
-1. **A** — the root helper installs behind **one native admin-password prompt** (`WakeHelperInstaller` — the production path, decided 2026-07-04).
-2. **B** — the app registers as a **login item** so it's alive at 3am to host the run.
-3. **C** — a **production enable flag** (separate from the dev toggle).
-4. **D+E** — the app **auto-enables the scheduler 18 hours after the first full cycle**.
+The in-app scheduler lives in `Scheduling/OvernightScheduler.swift` (owned by `AppState`); it only
+runs while Sentient is open. Everything logs to `~/Library/Logs/SentientOS/scheduler.log`
+(persistent, flushed per line — the "black box" for diagnosing an empty morning); the root helper
+logs to `/Library/Logs/SentientOS-wakehelper.log`.
 
-The in-app scheduler lives in `OvernightScheduler` (owned by `AppState`); it only runs while Sentient
-is open. Everything logs to `~/Library/Logs/SentientOS/scheduler.log`.
+## The wake mechanism — proven on real hardware (June 23, lid shut)
+
+The Mac woke at exactly **03:00:00** on a scheduled wake, kept itself awake, ran `.initial` over the
+enabled connector (46 Documents items → 33 kept / 13 junk / 0 failed in ~2¼ min), released the
+keep-awake, and slept again. Overnight processing is the approach — it superseded the old "~5s
+after the morning wake" (`NSWorkspace.didWakeNotification`) fallback plan; there is still
+deliberately **no daytime / "3 PM" idle trigger**.
+
+What the experiment established (the physics the design rests on):
+- **Gemma/Metal runs with the lid shut** — the scariest unknown; a clean pass (every on-device
+  inference succeeded during a lid-closed run).
+- **A userspace `IOPMAssertion` does NOT hold a closed lid.** `PreventUserIdleSystemSleep` blocks
+  *idle* sleep only; closing the lid is a forced (clamshell) sleep that overrides it. On AC with
+  the lid shut and only an assertion, the Mac sleeps and self-wakes in ~43-second maintenance
+  bursts (the GPU still works inside them) — not continuous.
+- **Root `pmset disablesleep 1` DOES hold it** — lid shut, fully awake, no gaps, charging, thermals
+  nominal. It's the one knob that gives a single continuous overnight run, and it needs root.
+- A scheduled `pmset` wake fires reliably, and the already-running app process survives sleep and
+  resumes to handle it (the waiting Task freezes with the Mac and thaws on the scheduled wake).
+
+## The privilege model — the root wake helper
+
+The ONLY code that runs as root is a tiny wake helper: the SAME app binary relaunched by launchd
+with `--wake-helper` (no separate Xcode target — `App/main.swift` branches into helper mode before
+SwiftUI, which is why `@main` moved off the app struct). It exposes six XPC ops — `armWake` /
+`cancelWake` / `cancelAllWakes` / `beginAwake` / `heartbeat` / `endAwake` — gated by a client
+code-signing check. Files: `Scheduling/WakeHelper.swift` (root side) · `WakeHelperClient.swift`
+(app side — every call is reply/error/timeout-guarded, so it can never hang at 3am) ·
+`WakeHelperProtocol.swift` (the shared contract).
+
+- **The deadman (load-bearing safety):** `beginAwake` starts a timer the app must feed via
+  `heartbeat`; if the app crashes and stops feeding it, the helper itself runs `disablesleep 0` —
+  so a bug can never leave the Mac awake all day. The helper also resets defensively on launch.
+  This safety lives OUTSIDE the app on purpose: an app-side timer dies with the app (the lesson
+  from a manual test where an un-reset `disablesleep` kept a Mac awake).
+- **Stale-wake hygiene:** the helper persists the armed wake spec, cancels it when the app's XPC
+  connection drops (quit / crash / force-quit — a Mac with Sentient closed never wakes on a stale
+  schedule), and the loop wipes all wakes (`cancelAllWakes`) before arming exactly one.
+- ⚠️ **The code-sign gate is DEBUG-permissive** (allows-and-logs on a failed check so dev testing
+  isn't blocked); Release MUST enforce it — pin the Developer ID team before launch.
+
+## The nightly run (`OvernightScheduler.runProcessing`)
+
+Detect the enabled connectors via **`SourceSelection.current(...)`** — the exact same reader the
+dev UI and Analyze Now use, so a 3am run processes precisely what's toggled on (persistent custom
+folders included) → check the **go/no-go gates** (`PowerState`: on AC · not Low Power Mode · not
+thermally critical — else log + emit `overnight.gated{reason}` and skip; the loop is already
+re-armed for tomorrow; thermal is start-only) → `beginAwake` + a 60s heartbeat loop →
+`IterativeRun(.auto)` + the Gmail/Calendar legs → the SAME **`ProactiveCycle`** tail as Analyze Now
+(knowledge base → mirror push → proactive decide/research/prepare → wipe summaries) → `endAwake` →
+the Mac idle-sleeps (lid shut) → re-arm for the next night. Production default is **3:00 AM**
+(`defaultMinutes`; the dev UI can override).
+
+⚠️ Known caveat: **Full Disk Access can read `false` when the app is launched from Terminal** (TCC
+attribution) — which silently excludes the DB sources. The arm-time `DETECTED …` / `FDA granted:`
+log lines surface it.
 
 ## The 18h auto-enable — why, and how
 
@@ -36,9 +91,6 @@ and *then* turn the scheduler on. The very first automatic overnight run has som
 - **The wait is 18h** (`defaultAutoEnableDelay`); a dev key (`autoEnableDelaySeconds`) shortens it for testing.
 
 ## A — Installing the root daemon
-
-The root wake helper is the same app binary relaunched with `--wake-helper` (`App/main.swift`
-branches before SwiftUI).
 
 **[DECIDED 2026-07-04] The admin-password installer IS the production install path** —
 `WakeHelperInstaller` (`Scheduling/WakeHelperInstaller.swift`): one native "enter your password"
