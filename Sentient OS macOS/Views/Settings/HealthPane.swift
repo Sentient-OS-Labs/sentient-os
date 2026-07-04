@@ -174,7 +174,7 @@ struct HealthPane: View {
                 StatusLine(title: "Screen Recording",
                            health: screenRec ? .ok : .warn,
                            note: screenRec ? "granted" : "not granted",
-                           tip: "Lets Sidekick snap a still of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}). The picture goes only to your own ChatGPT, never to Sentient. Without it, commands run text-only. Takes effect after you restart Sentient.",
+                           tip: "Lets Sidekick snap a still of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}). Without it, Sidekick may not know which open app to start controlling to help you. Takes effect after you restart Sentient.",
                            fixTitle: "Allow…") {
                     fixScreenRecording()
                 }
