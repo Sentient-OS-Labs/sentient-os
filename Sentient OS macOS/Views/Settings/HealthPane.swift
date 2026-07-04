@@ -20,6 +20,9 @@ struct HealthPane: View {
     @State private var notifStatus: UNAuthorizationStatus = .notDetermined
     @State private var loginOn = LoginItem.isEnabled
     @State private var showCodexSetup = false
+    @State private var confirmReset = false
+    @State private var resetting = false
+    @State private var resetDone = false
 
     private var allGreen: Bool {
         fdaGranted && loginOn
@@ -134,16 +137,42 @@ struct HealthPane: View {
         }
     }
 
-    // MARK: - Danger zone (Reset — still to build)
+    // MARK: - Danger zone (the shared FactoryReset wipe)
+
+    private static let dangerRed = Color(red: 1.0, green: 0.45, blue: 0.45)
 
     private var dangerGroup: some View {
-        SettingsGroup(label: "Danger Zone", badge: "coming soon") {
-            VStack(alignment: .leading, spacing: 8) {
-                SettingsProse("Reset erases everything Sentient has learned. You'll return to onboarding and run the initial overnight processing again.")
-                Text("Reset Sentient…")
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundStyle(Color(red: 1.0, green: 0.45, blue: 0.45).opacity(0.85))
+        SettingsGroup(label: "Danger Zone") {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, and all suggestions. You'll start over from scratch, including the initial processing. Your cloud copy isn't touched; the next processing run simply replaces it.")
+                Button { confirmReset = true } label: {
+                    Text(resetting ? "Erasing…" : "Reset Sentient…")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(Self.dangerRed)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .overlay(Capsule().strokeBorder(Self.dangerRed.opacity(0.4), lineWidth: 1))
+                }
+                .buttonStyle(PressScaleStyle())
+                .disabled(resetting)
+                if resetDone {
+                    Text("Reset complete. Sentient is a blank slate.")
+                        .font(.serif(11.5, weight: .regular)).italic()
+                        .foregroundStyle(Theme.Ink.body)
+                }
             }
+        }
+        .alert("Erase everything Sentient has learned?", isPresented: $confirmReset) {
+            Button("Cancel", role: .cancel) {}
+            Button("Erase Everything", role: .destructive) {
+                resetting = true
+                Task {
+                    await FactoryReset.run()
+                    resetting = false
+                    resetDone = true
+                }
+            }
+        } message: {
+            Text("Your knowledge base and everything Sentient understood is deleted from this Mac. This can't be undone; Sentient starts again from zero, beginning with the initial processing.")
         }
     }
 

@@ -848,17 +848,12 @@ struct DevToolsView: View {
         .padding(14).frame(maxWidth: 460).glassCard()
     }
 
-    /// Factory reset — wipe EVERY pointer + summary (the iterative cycle store), the knowledge base
-    /// (the vault), AND every persisted proactive trace (decisions, prepared cards, the welcome gift),
-    /// so the next "start / resume" run is a fresh first run that rebuilds everything from scratch and
-    /// the home's "For You" deck comes back empty. The deliberate, separate alternative to the (now
-    /// non-destructive) start button.
+    /// Factory reset — the shared FactoryReset wipe (cycle store + knowledge base + proactive
+    /// traces + lifetime counters), so the next "start / resume" run is a fresh first run and the
+    /// home's "For You" deck comes back empty. Same code path as Settings → Reset Sentient.
     @MainActor
     private func runReset() async {
-        await CycleStore.shared.wipeEverything()
-        try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
-        ProactiveCycle.resetAll()
-        Log("DevTools: RESET — wiped the cycle store + the knowledge base + proactive cards (\(VaultGenerator.vaultRoot.lastPathComponent))")   // B7: folder name, not the home path
+        await FactoryReset.run()
         let c = await CycleStore.shared.counts()
         resetResult = "✓ reset — cycle store + knowledge base + proactive cards wiped (notes \(c.notes))"
     }

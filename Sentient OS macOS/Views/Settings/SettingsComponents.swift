@@ -212,19 +212,29 @@ struct StatusLine: View {
     }
 }
 
-/// A non-interactive stand-in for a text-input field (used by skeleton panes to preview the
-/// real editor that lands with their phase).
-struct SettingsFieldPreview: View {
+/// A multiline text box — the one bordered input surface in Settings. Autosaves through its
+/// binding (pair with @AppStorage at the call site); shows a quiet placeholder while empty.
+struct SettingsTextBox: View {
     let placeholder: String
+    @Binding var text: String
 
     var body: some View {
-        Text(placeholder)
-            .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.deepMuted)
-            .padding(.horizontal, 12).padding(.vertical, 10)
-            .frame(maxWidth: .infinity, minHeight: 58, alignment: .topLeading)
-            .background(Color.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                .strokeBorder(Theme.stroke, lineWidth: 1))
+        ZStack(alignment: .topLeading) {
+            if text.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.deepMuted)
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .allowsHitTesting(false)
+            }
+            TextEditor(text: $text)
+                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.statusInk)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 7).padding(.vertical, 2)
+        }
+        .frame(minHeight: 64)
+        .background(Color.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .strokeBorder(Theme.stroke, lineWidth: 1))
     }
 }
 

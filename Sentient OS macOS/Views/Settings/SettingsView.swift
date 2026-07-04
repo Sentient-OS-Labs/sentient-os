@@ -4,8 +4,8 @@
 //
 //  The Settings window — a modern two-pane layout: a quiet sidebar of sections on the left
 //  (with the About footer: version + the open-source link), the selected pane on the right,
-//  and the trust ribbon riding the foot. Panes live beside this file (SystemPane is real;
-//  the rest are styled skeletons in PlaceholderPanes.swift, replaced one phase at a time).
+//  and the trust ribbon riding the foot. Every pane is real and lives beside this file:
+//  SourcesPane · ProactivePane · YourAIsPane · SystemPane · HealthPane.
 //
 
 import SwiftUI
@@ -114,7 +114,7 @@ struct SettingsView: View {
             Group {
                 switch selection {
                 case .sources:   SourcesPane()
-                case .proactive: ProactivePanePlaceholder()
+                case .proactive: ProactivePane()
                 case .yourAIs:   YourAIsPane()
                 case .system:    SystemPane()
                 case .health:    HealthPane()
