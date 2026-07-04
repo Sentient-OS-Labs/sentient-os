@@ -331,15 +331,21 @@ actor CodexCLI {
     /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
     /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
     /// --ignore-user-config). Returns the full output. Computer use is the WIP CLI path.
-    func runAgentCommand(_ prompt: String, timeout: TimeInterval = 1_800,
+    ///
+    /// `imagePath` (optional): a screenshot of the user's screen, attached with `codex exec -i <file>`
+    /// so the agent SEES what they're looking at (the notch/command-bar path passes one; the proactive
+    /// executor doesn't). It's placed right before `--skip-git-repo-check` so the flag terminates
+    /// `-i`'s variadic `<FILE>...` and the prompt is never mistaken for a second image.
+    func runAgentCommand(_ prompt: String, imagePath: String? = nil, timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         do {
             guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-            let args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
+            var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
                         "-m", Model.gpt55.rawValue,
-                        "-c", "model_reasoning_effort=\"low\"",
-                        "--skip-git-repo-check", prompt]
+                        "-c", "model_reasoning_effort=\"low\""]
+            if let imagePath { args += ["-i", imagePath] }   // followed by a flag → variadic stops at one file
+            args += ["--skip-git-repo-check", prompt]
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
             guard out.status == 0 else {
                 let detail = out.stderr.isEmpty ? out.stdout : out.stderr
