@@ -193,6 +193,21 @@ struct SettingsChip: View {
     }
 }
 
+/// A lit status LED: bright core + double soft glow (tight halo, wide bloom). Shared by
+/// StatusLine and the collapsed codex summary.
+struct HealthDot: View {
+    let color: Color
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .overlay(Circle().fill(.white.opacity(0.35)).frame(width: 2.5, height: 2.5))
+            .frame(width: 6.5, height: 6.5)
+            .shadow(color: color.opacity(0.85), radius: 3)
+            .shadow(color: color.opacity(0.45), radius: 8)
+    }
+}
+
 /// One health line — a verdict dot, the thing being checked, its state in mono-caps, and a
 /// fix affordance when something's red. The Permissions & Health form.
 struct StatusLine: View {
@@ -215,13 +230,7 @@ struct StatusLine: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            // A lit LED: bright core + double soft glow (tight halo, wide bloom).
-            Circle()
-                .fill(dot)
-                .overlay(Circle().fill(.white.opacity(0.35)).frame(width: 2.5, height: 2.5))
-                .frame(width: 6.5, height: 6.5)
-                .shadow(color: dot.opacity(0.85), radius: 3)
-                .shadow(color: dot.opacity(0.45), radius: 8)
+            HealthDot(color: dot)
             Text(title).font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
             Spacer(minLength: 12)
             MonoCaps(note, size: 8.5, tracking: 1.6,

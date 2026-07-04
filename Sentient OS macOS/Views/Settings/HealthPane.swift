@@ -8,8 +8,10 @@
 //  via the shared CodexSetup engine), and CODEX PERMISSIONS (the helper's Accessibility + Screen
 //  Recording — system-TCC, status-only, shown once computer use exists). The Automation grant has
 //  NO row: it self-heals silently shortly after the pane opens (the user has no job there).
-//  Red = a core capability is broken · yellow = optional or fixable-later. Statuses re-probe on
-//  app foreground and after the codex sheet closes. The danger-zone Reset runs FactoryReset.
+//  Red = a core capability is broken · yellow = optional or fixable-later. When the whole codex
+//  stack is green it collapses to one glowing summary line (tap for details) — a browsing user
+//  shouldn't wade through five rows of "fine". Statuses re-probe on app foreground and after the
+//  codex sheet closes. (Reset lives in Settings → System.)
 //
 
 import SwiftUI
@@ -34,14 +36,19 @@ struct HealthPane: View {
     @State private var helperScreenRecording = false
 
     @State private var showCodexSetup = false
-    @State private var confirmReset = false
-    @State private var resetting = false
-    @State private var resetDone = false
+    @State private var codexExpanded = false
 
     private enum DaemonState { case ready, awaitingApproval, notSetUp }
     private enum MicSpeechState { case granted, notAsked, denied }
 
     private var showCodexPermissions: Bool { fdaGranted && codex.computerUseReady }
+
+    /// The whole codex stack, healthy — the CLI, the account, computer use, AND its two helper
+    /// grants (verifiable only with FDA; unverifiable never claims "all good").
+    private var codexAllGreen: Bool {
+        codex.installed && codex.loggedIn && codex.computerUseReady
+            && fdaGranted && helperAccessibility && helperScreenRecording
+    }
 
     private var allGreen: Bool {
         fdaGranted && daemon == .ready && loginOn && micSpeech == .granted
@@ -56,9 +63,16 @@ struct HealthPane: View {
                                        : "Everything green means everything works.") {
             VStack(alignment: .leading, spacing: 30) {
                 sentientGroup
-                codexSetupGroup
-                if showCodexPermissions { codexPermissionsGroup }
-                dangerGroup
+                if codexAllGreen {
+                    SettingsGroup(label: "Codex") { codexSummaryLine }
+                    if codexExpanded {
+                        codexSetupGroup
+                        codexPermissionsGroup
+                    }
+                } else {
+                    codexSetupGroup
+                    if showCodexPermissions { codexPermissionsGroup }
+                }
             }
         }
         .task {
@@ -239,6 +253,30 @@ struct HealthPane: View {
         }
     }
 
+    // MARK: - The collapsed codex summary (everything green = one quiet line, tap for details)
+
+    private var codexSummaryLine: some View {
+        Button {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { codexExpanded.toggle() }
+        } label: {
+            HStack(spacing: 11) {
+                HealthDot(color: Theme.Ink.green)
+                Text("Codex is all good.")
+                    .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
+                Spacer(minLength: 12)
+                MonoCaps(codexExpanded ? "Hide" : "Details", size: 8.5, tracking: 1.6,
+                         color: Theme.Ink.label)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.Ink.label)
+                    .rotationEffect(.degrees(codexExpanded ? 180 : 0))
+            }
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - SET UP CODEX (the cloud brain — all three are core, red when missing)
 
     private var codexSetupGroup: some View {
@@ -299,39 +337,6 @@ struct HealthPane: View {
             } catch {
                 Log("HealthPane: automation self-heal failed — \(error)")
             }
-        }
-    }
-
-    // MARK: - Danger zone (the shared FactoryReset wipe)
-
-    private static let dangerRed = Color(red: 1.0, green: 0.36, blue: 0.36)
-
-    private var dangerGroup: some View {
-        SettingsGroup(label: "Danger Zone") {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, and all suggestions. You'll start over from scratch, including the initial processing. Your cloud copy isn't touched; the next processing run simply replaces it.")
-                SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
-                                   tint: Self.dangerRed) { confirmReset = true }
-                    .disabled(resetting)
-                if resetDone {
-                    Text("Reset complete. Sentient is a blank slate.")
-                        .font(.serif(11.5, weight: .regular)).italic()
-                        .foregroundStyle(Theme.Ink.body)
-                }
-            }
-        }
-        .alert("Erase everything Sentient has learned?", isPresented: $confirmReset) {
-            Button("Cancel", role: .cancel) {}
-            Button("Erase Everything", role: .destructive) {
-                resetting = true
-                Task {
-                    await FactoryReset.run()
-                    resetting = false
-                    resetDone = true
-                }
-            }
-        } message: {
-            Text("Your knowledge base and everything Sentient understood is deleted from this Mac. This can't be undone; Sentient starts again from zero, beginning with the initial processing.")
         }
     }
 

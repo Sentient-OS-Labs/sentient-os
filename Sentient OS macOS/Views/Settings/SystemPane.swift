@@ -4,8 +4,9 @@
 //
 //  Settings → System: how Sentient lives on this Mac. The overnight-intelligence story (prose,
 //  not a control — 3 AM is our taste, not a dial), the launch-at-login toggle (LoginItem.swift)
-//  with its keep-Sentient-alive confirm, and the privacy pledge with the two anonymous-reporting
-//  switches (crash reports → CrashReporting/Sentry · analytics → Analytics/TelemetryDeck).
+//  with its keep-Sentient-alive confirm, the privacy pledge with the two anonymous-reporting
+//  switches (crash reports → CrashReporting/Sentry · analytics → Analytics/TelemetryDeck), and
+//  the danger-zone Reset (the shared FactoryReset wipe — a system-level act, so it lives here).
 //  The updates group lands here once Sparkle ships.
 //
 
@@ -19,6 +20,9 @@ struct SystemPane: View {
 
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var confirmLoginOff = false
+    @State private var confirmReset = false
+    @State private var resetting = false
+    @State private var resetDone = false
 
     var body: some View {
         SettingsPane(title: "System.", whisper: "How Sentient lives on this Mac.") {
@@ -26,6 +30,7 @@ struct SystemPane: View {
                 overnightGroup
                 startupGroup
                 privacyGroup
+                dangerGroup
             }
         }
         .task { launchAtLogin = LoginItem.isEnabled }   // live status — revocable in System Settings
@@ -94,6 +99,39 @@ struct SystemPane: View {
         }
         .onChange(of: crashReportsEnabled) { _, _ in CrashReporting.applyEnabledChange() }
         .onChange(of: analyticsEnabled) { _, _ in Analytics.applyEnabledChange() }
+    }
+
+    // MARK: - Danger zone (the shared FactoryReset wipe)
+
+    private static let dangerRed = Color(red: 1.0, green: 0.36, blue: 0.36)
+
+    private var dangerGroup: some View {
+        SettingsGroup(label: "Danger Zone") {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, and all suggestions. You'll start over from scratch, including the initial processing. Your cloud copy isn't touched; the next processing run simply replaces it.")
+                SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
+                                   tint: Self.dangerRed) { confirmReset = true }
+                    .disabled(resetting)
+                if resetDone {
+                    Text("Reset complete. Sentient is a blank slate.")
+                        .font(.serif(11.5, weight: .regular)).italic()
+                        .foregroundStyle(Theme.Ink.body)
+                }
+            }
+        }
+        .alert("Erase everything Sentient has learned?", isPresented: $confirmReset) {
+            Button("Cancel", role: .cancel) {}
+            Button("Erase Everything", role: .destructive) {
+                resetting = true
+                Task {
+                    await FactoryReset.run()
+                    resetting = false
+                    resetDone = true
+                }
+            }
+        } message: {
+            Text("Your knowledge base and everything Sentient understood is deleted from this Mac. This can't be undone; Sentient starts again from zero, beginning with the initial processing.")
+        }
     }
 }
 
