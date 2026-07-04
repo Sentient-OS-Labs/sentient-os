@@ -331,7 +331,7 @@ actor CodexCLI {
     /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
     /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
     /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
-    /// --ignore-user-config). Returns the full output. Computer use is the WIP CLI path.
+    /// --ignore-user-config). Returns the full output.
     ///
     /// `imagePath` (optional): a screenshot of the user's screen, attached with `codex exec -i <file>`
     /// so the agent SEES what they're looking at (the notch/command-bar path passes one; the proactive

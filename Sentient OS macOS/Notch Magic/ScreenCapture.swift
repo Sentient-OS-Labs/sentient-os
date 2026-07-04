@@ -45,7 +45,9 @@ enum ScreenCapture {
         try? FileManager.default.removeItem(at: url)
     }
 
-    /// Run `screencapture` off the main actor; true iff it exited cleanly.
+    /// Run `screencapture` off the main actor; true iff it exited cleanly. A 5s watchdog kills a
+    /// wedged capture (house rule: no un-watchdogged Process) — the run start awaits this, so a hang
+    /// here would freeze the command where STOP can't reach; on timeout the command just runs text-only.
     private static func runCapture(_ args: [String]) async -> Bool {
         await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -56,7 +58,10 @@ enum ScreenCapture {
                 p.standardError = FileHandle.nullDevice
                 do {
                     try p.run()
+                    let watchdog = DispatchWorkItem { [weak p] in p?.terminate() }
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5, execute: watchdog)
                     p.waitUntilExit()
+                    watchdog.cancel()
                     cont.resume(returning: p.terminationStatus == 0)
                 } catch {
                     Log("📸 screencapture launch failed — \(error.localizedDescription)")
