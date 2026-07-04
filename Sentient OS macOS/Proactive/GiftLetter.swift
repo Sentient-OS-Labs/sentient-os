@@ -1,6 +1,6 @@
 //
 //  GiftLetter.swift
-//  Sentient OS macOS  ·  Ingestion/
+//  Sentient OS macOS  ·  Proactive/
 //
 //  The welcome "gift" — the day-one "letter from Sentient" card (Arch §6). One Codex call
 //  (gpt-5.5, high, workspace-write over the user's OWN knowledge base) reads the synthesized

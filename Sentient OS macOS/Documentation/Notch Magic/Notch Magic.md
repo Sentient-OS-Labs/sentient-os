@@ -58,7 +58,7 @@ Every command is **computer use** (the dedicated browser-use channel was removed
 
 Edits outside this folder: `AppState.swift` (owns/starts the two objects), `Views/HomeView.swift` (`PromptBar` drives `appState.commandCoordinator`), and the project's `INFOPLIST_KEY_NSMicrophoneUsageDescription` + `INFOPLIST_KEY_NSSpeechRecognitionUsageDescription` build settings.
 
-There is still a **DEV bench** `Views/HotkeyLabView.swift` (DEV TOOLS → HOTKEY LAB) — the original proof of the hotkey tap. It's superseded by `RightCommandMonitor`; **retire it** once you're confident (see §13).
+There is still a **DEV bench** `Views/Dev/HotkeyLabView.swift` (DEV TOOLS → HOTKEY LAB) — the original proof of the hotkey tap. It's superseded by `RightCommandMonitor`; **retire it** once you're confident (see §13).
 
 ---
 
@@ -264,7 +264,7 @@ Esc cancels/dismisses globally via the zero-permission `keyDown` tap (§4) — t
 - **Verify global Esc on macOS 15.** The listen-only `keyDown` tap is measured permission-free on Tahoe only; confirm Esc still flows (app unfocused, Input Monitoring off) on the 15 floor — same old-Mac trip as the voice fallback. If gated there, fall back to a right-⌘-tap cancel (a modifier is always free).
 - **Confirm** the SkyLight pin + order-out never leaves the notch stuck visible when idle.
 - **Reduced-motion / VoiceOver** sanity pass.
-- **Retire the dev bench** `Views/HotkeyLabView.swift` + its DEV TOOLS → HOTKEY LAB button once the real hotkey is proven.
+- **Retire the dev bench** `Views/Dev/HotkeyLabView.swift` + its DEV TOOLS → HOTKEY LAB button once the real hotkey is proven.
 
 ---
 

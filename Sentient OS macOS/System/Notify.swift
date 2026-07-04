@@ -2,11 +2,11 @@
 //  Notify.swift
 //  Sentient OS macOS
 //
-//  One small wrapper over UNUserNotificationCenter (Part II §D). Quiet by design — the
-//  day's-end job notifies only when the vault actually changed; no-op runs never make noise.
-//  Permission is requested lazily on first use for now; the real ask moves into onboarding's
-//  notification step. (Scheduled reminders return with proactive intelligence — git 67d8078
-//  has the schedule/cancel implementation.)
+//  One small wrapper over UNUserNotificationCenter. Currently DORMANT — nothing calls
+//  Notify.now() yet; the morning "your suggestions are ready" note and scheduled reminders
+//  ship with the proactive/reminder wiring (git 67d8078 has an old schedule/cancel
+//  implementation to mine). Permission is requested lazily on first use for now; the real
+//  ask moves into onboarding's notification step.
 //
 
 import Foundation

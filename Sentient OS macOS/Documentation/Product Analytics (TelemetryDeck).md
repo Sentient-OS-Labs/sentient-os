@@ -59,10 +59,10 @@ existing B7 "length, not the command text" log — same discipline.
 | `Engine.reloaded` | `Ingestion/IterativeRun.swift` | GPU-wedge self-heal fired (`reason`: preemptive/reactive) |
 | `Scheduler.overnightStarted` / `.overnightCompleted` | `Scheduling/OvernightScheduler.swift` | 3am run began / finished |
 | `Scheduler.gated` | `Scheduling/OvernightScheduler.swift` | Nightly run skipped (`reason`: battery/lowPower/thermal) |
-| `KnowledgeBase.built` / `.updated` / `.failed` | `Ingestion/ProactiveCycle.swift` | First build / incremental update / error |
-| `Proactive.decided` | `Ingestion/ProactiveCycle.swift` | # things-worth-doing found |
-| `Proactive.prepared` | `Ingestion/ProactiveCycle.swift` | # survived research (+ # dropped) |
-| `Proactive.actionFired` | `Ingestion/ProactiveExecutor.swift` | A user fired an action — `method` + `outcome` (the headline number) |
+| `KnowledgeBase.built` / `.updated` / `.failed` | `Proactive/ProactiveCycle.swift` | First build / incremental update / error |
+| `Proactive.decided` | `Proactive/ProactiveCycle.swift` | # things-worth-doing found |
+| `Proactive.prepared` | `Proactive/ProactiveCycle.swift` | # survived research (+ # dropped) |
+| `Proactive.actionFired` | `Proactive/ProactiveExecutor.swift` | A user fired an action — `method` + `outcome` (the headline number) |
 | `Mirror.enabled` / `.pushed` / `.disabled` | `MirrorClient.swift` | MCP mirror lifecycle |
 | `Command.submitted` | `Notch Magic/CommandCoordinator.swift` | "Do stuff for me" bar used (`source` + `mode`) |
 | `Source.connected` | `Views/{Gmail,Calendar}ConnectSheet.swift` | A source hooked up (`source`) |

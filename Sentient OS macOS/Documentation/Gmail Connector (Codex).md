@@ -6,7 +6,7 @@ summarize** it through the user's own **Codex Gmail connector** — OpenAI's acc
 `codex_apps/gmail.*` tools, reached by `codex exec`. No on-device model touches Gmail.
 
 Code: `Ingestion/GmailConnect.swift` · UI: `Views/GmailConnectSheet.swift` + the Gmail chip in
-`Views/DevToolsView.swift`.
+`Views/Dev/DevToolsView.swift`.
 
 ## How a user connects
 1. **Gmail chip** in the dev SOURCES grid → opens the connect popup.
@@ -21,9 +21,12 @@ Code: `Ingestion/GmailConnect.swift` · UI: `Views/GmailConnectSheet.swift` + th
 Gmail flows through the **same INITIAL / ITERATIVE buttons** as every other connector — it's just a
 source. The "start" button routes a selected Gmail to `GmailConnect` instead of the on-device takeover.
 
-- **Initial** (`runInitial`) — the last month as **4 weekly `codex exec` calls**, newest week first.
-  One dense **summary per week** (the user's decision). Weekly chunking is load-bearing: a heavy inbox
-  is ~430 threads/week and a whole month in one call would blow the model's input cap.
+- **Initial** (`runInitial`) — the last month as **4 weekly `codex exec` calls**, fired **IN
+  PARALLEL** (a task group; results collected in completion order, the high-water mark set once all
+  four finish — any window failing aborts the run so a retry re-runs all four). One dense **summary
+  per week**. Weekly chunking is load-bearing: a heavy inbox is ~430 threads/week and a whole month
+  in one call would blow the model's input cap; running the four concurrently makes the initial read
+  ~4× faster.
 - **Iterative** (`runIterative`) — one call covering everything since the high-water mark
   (`after:<epoch>`), then the mark advances. Falls back to initial if never run.
 
@@ -68,10 +71,12 @@ is the light model we landed on for Gmail [MEASURED June 15]. `.high` is the `In
 - **No `CodexCLI` change at all** — `probeConnected` and the reads use the existing
   `CodexCLI.Invocation` (read-only sandbox; the connector works under it).
 
-## Not yet / next
-- **Proactive reconciliation:** proactive currently keys on *per-item* `reminderFlagged` summaries; a
-  weekly Gmail blob needs *mining* (extract its action items). The weekly summary is shaped for this
-  (explicit action-items section), but the proactive consumer isn't built yet.
+## Notes / next
+- **Proactive consumes these** — the judge reads ALL of the cycle's summaries (Gmail's weekly blobs
+  included) as its last-7-days corpus; the explicit action-items section in each weekly summary is
+  what makes the blobs mineable. (`reminderFlagged` rides along as a hint, not the mechanism.)
 - **Connection detection** is a `codex exec` YES/NO probe (the user's chosen UX). A cheaper
   `codex plugin list` poll exists but is unused by design.
-- Dev-only surface for now (the `dbg.*` prefs + DevToolsView); the real onboarding/connectors UI is Phase 5.
+- The connect sheet is reachable from THREE places now — the Dev Tools chip, the home's Analysis
+  popover chip, and Settings → Knowledge Sources — all the same `GmailConnectSheet` + `dbg.*` keys.
+  The dedicated onboarding moment is still to build.

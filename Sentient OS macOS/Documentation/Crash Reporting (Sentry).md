@@ -95,6 +95,6 @@ comment there says why.
 - `CrashReporting.swift` — init, breadcrumbs, `capture(_:)`, dev test helpers.
 - `main.swift` — `start(.app)` / `start(.wakeHelper)`.
 - `Log.swift` — breadcrumb tee.
-- `Views/DevToolsView.swift` — the DEBUG SENTRY test buttons.
+- `Views/Dev/DevToolsView.swift` — the DEBUG SENTRY test buttons.
 - `.sentryclirc` (gitignored) — Auth Token + org/project for dSYM upload.
 - Build phase **"Upload dSYMs to Sentry"** in the app target (Release-only).

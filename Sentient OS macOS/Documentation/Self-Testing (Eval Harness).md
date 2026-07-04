@@ -35,7 +35,7 @@ enum SelfTest {
 ```
 
 ### 2. The hook
-Re-add the one-line call in the app's `@main` struct (`Sentient_OS_macOSApp.swift`), under `#if DEBUG`,
+Re-add the one-line call in the app struct (`App/Sentient_OS_macOSApp.swift` — note: `@main` itself is `App/main.swift`, which branches into the wake helper first), under `#if DEBUG`,
 so it runs before the UI launches:
 
 ```swift

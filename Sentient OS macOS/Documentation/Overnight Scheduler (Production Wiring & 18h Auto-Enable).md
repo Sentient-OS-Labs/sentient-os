@@ -5,7 +5,7 @@ Analyze Now (`IterativeRun .auto` → `ProactiveCycle`), then sleeps — so a fr
 waiting when you open the lid. The wake *mechanism* was already proven on real hardware; this doc
 covers the **production wiring** that turns it from a dev toggle into something that arms itself:
 
-1. **A** — the root helper installs via **SMAppService** (one-click System Settings approval).
+1. **A** — the root helper installs behind **one native admin-password prompt** (`WakeHelperInstaller` — the production path, decided 2026-07-04).
 2. **B** — the app registers as a **login item** so it's alive at 3am to host the run.
 3. **C** — a **production enable flag** (separate from the dev toggle).
 4. **D+E** — the app **auto-enables the scheduler 18 hours after the first full cycle**.
@@ -35,30 +35,33 @@ and *then* turn the scheduler on. The very first automatic overnight run has som
     silently half-enables.
 - **The wait is 18h** (`defaultAutoEnableDelay`); a dev key (`autoEnableDelaySeconds`) shortens it for testing.
 
-## A — SMAppService daemon (production install)
+## A — Installing the root daemon
 
-The root wake helper is the same app binary relaunched with `--wake-helper` (main.swift branches
-before SwiftUI). Production installs it via **`SMAppService.daemon`** instead of the old
-admin-password path:
+The root wake helper is the same app binary relaunched with `--wake-helper` (`App/main.swift`
+branches before SwiftUI).
 
-- A LaunchDaemon plist is **bundled** at `Contents/Library/LaunchDaemons/jesai.Sentient-OS-macOS.WakeHelper.plist`
-  (repo file at the project root, copied in by a "Copy wake-helper daemon plist" build phase). It uses
-  `BundleProgram` (the bundle-relative main executable) + `ProgramArguments` to pass `--wake-helper`,
-  and `MachServices` for the XPC name. Label/service name match `WakeHelperConfig`.
-- `WakeHelperClient.register()` registers it; `.status`/`.isReady` read the live state
-  (`.enabled` = approved & ready · `.requiresApproval` = registered, awaiting the user ·
-  `.notRegistered`/`.notFound` = not yet / not bundled / unsigned build).
-  `openLoginItemsSettings()` deep-links to where the user approves.
-- `OvernightScheduler.ensureHelperReady()` gates every arm: `.enabled` → go; `.requiresApproval` →
-  flag setup and bail (approval is async + user-driven). **DEBUG dev builds** (unsigned → `.notFound`)
-  fall back to the proven admin-password `WakeHelperInstaller`, so testing works without a signed build.
+**[DECIDED 2026-07-04] The admin-password installer IS the production install path** —
+`WakeHelperInstaller` (`Scheduling/WakeHelperInstaller.swift`): one native "enter your password"
+dialog (osascript admin) that writes the LaunchDaemon plist (pointing at THIS binary) into
+`/Library/LaunchDaemons`, chowns/chmods it, and `launchctl bootstrap`s it. It's measured-and-working
+on real hardware, self-heals when the binary path goes stale (`isInstalledAndCurrent()` checks the
+plist points at the running executable), and — the UX line we hold — never sends the user into
+System Settings. **Settings → Permissions & Health's "Overnight wake" fix button runs exactly this.**
+The SMAppService.daemon migration (a Login Items approval toggle) was considered and rejected.
 
-> **Signing:** SMAppService approval works on **any validly-signed build** — the standard Apple
-> Development signature Xcode puts on every Run/Debug build is enough (verified: "Register / Approve"
-> flips the helper to `enabled ✓` on a normal dev build). It does **NOT** need Developer ID,
-> notarization, or `/Applications`. Only a *fully unsigned* binary (e.g. a `CODE_SIGNING_ALLOWED=NO`
-> CLI build) returns `.notFound` — which is why the headless CLI verify can't exercise it, but the
-> Xcode build can.
+**SMAppService plumbing survives for the dev cockpit only:**
+- A LaunchDaemon plist is still bundled at `Contents/Library/LaunchDaemons/…WakeHelper.plist` (repo
+  file at the project root, a "Copy wake-helper daemon plist" build phase) so
+  `WakeHelperClient.register()` / `.status` / `openLoginItemsSettings()` keep working for
+  experiments (`OvernightDevView` step ①).
+- `OvernightScheduler.ensureHelperReady()` still checks SMAppService first (`.enabled` → go) and, in
+  DEBUG, falls back to the password installer when SMAppService reports `.notFound`/`.notRegistered`.
+  Since the production install path is the installer (via the Health pane), a user who set up through
+  Settings passes the DEBUG fallback's `isInstalledAndCurrent()` check without any SMAppService state.
+
+> **Signing note (SMAppService, dev only):** approval works on any validly-signed build — a standard
+> Apple Development Debug build is enough; only a fully unsigned `CODE_SIGNING_ALLOWED=NO` CLI build
+> returns `.notFound`.
 
 ## B — Launch at login
 
@@ -103,10 +106,10 @@ This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to th
 - `Scheduling/OvernightScheduler.swift` — the scheduler, the 18h auto-enable state machine, `ensureHelperReady`.
 - `Scheduling/LoginItem.swift` — launch-at-login via `SMAppService.mainApp`.
 - `Scheduling/WakeHelperClient.swift` — daemon register/status/deep-link + the four XPC ops.
-- `Scheduling/WakeHelperInstaller.swift` — DEBUG admin-password fallback installer.
+- `Scheduling/WakeHelperInstaller.swift` — the PRODUCTION admin-password installer (decided 2026-07-04); also the DEBUG fallback in `ensureHelperReady`.
 - `jesai.Sentient-OS-macOS.WakeHelper.plist` (project root) — the bundled SMAppService daemon plist + its Copy Files phase.
-- `Ingestion/ProactiveCycle.swift` — stamps "initial finished".
+- `Proactive/ProactiveCycle.swift` — stamps "initial finished".
 - `AppState.swift` / `Views/RootView.swift` — call `maybeAutoEnable()` at launch / after each cycle.
-- `Views/OvernightDevView.swift` — the standalone dev window (checklist + live status).
-- `Views/DevToolsView.swift` — the "Overnight Processing…" button that opens it.
+- `Views/Dev/OvernightDevView.swift` — the standalone dev window (checklist + live status).
+- `Views/Dev/DevToolsView.swift` — the "Overnight Processing…" button that opens it.
 - `Sentient_OS_macOSApp.swift` — the `OvernightDevView` window scene.
