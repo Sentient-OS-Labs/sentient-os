@@ -23,6 +23,7 @@ struct SystemPane: View {
     @State private var confirmReset = false
     @State private var resetting = false
     @State private var resetDone = false
+    @State private var activity = PipelineActivity.shared   // Reset locks while a run is active
 
     var body: some View {
         SettingsPane(title: "System.", whisper: "How Sentient lives on this Mac.") {
@@ -111,7 +112,11 @@ struct SystemPane: View {
                 SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, and all suggestions. You'll start over from scratch, including the initial processing. Your cloud copy isn't touched; the next processing run simply replaces it.")
                 SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
                                    tint: Self.dangerRed) { confirmReset = true }
-                    .disabled(resetting)
+                    .disabled(resetting || activity.isRunning)
+                if activity.isRunning {
+                    Text("A run is in progress. Reset unlocks when it finishes.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
+                }
                 if resetDone {
                     Text("Reset complete. Sentient is a blank slate.")
                         .font(.serif(11.5, weight: .regular)).italic()
