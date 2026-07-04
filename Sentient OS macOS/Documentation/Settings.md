@@ -111,7 +111,7 @@ opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
   relaunch link) · Overnight wake (🟢 = the installed daemon plist points at THIS binary; fix runs
   `WakeHelperInstaller.installAsync()` — **[DECIDED 2026-07-04] the password install IS
   production**, no Login Items migration) · Launch at login (yellow when off).
-- **SIDEKICK & PROACTIVE** (the magic's grants — all optional-tier, yellow never red):
+- **SIDEKICK & PROACTIVE** (the magic's grants — lazy-asked, yellow while not-asked/off; only an explicit mic/speech DENIAL goes red):
   Microphone & Speech (one row: `VoiceCapture.requestPermissions()` asks both; denied deep-links
   to the actual blocker) · **Screen Recording** (Sentient's OWN grant — Sidekick snaps a screen
   still per command, `Notch Magic/ScreenCapture.swift`; commands run text-only without it; fix =
