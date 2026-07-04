@@ -94,20 +94,55 @@ struct SettingToggleLine: View {
     }
 }
 
+/// Wraps chips onto as many rows as the width needs — like text, not a grid. Rows stay
+/// left-aligned and tidy no matter how many custom folders the user adds.
+struct ChipFlow: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        return CGSize(width: width == .infinity ? max(0, x - spacing) : width, height: y + rowHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > bounds.minX && x + size.width > bounds.maxX {
+                x = bounds.minX; y += rowHeight + spacing; rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: .unspecified)
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+    }
+}
+
 /// A source/option pill — the connector form (the Analysis popover's chips, grown up a size).
-/// The tiny mint dot is the on-state; `detail` carries counts ("12 chats").
+/// The tiny mint dot is the on-state; `detail` carries counts ("12 chats"). Pure action chips
+/// ("+ Add Folder") pass `dot: false` — they have no on/off to report.
 struct SettingsChip: View {
     let label: String
     var detail: String? = nil
     let on: Bool
+    var dot: Bool = true
     var action: (() -> Void)? = nil
 
     var body: some View {
         Button { action?() } label: {
             HStack(spacing: 7) {
-                Circle()
-                    .fill(on ? Theme.Ink.mint : Theme.Ink.deepMuted.opacity(0.55))
-                    .frame(width: 5, height: 5)
+                if dot {
+                    Circle()
+                        .fill(on ? Theme.Ink.mint : Theme.Ink.deepMuted.opacity(0.55))
+                        .frame(width: 5, height: 5)
+                }
                 Text(label)
                     .font(.system(size: 12, weight: on ? .medium : .regular))
                     .foregroundStyle(on ? Theme.Ink.statusInk : Theme.Ink.chipInk)

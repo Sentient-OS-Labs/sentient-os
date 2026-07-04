@@ -136,11 +136,16 @@ struct YourAIsPane: View {
     }
 
     private var maskedURL: String {
+        // ⚠️ "/mcp" must be searched BACKWARDS: the host "https://mcp.sentient-os.ai" itself
+        // contains "/mcp" (second slash + host), and a forward hit put `end` before the token —
+        // an inverted range that crashed the pane. Guard the order defensively regardless.
         guard let url = shareURL,
               let range = url.range(of: "/u/"),
-              let end = url.range(of: "/mcp") else { return "mcp.sentient-os.ai/u/…/mcp" }
+              let end = url.range(of: "/mcp", options: .backwards),
+              range.upperBound <= end.lowerBound else { return "mcp.sentient-os.ai/u/…/mcp" }
         let token = url[range.upperBound..<end.lowerBound]
         let host = url.replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")     // dev SENTIENT_MIRROR_BASE override
             .prefix(while: { $0 != "/" })
         return "\(host)/u/\(token.prefix(4))••••••••/mcp"
     }

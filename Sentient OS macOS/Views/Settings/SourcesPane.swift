@@ -57,7 +57,8 @@ struct SourcesPane: View {
                      whisper: "What Sentient reads — always locally, always yours.") {
             VStack(alignment: .leading, spacing: 30) {
                 if !fdaGranted { fdaLine }
-                localGroup
+                foldersGroup
+                chatsGroup
                 cloudGroup
                 Text("Sentient needs at least three sources to truly know you.")
                     .font(.serif(11.5, weight: .regular)).italic()
@@ -99,53 +100,36 @@ struct SourcesPane: View {
 
     // MARK: - Local sources
 
-    private var localGroup: some View {
-        SettingsGroup(label: "On This Mac") {
-            VStack(alignment: .leading, spacing: 9) {
-                chipRows(folderChips + [addFolderChip])
-                chipRows(chatAndNotesChips)
+    private var foldersGroup: some View {
+        SettingsGroup(label: "Folders") {
+            ChipFlow {
+                SettingsChip(label: "Desktop", on: runDesktop) { toggleFolder($runDesktop) }
+                SettingsChip(label: "Downloads", on: runDownloads) { toggleFolder($runDownloads) }
+                SettingsChip(label: "Documents", on: runDocuments) { toggleFolder($runDocuments) }
+                ForEach(customRoots, id: \.self) { url in
+                    SettingsChip(label: url.lastPathComponent, detail: "✕", on: true) {
+                        CustomRoots.remove(url)
+                    }
+                }
+                SettingsChip(label: "+ Add Folder", on: false, dot: false) { chooseFolder() }
             }
         }
     }
 
-    private var folderChips: [AnyView] {
-        var chips: [AnyView] = [
-            AnyView(SettingsChip(label: "Desktop", on: runDesktop) { toggleFolder($runDesktop) }),
-            AnyView(SettingsChip(label: "Downloads", on: runDownloads) { toggleFolder($runDownloads) }),
-            AnyView(SettingsChip(label: "Documents", on: runDocuments) { toggleFolder($runDocuments) }),
-        ]
-        for url in customRoots {
-            chips.append(AnyView(
-                SettingsChip(label: url.lastPathComponent, detail: "✕", on: true) {
-                    CustomRoots.remove(url)
+    private var chatsGroup: some View {
+        SettingsGroup(label: "Chats & Notes") {
+            ChipFlow {
+                if WhatsAppSource.isInstalled {
+                    SettingsChip(label: "WhatsApp",
+                                 detail: whatsappChats.isEmpty ? nil : "\(whatsappChats.count) chats",
+                                 on: runWhatsApp && !whatsappChats.isEmpty) { showWhatsAppPicker = true }
                 }
-            ))
+                SettingsChip(label: "iMessage",
+                             detail: imessageChats.isEmpty ? nil : "\(imessageChats.count) chats",
+                             on: runIMessage && !imessageChats.isEmpty) { showIMessagePicker = true }
+                SettingsChip(label: "Apple Notes", on: runNotes) { toggleConnector($runNotes) }
+            }
         }
-        return chips
-    }
-
-    private var addFolderChip: AnyView {
-        AnyView(SettingsChip(label: "+ Add Folder", on: false) { chooseFolder() })
-    }
-
-    private var chatAndNotesChips: [AnyView] {
-        var chips: [AnyView] = []
-        if WhatsAppSource.isInstalled {
-            chips.append(AnyView(
-                SettingsChip(label: "WhatsApp",
-                             detail: whatsappChats.isEmpty ? nil : "\(whatsappChats.count) chats",
-                             on: runWhatsApp && !whatsappChats.isEmpty) { showWhatsAppPicker = true }
-            ))
-        }
-        chips.append(AnyView(
-            SettingsChip(label: "iMessage",
-                         detail: imessageChats.isEmpty ? nil : "\(imessageChats.count) chats",
-                         on: runIMessage && !imessageChats.isEmpty) { showIMessagePicker = true }
-        ))
-        chips.append(AnyView(
-            SettingsChip(label: "Apple Notes", on: runNotes) { toggleConnector($runNotes) }
-        ))
-        return chips
     }
 
     // MARK: - Cloud sources
@@ -154,7 +138,7 @@ struct SourcesPane: View {
         SettingsGroup(label: "Through Your ChatGPT") {
             VStack(alignment: .leading, spacing: 12) {
                 SettingsProse("Read through your own connectors — never our servers.")
-                HStack(spacing: 8) {
+                ChipFlow {
                     SettingsChip(label: "Gmail", on: gmailConnected && runGmail) { showGmailConnect = true }
                     SettingsChip(label: "Google Calendar", on: calendarConnected && runCalendar) { showCalendarConnect = true }
                 }
@@ -197,17 +181,6 @@ struct SourcesPane: View {
         panel.message = "Add a folder for Sentient to read."
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { CustomRoots.add(url) }
-    }
-
-    /// Lay chips out in wrapping rows of ~3 (simple + predictable at the pane's fixed measure).
-    private func chipRows(_ chips: [AnyView]) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            ForEach(Array(stride(from: 0, to: chips.count, by: 3)), id: \.self) { i in
-                HStack(spacing: 8) {
-                    ForEach(i..<min(i + 3, chips.count), id: \.self) { j in chips[j] }
-                }
-            }
-        }
     }
 }
 
