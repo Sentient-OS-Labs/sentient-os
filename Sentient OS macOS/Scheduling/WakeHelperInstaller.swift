@@ -8,8 +8,10 @@
 //    write the plist (with THIS app's current binary path) to a temp file → privileged cp into
 //    /Library/LaunchDaemons → chown/chmod → launchctl bootstrap.
 //
-//  This is the dev/testing path; production will swap it for SMAppService.daemon (a one-click
-//  System Settings approval, no password). Same daemon, same plist — only the install UX differs.
+//  [DECIDED 2026-07-04] This IS the production path. The SMAppService.daemon migration (Login
+//  Items toggle) was considered and rejected: this works, it's measured on real hardware, and one
+//  native password dialog beats sending users into System Settings. (WakeHelperClient keeps its
+//  SMAppService plumbing for the dev cockpit, but nothing user-facing routes there.)
 //
 
 import Foundation

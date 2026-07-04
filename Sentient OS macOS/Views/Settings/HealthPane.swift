@@ -19,7 +19,6 @@ import AppKit
 import AVFoundation
 import Speech
 import UserNotifications
-import ServiceManagement   // SMAppService.Status — the wake daemon's registration state
 
 struct HealthPane: View {
     @State private var codex = CodexSetup.shared
@@ -40,7 +39,7 @@ struct HealthPane: View {
     @State private var checked = false        // first full probe done (codex login check is seconds)
     @State private var revealed = false       // drives the rise-in cascade after the first probe
 
-    private enum DaemonState { case ready, awaitingApproval, notSetUp }
+    private enum DaemonState { case ready, installing, notSetUp }
     private enum MicSpeechState { case granted, notAsked, denied }
 
     private var showCodexPermissions: Bool { fdaGranted && codex.computerUseReady }
@@ -138,7 +137,7 @@ struct HealthPane: View {
                 StatusLine(title: "Overnight wake",
                            health: daemon == .ready ? .ok : .bad,
                            note: daemonNote,
-                           fixTitle: daemon == .awaitingApproval ? "Approve…" : "Set Up…") {
+                           fixTitle: "Set Up…") {
                     fixDaemon()
                 }
                 .rise(1, revealed: revealed)
@@ -172,37 +171,26 @@ struct HealthPane: View {
 
     private var daemonNote: String {
         switch daemon {
-        case .ready:             return "ready"
-        case .awaitingApproval:  return "awaiting approval"
-        case .notSetUp:          return "not set up"
+        case .ready:      return "ready"
+        case .installing: return "installing…"
+        case .notSetUp:   return "not set up"
         }
     }
 
-    /// Awaiting approval → straight to Login Items. Not set up → register (the SMAppService path);
-    /// if that lands in requires-approval, open Login Items so the user can finish the click.
+    /// [DECIDED 2026-07-04] The password install IS the production path (no Login Items
+    /// migration — one native admin prompt, no trip to System Settings). Fix = run the installer.
     private func fixDaemon() {
-        switch daemon {
-        case .ready:
-            break
-        case .awaitingApproval:
-            WakeHelperClient.shared.openLoginItemsSettings()
-        case .notSetUp:
-            let status = WakeHelperClient.shared.register()
-            if status == .requiresApproval { WakeHelperClient.shared.openLoginItemsSettings() }
+        guard daemon == .notSetUp else { return }
+        daemon = .installing
+        Task {
+            _ = await WakeHelperInstaller.installAsync()
             refreshDaemon()
         }
     }
 
-    /// Green = the SMAppService daemon is approved OR the dev-installed plist exists and points at
-    /// this exact binary (the manual path still counts as a working heartbeat).
+    /// Green = the installed daemon plist exists AND points at this exact binary.
     private func refreshDaemon() {
-        if WakeHelperInstaller.isInstalledAndCurrent() || WakeHelperClient.shared.status == .enabled {
-            daemon = .ready
-        } else if WakeHelperClient.shared.status == .requiresApproval {
-            daemon = .awaitingApproval
-        } else {
-            daemon = .notSetUp
-        }
+        daemon = WakeHelperInstaller.isInstalledAndCurrent() ? .ready : .notSetUp
     }
 
     // MARK: Microphone & Speech (one row — one call asks for both)
