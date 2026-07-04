@@ -38,7 +38,7 @@ struct SystemPane: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Your Sentient works the night shift.")
                     .font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
-                SettingsProse("Every night at 3 AM, Sentient wakes your Mac to read what's new in your life, update your knowledge base, and prepare your morning suggestions. It only happens while your Mac is plugged in — and only if Sentient is still running in your menu bar. This quiet, on-device work is what keeps your Sentient alive and helpful.")
+                SettingsProse("Every night at 3 AM, Sentient wakes your Mac to read what's new in your life, update your knowledge base, and prepare your morning suggestions. It only happens while your Mac is plugged in, and only if Sentient is still running in your menu bar. This quiet, on-device work is what keeps your Sentient alive and helpful.")
                 Text("Runs while your Mac rests.")
                     .font(.serif(11.5, weight: .regular)).italic()
                     .foregroundStyle(Theme.Ink.deepMuted)
@@ -72,7 +72,7 @@ struct SystemPane: View {
                 }
             }
         } message: {
-            Text("To stay helpful, your Sentient runs its on-device intelligence every night at 3 AM — and that can only happen if Sentient is already running. It's heavily optimized and stays out of your RAM and CPU the rest of the time.\n\nWe recommend leaving this on to keep your Sentient alive.")
+            Text("To stay helpful, your Sentient runs its on-device intelligence every night at 3 AM, and that can only happen if Sentient is already running. It's heavily optimized and stays out of your RAM and CPU the rest of the time.\n\nWe recommend leaving this on to keep your Sentient alive.")
         }
     }
 
@@ -81,14 +81,14 @@ struct SystemPane: View {
     private var privacyGroup: some View {
         SettingsGroup(label: "Privacy") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Sentient never collects any of your personal data — nor any AI analysis of it. Privacy is a core principle that extends to every part of Sentient, and the whole stack will always remain open source.")
+                SettingsProse("Sentient never collects any of your personal data, nor any AI analysis of it. Privacy is a core principle that extends to every part of Sentient, and the whole stack will always remain open source.")
                     .padding(.bottom, 6)
                 SettingToggleLine(title: "Share anonymous crash reports",
-                                  sub: "Privacy-friendly, structure-only reports that help us fix your bugs — never your content.",
+                                  sub: "Privacy-friendly, structure-only reports that help us fix your bugs; never your content.",
                                   isOn: $crashReportsEnabled)
                 SettingsHairline()
                 SettingToggleLine(title: "Share anonymous analytics",
-                                  sub: "A privacy-friendly ping that tells us how many people use Sentient — nothing more.",
+                                  sub: "A privacy-friendly ping that tells us how many people use Sentient; nothing more.",
                                   isOn: $analyticsEnabled)
             }
         }

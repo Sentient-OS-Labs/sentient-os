@@ -54,7 +54,7 @@ struct SourcesPane: View {
 
     var body: some View {
         SettingsPane(title: "Knowledge Sources.",
-                     whisper: "What Sentient reads — always locally, always yours.") {
+                     whisper: "What Sentient reads: always locally, always yours.") {
             VStack(alignment: .leading, spacing: 30) {
                 if !fdaGranted { fdaLine }
                 foldersGroup
@@ -90,11 +90,11 @@ struct SourcesPane: View {
 
     private var fdaLine: some View {
         VStack(alignment: .leading, spacing: 8) {
-            StatusLine(title: "Full Disk Access is off — WhatsApp, iMessage & Notes can't be read.",
+            StatusLine(title: "Full Disk Access is off, so WhatsApp, iMessage & Notes can't be read.",
                        health: .warn, note: "not granted", fixTitle: "Grant…") {
                 Permissions.openFullDiskAccessSettings()
             }
-            SettingsProse("Everything is still read locally — Full Disk Access is just how macOS lets Sentient open those databases. After granting, relaunch Sentient.")
+            SettingsProse("Everything is still read locally; Full Disk Access is just how macOS lets Sentient open those databases. After granting, relaunch Sentient.")
         }
     }
 
@@ -111,7 +111,7 @@ struct SourcesPane: View {
                         CustomRoots.remove(url)
                     }
                 }
-                SettingsChip(label: "+ Add Folder", on: false, dot: false) { chooseFolder() }
+                SettingsChip(label: "+ Add Folder", on: false, isAction: true) { chooseFolder() }
             }
         }
     }
@@ -137,7 +137,7 @@ struct SourcesPane: View {
     private var cloudGroup: some View {
         SettingsGroup(label: "Through Your ChatGPT") {
             VStack(alignment: .leading, spacing: 12) {
-                SettingsProse("Read through your own connectors — never our servers.")
+                SettingsProse("Read through your own connectors, never our servers.")
                 ChipFlow {
                     SettingsChip(label: "Gmail", on: gmailConnected && runGmail) { showGmailConnect = true }
                     SettingsChip(label: "Google Calendar", on: calendarConnected && runCalendar) { showCalendarConnect = true }

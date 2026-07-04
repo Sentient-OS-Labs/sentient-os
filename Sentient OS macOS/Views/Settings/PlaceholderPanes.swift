@@ -16,13 +16,13 @@ struct ProactivePanePlaceholder: View {
             VStack(alignment: .leading, spacing: 30) {
                 SettingsGroup(label: "Proactive Intelligence", badge: "coming soon") {
                     VStack(alignment: .leading, spacing: 10) {
-                        SettingsProse("Every morning, Sentient surfaces a few things worth doing — already done, waiting for your go. Tell it what you care about, and what to skip.")
+                        SettingsProse("Every morning, Sentient surfaces a few things worth doing, already done and waiting for your go. Tell it what you care about, and what to skip.")
                         SettingsFieldPreview(placeholder: "e.g. Don't give me suggestions about Chase Bank alerts.")
                     }
                 }
                 SettingsGroup(label: "Sidekick", badge: "coming soon") {
                     VStack(alignment: .leading, spacing: 14) {
-                        SettingsProse("Hold the shortcut key and just talk — \u{201C}finish this for me\u{201D} — and Sidekick acts on whatever you're looking at.")
+                        SettingsProse("Hold the shortcut key and just talk (\u{201C}finish this for me\u{201D}), and Sidekick acts on whatever you're looking at.")
                         HStack(spacing: 8) {
                             SettingsChip(label: "Right ⌘", on: true)
                             SettingsChip(label: "Right ⌥", on: false)

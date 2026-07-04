@@ -50,7 +50,7 @@ struct YourAIsPane: View {
     private var cloudSyncGroup: some View {
         SettingsGroup(label: "Cloud Sync") {
             SettingToggleLine(title: "Offer your knowledge base to your AIs",
-                              sub: "ChatGPT and Claude read it over MCP — no account, just a secret link, with a 30-day lease that cleans up after itself.",
+                              sub: "ChatGPT and Claude read it over MCP. No account, just a secret link with a 30-day lease that cleans up after itself.",
                               isOn: $enabled)
                 .disabled(busy || !loaded)
         }
@@ -117,7 +117,7 @@ struct YourAIsPane: View {
                     .buttonStyle(PressScaleStyle())
                     .disabled(busy)
                 }
-                SettingsProse("This link is your whole identity — there's no account behind it. Paste it into ChatGPT or Claude as a connector, and treat it like a password.")
+                SettingsProse("This link is your whole identity; there's no account behind it. Paste it into ChatGPT or Claude as a connector, and treat it like a password.")
                 HStack(spacing: 18) {
                     quietLink("How to connect your AIs") { openWindow(id: ConnectAIsView.windowID) }
                     quietLink("Copy the system prompt") {
@@ -131,7 +131,7 @@ struct YourAIsPane: View {
             Button("Cancel", role: .cancel) {}
             Button("Regenerate", role: .destructive) { regenerate() }
         } message: {
-            Text("The old link stops working immediately — every AI you've connected will need the new one. Do this if the link ever leaks.")
+            Text("The old link stops working immediately, and every AI you've connected will need the new one. Do this if the link ever leaks.")
         }
     }
 
@@ -184,7 +184,7 @@ struct YourAIsPane: View {
     }
 
     private var activityLine: String {
-        guard let stats else { return "No activity yet — connect an AI and ask it about you." }
+        guard let stats else { return "No activity yet. Connect an AI and ask it about you." }
         if stats.notesRead24h == 0 { return "Your AIs haven't read anything in the last day." }
         return "Your AIs read \(stats.notesRead24h) note\(stats.notesRead24h == 1 ? "" : "s") in the last 24 hours."
     }
@@ -193,7 +193,7 @@ struct YourAIsPane: View {
 
     private var localOnlyProse: some View {
         SettingsGroup(label: "Prefer fully offline?") {
-            SettingsProse("Your knowledge base is a plain markdown folder on this Mac — point Claude Code or any local AI at it directly. Sharing above is only for the AIs that live in the cloud.")
+            SettingsProse("Your knowledge base is a plain markdown folder on this Mac; point Claude Code or any local AI at it directly. Sharing above is only for the AIs that live in the cloud.")
         }
     }
 

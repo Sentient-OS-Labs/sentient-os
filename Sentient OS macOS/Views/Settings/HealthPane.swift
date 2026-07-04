@@ -29,7 +29,7 @@ struct HealthPane: View {
 
     var body: some View {
         SettingsPane(title: "Permissions & Health.",
-                     whisper: allGreen ? "All clear — your Sentient is healthy."
+                     whisper: allGreen ? "All clear. Your Sentient is healthy."
                                        : "Everything green means everything works.") {
             VStack(alignment: .leading, spacing: 30) {
                 permissionsGroup
@@ -139,7 +139,7 @@ struct HealthPane: View {
     private var dangerGroup: some View {
         SettingsGroup(label: "Danger Zone", badge: "coming soon") {
             VStack(alignment: .leading, spacing: 8) {
-                SettingsProse("Reset erases everything Sentient has learned — you'll return to onboarding and run the initial overnight processing again.")
+                SettingsProse("Reset erases everything Sentient has learned. You'll return to onboarding and run the initial overnight processing again.")
                 Text("Reset Sentient…")
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Color(red: 1.0, green: 0.45, blue: 0.45).opacity(0.85))

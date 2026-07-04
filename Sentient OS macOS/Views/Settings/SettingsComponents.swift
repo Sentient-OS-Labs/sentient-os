@@ -127,33 +127,42 @@ struct ChipFlow: Layout {
 
 /// A source/option pill — the connector form (the Analysis popover's chips, grown up a size).
 /// The tiny mint dot is the on-state; `detail` carries counts ("12 chats"). Pure action chips
-/// ("+ Add Folder") pass `dot: false` — they have no on/off to report.
+/// ("+ Add Folder") pass `isAction: true`: no status dot, a dashed border, and a slightly
+/// lifted fill, so they read as "do something" rather than as a source.
 struct SettingsChip: View {
     let label: String
     var detail: String? = nil
     let on: Bool
-    var dot: Bool = true
+    var isAction: Bool = false
     var action: (() -> Void)? = nil
 
     var body: some View {
         Button { action?() } label: {
             HStack(spacing: 7) {
-                if dot {
+                if !isAction {
                     Circle()
                         .fill(on ? Theme.Ink.mint : Theme.Ink.deepMuted.opacity(0.55))
                         .frame(width: 5, height: 5)
                 }
                 Text(label)
                     .font(.system(size: 12, weight: on ? .medium : .regular))
-                    .foregroundStyle(on ? Theme.Ink.statusInk : Theme.Ink.chipInk)
+                    .foregroundStyle(isAction ? Theme.Ink.bright : (on ? Theme.Ink.statusInk : Theme.Ink.chipInk))
                 if let detail {
                     Text(detail).font(.system(size: 10.5)).foregroundStyle(Theme.Ink.label)
                 }
             }
             .padding(.horizontal, 13).padding(.vertical, 7)
-            .background(on ? Theme.elevated : Color.clear, in: Capsule())
-            .overlay(Capsule().strokeBorder(on ? Color.white.opacity(0.16) : Theme.Ink.chipBorder,
-                                            lineWidth: 1))
+            .background(isAction ? Color.white.opacity(0.035) : (on ? Theme.elevated : Color.clear),
+                        in: Capsule())
+            .overlay {
+                if isAction {
+                    Capsule().strokeBorder(Color.white.opacity(0.18),
+                                           style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                } else {
+                    Capsule().strokeBorder(on ? Color.white.opacity(0.16) : Theme.Ink.chipBorder,
+                                           lineWidth: 1)
+                }
+            }
             .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
