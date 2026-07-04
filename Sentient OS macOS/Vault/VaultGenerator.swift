@@ -7,7 +7,7 @@
 //  markdown vault at "~/Sentient OS - Knowledge Base/": the model WRITES the .md files itself
 //  (file tools, sandbox-scoped to a staging dir), which sidesteps per-message output caps
 //  and makes usage-limit resume natural. The old vault is only replaced on success
-//  (staging → atomic swap). No codex = no cloud organize until the free tier ships.
+//  (staging → atomic swap). No codex = no cloud work — a ChatGPT subscription is a hard requirement (no Sentient-hosted fallback).
 //
 //  The prompt core is the product of a multi-cycle eval against real data: truth/
 //  attribution guardrails, source-trust tiers, ruthless synthesis, a root README portrait

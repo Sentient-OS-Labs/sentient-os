@@ -38,9 +38,10 @@ mirror → gift → proactive → wipe), byte-for-byte what the 3am scheduler ru
 
 ## Real cards vs the demo deck — `ForYouModel`
 
-The home has two modes, flipped by the dev "REAL FOR-YOU CARDS" toggle (`dev.proactive.realCards`):
+The home has two modes, flipped by the dev "REAL FOR-YOU CARDS" toggle (`dev.proactive.realCards`,
+ON by default since 2026-07-05):
 
-- **Real mode (✅ wired):** `beginVisit` builds the deck from the persisted proactive results — the
+- **Real mode (the default):** `beginVisit` builds the deck from the persisted proactive results — the
   welcome **`GiftLetter`** envelope first (sealed, wax-stamped; generated once from the user's own
   knowledge base), then one card per `PreparedAction` in `ProactiveResearch.latest()`
   (`Briefing(from:)` — method accent + `METHOD · TARGET` kicker, the `card_summary` body, the
@@ -51,7 +52,7 @@ The home has two modes, flipped by the dev "REAL FOR-YOU CARDS" toggle (`dev.pro
   editable:** the letter view's draft block is a `TextEditor` for real cards — Save persists the edit
   into `preparedContent` (both in-memory and in `ProactiveResearch.latest()`), so what the user edited
   is verbatim what fires.
-- **Demo mode (toggle OFF, the current default):** the hard-coded investor showcase deck
+- **Demo mode (toggle OFF — pitch mode):** the hard-coded investor showcase deck
   (`Briefing.demo` — Charles/EWOR · Anthos · AIM · SSN prep · Supabase · the welcome letter), playing
   the scripted `workLog` theater. Parked/alternate cards live commented at the bottom of
   `Briefing.swift` as a swap-in library.
@@ -100,6 +101,6 @@ a STOP button, and the notch glows alongside. (Doc: `Notch Magic/Notch Magic.md`
 
 ## Still demo / future
 
-The demo deck as the default (the real-cards toggle ships OFF) · the demo access-log/pending strings
-in the popovers when demo mode is on · the Analysis dot pulsing during a live morning run · the
+Scrubbing the demo deck before the repo goes public (it carries real investor names) · the demo
+access-log/pending strings in the popovers when demo mode is on · the Analysis dot pulsing during a live morning run · the
 home ⟷ takeover morph (today a cross-fade) · the richer menu bar.

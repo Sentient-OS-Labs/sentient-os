@@ -158,12 +158,13 @@ Cancellation is real: the awaiting Task's cancel (a card's STOP) terminates the 
 
 ## Where it surfaces
 
-- **The For You home (✅ wired):** with the dev "REAL FOR-YOU CARDS" toggle ON
-  (`dev.proactive.realCards`), the home deals real cards from `ProactiveResearch.latest()` — the
+- **The For You home (✅ wired, the DEFAULT since 2026-07-05):** the home deals real cards from
+  `ProactiveResearch.latest()` (`dev.proactive.realCards`, ON by default) — the
   welcome `GiftLetter` envelope first, then one card per `PreparedAction` (method accent + kicker,
   editable draft, the LLM-written fire button). Firing streams codex's live play-by-play into the
   card with a per-card STOP; success flies the card away and removes it from the persisted set.
-  Toggle OFF = the hard-coded investor demo deck. See `Home — Proactive Intelligence (For You).md`.
+  The dev toggle OFF = the hard-coded investor demo deck (pitch mode; scrubbed pre-launch). See
+  `Home — Proactive Intelligence (For You).md`.
 - **The dev cockpit:** DEV TOOLS → "proactive system" (PART 1) → "proactive RESEARCH + PREPARE"
   (PART 2) → the "PROACTIVE · EXECUTE" window (PART 3, real FIRE buttons) — plus "VIEW ACTION ITEMS"
   for the last judge run. Full detail tees to the console (`tail -f /tmp/sentient-dev.log`).
@@ -177,13 +178,13 @@ over the user's own knowledge base, no web/MCP) reads the whole vault and writes
 cross-life-patterns letter as `Gift from Sentient.md`; the app reads it back, persists it
 (`gift.latestLetter`), and deletes the file so nothing strays into the vault or the mirror.
 Generated ONCE by `ProactiveCycle` (best-effort — never fails the cycle), rendered as the sealed
-envelope card (`Briefing(fromGiftMarkdown:)`). The prompt is team-iterated in
-`Our_Stuff/Gift Card Prompt.md` — keep the two in sync.
+envelope card (`Briefing(fromGiftMarkdown:)`). The prompt lives in
+the code itself — `GiftLetter.prompt(vaultPath:)` is the source of truth (the old Our_Stuff scratch md is temporary).
 
 ## Not wired yet (next steps)
 
-- **The default experience** — the real-cards mode ships behind the dev toggle; flipping it to the
-  production default (and retiring the demo deck) is a launch decision.
+- **Retiring the demo deck** — real cards are the default now; deleting the hard-coded demo cards
+  (they carry real investor names) is a pre-launch checklist item.
 - **Consuming `proactive.instructions`** — the Settings → Proactive & Sidekick standing instructions
   are stored but not yet read by the judge/research prompts (the "prompt refinement" todo).
 - **Tier 1 reminders** — a scheduled macOS notification from a `reminder`/dated action

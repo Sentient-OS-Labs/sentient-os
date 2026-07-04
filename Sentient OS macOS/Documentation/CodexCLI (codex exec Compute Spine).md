@@ -5,7 +5,8 @@ One actor (`Cloud/CodexCLI.swift`), the spine EVERY cloud feature calls: knowled
 welcome gift letter, proactive intelligence, and every computer-use run (the command bar, Sidekick,
 and the executor's `computer` channel). It piggybacks on the user's own Codex CLI
 (their ChatGPT subscription pays). It is the app's ONLY cloud-model path — there is no
-direct-Anthropic-API route (deleted, along with `Secrets.swift`) and no free tier yet.
+direct-Anthropic-API route (deleted, along with `Secrets.swift`) and NO Sentient-hosted
+fallback: a ChatGPT subscription is a hard requirement of the product (decided 2026-07-05).
 Replaced `ClaudeCLI`/`claude -p` on June 11 (clean kill — same actor shape, same `Process`
 plumbing).
 
@@ -110,8 +111,8 @@ ChatGPT-plan limit message is still unverified — refine the markers during dog
   Code's `~/.claude/`). `--ephemeral` exists if a job should ever skip persistence; nothing
   uses it today because resume is worth more.
 - This spine is the ONLY cloud-model path in the app (the old direct-Anthropic-API fallback
-  and `Secrets.swift` were deleted June 11 — git history has them). No codex = no cloud
-  organize until the free tier ships.
+  and `Secrets.swift` were deleted June 11 — git history has them). No codex = no cloud work;
+  a ChatGPT subscription is a hard requirement — there is no free tier and never will be.
 
 ## Diagnostics
 

@@ -14,7 +14,8 @@
 //   - generate() async throws -> String   (reads the KB, runs Codex, reads back the letter, persists)
 //   - latest() -> String?                 (the last generated letter; nil if never run)
 //
-//  The prompt is iterated by the team in Our_Stuff/Gift Card Prompt.md — keep the two in sync.
+//  The prompt below IS the source of truth — it lives in code. (The old Our_Stuff scratch md is
+//  temporary and will be deleted.)
 //
 
 import Foundation
@@ -112,7 +113,7 @@ actor GiftLetter {
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    // MARK: The prompt (team-iterated in Our_Stuff/Gift Card Prompt.md — keep in sync)
+    // MARK: The prompt (the source of truth — it lives here in code)
 
     private static func prompt(vaultPath: String) -> String {
         """
