@@ -118,7 +118,7 @@ struct HealthPane: View {
                     StatusLine(title: "Full Disk Access",
                                health: fdaGranted ? .ok : .bad,
                                note: fdaGranted ? "granted" : "not granted",
-                               tip: "Lets Sentient read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac. Everything is read locally; nothing leaves your Mac.",
+                               tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac. Everything is read right here on your Mac; your data never leaves it.",
                                fixTitle: "Grant…") {
                         Permissions.openFullDiskAccessSettings()
                     }
@@ -140,7 +140,7 @@ struct HealthPane: View {
                 StatusLine(title: "Overnight wake",
                            health: daemon == .ready ? .ok : .bad,
                            note: daemonNote,
-                           tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient can work while you sleep. It only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
+                           tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep. It only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
                            fixTitle: "Set Up…") {
                     fixDaemon()
                 }
@@ -157,7 +157,7 @@ struct HealthPane: View {
                 StatusLine(title: "Microphone & Speech",
                            health: micSpeechHealth,
                            note: micSpeechNote,
-                           tip: "Lets Sidekick hear you and turn your words into text when you hold the shortcut key. Transcription happens on this Mac.",
+                           tip: "Lets Sidekick hear you and turn your words into text when you hold the shortcut key. Your voice is heard and transcribed on this Mac, never in the cloud.",
                            fixTitle: micSpeech == .notAsked ? "Allow…" : "Fix…") {
                     fixMicSpeech()
                 }
