@@ -24,16 +24,19 @@ accounts, nothing personal ever leaves the Mac.
 }
 ```
 
-`start()` has the **same two hard gates as Sentry**:
+`start()` has **two hard gates**, mirroring Sentry's shape:
 1. **RELEASE builds only** — a deliberate no-op in DEBUG, so a dev's day-to-day Debug runs never
    pollute real usage numbers. (Verify from a Release build — see below.)
-2. **The shared opt-OUT switch** — `CrashReporting.diagnosticsEnabled` (default ON). The single
-   "Share anonymous diagnostics" toggle in Settings gates BOTH Sentry and TelemetryDeck; flipping it
-   calls `Analytics.applyEnabledChange()` alongside `CrashReporting.applyEnabledChange()`.
+2. **Its OWN opt-OUT switch** — `Analytics.analyticsEnabled` (UserDefaults key `analyticsEnabled`,
+   default ON, unset-reads-true). The "Share anonymous analytics" toggle in **Settings → System**
+   gates TelemetryDeck only; crash reports keep their separate switch (`CrashReporting.
+   diagnosticsEnabled`, the "Share anonymous crash reports" toggle beside it). The two consents
+   split when the real Settings shipped, so a user can keep crash reports on while opting out of
+   usage analytics — or vice versa. Flipping the toggle calls `Analytics.applyEnabledChange()`.
 
 Identity is the **same anonymous per-install id** as Sentry (`CrashReporting.installID`, a random
-UUID in UserDefaults), passed as TelemetryDeck's `defaultUser` (it re-hashes it). One opt-out, one
-identity — never a second consent surface. Every signal also auto-stamps `model` (the on-device
+UUID in UserDefaults), passed as TelemetryDeck's `defaultUser` (it re-hashes it). One identity,
+two independent switches. Every signal also auto-stamps `model` (the on-device
 model file name) via `defaultParameters`; OS/app version/device come free from the SDK.
 
 ## The App ID — safe in the code
@@ -95,9 +98,9 @@ Because sends are Release-only, verify from a **Release build** (Debug sends not
 
 ## Files
 
-- `Analytics.swift` — `start()`, `signal(_:parameters:)`, `applyEnabledChange()`, the App ID constant.
+- `Analytics.swift` — `start()`, `signal(_:parameters:)`, `applyEnabledChange()`, the `analyticsEnabled` opt-out, the App ID constant.
 - `main.swift` — `Analytics.start()` in the `.app` branch.
-- `CrashReporting.swift` — the shared `diagnosticsEnabled` opt-out + `installID` identity (reused, not modified).
-- `Views/SettingsView.swift` — the shared toggle's `onChange` calls both `applyEnabledChange()`s.
+- `CrashReporting.swift` — the `installID` identity (shared) + Sentry's separate `diagnosticsEnabled` opt-out.
+- `Views/Settings/SystemPane.swift` — the two Privacy toggles; each `onChange` calls its own `applyEnabledChange()`.
 - The ~12 call sites in the table above.
 - SPM package `github.com/TelemetryDeck/SwiftSDK` (product `TelemetryDeck`), pinned up-to-next-major from 2.0.0.

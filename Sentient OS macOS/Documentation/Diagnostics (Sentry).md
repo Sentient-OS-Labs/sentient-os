@@ -24,8 +24,10 @@ Everything funnels through `CrashReporting` (`CrashReporting.swift`), a caseless
    **no debug bypass** (the old `startForDevTest` / dev-pane buttons were removed). To test the
    pipeline you build a Release app; Sentry then boots through the normal `start(.app)` path.
 2. **Opt-OUT switch, default ON.** `diagnosticsEnabled` (UserDefaults key `diagnosticsEnabled`,
-   treats unset as `true`). One "Share anonymous diagnostics" toggle in **Settings** gates **all**
-   reporting — crashes included. Flipping it live calls `applyEnabledChange()` (boots or `SentrySDK.close()`).
+   treats unset as `true`). The "Share anonymous crash reports" toggle in **Settings → System**
+   gates **all** Sentry reporting — crashes included. Flipping it live calls `applyEnabledChange()`
+   (boots or `SentrySDK.close()`). Product analytics (TelemetryDeck) has its OWN separate switch —
+   `analyticsEnabled`, the toggle beside it — see the Product Analytics doc.
 
 `main.swift` calls `CrashReporting.start(.app)` (GUI) / `.start(.wakeHelper)` (the root overnight
 helper) before anything else. Both are gated as above.

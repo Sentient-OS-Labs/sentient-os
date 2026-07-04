@@ -16,6 +16,7 @@ try await mirror.push()                // zip the vault + replace the mirror (ca
 let s = try await mirror.stats()       // {notesRead24h, toolCalls24h, lastAccess} for "Your AIs"
 try await mirror.deleteRemote()        // delete the cloud copy (keeps the token → stable URL)
 await mirror.disable()                 // opt out: flip OFF + delete remote, but KEEP the token (stable link)
+let u2 = try await mirror.regenerateToken()  // leak remediation: delete old copy, mint NEW token, re-push
 ```
 
 ## The single token
@@ -57,8 +58,13 @@ auto-push-after-KB-update, call `await Self.pushIfDirty()` from `VaultCloud.mark
 
 ## Turning the mirror on (today)
 
-The opt-in is "mint a token" — `enable()`. The real onboarding/Settings opt-in UI is Phase 5, so
-ahead of that the **DEV TOOLS** panel (`DevToolsView`) exposes, while the mirror is ON:
+The user-facing opt-in is **Settings → Your AIs** (`Views/Settings/YourAIsPane.swift`): the share
+toggle (ON = `enable()` + a first push; OFF = a confirm dialog, then `disable()`), the masked
+secret link with **Copy** and **Regenerate** (`regenerateToken()` — the remediation if a link ever
+leaks: old cloud copy deleted, new identity minted, re-pushed), live `stats()` activity, and the
+connect-guide / system-prompt links. The onboarding opt-in moment is still to build.
+
+The **DEV TOOLS** panel (`DevToolsView`) keeps its own controls, while the mirror is ON:
 - **MCP TOGGLE** — ON mints the token (if absent) + pushes the current vault; OFF deletes the cloud copy but **keeps the token**, so re-enabling reuses the same share link.
 - **Copy MCP Link** / **Copy System Prompt** — the share URL and the coached connector prompt to paste into ChatGPT/Claude.
 - **MCP SYNC** — force-push the current vault to the mirror (sync is a separate manual step now; see Sync above).
