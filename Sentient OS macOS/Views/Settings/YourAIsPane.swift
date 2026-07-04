@@ -28,6 +28,7 @@ struct YourAIsPane: View {
             VStack(alignment: .leading, spacing: 30) {
                 intro
                 cloudSyncGroup
+                    .padding(.top, 10)    // same breath as before Activity — the blurb block stands alone
                 if enabled && loaded {
                     heroButton
                         .padding(.top, -14)   // belongs to the Cloud Sync group, not floating between groups
