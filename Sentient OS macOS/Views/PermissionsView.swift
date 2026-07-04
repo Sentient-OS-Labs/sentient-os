@@ -116,7 +116,7 @@ struct PermissionsView: View {
     private func receiptLine(_ text: String) -> some View {
         Text(text)
             .font(.system(.caption2, design: .monospaced))
-            .foregroundStyle(text.hasPrefix("✓") ? .green : text.hasPrefix("✗") ? .red : Theme.secondary)
+            .foregroundStyle(text.hasPrefix("✓") ? Theme.Ink.green : text.hasPrefix("✗") ? .red : Theme.secondary)
             .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }

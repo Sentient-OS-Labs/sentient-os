@@ -132,7 +132,7 @@ struct BriefingCard: View {
                     let line = briefing.workLog[i]
                     Text(line)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(line.hasPrefix("✓") ? Theme.Ink.mint : .white.opacity(0.72))
+                        .foregroundStyle(line.hasPrefix("✓") ? Theme.Ink.green : .white.opacity(0.72))
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 if visible < briefing.workLog.count { BlinkingCursor(color: briefing.accent) }
@@ -156,7 +156,7 @@ struct BriefingCard: View {
     private var doneFace: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 24)).foregroundStyle(Theme.Ink.mint)
+                .font(.system(size: 24)).foregroundStyle(Theme.Ink.green)
             VStack(alignment: .leading, spacing: 5) {
                 Text(briefing.doneTitle)
                     .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
@@ -179,7 +179,7 @@ struct BriefingCard: View {
     static let welcomeGradient = LinearGradient(
         colors: [Color(red: 1.00, green: 0.37, blue: 0.43).opacity(0.55),
                  Color(red: 1.00, green: 0.76, blue: 0.44).opacity(0.40),
-                 Color(red: 0.28, green: 0.84, blue: 0.67).opacity(0.40),
+                 Theme.Ink.green.opacity(0.40),
                  Color(red: 0.36, green: 0.55, blue: 1.00).opacity(0.55)],
         startPoint: .topLeading, endPoint: .bottomTrailing)
 }

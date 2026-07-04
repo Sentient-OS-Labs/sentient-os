@@ -181,7 +181,7 @@ struct ProactiveExecuteView: View {
             switch m {
             case .gmail:    return ("GMAIL", Color(red: 1.00, green: 0.50, blue: 0.18))
             case .calendar: return ("CALENDAR", Color(red: 0.36, green: 0.55, blue: 1.00))
-            case .computer: return ("COMPUTER USE", Color(red: 0.28, green: 0.84, blue: 0.67))
+            case .computer: return ("COMPUTER USE", Theme.Ink.green)
             case .research: return ("RESEARCHED", Theme.secondary)
             }
         }()
@@ -193,7 +193,7 @@ struct ProactiveExecuteView: View {
     private func statusBadge(_ s: PreparedAction.Status) -> some View {
         let (label, color): (String, Color) = {
             switch s {
-            case .confirmed:  return ("CONFIRMED", Color(red: 0.40, green: 0.92, blue: 0.70))
+            case .confirmed:  return ("CONFIRMED", Theme.Ink.green)
             case .updated:    return ("UPDATED", Color(red: 1.00, green: 0.78, blue: 0.28))
             case .unverified: return ("UNVERIFIED", Theme.secondary)
             }
@@ -239,7 +239,7 @@ struct ProactiveExecuteView: View {
     }
 
     private func statusColor(_ s: String) -> Color {
-        if s.hasPrefix("✓") { return .green }
+        if s.hasPrefix("✓") { return Theme.Ink.green }
         if s.hasPrefix("✗") { return .red }
         if s.hasPrefix("⚠︎") { return .orange }
         return Theme.secondary

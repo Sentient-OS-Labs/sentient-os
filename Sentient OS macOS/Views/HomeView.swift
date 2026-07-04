@@ -118,7 +118,7 @@ struct HomeView: View {
             Text("Sentient OS")
                 .font(.system(size: 13.5, weight: .semibold)).foregroundStyle(.white)
             Spacer()
-            NavItem(title: "Analysis", dot: Theme.Ink.mint) { showAnalysis = true }
+            NavItem(title: "Analysis", dot: Theme.Ink.green) { showAnalysis = true }
                 .popover(isPresented: $showAnalysis) { analysisPopover }
             NavItem(title: "Your AIs") { showYourAIs = true }
                 .popover(isPresented: $showYourAIs) { yourAIsPopover }
@@ -756,7 +756,7 @@ private struct LetterView: View {
                                 Image(systemName: isDirty ? "square.and.arrow.down" : "checkmark").font(.system(size: 9.5))
                                 Text(isDirty ? "Save" : "Saved").font(.system(size: 11, weight: isDirty ? .semibold : .regular))
                             }
-                            .foregroundStyle(isDirty ? briefing.accent : Theme.Ink.mint)
+                            .foregroundStyle(isDirty ? briefing.accent : Theme.Ink.green)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -772,7 +772,7 @@ private struct LetterView: View {
                             Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 9.5))
                             Text(copied ? "Copied" : "Copy").font(.system(size: 11))
                         }
-                        .foregroundStyle(copied ? Theme.Ink.mint : Theme.Ink.bright)
+                        .foregroundStyle(copied ? Theme.Ink.green : Theme.Ink.bright)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

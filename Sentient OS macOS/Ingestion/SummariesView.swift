@@ -43,7 +43,7 @@ struct SummariesView: View {
             if let status {
                 Text(status)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(status.hasPrefix("✓") ? .green : status.hasPrefix("✗") ? .red : Theme.secondary)
+                    .foregroundStyle(status.hasPrefix("✓") ? Theme.Ink.green : status.hasPrefix("✗") ? .red : Theme.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 18).padding(.bottom, 8)
                     .textSelection(.enabled)

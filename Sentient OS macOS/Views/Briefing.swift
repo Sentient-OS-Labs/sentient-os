@@ -28,7 +28,7 @@ struct Briefing: Identifiable {
             switch self {
             case .meeting:  Color(red: 0.36, green: 0.55, blue: 1.00)   // cobalt
             case .overdue:  Color(red: 1.00, green: 0.50, blue: 0.18)   // overdue orange — hotter than amber
-            case .promise:  Theme.Ink.mint
+            case .promise:  Theme.Ink.green
             case .deadline: Color(red: 1.00, green: 0.42, blue: 0.45)   // ember
             case .plan:     Color(red: 0.72, green: 0.46, blue: 0.96)   // orchid
             case .welcome:  Theme.Ink.amber
@@ -145,7 +145,7 @@ struct Briefing: Identifiable {
         case .gmail:    return Color(red: 1.00, green: 0.42, blue: 0.45)   // ember
         case .calendar: return Color(red: 0.36, green: 0.55, blue: 1.00)   // cobalt
         case .computer: return Color(red: 0.30, green: 0.82, blue: 0.78)   // teal
-        case .research: return Theme.Ink.mint                              // mint
+        case .research: return Theme.Ink.green                              // mint
         }
     }
 

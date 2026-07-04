@@ -55,7 +55,7 @@ struct CodexSetupView: View {
             Button { Task { await codex.installCodex() } } label: {
                 buttonLabel("arrow.down.circle.fill", "Install Codex CLI", busy: codex.installing)
             }
-            .buttonStyle(.bordered).tint(.green)
+            .buttonStyle(.bordered).tint(Theme.Ink.green)
             .disabled(codex.installing)
 
             statusLine(codex.installStatus)
@@ -78,12 +78,12 @@ struct CodexSetupView: View {
                 Button { Task { await codex.confirmLogin() } } label: {
                     buttonLabel("checkmark.circle.fill", "Finished logging into codex", busy: false)
                 }
-                .buttonStyle(.borderedProminent).tint(.green)
+                .buttonStyle(.borderedProminent).tint(Theme.Ink.green)
             } else {
                 Button { codex.startLogin() } label: {
                     buttonLabel("person.crop.circle.badge.checkmark", "Log in to Codex", busy: false)
                 }
-                .buttonStyle(.bordered).tint(.green)
+                .buttonStyle(.bordered).tint(Theme.Ink.green)
                 .disabled(!codex.installed)
             }
             statusLine(codex.loginStatusLine)
@@ -105,7 +105,7 @@ struct CodexSetupView: View {
                 Button { Task { await codex.setupComputerUse() } } label: {
                     buttonLabel("cpu.fill", "Set up computer use", busy: codex.settingUpComputerUse)
                 }
-                .buttonStyle(.bordered).tint(.green)
+                .buttonStyle(.bordered).tint(Theme.Ink.green)
                 .disabled(codex.settingUpComputerUse || !codex.installed)
             }
             statusLine(codex.computerUseStatus)
@@ -123,15 +123,15 @@ struct CodexSetupView: View {
                 Text("\(number)")
                     .font(.callout.weight(.bold).monospacedDigit())
                     .frame(width: 26, height: 26)
-                    .background(Circle().fill(done ? Color.green.opacity(0.22) : Color.white.opacity(0.06)))
-                    .foregroundStyle(done ? .green : Theme.secondary)
+                    .background(Circle().fill(done ? Theme.Ink.green.opacity(0.22) : Color.white.opacity(0.06)))
+                    .foregroundStyle(done ? Theme.Ink.green : Theme.secondary)
                 Text(title).font(.callout.weight(.semibold)).foregroundStyle(.white)
                 Spacer()
                 Text(done ? "DONE" : "PENDING")
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(Capsule().fill((done ? Color.green : Theme.secondary).opacity(0.22)))
-                    .foregroundStyle(done ? .green : Theme.secondary)
+                    .background(Capsule().fill((done ? Theme.Ink.green : Theme.secondary).opacity(0.22)))
+                    .foregroundStyle(done ? Theme.Ink.green : Theme.secondary)
             }
             content()
         }
@@ -154,7 +154,7 @@ struct CodexSetupView: View {
         if let s {
             Text(s)
                 .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(s.hasPrefix("✓") ? .green : s.hasPrefix("✗") ? .red : Theme.secondary)
+                .foregroundStyle(s.hasPrefix("✓") ? Theme.Ink.green : s.hasPrefix("✗") ? .red : Theme.secondary)
                 .multilineTextAlignment(.leading).textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
         }

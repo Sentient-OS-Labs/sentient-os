@@ -27,39 +27,8 @@
 import SwiftUI
 import AppKit
 
-/// One-shot reader of the dev source-picker prefs (same keys as the @AppStorage below; defaults
-/// must match: folder toggles ON, DB sources OFF). RootView uses it for Analyze Now; this sheet
-/// uses it too. The @AppStorage copies in DevToolsView exist for SwiftUI reactivity.
-enum SourceSelection {
-    static var chatJIDs: Set<String> {
-        Set((UserDefaults.standard.string(forKey: "dbg.whatsapp.chats") ?? "")
-            .split(separator: ",").map(String.init))
-    }
-    static var imessageGUIDs: Set<String> {
-        Set((UserDefaults.standard.string(forKey: "dbg.imessage.chats") ?? "")
-            .split(separator: ",").map(String.init))
-    }
-
-    static func current(customRoots: [URL], fdaGranted: Bool) -> [RunSource] {
-        var s: [RunSource] = []
-        if bool("dbg.run.downloads", default: true) { s.append(.files(.downloads)) }
-        if bool("dbg.run.desktop", default: true) { s.append(.files(.desktop)) }
-        if bool("dbg.run.documents", default: true) { s.append(.files(.documents)) }
-        s.append(contentsOf: customRoots.map { .files(.custom($0)) })
-        if bool("dbg.run.whatsapp", default: false) && fdaGranted && WhatsAppSource.isInstalled && !chatJIDs.isEmpty {
-            s.append(.whatsapp(chatJIDs: chatJIDs))
-        }
-        if bool("dbg.run.imessage", default: false) && fdaGranted && !imessageGUIDs.isEmpty {
-            s.append(.imessage(chatGUIDs: imessageGUIDs))
-        }
-        if bool("dbg.run.notes", default: false) && fdaGranted { s.append(.notes) }
-        return s
-    }
-
-    private static func bool(_ key: String, default def: Bool) -> Bool {
-        (UserDefaults.standard.object(forKey: key) as? Bool) ?? def
-    }
-}
+// SourceSelection + CustomRoots moved to Sources/SourceSelection.swift when the real Settings
+// shipped — the selection stopped being a dev-only concern.
 
 /// Tracks which dev action is running + each action's latest status line. MainActor-isolated so a
 /// background run's `@Sendable` progress callback can update it safely.
@@ -81,7 +50,9 @@ struct DeviceJob: Identifiable {
 }
 
 struct DevToolsView: View {
-    @Binding var customRoots: [URL]
+    // Persistent custom folder roots (CustomRoots store) — shared with Settings → Knowledge Sources.
+    @AppStorage(CustomRoots.key) private var customRootsRaw = ""
+    private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
@@ -130,7 +101,7 @@ struct DevToolsView: View {
     @State private var mirrorBusy = false
 
     private var selectedSources: [RunSource] {
-        SourceSelection.current(customRoots: customRoots, fdaGranted: fdaGranted)
+        SourceSelection.current(fdaGranted: fdaGranted)
     }
     private var selectedChatJIDs: Set<String> {
         Set(selectedChatsCSV.split(separator: ",").map(String.init))
@@ -186,7 +157,7 @@ struct DevToolsView: View {
                 .font(.caption.weight(.bold)).tracking(2)
                 .frame(maxWidth: .infinity, minHeight: 40)
         }
-        .buttonStyle(.bordered).tint(.green)
+        .buttonStyle(.bordered).tint(Theme.Ink.green)
     }
 
     var body: some View {
@@ -331,7 +302,7 @@ struct DevToolsView: View {
             if let s = run.status[id] {
                 Text(s)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(s.hasPrefix("✓") ? .green : s.hasPrefix("✗") ? .red : Theme.secondary)
+                    .foregroundStyle(s.hasPrefix("✓") ? Theme.Ink.green : s.hasPrefix("✗") ? .red : Theme.secondary)
                     .multilineTextAlignment(.center).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -409,12 +380,12 @@ struct DevToolsView: View {
                 }
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
-            .buttonStyle(.bordered).tint(.green)
+            .buttonStyle(.bordered).tint(Theme.Ink.green)
             .disabled(deviceJob != nil || run.busy != nil || (Self.modelPath == nil && !((gmailConnected && runGmail) || (calendarConnected && runCalendar))))
             if let s = run.status[id] {
                 Text(s)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(s.hasPrefix("✓") ? .green : s.hasPrefix("✗") ? .red : Theme.secondary)
+                    .foregroundStyle(s.hasPrefix("✓") ? Theme.Ink.green : s.hasPrefix("✗") ? .red : Theme.secondary)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -529,7 +500,7 @@ struct DevToolsView: View {
                 sourceChip("Documents", selected: runDocuments) { runDocuments.toggle() }
                 ForEach(customRoots, id: \.self) { url in
                     sourceChip(url.lastPathComponent, selected: true, removable: true) {
-                        customRoots.removeAll { $0 == url }
+                        CustomRoots.remove(url)
                     }
                 }
                 chooseFolderChip
@@ -657,7 +628,7 @@ struct DevToolsView: View {
         panel.prompt = "Add"
         panel.message = "Add a folder for Sentient OS to analyze."
         guard panel.runModal() == .OK else { return }
-        for url in panel.urls where !customRoots.contains(url) { customRoots.append(url) }
+        for url in panel.urls { CustomRoots.add(url) }
     }
 
     // MARK: More (legacy + FDA + reset)
@@ -685,7 +656,7 @@ struct DevToolsView: View {
                         .buttonStyle(.bordered)
                         if let resetResult {
                             Text(resetResult).font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(resetResult.hasPrefix("✓") ? .green : .red)
+                                .foregroundStyle(resetResult.hasPrefix("✓") ? Theme.Ink.green : .red)
                         }
                     }
 
@@ -740,12 +711,12 @@ struct DevToolsView: View {
                     Text(mirrorEnabled ? "ON" : "OFF")
                         .font(.caption2.weight(.bold))
                         .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Capsule().fill((mirrorEnabled ? Color.green : Theme.secondary).opacity(0.22)))
-                        .foregroundStyle(mirrorEnabled ? .green : Theme.secondary)
+                        .background(Capsule().fill((mirrorEnabled ? Theme.Ink.green : Theme.secondary).opacity(0.22)))
+                        .foregroundStyle(mirrorEnabled ? Theme.Ink.green : Theme.secondary)
                 }
                 .frame(maxWidth: .infinity, minHeight: 40)
             }
-            .buttonStyle(.bordered).tint(mirrorEnabled ? .green : Theme.secondary)
+            .buttonStyle(.bordered).tint(mirrorEnabled ? Theme.Ink.green : Theme.secondary)
             .disabled(mirrorBusy)
 
             if mirrorEnabled, let url = mirrorURL {
@@ -796,7 +767,7 @@ struct DevToolsView: View {
             if let mirrorStatus {
                 Text(mirrorStatus)
                     .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(mirrorStatus.hasPrefix("✓") ? .green : mirrorStatus.hasPrefix("✗") ? .red : Theme.secondary)
+                    .foregroundStyle(mirrorStatus.hasPrefix("✓") ? Theme.Ink.green : mirrorStatus.hasPrefix("✗") ? .red : Theme.secondary)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
@@ -877,17 +848,12 @@ struct DevToolsView: View {
         .padding(14).frame(maxWidth: 460).glassCard()
     }
 
-    /// Factory reset — wipe EVERY pointer + summary (the iterative cycle store), the knowledge base
-    /// (the vault), AND every persisted proactive trace (decisions, prepared cards, the welcome gift),
-    /// so the next "start / resume" run is a fresh first run that rebuilds everything from scratch and
-    /// the home's "For You" deck comes back empty. The deliberate, separate alternative to the (now
-    /// non-destructive) start button.
+    /// Factory reset — the shared FactoryReset wipe (cycle store + knowledge base + proactive
+    /// traces + lifetime counters), so the next "start / resume" run is a fresh first run and the
+    /// home's "For You" deck comes back empty. Same code path as Settings → Reset Sentient.
     @MainActor
     private func runReset() async {
-        await CycleStore.shared.wipeEverything()
-        try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
-        ProactiveCycle.resetAll()
-        Log("DevTools: RESET — wiped the cycle store + the knowledge base + proactive cards (\(VaultGenerator.vaultRoot.lastPathComponent))")   // B7: folder name, not the home path
+        await FactoryReset.run()
         let c = await CycleStore.shared.counts()
         resetResult = "✓ reset — cycle store + knowledge base + proactive cards wiped (notes \(c.notes))"
     }

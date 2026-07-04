@@ -4,11 +4,13 @@
 //
 //  TelemetryDeck integration — the app's privacy-safe PRODUCT analytics (how many people use the app,
 //  how far they get in onboarding, which features actually fire). The twin of CrashReporting.swift
-//  (Sentry, which is crashes/errors) and it deliberately reuses that file's two gates and identity so
-//  there is ONE opt-out and ONE anonymous identity, never a second consent surface:
+//  (Sentry, which is crashes/errors). Two gates, mirroring Sentry's:
 //    1. RELEASE builds only — a no-op in DEBUG, so a dev's day-to-day Debug runs never pollute the
 //       real usage numbers. Verify the pipeline from a Release build (same rule as Sentry).
-//    2. The shared opt-OUT switch — `CrashReporting.diagnosticsEnabled` (default ON) gates everything.
+//    2. Its OWN opt-OUT switch — `analyticsEnabled` (default ON), the "Share anonymous analytics"
+//       toggle in Settings → System. Crash reports keep their separate switch (CrashReporting's
+//       `diagnosticsEnabled`) — the two consents split when the real Settings shipped, so a user
+//       can keep crash reports on while opting out of usage analytics (or vice versa).
 //  Identity is the same anonymous per-install UUID (`CrashReporting.installID`); TelemetryDeck hashes
 //  it again on-device and once more on their server, and stores no PII and no IP address by design —
 //  so this upholds the Privacy Constitution (no accounts, nothing personal leaves the Mac). Signals
@@ -34,15 +36,27 @@ enum Analytics {
 
     private static var started = false
 
+    // MARK: - Opt-out gate
+
+    private static let analyticsKey = "analyticsEnabled"
+
+    /// The opt-OUT switch: default ON, gates all TelemetryDeck sends. Treats an unset key as ON
+    /// (a bare `bool(forKey:)` reads a missing key as false → would wrongly read as opted out).
+    nonisolated static var analyticsEnabled: Bool {
+        let d = UserDefaults.standard
+        if d.object(forKey: analyticsKey) == nil { return true }
+        return d.bool(forKey: analyticsKey)
+    }
+
     // MARK: - Boot
 
-    /// Boot TelemetryDeck for the GUI app — Release-only, and only if diagnostics are on. A deliberate
+    /// Boot TelemetryDeck for the GUI app — Release-only, and only if analytics are on. A deliberate
     /// no-op in DEBUG and while the App ID is still the placeholder. Called from main.swift's `.app`
     /// branch (NOT the root wake-helper — the privileged path sends no analytics). Idempotent.
     static func start() {
         guard !started else { return }
-        guard CrashReporting.diagnosticsEnabled else {
-            Log("Analytics: diagnostics opted out — TelemetryDeck disabled")
+        guard analyticsEnabled else {
+            Log("Analytics: analytics opted out — TelemetryDeck disabled")
             return
         }
         #if DEBUG
@@ -65,23 +79,23 @@ enum Analytics {
 
     /// Send one product event. Guard-railed to structure only — a dotted name plus count/enum/version
     /// parameters, NEVER user content (TelemetryDeck stores no PII; same clean-at-source rule as
-    /// diagnostics). No-op until started and whenever diagnostics are opted out.
+    /// diagnostics). No-op until started and whenever analytics are opted out.
     static func signal(_ name: String, parameters: [String: String] = [:]) {
-        guard started, CrashReporting.diagnosticsEnabled else { return }
+        guard started, analyticsEnabled else { return }
         TelemetryDeck.signal(name, parameters: parameters)
     }
 
     // MARK: - Opt-out
 
-    /// React to a mid-session flip of the shared "Share anonymous diagnostics" switch (Settings). On →
+    /// React to a mid-session flip of the "Share anonymous analytics" switch (Settings → System). On →
     /// boot; off → latch off so nothing more is sent (TelemetryDeck has no explicit teardown, and the
     /// per-signal gate already blocks sends the instant the switch is off).
     static func applyEnabledChange() {
-        if CrashReporting.diagnosticsEnabled {
+        if analyticsEnabled {
             start()
         } else {
             started = false
-            Log("Analytics: diagnostics turned off — TelemetryDeck silenced")
+            Log("Analytics: analytics turned off — TelemetryDeck silenced")
         }
     }
 }

@@ -51,14 +51,15 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1100, height: 720)
 
-        // Settings — its own window, opened from the home's top-bar gear.
+        // Settings — its own window, opened from the home's top-bar gear. Two-pane layout
+        // (sidebar + pane), so it wants a wider canvas than the old single-column placeholder.
         Window("", id: SettingsView.windowID) {
             SettingsView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 560, height: 620)
+        .defaultSize(width: 940, height: 660)
 
         // Connect your AIs — opened by the glowing CTA in the Your AIs popover (setup guide is
         // a deferred stub for now).

@@ -56,8 +56,8 @@ struct OvernightDevView: View {
         VStack(alignment: .leading, spacing: 9) {
             Text("STATUS").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
             statusRow("Root helper", Self.helperText(helperStatus), Self.helperColor(helperStatus))
-            statusRow("Launch at login", loginOn ? "on" : "off", loginOn ? .green : .secondary)
-            statusRow("Scheduler", schedulerOn ? appState.scheduler.statusLine : "off", schedulerOn ? .green : .secondary)
+            statusRow("Launch at login", loginOn ? "on" : "off", loginOn ? Theme.Ink.green : .secondary)
+            statusRow("Scheduler", schedulerOn ? appState.scheduler.statusLine : "off", schedulerOn ? Theme.Ink.green : .secondary)
             statusRow("Auto-enable", autoEnableShort, appState.scheduler.needsSchedulerSetup ? .orange : .secondary)
         }
         .padding(16).frame(maxWidth: .infinity, alignment: .leading)
@@ -88,7 +88,7 @@ struct OvernightDevView: View {
                 .buttonStyle(.borderedProminent)
                 Button("Open System Settings") { WakeHelperClient.shared.openLoginItemsSettings() }
                 if helperStatus == .enabled {
-                    Label("approved", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.caption)
+                    Label("approved", systemImage: "checkmark.circle.fill").foregroundStyle(Theme.Ink.green).font(.caption)
                 }
             }
         }
@@ -240,7 +240,7 @@ struct OvernightDevView: View {
     }
     private static func helperColor(_ s: SMAppService.Status) -> Color {
         switch s {
-        case .enabled:          return .green
+        case .enabled:          return Theme.Ink.green
         case .requiresApproval: return .orange
         default:                return .red
         }

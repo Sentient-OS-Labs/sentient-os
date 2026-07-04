@@ -15,7 +15,10 @@ struct RootView: View {
     @Environment(AppState.self) private var appState
     @State private var isProcessing = false
     @State private var showDevTools = false
-    @State private var customRoots: [URL] = []   // session-only custom folders (dev picker)
+    // Persistent custom folder roots (CustomRoots store) — added in Settings or Dev Tools,
+    // watched here so Analyze Now and the Analysis popover react to edits from any window.
+    @AppStorage(CustomRoots.key) private var customRootsRaw = ""
+    private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
     @AppStorage("dev.proactive.realCards") private var realCards = false   // real cards + full-cycle Analyze Now
     // Cloud sources — same flags the scheduler reads, so Analyze Now processes exactly what an
@@ -28,9 +31,9 @@ struct RootView: View {
     // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
     private static let modelPath = ModelLocator.resolve()
 
-    /// The sources Analyze Now will process — the dev picker's selection (folders + DB sources).
+    /// The sources Analyze Now will process — the shared selection (folders + DB sources).
     private var selectedSources: [RunSource] {
-        SourceSelection.current(customRoots: customRoots, fdaGranted: fdaGranted)
+        SourceSelection.current(fdaGranted: fdaGranted)
     }
 
     var body: some View {
@@ -55,7 +58,7 @@ struct RootView: View {
         }
         .frame(minWidth: 1040, minHeight: 800)
         .sheet(isPresented: $showDevTools) {
-            DevToolsView(customRoots: $customRoots)
+            DevToolsView()
         }
         .onChange(of: showDevTools) { _, open in
             if !open { fdaGranted = Permissions.hasFullDiskAccess() }   // may have changed in the sheet
