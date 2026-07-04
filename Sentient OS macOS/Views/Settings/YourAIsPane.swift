@@ -81,20 +81,22 @@ struct YourAIsPane: View {
 
     private var cloudSyncGroup: some View {
         SettingsGroup(label: "Cloud Sync") {
+            // A custom binding, NOT $enabled + onChange: the setter fires only when the USER flips
+            // the control, so programmatic `enabled =` writes can't re-trigger the confirm flow.
+            // (The old onChange guard checked `busy`, but turnOff() cleared `busy` in the same
+            // transaction as `enabled = false` — onChange then read busy == false, mistook the
+            // write for a user flip, and re-showed the dialog forever.)
             SettingToggleLine(title: "Offer your knowledge base to your AIs",
                               sub: "ChatGPT and Claude read it over MCP. No account, just a private link that only you hold.",
-                              isOn: $enabled)
+                              isOn: Binding(
+                                  get: { enabled },
+                                  set: { requested in
+                                      if requested { turnOn() } else { confirmOff = true }
+                                  }))
                 .disabled(busy || !loaded)
         }
-        .onChange(of: enabled) { was, now in
-            guard loaded, !busy else { return }
-            if now { turnOn() } else if was {
-                enabled = true                     // hold until the user confirms the delete
-                confirmOff = true
-            }
-        }
         .alert("Stop sharing your knowledge base?", isPresented: $confirmOff) {
-            Button("Keep Sharing", role: .cancel) {}
+            Button("Keep Sharing", role: .cancel) {}       // switch never changed — stays on
             Button("Stop & Delete Cloud Copy", role: .destructive) { turnOff() }
         } message: {
             Text("The cloud copy is deleted immediately and your AIs lose access. Your knowledge base stays safe on this Mac, and turning sharing back on restores the same link.")
@@ -102,6 +104,7 @@ struct YourAIsPane: View {
     }
 
     private func turnOn() {
+        enabled = true                                     // optimistic — the switch answers instantly
         busy = true; errorLine = nil
         Task {
             do {
