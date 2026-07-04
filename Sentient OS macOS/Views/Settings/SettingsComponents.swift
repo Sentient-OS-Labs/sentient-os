@@ -28,7 +28,7 @@ struct SettingsPane<Content: View>: View {
                 if let whisper {
                     Text(whisper)
                         .font(.serif(12.5, weight: .regular)).italic()
-                        .foregroundStyle(Theme.Ink.body)
+                        .foregroundStyle(.white.opacity(0.72))
                         .padding(.top, 7)
                 }
                 content
