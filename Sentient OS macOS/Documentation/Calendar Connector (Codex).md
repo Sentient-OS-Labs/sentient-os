@@ -97,6 +97,6 @@ the proactive fetch) — calendar data is small and structured. The **write** (e
 
 ## Not yet / next
 - **Dev-only surface** (the `dbg.calendar.*` prefs + the chip in DevToolsView), exactly like Gmail. The
-  real onboarding/connectors UI is Phase 5.
-- **Scheduler wiring:** when the real proactive trigger lands, it should fetch the calendar context
-  **once** and pass it to both PART 1 and PART 2 (the two dev buttons each fetch independently today).
+  connect sheet is also reachable from the home's Analysis popover and Settings → Knowledge Sources; the dedicated onboarding moment is still to build.
+- ~~Scheduler wiring~~ ✅ done — `ProactiveCycle` fetches the calendar context **once** and hands it
+  to both PART 1 and PART 2 (only the two standalone dev buttons still fetch independently).

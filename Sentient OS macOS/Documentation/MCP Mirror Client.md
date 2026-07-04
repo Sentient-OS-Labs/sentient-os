@@ -84,6 +84,8 @@ file is the shared generic-password helper (service `ai.sentient-os.app`).
 
 ## Self-test
 
+*(Recreate the harness first — see `Self-Testing (Eval Harness).md`; `Self Tests - Temp/` is kept empty.)*
+
 ```sh
 SENTIENT_SELFTEST=mirror "<app>/Contents/MacOS/Sentient OS"          # against production
 SENTIENT_MIRROR_BASE=http://127.0.0.1:8901 SENTIENT_SELFTEST=mirror …  # against a local server

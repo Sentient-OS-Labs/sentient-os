@@ -91,5 +91,7 @@ same `ChatStorage.sqlite`. Nothing to build; verify with a business-linked accou
 
 ## Self-test
 
+*(Self-test modes are scaffolding — `Self Tests - Temp/` is kept empty; recreate the harness per `Self-Testing (Eval Harness).md` first.)*
+
 `SENTIENT_SELFTEST=whatsapp` dumps the windows the model would see (chats, sender labels, group
 roll-ups) for eyeballing.

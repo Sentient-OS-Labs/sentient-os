@@ -46,7 +46,7 @@ the user wrote; the knowledge-base-worthiness framing fits). The model sees
 `"Apple Notes · <folder> · <title>"` as the display path + the note text capped at 8k chars
 (`maxContentChars`, same cap as files). No dedicated notes prompt until dumps prove verdicts need one.
 
-## Self-tests (`Self Tests - Temp/`, need FDA on the spawning terminal)
+## Self-tests (recreate per `Self-Testing (Eval Harness).md` — `Self Tests - Temp/` is kept empty; need FDA on the spawning terminal)
 
 - `SENTIENT_SELFTEST=notesdecode` — decode-rate stats on the real store (no model, no content).
 - `SENTIENT_SELFTEST=notes` — full dump through the model (`SENTIENT_SELFTEST_N` to limit).

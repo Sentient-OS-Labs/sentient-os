@@ -84,7 +84,7 @@ Self-tests launch the **Debug binary directly**, not through Xcode's Run.
    ```
    It runs the test, prints to stdout (and `/tmp/sentient-dev.log` via `Log()`), and `exit(0)`s before
    any window opens. Notifications are auto-silenced while `SENTIENT_SELFTEST` is set (`Notify.swift`).
-3. **Inspect, iterate, then DELETE the test** when the behavior is nailed (Phase-6 "Release strip"
+3. **Inspect, iterate, then DELETE the test** when the behavior is nailed (the "Release strip"
    enforces an empty folder; don't let scaffolding rot).
 
 ## Past modes you can recreate on demand

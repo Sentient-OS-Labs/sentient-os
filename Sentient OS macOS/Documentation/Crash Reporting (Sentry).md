@@ -8,8 +8,8 @@ traces additionally need the Release dSYM-upload build phase (below).
 
 ## How it boots
 
-`main.swift` calls `CrashReporting.start(_:)` first thing — in **both** process roles, before any
-other code runs:
+`App/main.swift` calls `CrashReporting.start(_:)` first thing — in **both** process roles, before
+any other code runs:
 
 ```swift
 if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
@@ -17,6 +17,7 @@ if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
     WakeHelper.run()
 } else {
     CrashReporting.start(.app)          // the normal GUI app
+    Analytics.start()                   // product analytics (TelemetryDeck) — GUI app only
     SentientOSApp.main()
 }
 ```
@@ -26,7 +27,9 @@ crash is told apart from a UI crash in the dashboard.
 
 `start(_:)` boots Sentry with everything on: native crash handler + attached stack traces,
 app-hang ("beachball") detection, release-health sessions, 100% trace sampling, and trace-lifecycle
-profiling. It's idempotent (guarded by `started`) and a no-op if the DSN is blank.
+profiling. It's idempotent (guarded by `started`), a no-op if the DSN is blank, and — the two hard
+gates — a no-op in DEBUG and whenever the `diagnosticsEnabled` opt-out is off (the full gate story:
+`Diagnostics (Sentry).md`).
 
 ## The DSN — safe in the code
 
@@ -44,16 +47,17 @@ handled by Sentry's inbound filters + rate limits, and the DSN rotates in one cl
 Every `Log()` call (Log.swift) also feeds a Sentry breadcrumb, so a crash report arrives carrying
 the recent log trail that led to it. No-op until Sentry has started.
 
-## Dev verification (DEBUG only)
+## Verifying the pipeline
 
-DEV TOOLS → **More** → **SENTRY** row:
-- **Send test event** → `CrashReporting.sendTestEvent()`, a non-fatal event; appears in Issues in
-  seconds. Good for confirming the pipeline + breadcrumbs.
-- **Force crash** → `CrashReporting.forceCrash()`, a hard crash. The report uploads on the **next
-  launch** (that's how native crash capture works).
+Sentry **never initializes in DEBUG** — there is no debug bypass, and the old dev-pane test
+buttons (`sendTestEvent`/`forceCrash`) were removed when that gate landed. To verify: build
+**Release**, run the app, and exercise a real path (any structured event, or a forced crash via a
+temporary `fatalError`). The pipeline was proven end-to-end on real hardware — see
+`Diagnostics (Sentry).md`.
 
 ⚠️ **Sentry does not capture crashes while the Xcode debugger is attached** — LLDB eats the signal.
-To test a crash, run the built `.app` **standalone** (not ⌘R), crash, then relaunch.
+To test a crash, run the built `.app` **standalone** (not ⌘R), crash, then relaunch (the report
+uploads on the next launch — that's how native crash capture works).
 
 ## Production stack traces — the dSYM upload
 
@@ -92,9 +96,8 @@ comment there says why.
 
 ## Files
 
-- `CrashReporting.swift` — init, breadcrumbs, `capture(_:)`, dev test helpers.
-- `main.swift` — `start(.app)` / `start(.wakeHelper)`.
-- `Log.swift` — breadcrumb tee.
-- `Views/Dev/DevToolsView.swift` — the DEBUG SENTRY test buttons.
+- `Diagnostics/CrashReporting.swift` — init, gates, `captureEvent`, breadcrumbs, `capture(_:)`, the scrubber.
+- `App/main.swift` — `start(.app)` / `start(.wakeHelper)`.
+- `Diagnostics/Log.swift` — breadcrumb tee.
 - `.sentryclirc` (gitignored) — Auth Token + org/project for dSYM upload.
 - Build phase **"Upload dSYMs to Sentry"** in the app target (Release-only).

@@ -59,11 +59,12 @@ existing B7 "length, not the command text" log — same discipline.
 | `Engine.reloaded` | `Ingestion/IterativeRun.swift` | GPU-wedge self-heal fired (`reason`: preemptive/reactive) |
 | `Scheduler.overnightStarted` / `.overnightCompleted` | `Scheduling/OvernightScheduler.swift` | 3am run began / finished |
 | `Scheduler.gated` | `Scheduling/OvernightScheduler.swift` | Nightly run skipped (`reason`: battery/lowPower/thermal) |
+| `Scheduler.autoEnabled` | `Scheduling/OvernightScheduler.swift` | The 18h auto-enable flipped the scheduler on |
 | `KnowledgeBase.built` / `.updated` / `.failed` | `Proactive/ProactiveCycle.swift` | First build / incremental update / error |
 | `Proactive.decided` | `Proactive/ProactiveCycle.swift` | # things-worth-doing found |
 | `Proactive.prepared` | `Proactive/ProactiveCycle.swift` | # survived research (+ # dropped) |
 | `Proactive.actionFired` | `Proactive/ProactiveExecutor.swift` | A user fired an action — `method` + `outcome` (the headline number) |
-| `Mirror.enabled` / `.pushed` / `.disabled` | `MirrorClient.swift` | MCP mirror lifecycle |
+| `Mirror.enabled` / `.pushed` / `.disabled` / `.regenerated` | `Cloud/MirrorClient.swift` | MCP mirror lifecycle |
 | `Command.submitted` | `Notch Magic/CommandCoordinator.swift` | "Do stuff for me" bar used (`source` + `mode`) |
 | `Source.connected` | `Views/{Gmail,Calendar}ConnectSheet.swift` | A source hooked up (`source`) |
 
@@ -98,9 +99,9 @@ Because sends are Release-only, verify from a **Release build** (Debug sends not
 
 ## Files
 
-- `Analytics.swift` — `start()`, `signal(_:parameters:)`, `applyEnabledChange()`, the `analyticsEnabled` opt-out, the App ID constant.
-- `main.swift` — `Analytics.start()` in the `.app` branch.
-- `CrashReporting.swift` — the `installID` identity (shared) + Sentry's separate `diagnosticsEnabled` opt-out.
+- `Diagnostics/Analytics.swift` — `start()`, `signal(_:parameters:)`, `applyEnabledChange()`, the `analyticsEnabled` opt-out, the App ID constant.
+- `App/main.swift` — `Analytics.start()` in the `.app` branch.
+- `Diagnostics/CrashReporting.swift` — the `installID` identity (shared) + Sentry's separate `diagnosticsEnabled` opt-out.
 - `Views/Settings/SystemPane.swift` — the two Privacy toggles; each `onChange` calls its own `applyEnabledChange()`.
 - The ~12 call sites in the table above.
 - SPM package `github.com/TelemetryDeck/SwiftSDK` (product `TelemetryDeck`), pinned up-to-next-major from 2.0.0.

@@ -109,6 +109,7 @@ live and reused by the core: `Engine` + `Triage` (`Engine/`), `ProcessingView`, 
 (`DatabaseView` was later replaced by the real Knowledge window — `Views/Knowledge/`.)
 
 ## Verify
+*(These modes are scaffolding — recreate the harness per `Self-Testing (Eval Harness).md`; `Self Tests - Temp/` is kept empty.)*
 `SENTIENT_SELFTEST=fileiter` — deterministic, no model/codex: ItemKey tiebreak · the newer-than-mark
 partition (twin at the boundary) · CycleStore round-trip · `FilesConnector.buckets` skip/keep.
 `SENTIENT_SELFTEST=notesiter` — runs the real `NotesConnector` against the live Notes DB (structural

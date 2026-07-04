@@ -57,7 +57,8 @@ that whole choreography, B1, is now deleted.)*
 ## Progress
 
 Progress is the filesystem itself: a 2s poll of the staging dir's `.md` count →
-`Progress.writing(notes:)` → VaultView's "N notes written…". No CLI stream parsing.
+`Progress.writing(notes:)` → the caller's status line (Dev Tools shows "… writing N notes"; the
+home's takeover shows the preparing phase). No CLI stream parsing.
 
 ## The prompt
 
@@ -77,6 +78,8 @@ writes it ONCE, the first time a knowledge base exists; the home renders it as t
 card. See `Proactive Intelligence (Judge).md` §The welcome gift.
 
 ## Self-test
+
+*(Recreate the harness first — see `Self-Testing (Eval Harness).md`; `Self Tests - Temp/` is kept empty.)*
 
 ```sh
 SENTIENT_SELFTEST=vault SENTIENT_SELFTEST_N=8 "<app>/Contents/MacOS/Sentient OS"   # tiny subset

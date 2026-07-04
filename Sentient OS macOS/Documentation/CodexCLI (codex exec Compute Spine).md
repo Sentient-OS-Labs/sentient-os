@@ -123,6 +123,8 @@ proactive / computer / …) so a broken spine is attributable per feature.
 
 ## Self-test
 
+*(Recreate the harness first — see `Self-Testing (Eval Harness).md`; `Self Tests - Temp/` is kept empty.)*
+
 ```sh
 SENTIENT_SELFTEST=codexcli "<app>/Contents/MacOS/Sentient OS"
 # binary → availability → SPINE_OK run → envelope (session id, items, ms, token triple)
