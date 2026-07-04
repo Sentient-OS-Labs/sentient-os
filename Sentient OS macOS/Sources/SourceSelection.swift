@@ -45,6 +45,10 @@ enum CustomRoots {
 
 /// One-shot reader of the source-picker prefs (same keys as the @AppStorage copies in the views;
 /// defaults must match: folder toggles ON, DB sources OFF).
+///
+/// ⚠️ The `dbg.*` prefix is HISTORICAL — these ARE the production preference keys (Settings, the
+/// home popover, Dev Tools, and the 3am run all share them). Never rename them casually: they're
+/// persisted on user machines, and a rename without a migration silently resets everyone's setup.
 enum SourceSelection {
     static var chatJIDs: Set<String> {
         Set((UserDefaults.standard.string(forKey: "dbg.whatsapp.chats") ?? "")
