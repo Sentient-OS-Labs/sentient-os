@@ -23,7 +23,7 @@ struct YourAIsPane: View {
     @State private var errorLine: String?
 
     var body: some View {
-        SettingsPane(title: "Your AIs.",
+        SettingsPane(title: "ChatGPT & Claude.",
                      whisper: "Your knowledge base, offered to every AI you already use.") {
             VStack(alignment: .leading, spacing: 30) {
                 intro

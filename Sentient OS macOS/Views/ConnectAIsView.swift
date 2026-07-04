@@ -48,7 +48,7 @@ struct ConnectAIsView: View {
                         .foregroundStyle(Theme.Ink.body)
                         .padding(.top, 10)
                 } else if loaded {
-                    Text("Sharing is off. Turn on \u{201C}Offer your knowledge base to your AIs\u{201D} in Settings → Your AIs first.")
+                    Text("Sharing is off. Turn on \u{201C}Offer your knowledge base to your AIs\u{201D} in Settings → Connect AIs to Knowledge first.")
                         .font(.system(size: 12)).foregroundStyle(Theme.Ink.amber)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 360)

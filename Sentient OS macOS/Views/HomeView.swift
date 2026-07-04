@@ -9,7 +9,7 @@
 //  bar at the foot lets you ask it to DO anything (computer use).
 //
 //  The chrome is deliberately quiet: a wordmark, and four doors at the top-right —
-//  Analysis ▾ and Your AIs ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
+//  Analysis ▾ and Connect AIs ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
 //  Settings (their own windows). Status lives inside Analysis, never cluttering the home.
 //
 //  WHEN THERE ARE NO CARDS, the living Orb blooms into the vacated center with "I'm here to
@@ -120,9 +120,9 @@ struct HomeView: View {
             Spacer()
             NavItem(title: "Analysis", dot: Theme.Ink.green) { showAnalysis = true }
                 .popover(isPresented: $showAnalysis) { analysisPopover }
-            NavItem(title: "Your AIs") { showYourAIs = true }
-                .popover(isPresented: $showYourAIs) { yourAIsPopover }
             NavItem(title: "Knowledge") { openWindow(id: KnowledgeView.windowID) }
+            NavItem(title: "Connect AIs") { showYourAIs = true }
+                .popover(isPresented: $showYourAIs) { yourAIsPopover }
             NavItem(icon: "gearshape") { openWindow(id: SettingsView.windowID) }
         }
         .padding(.horizontal, 30).padding(.top, 18)

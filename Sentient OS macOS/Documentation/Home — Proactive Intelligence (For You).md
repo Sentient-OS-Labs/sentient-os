@@ -13,7 +13,7 @@ stats were reused in this surface and its popovers. Arch §10.)*
 The main window's content (rendered by `RootView`). Layers, bottom-to-top:
 
 - **Chrome (on top, so the nav stays clickable):** a slim top bar — `OrbMark` + "Sentient OS"
-  wordmark on the left; on the right four **doors** — `Analysis ▾` · `Your AIs ▾` (quick popovers)
+  wordmark on the left; on the right four **doors** — `Analysis ▾` (popover) · `Knowledge` · `Connect AIs ▾` (popover)
   · `Knowledge` · `⚙` (their own windows). Below it, the editorial voice: an hour-aware serif-italic
   greeting ("Good evening, Jesai.") over a mono-caps read-line.
 - **The scatter:** the suggestion cards, dealt in from above the header with staggered springs into
@@ -74,7 +74,7 @@ a STOP button. (Computer use is the WIP Codex-CLI path.)
 ## The other windows
 
 - **`Views/Settings/SettingsView.swift`** (`windowID "settings"`, the gear) — the REAL two-pane
-  Settings window: five live panes (Knowledge Sources · Proactive & Sidekick · Your AIs · System ·
+  Settings window: five live panes (Knowledge Sources · Proactive & Sidekick · Connect AIs to Knowledge · System ·
   Permissions & Health). Doc: `Documentation/Settings.md`.
 - **`Views/ConnectAIsView.swift`** (`windowID "connect-ais"`) — the deferred setup guide (stub): the
   real two-step flow (copy your MCP URL → add the line to your AI's instructions) lands later.

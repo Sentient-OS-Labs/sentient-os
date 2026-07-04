@@ -14,7 +14,7 @@ pieces (`SettingsComponents.swift`).
    consumes the values yet**. The proactive/Sidekick prompts learn to read them with the
    prompt-refinement work, and the Right ⌥ choice additionally needs `RightCommandMonitor`
    support (it listens for right-⌘ only today).
-2. **The E2E encryption claim front-runs the code** — the Your AIs privacy blurb says the cloud
+2. **The E2E encryption claim front-runs the code** — the Connect-AIs privacy blurb says the cloud
    copy is end-to-end encrypted and unreadable even by Sentient's devs. That is LAUNCH truth,
    decided 2026-07-04: the mirror stores plaintext markdown today, and the "mcp encryption"
    backlog item (Aditya) MUST ship before launch or the copy must change. Do not soften the copy;
@@ -74,7 +74,7 @@ sees custom folders. Verified by a headless selftest (7/7) on ship day.
 Autosaving standing instructions + Sidekick's shortcut key and standing context. Stored, not yet
 consumed — see the NOT-wired list above.
 
-### Your AIs (`YourAIsPane.swift`)
+### Connect AIs to Knowledge (`YourAIsPane.swift`)
 The story leads: a value blurb (your ChatGPT/Claude, phone apps included, read the knowledge
 base and choose what's relevant) then the plain-language privacy explainer (local-first,
 PII-stripped summaries only, E2E-encrypted [see the NOT-wired list], no accounts, the 30-day

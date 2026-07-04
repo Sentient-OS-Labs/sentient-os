@@ -170,7 +170,7 @@ struct YourAIsPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                MonoCaps("Your AIs", size: 10, tracking: 2.4, color: Theme.Ink.label)
+                MonoCaps("Connect AIs", size: 10, tracking: 2.4, color: Theme.Ink.label)
                 Spacer()
                 togglePill
             }

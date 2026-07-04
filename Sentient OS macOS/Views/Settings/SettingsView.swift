@@ -23,7 +23,7 @@ struct SettingsView: View {
             switch self {
             case .sources:   return "Knowledge Sources"
             case .proactive: return "Proactive & Sidekick"
-            case .yourAIs:   return "Your AIs"
+            case .yourAIs:   return "Connect AIs to Knowledge"
             case .system:    return "System"
             case .health:    return "Permissions & Health"
             }
