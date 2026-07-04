@@ -69,14 +69,8 @@ struct HealthPane: View {
                 VStack(alignment: .leading, spacing: 30) {
                     sentientGroup
                     Group {
-                        if codexAllGreen {
-                            VStack(alignment: .leading, spacing: 30) {
-                                SettingsGroup(label: "Codex") { codexSummaryLine }
-                                if codexExpanded {
-                                    codexSetupGroup
-                                    codexPermissionsGroup
-                                }
-                            }
+                        if codexAllGreen && !codexExpanded {
+                            SettingsGroup(label: "Codex") { codexSummaryLine }
                         } else {
                             VStack(alignment: .leading, spacing: 30) {
                                 codexSetupGroup
@@ -286,23 +280,22 @@ struct HealthPane: View {
         }
     }
 
-    // MARK: - The collapsed codex summary (everything green = one quiet line, tap for details)
+    // MARK: - The collapsed codex summary (everything green = one quiet line; expanding REPLACES
+    // it — a one-way door per visit, so the detail view never carries an extra clutter line)
 
     private var codexSummaryLine: some View {
         Button {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { codexExpanded.toggle() }
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { codexExpanded = true }
         } label: {
             HStack(spacing: 11) {
                 HealthDot(color: Theme.Ink.green)
                 Text("Codex is all good.")
                     .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
                 Spacer(minLength: 12)
-                MonoCaps(codexExpanded ? "Hide" : "Details", size: 8.5, tracking: 1.6,
-                         color: Theme.Ink.label)
+                MonoCaps("Details", size: 8.5, tracking: 1.6, color: Theme.Ink.label)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(Theme.Ink.label)
-                    .rotationEffect(.degrees(codexExpanded ? 180 : 0))
             }
             .padding(.vertical, 6)
             .contentShape(Rectangle())
