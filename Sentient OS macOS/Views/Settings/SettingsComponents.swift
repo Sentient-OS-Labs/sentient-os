@@ -204,17 +204,24 @@ struct StatusLine: View {
     var fixTitle: String = "Fix…"
     var fix: (() -> Void)? = nil
 
+    /// Punchier than the ink palette on purpose — these are status LEDs, not labels.
     private var dot: Color {
         switch health {
         case .ok:   return Theme.Ink.green
-        case .warn: return Theme.Ink.amber
-        case .bad:  return Color(red: 1.0, green: 0.45, blue: 0.45)
+        case .warn: return Color(red: 1.0, green: 0.72, blue: 0.30)
+        case .bad:  return Color(red: 1.0, green: 0.36, blue: 0.36)
         }
     }
 
     var body: some View {
         HStack(spacing: 11) {
-            Circle().fill(dot).frame(width: 6, height: 6)
+            // A lit LED: bright core + double soft glow (tight halo, wide bloom).
+            Circle()
+                .fill(dot)
+                .overlay(Circle().fill(.white.opacity(0.35)).frame(width: 2.5, height: 2.5))
+                .frame(width: 6.5, height: 6.5)
+                .shadow(color: dot.opacity(0.85), radius: 3)
+                .shadow(color: dot.opacity(0.45), radius: 8)
             Text(title).font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
             Spacer(minLength: 12)
             MonoCaps(note, size: 8.5, tracking: 1.6,
