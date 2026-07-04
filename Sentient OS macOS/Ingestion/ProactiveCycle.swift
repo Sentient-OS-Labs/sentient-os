@@ -52,6 +52,8 @@ actor ProactiveCycle {
     /// Never throws — every failure is ALSO reported through `progress(.failed(…))` for the live UI.
     @discardableResult
     func run(progress: @escaping @Sendable (ProactiveCyclePhase) -> Void) async -> String? {
+        PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
+        defer { PipelineActivity.end() }
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
         guard !notes.isEmpty else {                          // nothing new this cycle — harmless no-op
             UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)

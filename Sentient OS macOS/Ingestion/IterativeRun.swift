@@ -108,6 +108,8 @@ struct IterativeRun {
              onProgress: @Sendable @escaping (RunProgress) -> Void = { _ in }) async -> RunProgress {
         var p = RunProgress()
         guard !connectors.isEmpty else { return p }
+        PipelineActivity.begin()                 // Settings' Reset is disabled while we're mid-run
+        defer { PipelineActivity.end() }
 
         // §7.22: if this run includes a DB source (WhatsApp/iMessage/Notes need Full Disk Access),
         // report the FDA probe when it isn't cleanly granted — the top "empty morning" signal (a 3am

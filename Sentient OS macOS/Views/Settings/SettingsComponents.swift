@@ -193,6 +193,73 @@ struct SettingsChip: View {
     }
 }
 
+/// A lit status LED: bright core + double soft glow (tight halo, wide bloom). Shared by
+/// StatusLine and the collapsed codex summary.
+struct HealthDot: View {
+    let color: Color
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .overlay(Circle().fill(.white.opacity(0.35)).frame(width: 2.5, height: 2.5))
+            .frame(width: 6.5, height: 6.5)
+            .shadow(color: color.opacity(0.85), radius: 3)
+            .shadow(color: color.opacity(0.45), radius: 8)
+    }
+}
+
+/// Shared "warmth" for the info tips: once one tip has opened, sibling tips open instantly for a
+/// short window (the native-menu feel) instead of each re-waiting the hover delay.
+@MainActor @Observable
+final class TipWarmth {
+    static let shared = TipWarmth()
+    private var lastInteraction = Date.distantPast
+
+    var isWarm: Bool { Date().timeIntervalSince(lastInteraction) < 0.5 }
+    func touch() { lastInteraction = Date() }
+}
+
+/// The tiny info icon beside a permission name. Hover 0.15s to open the explanation (a small
+/// popover); while any tip is warm, siblings open instantly.
+struct InfoTip: View {
+    let text: String
+    @State private var shown = false
+    @State private var hoverTask: Task<Void, Never>?
+
+    var body: some View {
+        Image(systemName: "info.circle")
+            .font(.system(size: 10))
+            .foregroundStyle(Theme.Ink.label.opacity(0.75))
+            .onHover { inside in
+                hoverTask?.cancel()
+                if inside {
+                    if TipWarmth.shared.isWarm {
+                        shown = true
+                        TipWarmth.shared.touch()
+                    } else {
+                        hoverTask = Task {
+                            try? await Task.sleep(for: .seconds(0.15))
+                            guard !Task.isCancelled else { return }
+                            shown = true
+                            TipWarmth.shared.touch()
+                        }
+                    }
+                } else {
+                    if shown { TipWarmth.shared.touch() }   // keep siblings warm on the way out
+                    shown = false
+                }
+            }
+            .popover(isPresented: $shown, arrowEdge: .trailing) {
+                Text(text)
+                    .font(.system(size: 11.5))
+                    .lineSpacing(2.5)
+                    .padding(.horizontal, 12).padding(.vertical, 9)
+                    .frame(width: 250, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+    }
+}
+
 /// One health line — a verdict dot, the thing being checked, its state in mono-caps, and a
 /// fix affordance when something's red. The Permissions & Health form.
 struct StatusLine: View {
@@ -201,6 +268,7 @@ struct StatusLine: View {
     let title: String
     let health: Health
     let note: String                    // "granted" / "not granted" / "logged in"
+    var tip: String? = nil              // the info-icon explanation (InfoTip)
     var fixTitle: String = "Fix…"
     var fix: (() -> Void)? = nil
 
@@ -215,14 +283,11 @@ struct StatusLine: View {
 
     var body: some View {
         HStack(spacing: 11) {
-            // A lit LED: bright core + double soft glow (tight halo, wide bloom).
-            Circle()
-                .fill(dot)
-                .overlay(Circle().fill(.white.opacity(0.35)).frame(width: 2.5, height: 2.5))
-                .frame(width: 6.5, height: 6.5)
-                .shadow(color: dot.opacity(0.85), radius: 3)
-                .shadow(color: dot.opacity(0.45), radius: 8)
-            Text(title).font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
+            HealthDot(color: dot)
+            HStack(spacing: 6) {
+                Text(title).font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
+                if let tip { InfoTip(text: tip) }
+            }
             Spacer(minLength: 12)
             MonoCaps(note, size: 8.5, tracking: 1.6,
                      color: health == .ok ? Theme.Ink.label : dot)

@@ -54,16 +54,19 @@ struct SourcesPane: View {
 
     var body: some View {
         SettingsPane(title: "Knowledge Sources.",
-                     whisper: "What Sentient reads: always locally, always yours.") {
+                     whisper: "Your files never leave your Mac. Your Sentient uses an on-device LLM to understand your life overnight.") {
             VStack(alignment: .leading, spacing: 30) {
+                // Tucked tight under the whisper so the two lines read as ONE header block,
+                // with the full 30pt group gap only after it.
+                Text("Your Sentient needs at least three sources to truly know you.")
+                    .font(.serif(11.5, weight: .regular)).italic()
+                    .foregroundStyle(flashMinimum ? Theme.Ink.amber : Theme.Ink.deepMuted)
+                    .animation(.easeInOut(duration: 0.25), value: flashMinimum)
+                    .padding(.top, -16)
                 if !fdaGranted { fdaLine }
                 foldersGroup
                 chatsGroup
                 cloudGroup
-                Text("Sentient needs at least three sources to truly know you.")
-                    .font(.serif(11.5, weight: .regular)).italic()
-                    .foregroundStyle(flashMinimum ? Theme.Ink.amber : Theme.Ink.deepMuted)
-                    .animation(.easeInOut(duration: 0.25), value: flashMinimum)
             }
         }
         .task { fdaGranted = Permissions.hasFullDiskAccess() }
