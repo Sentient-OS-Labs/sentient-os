@@ -5,7 +5,7 @@
 through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.5` at **`.xhigh` effort**,
 `workspace-write` sandbox, cwd = a staging dir; the model writes the `.md` files itself with its
 file tools. Without a working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — a ChatGPT
-subscription is a hard requirement, decided 2026-07-05; the old direct-Anthropic-API route and its
+subscription is a hard requirement; the old direct-Anthropic-API route and its
 `Secrets.swift` dev key were deleted June 11 and live in git history).
 
 This is the first build. `Vault/VaultCloud.swift` is the iterative system's wrapper around it:

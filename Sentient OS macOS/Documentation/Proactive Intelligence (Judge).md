@@ -158,7 +158,7 @@ Cancellation is real: the awaiting Task's cancel (a card's STOP) terminates the 
 
 ## Where it surfaces
 
-- **The For You home (✅ wired, the DEFAULT since 2026-07-05):** the home deals real cards from
+- **The For You home (the default experience):** the home deals real cards from
   `ProactiveResearch.latest()` (`dev.proactive.realCards`, ON by default) — the
   welcome `GiftLetter` envelope first, then one card per `PreparedAction` (method accent + kicker,
   editable draft, the LLM-written fire button). Firing streams codex's live play-by-play into the

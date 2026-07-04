@@ -6,7 +6,7 @@ welcome gift letter, proactive intelligence, and every computer-use run (the com
 and the executor's `computer` channel). It piggybacks on the user's own Codex CLI
 (their ChatGPT subscription pays). It is the app's ONLY cloud-model path — there is no
 direct-Anthropic-API route (deleted, along with `Secrets.swift`) and NO Sentient-hosted
-fallback: a ChatGPT subscription is a hard requirement of the product (decided 2026-07-05).
+fallback: a ChatGPT subscription is a hard requirement of the product.
 Replaced `ClaudeCLI`/`claude -p` on June 11 (clean kill — same actor shape, same `Process`
 plumbing).
 

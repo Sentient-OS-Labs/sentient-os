@@ -39,7 +39,7 @@ mirror → gift → proactive → wipe), byte-for-byte what the 3am scheduler ru
 ## Real cards vs the demo deck — `ForYouModel`
 
 The home has two modes, flipped by the dev "REAL FOR-YOU CARDS" toggle (`dev.proactive.realCards`,
-ON by default since 2026-07-05):
+ON by default):
 
 - **Real mode (the default):** `beginVisit` builds the deck from the persisted proactive results — the
   welcome **`GiftLetter`** envelope first (sealed, wax-stamped; generated once from the user's own
