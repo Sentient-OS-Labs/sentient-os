@@ -115,6 +115,21 @@ actor MirrorClient {
         return "\(Self.baseURL)/u/\(token)/mcp"
     }
 
+    /// A display-safe version of the share URL (token masked to its first 4 chars). ⚠️ "/mcp" must
+    /// be searched BACKWARDS: the host "https://mcp.sentient-os.ai" itself contains "/mcp", and a
+    /// forward hit put the end before the token — an inverted range that once crashed Settings.
+    nonisolated static func maskedURL(_ url: String?) -> String {
+        guard let url,
+              let start = url.range(of: "/u/"),
+              let end = url.range(of: "/mcp", options: .backwards),
+              start.upperBound <= end.lowerBound else { return "mcp.sentient-os.ai/u/…/mcp" }
+        let token = url[start.upperBound..<end.lowerBound]
+        let host = url.replacingOccurrences(of: "https://", with: "")
+            .replacingOccurrences(of: "http://", with: "")     // dev SENTIENT_MIRROR_BASE override
+            .prefix(while: { $0 != "/" })
+        return "\(host)/u/\(token.prefix(4))••••••••/mcp"
+    }
+
     // MARK: Push / delete / stats
 
     /// Zip the local vault and replace the mirror with it. Renews the 30-day lease.

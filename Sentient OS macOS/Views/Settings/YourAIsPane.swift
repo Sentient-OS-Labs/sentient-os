@@ -2,10 +2,11 @@
 //  YourAIsPane.swift
 //  Sentient OS macOS
 //
-//  Settings → Your AIs: the hosted MCP mirror, wired to MirrorClient. The share toggle (off =
-//  deletes the cloud copy, token kept so the URL survives re-enabling), the secret URL (masked;
-//  copy + regenerate), the connect guide + system prompt, and the live activity stats. When
-//  sharing is off, the local-only story takes the stage.
+//  Settings → Your AIs: the value + privacy story up top, the share toggle (off = confirm, then
+//  the cloud copy is deleted; the token is kept so the link survives re-enabling), and the HERO:
+//  the glowing "Connect your AIs" button → the real guided setup (ConnectAIsView), which owns the
+//  secret link + system prompt. Live activity from /stats below. Regenerate lives in MirrorClient
+//  only (a support/dev remediation; a UI button was a footgun that bricks every connector).
 //
 
 import SwiftUI
@@ -15,23 +16,24 @@ struct YourAIsPane: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var enabled = false
-    @State private var shareURL: String?
     @State private var stats: MirrorClient.Stats?
     @State private var loaded = false
     @State private var busy = false                // a network call is in flight — freeze the toggle
     @State private var confirmOff = false
-    @State private var confirmRegenerate = false
-    @State private var copied = false
     @State private var errorLine: String?
 
     var body: some View {
-        SettingsPane(title: "Your AIs.",
+        SettingsPane(title: "ChatGPT & Claude.",
                      whisper: "Your knowledge base, offered to every AI you already use.") {
             VStack(alignment: .leading, spacing: 30) {
+                intro
                 cloudSyncGroup
+                    .padding(.top, 10)    // same breath as before Activity — the blurb block stands alone
                 if enabled && loaded {
-                    urlGroup
+                    heroButton
+                        .padding(.top, -14)   // belongs to the Cloud Sync group, not floating between groups
                     activityGroup
+                        .padding(.top, 10)    // extra breath after the hero
                 } else if loaded {
                     localOnlyProse
                 }
@@ -45,24 +47,56 @@ struct YourAIsPane: View {
         .task { await refresh() }
     }
 
+    // MARK: - The story (value first, then four scannable privacy pillars — never a wall of text)
+
+    private var intro: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base, making them dramatically more helpful.")
+                .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 9) {
+                pillar("lock.shield", "Your real files never leave this Mac. Your AIs only see short summaries, personal details stripped.")
+                pillar("lock.fill", "End-to-end encrypted: no one, not even Sentient's developers, can read your knowledge base.")
+                pillar("key.fill", "No account. One secret link only you hold; leave Sentient and the cloud copy deletes itself in 30 days.")
+                pillar("chevron.left.forwardslash.chevron.right", "Even the cloud backend is open source. Everything's verifiable.")
+            }
+        }
+    }
+
+    private func pillar(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.Ink.green.opacity(0.8))
+                .frame(width: 15)
+            Text(text)
+                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
+                .lineSpacing(2.5)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: - The share toggle
 
     private var cloudSyncGroup: some View {
         SettingsGroup(label: "Cloud Sync") {
+            // A custom binding, NOT $enabled + onChange: the setter fires only when the USER flips
+            // the control, so programmatic `enabled =` writes can't re-trigger the confirm flow.
+            // (The old onChange guard checked `busy`, but turnOff() cleared `busy` in the same
+            // transaction as `enabled = false` — onChange then read busy == false, mistook the
+            // write for a user flip, and re-showed the dialog forever.)
             SettingToggleLine(title: "Offer your knowledge base to your AIs",
-                              sub: "ChatGPT and Claude read it over MCP. No account, just a secret link with a 30-day lease that cleans up after itself.",
-                              isOn: $enabled)
+                              sub: "ChatGPT and Claude read it over MCP. No account, just a private link that only you hold.",
+                              isOn: Binding(
+                                  get: { enabled },
+                                  set: { requested in
+                                      if requested { turnOn() } else { confirmOff = true }
+                                  }))
                 .disabled(busy || !loaded)
         }
-        .onChange(of: enabled) { was, now in
-            guard loaded, !busy else { return }
-            if now { turnOn() } else if was {
-                enabled = true                     // hold until the user confirms the delete
-                confirmOff = true
-            }
-        }
         .alert("Stop sharing your knowledge base?", isPresented: $confirmOff) {
-            Button("Keep Sharing", role: .cancel) {}
+            Button("Keep Sharing", role: .cancel) {}       // switch never changed — stays on
             Button("Stop & Delete Cloud Copy", role: .destructive) { turnOff() }
         } message: {
             Text("The cloud copy is deleted immediately and your AIs lose access. Your knowledge base stays safe on this Mac, and turning sharing back on restores the same link.")
@@ -70,12 +104,12 @@ struct YourAIsPane: View {
     }
 
     private func turnOn() {
+        enabled = true                                     // optimistic — the switch answers instantly
         busy = true; errorLine = nil
         Task {
             do {
-                let url = try await MirrorClient.shared.enable()
+                _ = try await MirrorClient.shared.enable()
                 try? await MirrorClient.shared.push()      // best-effort first fill (no vault yet is fine)
-                shareURL = url
             } catch {
                 enabled = false
                 errorLine = (error as? LocalizedError)?.errorDescription ?? "\(error)"
@@ -94,72 +128,10 @@ struct YourAIsPane: View {
         }
     }
 
-    // MARK: - The secret URL
+    // MARK: - The hero: the guided setup (settings-scale glow — a gradient ring, not the home's sun)
 
-    private var urlGroup: some View {
-        SettingsGroup(label: "Your Secret Link") {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 9) {
-                    Text(maskedURL)
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(Theme.Ink.bright)
-                        .lineLimit(1)
-                        .padding(.horizontal, 12).padding(.vertical, 7)
-                        .background(Color.white.opacity(0.03), in: Capsule())
-                        .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
-                    SettingsPillButton(title: copied ? "Copied ✓" : "Copy",
-                                       tint: copied ? Theme.Ink.green : Theme.Ink.bright) { copyURL() }
-                    SettingsPillButton(title: "Regenerate…") { confirmRegenerate = true }
-                        .disabled(busy)
-                }
-                SettingsProse("This link is your whole identity; there's no account behind it. Paste it into ChatGPT or Claude as a connector, and treat it like a password.")
-                HStack(spacing: 16) {
-                    quietLink("How to connect your AIs") { openWindow(id: ConnectAIsView.windowID) }
-                    quietLink("Copy the system prompt") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(MirrorClient.systemPrompt, forType: .string)
-                    }
-                }
-            }
-        }
-        .alert("Regenerate your secret link?", isPresented: $confirmRegenerate) {
-            Button("Cancel", role: .cancel) {}
-            Button("Regenerate", role: .destructive) { regenerate() }
-        } message: {
-            Text("The old link stops working immediately, and every AI you've connected will need the new one. Do this if the link ever leaks.")
-        }
-    }
-
-    private var maskedURL: String {
-        // ⚠️ "/mcp" must be searched BACKWARDS: the host "https://mcp.sentient-os.ai" itself
-        // contains "/mcp" (second slash + host), and a forward hit put `end` before the token —
-        // an inverted range that crashed the pane. Guard the order defensively regardless.
-        guard let url = shareURL,
-              let range = url.range(of: "/u/"),
-              let end = url.range(of: "/mcp", options: .backwards),
-              range.upperBound <= end.lowerBound else { return "mcp.sentient-os.ai/u/…/mcp" }
-        let token = url[range.upperBound..<end.lowerBound]
-        let host = url.replacingOccurrences(of: "https://", with: "")
-            .replacingOccurrences(of: "http://", with: "")     // dev SENTIENT_MIRROR_BASE override
-            .prefix(while: { $0 != "/" })
-        return "\(host)/u/\(token.prefix(4))••••••••/mcp"
-    }
-
-    private func copyURL() {
-        guard let url = shareURL else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url, forType: .string)
-        copied = true
-        Task { try? await Task.sleep(for: .seconds(1.8)); copied = false }
-    }
-
-    private func regenerate() {
-        busy = true; errorLine = nil
-        Task {
-            do { shareURL = try await MirrorClient.shared.regenerateToken() }
-            catch { errorLine = (error as? LocalizedError)?.errorDescription ?? "\(error)" }
-            busy = false
-        }
+    private var heroButton: some View {
+        ConnectCTA { openWindow(id: ConnectAIsView.windowID) }
     }
 
     // MARK: - Activity
@@ -192,24 +164,38 @@ struct YourAIsPane: View {
         }
     }
 
-    // MARK: - Helpers
-
-    private func quietLink(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 4) {
-                Text(title).font(.system(size: 11, weight: .medium))
-                Image(systemName: "chevron.right").font(.system(size: 7.5, weight: .semibold))
-            }
-            .foregroundStyle(Theme.Ink.label)
-        }
-        .buttonStyle(PressScaleStyle())
-    }
+    // MARK: - Probes
 
     private func refresh() async {
         enabled = await MirrorClient.shared.isEnabled
-        shareURL = await MirrorClient.shared.shareURL
         loaded = true
         if enabled { stats = try? await MirrorClient.shared.stats() }
+    }
+}
+
+/// The pane's compact glow CTA: a dark capsule with the AI-gradient as a thin ring + a soft
+/// halo behind it. Jewelry at settings scale — deliberately NOT the home's big white GlowButton.
+private struct ConnectCTA: View {
+    let action: () -> Void
+
+    private var gradient: AngularGradient {
+        AngularGradient(colors: GlowHalo.stops, center: .center)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles").font(.system(size: 12, weight: .semibold))
+                Text("Connect your AIs").font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 22).padding(.vertical, 10)
+            .background(Capsule().fill(Theme.Ink.cardBG))
+            .overlay(Capsule().strokeBorder(gradient, lineWidth: 1.2))
+            .background(Capsule().fill(gradient).blur(radius: 9).opacity(0.38))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressScaleStyle())
     }
 }
 

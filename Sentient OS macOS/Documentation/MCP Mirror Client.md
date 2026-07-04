@@ -13,7 +13,7 @@ await mirror.isEnabled                 // is mirroring ON? (the toggle flag — 
 let url = await mirror.enable()        // opt in → mints token if absent → returns the share URL
 await mirror.shareURL                  // the "Copy MCP Link" value, or nil
 try await mirror.push()                // zip the vault + replace the mirror (call after any change)
-let s = try await mirror.stats()       // {notesRead24h, toolCalls24h, lastAccess} for "Your AIs"
+let s = try await mirror.stats()       // {notesRead24h, toolCalls24h, lastAccess} for "Connect AIs"
 try await mirror.deleteRemote()        // delete the cloud copy (keeps the token → stable URL)
 await mirror.disable()                 // opt out: flip OFF + delete remote, but KEEP the token (stable link)
 let u2 = try await mirror.regenerateToken()  // leak remediation: delete old copy, mint NEW token, re-push
@@ -58,11 +58,13 @@ auto-push-after-KB-update, call `await Self.pushIfDirty()` from `VaultCloud.mark
 
 ## Turning the mirror on (today)
 
-The user-facing opt-in is **Settings → Your AIs** (`Views/Settings/YourAIsPane.swift`): the share
-toggle (ON = `enable()` + a first push; OFF = a confirm dialog, then `disable()`), the masked
-secret link with **Copy** and **Regenerate** (`regenerateToken()` — the remediation if a link ever
-leaks: old cloud copy deleted, new identity minted, re-pushed), live `stats()` activity, and the
-connect-guide / system-prompt links. The onboarding opt-in moment is still to build.
+The user-facing opt-in is **Settings → Connect AIs to Knowledge** (`Views/Settings/YourAIsPane.swift`): the
+value/privacy story, the share toggle (ON = `enable()` + a first push; OFF = a confirm dialog,
+then `disable()`), the glowing **Connect your AIs** hero → `ConnectAIsView`, the REAL guided
+setup (masked link + Copy · Copy-the-system-prompt · the "what do you know about me?" closer),
+and live `stats()` activity. **Regenerate is backend-only** (`regenerateToken()` stays as the
+support remediation if a link leaks; the UI button was removed — it bricks every connector the
+user set up). The onboarding opt-in moment is still to build.
 
 The **DEV TOOLS** panel (`DevToolsView`) keeps its own controls, while the mirror is ON:
 - **MCP TOGGLE** — ON mints the token (if absent) + pushes the current vault; OFF deletes the cloud copy but **keeps the token**, so re-enabling reuses the same share link.
@@ -89,7 +91,7 @@ Runs enable → push → stats → delete → disable. Needs a knowledge base on
 ## Not built here (downstream)
 
 The production opt-in surfaces — the MCP opt-in onboarding screen (step ⑨) with the
-no-account/token/30-day-lease explainer, the "Your AIs" satellite (access-log line), and the
+no-account/token/30-day-lease explainer, the "Connect AIs" glance (access-log line), and the
 menu-bar Copy MCP Link — are Phase-5 work that calls into this client (the DEV TOOLS MCP TOGGLE is
 the interim dogfood stand-in). Auto-push *after vault changes* is now wired (see Sync above); the
 editor-idle gate (`VaultActivity.editorBusy`) still awaits the Phase-5 vault editor.
