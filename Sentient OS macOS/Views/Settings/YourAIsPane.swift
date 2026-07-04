@@ -48,7 +48,7 @@ struct YourAIsPane: View {
 
     private var intro: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base and decide what's relevant, making them dramatically more helpful about your actual life.")
+            Text("Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base, making them dramatically more helpful about your actual life.")
                 .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
@@ -56,7 +56,7 @@ struct YourAIsPane: View {
                 pillar("lock.shield", "Your real files never leave this Mac. Your AIs only see short summaries, personal details stripped.")
                 pillar("lock.fill", "End-to-end encrypted: no one, not even Sentient's developers, can read your knowledge base.")
                 pillar("key.fill", "No account. One secret link only you hold; leave Sentient and the cloud copy deletes itself in 30 days.")
-                pillar("chevron.left.forwardslash.chevron.right", "Even the cloud backend is open source. Verify everything.")
+                pillar("chevron.left.forwardslash.chevron.right", "Even the cloud backend is open source. Everything's verifiable.")
             }
         }
     }
