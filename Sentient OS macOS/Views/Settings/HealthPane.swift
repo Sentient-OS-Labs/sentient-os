@@ -263,8 +263,13 @@ struct HealthPane: View {
                     .requestAuthorization(options: [.alert, .sound])
                 await refresh()
             }
-        } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
-            NSWorkspace.shared.open(url)
+        } else {
+            // Modern Settings pane first (Ventura+), legacy anchor as fallback — same pattern as
+            // Permissions.openFullDiskAccessSettings.
+            let modern = "x-apple.systempreferences:com.apple.Notifications-Settings.extension"
+            let legacy = "x-apple.systempreferences:com.apple.preference.notifications"
+            if let url = URL(string: modern), NSWorkspace.shared.open(url) { return }
+            if let url = URL(string: legacy) { NSWorkspace.shared.open(url) }
         }
     }
 
