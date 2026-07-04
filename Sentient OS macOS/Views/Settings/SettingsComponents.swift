@@ -50,9 +50,9 @@ struct SettingsGroup<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(spacing: 8) {
-                MonoCaps(label, size: 9.5, tracking: 2.4, color: Theme.Ink.label)
+                MonoCaps(label, size: 9.5, tracking: 2.4, color: .white.opacity(0.7), weight: .semibold)
                 if let badge {
-                    MonoCaps("· \(badge)", size: 8, tracking: 1.6, color: Theme.Ink.deepMuted)
+                    MonoCaps("· \(badge)", size: 8, tracking: 1.6, color: .white.opacity(0.5))
                 }
             }
             content

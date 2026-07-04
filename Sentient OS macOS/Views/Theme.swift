@@ -74,17 +74,19 @@ struct MonoCaps: View {
     let size: CGFloat
     let tracking: CGFloat
     let color: Color
+    let weight: Font.Weight
 
-    init(_ text: String, size: CGFloat, tracking: CGFloat, color: Color) {
+    init(_ text: String, size: CGFloat, tracking: CGFloat, color: Color, weight: Font.Weight = .medium) {
         self.text = text
         self.size = size
         self.tracking = tracking
         self.color = color
+        self.weight = weight
     }
 
     var body: some View {
         Text(text.uppercased())
-            .font(.system(size: size, weight: .medium, design: .monospaced))
+            .font(.system(size: size, weight: weight, design: .monospaced))
             .tracking(tracking)
             .foregroundStyle(color)
     }
