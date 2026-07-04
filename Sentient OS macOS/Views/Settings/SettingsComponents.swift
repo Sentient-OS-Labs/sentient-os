@@ -249,7 +249,7 @@ struct InfoTip: View {
                     shown = false
                 }
             }
-            .popover(isPresented: $shown, arrowEdge: .bottom) {
+            .popover(isPresented: $shown, arrowEdge: .trailing) {
                 Text(text)
                     .font(.system(size: 11.5))
                     .lineSpacing(2.5)
