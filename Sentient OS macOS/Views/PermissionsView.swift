@@ -11,10 +11,12 @@
 //  CODEX COMPUTER USE — the helper's Accessibility (move mouse / type) + Screen Recording (see the
 //    screen). These belong to Codex's helper app, not Sentient.
 //
-//  The Automation + both Codex grants are written straight into the user's TCC database using the Full
-//  Disk Access Sentient already holds (device-/signer-agnostic — the code-requirement blobs are made
-//  from the live apps). Mic uses the normal request API; screen recording uses CGRequestScreenCapture;
-//  the daemon uses SMAppService. Every pane also has a Settings deep-link fallback + a re-check.
+//  The Automation grant is written straight into the user's TCC database using the Full Disk
+//  Access Sentient already holds (device-/signer-agnostic — the code-requirement blobs are made
+//  from the live apps). The two Codex grants (Accessibility + Screen Recording) live in the
+//  SIP-protected SYSTEM TCC db — no app can write those, so their panes are STATUS-ONLY (read via
+//  FDA) + a Settings deep-link. Mic uses the normal request API; screen recording uses
+//  CGRequestScreenCapture; the daemon uses SMAppService. Every pane also has a re-check.
 //
 
 import SwiftUI

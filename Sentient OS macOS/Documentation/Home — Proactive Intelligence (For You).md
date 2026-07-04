@@ -73,8 +73,9 @@ a STOP button. (Computer use is the WIP Codex-CLI path.)
 
 ## The other windows
 
-- **`Views/SettingsView.swift`** (`windowID "settings"`, the gear) — a tasteful placeholder for now:
-  an About block + the coming sections (sources · cloud mirror · compute · notifications).
+- **`Views/Settings/SettingsView.swift`** (`windowID "settings"`, the gear) — the REAL two-pane
+  Settings window: five live panes (Knowledge Sources · Proactive & Sidekick · Your AIs · System ·
+  Permissions & Health). Doc: `Documentation/Settings.md`.
 - **`Views/ConnectAIsView.swift`** (`windowID "connect-ais"`) — the deferred setup guide (stub): the
   real two-step flow (copy your MCP URL → add the line to your AI's instructions) lands later.
 - **Knowledge** = the existing `DatabaseView` window (`windowID "knowledge"`) — a reader today; the
