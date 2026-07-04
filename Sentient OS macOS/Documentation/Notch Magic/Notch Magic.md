@@ -20,6 +20,8 @@ All funnel through **`CommandCoordinator` → `CommandRunModel` → `CodexCLI.ru
 
 Every command is **computer use** (the dedicated browser-use channel was removed — see the root architecture doc §7), and the notch shows for all of them.
 
+**The instant you fire a command, Sentient also snaps a still of your screen and hands it to the agent** (`codex exec -i`), so "finish this", "reply to this", "complete this form" resolve against the actual pixels you're looking at — computer use starts with eyes open, not blind. It rides Sentient's own Screen Recording grant; no grant → the command just runs text-only. See §6a. [✅ verified on hardware — §11.]
+
 ---
 
 ## 2. Architecture in one breath
@@ -48,7 +50,8 @@ Every command is **computer use** (the dedicated browser-use channel was removed
 | **`SpeechAnalyzerEngine.swift`** | macOS **26+** speech-to-text (`SpeechAnalyzer` + `SpeechTranscriber`, on-device, in-memory). |
 | **`SFSpeechRecognizerEngine.swift`** | macOS **15** fallback (`SFSpeechRecognizer`, server-capable). |
 | **`VoiceCapture.swift`** | Façade: mic + speech permissions, engine selection, `prewarm` / `start` / `stopAndTranscribe` / `cancel`. |
-| **`CommandRunModel.swift`** | Runs ONE codex task; **cleans codex's raw human-readable stream** into the bar's `statusLine` + the `remembering` state (§6); `stop()`, `onFinished(Outcome)`. |
+| **`CommandRunModel.swift`** | Runs ONE codex task; **cleans codex's raw human-readable stream** into the bar's `statusLine` + the `remembering` state (§6); `stop()`, `onFinished(Outcome)`. Grabs + attaches the screen still at run start (§6a). |
+| **`ScreenCapture.swift`** | Grabs the screen to a temp JPEG for computer-use context (`/usr/sbin/screencapture`, main display). `grab() -> URL?` (nil if no Screen Recording grant) · `discard(_:)`. §6a. |
 | **`CommandCoordinator.swift`** | The brain: owns the run + hotkey + voice, drives `phase` (`NotchPhase`), the press→branch flow, `submit()` / `submitTyped()` / `dismissTyping()` / `cancelCurrent()` / `stop()`. |
 | **`NotchSpace.swift`** | SkyLight private-API wrapper — pins the panel into a top-level window-server space so it's fixed over the notch on every Space. |
 | **`NotchWindowController.swift`** | The `NSPanel` host: a **fixed canvas** flush at the bezel; click-through by toggling `ignoresMouseEvents` per cursor position; all-Spaces; observers. Also `NotchPanel`, `NotchHostingView`, the `NSScreen.notchSize`/`displayID` extension. |
@@ -56,7 +59,7 @@ Every command is **computer use** (the dedicated browser-use channel was removed
 | **`SpinningLogo.swift`** | The 2D spectrum-ring logo (matches the app icon). |
 | **`NotchView.swift`** | `NotchView` (binder) + `NotchContent` (the pure visual: morph, phases, layered edge glow, the read-back / Remembering / status captions) + `NotchMetrics` (per-phase sizing) + `NotchStopButton` + the `.blurDissolve` transition. |
 
-Edits outside this folder: `AppState.swift` (owns/starts the two objects), `Views/HomeView.swift` (`PromptBar` drives `appState.commandCoordinator`), and the project's `INFOPLIST_KEY_NSMicrophoneUsageDescription` + `INFOPLIST_KEY_NSSpeechRecognitionUsageDescription` build settings.
+Edits outside this folder: `AppState.swift` (owns/starts the two objects), `Views/HomeView.swift` (`PromptBar` drives `appState.commandCoordinator`), `Cloud/CodexCLI.swift` (`runAgentCommand` gained an optional `imagePath` → `codex exec -i`, §6a), `System/Permissions.swift` (`hasScreenRecording()`, already present), and the project's `INFOPLIST_KEY_NSMicrophoneUsageDescription` + `INFOPLIST_KEY_NSSpeechRecognitionUsageDescription` build settings.
 
 There is still a **DEV bench** `Views/Dev/HotkeyLabView.swift` (DEV TOOLS → HOTKEY LAB) — the original proof of the hotkey tap. It's superseded by `RightCommandMonitor`; **retire it** once you're confident (see §13).
 
@@ -135,6 +138,16 @@ Two routes feed it: the **global** Esc tap (`RightCommandMonitor.onEscape`, §4)
 - **track sections** by codex's bare headers (`user`/`codex`/`exec`/…) — show only codex's narration + tool/`mcp:` lines; drop the startup banner, the user-prompt echo, and raw shell output (`barLine`);
 - in the **`exec`** section, surface knowledge-base reads as the **`remembering`** state — `knowledgeBaseRead` slices the note path out of a `cat`/`grep`/`sed`/… command (command-agnostic: keys off the vault path, requires it shell-quoted so grep *output* isn't mistaken for a read). `setRemembering` holds it ≥1.5s (so the bloom completes for a single file);
 - replace the confirmation-policy `SKILL.md` dump's lingering tail ("…avoid redundant confirmations…") with **"Thinking through your task"**.
+
+### 6a. Screen context — the screenshot (`ScreenCapture.swift`)
+
+So the agent can act on what you're *actually looking at*, every command attaches a still of your screen. It's captured **inside `CommandRunModel.start`** (at the top of its run Task, so `isRunning` is already true — no re-entrancy gap): `await ScreenCapture.grab()` shells `/usr/sbin/screencapture -x -t jpg <temp>` (main display, silent, JPEG to stay compact vs a multi-MB Retina PNG), returns the temp `URL`, and a `defer { ScreenCapture.discard(shot) }` deletes it the moment codex is done.
+
+- **Permission-gated, never prompts:** `grab()` returns `nil` unless `Permissions.hasScreenRecording()` is already true — no grant → the command runs text-only exactly as before. (`CGPreflightScreenCaptureAccess`, so it never surfaces a dialog mid-command.)
+- **Into the prompt:** `CodexCLI.runAgentCommand(prompt, imagePath:)` adds `-i <path>` to the `codex exec` args, placed **right before `--skip-git-repo-check`** so that flag terminates `-i`'s variadic `<FILE>...` and the prompt is never mistaken for a second image. `commandPrompt(…, hasScreenshot:)` adds a line telling the agent to resolve "this"/"here" against the attached frame.
+- **The proactive executor passes nothing** (`imagePath` defaults to nil) — a background proactive action has no "current screen" to show; this is a Sidekick-only capture.
+- **Privacy note:** the frame goes to the user's OWN codex/OpenAI — the same trust boundary computer use already crosses (it reads the live screen anyway). It never touches Sentient servers, and only the file *size* is logged, never the pixels.
+- **Known rough edges (§13):** no downscale yet (~0.5–1.5 MB per frame) · our own notch overlay is *in* the shot (recordable window) · main-display only (multi-monitor grabs the wrong screen sometimes) · the **home command-bar path is weak** — Sentient is frontmost there, so the frame is often our own UI; the two *notch* doors (non-activating panel) are where the shot is genuinely useful.
 
 ---
 
@@ -228,6 +241,7 @@ All of the below is **confirmed working on Jesai's bezel** (live screenshots/rec
 - **The window:** fixed canvas, flush at the bezel (concave corners visible), no detach during morphs; **click-through bulletproof** (cursor-position toggle — verified clicks pass through the glow + everywhere but the notch); typing takes keystrokes without activating the app.
 - **The glow:** thick, vivid, layered, all around the silhouette (incl. corners), alive from the moment the notch appears.
 - **Remembering:** gradient "Remembering ‹note›" surfaces the knowledge-base reads; status stream is filtered clean (no CLI chrome / `stderr:` / prompt echo).
+- **Screen context (§6a):** [MEASURED, real hardware, 2026-07-04] on a "what do you see on my screen" command the log shows the full chain — `📸 screenshot captured (752 KB)` → `screenshot: true` → the prompt carries the screenshot line → `codex exec -i` → codex answered **"I see Google Chrome open to `x.com/home` on X in dark mode."** The still is captured, attached, and read. (Note: computer use ALSO has its own live screen access now, so a given answer may draw on either our still or its live view; codex's "using the screenshot as immediate context" confirms our image is ingested.)
 - **The logo** matches the app icon — twinned to the right control in a shared 17pt slot, the warm seam stop deepened to gold (no white spot), the white ring extra-fine, spinning 2× faster while processing.
 - **Dismiss & Esc:** the notch *retracts/merges into the cutout* on dismiss (no fade); Esc cancels globally (type field · listening · transcript), a right-⌘ tap closes the type field, and STOP/Esc dismiss the transcript instantly while still halting live computer use with the "Stopped" beat.
 - **Not yet done:** §12 polish backlog; productionization (§13). Reduced-motion + VoiceOver coded but unverified.
@@ -265,6 +279,7 @@ Esc cancels/dismisses globally via the zero-permission `keyDown` tap (§4) — t
 - **Confirm** the SkyLight pin + order-out never leaves the notch stuck visible when idle.
 - **Reduced-motion / VoiceOver** sanity pass.
 - **Retire the dev bench** `Views/Dev/HotkeyLabView.swift` + its DEV TOOLS → HOTKEY LAB button once the real hotkey is proven.
+- **Screenshot polish (§6a), each its own small pass:** downscale the frame (~1440px wide) to cut upload/latency/tokens · **exclude our own notch overlay** from the shot (ScreenCaptureKit `SCContentFilter` window-exclusion, vs the current `screencapture` CLI) · **multi-display** — capture the display the user is actually on (or attach all via `-i`'s variadic), not just the main one · reconsider the **home command-bar path**, where the frame is usually just Sentient's own UI (skip it there, or capture the display behind).
 
 ---
 

@@ -10,7 +10,7 @@
 //  lets the coordinator move the notch from running → finishing. Everything also tees to Log()
 //  (tail /tmp/sentient-dev.log). Doc: Documentation/Notch Magic/.
 //
-//  Key methods: start(_:mode:) · stop() · commandPrompt(task:mode:).
+//  Key methods: start(_:mode:) · stop() · commandPrompt(task:mode:hasScreenshot:).
 //
 
 import Foundation
@@ -51,18 +51,22 @@ final class CommandRunModel {
         remembering = nil
         rememberClear?.cancel()
         statusLine = "Starting \(mode.promptPhrase)…"
-        let prompt = Self.commandPrompt(task: task0, mode: mode)
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
-        Log("CMD: launching codex exec (gpt-5.5 · \(mode.promptPhrase) · bypass sandbox)…")
-        #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
-                    // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
-        Log("CMD: prompt ↓\n\(prompt)")
-        #endif
-        Log("──────────────── live codex output ↓ ────────────────")
         let started = Date()
         task = Task { [weak self] in
+            // Snap the screen NOW so computer use sees exactly what the user is looking at (nil if the
+            // Screen Recording grant is missing → runs text-only). Deleted the moment codex is done.
+            let shot = await ScreenCapture.grab()
+            defer { ScreenCapture.discard(shot) }
+            let prompt = Self.commandPrompt(task: task0, mode: mode, hasScreenshot: shot != nil)
+            Log("CMD: launching codex exec (gpt-5.5 · \(mode.promptPhrase) · bypass sandbox · screenshot: \(shot != nil))…")
+            #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
+                        // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
+            Log("CMD: prompt ↓\n\(prompt)")
+            #endif
+            Log("──────────────── live codex output ↓ ────────────────")
             do {
-                let out = try await CodexCLI.shared.runAgentCommand(prompt) { line in
+                let out = try await CodexCLI.shared.runAgentCommand(prompt, imagePath: shot?.path) { line in
                     Task { @MainActor in
                         #if DEBUG
                         Log("CMD │ \(line)")
@@ -204,11 +208,15 @@ final class CommandRunModel {
     /// Build the command prompt: `mode.promptPhrase` ("computer use") leads and the typed/spoken task fills
     /// the rest. The agent is told to do the TASK via computer use (not AppleScript GUI-scripting), and to
     /// read the knowledge base (path resolved from `~`) with its shell/file tools — NOT by opening it in a
-    /// GUI app like Obsidian.
-    nonisolated static func commandPrompt(task: String, mode: AgentMode) -> String {
-        """
+    /// GUI app like Obsidian. When `hasScreenshot`, a frame of the user's live screen is attached (via
+    /// `codex exec -i`), so the prompt tells the agent to ground "this"/"here" in what it can see.
+    nonisolated static func commandPrompt(task: String, mode: AgentMode, hasScreenshot: Bool) -> String {
+        let screenLine = hasScreenshot
+            ? "\nAttached is a screenshot of my screen exactly as it looks right now. Use it to see what I'm currently looking at — resolve any \"this\", \"here\", \"that form\", etc. against what's on screen before you act.\n"
+            : ""
+        return """
         Using \(mode.promptPhrase), \(task)
-
+        \(screenLine)
         Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate). Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
 
         For context about me, my knowledge base is a folder of markdown files at '\(VaultGenerator.vaultRoot.path)'. When you need it, read it directly with your shell/file tools — `ls`, `cat`, and `grep` the .md files. Do NOT open it in Obsidian or any GUI app to read it.
