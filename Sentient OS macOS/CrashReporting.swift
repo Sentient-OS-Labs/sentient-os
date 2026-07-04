@@ -11,8 +11,9 @@
 //  Two hard gates decide whether ANYTHING reaches Sentry (Documentation/Source Diagnostics …):
 //   1. RELEASE builds only — `start()` no-ops in DEBUG. There is NO debug bypass: Sentry never
 //      initializes in a Debug build, so verify the pipeline from a Release build.
-//   2. Opt-OUT switch — `diagnosticsEnabled` (default ON); the single "Share anonymous diagnostics"
-//      toggle in Settings gates ALL reporting, crashes included.
+//   2. Opt-OUT switch — `diagnosticsEnabled` (default ON); the "Share anonymous crash reports"
+//      toggle in Settings → System gates ALL Sentry reporting, crashes included. (Product
+//      analytics has its own separate switch — see Analytics.swift.)
 //  Privacy is upheld by construction, not by the switch: `captureEvent` only ever takes
 //  counts/enums/versions/error-type-names, and `beforeSend`/`beforeBreadcrumb` scrub free text as a
 //  backstop. Events carry an anonymous per-install id (a random UUID, never the mirror token).
