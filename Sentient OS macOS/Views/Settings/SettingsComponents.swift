@@ -149,9 +149,10 @@ struct ChipFlow: Layout {
 
 /// A source/option pill — the connector form (the Analysis popover's chips, grown up a size).
 /// ON is a small celebration: a green wash + green ring + the green dot, so a selected source
-/// visibly counts. `detail` carries counts ("12 chats"). Pure
-/// action chips ("+ Add Folder") pass `isAction: true`: no dot, a bright dashed border, white
-/// ink — an invitation, not a source.
+/// visibly counts. The label ink is ALWAYS pure white — the dot/wash/ring carry the on/off
+/// state, never a dimmed label (dim gray on OLED black was unreadable). `detail` carries counts
+/// ("12 chats"). Pure action chips ("+ Add Folder") pass `isAction: true`: no dot, a bright
+/// dashed border — an invitation, not a source.
 struct SettingsChip: View {
     let label: String
     var detail: String? = nil
@@ -164,15 +165,15 @@ struct SettingsChip: View {
             HStack(spacing: 7) {
                 if !isAction {
                     Circle()
-                        .fill(on ? Theme.Ink.green : Theme.Ink.deepMuted.opacity(0.55))
+                        .fill(on ? Theme.Ink.green : .white.opacity(0.4))
                         .frame(width: 5, height: 5)
                 }
                 Text(label)
                     .font(.system(size: 12, weight: on || isAction ? .medium : .regular))
-                    .foregroundStyle(isAction || on ? .white : Theme.Ink.chipInk)
+                    .foregroundStyle(.white)
                 if let detail {
                     Text(detail).font(.system(size: 10.5))
-                        .foregroundStyle(on ? Theme.Ink.green.opacity(0.85) : Theme.Ink.label)
+                        .foregroundStyle(on ? Theme.Ink.green.opacity(0.85) : .white.opacity(0.62))
                 }
             }
             .padding(.horizontal, 13).padding(.vertical, 7)
@@ -183,7 +184,7 @@ struct SettingsChip: View {
                     Capsule().strokeBorder(Color.white.opacity(0.32),
                                            style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 } else {
-                    Capsule().strokeBorder(on ? Theme.Ink.green.opacity(0.38) : Theme.Ink.chipBorder,
+                    Capsule().strokeBorder(on ? Theme.Ink.green.opacity(0.38) : Color.white.opacity(0.16),
                                            lineWidth: 1)
                 }
             }
@@ -311,7 +312,7 @@ struct SettingsTextBox: View {
             // (horizontal 7 + NSTextView's ~5pt line-fragment padding, vertical 8) → (12, 8).
             if text.isEmpty {
                 Text(placeholder)
-                    .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.deepMuted)
+                    .font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.55))
                     .padding(.horizontal, 12).padding(.vertical, 8)
                     .allowsHitTesting(false)
             }
