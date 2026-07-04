@@ -117,7 +117,7 @@ struct SettingsView: View {
                 case .proactive: ProactivePanePlaceholder()
                 case .yourAIs:   YourAIsPane()
                 case .system:    SystemPane()
-                case .health:    HealthPanePlaceholder()
+                case .health:    HealthPane()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
