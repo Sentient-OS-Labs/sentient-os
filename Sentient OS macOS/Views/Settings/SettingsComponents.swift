@@ -6,7 +6,7 @@
 //  prose for stories, hairline toggle lines for switches, chips for sources, status dots for
 //  health, bordered fields only for actual input. No uniform card rows.
 //  Pieces: SettingsPane (scaffold) · SettingsGroup · SettingsProse · SettingToggleLine ·
-//  SettingsChip · StatusLine · SettingsFieldPreview · SettingsHairline.
+//  SettingsPillButton · ChipFlow · SettingsChip · StatusLine · SettingsTextBox · SettingsHairline.
 //
 
 import SwiftUI
@@ -88,7 +88,7 @@ struct SettingToggleLine: View {
             }
             Spacer(minLength: 12)
             Toggle("", isOn: $isOn)
-                .labelsHidden().toggleStyle(.switch).tint(Theme.Ink.mint)
+                .labelsHidden().toggleStyle(.switch).tint(Theme.Ink.green)
         }
         .padding(.vertical, 5)
     }
@@ -148,8 +148,8 @@ struct ChipFlow: Layout {
 }
 
 /// A source/option pill — the connector form (the Analysis popover's chips, grown up a size).
-/// ON is a small celebration: a mint wash + mint ring + the mint dot (the verdict color for
-/// "kept"), so a selected source visibly counts. `detail` carries counts ("12 chats"). Pure
+/// ON is a small celebration: a green wash + green ring + the green dot, so a selected source
+/// visibly counts. `detail` carries counts ("12 chats"). Pure
 /// action chips ("+ Add Folder") pass `isAction: true`: no dot, a bright dashed border, white
 /// ink — an invitation, not a source.
 struct SettingsChip: View {
@@ -164,7 +164,7 @@ struct SettingsChip: View {
             HStack(spacing: 7) {
                 if !isAction {
                     Circle()
-                        .fill(on ? Theme.Ink.mint : Theme.Ink.deepMuted.opacity(0.55))
+                        .fill(on ? Theme.Ink.green : Theme.Ink.deepMuted.opacity(0.55))
                         .frame(width: 5, height: 5)
                 }
                 Text(label)
@@ -172,18 +172,18 @@ struct SettingsChip: View {
                     .foregroundStyle(isAction || on ? .white : Theme.Ink.chipInk)
                 if let detail {
                     Text(detail).font(.system(size: 10.5))
-                        .foregroundStyle(on ? Theme.Ink.mint.opacity(0.85) : Theme.Ink.label)
+                        .foregroundStyle(on ? Theme.Ink.green.opacity(0.85) : Theme.Ink.label)
                 }
             }
             .padding(.horizontal, 13).padding(.vertical, 7)
-            .background(isAction ? Color.white.opacity(0.05) : (on ? Theme.Ink.mint.opacity(0.13) : Color.clear),
+            .background(isAction ? Color.white.opacity(0.05) : (on ? Theme.Ink.green.opacity(0.13) : Color.clear),
                         in: Capsule())
             .overlay {
                 if isAction {
                     Capsule().strokeBorder(Color.white.opacity(0.32),
                                            style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 } else {
-                    Capsule().strokeBorder(on ? Theme.Ink.mint.opacity(0.38) : Theme.Ink.chipBorder,
+                    Capsule().strokeBorder(on ? Theme.Ink.green.opacity(0.38) : Theme.Ink.chipBorder,
                                            lineWidth: 1)
                 }
             }
@@ -206,7 +206,7 @@ struct StatusLine: View {
 
     private var dot: Color {
         switch health {
-        case .ok:   return Theme.Ink.mint
+        case .ok:   return Theme.Ink.green
         case .warn: return Theme.Ink.amber
         case .bad:  return Color(red: 1.0, green: 0.45, blue: 0.45)
         }

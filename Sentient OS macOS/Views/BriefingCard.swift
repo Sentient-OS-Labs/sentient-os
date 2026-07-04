@@ -132,7 +132,7 @@ struct BriefingCard: View {
                     let line = briefing.workLog[i]
                     Text(line)
                         .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(line.hasPrefix("✓") ? Theme.Ink.mint : .white.opacity(0.72))
+                        .foregroundStyle(line.hasPrefix("✓") ? Theme.Ink.green : .white.opacity(0.72))
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
                 if visible < briefing.workLog.count { BlinkingCursor(color: briefing.accent) }
@@ -156,7 +156,7 @@ struct BriefingCard: View {
     private var doneFace: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 24)).foregroundStyle(Theme.Ink.mint)
+                .font(.system(size: 24)).foregroundStyle(Theme.Ink.green)
             VStack(alignment: .leading, spacing: 5) {
                 Text(briefing.doneTitle)
                     .font(.system(size: 20, design: .serif)).foregroundStyle(.white)

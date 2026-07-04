@@ -465,7 +465,7 @@ struct NotchContent: View {
     }
     private static func outcomeColor(_ o: CommandRunModel.Outcome) -> Color {
         switch o {
-        case .success: return Theme.Ink.mint
+        case .success: return Theme.Ink.green
         case .stopped: return .white.opacity(0.6)
         case .failed:  return Color(red: 1.0, green: 0.45, blue: 0.45)
         }

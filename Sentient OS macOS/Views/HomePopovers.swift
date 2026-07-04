@@ -67,9 +67,9 @@ struct AnalysisPopover: View {
             HStack {
                 MonoCaps("Analysis", size: 10, tracking: 2.4, color: Theme.Ink.label)
                 Spacer()
-                MonoCaps(syncedLabel, size: 8.5, tracking: 1.4, color: Theme.Ink.mint)
+                MonoCaps(syncedLabel, size: 8.5, tracking: 1.4, color: Theme.Ink.green)
                     .padding(.horizontal, 9).padding(.vertical, 4)
-                    .overlay(Capsule().strokeBorder(Theme.Ink.mint.opacity(0.3), lineWidth: 1))
+                    .overlay(Capsule().strokeBorder(Theme.Ink.green.opacity(0.3), lineWidth: 1))
             }
 
             Text(understoodLine)
@@ -185,7 +185,7 @@ struct YourAIsPopover: View {
             actions.padding(.top, 18)
 
             MonoCaps(note ?? "Your whole life · offered to every AI", size: 8.5, tracking: 1.6,
-                     color: note == nil ? Theme.Ink.deepMuted : Theme.Ink.mint)
+                     color: note == nil ? Theme.Ink.deepMuted : Theme.Ink.green)
                 .padding(.top, 13)
         }
         .padding(20)
@@ -201,13 +201,13 @@ struct YourAIsPopover: View {
         Button(action: toggle) {
             HStack(spacing: 5) {
                 if busy { ProgressView().controlSize(.mini) }
-                else { Circle().fill(enabled ? Theme.Ink.mint : Theme.Ink.deepMuted).frame(width: 6, height: 6) }
+                else { Circle().fill(enabled ? Theme.Ink.green : Theme.Ink.deepMuted).frame(width: 6, height: 6) }
                 Text(enabled ? "ON" : "OFF")
             }
             .font(.system(size: 8.5, weight: .semibold, design: .monospaced)).tracking(1.4)
-            .foregroundStyle(enabled ? Theme.Ink.mint : Theme.Ink.label)
+            .foregroundStyle(enabled ? Theme.Ink.green : Theme.Ink.label)
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .overlay(Capsule().strokeBorder((enabled ? Theme.Ink.mint : Theme.Ink.label).opacity(0.3), lineWidth: 1))
+            .overlay(Capsule().strokeBorder((enabled ? Theme.Ink.green : Theme.Ink.label).opacity(0.3), lineWidth: 1))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -340,7 +340,7 @@ struct SourceChip: View {
 
     var body: some View {
         let chip = HStack(spacing: 5) {
-            if on { Text("✓").foregroundStyle(Theme.Ink.mint) }
+            if on { Text("✓").foregroundStyle(Theme.Ink.green) }
             Text(name).foregroundStyle(on ? Theme.Ink.chipInk : .white.opacity(0.28))
         }
         .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(0.8)

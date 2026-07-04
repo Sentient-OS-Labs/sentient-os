@@ -108,7 +108,7 @@ struct YourAIsPane: View {
                         .background(Color.white.opacity(0.03), in: Capsule())
                         .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
                     SettingsPillButton(title: copied ? "Copied ✓" : "Copy",
-                                       tint: copied ? Theme.Ink.mint : Theme.Ink.bright) { copyURL() }
+                                       tint: copied ? Theme.Ink.green : Theme.Ink.bright) { copyURL() }
                     SettingsPillButton(title: "Regenerate…") { confirmRegenerate = true }
                         .disabled(busy)
                 }

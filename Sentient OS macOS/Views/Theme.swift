@@ -61,7 +61,7 @@ enum Theme {
         static let label = Color(red: 0.431, green: 0.427, blue: 0.459)        // #6e6d75
         static let deepMuted = Color(red: 0.337, green: 0.333, blue: 0.369)    // #56555e
         static let bright = Color(red: 0.812, green: 0.804, blue: 0.839)       // #cfcdd6
-        static let mint = Color(red: 0.278, green: 0.843, blue: 0.675)         // #47d7ac
+        static let green = Color(red: 0.290, green: 0.871, blue: 0.502)        // #4ade80 (was mint #47d7ac — too seafoam)
         static let amber = Color(red: 1.0, green: 0.765, blue: 0.443)          // #ffc371
         static let chipInk = Color(red: 0.541, green: 0.537, blue: 0.565)      // #8a8990
         static let chipBorder = Color(red: 0.114, green: 0.114, blue: 0.133)   // #1d1d22
