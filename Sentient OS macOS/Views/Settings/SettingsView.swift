@@ -113,7 +113,7 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Group {
                 switch selection {
-                case .sources:   SourcesPanePlaceholder()
+                case .sources:   SourcesPane()
                 case .proactive: ProactivePanePlaceholder()
                 case .yourAIs:   YourAIsPane()
                 case .system:    SystemPane()

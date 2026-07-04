@@ -27,39 +27,8 @@
 import SwiftUI
 import AppKit
 
-/// One-shot reader of the dev source-picker prefs (same keys as the @AppStorage below; defaults
-/// must match: folder toggles ON, DB sources OFF). RootView uses it for Analyze Now; this sheet
-/// uses it too. The @AppStorage copies in DevToolsView exist for SwiftUI reactivity.
-enum SourceSelection {
-    static var chatJIDs: Set<String> {
-        Set((UserDefaults.standard.string(forKey: "dbg.whatsapp.chats") ?? "")
-            .split(separator: ",").map(String.init))
-    }
-    static var imessageGUIDs: Set<String> {
-        Set((UserDefaults.standard.string(forKey: "dbg.imessage.chats") ?? "")
-            .split(separator: ",").map(String.init))
-    }
-
-    static func current(customRoots: [URL], fdaGranted: Bool) -> [RunSource] {
-        var s: [RunSource] = []
-        if bool("dbg.run.downloads", default: true) { s.append(.files(.downloads)) }
-        if bool("dbg.run.desktop", default: true) { s.append(.files(.desktop)) }
-        if bool("dbg.run.documents", default: true) { s.append(.files(.documents)) }
-        s.append(contentsOf: customRoots.map { .files(.custom($0)) })
-        if bool("dbg.run.whatsapp", default: false) && fdaGranted && WhatsAppSource.isInstalled && !chatJIDs.isEmpty {
-            s.append(.whatsapp(chatJIDs: chatJIDs))
-        }
-        if bool("dbg.run.imessage", default: false) && fdaGranted && !imessageGUIDs.isEmpty {
-            s.append(.imessage(chatGUIDs: imessageGUIDs))
-        }
-        if bool("dbg.run.notes", default: false) && fdaGranted { s.append(.notes) }
-        return s
-    }
-
-    private static func bool(_ key: String, default def: Bool) -> Bool {
-        (UserDefaults.standard.object(forKey: key) as? Bool) ?? def
-    }
-}
+// SourceSelection + CustomRoots moved to Sources/SourceSelection.swift when the real Settings
+// shipped — the selection stopped being a dev-only concern.
 
 /// Tracks which dev action is running + each action's latest status line. MainActor-isolated so a
 /// background run's `@Sendable` progress callback can update it safely.
@@ -81,7 +50,9 @@ struct DeviceJob: Identifiable {
 }
 
 struct DevToolsView: View {
-    @Binding var customRoots: [URL]
+    // Persistent custom folder roots (CustomRoots store) — shared with Settings → Knowledge Sources.
+    @AppStorage(CustomRoots.key) private var customRootsRaw = ""
+    private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
@@ -130,7 +101,7 @@ struct DevToolsView: View {
     @State private var mirrorBusy = false
 
     private var selectedSources: [RunSource] {
-        SourceSelection.current(customRoots: customRoots, fdaGranted: fdaGranted)
+        SourceSelection.current(fdaGranted: fdaGranted)
     }
     private var selectedChatJIDs: Set<String> {
         Set(selectedChatsCSV.split(separator: ",").map(String.init))
@@ -529,7 +500,7 @@ struct DevToolsView: View {
                 sourceChip("Documents", selected: runDocuments) { runDocuments.toggle() }
                 ForEach(customRoots, id: \.self) { url in
                     sourceChip(url.lastPathComponent, selected: true, removable: true) {
-                        customRoots.removeAll { $0 == url }
+                        CustomRoots.remove(url)
                     }
                 }
                 chooseFolderChip
@@ -657,7 +628,7 @@ struct DevToolsView: View {
         panel.prompt = "Add"
         panel.message = "Add a folder for Sentient OS to analyze."
         guard panel.runModal() == .OK else { return }
-        for url in panel.urls where !customRoots.contains(url) { customRoots.append(url) }
+        for url in panel.urls { CustomRoots.add(url) }
     }
 
     // MARK: More (legacy + FDA + reset)

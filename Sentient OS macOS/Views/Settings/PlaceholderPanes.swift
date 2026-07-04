@@ -10,43 +10,6 @@
 
 import SwiftUI
 
-struct SourcesPanePlaceholder: View {
-    var body: some View {
-        SettingsPane(title: "Knowledge Sources.",
-                     whisper: "What Sentient reads — always locally, always yours.") {
-            VStack(alignment: .leading, spacing: 30) {
-                SettingsGroup(label: "On This Mac", badge: "coming soon") {
-                    VStack(alignment: .leading, spacing: 9) {
-                        HStack(spacing: 8) {
-                            SettingsChip(label: "Desktop", on: true)
-                            SettingsChip(label: "Downloads", on: true)
-                            SettingsChip(label: "Documents", on: true)
-                            SettingsChip(label: "+ Add Folder", on: false)
-                        }
-                        HStack(spacing: 8) {
-                            SettingsChip(label: "WhatsApp", detail: "12 chats", on: true)
-                            SettingsChip(label: "iMessage", detail: "8 chats", on: true)
-                            SettingsChip(label: "Apple Notes", on: true)
-                        }
-                    }
-                }
-                SettingsGroup(label: "Through Your ChatGPT", badge: "coming soon") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        SettingsProse("Read through your own connectors — never our servers.")
-                        HStack(spacing: 8) {
-                            SettingsChip(label: "Gmail", on: false, action: nil)
-                            SettingsChip(label: "Google Calendar", on: false, action: nil)
-                        }
-                    }
-                }
-                Text("Sentient needs at least three sources to truly know you.")
-                    .font(.serif(11.5, weight: .regular)).italic()
-                    .foregroundStyle(Theme.Ink.deepMuted)
-            }
-        }
-    }
-}
-
 struct ProactivePanePlaceholder: View {
     var body: some View {
         SettingsPane(title: "Proactive & Sidekick.",

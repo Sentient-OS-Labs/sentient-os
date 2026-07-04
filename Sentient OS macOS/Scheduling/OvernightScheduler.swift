@@ -238,8 +238,10 @@ final class OvernightScheduler {
         Analytics.signal("Scheduler.overnightStarted")   // the 3am wake fired and we're processing
 
         // DETECT — identical to the dev UI / Analyze Now (the shared SourceSelection reader).
+        // Custom roots are persistent now (CustomRoots), so the 3am run sees them too — the old
+        // "session-only customRoots" caveat is gone.
         let fda = Permissions.hasFullDiskAccess()
-        let sources = SourceSelection.current(customRoots: [], fdaGranted: fda)
+        let sources = SourceSelection.current(fdaGranted: fda)
         let connectors = RunSource.connectors(from: sources)
         let runGmail = ud("dbg.gmail.connected") && ud("dbg.run.gmail")
         let runCalendar = ud("dbg.calendar.connected") && ud("dbg.run.calendar")
