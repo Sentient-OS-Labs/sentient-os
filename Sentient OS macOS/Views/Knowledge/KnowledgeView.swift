@@ -8,6 +8,9 @@
 //  right-click) and a rendered-markdown reader on the right. [[Wikilinks]] jump between notes (Back walks the trail);
 //  the titlebar carries Edit / Delete (→ Trash) / Reveal in Finder. Every edit/create/delete commits
 //  locally and DEBOUNCE-syncs to the cloud MCP (VaultActivity.markChanged → the sidebar status line).
+//  The window OPENS in the "Constellation View" graph (Graph/NightSkyView.swift — the default);
+//  glowing SkyDoor capsules swap between it and the reader (sky: top-center · reader: top-left;
+//  ⌘⇧G). Click a star to read that note; Back (or Esc) returns to the sky where you left it.
 //
 //  Replaced the old DatabaseView (a dev CycleStore-summaries inspector, still in Dev Tools via
 //  SummariesView). Data: VaultTree.swift · rendering: MarkdownView.swift.
@@ -54,26 +57,31 @@ struct KnowledgeView: View {
     @State private var createParent: URL?     // nil = the vault root
     @State private var createName = ""
 
+    // The Night Sky graph view — the window OPENS here (Constellation View is the default; the
+    // Reader door leads to the split view). The model outlives toggles, so the sky keeps its
+    // camera and star positions across reader trips; `cameFromSky` makes Back return to the sky
+    // after a star click.
+    @State private var mode: Mode = .sky
+    @StateObject private var skyModel = NightSkyModel()
+    @State private var cameFromSky = false
+
+    /// Reader (the split view) or the Night Sky (the full-window galaxy).
+    private enum Mode { case reader, sky }
+
     /// A navigation parked behind the unsaved-edits prompt.
-    private enum PendingNav { case open(URL), follow(URL), back }
+    private enum PendingNav { case open(URL), follow(URL), back, sky }
 
     var body: some View {
-        NavigationSplitView {
-            sidebar.navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 430)
-        } detail: {
-            reader
+        Group {
+            if mode == .sky {
+                skyPane.transition(.opacity)
+            } else {
+                splitView.transition(.opacity)
+            }
         }
-        .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 900, minHeight: 600)
         .background(Theme.bg)
         .background(WindowChrome())   // transparent titlebar from launch (no "grey until resize")
-        // Window-open focus lands in the search box, not the sidebar's "+" button. defaultFocus
-        // declares it; the delayed onAppear claim backs it up (AppKit assigns the initial key
-        // view a beat after SwiftUI's appear — same pattern as PromptBar's launch focus).
-        .defaultFocus($searchFocused, true)
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { searchFocused = true }
-        }
         .task { await loadVault() }
         .alert("You have unsaved edits", isPresented: $showDiscardPrompt) {
             Button("Save") { promptSave() }
@@ -87,6 +95,35 @@ struct KnowledgeView: View {
             Button("Create") { performCreate() }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// The reader half: the familiar sidebar + rendered-markdown split.
+    private var splitView: some View {
+        NavigationSplitView {
+            sidebar.navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 430)
+        } detail: {
+            reader
+        }
+        .navigationSplitViewStyle(.balanced)
+        // Window-open focus lands in the search box, not the sidebar's "+" button. defaultFocus
+        // declares it; the delayed onAppear claim backs it up (AppKit assigns the initial key
+        // view a beat after SwiftUI's appear — same pattern as PromptBar's launch focus).
+        .defaultFocus($searchFocused, true)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { searchFocused = true }
+        }
+    }
+
+    /// The Constellation View takes the whole window (the planetarium moment). The top-left
+    /// "Reader" door, Esc, and ⌘⇧G all lead back.
+    private var skyPane: some View {
+        NightSkyView(vault: vault, vaultLoaded: loaded, model: skyModel,
+                     onOpen: { openFromSky($0) },
+                     onExit: { requestMode(.reader) })
+            .toolbar {
+                SkyDoorToolbarItem(icon: "doc.plaintext", label: "Reader View",
+                                   help: "Back to the reader (Esc or ⌘⇧G)") { requestMode(.reader) }
+            }
     }
 
     private func loadVault() async {
@@ -108,7 +145,34 @@ struct KnowledgeView: View {
     /// Open a note from the sidebar (or on first load): a clean start, so no Back button shows.
     private func open(_ url: URL) {
         history = [url]; historyIndex = 0
+        cameFromSky = false      // a fresh trail forgets the sky (openFromSky re-sets it)
         select(url)
+    }
+
+    // MARK: The Night Sky (mode switching + the star → reader → back-to-sky loop)
+
+    /// Switch reader ⟷ sky. Entering the sky funnels through the same unsaved-edits guard as
+    /// every other navigation.
+    private func requestMode(_ new: Mode) {
+        guard new != mode else { return }
+        if new == .sky {
+            if editing { if isDirty { pendingNav = .sky; showDiscardPrompt = true; return }; exitEdit() }
+            enterSky()
+        } else {
+            withAnimation(.easeInOut(duration: 0.3)) { mode = .reader }
+        }
+    }
+
+    private func enterSky() {
+        if cameFromSky, let sel = selection { skyModel.highlight(sel) }   // "you were just here"
+        withAnimation(.easeInOut(duration: 0.3)) { mode = .sky }
+    }
+
+    /// A star was clicked: land in the reader on that note, and let Back lead home to the sky.
+    private func openFromSky(_ url: URL) {
+        withAnimation(.easeInOut(duration: 0.3)) { mode = .reader }
+        open(url)
+        cameFromSky = true
     }
 
     /// Follow a wikilink: push onto the trail (truncating anything we'd gone back past), so Back
@@ -143,7 +207,13 @@ struct KnowledgeView: View {
     }
     private func requestBack() {
         if editing { if isDirty { pendingNav = .back; showDiscardPrompt = true; return }; exitEdit() }
-        goBack()
+        backAction()
+    }
+
+    /// Back walks the wikilink trail; with the trail exhausted, it returns to the Night Sky if
+    /// that's where this reading trip began.
+    private func backAction() {
+        if canGoBack { goBack() } else if cameFromSky { enterSky() }
     }
 
     // MARK: The markdown editor
@@ -201,7 +271,8 @@ struct KnowledgeView: View {
         switch p {
         case .open(let u):   open(u)
         case .follow(let u): follow(u)
-        case .back:          goBack()
+        case .back:          backAction()
+        case .sky:           enterSky()
         }
     }
 
@@ -211,8 +282,9 @@ struct KnowledgeView: View {
     /// (a now-missing selection is handled by the caller).
     private func reloadVault() { vault = KnowledgeVault.load() }
 
-    /// Move a note to the macOS Trash (recoverable). If it was the open note, land on Overview.
-    private func deleteNote(_ url: URL) {
+    /// Move a note OR a folder to the macOS Trash (recoverable). If the open note was the trashed
+    /// item — or lived anywhere inside a trashed folder — land back on Overview.
+    private func deleteItem(_ url: URL) {
         guard url != vault?.readme else { return }   // never trash the vault index
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
@@ -220,9 +292,9 @@ struct KnowledgeView: View {
             Log("Knowledge: delete failed — \(error.localizedDescription)")
             return
         }
-        let wasOpen = (url == selection)
+        let lostSelection = selection == url || (selection?.path.hasPrefix(url.path + "/") ?? false)
         reloadVault()
-        if wasOpen {
+        if lostSelection {
             if let r = vault?.readme { open(r) }
             else { selection = nil; note = nil; history = []; historyIndex = -1 }
         }
@@ -359,16 +431,17 @@ struct KnowledgeView: View {
     }
 
     /// The line under the count: "Saved locally on this Mac" (mirror off) or the live cloud-MCP sync
-    /// state — a glowing status dot (white at rest, warm accent while working; a spinner while pushing)
-    /// then the state with an inline, single-color "(🔒 E2E Encrypted)". @Observable → re-renders live.
-    /// (E2E Encrypted is surfaced now, implemented later.)
+    /// state — a calm white status dot (a spinner while pushing; deliberately NEVER colored — an
+    /// orange "will sync" read as a warning) then the state with an inline, single-color
+    /// "(🔒 E2E Encrypted)". @Observable → re-renders live. (E2E Encrypted is surfaced now,
+    /// implemented later.)
     @ViewBuilder
     private var statusLine: some View {
         if mirrorEnabled {
             switch VaultActivity.shared.syncState {
             case .synced:  cloudStatus("Synced to Cloud MCP", color: Theme.secondary, dot: .white, spinner: false)
-            case .pending: cloudStatus("Will sync soon", color: Theme.knowledgeAccent, dot: Theme.knowledgeAccent, spinner: false)
-            case .syncing: cloudStatus("Syncing to Cloud MCP", color: Theme.knowledgeAccent, dot: Theme.knowledgeAccent, spinner: true)
+            case .pending: cloudStatus("Will sync soon", color: Theme.secondary, dot: .white, spinner: false)
+            case .syncing: cloudStatus("Syncing to Cloud MCP", color: Theme.secondary, dot: .white, spinner: true)
             }
         } else {
             HStack(spacing: 7) {
@@ -430,7 +503,7 @@ struct KnowledgeView: View {
                     NodeRow(node: node, depth: 0, expanded: $expanded, selection: selection,
                             onSelect: { requestOpen($0) },
                             onCreate: { promptCreate(folder: $1, in: $0) },
-                            onDelete: { deleteNote($0) })
+                            onDelete: { deleteItem($0) })
                 }
             } else if searchResults.isEmpty {
                 Text("No matches").font(.system(size: 12)).foregroundStyle(Theme.faint)
@@ -438,7 +511,7 @@ struct KnowledgeView: View {
             } else {
                 ForEach(searchResults) { node in
                     NoteRow(url: node.url, title: node.name, depth: 0, selected: node.url == selection,
-                            onDelete: { deleteNote($0) }) {
+                            onDelete: { deleteItem($0) }) {
                         requestOpen(node.url)
                     }
                 }
@@ -454,14 +527,22 @@ struct KnowledgeView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.bg)
             .toolbar {
-                // The actions live in the window's titlebar (no extra row): Back rides in on the left
-                // only after a wikilink jump; Edit + Reveal in Finder sit TOGETHER at the top-right.
-                // (One ToolbarItemGroup, not two ToolbarItems — split-view detail toolbars left-align
-                // multiple separate .primaryAction items; a single group trails correctly.)
-                if canGoBack {
+                // The actions live in the window's titlebar (no extra row): the glowing
+                // "Constellation View" door leads top-left (mode switches funnel through
+                // requestMode, so unsaved edits are never dropped), Back rides in beside it
+                // after a wikilink jump (or a star click — then it returns to the sky); Edit +
+                // Reveal in Finder sit TOGETHER at the top-right. (One ToolbarItemGroup, not two
+                // ToolbarItems — split-view detail toolbars left-align multiple separate
+                // .primaryAction items; a single group trails correctly.)
+                if vault != nil {
+                    SkyDoorToolbarItem(icon: "sparkles", label: "Constellation View",
+                                       help: "See your knowledge as a galaxy (⌘⇧G)",
+                                       placement: .navigation) { requestMode(.sky) }
+                }
+                if canGoBack || cameFromSky {
                     ToolbarItem(placement: .navigation) {
                         Button(action: requestBack) { Label("Back", systemImage: "chevron.left") }
-                            .help("Back")
+                            .help(canGoBack ? "Back" : "Back to the Night Sky")
                     }
                 }
                 if selection != nil {
@@ -479,7 +560,7 @@ struct KnowledgeView: View {
     @ViewBuilder
     private var deleteToolbarButton: some View {
         if let url = selection, url != vault?.readme {
-            Button(role: .destructive) { deleteNote(url) } label: {
+            Button(role: .destructive) { deleteItem(url) } label: {
                 Label("Move to Trash", systemImage: "trash")
             }
             .labelStyle(.iconOnly)
@@ -622,6 +703,7 @@ private struct FolderRow: View {
     let depth: Int
     let isOpen: Bool
     let onCreate: (URL, Bool) -> Void
+    let onDelete: (URL) -> Void
     let toggle: () -> Void
     @State private var hover = false
 
@@ -672,6 +754,8 @@ private struct FolderRow: View {
             Button { onCreate(url, true) } label: { Label("New Folder", systemImage: "folder.badge.plus") }
             Divider()
             Button { NSWorkspace.shared.activateFileViewerSelecting([url]) } label: { Label("Reveal in Finder", systemImage: "folder") }
+            Divider()
+            Button(role: .destructive) { onDelete(url) } label: { Label("Move to Trash", systemImage: "trash") }
         }
     }
 }
@@ -730,7 +814,8 @@ private struct NodeRow: View {
     var body: some View {
         if node.isFolder {
             VStack(alignment: .leading, spacing: 1) {
-                FolderRow(url: node.url, name: node.name, depth: depth, isOpen: isOpen, onCreate: onCreate) {
+                FolderRow(url: node.url, name: node.name, depth: depth, isOpen: isOpen,
+                          onCreate: onCreate, onDelete: onDelete) {
                     withAnimation(.easeInOut(duration: 0.22)) {
                         if isOpen { expanded.remove(node.url) } else { expanded.insert(node.url) }
                     }

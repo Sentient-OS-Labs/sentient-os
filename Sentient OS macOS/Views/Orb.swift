@@ -390,7 +390,8 @@ struct OrbMark: View {
 }
 
 /// Tiny deterministic RNG so the ring's matter is identical every launch.
-private struct SplitMix64: RandomNumberGenerator {
+/// Internal (not private): the Night Sky graph view seeds its star field and mock graph with it too.
+struct SplitMix64: RandomNumberGenerator {
     var state: UInt64
     init(seed: UInt64) { state = seed }
     mutating func next() -> UInt64 {
