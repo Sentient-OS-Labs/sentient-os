@@ -34,6 +34,10 @@ final class AppState {
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
 
+    /// The Sparkle auto-updater + our OLED forced-update UI. Only ever built in the GUI app (this
+    /// whole object is), never the root wake-helper. Its `model` drives UpdateGateView. (Updates/)
+    let update = UpdateController()
+
     private static let onboardingKey = "hasCompletedOnboarding"
     var hasCompletedOnboarding: Bool {
         didSet {
@@ -49,5 +53,6 @@ final class AppState {
         scheduler.maybeAutoEnable()   // 18h after initial: flip the overnight scheduler on (or arm the timer)
         commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
         notch.start()                // raise the notch overlay window
+        update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
     }
 }

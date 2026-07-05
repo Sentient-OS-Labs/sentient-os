@@ -21,6 +21,10 @@ struct MenuBarView: View {
         }
 
         Divider()
+        Button("Check for Updates…") { appState.update.checkForUpdatesNow() }
+        Text("Version \(UpdateController.currentVersionString)")
+
+        Divider()
         Button("Quit Sentient OS") { NSApplication.shared.terminate(nil) }
     }
 }

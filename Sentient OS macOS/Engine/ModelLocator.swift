@@ -34,13 +34,16 @@ enum ModelLocator {
         if fm.fileExists(atPath: appSupport) { return appSupport }
 
         #if DEBUG
-        // This file lives at <repo>/Sentient OS macOS/ModelLocator.swift; the model sits at the
-        // repo root next to the .xcodeproj (per the team onboarding checklist).
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // …/<repo>/Sentient OS macOS/
-            .deletingLastPathComponent()   // …/<repo>/
-        let dev = repoRoot.appendingPathComponent(fileName).path
-        if fm.fileExists(atPath: dev) { return dev }
+        // The model sits at the repo root next to the .xcodeproj (team onboarding checklist). Walk
+        // UP from this source file until we find it — robust to wherever this file lives in the
+        // tree, so a future reshuffle (e.g. moving it into Engine/) can't silently break the dev
+        // fallback the way a fixed number of parent hops did.
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while dir.path != "/" {
+            let candidate = dir.appendingPathComponent(fileName).path
+            if fm.fileExists(atPath: candidate) { return candidate }
+            dir = dir.deletingLastPathComponent()
+        }
         #endif
 
         return nil

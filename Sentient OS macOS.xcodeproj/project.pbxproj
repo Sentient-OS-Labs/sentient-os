@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5A5A9A0001000000000000A1 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5A5A9A0001000000000000A2 /* Sparkle */; };
 		5A7E1D0002000000000000B1 /* TelemetryDeck in Frameworks */ = {isa = PBXBuildFile; productRef = 5A7E1D0002000000000000B2 /* TelemetryDeck */; };
 		5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.plist in Copy wake-helper daemon plist */ = {isa = PBXBuildFile; fileRef = 5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */; };
 		5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5AB7600D2FD12ABE00149A7F /* LiteRTLM */; };
@@ -49,6 +50,7 @@
 				5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */,
 				5AE5710001000000000000A1 /* Sentry in Frameworks */,
 				5A7E1D0002000000000000B1 /* TelemetryDeck in Frameworks */,
+				5A5A9A0001000000000000A1 /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -99,6 +101,7 @@
 				5AB7600D2FD12ABE00149A7F /* LiteRTLM */,
 				5AE5710001000000000000A2 /* Sentry */,
 				5A7E1D0002000000000000B2 /* TelemetryDeck */,
+				5A5A9A0001000000000000A2 /* Sparkle */,
 			);
 			productName = "Sentient OS macOS";
 			productReference = 5A3F39112FD0F43300DD835E /* Sentient OS.app */;
@@ -132,6 +135,7 @@
 				5AB7600C2FD12ABE00149A7F /* XCLocalSwiftPackageReference "Vendor/LiteRTLM" */,
 				5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
 				5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */,
+				5A5A9A0001000000000000A3 /* XCRemoteSwiftPackageReference "Sparkle" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 5A3F39122FD0F43300DD835E /* Products */;
@@ -342,6 +346,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Sentient OS uses Automation so the computer-use agent you ask it to run can control apps on your Mac on your behalf.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sentient OS listens when you hold the right Command key, so you can speak the task you want done.";
@@ -379,6 +384,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Sentient OS uses Automation so the computer-use agent you ask it to run can control apps on your Mac on your behalf.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sentient OS listens when you hold the right Command key, so you can speak the task you want done.";
@@ -432,6 +438,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		5A5A9A0001000000000000A3 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.4;
+			};
+		};
 		5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/TelemetryDeck/SwiftSDK";
@@ -451,6 +465,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		5A5A9A0001000000000000A2 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A5A9A0001000000000000A3 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
 		5A7E1D0002000000000000B2 /* TelemetryDeck */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */;

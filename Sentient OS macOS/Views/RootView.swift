@@ -57,6 +57,9 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 1040, minHeight: 800)
+        // The mandatory update gate floats above everything (home, processing, dev sheet) — when a
+        // required update is found it takes over; otherwise it draws nothing. (Updates/)
+        .overlay { UpdateGateView() }
         .sheet(isPresented: $showDevTools) {
             DevToolsView()
         }
