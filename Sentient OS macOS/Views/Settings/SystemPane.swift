@@ -13,6 +13,8 @@
 import SwiftUI
 
 struct SystemPane: View {
+    @Environment(AppState.self) private var appState   // for the updater (Check Now / version)
+
     /// Crash reports (Sentry) — the original `diagnosticsEnabled` key, kept so existing installs
     /// carry their choice over. Analytics has its own key since the two toggles split.
     @AppStorage("diagnosticsEnabled") private var crashReportsEnabled = true
@@ -30,6 +32,7 @@ struct SystemPane: View {
             VStack(alignment: .leading, spacing: 34) {
                 overnightGroup
                 startupGroup
+                updatesGroup
                 privacyGroup
                 dangerGroup
             }
@@ -79,6 +82,27 @@ struct SystemPane: View {
             }
         } message: {
             Text("To stay helpful, your Sentient runs its on-device intelligence every night at 3 AM, and that can only happen if Sentient is already running. It's heavily optimized and stays out of your RAM and CPU the rest of the time.\n\nWe recommend leaving this on to keep your Sentient alive.")
+        }
+    }
+
+    // MARK: - Updates (Sparkle — the story is "we keep you current", not a dial)
+
+    private var updatesGroup: some View {
+        SettingsGroup(label: "Updates") {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsProse("Sentient keeps itself up to date automatically. When a new version is ready, Sentient asks you to update before continuing — so you're always on the latest, safest version.")
+                HStack(spacing: 6) {
+                    Text("Version \(UpdateController.currentVersionString)")
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
+                    if let last = appState.update.lastCheckDate {
+                        Text("· checked \(last.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                    }
+                }
+                SettingsPillButton(title: "Check for Updates Now") {
+                    appState.update.checkForUpdatesNow()
+                }
+            }
         }
     }
 
