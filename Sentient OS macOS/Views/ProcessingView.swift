@@ -77,6 +77,7 @@ struct ProcessingView: View {
     @State private var progress = RunProgress()
     @State private var started = false
     @State private var runTask: Task<RunProgress, Never>?
+    @State private var awake = DisplayAwake()   // keeps the screen on during the long first ingest
 
     var body: some View {
         ZStack {
@@ -365,6 +366,15 @@ struct ProcessingView: View {
     /// complete, internally-consistent snapshot, so dropping intermediate frames never desyncs the
     /// prompt pane from the card.
     private func run() async {
+        // Keep the display awake ONLY for the initial ingest — the long one. The home + 3am both run
+        // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 18h auto-enable
+        // uses (nil until the first full cycle completes). `defer` releases on completion, failure, or
+        // cancellation; the 3am path never reaches here (it never presents this view).
+        if mode == .initial || OvernightScheduler.firstCycleCompletedAt == nil {
+            awake.begin(reason: "Initial ingestion — keeping the screen on")
+        }
+        defer { awake.end() }
+
         state = .loadingModel
         progress = RunProgress()
         let (stream, continuation) = AsyncStream.makeStream(
