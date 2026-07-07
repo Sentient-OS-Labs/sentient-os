@@ -28,7 +28,7 @@ struct CodexSetupView: View {
 
             ScrollView {
                 VStack(spacing: 16) {
-                    Text("Three steps to let Sentient act for you with Codex computer use. This window just triggers the shared setup engine — onboarding calls the exact same code.")
+                    Text("Three steps to let Sentient act for you with Codex computer use. This window just triggers the shared setup engine; onboarding calls the exact same code.")
                         .font(.caption2).foregroundStyle(Theme.faint.opacity(0.8))
                         .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
 
@@ -68,7 +68,7 @@ struct CodexSetupView: View {
     private var loginCard: some View {
         stepCard(2, "Log in to Codex", done: codex.loggedIn) {
             if codex.loggedIn {
-                hint("Signed in with your OpenAI account. Codex is in every plan — free included — so there's no subscription to check.")
+                hint("Signed in with your OpenAI account. Codex is in every plan, free included, so there's no subscription to check.")
                 Button { codex.startLogin(force: true) } label: {
                     buttonLabel("arrow.triangle.2.circlepath", "Log in again", busy: false)
                 }
@@ -95,7 +95,7 @@ struct CodexSetupView: View {
     private var computerUseCard: some View {
         stepCard(3, "Set up computer use", done: codex.computerUseReady) {
             if codex.computerUseReady {
-                hint("Computer use is wired into ~/.codex — Codex can drive your Mac through the CLI.")
+                hint("Computer use is wired into ~/.codex; Codex can drive your Mac through the CLI.")
                 Button { Task { await codex.setupComputerUse(force: true) } } label: {
                     buttonLabel("arrow.triangle.2.circlepath", "Re-install computer use", busy: codex.settingUpComputerUse)
                 }

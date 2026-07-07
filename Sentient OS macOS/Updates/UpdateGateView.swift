@@ -9,7 +9,7 @@
 //     or "Couldn't check". Never shown for a silent background check.
 //  Rendered as an overlay by RootView; draws nothing when surface == .none.
 //
-//  Design bar: true-black, editorial serif titles, mono-caps whispers, the spinning AI-spectrum
+//  Design bar: true-black, bold display titles, mono-caps whispers, the spinning AI-spectrum
 //  logo as the living mark, the glow CTA. Reuses Theme / GlowButton / SpinningLogo.
 //
 
@@ -56,7 +56,7 @@ struct UpdateGateView: View {
                     .padding(.bottom, 14)
 
                 Text(gateTitle)
-                    .font(.serif(30)).italic()
+                    .display(30)
                     .foregroundStyle(Theme.Ink.statusInk)
                     .multilineTextAlignment(.center)
 
@@ -145,7 +145,7 @@ struct UpdateGateView: View {
                 case .checking:
                     ProgressView().controlSize(.small).tint(.white.opacity(0.5))
                     Text("Checking for updates…")
-                        .font(.serif(17)).italic().foregroundStyle(Theme.Ink.statusInk)
+                        .font(.system(size: 17)).foregroundStyle(Theme.Ink.statusInk)
                     Button("Cancel") { model.dismissInfo() }
                         .buttonStyle(.plain)
                         .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.label)
@@ -155,7 +155,7 @@ struct UpdateGateView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .font(.system(size: 26)).foregroundStyle(Theme.Ink.green)
                     Text("You're up to date.")
-                        .font(.serif(19)).italic().foregroundStyle(Theme.Ink.statusInk)
+                        .font(.system(size: 19, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
                     Text("Sentient is on version \(UpdateController.currentVersionString).")
                         .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
                     doneButton
@@ -164,7 +164,7 @@ struct UpdateGateView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 22)).foregroundStyle(Theme.Ink.amber)
                     Text("Couldn't check for updates.")
-                        .font(.serif(18)).italic().foregroundStyle(Theme.Ink.statusInk)
+                        .font(.system(size: 18, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
                     Text(message)
                         .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
                         .multilineTextAlignment(.center).frame(maxWidth: 280)
@@ -249,7 +249,7 @@ struct UpdateGateView: View {
     private var gateBody: String {
         switch model.phase {
         case .found:
-            return "To keep doing things for you safely, Sentient always runs the latest version. This one's quick — one tap and you're set."
+            return "To keep doing things for you safely, Sentient always runs the latest version. This one's quick; one tap and you're set."
         case .downloading, .extracting:
             return "Hang tight while Sentient updates itself."
         case .installing:

@@ -3,27 +3,36 @@
 //  Sentient OS macOS
 //
 //  The Sentient OS visual language — one place so "fancy everywhere" stays consistent.
-//  Pure OLED black, serif-italic display voice, glassy elevated surfaces, a soft violet glow,
-//  and verdict color-coding. The app is dark-only (no light mode).
+//  Pure OLED black, a bold tight-tracked display voice, glassy elevated surfaces, a soft violet
+//  glow, and verdict color-coding. Serif survives only as the face of a note's name (Knowledge
+//  reader headings, star labels) and inside the gift letter. The app is dark-only (no light mode).
 //
 
 import SwiftUI
 
 enum Theme {
     static let bg = Color.black
-    /// The Knowledge sidebar surface — a subtle WARM (orange-tinted) lift off the OLED-black reading
-    /// pane, so the folder panel reads as its own warm chrome. Same brightness as a neutral panel
-    /// would be, just warm (r > g > b).
-    static let panel = Color(red: 0.102, green: 0.074, blue: 0.052)
+    /// The Knowledge sidebar surface — moonlit slate: near-neutral graphite with a whisper of cool
+    /// blue (b > g > r), so the folder panel reads as night-sky chrome and recedes behind the
+    /// reading pane. (The old warm-orange panel read as a Claude-ism.)
+    static let panel = Color(red: 0.053, green: 0.058, blue: 0.072)
     static let elevated = Color.white.opacity(0.05)
     static let stroke = Color.white.opacity(0.09)
     static let secondary = Color.white.opacity(0.55)
     static let faint = Color.white.opacity(0.32)
     static let accent = Color(red: 0.62, green: 0.55, blue: 1.0)   // soft violet glow
-    /// The Knowledge viewer's warm accent — a soft amber-orange (#ffae6b), leaning gold not red, for
-    /// wikilinks, bullets, and the selected-note glow. Gives the reading surface its own calm
-    /// identity instead of the app's violet.
-    static let knowledgeAccent = Color(red: 1.0, green: 0.682, blue: 0.42)
+    /// The Knowledge window's interactive accent — starlight periwinkle (#8ea6ff), the middle note
+    /// of the wikilink gradient. Selected rows, tints, carets. Color means "alive/tappable" here;
+    /// everything else stays neutral ink.
+    static let knowledgeAccent = Color(red: 0.557, green: 0.651, blue: 1.0)
+
+    /// The wikilink color — a plain, minimalist sky blue (#6fb6ff). Deliberately a solid, honest
+    /// web-link blue: gradient text reads as AI-generated, single claimed hues read as other
+    /// brands; sky blue on a night-sky surface reads as ours.
+    static let knowledgeLink = Color(red: 0.435, green: 0.714, blue: 1.0)
+
+    /// The sky's "changed last night" shimmer — dawn cyan.
+    static let dawnCyan = Color(red: 0.333, green: 0.757, blue: 0.941)
 
     /// "Magic" cool palette for the Stage-2 vault CTA glow — teal · cyan · blue · indigo · purple.
     static let magicGlow: [Color] = [
@@ -101,10 +110,13 @@ struct PressScaleStyle: ButtonStyle {
     }
 }
 
-extension Font {
-    /// The serif-italic display voice (used with `.italic()`), e.g. the "sentient" wordmark.
-    static func serif(_ size: CGFloat, weight: Font.Weight = .semibold) -> Font {
-        .system(size: size, weight: weight, design: .serif)
+extension View {
+    /// The display voice — SF Pro at medium weight. Hierarchy comes from weight + ink + size, not
+    /// a genre switch. Medium, not bold: light-on-black reads about a weight heavier than the same
+    /// face on white. NO manual tracking — SF's optical sizing already tightens display sizes, and
+    /// extra negative tracking makes big lines render blotchy (crowded pairs look bolder).
+    func display(_ size: CGFloat, weight: Font.Weight = .medium) -> some View {
+        font(.system(size: size, weight: weight))
     }
 }
 

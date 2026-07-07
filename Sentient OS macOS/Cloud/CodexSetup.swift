@@ -103,7 +103,7 @@ final class CodexSetup {
         do {
             loginProcess = try CodexCLI.startLogin { line in Log("[codex-login] \(line)") }
             loggingIn = true
-            loginStatusLine = "A browser window opened — finish signing in, then tap “Finished logging into codex”."
+            loginStatusLine = "A browser window opened; finish signing in, then tap “Finished logging into codex”."
         } catch {
             loggingIn = false
             loginStatusLine = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
@@ -123,7 +123,7 @@ final class CodexSetup {
             loginProcess = nil
             loginStatusLine = "✓ Logged in to Codex"
         } else {
-            loginStatusLine = "✗ Not logged in yet — finish in the browser, then tap again."
+            loginStatusLine = "✗ Not logged in yet; finish in the browser, then tap again."
         }
     }
 

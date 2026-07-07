@@ -53,13 +53,13 @@ struct SourcesPane: View {
     }
 
     var body: some View {
-        SettingsPane(title: "Knowledge Sources.",
+        SettingsPane(title: "Knowledge Sources",
                      whisper: "Your files never leave your Mac. Your Sentient uses an on-device LLM to understand your life overnight.") {
             VStack(alignment: .leading, spacing: 30) {
                 // Tucked tight under the whisper so the two lines read as ONE header block,
                 // with the full 30pt group gap only after it.
                 Text("Your Sentient needs at least three sources to truly know you.")
-                    .font(.serif(12.5, weight: .regular)).italic()
+                    .font(.system(size: 12.5))
                     .foregroundStyle(flashMinimum ? Theme.Ink.amber : .white.opacity(0.72))
                     .animation(.easeInOut(duration: 0.25), value: flashMinimum)
                     .padding(.top, -16)

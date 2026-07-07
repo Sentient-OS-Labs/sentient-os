@@ -187,7 +187,7 @@ final class OvernightScheduler {
                 statusLine = "installing helper…"
                 let ok = await WakeHelperInstaller.installAsync()
                 log.line("helper install (admin): \(ok ? "OK" : "declined/failed")")
-                guard ok else { statusLine = "needs your password — toggle off then on to retry"; return false }
+                guard ok else { statusLine = "needs your password; toggle off then on to retry"; return false }
                 try? await Task.sleep(for: .seconds(1))
             }
             return true

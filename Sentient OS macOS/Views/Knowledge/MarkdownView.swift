@@ -37,7 +37,7 @@ struct MarkdownView: View {
                 line(raw.trimmingCharacters(in: .whitespaces))
             }
         }
-        .tint(Theme.knowledgeAccent)
+        .tint(Theme.knowledgeLink)
         .environment(\.openURL, OpenURLAction { url in
             if url.absoluteString.hasPrefix(Self.wikiScheme) {
                 let title = String(url.absoluteString.dropFirst(Self.wikiScheme.count)).removingPercentEncoding ?? ""
@@ -75,7 +75,7 @@ struct MarkdownView: View {
                 .padding(.top, 10).padding(.bottom, 4)
         } else if let bullet = bulletText(s) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("•").font(.system(size: 15)).foregroundStyle(Theme.knowledgeAccent.opacity(0.75))
+                Text("•").font(.system(size: 15)).foregroundStyle(.white.opacity(0.42))
                 Text(inline(bullet))
                     .font(.system(size: 14.5)).foregroundStyle(.white.opacity(0.82))
                     .lineSpacing(5).fixedSize(horizontal: false, vertical: true)
@@ -119,7 +119,8 @@ struct MarkdownView: View {
         return out
     }
 
-    /// `[[Title]]` or `[[Title|alias]]` → a styled run. Resolved → accent link; unresolved → dimmed.
+    /// `[[Title]]` or `[[Title|alias]]` → a styled run. Resolved → the sky-blue link; unresolved →
+    /// dimmed neutral (color here means "you can go somewhere").
     private func wikilink(_ inner: String) -> AttributedString {
         let parts = inner.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
         let target = parts[0].trimmingCharacters(in: .whitespaces)
@@ -129,10 +130,10 @@ struct MarkdownView: View {
            let encoded = target.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
            let url = URL(string: Self.wikiScheme + encoded) {
             run.link = url
-            run.foregroundColor = Theme.knowledgeAccent
+            run.foregroundColor = Theme.knowledgeLink
             run.underlineStyle = .single
         } else {
-            run.foregroundColor = Theme.knowledgeAccent.opacity(0.4)   // unresolved — visible but inert
+            run.foregroundColor = Color.white.opacity(0.38)   // unresolved — visible but inert
         }
         return run
     }

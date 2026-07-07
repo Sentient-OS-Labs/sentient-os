@@ -74,7 +74,7 @@ struct NightSkyView: View {
             VStack(alignment: .leading, spacing: 5) {
                 MonoCaps("Constellation View", size: 9, tracking: 3, color: Theme.Ink.label)
                 Text("Your life, from above.")
-                    .font(.system(size: 16, design: .serif)).italic()
+                    .font(.system(size: 16))
                     .foregroundStyle(Theme.Ink.statusInk.opacity(0.85))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -100,7 +100,7 @@ struct NightSkyView: View {
         VStack(spacing: 14) {
             Orb(size: 92)
             Text("Your sky is still forming.")
-                .font(.system(size: 20, design: .serif).italic())
+                .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(Theme.Ink.statusInk)
             Text("Once Sentient has read your life, every note becomes a star.")
                 .font(.system(size: 13)).foregroundStyle(Theme.secondary)
@@ -112,77 +112,24 @@ struct NightSkyView: View {
 
 // MARK: - The door (shared by both sides: "Constellation View" in the reader, "Reader" in the sky)
 
-/// The mode switch, front and center in the titlebar (both KnowledgeView toolbars mount one via
-/// SkyDoorToolbarItem, .principal placement). On macOS 26 the body is REAL Liquid Glass (in our
-/// own capsule — the item's shared glass is hidden so it never double-wraps); the 15 floor gets
-/// the dark capsule. The magic is the EDGE FLOW: a slow current of the brand spectrum circling
-/// the rim. ⌘⇧G fires whichever door is currently mounted.
+/// The mode switch in the titlebar (both KnowledgeView toolbars mount one via SkyDoorToolbarItem).
+/// A plain native toolbar button — same font and glass as its Edit / Reveal in Finder neighbours.
+/// ⌘⇧G fires whichever door is currently mounted.
 struct SkyDoor: View {
     let icon: String
     let label: String
     let action: () -> Void
-    @State private var hover = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon).font(.system(size: 11, weight: .medium))
-                MonoCaps(label, size: 9.5, tracking: 2.5, color: .white.opacity(hover ? 0.95 : 0.8))
-            }
-            .foregroundStyle(.white.opacity(hover ? 0.95 : 0.8))
-            .padding(.horizontal, 14)
-            .frame(height: 33)                    // match the native glass toolbar buttons' height
-            .modifier(SkyDoorChrome())
-            .overlay(edgeFlow)
-            .shadow(color: Color(red: 1.0, green: 0.68, blue: 0.42).opacity(hover ? 0.30 : 0.10),
-                    radius: hover ? 14 : 8)
-            .contentShape(Capsule())
+            Label(label, systemImage: icon)
         }
-        .buttonStyle(PressScaleStyle())
+        .labelStyle(.titleAndIcon)
         .keyboardShortcut("g", modifiers: [.command, .shift])
-        .onHover { hover = $0 }
-        .animation(.easeOut(duration: 0.18), value: hover)
-    }
-
-    /// The door's own warm spectrum — the Knowledge amber family (gold → orange → ember) with one
-    /// violet streak lapping through it. First == last, so the angular seam never shows.
-    private static let flow: [Color] = [
-        Color(red: 1.00, green: 0.78, blue: 0.45),   // gold
-        Color(red: 1.00, green: 0.66, blue: 0.38),   // amber (the sidebar's accent family)
-        Color(red: 0.99, green: 0.52, blue: 0.40),   // ember
-        Color(red: 0.80, green: 0.42, blue: 0.88),   // the violet streak
-        Color(red: 0.58, green: 0.44, blue: 0.98),   // purple
-        Color(red: 1.00, green: 0.70, blue: 0.42),   // back through amber
-        Color(red: 1.00, green: 0.78, blue: 0.45),   // wrap = gold
-    ]
-
-    /// The current riding the capsule's edge — one slow lap every 15s, brighter under the cursor.
-    private var edgeFlow: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { tl in
-            Capsule().strokeBorder(
-                AngularGradient(colors: Self.flow, center: .center,
-                                angle: .degrees(tl.date.timeIntervalSinceReferenceDate * 24)),
-                lineWidth: 1)
-        }
-        .opacity(hover ? 0.85 : 0.45)
-        .allowsHitTesting(false)
     }
 }
 
-/// Liquid Glass where it exists, quiet dark glass where it doesn't (the macOS 15 floor).
-private struct SkyDoorChrome: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.glassEffect(.regular.interactive(), in: Capsule())
-        } else {
-            content.background(Theme.Ink.cardBG.opacity(0.85), in: Capsule())
-        }
-    }
-}
-
-/// The door's toolbar seat. On macOS 26 the toolbar would wrap the door in ANOTHER glass capsule
-/// (glass-on-glass — the "lol" screenshot); hiding the item's shared background lets the door
-/// carry its own.
+/// The door's toolbar seat.
 struct SkyDoorToolbarItem: ToolbarContent {
     let icon: String
     let label: String
@@ -191,16 +138,9 @@ struct SkyDoorToolbarItem: ToolbarContent {
     let action: () -> Void
 
     var body: some ToolbarContent {
-        if #available(macOS 26.0, *) {
-            ToolbarItem(placement: placement) { door }
-                .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: placement) { door }
+        ToolbarItem(placement: placement) {
+            SkyDoor(icon: icon, label: label, action: action).help(help)
         }
-    }
-
-    private var door: some View {
-        SkyDoor(icon: icon, label: label, action: action).help(help)
     }
 }
 
@@ -223,7 +163,7 @@ private struct SkyHoverCard: View {
                     .lineLimit(2)
             }
             if info.recentlyChanged {
-                MonoCaps("Changed last night", size: 7.5, tracking: 1.5, color: Theme.Ink.amber)
+                MonoCaps("Changed last night", size: 7.5, tracking: 1.5, color: Theme.dawnCyan)
             }
         }
         .padding(12)

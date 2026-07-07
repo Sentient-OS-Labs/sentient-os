@@ -185,7 +185,7 @@ actor CodexCLI {
         guard locateBinary() != nil else {
             let detail = out.stderr.isEmpty ? out.stdout : out.stderr
             let msg = detail.isEmpty
-                ? "Codex not found after install — check your network connection."
+                ? "Codex not found after install; check your network connection."
                 : String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(600))
             throw CLIError.exitFailure(code: out.status, message: msg)
         }

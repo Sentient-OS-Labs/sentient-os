@@ -250,6 +250,10 @@ private struct EnvelopeFace: View {
                     .fill(Color(red: 0.082, green: 0.076, blue: 0.106))
                     .overlay(EnvelopeFlap().stroke(Color.white.opacity(0.08), lineWidth: 1))
                     .frame(height: 94)
+                    // Round the flap's top corners to the card's own radius — the raw triangle's
+                    // square tips poke past the rounded border. Clip BEFORE the rotation so the
+                    // rounded corners ride the flap as it opens.
+                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                     .rotation3DEffect(.degrees(open ? -150 : 0),
                                       axis: (x: 1, y: 0, z: 0), anchor: .top, perspective: 0.55)
 

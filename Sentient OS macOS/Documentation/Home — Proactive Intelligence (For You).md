@@ -15,8 +15,9 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
 - **Chrome (on top, so the nav stays clickable):** a slim top bar — `OrbMark` + "Sentient OS"
   wordmark on the left; on the right four **doors** — `Analysis ▾` and `Connect AIs ▾` (popovers) ·
   `Knowledge` and `⚙ Settings` (their own windows). Below it, the editorial voice: an hour-aware
-  serif-italic greeting ("Good evening, Jesai." — the name from the macOS account, `macFirstName`)
-  over a mono-caps read-line (the REAL lifetime count from `LifetimeStats`).
+  greeting in the SF display voice (`.display(27)` — "Good evening, Jesai.", the name from the
+  macOS account, `macFirstName`) over a mono-caps read-line (the REAL lifetime count from
+  `LifetimeStats`). Card titles stay upright serif — serif marks content about the user's life.
 - **The scatter:** the suggestion cards, dealt in from above the header with staggered springs into
   organic per-count slots in the **card zone** (the band between the chrome and the dock —
   `slots(count:in:)`, layouts defined up to 6 cards). Each card can be fired, flick-dismissed with

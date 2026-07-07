@@ -214,7 +214,7 @@ enum CalendarConnect {
         let sid = "calendar:\(Int(itemDate.timeIntervalSince1970))"        // unique per window
         await CycleStore.shared.recordNote(
             bucketKey: bucketKey, kind: .calendar, sourceID: sid, folder: "Calendar",
-            itemDate: itemDate, text: r.summary, title: "Calendar — \(label)",
+            itemDate: itemDate, text: r.summary, title: "Calendar · \(label)",
             reminderFlagged: r.hasActionItems)
     }
 

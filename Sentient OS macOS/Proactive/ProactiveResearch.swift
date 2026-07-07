@@ -100,9 +100,9 @@ actor ProactiveResearch {
         case failed(String)
         var errorDescription: String? {
             switch self {
-            case .noItems:           return "No action items to work — run PART 1 (\u{201C}proactive system\u{201D}) first."
-            case .noVault:           return "No knowledge base on disk yet — build it first (research + prepare read the vault for context + the user's voice)."
-            case .usageLimit(let m): return "Your AI hit its usage limit — try again later. (\(m.prefix(160)))"
+            case .noItems:           return "No action items to work; run PART 1 (\u{201C}proactive system\u{201D}) first."
+            case .noVault:           return "No knowledge base on disk yet; build it first (research + prepare read the vault for context + the user's voice)."
+            case .usageLimit(let m): return "Your AI hit its usage limit; try again later. (\(m.prefix(160)))"
             case .failed(let m):     return m
             }
         }
@@ -443,6 +443,9 @@ actor ProactiveResearch {
         - **review_note** — what (if anything) the user should double-check/decide before firing; "" if \
         fully ready.
         `dropped` — the items verification killed: **title** + **reason** (what the live source showed).
+
+        STYLE: in everything the user will read (title, card_summary, prepared_content, button_text, \
+        review_note), never use an em dash (—); use a semicolon, colon, or comma instead.
 
         You receive up to 8 candidate items. Return AT MOST \(Self.maxReady) READY cards — the \
         strongest, most useful, most time-sensitive of what survives. Dropping a stale item is a \

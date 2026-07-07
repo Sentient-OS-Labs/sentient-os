@@ -44,8 +44,10 @@ No uniform card rows. Each kind of content wears its natural form:
 - **Status LEDs** for health: glowing verdict dots (`HealthDot` — bright core + double bloom),
   mono-caps states, a pill fix button only when something needs one.
 - **Bordered surfaces only for real input**: the text boxes and the secret-link capsule.
-- Serif-italic pane titles ("System."), mono-caps group labels, a 640pt editorial measure, and
-  one green everywhere (`Theme.Ink.green`, #4ade80).
+- Pane titles in the SF display voice ("System" — `.display(27)`, no trailing period) over a
+  quiet plain-sans whisper, mono-caps group labels, a 640pt editorial measure, and one green
+  everywhere (`Theme.Ink.green`, #4ade80). *(The old serif-italic titles/whispers were retired
+  June 2026 — serif-italic display is a vibe-coded-AI tell.)*
 
 Shared components (`SettingsComponents.swift`): `SettingsPane` · `SettingsGroup` · `SettingsProse`
 · `SettingToggleLine` · `SettingsPillButton` · `ChipFlow` (a wrapping `Layout`) · `SettingsChip` ·
@@ -95,9 +97,10 @@ The overnight-intelligence story (prose; 3 AM is our taste, not a dial), launch-
 split consents (crash reports `diagnosticsEnabled` → Sentry · analytics `analyticsEnabled` →
 TelemetryDeck, each with its own `applyEnabledChange()`), and the **Danger Zone**: Reset runs the
 shared `FactoryReset` (`Ingestion/FactoryReset.swift` — cycle store + knowledge-base folder +
-proactive traces + lifetime counters; same code path as Dev Tools' "Reset everything", so the
-wipes can never drift; the cloud mirror is deliberately untouched — the next push replaces it,
-the 30-day lease is the backstop). **The Reset button locks while the pipeline runs**
+proactive traces + lifetime counters + the cloud mirror copy, deleted best-effort so an offline
+reset still succeeds; same code path as Dev Tools' "Reset everything", so the wipes can never
+drift. The mirror token + opt-in survive — the share URL pasted into the user's connectors keeps
+working, and the next push recreates the copy). **The Reset button locks while the pipeline runs**
 (`Ingestion/PipelineActivity.swift`, a counter flag begun/ended by `IterativeRun` +
 `ProactiveCycle`) — wiping mid-run would leave high-water marks pointing past erased notes.
 

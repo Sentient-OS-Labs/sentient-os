@@ -70,7 +70,7 @@ actor ProactiveCycle {
             Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
                              parameters: ["newSummaries": "\(notes.count)"])
         } catch {
-            let m = "Knowledge base — \(Self.msg(error))"
+            let m = "Knowledge base: \(Self.msg(error))"
             Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
             progress(.failed(m)); return m                   // half-edited vault isn't dirty; summaries kept
         }
@@ -97,7 +97,7 @@ actor ProactiveCycle {
         } catch Proactive.ProError.noRecent {
             items = []                                       // nothing recent enough — clear cards, still success
         } catch {
-            let m = "Deciding — \(Self.msg(error))"
+            let m = "Deciding: \(Self.msg(error))"
             progress(.failed(m)); return m
         }
         Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
@@ -111,7 +111,7 @@ actor ProactiveCycle {
                 Analytics.signal("Proactive.prepared", parameters: [
                     "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"])
             } catch {
-                let m = "Preparing — \(Self.msg(error))"
+                let m = "Preparing: \(Self.msg(error))"
                 progress(.failed(m)); return m
             }
         }

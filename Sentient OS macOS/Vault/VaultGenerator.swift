@@ -61,7 +61,7 @@ actor VaultGenerator {
             switch self {
             case .empty: return "The cloud returned no vault content."
             case .usageLimit(let message, _):
-                return "Your AI hit its usage limit — try again later and the run resumes where it left off. (\(message.prefix(160)))"
+                return "Your AI hit its usage limit; try again later and the run resumes where it left off. (\(message.prefix(160)))"
             }
         }
     }
@@ -366,6 +366,7 @@ Aim for a **focused, high-signal vault — roughly 100–150 notes.** Synthesize
 ## Writing style
 - **State facts directly as knowledge** — "The user is fundraising for their startup in SF," not "A screenshot shows…". Deliver substance.
 - Rich markdown bodies: headings, bullets, key facts, dates, names, links. Concise + information-dense.
+- **Never use em dashes (—) in the notes you write.** Use a semicolon, colon, comma, or period instead.
 """
 
 /// Agentic route: the model writes real files with its tools (no output cap, resumable).

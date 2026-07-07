@@ -89,9 +89,9 @@ actor VaultCloud {
         case failed(String)
         var errorDescription: String? {
             switch self {
-            case .empty:             return "No summaries yet — run the on-device pass first."
-            case .noVault:           return "No knowledge base on disk yet — run \"go make knowledge base exist\" first."
-            case .usageLimit(let m): return "Your AI hit its usage limit — try again later to resume. (\(m.prefix(160)))"
+            case .empty:             return "No summaries yet; run the on-device pass first."
+            case .noVault:           return "No knowledge base on disk yet; run \"go make knowledge base exist\" first."
+            case .usageLimit(let m): return "Your AI hit its usage limit; try again later to resume. (\(m.prefix(160)))"
             case .failed(let m):     return m
             }
         }
@@ -291,6 +291,8 @@ actor VaultCloud {
         genuinely connects.
         - **Synthesize, don't append-dump.** Work an item into the narrative of its note — update \
         facts, extend timelines, collapse redundancy.
+        - **Never use em dashes (—) in the note text you write.** Use a semicolon, colon, comma, or \
+        period instead.
         - If today's items genuinely change who the user is or what they're up to, update the root \
         `README.md` portrait — otherwise leave it untouched.
 

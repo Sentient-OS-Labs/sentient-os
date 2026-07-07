@@ -138,7 +138,7 @@ struct IterativeRun {
         func reloadEngine(reason: String) async {
             p.lastFilePath = nil; p.lastVerdict = nil
             p.lastTitle = "Resetting on-device engine…"
-            p.lastSummary = "The GPU runtime needs a quick reset — resuming shortly."
+            p.lastSummary = "The GPU runtime needs a quick reset; resuming shortly."
             onProgress(p)
             Analytics.signal("Engine.reloaded", parameters: ["reason": reason])   // GPU-wedge self-heal health metric
             try? await engine.reload()

@@ -27,7 +27,7 @@ struct CalendarConnectSheet: View {
             VStack(spacing: 8) {
                 Image(systemName: "calendar.badge.clock").font(.system(size: 30)).foregroundStyle(Theme.accent)
                 Text("Connect Google Calendar").font(.title3.weight(.semibold)).foregroundStyle(.white)
-                Text("Link your Google account on OpenAI's connector page. Your Codex reads your calendar through it — Sentient never sees your password.")
+                Text("Link your Google account on OpenAI's connector page. Your Codex reads your calendar through it; Sentient never sees your password.")
                     .font(.caption).foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }

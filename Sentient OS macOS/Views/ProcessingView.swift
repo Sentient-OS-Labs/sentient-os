@@ -233,7 +233,7 @@ struct ProcessingView: View {
                     }
                     // Survivors carry a summary; junk/sensitive often don't — show a graceful
                     // placeholder so the round never looks blank.
-                    let fallback = verdict == .sensitive ? "Held back — sensitive."
+                    let fallback = verdict == .sensitive ? "Held back: sensitive."
                                  : verdict == .junk ? "Nothing worth keeping here." : ""
                     let body = progress.lastSummary ?? fallback
                     if !body.isEmpty {
@@ -283,7 +283,7 @@ struct ProcessingView: View {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 58))
                 .foregroundStyle(Theme.verdictColor(.survivor))
             VStack(spacing: 6) {
-                Text("Analysis complete").font(.serif(28)).italic().foregroundStyle(.white)
+                Text("Analysis complete").display(28).foregroundStyle(.white)
                 Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.failed) failed")
                     .font(.subheadline).foregroundStyle(.white.opacity(0.55))
             }
@@ -432,7 +432,7 @@ struct ProcessingView: View {
                 p.done        = baseDone + completed
                 p.survivors   = baseKept + keptSoFar
                 p.junk        = baseJunk + (completed - keptSoFar)   // a window with nothing notable
-                p.lastTitle   = "Email — \(label)"
+                p.lastTitle   = "Email · \(label)"
                 p.lastSummary = summary
                 p.lastVerdict = summary == nil ? .junk : .survivor
                 p.lastFilePath = nil
@@ -483,7 +483,7 @@ struct ProcessingView: View {
                 p.done        = baseDone + step
                 p.survivors   = baseKept + keptSoFar
                 p.junk        = baseJunk + (step - keptSoFar)   // a window with nothing notable
-                p.lastTitle   = "Calendar — \(label)"
+                p.lastTitle   = "Calendar · \(label)"
                 p.lastSummary = summary
                 p.lastVerdict = summary == nil ? .junk : .survivor
                 p.lastFilePath = nil

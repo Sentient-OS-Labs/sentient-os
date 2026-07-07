@@ -131,7 +131,7 @@ struct HomeView: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text(greeting)
-                .font(.system(size: 30, design: .serif).italic())
+                .display(27)
                 .foregroundStyle(Theme.Ink.statusInk)
             MonoCaps(readLine, size: 9.5, tracking: 2.2, color: Theme.Ink.deepMuted)
         }
@@ -242,7 +242,7 @@ struct HomeView: View {
         VStack(spacing: 14) {
             Orb(size: 118)
             Text("I'm here to help.")
-                .font(.system(size: 22, design: .serif).italic())
+                .font(.system(size: 22, weight: .medium))
                 .foregroundStyle(Theme.Ink.statusInk)
                 .offset(y: -8)
         }
@@ -341,10 +341,10 @@ private struct NavItem: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let dot { Circle().fill(dot).frame(width: 5, height: 5).opacity(0.9) }
-                if let icon { Image(systemName: icon).font(.system(size: 13, weight: .medium)) }
-                if let title { Text(title).font(.system(size: 12.5, weight: .medium)) }
+                if let icon { Image(systemName: icon).font(.system(size: 14, weight: .medium)) }
+                if let title { Text(title).font(.system(size: 13.5, weight: .medium)) }
             }
-            .foregroundStyle(hover ? .white : Theme.Ink.body)
+            .foregroundStyle(hover ? .white : Theme.Ink.bright)
             .padding(.horizontal, 11).padding(.vertical, 6)
             .background(Capsule().fill(.white.opacity(hover ? 0.06 : 0)))
             .contentShape(Capsule())

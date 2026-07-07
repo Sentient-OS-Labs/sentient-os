@@ -23,7 +23,7 @@ struct YourAIsPane: View {
     @State private var errorLine: String?
 
     var body: some View {
-        SettingsPane(title: "ChatGPT & Claude.",
+        SettingsPane(title: "ChatGPT & Claude",
                      whisper: "Your knowledge base, offered to every AI you already use.") {
             VStack(alignment: .leading, spacing: 30) {
                 intro
@@ -140,7 +140,7 @@ struct YourAIsPane: View {
         SettingsGroup(label: "Activity") {
             VStack(alignment: .leading, spacing: 7) {
                 Text(activityLine)
-                    .font(.serif(13, weight: .regular)).italic()
+                    .font(.system(size: 13))
                     .foregroundStyle(Theme.Ink.body)
                 if let last = stats?.lastAccess {
                     MonoCaps("Last read · \(last.formatted(.relative(presentation: .named)))",
