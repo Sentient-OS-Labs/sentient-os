@@ -29,7 +29,7 @@ struct ConnectAIsView: View {
             VStack(spacing: 20) {
                 OrbMark(size: 38)
                 Text("Connect your AIs.")
-                    .font(.system(size: 25, design: .serif).italic())
+                    .display(25)
                     .foregroundStyle(Theme.Ink.statusInk)
                 Text("Offer your knowledge base to ChatGPT, Claude, and every AI you use. Private, over MCP, in two simple steps.")
                     .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
@@ -44,7 +44,7 @@ struct ConnectAIsView: View {
                     .padding(.top, 8)
 
                     Text("Then ask it: \u{201C}What do you know about me?\u{201D}")
-                        .font(.serif(13, weight: .regular)).italic()
+                        .font(.system(size: 13))
                         .foregroundStyle(Theme.Ink.body)
                         .padding(.top, 10)
                 } else if loaded {

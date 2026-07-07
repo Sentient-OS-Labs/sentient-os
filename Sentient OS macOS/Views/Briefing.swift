@@ -106,7 +106,7 @@ struct Briefing: Identifiable {
     /// its own "# Title"; we promote that to the card title so the expanded letter never shows two
     /// titles, and the rest becomes the letter body. The envelope/letter UX keys off `kind == .welcome`.
     init(fromGiftMarkdown markdown: String) {
-        var title = "A gift — connections across your life."
+        var title = "A gift: connections across your life."
         var lines = markdown.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
         if let i = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
             let head = lines[i].trimmingCharacters(in: .whitespaces)
@@ -169,7 +169,7 @@ struct Briefing: Identifiable {
 
         Thanks for reaching out, and that's awesome to hear! :)
 
-        Would love to chat! I think you'll be surprised — what you see on the website right now is a really old version of Sentient from over a month ago.
+        Would love to chat! I think you'll be surprised; what you see on the website right now is a really old version of Sentient from over a month ago.
 
         I'm using our core on-device processing moat to build a knowledge base for all your LLMs from your entire life. And cooler still, what I call Proactive Intelligence:
 
@@ -205,11 +205,11 @@ struct Briefing: Identifiable {
             id: "charles", kind: .deadline,
             kicker: "Reply · 2 days · Gmail",
             title: "Charles from EWOR is waiting on your timeslots.",
-            body: "Daniel introduced you to Charles Ferguson — he sold companies to Microsoft and Oracle, pre-seeded Higgsfield, and won an Oscar. I checked your calendar and drafted your reply.",
+            body: "Daniel introduced you to Charles Ferguson; he sold companies to Microsoft and Oracle, pre-seeded Higgsfield, and won an Oscar. I checked your calendar and drafted your reply.",
             letter: """
-            Daniel introduced you to Charles Ferguson for your next EWOR interview — he sold companies to **Microsoft** and **Oracle**, pre-seeded **Higgsfield** (€500M ARR in a year), and won an **Oscar**.
+            Daniel introduced you to Charles Ferguson for your next EWOR interview; he sold companies to **Microsoft** and **Oracle**, pre-seeded **Higgsfield** (€500M ARR in a year), and won an **Oscar**.
 
-            He cc'd his assistant Emily to schedule and asked for any materials — a deck or a memo. So I checked your calendar for **Monday and Tuesday**, found your open windows, and wrote your reply: a few timeslots and a memo offer.
+            He cc'd his assistant Emily to schedule and asked for any materials: a deck or a memo. So I checked your calendar for **Monday and Tuesday**, found your open windows, and wrote your reply: a few timeslots and a memo offer.
             """,
             draft: Briefing.charlesReply,
             draftLabel: "Draft reply · Gmail",
@@ -221,7 +221,7 @@ struct Briefing: Identifiable {
                       "→ composing your reply…",
                       "✓ sent"],
             doneTitle: "Sent to Charles.",
-            doneBody: "Emily has your availability — and materials are on the way.",
+            doneBody: "Emily has your availability, and materials are on the way.",
             codexPrompt: """
             You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
 
@@ -238,11 +238,11 @@ struct Briefing: Identifiable {
             id: "anthos", kind: .overdue,
             kicker: "Overdue · 2 days · Gmail",
             title: "You need to reply to Anthos Capital.",
-            body: "Serena emailed two days ago — $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
+            body: "Serena emailed two days ago: $3B+ AUM, names like Honey and Kalshi. She wanted time this week. I wrote your reply.",
             letter: """
-            Serena Saxena from Anthos Capital emailed two days ago — she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
+            Serena Saxena from Anthos Capital emailed two days ago; she found Sentient down an on-device-vs-cloud rabbit hole. Anthos runs a $1.5B fund with $3B+ in AUM, and backs companies people are obsessed with: Honey, Kalshi, Erewhon, Olaplex.
 
-            She's in LA and asked for time early this week. You went quiet. Let's fix that — the draft's below, warm and ready.
+            She's in LA and asked for time early this week. You went quiet. Let's fix that; the draft's below, warm and ready.
             """,
             draft: Briefing.anthosReply,
             draftLabel: "Draft · Gmail",
@@ -253,7 +253,7 @@ struct Briefing: Identifiable {
                       "→ composing your reply…",
                       "✓ sent"],
             doneTitle: "Sent to Anthos.",
-            doneBody: "Serena has your reply — Friday, or early next week.",
+            doneBody: "Serena has your reply: Friday, or early next week.",
             codexPrompt: """
             You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
 
@@ -263,20 +263,20 @@ struct Briefing: Identifiable {
 
             Send this reply now via the Gmail MCP — the user has already approved this send. Do not ask, do not draft-and-wait; complete the send and confirm it went out.
 
-            IMPORTANT — formatting: send it as an HTML email. Set the send tool's content_type to "text/html" and format the body as clean HTML so it reflows naturally in the reader's inbox: put EACH paragraph above inside its own <p>…</p> tag, and write the sign-off as "Best,<br>Jesai". Keep every word — including ":)", the "—" em-dash, "*acts*", and "Friday" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph; plain text gets hard-wrapped mid-sentence, which is the ugly formatting we're fixing.
+            IMPORTANT — formatting: send it as an HTML email. Set the send tool's content_type to "text/html" and format the body as clean HTML so it reflows naturally in the reader's inbox: put EACH paragraph above inside its own <p>…</p> tag, and write the sign-off as "Best,<br>Jesai". Keep every word, including ":)", "*acts*", and "Friday", exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph; plain text gets hard-wrapped mid-sentence, which is the ugly formatting we're fixing.
             """),
 
         Briefing(
             id: "aim", kind: .promise,
             kicker: "Press · Early next week · WhatsApp",
             title: "AIM India wants your voice.",
-            body: "Supreeth wants to interview you on Apple's Siri AI — and offered to cover the Sentient launch. He asked if you're free early next week. Reply's drafted.",
+            body: "Supreeth wants to interview you on Apple's Siri AI, and offered to cover the Sentient launch. He asked if you're free early next week. Reply's drafted.",
             letter: """
-            Supreeth from AIM (Analytics India Magazine) reached out — he wants you as an expert voice on Apple's Siri AI, and offered to cover the Sentient OS launch while he's at it. Two birds.
+            Supreeth from AIM (Analytics India Magazine) reached out; he wants you as an expert voice on Apple's Siri AI, and offered to cover the Sentient OS launch while he's at it. Two birds.
 
-            He asked if you're free early next week. You are — your week's wide open. Say the word and I'll send your yes.
+            He asked if you're free early next week. You are; your week's wide open. Say the word and I'll send your yes.
             """,
-            draft: "Hi Supreeth! Would love to — early next week works great on my end. And thank you for offering to cover the Sentient OS launch; happy to give you a hands-on look. Talk soon!",
+            draft: "Hi Supreeth! Would love to; early next week works great on my end. And thank you for offering to cover the Sentient OS launch; happy to give you a hands-on look. Talk soon!",
             draftLabel: "Draft reply · WhatsApp",
             detailLabel: "read the draft",
             offer: "Reply & lock it in?",
@@ -285,7 +285,7 @@ struct Briefing: Identifiable {
                       "→ confirming early next week…",
                       "✓ replied"],
             doneTitle: "You're on with AIM.",
-            doneBody: "Confirmed for early next week — Supreeth's expecting you.",
+            doneBody: "Confirmed for early next week; Supreeth's expecting you.",
             codexPrompt: "Reply to Supreeth (AIM India) on WhatsApp with the approved draft confirming the interview early next week."),
 
         Briefing(
@@ -294,7 +294,7 @@ struct Briefing: Identifiable {
             title: "Prep Social Security Appointment",
             body: "Your SSA appointment is tomorrow at 1:10 PM. This opens the prep checklist and arrival plan; nothing gets sent.",
             letter: """
-            Your Social Security Administration appointment is tomorrow at 1:10 PM. This is a read-only prep — nothing gets sent or scheduled.
+            Your Social Security Administration appointment is tomorrow at 1:10 PM. This is a read-only prep; nothing gets sent or scheduled.
 
             Bring (originals, not photocopies)
             - Passport and your current F-1 visa
@@ -304,7 +304,7 @@ struct Briefing: Identifiable {
             - A completed SS-5 application (download from ssa.gov)
 
             Arrival plan
-            - The office runs long — arrive about 20 minutes early, take a number, and fill the SS-5 while you wait.
+            - The office runs long; arrive about 20 minutes early, take a number, and fill the SS-5 while you wait.
             - No card same-day: it's mailed in ~10–14 business days, so confirm the address on file is your current one.
 
             I'll nudge you tomorrow morning. — your Sentient
@@ -317,11 +317,11 @@ struct Briefing: Identifiable {
             id: "supabase", kind: .deadline,
             kicker: "Renew · Friday · Computer use",
             title: "Your Supabase project expires Friday.",
-            body: "The free-tier database behind Sentient pauses this Friday after a week idle — and it's the one holding your 2,500+ waitlist signups. I can renew it in your dashboard. Want me to?",
+            body: "The free-tier database behind Sentient pauses this Friday after a week idle, and it's the one holding your 2,500+ waitlist signups. I can renew it in your dashboard. Want me to?",
             letter: """
-            Supabase flagged your **sentient-os** project: it's set to pause this **Friday**. Free-tier projects pause after 7 days of inactivity, and once paused the database goes offline until you restore it — and this is the one holding your **2,500+ waitlist signups**, so I'd rather not let it lapse.
+            Supabase flagged your **sentient-os** project: it's set to pause this **Friday**. Free-tier projects pause after 7 days of inactivity, and once paused the database goes offline until you restore it, and this is the one holding your **2,500+ waitlist signups**, so I'd rather not let it lapse.
 
-            I'll handle it the way you would: open your Supabase dashboard in your own logged-in browser, go to **sentient-os**, and restore it — nothing touched but the renew button, and nothing leaves this Mac. One tap and you're back online.
+            I'll handle it the way you would: open your Supabase dashboard in your own logged-in browser, go to **sentient-os**, and restore it; nothing touched but the renew button, and nothing leaves this Mac. One tap and you're back online.
             """,
             draft: "Open your Supabase dashboard → project 'sentient-os' → restore project → confirm it's back on the free tier.",
             draftLabel: "What I'll do · Computer use",
@@ -331,21 +331,21 @@ struct Briefing: Identifiable {
                       "→ finding project 'sentient-os'",
                       "→ restoring the paused project…",
                       "→ confirming it's back on the free tier",
-                      "✓ renewed — back online"],
+                      "✓ renewed · back online"],
             doneTitle: "Supabase renewed.",
-            doneBody: "Your database is back online — waitlist safe, still free tier.",
+            doneBody: "Your database is back online; waitlist safe, still free tier.",
             codexPrompt: "Use computer use to open the user's Supabase dashboard in their own logged-in browser, open the 'sentient-os' project, and restore/renew it so it doesn't pause. Confirm it's back online, then report what you did.",
             accent: Color(red: 0.36, green: 0.55, blue: 1.00)),   // cobalt (Luis's old blue)
 
         Briefing(
             id: "welcome", kind: .welcome,
             kicker: "Welcome · Read across your whole life",
-            title: "A gift — connections across your life.",
-            body: "Three patterns you might not have seen yourself — visible only with everything in one place.",
+            title: "A gift: connections across your life.",
+            body: "Three patterns you might not have seen yourself, visible only with everything in one place.",
             letter: """
             I read **1,704 things** across your life last night. Three patterns you might not have seen yourself:
 
-            ✦ **You never accept defaults.** Your iPhone ran **iPadOS** — WIRED noticed. Macs got **Apple Intelligence** before Apple shipped it, because you ported it. Your playlists skip the charts — and now you're routing around **college** itself.
+            ✦ **You never accept defaults.** Your iPhone ran **iPadOS**; WIRED noticed. Macs got **Apple Intelligence** before Apple shipped it, because you ported it. Your playlists skip the charts, and now you're routing around **college** itself.
 
             ✦ **You spec hardware in numbers and music in feelings.** RAM chosen by the gigabyte for local LLMs; playlists curated for **“mood, tears, goosebumps.”**
 

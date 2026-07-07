@@ -104,7 +104,7 @@ enum ComputerUseSetup {
         let pluginSrc = src.appendingPathComponent("plugins/computer-use")
         guard fm.fileExists(atPath: pluginSrc.path) else { throw SetupError.missingSource(pluginSrc.lastPathComponent) }
         let version = try readVersion(pluginSrc.appendingPathComponent(".codex-plugin/plugin.json"))
-        onLine("Found computer-use \(version) — installing…")
+        onLine("Found computer-use \(version); installing…")
 
         // 4) Lay down the three trees (ditto preserves the code signatures / xattrs).
         onLine("Copying marketplace…")

@@ -60,7 +60,7 @@ struct HealthPane: View {
     }
 
     var body: some View {
-        SettingsPane(title: "Permissions & Health.",
+        SettingsPane(title: "Permissions & Health",
                      whisper: allGreen ? "All clear. Your Sentient is healthy."
                                        : "Everything green means everything works.") {
             if !checked {
@@ -107,7 +107,7 @@ struct HealthPane: View {
         HStack(spacing: 10) {
             ProgressView().controlSize(.small)
             Text("Checking your Sentient…")
-                .font(.serif(12.5, weight: .regular)).italic()
+                .font(.system(size: 12.5))
                 .foregroundStyle(Theme.Ink.body)
         }
         .padding(.top, 10)

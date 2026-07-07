@@ -9,8 +9,8 @@
 //  the titlebar carries Edit / Delete (→ Trash) / Reveal in Finder. Every edit/create/delete commits
 //  locally and DEBOUNCE-syncs to the cloud MCP (VaultActivity.markChanged → the sidebar status line).
 //  The window OPENS in the "Constellation View" graph (Graph/NightSkyView.swift — the default);
-//  glowing SkyDoor capsules swap between it and the reader (sky: top-center · reader: top-left;
-//  ⌘⇧G). Click a star to read that note; Back (or Esc) returns to the sky where you left it.
+//  native SkyDoor toolbar buttons swap between it and the reader (sky: top-center · reader:
+//  top-left; ⌘⇧G). Click a star to read that note; Back (or Esc) returns to the sky where you left it.
 //
 //  Replaced the old DatabaseView (a dev CycleStore-summaries inspector, still in Dev Tools via
 //  SummariesView). Data: VaultTree.swift · rendering: MarkdownView.swift.
@@ -391,7 +391,7 @@ struct KnowledgeView: View {
             VStack(alignment: .leading, spacing: 2) {   // title + count = one tight block
                 HStack(spacing: 8) {
                     OrbMark(size: 15)
-                    Text("Knowledge").font(.system(size: 22, design: .serif)).italic().foregroundStyle(.white)
+                    Text("Knowledge").display(22).foregroundStyle(.white)
                     Spacer()
                     newMenu   // the always-visible "you can create things here" affordance
                 }
@@ -659,7 +659,7 @@ struct KnowledgeView: View {
     private func emptyState(title: String, subtitle: String?) -> some View {
         VStack(spacing: 14) {
             Orb(size: 92)
-            Text(title).font(.system(size: 20, design: .serif).italic()).foregroundStyle(Theme.Ink.statusInk)
+            Text(title).font(.system(size: 20, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
             if let subtitle {
                 Text(subtitle).font(.system(size: 13)).foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center).frame(maxWidth: 320)

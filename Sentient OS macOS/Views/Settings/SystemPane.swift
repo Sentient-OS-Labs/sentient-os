@@ -28,7 +28,7 @@ struct SystemPane: View {
     @State private var activity = PipelineActivity.shared   // Reset locks while a run is active
 
     var body: some View {
-        SettingsPane(title: "System.", whisper: "How Sentient lives on this Mac.") {
+        SettingsPane(title: "System", whisper: "How Sentient lives on this Mac.") {
             VStack(alignment: .leading, spacing: 34) {
                 overnightGroup
                 startupGroup
@@ -49,7 +49,7 @@ struct SystemPane: View {
                     .font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
                 SettingsProse("Every night at 3 AM, Sentient wakes your Mac to read what's new in your life, update your knowledge base, and prepare your morning suggestions. It only happens while your Mac is plugged in, and only if Sentient is still running in your menu bar. This quiet, on-device work is what keeps your Sentient alive and helpful.")
                 Text("Runs while your Mac rests.")
-                    .font(.serif(11.5, weight: .regular)).italic()
+                    .font(.system(size: 11.5))
                     .foregroundStyle(Theme.Ink.deepMuted)
                     .padding(.top, 3)
             }
@@ -90,7 +90,7 @@ struct SystemPane: View {
     private var updatesGroup: some View {
         SettingsGroup(label: "Updates") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Sentient keeps itself up to date automatically. When a new version is ready, Sentient asks you to update before continuing — so you're always on the latest, safest version.")
+                SettingsProse("Sentient keeps itself up to date automatically. When a new version is ready, Sentient asks you to update before continuing, so you're always on the latest, safest version.")
                 HStack(spacing: 6) {
                     Text("Version \(UpdateController.currentVersionString)")
                         .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
@@ -133,7 +133,7 @@ struct SystemPane: View {
     private var dangerGroup: some View {
         SettingsGroup(label: "Danger Zone") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, and all suggestions. You'll start over from scratch, including the initial processing. Your cloud copy isn't touched; the next processing run simply replaces it.")
+                SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, all suggestions, and the cloud copy your AIs read. You'll start over from scratch, including the initial processing. Your private link stays valid; the next processing run fills it again.")
                 SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
                                    tint: Self.dangerRed) { confirmReset = true }
                     .disabled(resetting || activity.isRunning)
@@ -143,7 +143,7 @@ struct SystemPane: View {
                 }
                 if resetDone {
                     Text("Reset complete. Sentient is a blank slate.")
-                        .font(.serif(11.5, weight: .regular)).italic()
+                        .font(.system(size: 11.5))
                         .foregroundStyle(Theme.Ink.body)
                 }
             }
@@ -159,7 +159,7 @@ struct SystemPane: View {
                 }
             }
         } message: {
-            Text("Your knowledge base and everything Sentient understood is deleted from this Mac. This can't be undone; Sentient starts again from zero, beginning with the initial processing.")
+            Text("Your knowledge base and everything Sentient understood is deleted from this Mac, and the cloud copy is removed. This can't be undone; Sentient starts again from zero, beginning with the initial processing.")
         }
     }
 }

@@ -210,7 +210,7 @@ enum GmailConnect {
         let sid = "gmail:\(Int(itemDate.timeIntervalSince1970))"          // unique per window
         await CycleStore.shared.recordNote(
             bucketKey: bucketKey, kind: .gmail, sourceID: sid, folder: "Gmail",
-            itemDate: itemDate, text: r.summary, title: "Email — \(label)",
+            itemDate: itemDate, text: r.summary, title: "Email · \(label)",
             reminderFlagged: r.hasActionItems)
     }
 

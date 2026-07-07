@@ -60,7 +60,7 @@ struct ChatPicker: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Choose chats & groups").font(.serif(24)).italic().foregroundStyle(.white)
+            Text("Choose chats & groups").display(24).foregroundStyle(.white)
             Text(loaded
                  ? "\(selection.count) selected · \(visible.count) active in the last \(ChatWindowing.lookbackDays) days"
                  : "Reading your chats…")
@@ -132,7 +132,7 @@ struct ChatPicker: View {
             centered {
                 Image(systemName: "person.crop.circle.badge.questionmark").font(.largeTitle).foregroundStyle(Theme.faint)
                 Text(search.isEmpty
-                     ? "Only unsaved numbers were active — tap “Unsaved numbers” to show them"
+                     ? "Only unsaved numbers were active; tap “Unsaved numbers” to show them"
                      : "No chats match “\(search)”")
                     .font(.callout).foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center).padding(.horizontal, 40)

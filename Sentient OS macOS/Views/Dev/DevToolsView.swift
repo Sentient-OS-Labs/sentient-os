@@ -849,12 +849,13 @@ struct DevToolsView: View {
     }
 
     /// Factory reset — the shared FactoryReset wipe (cycle store + knowledge base + proactive
-    /// traces + lifetime counters), so the next "start / resume" run is a fresh first run and the
-    /// home's "For You" deck comes back empty. Same code path as Settings → Reset Sentient.
+    /// traces + lifetime counters + the cloud mirror copy), so the next "start / resume" run is a
+    /// fresh first run and the home's "For You" deck comes back empty. Same code path as
+    /// Settings → Reset Sentient.
     @MainActor
     private func runReset() async {
         await FactoryReset.run()
         let c = await CycleStore.shared.counts()
-        resetResult = "✓ reset — cycle store + knowledge base + proactive cards wiped (notes \(c.notes))"
+        resetResult = "✓ reset — cycle store + knowledge base + proactive cards + cloud copy wiped (notes \(c.notes))"
     }
 }

@@ -58,7 +58,7 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 OrbMark(size: 19)
                 Text("Settings")
-                    .font(.serif(16)).italic().foregroundStyle(.white)
+                    .display(16).foregroundStyle(.white)
             }
             .padding(.horizontal, 10)
             .padding(.top, 20)

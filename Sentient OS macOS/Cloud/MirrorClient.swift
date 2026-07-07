@@ -72,7 +72,7 @@ actor MirrorClient {
         var errorDescription: String? {
             switch self {
             case .notEnabled:            return "The cloud mirror isn't turned on."
-            case .http(0, _):            return "Couldn't reach the mirror server (no HTTP response — proxy or captive portal?)."
+            case .http(0, _):            return "Couldn't reach the mirror server (no HTTP response; proxy or captive portal?)."
             case .http(let c, let b):    return "Mirror server returned HTTP \(c). \(b.prefix(200))"
             case .zipFailed(let m):      return "Couldn't package the vault: \(m)"
             case .noVault:               return "There's no vault on disk to mirror yet."

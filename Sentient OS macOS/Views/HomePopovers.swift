@@ -73,7 +73,7 @@ struct AnalysisPopover: View {
             }
 
             Text(understoodLine)
-                .font(.system(size: 21, design: .serif)).foregroundStyle(.white)
+                .display(21).foregroundStyle(.white)
                 .padding(.top, 13)
             MonoCaps(vaultLine, size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
                 .padding(.top, 7)
@@ -130,7 +130,7 @@ struct AnalysisPopover: View {
         return "\(v.notes) notes · \(v.domains) domains in your knowledge"
     }
     private var runHint: String {
-        if modelMissing { return "The on-device model is missing — see Dev Tools" }
+        if modelMissing { return "The on-device model is missing; see Dev Tools" }
         return armed ? "\(pending) pending · runs when your Mac rests" : "No sources armed"
     }
 
@@ -176,7 +176,7 @@ struct YourAIsPopover: View {
             }
 
             Text(headline)
-                .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
+                .display(20).foregroundStyle(.white)
                 .padding(.top, 11)
             if let sub = subLineText {
                 MonoCaps(sub, size: 10, tracking: 1.0, color: Theme.Ink.body).padding(.top, 7)
@@ -267,7 +267,7 @@ struct YourAIsPopover: View {
                 } catch MirrorClient.MirrorError.noVault {
                     flash("On · syncs on your first analysis")
                 } catch MirrorClient.MirrorError.tokenGenerationFailed, MirrorClient.MirrorError.keychainWriteFailed {
-                    flash("Couldn't turn on — try again")
+                    flash("Couldn't turn on; try again")
                 } catch {
                     flash("On · sync will retry")
                 }

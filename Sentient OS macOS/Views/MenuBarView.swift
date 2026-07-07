@@ -16,8 +16,8 @@ struct MenuBarView: View {
         switch appState.status {
         case .idle:                            Text("Sentient OS · idle")
         case .processing(let done, let total): Text("Processing \(done) / \(total)")
-        case .paused(let reason):              Text("Paused — \(reason)")
-        case .error(let message):              Text("Error — \(message)")
+        case .paused(let reason):              Text("Paused · \(reason)")
+        case .error(let message):              Text("Error · \(message)")
         }
 
         Divider()

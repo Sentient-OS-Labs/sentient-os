@@ -65,7 +65,7 @@ actor ProactiveExecutor {
             r = hasRecipe(recipe) ? await fireComputer(routing: recipe, content: content, progress: progress)
                                   : .notFireable("No computer-use recipe to fire.")
         case .research:
-            r = .notFireable("This is a briefing to read — there's nothing to fire.")
+            r = .notFireable("This is a briefing to read; there's nothing to fire.")
         }
         // §7.19: one scoreboard record per fire (source is always a proactive card here; the command
         // bar / voice records separately from CommandRunModel).

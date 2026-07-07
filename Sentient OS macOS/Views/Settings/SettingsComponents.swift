@@ -11,8 +11,8 @@
 
 import SwiftUI
 
-/// The right-pane scaffold every settings pane uses: an italic serif title (the editorial voice),
-/// an optional serif-italic whisper under it, then the scrolling body — capped to an editorial
+/// The right-pane scaffold every settings pane uses: a bold display title (the editorial voice),
+/// an optional quiet whisper under it, then the scrolling body — capped to an editorial
 /// measure so a wide window never stretches lines unreadable.
 struct SettingsPane<Content: View>: View {
     let title: String
@@ -23,11 +23,11 @@ struct SettingsPane<Content: View>: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text(title)
-                    .font(.serif(27)).italic()
+                    .display(27)
                     .foregroundStyle(.white)
                 if let whisper {
                     Text(whisper)
-                        .font(.serif(12.5, weight: .regular)).italic()
+                        .font(.system(size: 12.5))
                         .foregroundStyle(.white.opacity(0.72))
                         .padding(.top, 7)
                 }

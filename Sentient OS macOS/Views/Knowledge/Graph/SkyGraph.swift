@@ -22,7 +22,7 @@ struct SkyNode: Identifiable {
     let domain: Int              // index into SkyGraph.domains · -1 = the root README (the sun)
     var degree: Int              // resolved wikilink connections (deduped, undirected)
     let isRoot: Bool
-    let recentlyChanged: Bool    // modified in the last 36h → the amber shimmer
+    let recentlyChanged: Bool    // modified in the last 36h → the dawn shimmer
     let preview: String          // first readable body line (cleaned) — the hover card's one-liner
     let twinklePhase: Double     // stable per-note personality (hashed from the path, so a star
     let twinkleSpeed: Double     //  twinkles the same way every night)

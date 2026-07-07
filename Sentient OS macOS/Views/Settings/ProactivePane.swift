@@ -17,7 +17,7 @@ struct ProactivePane: View {
     @AppStorage("sidekick.context") private var sidekickContext = ""
 
     var body: some View {
-        SettingsPane(title: "Proactive & Sidekick.",
+        SettingsPane(title: "Proactive & Sidekick",
                      whisper: "Morning suggestions, and the hold-to-talk magic in your notch.") {
             VStack(alignment: .leading, spacing: 30) {
                 SettingsGroup(label: "Proactive Intelligence") {

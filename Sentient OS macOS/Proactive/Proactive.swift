@@ -52,8 +52,8 @@ actor Proactive {
         case failed(String)
         var errorDescription: String? {
             switch self {
-            case .noRecent:          return "No summaries in the last \(Proactive.lookbackDays) days — nothing for the proactive judge to consider."
-            case .usageLimit(let m): return "Your AI hit its usage limit — try again later. (\(m.prefix(160)))"
+            case .noRecent:          return "No summaries in the last \(Proactive.lookbackDays) days; nothing for the proactive judge to consider."
+            case .usageLimit(let m): return "Your AI hit its usage limit; try again later. (\(m.prefix(160)))"
             case .failed(let m):     return m
             }
         }
@@ -333,6 +333,8 @@ actor Proactive {
         - **sources** — the concrete summaries behind the item, each by name (e.g. "WhatsApp · Dad", \
         "Notes · running gear", "Calendar", "Gmail · <subject>"). Cite the provenance here.
         - **urgency** — "high", "medium", or "low".
+
+        STYLE: never use an em dash (—) in any text field; use a semicolon, colon, or comma instead.
 
         \(calendarBlock)The last \(lookbackDays) days of summaries follow.
 

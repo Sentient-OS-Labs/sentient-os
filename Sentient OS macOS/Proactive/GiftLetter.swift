@@ -34,9 +34,9 @@ actor GiftLetter {
         case failed(String)
         var errorDescription: String? {
             switch self {
-            case .noVault:           return "No knowledge base on disk yet — build it first, then the welcome gift can be written."
+            case .noVault:           return "No knowledge base on disk yet; build it first, then the welcome gift can be written."
             case .empty:             return "The model didn't produce a letter."
-            case .usageLimit(let m): return "Your AI hit its usage limit — try again later. (\(m.prefix(160)))"
+            case .usageLimit(let m): return "Your AI hit its usage limit; try again later. (\(m.prefix(160)))"
             case .failed(let m):     return m
             }
         }

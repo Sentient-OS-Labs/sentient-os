@@ -28,7 +28,7 @@ struct GmailConnectSheet: View {
             VStack(spacing: 8) {
                 Image(systemName: "envelope.badge.fill").font(.system(size: 30)).foregroundStyle(Theme.accent)
                 Text("Connect Gmail").font(.title3.weight(.semibold)).foregroundStyle(.white)
-                Text("Link your Google account on OpenAI's connector page. Your Codex reads your email through it — Sentient never sees your password.")
+                Text("Link your Google account on OpenAI's connector page. Your Codex reads your email through it; Sentient never sees your password.")
                     .font(.caption).foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }

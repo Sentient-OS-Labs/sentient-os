@@ -29,7 +29,7 @@ struct SkyRenderer {
         (0.55, 0.92, 0.80),  // mint
         (0.82, 0.70, 0.98),  // lavender
     ]
-    private static let amber = (r: 1.0, g: 0.682, b: 0.42)   // Theme.knowledgeAccent's components
+    private static let dawn = (r: 0.333, g: 0.757, b: 0.941)   // Theme.dawnCyan's components
 
     static func domainColor(_ d: Int, alpha: Double = 1) -> Color {
         guard d >= 0 else { return Color(red: 1, green: 0.93, blue: 0.85, opacity: alpha) }   // the sun: warm white
@@ -288,13 +288,13 @@ struct SkyRenderer {
                                           .clear]),
                         center: p, startRadius: 0, endRadius: haloR))
 
-            // "Changed last night" — a slow amber breath around the star.
+            // "Changed last night" — a slow dawn-cyan breath around the star.
             if n.recentlyChanged {
                 let aR = r * 5
                 let aA = (0.10 + 0.07 * sin(t * 1.5 + n.twinklePhase)) * dim * starReveal
                 ctx.fill(Path(ellipseIn: CGRect(x: p.x - aR, y: p.y - aR, width: aR * 2, height: aR * 2)),
                          with: .radialGradient(
-                            Gradient(colors: [Color(red: amber.r, green: amber.g, blue: amber.b, opacity: aA), .clear]),
+                            Gradient(colors: [Color(red: dawn.r, green: dawn.g, blue: dawn.b, opacity: aA), .clear]),
                             center: p, startRadius: 0, endRadius: aR))
             }
 
