@@ -3,14 +3,21 @@
 //  Sentient OS macOS
 //
 //  Owns the Sparkle updater and wires it to our own UI. Creates one SPUUpdater targeting the app's
-//  main bundle, driven by SentientUpdateDriver (our OLED gate) with this object as the (optional)
-//  delegate for logging. AppState holds one of these and calls `start()` — GUI path only (never the
-//  root wake-helper). The menu bar and Settings call `checkForUpdatesNow()`.
+//  main bundle, driven by SentientUpdateDriver (our OLED gate) with this object as the SPUUpdaterDelegate.
+//  AppState holds one of these and calls `start()` — GUI path only (never the root wake-helper). The
+//  menu bar and Settings call `checkForUpdatesNow()`.
 //
-//  Config (feed URL, EdDSA key, daily interval, mandatory model) lives in Info.plist — see
-//  Documentation/Auto-Update (Sparkle).md. This file is just the runtime glue.
+//  Chrome-style silent relaunch: once Sparkle has silently downloaded + staged an update, it calls our
+//  `willInstallUpdateOnQuit` hook. We take over and, the moment it's SAFE (no pipeline run in flight and
+//  the user isn't actively using the app), install + relaunch with zero UI — so the user never has to
+//  quit. The OLED gate only surfaces for user-initiated checks or when a silent install is impossible
+//  (needs an admin password, or errors).
+//
+//  Config (feed URL, EdDSA key, check interval) lives in Info.plist — see
+//  Documentation/Auto-Update (Sparkle).md. This file is the runtime glue.
 //
 
+import AppKit
 import Foundation
 import Sparkle
 
@@ -22,6 +29,12 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
 
     private let driver: SentientUpdateDriver
     private var updater: SPUUpdater!
+
+    /// Sparkle's "install + relaunch now" trigger for a silently-staged update, stashed until the
+    /// moment is safe (see `isSafeToRelaunch`). Set from `willInstallUpdateOnQuit`; cleared once fired.
+    private var pendingInstallHandler: (() -> Void)?
+    /// Polls for an idle-safe moment while an install is pending. Invalidated the instant we install.
+    private var idleTimer: Timer?
 
     override init() {
         let model = self.model
@@ -68,7 +81,7 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
         return short
     }
 
-    // MARK: - SPUUpdaterDelegate (optional — logging only)
+    // MARK: - SPUUpdaterDelegate
 
     @objc(updater:didFinishUpdateCycleForUpdateCheck:error:)
     func updater(_ updater: SPUUpdater,
@@ -77,5 +90,57 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
         if let error {
             Log("Sparkle: update cycle finished with error — \((error as NSError).localizedDescription)")
         }
+    }
+
+    /// Silent path: Sparkle has downloaded + staged an update for install-on-quit. Returning `true`
+    /// makes US responsible for triggering the install — we MUST eventually call the handler, or
+    /// Sparkle's update cycle stays blocked for the session. We stash it and fire it the moment it's
+    /// idle-safe; if the user quits first, Sparkle installs the staged update on quit anyway.
+    @objc(updater:willInstallUpdateOnQuit:immediateInstallationBlock:)
+    func updater(_ updater: SPUUpdater,
+                 willInstallUpdateOnQuit item: SUAppcastItem,
+                 immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        pendingInstallHandler = immediateInstallHandler
+        scheduleInstallWhenIdle()
+        return true
+    }
+
+    /// Last breath before the silent relaunch. Pipeline state is already durable (crash-safe CycleStore
+    /// marks), so there's nothing extra to flush — this is just a breadcrumb.
+    @objc(updaterWillRelaunchApplication:)
+    func updaterWillRelaunchApplication(_ updater: SPUUpdater) {
+        Log("Sparkle: relaunching into the new version")
+    }
+
+    // MARK: - Idle-gated silent install
+
+    /// Start (re)trying to install the staged update. Retries every 30s so a heavy/active session is
+    /// caught the moment it goes quiet; also tries once immediately.
+    private func scheduleInstallWhenIdle() {
+        idleTimer?.invalidate()
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.installIfSafe() }
+        }
+        installIfSafe()
+    }
+
+    private func installIfSafe() {
+        guard let install = pendingInstallHandler, isSafeToRelaunch else { return }
+        pendingInstallHandler = nil
+        idleTimer?.invalidate()
+        idleTimer = nil
+        Log("Sparkle: idle-safe — installing staged update and relaunching silently")
+        install()   // Sparkle terminates, installs, and relaunches us — zero UI.
+    }
+
+    /// Two invariants: never relaunch out from under an in-flight processing run, and never yank the
+    /// app away from a user who's actively using it. Frontmost with a key window counts as "in use"
+    /// unless they've been idle 5+ minutes; if we're not frontmost at all, the relaunch is invisible.
+    private var isSafeToRelaunch: Bool {
+        if PipelineActivity.shared.isRunning { return false }
+        let appIsFrontmost = NSApp.isActive && NSApp.keyWindow != nil
+        let anyInput = CGEventType(rawValue: ~0)!   // kCGAnyInputEventType — time since any keyboard/mouse event
+        let idleSeconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
+        return !appIsFrontmost || idleSeconds > 300
     }
 }

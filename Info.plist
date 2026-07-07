@@ -27,30 +27,26 @@
 	<key>SUPublicEDKey</key>
 	<string>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</string>
 
-	<!-- Check automatically once a day. No second-launch permission prompt (updates are mandatory,
-	     so there's nothing to opt out of). -->
+	<!-- Check hourly (3600s is Sparkle's floor). Frequent releases are planned, and pairing fast
+	     discovery with the silent idle-relaunch below keeps users effortlessly current. No
+	     second-launch permission prompt — there's nothing to opt out of. -->
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>
-	<integer>86400</integer>
+	<integer>3600</integer>
 
-	<!-- Auto-update with our OLED gate as the FALLBACK: Sparkle silently downloads and installs
-	     updates on its own (applied on quit/relaunch — you can't swap a running bundle underneath the
-	     user). Zero taps in the normal case. Our custom forced-update gate (SentientUpdateDriver /
-	     UpdateGateView — no skip, no remind) only appears when a silent install CAN'T happen: macOS
-	     needs an admin password (app in /Applications), an install error, or the impatient window
-	     below elapses without the app being quit. -->
+	<!-- Chrome-style silent auto-update. Sparkle silently downloads + stages new versions; then
+	     UpdateController's `willInstallUpdateOnQuit` hook installs + relaunches on its own the moment
+	     it's safe (no pipeline run in flight, user not actively using the app) — no "install on quit"
+	     wait, zero taps. Because Sentient is a long-running menu-bar app, we deliberately do NOT set
+	     SUScheduledImpatientCheckInterval: idle-relaunch replaces the old 2-day forced-gate nag.
+	     Our OLED forced-update gate (SentientUpdateDriver / UpdateGateView — no skip, no remind) now
+	     appears ONLY when a silent install is genuinely impossible: macOS needs an admin password
+	     (app in a non-user-writable dir) or an install error — plus user-initiated "Check for Updates". -->
 	<key>SUAllowsAutomaticUpdates</key>
 	<true/>
 	<key>SUAutomaticallyUpdate</key>
 	<true/>
-
-	<!-- Sentient lives in the menu bar and may run for days, so "install on quit" can be slow to fire.
-	     If a silently-downloaded update still hasn't installed after this window, Sparkle surfaces it —
-	     i.e. our gate shows as the fallback. 2 days: current enough without nagging. Must exceed
-	     SUScheduledCheckInterval. -->
-	<key>SUScheduledImpatientCheckInterval</key>
-	<integer>172800</integer>
 
 	<!-- Privacy Constitution: send no system profile, and never run JavaScript in release notes.
 	     The only network exposure is the appcast GET (IP + User-Agent) over HTTPS — no account. -->
