@@ -3,7 +3,7 @@
 # release.sh — cut a signed, notarized Sentient OS release and publish it for Sparkle auto-update.
 #
 # The whole pipeline, one command:
-#   archive → export (Developer ID) → DMG → notarize → staple → EdDSA-sign → appcast → GitHub Release
+#   archive → export (Developer ID) → DMG → notarize → staple → EdDSA-sign → appcast → GitHub Release → Homebrew cask
 #
 # Run this on JESAI'S Mac (the paid Developer-ID team YJ8AZR3G5Q) — Sparkle requires every update to
 # be signed with the SAME Team ID as the installed app, and only the paid account can notarize.
@@ -33,6 +33,7 @@ SCHEME="Sentient OS macOS"
 APP_NAME="Sentient OS"
 BUILD_DIR="$REPO_ROOT/build/release"
 GH_REPO="Sentient-OS-Labs/sentient-os"
+TAP_REPO="${TAP_REPO:-Sentient-OS-Labs/homebrew-tap}"   # the Homebrew cask lives here (Casks/sentient-os.rb)
 NOTARY_PROFILE="${NOTARY_PROFILE:-SentientNotary}"     # xcrun notarytool keychain profile name
 DEVELOPER_ID="${DEVELOPER_ID:-Developer ID Application}" # matched from the keychain by prefix
 KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-ed25519}"        # Sparkle EdDSA Keychain account
@@ -51,6 +52,25 @@ find_sparkle_bin() {
   found="$(find "$HOME/Library/Developer/Xcode/DerivedData" -type f -name sign_update -path '*Sparkle*' 2>/dev/null | head -1)"
   [[ -n "$found" ]] && { dirname "$found"; return; }
   echo ""
+}
+
+# ── Bump the Homebrew cask in our own tap (version + sha256 → commit → push) ──────────────────────
+# Stateless: clones the tap fresh (this Mac may not have it checked out), rewrites the two values,
+# pushes via the already-authed gh. Best-effort — see the call site; a failure never unwinds an
+# already-published release. Uses $DMG / $SHORT / $BUILD_DIR / $TAP_REPO (resolved at call time).
+bump_cask() {
+  local sha tap_dir cask
+  sha="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+  tap_dir="$BUILD_DIR/tap"; rm -rf "$tap_dir"
+  gh repo clone "$TAP_REPO" "$tap_dir" -- --depth 1 --quiet || return 1
+  cask="$tap_dir/Casks/sentient-os.rb"
+  [[ -f "$cask" ]] || { echo "   cask file missing in $TAP_REPO"; return 1; }
+  /usr/bin/perl -i -pe "s|^  version \".*\"|  version \"$SHORT\"|" "$cask"
+  /usr/bin/perl -i -pe "s|^  sha256 \".*\"|  sha256 \"$sha\"|"     "$cask"
+  grep -q "$sha" "$cask" || { echo "   cask sha256 rewrite failed"; return 1; }
+  git -C "$tap_dir" diff --quiet && { echo "   cask already at $SHORT — nothing to push"; return 0; }
+  git -C "$tap_dir" commit -aqm "sentient-os $SHORT" && git -C "$tap_dir" push --quiet || return 1
+  echo "   cask → sentient-os $SHORT  (sha256 $sha)"
 }
 
 # ── Subcommand: one-time key generation ──────────────────────────────────────────────────────────
@@ -75,14 +95,14 @@ ARCHIVE="$BUILD_DIR/$APP_NAME.xcarchive"
 EXPORT_DIR="$BUILD_DIR/export"
 
 # ── 1. Archive (Release, Developer ID via Signing.xcconfig) ──────────────────────────────────────
-echo "→ [1/7] Archiving…"
+echo "→ [1/8] Archiving…"
 xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
   -archivePath "$ARCHIVE" archive | xcbeautify 2>/dev/null || \
 xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
   -archivePath "$ARCHIVE" archive
 
 # ── 2. Export a Developer-ID-signed .app ─────────────────────────────────────────────────────────
-echo "→ [2/7] Exporting (Developer ID)…"
+echo "→ [2/8] Exporting (Developer ID)…"
 cat > "$BUILD_DIR/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -105,21 +125,21 @@ DMG="$BUILD_DIR/SentientOS-$SHORT.dmg"      # no spaces in the asset name (appca
 echo "   version $SHORT ($BUILD) → tag $TAG"
 
 # ── 3. Build a DMG (Applications drag-target) ────────────────────────────────────────────────────
-echo "→ [3/7] Building DMG…"
+echo "→ [3/8] Building DMG…"
 STAGE="$BUILD_DIR/dmg"; rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
 
 # ── 4. Notarize + 5. Staple ──────────────────────────────────────────────────────────────────────
-echo "→ [4/7] Notarizing (this waits on Apple)…"
+echo "→ [4/8] Notarizing (this waits on Apple)…"
 xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
-echo "→ [5/7] Stapling…"
+echo "→ [5/8] Stapling…"
 xcrun stapler staple "$DMG"
 xcrun stapler validate "$DMG"
 
 # ── 6. EdDSA-sign the DMG for Sparkle + generate the appcast ─────────────────────────────────────
-echo "→ [6/7] Signing (EdDSA) + generating appcast…"
+echo "→ [6/8] Signing (EdDSA) + generating appcast…"
 "$BIN/sign_update" "$DMG" --account "$KEYCHAIN_ACCOUNT"    # prints edSignature (also folded into appcast)
 FEED_PREFIX="https://github.com/$GH_REPO/releases/download/$TAG/"
 "$BIN/generate_appcast" "$BUILD_DIR" \
@@ -129,14 +149,18 @@ FEED_PREFIX="https://github.com/$GH_REPO/releases/download/$TAG/"
 echo "   appcast → $BUILD_DIR/appcast.xml"
 
 # ── 7. GitHub Release (uploads the DMG the appcast points at) ────────────────────────────────────
-echo "→ [7/7] Creating GitHub release $TAG…"
+echo "→ [7/8] Creating GitHub release $TAG…"
 gh release create "$TAG" "$DMG" \
   --repo "$GH_REPO" --title "$APP_NAME $SHORT" \
   --notes "Sentient OS $SHORT ($BUILD)" || \
   echo "   (release may already exist — upload manually with: gh release upload $TAG \"$DMG\")"
 
+# ── 8. Bump + push the Homebrew cask (own tap) ───────────────────────────────────────────────────
+echo "→ [8/8] Updating Homebrew cask…"
+bump_cask || echo "   ⚠️  cask bump failed — update $TAP_REPO/Casks/sentient-os.rb by hand (version \"$SHORT\" + the sha256 of $DMG), then push."
+
 echo "──────────────────────────────────────────────────────────────────"
-echo " ✅ Built, notarized, signed, and released $APP_NAME $SHORT."
+echo " ✅ Built, notarized, signed, released, and cask-bumped: $APP_NAME $SHORT."
 echo ""
 echo " NEXT (manual, load-bearing): publish the appcast so installed apps see the update —"
 echo "   copy  $BUILD_DIR/appcast.xml"
