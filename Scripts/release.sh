@@ -1,26 +1,28 @@
 #!/bin/bash
 #
-# release.sh — cut a signed, notarized Sentient OS release and publish it for Sparkle auto-update.
+# release.sh — publish an already signed + notarized Sentient OS DMG for Sparkle auto-update.
 #
-# The whole pipeline, one command:
-#   archive → export (Developer ID) → DMG → notarize → staple → EdDSA-sign → appcast → GitHub Release → Homebrew cask
+# YOU build the DMG yourself (Xcode → Archive → Distribute App → Direct Distribution → notarize →
+# a .dmg containing the notarized .app). This script takes that finished DMG and does the rest:
 #
-# Run this on JESAI'S Mac (the paid Developer-ID team YJ8AZR3G5Q) — Sparkle requires every update to
-# be signed with the SAME Team ID as the installed app, and only the paid account can notarize.
+#   validate it's really notarized → EdDSA-sign → generate appcast → GitHub Release → Homebrew cask
 #
-# ── ONE-TIME SETUP (do these once, ever) ────────────────────────────────────────────────────────
-#   1. EdDSA signing key:      ./release.sh keys
-#        → prints SUPublicEDKey. Paste it into ../Info.plist (replacing the placeholder), commit.
-#        → the private seed is stored in this Mac's login Keychain; NEVER put it in the repo.
-#   2. Notary credentials:     xcrun notarytool store-credentials "SentientNotary" \
-#                                --apple-id "you@apple.id" --team-id YJ8AZR3G5Q --password <app-specific-pw>
-#   3. Sparkle CLI tools:      brew install --cask sparkle   (or set SPARKLE_BIN to a Sparkle bin/ dir)
+# Run on JESAI'S Mac: the EdDSA private seed lives in THIS Mac's login Keychain, and the GitHub
+# release + cask push ride the already-authed `gh`. Notarization is NOT done here (you do it in
+# Xcode), so there are NO notary credentials to set up.
 #
-# ── EACH RELEASE ────────────────────────────────────────────────────────────────────────────────
-#   1. Bump MARKETING_VERSION and CURRENT_PROJECT_VERSION in the project (build number MUST increase —
-#      Sparkle compares CFBundleVersion). Commit.
-#   2. ./release.sh            (reads the version from the build)
-#   3. Publish the emitted appcast.xml to https://sentient-os.ai/appcast.xml (the SUFeedURL).
+# ── ONE-TIME SETUP (done) ─────────────────────────────────────────────────────────────────────
+#   EdDSA key:  ./release.sh keys   → prints SUPublicEDKey (already baked into ../Info.plist).
+#               Minted 2026-07-07; private seed stays in the Keychain, NEVER in the repo. Back it
+#               up: `generate_keys -x <file>` → 1Password.
+#   Sparkle CLI tools resolve automatically from the SwiftPM checkout in DerivedData (or set
+#   SPARKLE_BIN, or `brew install --cask sparkle`).
+#
+# ── EACH RELEASE ──────────────────────────────────────────────────────────────────────────────
+#   1. Bump MARKETING_VERSION + CURRENT_PROJECT_VERSION (the build number MUST increase — Sparkle
+#      compares CFBundleVersion). Archive → Distribute (Developer ID) → notarize → make the DMG.
+#   2. ./release.sh path/to/SentientOS-<version>.dmg
+#   3. Publish the emitted appcast.xml to https://sentient-os.ai/appcast.xml (the script prints how).
 #
 # Doc: Sentient OS macOS/Documentation/Auto-Update (Sparkle).md
 #
@@ -28,26 +30,23 @@ set -euo pipefail
 
 # ── Config ───────────────────────────────────────────────────────────────────────────────────────
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"          # the app git repo root (has the .xcodeproj)
-PROJECT="$REPO_ROOT/Sentient OS macOS.xcodeproj"
-SCHEME="Sentient OS macOS"
 APP_NAME="Sentient OS"
 BUILD_DIR="$REPO_ROOT/build/release"
-GH_REPO="Sentient-OS-Labs/sentient-os"
+GH_REPO="${GH_REPO:-Sentient-OS-Labs/sentient-os}"     # override pre-launch (the main repo is private, so its release assets aren't publicly downloadable yet)
+WEB_REPO="Sentient-OS-Labs/sentient-os-website"         # serves public/appcast.xml via Vercel
 TAP_REPO="${TAP_REPO:-Sentient-OS-Labs/homebrew-tap}"   # the Homebrew cask lives here (Casks/sentient-os.rb)
-NOTARY_PROFILE="${NOTARY_PROFILE:-SentientNotary}"     # xcrun notarytool keychain profile name
-DEVELOPER_ID="${DEVELOPER_ID:-Developer ID Application}" # matched from the keychain by prefix
 KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-ed25519}"        # Sparkle EdDSA Keychain account
+TEAM_ID="YJ8AZR3G5Q"                                    # Sparkle requires updates to match the installed team
+PLACEHOLDER_EDKEY="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 
 # ── Locate Sparkle's CLI tools (generate_keys / sign_update / generate_appcast) ──────────────────
 find_sparkle_bin() {
   if [[ -n "${SPARKLE_BIN:-}" && -x "$SPARKLE_BIN/sign_update" ]]; then echo "$SPARKLE_BIN"; return; fi
-  # Homebrew cask lays them into the Sparkle.app or a caskroom bin.
   for c in /Applications/Sparkle.app/Contents/Resources \
            /opt/homebrew/Caskroom/sparkle/*/bin \
            /usr/local/Caskroom/sparkle/*/bin; do
     [[ -x "$c/sign_update" ]] && { echo "$c"; return; }
   done
-  # Fall back to the resolved SwiftPM artifact in DerivedData.
   local found
   found="$(find "$HOME/Library/Developer/Xcode/DerivedData" -type f -name sign_update -path '*Sparkle*' 2>/dev/null | head -1)"
   [[ -n "$found" ]] && { dirname "$found"; return; }
@@ -55,9 +54,8 @@ find_sparkle_bin() {
 }
 
 # ── Bump the Homebrew cask in our own tap (version + sha256 → commit → push) ──────────────────────
-# Stateless: clones the tap fresh (this Mac may not have it checked out), rewrites the two values,
-# pushes via the already-authed gh. Best-effort — see the call site; a failure never unwinds an
-# already-published release. Uses $DMG / $SHORT / $BUILD_DIR / $TAP_REPO (resolved at call time).
+# Stateless: clones the tap fresh, rewrites the two values, pushes via the already-authed gh.
+# Best-effort — a failure never unwinds an already-published release. Uses $DMG / $SHORT / $BUILD_DIR.
 bump_cask() {
   local sha tap_dir cask
   sha="$(shasum -a 256 "$DMG" | awk '{print $1}')"
@@ -84,85 +82,93 @@ if [[ "${1:-}" == "keys" ]]; then
   exit 0
 fi
 
+# ── Input: the pre-notarized DMG ─────────────────────────────────────────────────────────────────
+INPUT_DMG="${1:-}"
+[[ -z "$INPUT_DMG" ]] && { echo "Usage: $0 path/to/SentientOS-<version>.dmg   (or: $0 keys)"; exit 1; }
+[[ -f "$INPUT_DMG" ]] || { echo "❌ No DMG at: $INPUT_DMG"; exit 1; }
+
 BIN="$(find_sparkle_bin)"
 [[ -z "$BIN" ]] && { echo "❌ Sparkle tools not found. brew install --cask sparkle (or set SPARKLE_BIN)."; exit 1; }
 
 echo "──────────────────────────────────────────────────────────────────"
-echo " Sentient OS release  ·  tools: $BIN"
+echo " Sentient OS release  ·  input: $INPUT_DMG"
+echo " tools: $BIN"
 echo "──────────────────────────────────────────────────────────────────"
 rm -rf "$BUILD_DIR"; mkdir -p "$BUILD_DIR"
-ARCHIVE="$BUILD_DIR/$APP_NAME.xcarchive"
-EXPORT_DIR="$BUILD_DIR/export"
 
-# ── 1. Archive (Release, Developer ID via Signing.xcconfig) ──────────────────────────────────────
-echo "→ [1/8] Archiving…"
-xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
-  -archivePath "$ARCHIVE" archive | xcbeautify 2>/dev/null || \
-xcodebuild -project "$PROJECT" -scheme "$SCHEME" -configuration Release \
-  -archivePath "$ARCHIVE" archive
+# ── 1. Mount, VALIDATE (signed + notarized + stapled), read the shipped version ──────────────────
+echo "→ [1/5] Validating the DMG and reading its version…"
+MOUNT="$(mktemp -d)"
+hdiutil attach "$INPUT_DMG" -nobrowse -readonly -mountpoint "$MOUNT" >/dev/null
+trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
 
-# ── 2. Export a Developer-ID-signed .app ─────────────────────────────────────────────────────────
-echo "→ [2/8] Exporting (Developer ID)…"
-cat > "$BUILD_DIR/ExportOptions.plist" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>method</key><string>developer-id</string>
-  <key>signingStyle</key><string>automatic</string>
-</dict></plist>
-PLIST
-xcodebuild -exportArchive -archivePath "$ARCHIVE" \
-  -exportOptionsPlist "$BUILD_DIR/ExportOptions.plist" -exportPath "$EXPORT_DIR"
+APP="$(find "$MOUNT" -maxdepth 1 -name '*.app' | head -1)"
+[[ -n "$APP" ]] || { echo "❌ No .app inside the DMG."; exit 1; }
 
-APP="$EXPORT_DIR/$APP_NAME.app"
-[[ -d "$APP" ]] || { echo "❌ Export produced no .app at $APP"; exit 1; }
+# Gatekeeper assessment — must be accepted AND notarized (not merely Developer-ID signed).
+if ! ASSESS="$(spctl -a -t exec -vv "$APP" 2>&1)"; then
+  echo "$ASSESS"; echo "❌ Gatekeeper REJECTED the app — not properly signed/notarized. Aborting."; exit 1
+fi
+echo "$ASSESS" | grep -q "Notarized" || {
+  echo "$ASSESS"; echo "❌ App is signed but NOT notarized. Notarize + staple before releasing. Aborting."; exit 1; }
+xcrun stapler validate "$APP" >/dev/null 2>&1 || {
+  echo "❌ Notarization ticket is not stapled to the app. Aborting."; exit 1; }
 
-# Version from the built app (source of truth = what actually shipped).
+TEAM="$(codesign -dv --verbose=4 "$APP" 2>&1 | awk -F= '/TeamIdentifier/{print $2}')"
+[[ "$TEAM" == "$TEAM_ID" ]] || echo "   ⚠️  Team is '$TEAM', expected '$TEAM_ID' — Sparkle needs the SAME team as the installed app."
+
 SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
+EDKEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+[[ "$EDKEY" == "$PLACEHOLDER_EDKEY" ]] && {
+  echo "❌ This build carries the PLACEHOLDER EdDSA key — it could never verify updates. Rebuild with the real key. Aborting."; exit 1; }
+
+hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
+trap - EXIT
+echo "   ✅ notarized · team $TEAM · version $SHORT ($BUILD)"
+
 TAG="$SHORT"
-DMG="$BUILD_DIR/SentientOS-$SHORT.dmg"      # no spaces in the asset name (appcast URL encoding)
-echo "   version $SHORT ($BUILD) → tag $TAG"
+STAGE="$BUILD_DIR/appcast"; mkdir -p "$STAGE"
+DMG="$STAGE/SentientOS-$SHORT.dmg"      # canonical, space-free asset name → clean appcast URLs
+cp "$INPUT_DMG" "$DMG"
 
-# ── 3. Build a DMG (Applications drag-target) ────────────────────────────────────────────────────
-echo "→ [3/8] Building DMG…"
-STAGE="$BUILD_DIR/dmg"; rm -rf "$STAGE"; mkdir -p "$STAGE"
-cp -R "$APP" "$STAGE/"
-ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+# ── 2. EdDSA-sign the DMG (explicit — generate_appcast re-signs, this prints + verifies the sig) ──
+echo "→ [2/5] EdDSA-signing the DMG…"
+"$BIN/sign_update" "$DMG" --account "$KEYCHAIN_ACCOUNT"
 
-# ── 4. Notarize + 5. Staple ──────────────────────────────────────────────────────────────────────
-echo "→ [4/8] Notarizing (this waits on Apple)…"
-xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
-echo "→ [5/8] Stapling…"
-xcrun stapler staple "$DMG"
-xcrun stapler validate "$DMG"
-
-# ── 6. EdDSA-sign the DMG for Sparkle + generate the appcast ─────────────────────────────────────
-echo "→ [6/8] Signing (EdDSA) + generating appcast…"
-"$BIN/sign_update" "$DMG" --account "$KEYCHAIN_ACCOUNT"    # prints edSignature (also folded into appcast)
+# ── 3. Generate the appcast (enclosure URL points at the GitHub Release asset) ────────────────────
+echo "→ [3/5] Generating appcast…"
 FEED_PREFIX="https://github.com/$GH_REPO/releases/download/$TAG/"
-"$BIN/generate_appcast" "$BUILD_DIR" \
+"$BIN/generate_appcast" "$STAGE" \
   --account "$KEYCHAIN_ACCOUNT" \
   --download-url-prefix "$FEED_PREFIX" \
-  -o "$BUILD_DIR/appcast.xml"
-echo "   appcast → $BUILD_DIR/appcast.xml"
+  -o "$STAGE/appcast.xml"
+echo "   appcast → $STAGE/appcast.xml"
 
-# ── 7. GitHub Release (uploads the DMG the appcast points at) ────────────────────────────────────
-echo "→ [7/8] Creating GitHub release $TAG…"
+# ── 4. GitHub Release (uploads the DMG the appcast points at) ─────────────────────────────────────
+echo "→ [4/5] Creating GitHub release ${TAG}…"
 gh release create "$TAG" "$DMG" \
   --repo "$GH_REPO" --title "$APP_NAME $SHORT" \
   --notes "Sentient OS $SHORT ($BUILD)" || \
   echo "   (release may already exist — upload manually with: gh release upload $TAG \"$DMG\")"
 
-# ── 8. Bump + push the Homebrew cask (own tap) ───────────────────────────────────────────────────
-echo "→ [8/8] Updating Homebrew cask…"
-bump_cask || echo "   ⚠️  cask bump failed — update $TAP_REPO/Casks/sentient-os.rb by hand (version \"$SHORT\" + the sha256 of $DMG), then push."
+# ── 5. Bump + push the Homebrew cask (own tap) ────────────────────────────────────────────────────
+if [[ -n "${SKIP_CASK:-}" ]]; then
+  echo "→ [5/5] Skipping Homebrew cask bump (SKIP_CASK set)."
+else
+  echo "→ [5/5] Updating Homebrew cask…"
+  bump_cask || echo "   ⚠️  cask bump failed — update $TAP_REPO/Casks/sentient-os.rb by hand (version \"$SHORT\" + the sha256 of $DMG), then push."
+fi
 
 echo "──────────────────────────────────────────────────────────────────"
-echo " ✅ Built, notarized, signed, released, and cask-bumped: $APP_NAME $SHORT."
+echo " ✅ Signed, appcast'd, released, cask-bumped: $APP_NAME $SHORT ($BUILD)."
 echo ""
-echo " NEXT (manual, load-bearing): publish the appcast so installed apps see the update —"
-echo "   copy  $BUILD_DIR/appcast.xml"
-echo "   to    https://sentient-os.ai/appcast.xml   (the SUFeedURL every build polls)."
+echo " NEXT (manual, load-bearing): publish the appcast so installed apps see the update."
+echo " The website ($WEB_REPO) serves it at public/appcast.xml; Vercel auto-deploys main:"
+echo ""
+echo "     gh repo clone $WEB_REPO /tmp/sos-web -- --depth 1"
+echo "     cp \"$STAGE/appcast.xml\" /tmp/sos-web/public/appcast.xml"
+echo "     git -C /tmp/sos-web commit -aqm \"appcast: $APP_NAME $SHORT\" && git -C /tmp/sos-web push"
+echo ""
+echo "   Then verify:  curl -s https://sentient-os.ai/appcast.xml | head"
 echo "──────────────────────────────────────────────────────────────────"
