@@ -57,7 +57,7 @@ struct YourAIsPane: View {
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 9) {
                 pillar("lock.shield", "Your real files never leave this Mac. Your AIs only see short summaries, personal details stripped.")
-                pillar("lock.fill", "End-to-end encrypted: no one, not even Sentient's developers, can read your knowledge base.")
+                pillar("lock.fill", "Encrypted with a key only your private link holds. On our servers your knowledge base is unreadable ciphertext.")
                 pillar("key.fill", "No account. One secret link only you hold; leave Sentient and the cloud copy deletes itself in 30 days.")
                 pillar("chevron.left.forwardslash.chevron.right", "Even the cloud backend is open source. Everything's verifiable.")
             }

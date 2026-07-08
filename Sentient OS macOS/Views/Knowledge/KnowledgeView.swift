@@ -451,7 +451,7 @@ struct KnowledgeView: View {
         }
     }
 
-    /// A leading status glyph (a glowing dot, or a spinner while syncing) + "<verb> (🔒 E2E Encrypted)"
+    /// A leading status glyph (a glowing dot, or a spinner while syncing) + "<verb> (🔒 Encrypted)"
     /// as one single-colored line — the lock is inline in the Text so it tints with everything else.
     private func cloudStatus(_ verb: String, color: Color, dot: Color, spinner: Bool) -> some View {
         HStack(spacing: 7) {
@@ -464,7 +464,7 @@ struct KnowledgeView: View {
             HStack(spacing: 6) {
                 Text(verb)
                 Rectangle().fill(color.opacity(0.35)).frame(width: 1, height: 11)   // subtle divider
-                Text("\(Image(systemName: "lock.fill")) E2E Encrypted")
+                Text("\(Image(systemName: "lock.fill")) Encrypted")
             }
             .font(.system(size: 11.5))
             .foregroundStyle(color)
