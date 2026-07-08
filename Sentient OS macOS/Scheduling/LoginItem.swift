@@ -25,12 +25,25 @@ enum LoginItem {
     /// True when the app is registered to launch at login.
     static var isEnabled: Bool { service.status == .enabled }
 
+    /// True when macOS registered the item but demands the user's OK in System Settings — the
+    /// answer it gives once the user has manually disabled the item there; the app can never
+    /// silently re-enable past it.
+    static var needsApproval: Bool { service.status == .requiresApproval }
+
     /// Register the app as a login item. Idempotent; silent (no approval prompt). Returns success.
     @discardableResult
     static func enable() -> Bool {
         guard service.status != .enabled else { return true }
         do { try service.register(); Log("LoginItem: registered (status=\(service.status.rawValue))"); return true }
         catch { Log("LoginItem: register failed — \(error)"); return false }
+    }
+
+    /// The UI "Turn On" action: register, and when macOS answers .requiresApproval (the user
+    /// disabled the item in System Settings once), deep-link them there to flip it back on —
+    /// that's the only way past it. Both onboarding and Settings → Health call THIS.
+    static func enableOrRequestApproval() {
+        enable()
+        if needsApproval { SMAppService.openSystemSettingsLoginItems() }
     }
 
     /// Unregister the login item. Best-effort.

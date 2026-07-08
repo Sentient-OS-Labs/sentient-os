@@ -177,8 +177,16 @@ actor CodexCLI {
     /// exit code: a `curl | sh` pipeline reports the trailing `sh`'s status, so a failed download
     /// (no network) can still "exit 0" with nothing installed. Throws if codex isn't found after the
     /// run. (Installed ≠ logged in — auth is the next step; detection-first is the caller's job.)
+    ///
+    /// ⚠️ The sed stage is a working workaround for an UPSTREAM bug [MEASURED 2026-07-08]: GitHub's
+    /// API began serving MINIFIED JSON to requests without an explicit Accept header, and OpenAI's
+    /// installer parses the release JSON line-by-line — so every vanilla `curl … | sh` run now dies
+    /// with "Could not find Codex package or platform npm release assets". Injecting
+    /// `Accept: application/json` into the script's curl calls makes GitHub pretty-print again
+    /// (verified end-to-end); it's harmless on the script's binary downloads. Drop the sed once
+    /// OpenAI fixes install.sh.
     static func install(onLine: @escaping @Sendable (String) -> Void) async throws {
-        let pipeline = "curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"
+        let pipeline = #"curl -fsSL https://chatgpt.com/codex/install.sh | sed 's|curl -fsSL|curl -fsSL -H "Accept: application/json"|g' | CODEX_NON_INTERACTIVE=1 sh"#
         let out = try await executeStreaming(binary: "/bin/sh", args: ["-c", pipeline],
                                              timeout: 300, onLine: onLine)
         UserDefaults.standard.removeObject(forKey: pathCacheKey)   // force a fresh discovery scan
@@ -236,6 +244,17 @@ actor CodexCLI {
     /// Step 2 ground-truth check — `codex login status`. [MEASURED v0.142.3] exit 0 = logged in;
     /// exit 1 + "Not logged in" = not. Exit status is the primary signal, with an output scan as a
     /// backstop. Uses the bare-env `executeAsync` (status only reads `~/.codex/auth.json` via HOME).
+    /// Ground truth for "codex is installed": actually RUN `codex --help` and see it answer.
+    /// A pure path check can be fooled (e.g. a broken symlink left by a half-deleted install);
+    /// no binary found anywhere = the shell's "command not found" case. Onboarding's login
+    /// screen polls this to un-grey its button the moment the background install lands.
+    static func isRunnable() async -> Bool {
+        guard let bin = locateBinary() else { return false }
+        guard let out = try? await executeAsync(binary: bin, args: ["--help"],
+                                                stdinText: nil, cwd: nil, timeout: 10) else { return false }
+        return out.status == 0 && !out.stdout.isEmpty
+    }
+
     static func loginStatus() async -> Bool {
         guard let bin = locateBinary() else { return false }
         guard let out = try? await executeAsync(binary: bin, args: ["login", "status"],
