@@ -39,7 +39,14 @@ struct RootView: View {
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
-            if isProcessing, let modelPath = Self.modelPath {
+            if !appState.hasCompletedOnboarding {
+                // First launch → the intro slides. TEMPORARY wiring: the last slide's Next marks
+                // onboarding complete and drops into home (until the full ~10-step flow lands).
+                OnboardingView {
+                    withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
+                }
+                .transition(.opacity)
+            } else if isProcessing, let modelPath = Self.modelPath {
                 // Same engine + UI as the dev "start on device" buttons; .auto = backfill new
                 // buckets, catch up the rest. (Gmail is a dev-tools leg; the home button is on-device.)
                 ProcessingView(modelPath: modelPath,

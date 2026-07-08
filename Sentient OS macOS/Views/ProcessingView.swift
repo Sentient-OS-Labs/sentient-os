@@ -61,14 +61,18 @@ struct ProcessingView: View {
     let runCalendar: Bool             // append the cloud Google Calendar leg (same takeover)
     let showPrompt: Bool              // dev: add the left-side prompt pane
     let fullCycle: Bool               // real-mode Analyze Now: after the read, run ProactiveCycle (KB + proactive + wipe)
+    let pausable: Bool                // onboarding: the footer button is Pause/Resume (freeze in place) instead of Stop (exit)
+    let onExitEarly: (() -> Void)?    // onboarding: where "Back" on a failure returns (nil = onDone, the home behavior)
     var onDone: () -> Void
 
     init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode,
          runGmail: Bool = false, runCalendar: Bool = false, showPrompt: Bool = false,
-         fullCycle: Bool = false, onDone: @escaping () -> Void) {
+         fullCycle: Bool = false, pausable: Bool = false, onExitEarly: (() -> Void)? = nil,
+         onDone: @escaping () -> Void) {
         self.modelPath = modelPath; self.connectors = connectors; self.mode = mode
         self.runGmail = runGmail; self.runCalendar = runCalendar; self.showPrompt = showPrompt
-        self.fullCycle = fullCycle; self.onDone = onDone
+        self.fullCycle = fullCycle; self.pausable = pausable; self.onExitEarly = onExitEarly
+        self.onDone = onDone
     }
 
     private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(String) }
@@ -76,6 +80,7 @@ struct ProcessingView: View {
     @State private var prepStatus = "Preparing your suggestions…"
     @State private var progress = RunProgress()
     @State private var started = false
+    @State private var paused = false           // pausable only: frozen at the last item, awaiting Resume
     @State private var runTask: Task<RunProgress, Never>?
     @State private var awake = DisplayAwake()   // keeps the screen on during the long first ingest
 
@@ -305,7 +310,7 @@ struct ProcessingView: View {
             Text(message).font(.caption).foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             HStack(spacing: 12) {
-                Button("Back", action: onDone).buttonStyle(.bordered).tint(.white)
+                Button("Back", action: onExitEarly ?? onDone).buttonStyle(.bordered).tint(.white)
                 Button("Retry") { Task { started = false; await startIfNeeded() } }
                     .buttonStyle(.borderedProminent).tint(.white)
             }
@@ -315,15 +320,16 @@ struct ProcessingView: View {
     private var footer: some View {
         VStack(spacing: 18) {
             VStack(spacing: 6) {
-                Button(action: stop) {
-                    Text("Stop Analysis")
+                Button(action: pausable ? (paused ? resume : pause) : stop) {
+                    Text(pausable ? (paused ? "Resume Analysis" : "Pause Analysis") : "Stop Analysis")
                         .font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.9))
                         .padding(.horizontal, 24).padding(.vertical, 10)
                         .background(Capsule().fill(.white.opacity(0.08)))
                         .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
                 }
                 .buttonStyle(.plain)
-                Text("Analysis can always resume later.")
+                Text(pausable ? (paused ? "Paused. It picks up exactly where it stopped." : "Pausing keeps your progress.")
+                              : "Analysis can always resume later.")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
             if showPrompt {
@@ -347,6 +353,20 @@ struct ProcessingView: View {
     private func stop() {
         runTask?.cancel()
         onDone()
+    }
+
+    /// Pause (pausable/onboarding only): cancel the run and FREEZE in place — the card keeps
+    /// showing the item it stopped on. Every item commits atomically, so nothing is lost.
+    private func pause() {
+        paused = true
+        runTask?.cancel()
+    }
+
+    /// Resume from the durable marks — the same restart the crash-safe design gives a 3am run.
+    private func resume() {
+        paused = false
+        started = false
+        Task { await startIfNeeded() }
     }
 
     private var percent: Int {
@@ -396,9 +416,11 @@ struct ProcessingView: View {
         runTask = task
         for await p in stream {
             if state == .loadingModel { withAnimation { state = .processing } }
-            progress = p
+            if !paused { progress = p }   // paused → freeze the card at the item it stopped on
         }
-        progress = await task.value
+        let final = await task.value
+        if paused { return }              // wait for Resume; never fall through to the cycle/completed
+        progress = final
 
         // Real-mode Analyze Now: after the read, file into the knowledge base + run all three proactive
         // steps + wipe the summaries — surfacing each phase — then reveal the real cards on the home.

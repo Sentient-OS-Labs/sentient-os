@@ -149,10 +149,10 @@ struct HealthPane: View {
                 .rise(1, revealed: revealed)
                 StatusLine(title: "Launch at login",
                            health: loginOn ? .ok : .warn,
-                           note: loginOn ? "on" : "off",
+                           note: loginOn ? "on" : (LoginItem.needsApproval ? "approve in system settings" : "off"),
                            tip: "Starts Sentient quietly in your menu bar when you log in, so the overnight run can happen and your Sentient can stay alive.",
-                           fixTitle: "Turn On") {
-                    LoginItem.enable()
+                           fixTitle: LoginItem.needsApproval ? "Approve…" : "Turn On") {
+                    LoginItem.enableOrRequestApproval()
                     loginOn = LoginItem.isEnabled
                 }
                 .rise(2, revealed: revealed)
