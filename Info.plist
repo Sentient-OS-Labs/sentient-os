@@ -11,11 +11,13 @@
 	  (that's why INFOPLIST_FILE + GENERATE_INFOPLIST_FILE coexist here). Do NOT duplicate generated
 	  keys in this file. Doc: Documentation/Auto-Update (Sparkle).md
 
-	  ⚠️ SUPublicEDKey below is a PLACEHOLDER (32 zero-bytes). It MUST be replaced with the real
-	  EdDSA public key BEFORE the first public release — run `generate_keys` once on Jesai's Mac
-	  (the paid Developer-ID team), which prints the real SUPublicEDKey and stores the private seed
-	  in that Mac's login Keychain. The private key NEVER lives in the repo. Until it's replaced,
-	  update checks can't verify anything (harmless: there's no appcast live yet either).
+	  🔑 SUPublicEDKey below is the REAL production key (minted 2026-07-07 on Jesai's Mac). Its
+	  matching private seed lives ONLY in Jesai's login Keychain (service `https://sparkle-project.org`,
+	  account `ed25519`) — NEVER in the repo. This public key is the permanent root of trust: every
+	  future update must be EdDSA-signed with the matching private seed or the installed fleet rejects
+	  it. Back that seed up (export via `generate_keys -x` → 1Password, shared with Aditya) — losing it
+	  strands every user with no upgrade path. Rotating it means first shipping a build carrying a new
+	  key, so treat it as forever.
 	-->
 
 	<!-- The appcast Sparkle polls. Hosted on our own domain (Vercel) — a permanent contract, since
@@ -23,17 +25,19 @@
 	<key>SUFeedURL</key>
 	<string>https://sentient-os.ai/appcast.xml</string>
 
-	<!-- PLACEHOLDER — replace with the real key from `generate_keys` before first release. -->
+	<!-- REAL production key (minted 2026-07-07). Private seed lives only in Jesai's login Keychain. -->
 	<key>SUPublicEDKey</key>
-	<string>AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</string>
+	<string>Fyi7OXvg0zcV820ryP5HBQZTeBpVgXuKilIAVFTRLX0=</string>
 
-	<!-- Check hourly (3600s is Sparkle's floor). Frequent releases are planned, and pairing fast
-	     discovery with the silent idle-relaunch below keeps users effortlessly current. No
-	     second-launch permission prompt — there's nothing to opt out of. -->
+	<!-- Check every 3 hours (10800s; Sparkle's floor is 3600). Frequent releases are planned, and
+	     pairing steady discovery with the silent idle-relaunch below keeps users effortlessly current.
+	     Note: UpdateController.start() also fires ONE background check at launch, so a fresh relaunch
+	     discovers updates immediately regardless of this cadence. No second-launch permission prompt —
+	     there's nothing to opt out of. -->
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUScheduledCheckInterval</key>
-	<integer>3600</integer>
+	<integer>10800</integer>
 
 	<!-- Chrome-style silent auto-update. Sparkle silently downloads + stages new versions; then
 	     UpdateController's `willInstallUpdateOnQuit` hook installs + relaunches on its own the moment
