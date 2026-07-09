@@ -39,18 +39,9 @@ struct SourcesPane: View {
     private var whatsappChats: Set<String> { Set(whatsappCSV.split(separator: ",").map(String.init)) }
     private var imessageChats: Set<String> { Set(imessageCSV.split(separator: ",").map(String.init)) }
 
-    /// How many CONNECTORS are on (all folders together count as one). The three-source minimum
-    /// is about breadth of life coverage, not folder count.
-    private var connectorCount: Int {
-        var n = 0
-        if runDownloads || runDesktop || runDocuments || !customRoots.isEmpty { n += 1 }
-        if runWhatsApp && !whatsappChats.isEmpty { n += 1 }
-        if runIMessage && !imessageChats.isEmpty { n += 1 }
-        if runNotes { n += 1 }
-        if gmailConnected && runGmail { n += 1 }
-        if calendarConnected && runCalendar { n += 1 }
-        return n
-    }
+    /// The shared 3-minimum rule (SourceSelection.connectorCount — onboarding's ready screen
+    /// enforces the same one). The @AppStorage copies above keep this body re-evaluating live.
+    private var connectorCount: Int { SourceSelection.connectorCount }
 
     var body: some View {
         SettingsPane(title: "Knowledge Sources",

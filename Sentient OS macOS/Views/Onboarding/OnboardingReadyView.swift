@@ -7,7 +7,8 @@
 //  keys and the SAME picker/connect sheets — so this IS the real selection (it persists and
 //  feeds the 3am run too), styled to make connecting sources feel like the main event: we WANT
 //  a bunch connected before the first analysis. Desktop, Documents, and Downloads ship armed;
-//  at least 3 FOLDERS must stay armed (apps are extra on top). The big Start Analysis button
+//  at least 3 CONNECTORS must be armed to start (SourceSelection.connectorCount — the same rule
+//  Settings enforces; all folders together count as one). The big Start Analysis button
 //  fires the exact run the home's Analyze Now fires, but wears the full-brightness glow (the
 //  popover's copy is deliberately subdued).
 //
@@ -43,11 +44,9 @@ struct OnboardingReadyView: View {
     private var whatsappChats: Set<String> { Set(whatsappCSV.split(separator: ",").map(String.init)) }
     private var imessageChats: Set<String> { Set(imessageCSV.split(separator: ",").map(String.init)) }
 
-    /// The min-3 rule counts FOLDERS only (defaults + custom); apps are extra on top.
-    private var folderCount: Int {
-        [runDownloads, runDesktop, runDocuments].count(where: { $0 }) + customRoots.count
-    }
-    private var canStart: Bool { folderCount >= 3 && !modelMissing }
+    /// The min-3 rule counts CONNECTORS, exactly like Settings (all folders together = one).
+    private var connectorCount: Int { SourceSelection.connectorCount }
+    private var canStart: Bool { connectorCount >= 3 && !modelMissing }
 
     var body: some View {
         VStack(spacing: 40) {
@@ -101,8 +100,8 @@ struct OnboardingReadyView: View {
                         }
                     }
                 }
-                if folderCount < 3 {
-                    MonoCaps("keep at least 3 folders on", size: 8.5, tracking: 1.6, color: Theme.Ink.amber)
+                if connectorCount < 3 {
+                    MonoCaps("keep at least 3 connectors on", size: 8.5, tracking: 1.6, color: Theme.Ink.amber)
                 }
             }
             .frame(width: 640)

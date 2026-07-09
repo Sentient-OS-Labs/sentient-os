@@ -360,7 +360,12 @@ struct SourceChip: View {
         .contentShape(Capsule())
 
         if locked {
-            chip.help(CodexAuth.connectorLockedTip)
+            chip
+                .onHover { hover = $0 }
+                .overlay(alignment: .top) {
+                    if hover { LockedChipTip().offset(y: -26) }
+                }
+                .animation(.easeInOut(duration: 0.15), value: hover)
         } else if let action {
             Button(action: action) { chip }
                 .buttonStyle(.plain)

@@ -59,6 +59,21 @@ enum SourceSelection {
             .split(separator: ",").map(String.init))
     }
 
+    /// How many CONNECTORS are armed (all folders together count as ONE) — the shared 3-minimum
+    /// rule Settings and onboarding's ready screen both enforce. Breadth of life coverage, not
+    /// folder count.
+    static var connectorCount: Int {
+        var n = 0
+        if bool("dbg.run.downloads", default: true) || bool("dbg.run.desktop", default: true)
+            || bool("dbg.run.documents", default: true) || !CustomRoots.urls.isEmpty { n += 1 }
+        if bool("dbg.run.whatsapp", default: false) && !chatJIDs.isEmpty { n += 1 }
+        if bool("dbg.run.imessage", default: false) && !imessageGUIDs.isEmpty { n += 1 }
+        if bool("dbg.run.notes", default: false) { n += 1 }
+        if bool("dbg.gmail.connected", default: false) && bool("dbg.run.gmail", default: false) { n += 1 }
+        if bool("dbg.calendar.connected", default: false) && bool("dbg.run.calendar", default: false) { n += 1 }
+        return n
+    }
+
     static func current(fdaGranted: Bool) -> [RunSource] {
         var s: [RunSource] = []
         if bool("dbg.run.downloads", default: true) { s.append(.files(.downloads)) }

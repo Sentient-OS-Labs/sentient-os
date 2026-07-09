@@ -163,8 +163,19 @@ struct SettingsChip: View {
     var locked: Bool = false
     var action: (() -> Void)? = nil
 
+    @State private var lockHover = false
+
     @ViewBuilder var body: some View {
-        if locked { chip.help(CodexAuth.connectorLockedTip) } else { chip }
+        if locked {
+            chip
+                .onHover { lockHover = $0 }
+                .overlay(alignment: .top) {
+                    if lockHover { LockedChipTip().offset(y: -32) }
+                }
+                .animation(.easeInOut(duration: 0.15), value: lockHover)
+        } else {
+            chip
+        }
     }
 
     private var chip: some View {
@@ -203,6 +214,22 @@ struct SettingsChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// The instant hover notice on a locked (knowledge-base-only) connector chip — the system
+/// tooltip's delay made it look like there was none. Shared by SettingsChip and SourceChip.
+struct LockedChipTip: View {
+    var body: some View {
+        Text(CodexAuth.connectorLockedTip)
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.white.opacity(0.88))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Color(white: 0.14), in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+            .fixedSize()
+            .allowsHitTesting(false)
+            .transition(.opacity)
     }
 }
 

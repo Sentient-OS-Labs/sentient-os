@@ -48,9 +48,9 @@ enum CodexAuth {
     /// The ChatGPT pricing page — where the crossroads screen and every upsell surface send users.
     static let upgradeURL = URL(string: "https://chatgpt.com/#pricing")!
 
-    /// The hover explanation on locked Gmail/Calendar chips (knowledge-base-only mode) — shared
-    /// by every surface that shows them, so the wording never drifts.
-    static let connectorLockedTip = "ChatGPT Free and Go don't support this connector. Sentient connects to Gmail and Calendar through your own ChatGPT, so this one needs Plus."
+    /// The hover notice on locked Gmail/Calendar chips (knowledge-base-only mode) — shared by
+    /// every surface that shows them, so the wording never drifts.
+    static let connectorLockedTip = "Only supported on ChatGPT Plus"
 
     // MARK: Persisted state
 
