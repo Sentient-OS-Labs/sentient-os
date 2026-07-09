@@ -3,8 +3,9 @@
 //  Sentient OS macOS
 //
 //  The app-lifetime brain behind "do this for me." Owns the ONE shared codex run (CommandRunModel),
-//  the right-⌘ hotkey (RightCommandMonitor), and voice capture (VoiceCapture) — so whether the user
-//  holds right-⌘ and speaks, or types in the home command bar, both reach the SAME backend and the
+//  the Sidekick hotkey (SidekickHotkeyMonitor — right ⌘ or right ⌥, the user's choice), and voice
+//  capture (VoiceCapture) — so whether the user holds the hotkey and speaks, or types in the home
+//  command bar, both reach the SAME backend and the
 //  SAME notch status (NotchPhase). The notch RENDERING is built later; this owns + drives `phase` and
 //  logs every transition, so the whole voice path is testable headlessly today.
 //
@@ -43,8 +44,9 @@ final class CommandCoordinator {
     /// `readBack ?? run.statusLine` while running.
     private(set) var readBack: String?
 
-    private let hotkey = RightCommandMonitor()
+    private let hotkey = SidekickHotkeyMonitor()
     private let voice = VoiceCapture()
+    private var hotkeyChangeObserver: NSObjectProtocol?
 
     private var listening = false           // a voice session is live (start → finalize / cancel)
     private var voiceStartTask: Task<Void, Never>?
@@ -58,17 +60,23 @@ final class CommandCoordinator {
     /// backend is testable immediately.)
     func start() {
         hotkey.maxHold = VoiceCapture.maxCaptureDuration   // cap the hold at the active engine's limit
+        hotkey.setKey(.current)                            // honor the user's Settings choice (right ⌘ / right ⌥)
         hotkey.onPress = { [weak self] in self?.voicePressBegan() }
         hotkey.onHoldConfirmed = { [weak self] in self?.voiceHoldConfirmed() }
         hotkey.onRelease = { [weak self] held in self?.voiceReleased(held: held) }
         // No global Esc: a keyDown tap is exactly what Input Monitoring gates, so the monitor
         // listens to modifiers only. Esc still cancels via the window's LOCAL monitor whenever
-        // Sentient itself is frontmost; over other apps, a fresh right-⌘ press is the cancel
+        // Sentient itself is frontmost; over other apps, a fresh hotkey press is the cancel
         // (see voicePressBegan).
         hotkey.start()
+        // Live re-key when the user flips the choice in Settings — no restart needed.
+        hotkeyChangeObserver = NotificationCenter.default.addObserver(
+            forName: .sidekickHotkeyChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.hotkey.setKey(.current) }
+        }
         voice.prewarm()
         run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
-        Log("CommandCoordinator armed (right-⌘ hold-to-talk · voice available: \(VoiceCapture.isAvailable))")
+        Log("CommandCoordinator armed (\(hotkey.key.label) hold-to-talk · voice available: \(VoiceCapture.isAvailable))")
     }
 
     // MARK: The one entry point — hotkey-voice AND the prompt bar both call this
@@ -130,16 +138,16 @@ final class CommandCoordinator {
 
     private func voicePressBegan() {
         guard VoiceCapture.isAvailable else { return }
-        // A right-⌘ tap while the type field is open toggles it closed (no action) — a quick way to back out.
+        // A hotkey tap while the type field is open toggles it closed (no action) — a quick way to back out.
         if phase == .typing { dismissTyping(); return }
-        // Right-⌘ doubles as the GLOBAL cancel (there is no global Esc — keyDown taps are what
+        // The hotkey doubles as the GLOBAL cancel (there is no global Esc — keyDown taps are what
         // Input Monitoring gates): a press while a stuck finalize is spinning, or while the
         // just-fired transcript is still shown ("you misheard me"), backs out — the beats the
         // global Esc used to cover.
         if phase == .transcribing { cancelCurrent(); return }
         if phase == .running, readBack != nil, run.remembering == nil {
             stop()                        // transcript shown → instant dismiss, run cancelled
-            Log("notch transcript cancelled (right-⌘)")
+            Log("notch transcript cancelled (\(hotkey.key.label))")
             return
         }
         guard !run.isRunning, !isInteracting else { Log("hotkey ignored — busy"); return }
@@ -175,7 +183,7 @@ final class CommandCoordinator {
     private func voiceReleased(held: TimeInterval) {
         switch phase {
         case .opening, .listening:
-            if held >= RightCommandMonitor.holdThreshold { finalizeVoice() } else { beginTyping() }
+            if held >= SidekickHotkeyMonitor.holdThreshold { finalizeVoice() } else { beginTyping() }
         default:
             break
         }
