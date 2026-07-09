@@ -295,9 +295,10 @@ struct HealthPane: View {
 
     private var notifNote: String {
         switch notifStatus {
-        case .authorized, .provisional: return "on"
-        case .notDetermined:            return "not asked yet"
-        default:                        return "off"
+        case .authorized:    return "on"
+        case .provisional:   return "quiet"   // the launch-banked provisional grant (no banners/sounds)
+        case .notDetermined: return "not asked yet"
+        default:             return "off"
         }
     }
 

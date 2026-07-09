@@ -9,6 +9,7 @@
 
 import Foundation
 import SwiftUI
+import UserNotifications
 
 @MainActor
 @Observable
@@ -60,6 +61,22 @@ final class AppState {
         }
         notch.start()                // raise the notch overlay window
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
+
+        // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
+        // grants quiet Notification Center delivery and lists us in Settings → Notifications (the
+        // user sees at most the passive "Sentient OS can send you notifications" notice). Asked
+        // lazily after onboarding so that notice never lands mid-flow; the explicit alerts
+        // upgrade stays in Settings → Health's "Allow…". Only fires while status is untouched —
+        // a real Allow/Deny is never overridden.
+        if hasCompletedOnboarding {
+            Task {
+                let center = UNUserNotificationCenter.current()
+                if await center.notificationSettings().authorizationStatus == .notDetermined {
+                    _ = try? await center.requestAuthorization(options: [.provisional])
+                    Log("Notifications: banked provisional (quiet) authorization")
+                }
+            }
+        }
 
         // First launch (onboarding not yet completed): kick off the codex CLI install silently in
         // the background, 1s after launch, while the user reads the intro slides. A USED codex
