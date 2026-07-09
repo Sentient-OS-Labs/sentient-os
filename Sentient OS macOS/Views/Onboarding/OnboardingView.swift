@@ -69,10 +69,24 @@ struct OnboardingView: View {
                 }
             }
         }
+        // A quiet back door on every screen but the first (and never over the analysis takeover,
+        // which owns its own pause/exit). One shared code path, so every step gets it for free.
+        .overlay(alignment: .topLeading) {
+            if step > 0 && !analyzing {
+                OnboardingBackButton(action: goBack)
+                    .padding(.top, 24)
+                    .padding(.leading, 24)
+                    .transition(.opacity)
+            }
+        }
     }
 
     private func advance() {
         withAnimation(.easeInOut(duration: 0.25)) { step += 1 }
+    }
+
+    private func goBack() {
+        withAnimation(.easeInOut(duration: 0.25)) { step = max(0, step - 1) }
     }
 
     // MARK: The three intro slides (placeholders)
@@ -123,6 +137,31 @@ struct OnboardingNextButton: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .animation(.easeInOut(duration: 0.3), value: enabled)
+    }
+}
+
+/// The subtle onboarding back door — a small arrow + "Back", top-left on every screen but the
+/// first. Quiet by default, brightening on hover, so it never competes with the screen's CTA.
+struct OnboardingBackButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Back")
+                    .font(.system(size: 13))
+            }
+            .foregroundStyle(hovering ? Theme.secondary : Theme.faint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeInOut(duration: 0.15), value: hovering)
     }
 }
 
