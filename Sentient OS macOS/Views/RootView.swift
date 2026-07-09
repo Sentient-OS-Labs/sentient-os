@@ -31,6 +31,9 @@ struct RootView: View {
     // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
     private static let modelPath = ModelLocator.resolve()
 
+    /// Observed for the global "setting up computer use" whisper (the overlay below).
+    @State private var codex = CodexSetup.shared
+
     /// The sources Analyze Now will process — the shared selection (folders + DB sources).
     private var selectedSources: [RunSource] {
         SourceSelection.current(fdaGranted: fdaGranted)
@@ -64,6 +67,24 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 1040, minHeight: 800)
+        // The computer-use setup whisper — screen-agnostic on purpose: the bootstrap is an
+        // unstructured background task that outlives onboarding's processing takeover (knowledge
+        // base creation, even the home in rare cases), so as long as it's actually running, this
+        // quiet line rides the bottom of WHATEVER screen is up. Keyed to the live shared engine
+        // state, so dev/Settings-triggered setups surface it too.
+        .overlay(alignment: .bottomLeading) {
+            if codex.settingUpComputerUse {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small).scaleEffect(0.6)
+                    Text("Setting up Codex computer use in the background.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.faint)
+                }
+                .padding(.leading, 22).padding(.bottom, 12)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeInOut(duration: 0.35), value: codex.settingUpComputerUse)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a
         // required update is found it takes over; otherwise it draws nothing. (Updates/)
         .overlay { UpdateGateView() }
