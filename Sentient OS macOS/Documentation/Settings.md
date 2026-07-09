@@ -19,10 +19,11 @@ pieces (`SettingsComponents.swift`).
    decided 2026-07-04: the mirror stores plaintext markdown today, and the "mcp encryption"
    backlog item (Aditya) MUST ship before launch or the copy must change. Do not soften the copy;
    ship the encryption.
-3. **The morning notification** — the Notifications permission row is real, but nothing in the app
-   *sends* notifications yet (`Notify.now()` has zero call sites). The "Proactive Intelligence is
-   ready" morning note ships with the reminders/scheduler work; the permission ask then moves to
-   onboarding's notifications step.
+3. **The morning notification** — the Notifications permission row is real, and the permission ask
+   is now wired: onboarding's permissions screen fires `Notify.ask()` on appear, so the native
+   macOS prompt happens once with no extra UI (`ask()` no-ops unless status is still
+   `.notDetermined`). What's still dormant is the *sending* — `Notify.now()` has zero call sites;
+   the "Proactive Intelligence is ready" morning note ships with the reminders/scheduler work.
 4. **The Updates group** (System pane) — doesn't exist until Sparkle lands; it brings its own
    keep-it-on message.
 5. **Privacy toggles transmit only in RELEASE builds** — by design (Sentry/TelemetryDeck never

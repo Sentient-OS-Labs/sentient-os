@@ -2,11 +2,12 @@
 //  Notify.swift
 //  Sentient OS macOS
 //
-//  One small wrapper over UNUserNotificationCenter. Currently DORMANT — nothing calls
-//  Notify.now() yet; the morning "your suggestions are ready" note and scheduled reminders
-//  ship with the proactive/reminder wiring (git 67d8078 has an old schedule/cancel
-//  implementation to mine). Permission is requested lazily on first use for now; the real
-//  ask moves into onboarding's notification step.
+//  One small wrapper over UNUserNotificationCenter. Notify.now() (the morning "your suggestions
+//  are ready" note and scheduled reminders) is still DORMANT — it ships with the
+//  proactive/reminder wiring (git 67d8078 has an old schedule/cancel implementation to mine).
+//  The permission ask, though, is live: onboarding's permissions screen fires Notify.ask() the
+//  moment it appears, so the native prompt happens once, with no extra UI; now() also asks
+//  lazily as a backstop.
 //
 
 import Foundation
@@ -21,7 +22,16 @@ enum Notify {
         ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] != nil
     }
 
-    /// Ask once per launch, lazily (dev behavior; onboarding owns the real moment later).
+    /// Ask macOS for notification permission — the native "Sentient would like to send you
+    /// notifications" prompt. A no-op unless the status is still `.notDetermined` (a prior
+    /// allow/deny is final; only System Settings can change it), so it's safe to call on every
+    /// appearance. Onboarding's permissions screen fires this the moment it appears — no button,
+    /// no extra UI. Silent under SENTIENT_SELFTEST (the harness can't answer the dialog).
+    static func ask() async {
+        guard !suppressed else { return }
+        await requestPermissionIfNeeded()
+    }
+
     private static func requestPermissionIfNeeded() async {
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()

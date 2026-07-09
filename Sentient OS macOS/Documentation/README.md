@@ -22,7 +22,7 @@ on disk auto-join the target):
 | `Scheduling/` | The overnight 3am machinery: `OvernightScheduler`, the root `WakeHelper` (+ client/installer/protocol), `PowerState` gates, `LoginItem` | `Overnight Scheduler (3am Wake).md` |
 | `Notch Magic/` | Sidekick: the right-⌘ hold-to-talk hotkey, on-device voice, the per-command screen still (`ScreenCapture`), the one shared command run, and the living notch overlay | `Notch Magic/Notch Magic.md` |
 | `Diagnostics/` | `Log()` (the print replacement + dev-log tee), `CrashReporting` (Sentry), `Analytics` (TelemetryDeck), the sensors that feed them — `SourceHealth` (listing-collapse + extraction-rate memory) + `ExecutorScoreboard` (per-fire outcomes) | `Crash Reporting (Sentry).md` · `Diagnostics (Sentry).md` · `Product Analytics (TelemetryDeck).md` · `Source Diagnostics & Hardening (Sentry).md` |
-| `System/` | macOS integration: `Permissions` (FDA/TCC/Automation grants), `Notify` (notifications — dormant) | — |
+| `System/` | macOS integration: `Permissions` (FDA/TCC/Automation grants), `Notify` (notifications — `ask()` wired into onboarding; `now()` sending still dormant) | — |
 | `Views/` | The UI: the For You home + cards + command bar, popovers, processing takeover, `Knowledge/` (viewer/editor), `Settings/` (the five panes), the connect sheets, `Theme` | `Home — Proactive Intelligence (For You).md` · `Knowledge Viewer.md` · `Settings.md` |
 | `Views/Dev/` | Dev-only surfaces: `DevToolsView` (the cockpit), `OvernightDevView`, `PermissionsView`, `HotkeyLabView`, `SummariesView`, `ProactiveItemsView`, `ProactiveExecuteView` | — |
 | `Self Tests - Temp/` | Kept EMPTY — self-tests are scaffolding, recreated on demand | `Self-Testing (Eval Harness).md` |
