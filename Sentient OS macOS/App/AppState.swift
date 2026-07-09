@@ -39,7 +39,7 @@ final class AppState {
     /// whole object is), never the root wake-helper. Its `model` drives UpdateGateView. (Updates/)
     let update = UpdateController()
 
-    private static let onboardingKey = "hasCompletedOnboarding"
+    static let onboardingKey = "hasCompletedOnboarding"   // FactoryReset clears it (the rewind)
     var hasCompletedOnboarding: Bool {
         didSet {
             UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey)
