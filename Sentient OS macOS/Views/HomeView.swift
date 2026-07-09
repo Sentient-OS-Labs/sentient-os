@@ -177,7 +177,7 @@ struct HomeView: View {
     }
 
     /// The user's first name from their macOS account — full name's first word (e.g. "Jesai
-    /// Avadhani" → "Jesai"), falling back to the (capitalized) short login name, then to nothing
+    /// Tarun" → "Jesai"), falling back to the (capitalized) short login name, then to nothing
     /// (the greeting just drops the name). Resolved once per launch; no account, no network.
     static let macFirstName: String = {
         let full = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
