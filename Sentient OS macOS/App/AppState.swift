@@ -81,11 +81,12 @@ final class AppState {
         // First launch (onboarding not yet completed): kick off the codex CLI install silently in
         // the background, 1s after launch, while the user reads the intro slides. A USED codex
         // setup on this Mac (~/.codex/auth.json or config.toml — codex writes those once it's
-        // actually run) means never auto-install over it. The bare ~/.codex folder is NOT proof:
-        // an install interrupted mid-download (the FDA relaunch) leaves one behind, and skipping
-        // on it would strand onboarding without codex. installCodex() additionally no-ops when
-        // the binary is found, so a quit-and-relaunch mid-onboarding just re-checks. Login +
-        // computer-use stay interactive, later in the flow.
+        // actually run) means never auto-install over it at launch — those setups get their CLI
+        // update from the onboarding codex screen's kick instead (the installer doubles as the
+        // updater). The bare ~/.codex folder is NOT proof: an install interrupted mid-download
+        // (the FDA relaunch) leaves one behind, and skipping on it would strand onboarding
+        // without codex. A quit-and-relaunch mid-onboarding re-runs the installer, which is safe
+        // (update in place). Login + computer-use stay interactive, later in the flow.
         if !hasCompletedOnboarding {
             Task {
                 try? await Task.sleep(for: .seconds(1))

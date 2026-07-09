@@ -53,13 +53,14 @@ struct CodexSetupView: View {
     private var installCard: some View {
         stepCard(1, "Install the Codex CLI", done: codex.installed) {
             Button { Task { await codex.installCodex() } } label: {
-                buttonLabel("arrow.down.circle.fill", "Install Codex CLI", busy: codex.installing)
+                buttonLabel("arrow.down.circle.fill", codex.installed ? "Update Codex CLI" : "Install Codex CLI",
+                            busy: codex.installing)
             }
             .buttonStyle(.bordered).tint(Theme.Ink.green)
             .disabled(codex.installing)
 
             statusLine(codex.installStatus)
-            hint("Runs OpenAI's official installer (curl … | sh) → ~/.local/bin/codex. A no-op if codex is already there.")
+            hint("Runs OpenAI's official installer (curl … | sh) → ~/.local/bin/codex. Updates in place if codex is already there.")
         }
     }
 

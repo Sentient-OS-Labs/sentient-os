@@ -14,7 +14,8 @@
 //
 //  Key methods:
 //   - refreshInstalled()   → re-detect whether the codex binary is present
-//   - installCodex()       → step 1: run OpenAI's installer (detection-first; streams progress)
+//   - installCodex()       → step 1: run OpenAI's installer (ALWAYS runs — it doubles as the
+//                            updater over an existing install; streams progress)
 //   - startLogin/confirmLogin → step 2: interactive `codex login` (browser) + confirm
 //   - setupComputerUse()   → step 3: bootstrap computer use from OpenAI's DMG (streams progress)
 //   - whatsNeeded()        → fresh check of all three; returns the pending steps (smart-flow driver)
@@ -46,28 +47,34 @@ final class CodexSetup {
     /// Cheap re-detect of step 1's status — call on appear and after an install.
     func refreshInstalled() { installed = CodexCLI.locateBinary() != nil }
 
-    /// Step 1 — install the Codex CLI via OpenAI's official installer. Detection-first: a no-op if
-    /// codex is already present. Streams the installer's output into `installStatus` (and the
-    /// console). Both onboarding and the dev button call THIS — no duplicated logic.
+    /// One successful installer run already happened this launch — the once-per-launch guard for
+    /// the onboarding screen's update kick (a second run would just re-resolve the same release).
+    private(set) var ranInstallerThisLaunch = false
+
+    /// Step 1 — install OR update the Codex CLI via OpenAI's official installer. Always runs the
+    /// script, even over an existing install: it updates in place (auth/config untouched), so the
+    /// setup flow always drops the latest computer use into the latest CLI. Streams the
+    /// installer's output into `installStatus` (and the console). Both onboarding and the dev
+    /// button call THIS — no duplicated logic.
     func installCodex() async {
         guard !installing else { return }
-        if CodexCLI.locateBinary() != nil {
-            installed = true
-            installStatus = "✓ Codex CLI already installed"
-            return
-        }
+        let updating = CodexCLI.locateBinary() != nil
         installing = true
-        installStatus = "Installing Codex CLI…"
+        installStatus = updating ? "Updating Codex CLI…" : "Installing Codex CLI…"
         do {
             try await CodexCLI.install { [weak self] line in
                 Log("[codex-install] \(line)")
                 Task { @MainActor in self?.installStatus = line }
             }
             installed = true
-            installStatus = "✓ Codex CLI installed"
+            ranInstallerThisLaunch = true
+            installStatus = updating ? "✓ Codex CLI up to date" : "✓ Codex CLI installed"
         } catch {
             installed = CodexCLI.locateBinary() != nil
-            installStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+            // A failed UPDATE still leaves a working codex — don't wave a ✗ at a healthy setup.
+            installStatus = installed
+                ? "✓ Codex CLI present (update skipped: \((error as? LocalizedError)?.errorDescription ?? "\(error)"))"
+                : "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
             stepFailed(.install, error, binaryFound: installed)   // "installer ran, binary missing" if false
         }
         installing = false

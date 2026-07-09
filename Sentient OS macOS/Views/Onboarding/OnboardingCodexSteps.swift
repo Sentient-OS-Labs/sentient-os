@@ -84,9 +84,11 @@ struct OnboardingCodexLoginView: View {
         .onAppear {
             codex.refreshInstalled()
             Task { await codex.refreshLoginStatus() }
-            // Safety net: no binary and no install in flight (it failed, or the launch kick
-            // skipped over a half-deleted setup) — quietly re-kick the same engine.
-            if !codex.installed && !codex.installing {
+            // Two nets in one kick: no binary (the launch kick failed or skipped a half-deleted
+            // setup) → install; binary present but the installer hasn't run this launch (the
+            // launch kick deliberately skips USED setups) → run it anyway, because the installer
+            // doubles as the updater and setup should hand the latest CLI to the later steps.
+            if !codex.installing && (!codex.installed || !codex.ranInstallerThisLaunch) {
                 Task { await codex.installCodex() }
             }
         }
