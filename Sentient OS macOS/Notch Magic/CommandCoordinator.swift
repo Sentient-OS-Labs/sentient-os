@@ -126,7 +126,8 @@ final class CommandCoordinator {
     // wasn't pre-authorized) · release(hold) → transcribe → submit · release(tap) → .typing field.
 
     /// The knowledge-base-only aside — one string for the press flash and the submit backstop.
-    private static let needsPlusNotice = "Sidekick needs your ChatGPT Plus. Get it to continue."
+    /// Short on purpose: the notch truncates around ~45 characters.
+    private static let needsPlusNotice = "Sidekick needs you to get ChatGPT Plus"
 
     private func voicePressBegan() {
         guard VoiceCapture.isAvailable else { return }
