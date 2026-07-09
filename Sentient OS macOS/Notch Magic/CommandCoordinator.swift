@@ -80,6 +80,18 @@ final class CommandCoordinator {
         guard !trimmed.isEmpty else { return }
         guard !run.isRunning else { Log("submit ignored — a task is already running"); return }
 
+        // First-use permission gate: while any of the four action grants is missing, the one-time
+        // setup window takes over and holds this command — Continue fires it, close drops it.
+        if ComputerUseGate.shared.intercept({ [weak self] in self?.launch(trimmed, mode: mode, source: source) }) {
+            setPhase(.hidden)   // the gate window owns the moment; the notch steps aside
+            return
+        }
+        launch(trimmed, mode: mode, source: source)
+    }
+
+    /// The actual fire — everything after the gate. Only submit() and the gate's Continue call this.
+    private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource) {
+        guard !run.isRunning else { Log("launch ignored — a task is already running"); return }
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
         Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label])   // count only, never the text
         run.start(trimmed, mode: mode, source: source.rawValue)
@@ -150,12 +162,32 @@ final class CommandCoordinator {
 
     private func finalizeVoice() {
         setPhase(.transcribing)
+        let token = phaseToken
+
+        // Watchdog: transcription must resolve promptly (the finalize itself is <2s; the trap is
+        // voice.start() still parked on the on-device speech model DOWNLOAD, which has no bound of
+        // its own — seen in the field as a notch spinning forever with every new press "busy").
+        // Still transcribing after 15s → cancel the capture, keep the model download moving for
+        // the next attempt, and say so honestly. The notch must never wedge.
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(15))
+            guard let self, self.phaseToken == token, self.phase == .transcribing else { return }
+            Log("✗ transcription timed out — cancelling the capture (speech model likely still downloading)")
+            self.listening = false
+            self.voiceStartTask?.cancel(); self.voiceStartTask = nil
+            self.voice.cancel()
+            self.voice.prewarm()   // best-effort: resume/continue the model install in the background
+            self.flash("voice isn’t ready yet, try again in a moment")
+        }
+
         Task { [weak self] in
             guard let self else { return }
             await self.voiceStartTask?.value     // ensure capture actually started (or failed)
             guard self.listening else { return } // a start failure already set a notice/hidden phase
+            guard self.phaseToken == token else { return }   // timed out / Esc'd while waiting
             do {
                 let text = try await self.voice.stopAndTranscribe()
+                guard self.phaseToken == token else { return }   // timed out / Esc'd mid-finalize
                 self.listening = false
                 if text.isEmpty {
                     Log("🗣️ heard nothing")
@@ -168,6 +200,7 @@ final class CommandCoordinator {
                     self.submit(text, mode: .computer, source: .voice)
                 }
             } catch {
+                guard self.phaseToken == token else { return }   // the watchdog already spoke
                 self.listening = false
                 Log("✗ transcription failed — \(error.localizedDescription)")
                 self.flash("didn’t catch that")
@@ -205,7 +238,8 @@ final class CommandCoordinator {
     }
 
     /// Esc — back out of whatever the notch is doing, mirroring the obvious one-tap action for each state:
-    /// dismiss the type field · abandon an open/listening voice capture (so a later release fires nothing) ·
+    /// dismiss the type field · abandon an open/listening/transcribing voice capture (so a later release
+    /// fires nothing, and a stuck finalize can always be bailed) ·
     /// or, ONLY while the voice transcript is still on screen, cancel the just-fired run and dismiss INSTANTLY
     /// (no "Stopped" flourish — that's reserved for interrupting live computer use via STOP) so a misheard
     /// command can be killed and redone at a glance. The instant the transcript dissolves into the working /
@@ -218,7 +252,7 @@ final class CommandCoordinator {
         case .typing:
             dismissTyping()
             return true
-        case .opening, .listening:
+        case .opening, .listening, .transcribing:
             listening = false
             voiceStartTask?.cancel(); voiceStartTask = nil
             voice.cancel()

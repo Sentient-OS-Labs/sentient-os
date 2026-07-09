@@ -108,7 +108,7 @@ final class RightCommandMonitor {
 
     // MARK: The tap
 
-    private func installTap() {
+    private func installTap(quiet: Bool = false) {
         teardownTap()
         // flagsChanged (right-⌘, a modifier) + keyDown (for Esc). Both flow through a listen-only tap with
         // no permission — measured on Tahoe (the keyDown half was the surprise; re-verify on macOS 15).
@@ -126,7 +126,7 @@ final class RightCommandMonitor {
         CGEvent.tapEnable(tap: port, enable: true)
         self.port = port
         self.runLoopSource = src
-        Log("⌘mon: listening (flagsChanged-only, zero-permission)")
+        if !quiet { Log("⌘mon: listening (flagsChanged-only, zero-permission)") }
     }
 
     private func teardownTap() {
@@ -136,10 +136,21 @@ final class RightCommandMonitor {
         port = nil
     }
 
+    /// Health-tick reinstalls of a dead tap run QUIET, with a periodic count instead — the system
+    /// can keep disabling a listen-only tap (seen after a full TCC reset), and per-reinstall logging
+    /// floods a session log at 1.5s intervals until it drowns everything else.
+    private var reinstalls = 0
+
     private func reinstallIfNeeded() {
         guard running else { return }
         let enabled = port.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
-        if !enabled { installTap() }
+        if !enabled {
+            reinstalls += 1
+            if reinstalls == 1 || reinstalls % 200 == 0 {
+                Log("⌘mon: tap was disabled — re-armed (×\(reinstalls) this session)")
+            }
+            installTap(quiet: true)
+        }
     }
 
     // MARK: Event handling (on the main actor, via the trampoline)

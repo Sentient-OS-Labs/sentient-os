@@ -423,7 +423,11 @@ final class ForYouModel {
     /// STOP); a demo card plays the briefing's hard-coded `workLog` theater for visual feedback.
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
-        if let action = e.action { runReal(id, action); return }   // real card → fire for real
+        if let action = e.action {   // real card → fire for real (behind the first-use permission gate)
+            if ComputerUseGate.shared.intercept({ [weak self] in self?.runReal(id, action) }) { return }
+            runReal(id, action)
+            return
+        }
         let v = visit
 
         Task {
