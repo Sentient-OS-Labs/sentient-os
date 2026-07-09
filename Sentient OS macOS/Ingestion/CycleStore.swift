@@ -335,12 +335,12 @@ actor CycleStore {
 // MARK: - Shared instance (its own container)
 
 extension CycleStore {
-    /// The app-wide iterative store, backed by its OWN on-disk store ("IterativeCycle.store" in
-    /// Application Support) — isolated from the old `Store`. Wipe-and-retry-once on an incompatible
-    /// schema change (dev convenience).
+    /// The app-wide iterative store, backed by its OWN on-disk store ("IterativeCycle.store" under
+    /// the namespaced `SentientOS` root in Application Support). Wipe-and-retry-once on an
+    /// incompatible schema change (dev convenience).
     static let shared: CycleStore = {
         let schema = Schema([BucketPointer.self, CycleNote.self])
-        let url = URL.applicationSupportDirectory.appending(path: "IterativeCycle.store")
+        let url = URL.sentientSupport.appending(path: "IterativeCycle.store")
         let config = ModelConfiguration(schema: schema, url: url)
         if let container = try? ModelContainer(for: schema, configurations: config) {
             return CycleStore(modelContainer: container)

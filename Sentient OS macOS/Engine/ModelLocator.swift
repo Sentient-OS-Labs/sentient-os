@@ -29,8 +29,7 @@ enum ModelLocator {
             return bundled
         }
 
-        let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("SentientOS/Models/\(fileName)").path
+        let appSupport = URL.sentientSupport.appendingPathComponent("Models/\(fileName)").path
         if fm.fileExists(atPath: appSupport) { return appSupport }
 
         #if DEBUG

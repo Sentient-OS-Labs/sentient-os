@@ -181,58 +181,26 @@ struct Briefing: Identifiable {
         Jesai
         """
 
-    /// The EXACT reply we send Charles — shared by the Charles card's draft PREVIEW and its
-    /// `codexPrompt` (the live reply-all into the real "EWOR | Introducing Jesai & Charles"
-    /// thread), so the preview and the sent email can never drift.
-    private static let charlesReply = """
-        Hey Charles,
-
-        Really excited to meet you! :)
-        Thanks so much for making the time.
-
-        I'm in SF (PDT), and I'm happy to work around your schedule. For reference:
-        - I can make any time Monday work, until 4:30 PM
-        - I can make any time Tuesday work
-
-        I'll also send some materials before the call.
-
-        Looking forward to it,
-        Jesai
-        """
-
     static let demo: [Briefing] = [
         Briefing(
-            id: "charles", kind: .deadline,
-            kicker: "Reply · 2 days · Gmail",
-            title: "Charles from EWOR is waiting on your timeslots.",
-            body: "Daniel introduced you to Charles Ferguson; he sold companies to Microsoft and Oracle, pre-seeded Higgsfield, and won an Oscar. I checked your calendar and drafted your reply.",
+            id: "charles", kind: .plan,
+            kicker: "Prep · 4 PM today · Researched",
+            title: "Prepare for your call with Charles from EWOR.",
+            body: "Your EWOR final interview with Charles Ferguson is at 4 PM. He sold Vermeer to Microsoft, writes first checks into AI, and directed the Oscar-winning Inside Job. I pulled together what'll get you ready.",
             letter: """
-            Daniel introduced you to Charles Ferguson for your next EWOR interview; he sold companies to **Microsoft** and **Oracle**, pre-seeded **Higgsfield** (€500M ARR in a year), and won an **Oscar**.
+            Your EWOR final-stage interview is today at 4 PM: 45 minutes with Charles Ferguson, the call Daniel set up. Worth knowing going in that EWOR invests in people, not decks, so this is really about you and what drives you, more than the product.
 
-            He cc'd his assistant Emily to schedule and asked for any materials: a deck or a memo. So I checked your calendar for **Monday and Tuesday**, found your open windows, and wrote your reply: a few timeslots and a memo offer.
+            ✦ **Know who's across the table.** He founded Vermeer Technologies and sold it to Microsoft for $133M, holds an MIT PhD and a Berkeley math degree, and now writes first checks into early AI startups. He also directed *Inside Job*, which won the Oscar for best documentary. He's as technical as he is strategic.
+
+            ✦ **You're on the same side.** *Inside Job* is about institutions that quietly stopped serving the people they were built for. Sentient is the structural opposite: an AI that runs on your own Mac, that you can read, delete, or even fork, with nothing ever leaving the device. That's real common ground with him, and it's the honest reason you're building this.
+
+            ✦ **He'll actually follow the architecture, and he's lived your hardest question.** He's an engineer at heart, so he can tell real building from a demo: go as deep on the on-device stack as he wants to. And Microsoft squeezed Vermeer before buying it, so "what happens when Apple or OpenAI ships this?" is his own scar tissue, not a gotcha. It's worth asking what he learned.
+
+            Go have a real conversation. — your Sentient
             """,
-            draft: Briefing.charlesReply,
-            draftLabel: "Draft reply · Gmail",
-            detailLabel: "read the draft",
-            offer: "Should I send it for you?",
-            workLog: ["→ reading Charles's note",
-                      "→ checking Monday & Tuesday for open slots",
-                      "→ opening Gmail",
-                      "→ composing your reply…",
-                      "✓ sent"],
-            doneTitle: "Sent to Charles.",
-            doneBody: "Emily has your availability, and materials are on the way.",
-            codexPrompt: """
-            You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
-
-            Use the Gmail MCP to open the thread titled "EWOR | Introducing Jesai & Charles". In that thread, find the message from Charles Ferguson (chf@cferguson.com) whose body STARTS WITH "Thank you, Daniel, and moving you to bcc." REPLY-ALL to THAT message — include every recipient on it (all To and all Cc: Charles, his assistant Emily, and the EWOR "selection" address) so everyone Charles addressed receives the reply. Reply to CHARLES'S message specifically (NOT Daniel's earlier intro) so the reply respects that Charles moved Daniel to bcc — do not add Daniel. Send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
-
-            \(Briefing.charlesReply)
-
-            Send this reply-all now via the Gmail MCP — the user has already approved it. Do not ask, do not draft-and-wait; complete the send, then report exactly who it went to (the full To and Cc list).
-
-            FORMATTING: send it as an HTML email (set the send tool's content_type to "text/html"). Put each paragraph in its own <p>…</p> tag; render the two "I can make any time…" lines as a <ul><li>…</li></ul> list; write the sign-off as "Looking forward to it,<br>Jesai". Keep every word — including ":)" and "4:30 PM" — exactly as written. Do NOT send as text/plain and do NOT insert any manual line breaks inside a paragraph.
-            """),
+            detailLabel: "read the prep doc",
+            offer: nil,
+            doneTitle: "", doneBody: ""),
 
         Briefing(
             id: "anthos", kind: .overdue,

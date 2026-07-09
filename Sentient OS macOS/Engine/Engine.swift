@@ -145,9 +145,7 @@ actor Engine {
 
     /// Writable scratch dir for LiteRT-LM's shader/compilation cache.
     private static func cacheDirectory() -> String {
-        let dir = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("SentientOS/ModelCache", isDirectory: true)
+        let dir = URL.sentientSupport.appendingPathComponent("ModelCache", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.path
     }
