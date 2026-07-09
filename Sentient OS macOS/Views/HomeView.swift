@@ -604,14 +604,26 @@ private struct LetterView: View {
     @State private var copied = false
     @State private var editedDraft = ""        // the live editor text
     @State private var savedDraft = ""         // the last COMMITTED text — drift from editedDraft = unsaved edits
+    @State private var saveTask: Task<Void, Never>?   // in-flight debounced auto-save
 
-    /// There are unsaved edits to commit.
+    /// Auto-save is pending (unsaved edits still settling). Drives the ambient "Saving…" status.
     private var isDirty: Bool { editable && editedDraft != savedDraft }
 
-    /// Commit the current draft so it persists + is what fires.
+    /// Commit the current draft so it persists + is what fires. Cancels any pending debounce.
     private func commitEdit() {
+        saveTask?.cancel()
         onCommitEdit(editedDraft)
         savedDraft = editedDraft
+    }
+
+    /// Debounced auto-save: commit ~0.6s after the user stops typing.
+    private func scheduleAutoSave() {
+        saveTask?.cancel()
+        saveTask = Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled else { return }
+            commitEdit()
+        }
     }
 
     var body: some View {
@@ -663,7 +675,14 @@ private struct LetterView: View {
         // so .onAppear fires only once; without the .onChange a second card would show the first card's
         // draft. editedDraft + savedDraft start equal (a freshly-opened card has no unsaved edits).
         .onAppear { editedDraft = liveDraft; savedDraft = liveDraft }
-        .onChange(of: briefing.id) { _, _ in editedDraft = liveDraft; savedDraft = liveDraft; copied = false }
+        // A different card opened: cancel any pending auto-save (it belongs to the OLD card's closure)
+        // and reseed. editedDraft + savedDraft start equal — a freshly-opened card has no unsaved edits.
+        .onChange(of: briefing.id) { _, _ in
+            saveTask?.cancel(); editedDraft = liveDraft; savedDraft = liveDraft; copied = false
+        }
+        // Every keystroke reschedules the debounced commit, so edits persist without a Save click.
+        .onChange(of: editedDraft) { _, _ in if isDirty { scheduleAutoSave() } }
+        .onDisappear { saveTask?.cancel() }
     }
 
     /// The letter body, rendered line-by-line. Supports the editorial Markdown subset our letters use:
@@ -748,19 +767,15 @@ private struct LetterView: View {
                         Image(systemName: "pencil").font(.system(size: 8.5)).foregroundStyle(briefing.accent.opacity(0.9))
                     }
                     Spacer()
-                    // Save — explicit so the user KNOWS the edit is persisted + is what fires. "Save"
-                    // (accent) when there are unsaved edits; "Saved" (mint, disabled) when in sync.
+                    // Auto-save status (not a button) — edits persist on their own. "Saving…" (muted)
+                    // while a debounced commit is pending; "Saved" (mint) once it's in sync + is what fires.
                     if editable {
-                        Button(action: commitEdit) {
-                            HStack(spacing: 5) {
-                                Image(systemName: isDirty ? "square.and.arrow.down" : "checkmark").font(.system(size: 9.5))
-                                Text(isDirty ? "Save" : "Saved").font(.system(size: 11, weight: isDirty ? .semibold : .regular))
-                            }
-                            .foregroundStyle(isDirty ? briefing.accent : Theme.Ink.green)
-                            .contentShape(Rectangle())
+                        HStack(spacing: 5) {
+                            Image(systemName: isDirty ? "arrow.triangle.2.circlepath" : "checkmark").font(.system(size: 9.5))
+                            Text(isDirty ? "Saving…" : "Saved").font(.system(size: 11))
                         }
-                        .buttonStyle(.plain)
-                        .disabled(!isDirty)
+                        .foregroundStyle(isDirty ? Theme.Ink.label : Theme.Ink.green)
+                        .animation(.easeInOut(duration: 0.2), value: isDirty)
                     }
                     Button {
                         NSPasteboard.general.clearContents()
