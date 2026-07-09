@@ -89,7 +89,7 @@ struct HealthPane: View {
         .task {
             await refresh()
             try? await Task.sleep(for: .seconds(0.5))
-            selfHealAutomation()
+            Permissions.selfHealComputerUseAutomation(context: "HealthPane")
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refresh() }   // the user may just have fixed something in System Settings
@@ -122,7 +122,7 @@ struct HealthPane: View {
                                note: fdaGranted ? "granted" : "not granted",
                                tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac. Everything is read right here on your Mac; your data never leaves it.",
                                fixTitle: "Grant…") {
-                        Permissions.openFullDiskAccessSettings()
+                        PermissionGuide.shared.guide(.fullDiskAccess, dragging: Bundle.main.bundleURL)
                     }
                     if !fdaGranted {
                         HStack(spacing: 6) {
@@ -154,6 +154,9 @@ struct HealthPane: View {
                            fixTitle: LoginItem.needsApproval ? "Approve…" : "Turn On") {
                     LoginItem.enableOrRequestApproval()
                     loginOn = LoginItem.isEnabled
+                    if LoginItem.needsApproval {
+                        PermissionGuide.shared.guide(.loginItems, dragging: nil)
+                    }
                 }
                 .rise(2, revealed: revealed)
             }
@@ -172,7 +175,7 @@ struct HealthPane: View {
                 }
                 .rise(3, revealed: revealed)
                 StatusLine(title: "Screen Recording",
-                           health: screenRec ? .ok : .warn,
+                           health: screenRec ? .ok : .bad,   // compulsory — Sidekick is half-blind without it
                            note: screenRec ? "granted" : "not granted",
                            tip: "Lets Sidekick snap a still of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}). Without it, Sidekick may not know which open app to start controlling to help you. Takes effect after you restart Sentient.",
                            fixTitle: "Allow…") {
@@ -253,15 +256,13 @@ struct HealthPane: View {
 
     // MARK: Screen Recording (Sentient's own grant — Sidekick's screen context)
 
-    /// `CGRequestScreenCaptureAccess` prompts only on the FIRST ever ask (and adds Sentient to the
-    /// list); once denied it returns false silently, so the fallback is the Settings deep-link.
-    /// There is no macOS API to tell "never asked" from "denied" (the preflight is a plain Bool).
+    /// The Screen Recording list is drag-authorizable, and Sentient may not be IN the list at all
+    /// (on Tahoe, CGRequestScreenCaptureAccess doesn't reliably add it — field-verified), so the
+    /// guide always carries Sentient itself as the drag card. Harmless when the row already
+    /// exists; the user just flips the existing switch.
     private func fixScreenRecording() {
         guard !screenRec else { return }
-        if !Permissions.requestScreenRecording() {
-            Permissions.openScreenRecordingSettings()
-        }
-        screenRec = Permissions.hasScreenRecording()
+        PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
     }
 
     private func refreshMicSpeech() {
@@ -366,15 +367,15 @@ struct HealthPane: View {
                            health: helperAccessibility ? .ok : .bad,
                            note: helperAccessibility ? "granted" : "not granted",
                            tip: "Lets Codex's helper app move the mouse and type for you. Granted to OpenAI's helper, not to Sentient.",
-                           fixTitle: "Open Settings…") {
-                    Permissions.openAccessibilitySettings()
+                           fixTitle: "Grant…") {
+                    guideHelper(.accessibility)
                 }
                 StatusLine(title: "Screen Recording (see the screen)",
                            health: helperScreenRecording ? .ok : .bad,
                            note: helperScreenRecording ? "granted" : "not granted",
                            tip: "Lets Codex's helper app see the screen so it acts on the right thing. Granted to OpenAI's helper, not to Sentient.",
-                           fixTitle: "Open Settings…") {
-                    Permissions.openScreenRecordingSettings()
+                           fixTitle: "Grant…") {
+                    guideHelper(.screenRecording)
                 }
                 SettingsProse("These belong to Codex's Computer Use helper, not Sentient. Flip its switch in each list; macOS may also prompt on the first computer-use run.")
                     .padding(.top, 6)
@@ -382,22 +383,15 @@ struct HealthPane: View {
         }
     }
 
-    // MARK: - Automation: no row, just a quiet self-heal (the user has no job here)
-
-    /// Sentient drives Codex's helper over Apple Events; that grant lives in the USER TCC db,
-    /// which we can write with the FDA we already hold. Probe, and if it's missing while the
-    /// prerequisites exist, silently re-grant (idempotent INSERT OR REPLACE) — no UI, just a log.
-    private func selfHealAutomation() {
-        guard fdaGranted, Permissions.computerUseHelperURL() != nil else { return }
-        let bundleID = Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"
-        guard !Permissions.isTCCGranted(service: "kTCCServiceAppleEvents", clientBundleID: bundleID) else { return }
-        Task.detached {
-            do {
-                let receipt = try Permissions.grantComputerUseAutomation()
-                Log("HealthPane: automation self-heal — \(receipt)")
-            } catch {
-                Log("HealthPane: automation self-heal failed — \(error)")
-            }
+    /// The helper's system-TCC grants: the floating drag panel with the helper app as the card
+    /// (drag it into the list). Helper somehow missing → the plain deep-link is the fallback.
+    private func guideHelper(_ pane: PermissionGuide.Pane) {
+        if let helper = Permissions.computerUseHelperURL() {
+            PermissionGuide.shared.guide(pane, dragging: helper)
+        } else if pane == .accessibility {
+            Permissions.openAccessibilitySettings()
+        } else {
+            Permissions.openScreenRecordingSettings()
         }
     }
 

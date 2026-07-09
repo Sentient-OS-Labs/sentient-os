@@ -68,6 +68,10 @@ struct OnboardingPermissionsView: View {
                                          fixTitle: loginNeedsApproval ? "Approve…" : "Turn On") {
                             LoginItem.enableOrRequestApproval()
                             refresh()
+                            // macOS wants the switch flipped by hand → escort the user to it.
+                            if LoginItem.needsApproval {
+                                PermissionGuide.shared.guide(.loginItems, dragging: nil)
+                            }
                         })
                         gated(fdaUnlocked,
                               StatusLine(title: "Full Disk Access",
@@ -75,7 +79,9 @@ struct OnboardingPermissionsView: View {
                                          note: fdaGranted ? "granted" : "not granted",
                                          tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac. Everything is read right here on your Mac; your data never leaves it.",
                                          fixTitle: "Grant…") {
-                            Permissions.openFullDiskAccessSettings()
+                            // The floating guide carries Sentient itself as the drag card — no
+                            // hunting through the "+" file picker.
+                            PermissionGuide.shared.guide(.fullDiskAccess, dragging: Bundle.main.bundleURL)
                         })
                         if fdaUnlocked && !fdaGranted {
                             HStack(spacing: 6) {

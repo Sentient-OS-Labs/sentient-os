@@ -117,6 +117,24 @@ enum Permissions {
         return "granted \(bundleID) → Codex Computer Use (csreq \(csreq.count)B · target \(target.count)B)"
     }
 
+    /// Quiet self-heal for the Automation grant (Sentient → Codex Computer Use over Apple Events):
+    /// probe, and if it's missing while the prerequisites exist (FDA + the helper on disk), silently
+    /// re-grant in the background — idempotent, no UI, just a log line. The user has no job here.
+    /// Called from Settings → Health on open and from the computer-use gate before the first fire.
+    static func selfHealComputerUseAutomation(context: String) {
+        guard hasFullDiskAccess(), computerUseHelperURL() != nil else { return }
+        let bundleID = Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"
+        guard !isTCCGranted(service: "kTCCServiceAppleEvents", clientBundleID: bundleID) else { return }
+        Task.detached {
+            do {
+                let receipt = try grantComputerUseAutomation()
+                Log("\(context): automation self-heal — \(receipt)")
+            } catch {
+                Log("\(context): automation self-heal failed — \(error)")
+            }
+        }
+    }
+
     // MARK: - Codex helper: Accessibility + Screen Recording — READ-ONLY status (can't be granted by us)
     //
     // Computer use spawns `codex`, which launches Codex's bundled helper app ("Codex Computer Use.app",

@@ -9,7 +9,8 @@
 //  the home. The current step persists (UserDefaults "onboarding.step") so a quit-and-relaunch
 //  mid-onboarding — which granting Full Disk Access requires — resumes exactly where the user
 //  left. The background codex install is NOT here: AppState kicks it off 1s after launch while
-//  the user reads the slides.
+//  the user reads the slides. Computer use (codex step 3) IS here: Start Analysis arms a silent
+//  one-shot that bootstraps it 2 minutes into the first analysis (armComputerUseSetup).
 //
 
 import SwiftUI
@@ -24,6 +25,10 @@ struct OnboardingView: View {
     /// Start Analysis pressed — the ProcessingView takeover is up. Not persisted: a quit
     /// mid-run relaunches to the ready screen, and the durable marks resume the analysis.
     @State private var analyzing = false
+
+    /// One-shot: the deferred background computer-use setup (codex step 3) has been armed this
+    /// launch, so a pause → resume never spawns a second timer.
+    @State private var computerUseArmed = false
 
     // The same run flags the home's Analyze Now reads (RootView).
     @AppStorage("dev.proactive.realCards") private var realCards = true
@@ -64,6 +69,7 @@ struct OnboardingView: View {
                 } else {
                     OnboardingReadyView(modelMissing: Self.modelPath == nil) {
                         withAnimation(.easeInOut(duration: 0.3)) { analyzing = true }
+                        armComputerUseSetup()
                     }
                     .transition(.opacity)
                 }
@@ -78,6 +84,22 @@ struct OnboardingView: View {
                     .padding(.leading, 24)
                     .transition(.opacity)
             }
+        }
+    }
+
+    /// Two minutes into the first analysis, bootstrap codex computer use (setup step 3) silently
+    /// in the background — so it's ready by the time the home's cards and Sidekick need it, with
+    /// no onboarding screen of its own. An unstructured Task on purpose: pausing or exiting the
+    /// analysis must NOT cancel a DMG download mid-flight. setupComputerUse() self-guards (no-op
+    /// when already bootstrapped, requires the codex binary), so a quit-and-relaunch that restarts
+    /// the analysis just re-arms harmlessly; failures land in the log + Sentry, never in the UI.
+    private func armComputerUseSetup() {
+        guard !computerUseArmed else { return }
+        computerUseArmed = true
+        Task {
+            try? await Task.sleep(for: .seconds(120))
+            Log("Onboarding: 2 min into first analysis — starting background computer-use setup")
+            await CodexSetup.shared.setupComputerUse()
         }
     }
 
