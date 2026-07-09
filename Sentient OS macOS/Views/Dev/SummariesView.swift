@@ -172,11 +172,11 @@ struct SummariesView: View {
         status = "✓ imported \(exp.notes.count)" + (existing.isEmpty ? "" : " · backed up \(existing.count)")
     }
 
-    /// Dump the soon-to-be-replaced notes to Application Support/SummaryBackups so an accidental
-    /// import is always recoverable (re-import the backup to undo).
+    /// Dump the soon-to-be-replaced notes to SentientOS/SummaryBackups so an accidental import is
+    /// always recoverable (re-import the backup to undo).
     private func backup(_ items: [CycleNoteItem]) {
         guard !items.isEmpty else { return }
-        let dir = URL.applicationSupportDirectory.appending(path: "SummaryBackups", directoryHint: .isDirectory)
+        let dir = URL.sentientSupport.appending(path: "SummaryBackups", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appending(path: "backup-\(Self.stamp()).json")
         if let data = try? Self.encoder.encode(SummaryExport(notes: items)) {
