@@ -64,7 +64,8 @@ actor ProactiveCycle {
 
         // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
         let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
-        progress(.knowledgeBase(exists ? "Updating your knowledge…" : "Building your knowledge…"))
+        progress(.knowledgeBase(exists ? "Updating your knowledge…"
+                                       : "Creating your perfect knowledge base from everything we've analyzed…"))
         do {
             if exists { _ = try await VaultCloud.shared.update(notes: notes) }
             else      { _ = try await VaultCloud.shared.create(notes: notes) }

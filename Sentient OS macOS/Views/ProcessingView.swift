@@ -78,6 +78,9 @@ struct ProcessingView: View {
     private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(String) }
     @State private var state: UIState = .loadingModel
     @State private var prepStatus = "Preparing your suggestions…"
+    /// Phase-appropriate caption under the phase line (nil = none) — the proactive stages get
+    /// the "things worth doing" promise; the knowledge-base/welcome phases speak for themselves.
+    @State private var prepSubtext: String?
     @State private var progress = RunProgress()
     @State private var started = false
     @State private var paused = false           // pausable only: frozen at the last item, awaiting Resume
@@ -278,8 +281,10 @@ struct ProcessingView: View {
             Text(prepStatus)
                 .font(.title3.weight(.semibold)).foregroundStyle(.white)
                 .multilineTextAlignment(.center)
-            Text("Reading what's new, then preparing a few things worth doing.")
-                .font(.caption).foregroundStyle(.white.opacity(0.4))
+            if let prepSubtext {
+                Text(prepSubtext)
+                    .font(.caption).foregroundStyle(.white.opacity(0.4))
+            }
             ProgressView().tint(.white.opacity(0.4)).padding(.top, 2)
         }
     }
@@ -429,10 +434,16 @@ struct ProcessingView: View {
             let failure = await ProactiveCycle.shared.run { phase in
                 Task { @MainActor in
                     switch phase {
-                    case .knowledgeBase(let s): prepStatus = s
-                    case .deciding:             prepStatus = "Deciding what's worth doing…"
-                    case .researching(let n):   prepStatus = "Preparing \(n) suggestion\(n == 1 ? "" : "s")…"
-                    case .done, .failed:        break
+                    case .knowledgeBase(let s):
+                        prepStatus = s; prepSubtext = nil            // the phase line says it all
+                    case .deciding:
+                        prepStatus = "Deciding what's worth doing…"
+                        prepSubtext = "Reading what's new, then preparing a few things worth doing."
+                    case .researching(let n):
+                        prepStatus = "Preparing \(n) suggestion\(n == 1 ? "" : "s")…"
+                        prepSubtext = "Reading what's new, then preparing a few things worth doing."
+                    case .done, .failed:
+                        break
                     }
                 }
             }
