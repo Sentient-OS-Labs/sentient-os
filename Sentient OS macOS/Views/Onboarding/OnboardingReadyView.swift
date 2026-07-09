@@ -7,8 +7,9 @@
 //  keys and the SAME picker/connect sheets — so this IS the real selection (it persists and
 //  feeds the 3am run too), styled to make connecting sources feel like the main event: we WANT
 //  a bunch connected before the first analysis. Desktop, Documents, and Downloads ship armed;
-//  at least 3 CONNECTORS must be armed to start (SourceSelection.connectorCount — the same rule
-//  Settings enforces; all folders together count as one). The big Start Analysis button
+//  at least 4 SELECTIONS must be armed to start (SourceSelection.selectionCount — the same rule
+//  Settings enforces; every folder/chat/notes/connector counts as one), so the default three
+//  folders alone never light the button. The big Start Analysis button
 //  fires the exact run the home's Analyze Now fires, but wears the full-brightness glow (the
 //  popover's copy is deliberately subdued).
 //
@@ -44,9 +45,10 @@ struct OnboardingReadyView: View {
     private var whatsappChats: Set<String> { Set(whatsappCSV.split(separator: ",").map(String.init)) }
     private var imessageChats: Set<String> { Set(imessageCSV.split(separator: ",").map(String.init)) }
 
-    /// The min-3 rule counts CONNECTORS, exactly like Settings (all folders together = one).
-    private var connectorCount: Int { SourceSelection.connectorCount }
-    private var canStart: Bool { connectorCount >= 3 && !modelMissing }
+    /// The shared minimum: at least 4 SELECTIONS (each folder, chat source, Notes, or connector
+    /// counts as one) — the three default folders alone deliberately don't light the button.
+    private var selectionCount: Int { SourceSelection.selectionCount }
+    private var canStart: Bool { selectionCount >= SourceSelection.minimumSelections && !modelMissing }
 
     var body: some View {
         VStack(spacing: 40) {
@@ -100,8 +102,8 @@ struct OnboardingReadyView: View {
                         }
                     }
                 }
-                if connectorCount < 3 {
-                    MonoCaps("keep at least 3 connectors on", size: 8.5, tracking: 1.6, color: Theme.Ink.amber)
+                if selectionCount < SourceSelection.minimumSelections {
+                    MonoCaps("keep at least 4 sources on", size: 8.5, tracking: 1.6, color: Theme.Ink.amber)
                 }
             }
             .frame(width: 640)

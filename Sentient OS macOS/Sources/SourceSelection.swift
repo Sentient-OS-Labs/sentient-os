@@ -59,13 +59,17 @@ enum SourceSelection {
             .split(separator: ",").map(String.init))
     }
 
-    /// How many CONNECTORS are armed (all folders together count as ONE) — the shared 3-minimum
-    /// rule Settings and onboarding's ready screen both enforce. Breadth of life coverage, not
-    /// folder count.
-    static var connectorCount: Int {
+    /// How many SELECTIONS are armed — every folder (default or custom), each chat source with
+    /// chats picked, Notes, and each connected cloud source counts as ONE. The shared minimum
+    /// (at least 4) that onboarding's ready screen and Settings both enforce: the defaults alone
+    /// (three folders) deliberately don't pass, so starting always takes one deliberate connect.
+    static let minimumSelections = 4
+    static var selectionCount: Int {
         var n = 0
-        if bool("dbg.run.downloads", default: true) || bool("dbg.run.desktop", default: true)
-            || bool("dbg.run.documents", default: true) || !CustomRoots.urls.isEmpty { n += 1 }
+        if bool("dbg.run.downloads", default: true) { n += 1 }
+        if bool("dbg.run.desktop", default: true) { n += 1 }
+        if bool("dbg.run.documents", default: true) { n += 1 }
+        n += CustomRoots.urls.count
         if bool("dbg.run.whatsapp", default: false) && !chatJIDs.isEmpty { n += 1 }
         if bool("dbg.run.imessage", default: false) && !imessageGUIDs.isEmpty { n += 1 }
         if bool("dbg.run.notes", default: false) { n += 1 }

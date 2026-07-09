@@ -5,7 +5,7 @@
 //  Settings → Knowledge Sources: the real source picker, on the SAME keys as the Analysis
 //  popover / Dev Tools / the 3am run (SourceSelection + CustomRoots). Folder chips toggle,
 //  custom roots add/remove (persistent), WhatsApp & iMessage open the shared ChatPicker,
-//  Gmail & Calendar open their connect sheets. Enforces the three-connector minimum on direct
+//  Gmail & Calendar open their connect sheets. Enforces the four-selection minimum on direct
 //  toggles, and surfaces a fix-it line when Full Disk Access is missing.
 //
 
@@ -39,9 +39,9 @@ struct SourcesPane: View {
     private var whatsappChats: Set<String> { Set(whatsappCSV.split(separator: ",").map(String.init)) }
     private var imessageChats: Set<String> { Set(imessageCSV.split(separator: ",").map(String.init)) }
 
-    /// The shared 3-minimum rule (SourceSelection.connectorCount — onboarding's ready screen
+    /// The shared minimum rule (SourceSelection.selectionCount — onboarding's ready screen
     /// enforces the same one). The @AppStorage copies above keep this body re-evaluating live.
-    private var connectorCount: Int { SourceSelection.connectorCount }
+    private var selectionCount: Int { SourceSelection.selectionCount }
 
     var body: some View {
         SettingsPane(title: "Knowledge Sources",
@@ -49,7 +49,7 @@ struct SourcesPane: View {
             VStack(alignment: .leading, spacing: 30) {
                 // Tucked tight under the whisper so the two lines read as ONE header block,
                 // with the full 30pt group gap only after it.
-                Text("Your Sentient needs at least three sources to truly know you.")
+                Text("Your Sentient needs at least four sources to truly know you.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(flashMinimum ? Theme.Ink.amber : .white.opacity(0.72))
                     .animation(.easeInOut(duration: 0.25), value: flashMinimum)
@@ -97,9 +97,9 @@ struct SourcesPane: View {
     private var foldersGroup: some View {
         SettingsGroup(label: "Folders") {
             ChipFlow {
-                SettingsChip(label: "Desktop", on: runDesktop) { toggleFolder($runDesktop) }
-                SettingsChip(label: "Downloads", on: runDownloads) { toggleFolder($runDownloads) }
-                SettingsChip(label: "Documents", on: runDocuments) { toggleFolder($runDocuments) }
+                SettingsChip(label: "Desktop", on: runDesktop) { toggleConnector($runDesktop) }
+                SettingsChip(label: "Downloads", on: runDownloads) { toggleConnector($runDownloads) }
+                SettingsChip(label: "Documents", on: runDocuments) { toggleConnector($runDocuments) }
                 ForEach(customRoots, id: \.self) { url in
                     SettingsChip(label: url.lastPathComponent, detail: "✕", on: true) {
                         CustomRoots.remove(url)
@@ -142,22 +142,13 @@ struct SourcesPane: View {
         }
     }
 
-    // MARK: - Toggle guards (the three-connector minimum)
+    // MARK: - Toggle guards (the four-selection minimum)
 
-    /// The guard fires only on the 3 → 2 drop: onboarding guarantees users start at three or
-    /// more, and a pre-onboarding dev state below three must never get trapped by the rule.
-    private var atMinimum: Bool { connectorCount == 3 }
+    /// The guard fires only on the 4 → 3 drop: onboarding guarantees users start at four or
+    /// more, and a pre-onboarding dev state below four must never get trapped by the rule.
+    private var atMinimum: Bool { selectionCount == SourceSelection.minimumSelections }
 
-    /// Toggling a folder off is guarded only when it would kill the whole FILES connector
-    /// (the last enabled folder) while at the minimum.
-    private func toggleFolder(_ flag: Binding<Bool>) {
-        if flag.wrappedValue {
-            let foldersLeft = [runDesktop, runDownloads, runDocuments].filter(\.self).count - 1
-            if foldersLeft == 0 && customRoots.isEmpty && atMinimum { return flash() }
-        }
-        flag.wrappedValue.toggle()
-    }
-
+    /// Every selection counts as one (folders included), so one guard covers every chip.
     private func toggleConnector(_ flag: Binding<Bool>) {
         if flag.wrappedValue && atMinimum { return flash() }
         flag.wrappedValue.toggle()
