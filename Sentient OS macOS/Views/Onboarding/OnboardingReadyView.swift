@@ -74,8 +74,10 @@ struct OnboardingReadyView: View {
                     }
                     SourceChip("iMessage", on: runIMessage && !imessageCSV.isEmpty) { showIMessagePicker = true }
                     SourceChip("Notes",    on: runNotes) { runNotes.toggle() }
-                    SourceChip("Gmail",    on: gmailConnected && runGmail)       { showGmailConnect = true }
-                    SourceChip("Calendar", on: calendarConnected && runCalendar) { showCalendarConnect = true }
+                    SourceChip("Gmail",    on: gmailConnected && runGmail,
+                               locked: CodexAuth.knowledgeBaseOnly) { showGmailConnect = true }
+                    SourceChip("Calendar", on: calendarConnected && runCalendar,
+                               locked: CodexAuth.knowledgeBaseOnly) { showCalendarConnect = true }
                 }
                 if folderCount < 3 {
                     MonoCaps("keep at least 3 folders on", size: 8.5, tracking: 1.6, color: Theme.Ink.amber)

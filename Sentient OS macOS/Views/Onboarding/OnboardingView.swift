@@ -4,6 +4,7 @@
 //
 //  First-launch onboarding: three intro slides (placeholder boxes for now — real design comes
 //  later), then permissions (OnboardingPermissionsView), then codex login (OnboardingCodexSteps),
+//  then the plan crossroads (OnboardingPlanView — free/go accounts only; full plans skip it),
 //  then the ready-to-process screen (OnboardingReadyView) whose Start Analysis presents the REAL
 //  ProcessingView takeover (pausable) — and only a finished run calls `onFinished` and reveals
 //  the home. The current step persists (UserDefaults "onboarding.step") so a quit-and-relaunch
@@ -46,6 +47,10 @@ struct OnboardingView: View {
                 OnboardingPermissionsView(onContinue: advance).transition(.opacity)
             case Self.slideCount + 1:
                 OnboardingCodexLoginView(onContinue: advance).transition(.opacity)
+            case Self.slideCount + 2:
+                // The plan crossroads — free/go accounts decide here; full plans skip it
+                // before it renders (OnboardingPlanView auto-advances).
+                OnboardingPlanView(onContinue: advance).transition(.opacity)
             default:
                 if analyzing, let modelPath = Self.modelPath {
                     // The REAL first analysis — the same engine + takeover as the home's Analyze
@@ -86,7 +91,11 @@ struct OnboardingView: View {
     }
 
     private func goBack() {
-        withAnimation(.easeInOut(duration: 0.25)) { step = max(0, step - 1) }
+        var target = step - 1
+        // The crossroads only exists for free/go accounts — never strand a full plan on an
+        // auto-advancing screen (back would visibly bounce forward again).
+        if target == Self.slideCount + 2 && !CodexAuth.isLimited() { target -= 1 }
+        withAnimation(.easeInOut(duration: 0.25)) { step = max(0, target) }
     }
 
     // MARK: The three intro slides (placeholders)

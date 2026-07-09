@@ -119,6 +119,9 @@ final class OvernightScheduler {
     /// when the prerequisites (approved root helper + launch-at-login) are in place — otherwise it flags
     /// `needsSchedulerSetup` for the setup UX and retries on the next tick.
     func maybeAutoEnable() {
+        // Free/go knowledge-base-only mode: no quota for nightly runs — auto-enable never fires.
+        // Deliberately NOT latched, so an upgrade (+ reset) later starts the 18h clock fresh.
+        guard !CodexAuth.knowledgeBaseOnly else { return }
         let d = UserDefaults.standard
         guard !d.bool(forKey: Self.autoEnableFiredKey) else { return }      // already handled once
 

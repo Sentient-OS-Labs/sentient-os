@@ -106,8 +106,10 @@ struct AnalysisPopover: View {
                 }
                 HStack(spacing: 8) {
                     SourceChip("Notes",    on: runNotes) { runNotes.toggle() }
-                    SourceChip("Gmail",    on: gmailConnected && runGmail,       action: onPickGmail)
-                    SourceChip("Calendar", on: calendarConnected && runCalendar, action: onPickCalendar)
+                    SourceChip("Gmail",    on: gmailConnected && runGmail,
+                               locked: CodexAuth.knowledgeBaseOnly, action: onPickGmail)
+                    SourceChip("Calendar", on: calendarConnected && runCalendar,
+                               locked: CodexAuth.knowledgeBaseOnly, action: onPickCalendar)
                 }
             }
             .padding(.top, 11)
@@ -326,30 +328,40 @@ private struct CopyPill: View {
 // MARK: - Shared bits
 
 /// A source pill (✓ when armed). Tappable when an `action` is set (toggles a source / opens a
-/// chat or connect sheet). Harvested from the Constellation.
+/// chat or connect sheet). `locked` (knowledge-base-only mode's Gmail/Calendar) renders a dim
+/// lock chip that ignores its action and explains itself on hover. Harvested from the Constellation.
 struct SourceChip: View {
     let name: String
     let on: Bool
+    var locked: Bool = false
     var action: (() -> Void)? = nil    // tappable when set (toggles a source / opens the chat picker)
 
     @State private var hover = false
 
-    init(_ name: String, on: Bool, action: (() -> Void)? = nil) {
-        self.name = name; self.on = on; self.action = action
+    init(_ name: String, on: Bool, locked: Bool = false, action: (() -> Void)? = nil) {
+        self.name = name; self.on = on; self.locked = locked; self.action = action
     }
 
     var body: some View {
         let chip = HStack(spacing: 5) {
-            if on { Text("✓").foregroundStyle(Theme.Ink.green) }
-            Text(name).foregroundStyle(on ? Theme.Ink.chipInk : .white.opacity(0.28))
+            if locked {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 7))
+                    .foregroundStyle(.white.opacity(0.28))
+            } else if on {
+                Text("✓").foregroundStyle(Theme.Ink.green)
+            }
+            Text(name).foregroundStyle(on && !locked ? Theme.Ink.chipInk : .white.opacity(0.28))
         }
         .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(0.8)
         .padding(.horizontal, 9).padding(.vertical, 4)
-        .background(Capsule().fill(.white.opacity(hover && action != nil ? 0.06 : 0)))
+        .background(Capsule().fill(.white.opacity(hover && action != nil && !locked ? 0.06 : 0)))
         .overlay(Capsule().strokeBorder(Theme.Ink.chipBorder, lineWidth: 1))
         .contentShape(Capsule())
 
-        if let action {
+        if locked {
+            chip.help(CodexAuth.connectorLockedTip)
+        } else if let action {
             Button(action: action) { chip }
                 .buttonStyle(.plain)
                 .onHover { hover = $0 }

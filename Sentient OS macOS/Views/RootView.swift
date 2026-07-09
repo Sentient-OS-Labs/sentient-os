@@ -13,6 +13,7 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
     @State private var isProcessing = false
     @State private var showDevTools = false
     // Persistent custom folder roots (CustomRoots store) — added in Settings or Dev Tools,
@@ -40,10 +41,16 @@ struct RootView: View {
         ZStack {
             Theme.bg.ignoresSafeArea()
             if !appState.hasCompletedOnboarding {
-                // First launch → the intro slides. TEMPORARY wiring: the last slide's Next marks
-                // onboarding complete and drops into home (until the full ~10-step flow lands).
+                // First launch → onboarding, whose finished first analysis calls this closure.
+                // The finale (every plan): onboarding dissolves into the home, then the Knowledge
+                // window (the Constellation) assembles on top — the user's first sight of their
+                // knowledge base, before the cards (or the free-plan preview message) behind it.
                 OnboardingView {
                     withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
+                    Task {
+                        try? await Task.sleep(for: .seconds(0.6))   // let the home settle first
+                        openWindow(id: KnowledgeView.windowID)
+                    }
                 }
                 .transition(.opacity)
             } else if isProcessing, let modelPath = Self.modelPath {

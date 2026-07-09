@@ -142,8 +142,10 @@ struct SourcesPane: View {
             VStack(alignment: .leading, spacing: 12) {
                 SettingsProse("Read through your own connectors, never our servers.")
                 ChipFlow {
-                    SettingsChip(label: "Gmail", on: gmailConnected && runGmail) { showGmailConnect = true }
-                    SettingsChip(label: "Google Calendar", on: calendarConnected && runCalendar) { showCalendarConnect = true }
+                    SettingsChip(label: "Gmail", on: gmailConnected && runGmail,
+                                 locked: CodexAuth.knowledgeBaseOnly) { showGmailConnect = true }
+                    SettingsChip(label: "Google Calendar", on: calendarConnected && runCalendar,
+                                 locked: CodexAuth.knowledgeBaseOnly) { showCalendarConnect = true }
                 }
             }
         }
