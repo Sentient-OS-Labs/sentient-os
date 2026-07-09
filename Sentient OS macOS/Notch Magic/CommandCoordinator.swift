@@ -126,8 +126,9 @@ final class CommandCoordinator {
     // wasn't pre-authorized) · release(hold) → transcribe → submit · release(tap) → .typing field.
 
     /// The knowledge-base-only aside — one string for the press flash and the submit backstop.
-    /// Short on purpose: the notch truncates around ~45 characters.
-    private static let needsPlusNotice = "Sidekick needs you to get ChatGPT Plus"
+    /// Short on purpose (the notch truncates around ~45 characters), and shaped like the mic
+    /// notice: [do X] to [get Y], in the living-machine voice ("wake", not "unlock").
+    private static let needsPlusNotice = "get ChatGPT Plus to wake Sidekick"
 
     private func voicePressBegan() {
         guard VoiceCapture.isAvailable else { return }
