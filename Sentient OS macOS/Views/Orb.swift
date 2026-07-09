@@ -21,6 +21,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 enum OrbMode { case idle, processing, attention }
 
@@ -387,6 +388,26 @@ struct OrbMark: View {
         .frame(width: size, height: size)
         .shadow(color: Color(red: 0.69, green: 0.42, blue: 0.70).opacity(0.55), radius: size * 0.3)
     }
+
+    /// The mark as a monochrome menu-bar TEMPLATE image — same ring + dot proportions as the
+    /// view. Template (not colored) on purpose: macOS tints it live for light/dark menu bars,
+    /// wallpaper tinting, and the pressed highlight; the gradient glow stays an in-app treatment.
+    static let menuBarIcon: NSImage = {
+        let side: CGFloat = 17
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            let line = max(1, side * 0.085)
+            NSColor.black.set()
+            let ring = NSBezierPath(ovalIn: rect.insetBy(dx: line / 2, dy: line / 2))
+            ring.lineWidth = line
+            ring.stroke()
+            let dot = side * 0.38
+            NSBezierPath(ovalIn: NSRect(x: rect.midX - dot / 2, y: rect.midY - dot / 2,
+                                        width: dot, height: dot)).fill()
+            return true
+        }
+        image.isTemplate = true
+        return image
+    }()
 }
 
 /// Tiny deterministic RNG so the ring's matter is identical every launch.

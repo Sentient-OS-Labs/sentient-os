@@ -81,10 +81,13 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 780)
 
-        MenuBarExtra("Sentient OS", systemImage: "brain.head.profile") {
+        MenuBarExtra {
             MenuBarView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
+        } label: {
+            Image(nsImage: OrbMark.menuBarIcon)   // the home's ring+dot mark, as a template
+                .accessibilityLabel("Sentient OS")
         }
     }
 }
