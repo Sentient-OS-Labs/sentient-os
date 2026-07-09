@@ -239,7 +239,9 @@ private struct EnvelopeFace: View {
 
                 VStack(spacing: 7) {
                     MonoCaps("A letter from your Sentient", size: 9, tracking: 2.4, color: Theme.Ink.label)
-                    Text("For Jesai")   // demo: the recipient comes from the vault portrait later
+                    // The recipient: the Mac account's first name (same source as the home
+                    // greeting); a nameless account just gets "For you".
+                    Text(HomeView.macFirstName.isEmpty ? "For you" : "For \(HomeView.macFirstName)")
                         .font(.system(size: 22, design: .serif).italic())
                         .foregroundStyle(Theme.Ink.statusInk)
                 }
