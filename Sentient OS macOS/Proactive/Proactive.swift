@@ -7,7 +7,7 @@
 //
 //  The proactive pipeline runs in three steps, each its own prompt: PART 1 (this file) finds the top
 //  action items, PART 2 researches/verifies them (Gmail MCP + web + the knowledge base), PART 3 acts.
-//  PART 1 is deliberately SUMMARIES-ONLY and hermetic: the cloud model (Codex, gpt-5.5, high effort)
+//  PART 1 is deliberately SUMMARIES-ONLY and hermetic: the cloud model (Codex, gpt-5.6-sol, high effort)
 //  reads ONLY the last 7 days of survivor summaries from EVERY source — files, WhatsApp, iMessage,
 //  Apple Notes, Calendar, Gmail — over stdin (no file/web/MCP tools), and returns the up-to-5 most
 //  important, most time-sensitive ACTION ITEMS (ranked, `--output-schema`). The deep grounding against
@@ -102,7 +102,7 @@ actor Proactive {
 
         var inv = CodexCLI.Invocation(prompt: Self.prompt(recent: recent, now: now, calendarContext: calendarContext))
         inv.feature = "proactive"
-        inv.effort = .high                  // gpt-5.5 → high (this judgment is the product)
+        inv.effort = .high                  // gpt-5.6-sol → high (this judgment is the product)
         inv.sandbox = .readOnly             // never writes or acts
         inv.cwd = scratch.path              // neutral empty dir — nothing to read
         inv.webSearch = false               // summaries-only; web research is PART 2

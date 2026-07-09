@@ -40,12 +40,13 @@ actor CodexCLI {
         case xhigh
     }
 
-    /// The model id passed to `codex exec -m`. NOTE: on a ChatGPT-account (subscription) auth only
-    /// gpt-5.5 and the gpt-5.4 family are available — gpt-5.4-spark / -codex / -mini-of-other-gens
-    /// are API-key-only [MEASURED June 15]. `gpt54mini` is the light model for the Gmail tier.
+    /// The model id passed to `codex exec -m`. The gpt-5.6 lineup (sol = flagship · terra = mid ·
+    /// luna = light) rides ChatGPT-account auth like 5.5/5.4-mini did; terra is unused so far.
+    /// (Old lesson still applies: some SKUs are API-key-only — verify a model answers through
+    /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
-        case gpt55 = "gpt-5.5"           // knowledge-base work + everything else
-        case gpt54mini = "gpt-5.4-mini"  // Gmail connect-check + processing
+        case gpt56sol = "gpt-5.6-sol"    // knowledge-base work + everything else
+        case gpt56luna = "gpt-5.6-luna"  // Gmail connect-check + processing
     }
 
     /// OS-level (Seatbelt) confinement of everything the agent does — stronger than a tool
@@ -58,8 +59,8 @@ actor CodexCLI {
     /// One headless `codex exec` call, fully specified.
     struct Invocation: Sendable {
         var prompt: String
-        var model: Model = .gpt55              // gpt-5.5 for everything except the Gmail tier
-        var effort: Effort = .high             // gpt-5.5 default; initial vault build → .xhigh; Gmail tier → .medium
+        var model: Model = .gpt56sol              // gpt-5.6-sol for everything except the Gmail tier
+        var effort: Effort = .high             // gpt-5.6-sol default; initial vault build → .xhigh; Gmail tier → .medium
         var sandbox: Sandbox = .readOnly
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd
@@ -345,7 +346,7 @@ actor CodexCLI {
     /// The command bar's "Let me DO stuff for you" spine — computer use (the "computer use" phrase is
     /// built into the prompt by the caller, NOT a flag here). Runs a raw `codex exec` with the prompt
     /// passed as ARGV and the exact flag set verified to make Codex's computer use work via the CLI:
-    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.5 -c model_reasoning_effort="low"
+    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -c model_reasoning_effort="low"
     /// --skip-git-repo-check`, NO `--json` (human-readable output, not JSONL). Each output LINE is
     /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
     /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
@@ -366,7 +367,7 @@ actor CodexCLI {
             // "shall I proceed?" questions nothing can answer. Cheap file check, idempotent.
             ComputerUseSkillPatch.ensureApplied()
             var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                        "-m", Model.gpt55.rawValue,
+                        "-m", Model.gpt56sol.rawValue,
                         "-c", "model_reasoning_effort=\"low\""]
             if let imagePath { args += ["-i", imagePath] }   // followed by a flag → variadic stops at one file
             args += ["--skip-git-repo-check", prompt]
@@ -379,7 +380,7 @@ actor CodexCLI {
         } catch {
             // §7.9: computer-use runs are the highest-risk executions (bypass-sandbox). Case name only.
             Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                  model: .gpt55, effort: .low, resumed: false,
+                                  model: .gpt56sol, effort: .low, resumed: false,
                                   durationMS: Int(Date().timeIntervalSince(t0) * 1000))
             throw error
         }

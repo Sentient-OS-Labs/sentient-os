@@ -161,7 +161,7 @@ actor VaultCloud {
         }
         var invocation = inv
         invocation.feature = "vault"
-        invocation.effort = .high                                    // incremental KB update (gpt-5.5 → high)
+        invocation.effort = .high                                    // incremental KB update (gpt-5.6-sol → high)
         invocation.sandbox = .workspaceWrite                        // edits confined to the staging dir
         invocation.cwd = staging.path
         invocation.timeout = 1_800

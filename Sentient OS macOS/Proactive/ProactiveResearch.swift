@@ -127,7 +127,7 @@ actor ProactiveResearch {
 
         var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, recent: recent, now: now, calendarContext: calendarContext))
         inv.feature = "proactive-research"
-        inv.effort = .high                  // gpt-5.5 → high (accuracy + the prepared draft are the product)
+        inv.effort = .high                  // gpt-5.6-sol → high (accuracy + the prepared draft are the product)
         inv.sandbox = .readOnly             // verifies + stages — never sends, drafts into a provider, or acts
         inv.cwd = vault.path                // working dir = the knowledge base (a research surface + the voice)
         inv.webSearch = true                // ground external facts (on-sale/event dates, deadlines, form fields)

@@ -3,7 +3,7 @@
 //  Sentient OS macOS  ·  Proactive/
 //
 //  The welcome "gift" — the day-one "letter from Sentient" card. One Codex call
-//  (gpt-5.5, high, workspace-write over the user's OWN knowledge base) reads the synthesized
+//  (gpt-5.6-sol, high, workspace-write over the user's OWN knowledge base) reads the synthesized
 //  cross-life portrait and WRITES the finished letter as "Gift from Sentient.md" in the vault folder.
 //  We read that file back, persist it, and delete it so nothing strays into the user's notes. The
 //  letter is plain-English Markdown (a title, a couple of sections, ✦ bullets) — rendered by the

@@ -8,7 +8,7 @@
 //  rounded field:
 //    [ Computer use ]  ·  the prompt input (verb "DO" bolded bright)  ·  ◯↑ send
 //  `onSend(text, mode)` is wired LIVE: HomeView builds "Using <mode.promptPhrase>, <text>.
-//  My knowledge base is at …" and runs it through CodexCLI.runAgentCommand (codex exec, gpt-5.5,
+//  My knowledge base is at …" and runs it through CodexCLI.runAgentCommand (codex exec, gpt-5.6-sol,
 //  bypass sandbox).
 //
 //  Key pieces: PromptBar (the bar) · ModeToggle (the segmented selector) · SendButton ·

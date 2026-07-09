@@ -210,7 +210,7 @@ actor VaultGenerator {
 
         var invocation = CodexCLI.Invocation(prompt: prompt)
         invocation.feature = "vault"
-        // KB build gets the deepest pass (gpt-5.5) — except in knowledge-base-only mode, where
+        // KB build gets the deepest pass (gpt-5.6-sol) — except in knowledge-base-only mode, where
         // .high keeps the one build a free/go plan's tiny monthly quota can afford (~70% of it).
         invocation.effort = CodexAuth.knowledgeBaseOnly ? .high : .xhigh
         invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir

@@ -59,7 +59,7 @@ final class CommandRunModel {
             let shot = await ScreenCapture.grab()
             defer { ScreenCapture.discard(shot) }
             let prompt = Self.commandPrompt(task: task0, mode: mode, hasScreenshot: shot != nil)
-            Log("CMD: launching codex exec (gpt-5.5 · \(mode.promptPhrase) · bypass sandbox · screenshot: \(shot != nil))…")
+            Log("CMD: launching codex exec (gpt-5.6-sol · \(mode.promptPhrase) · bypass sandbox · screenshot: \(shot != nil))…")
             #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
                         // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
             Log("CMD: prompt ↓\n\(prompt)")
