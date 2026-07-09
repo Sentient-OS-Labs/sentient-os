@@ -301,7 +301,7 @@ struct HomeView: View {
             .display(24)
             .foregroundStyle(Theme.Ink.statusInk)
             .padding(.top, 16)
-        Text("Your knowledge base is built, private, and yours to explore.\nThe living Sentient runs on ChatGPT Plus:")
+        Text("Your knowledge base is built, private, and yours to explore.\nThe living Sentient uses your ChatGPT Plus:")
             .font(.system(size: 13.5))
             .foregroundStyle(Theme.secondary)
             .multilineTextAlignment(.center)
