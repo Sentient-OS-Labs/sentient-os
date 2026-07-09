@@ -58,12 +58,13 @@ final class NotchWindowController {
         }
     }
 
-    /// Esc handling has two halves. THE GLOBAL half lives in `RightCommandMonitor.onEscape` (a listen-only
-    /// keyDown tap) and covers the states where we're NOT the key window — a voice capture / a running
-    /// transcript over another app. THIS local half exists for the ONE thing the global tap can't do: while
-    /// the TYPE FIELD is focused (our key panel), it consumes Esc *before* the text field so dismissing never
-    /// beeps. A LOCAL monitor needs no permission (it only sees events already routed to us); `cancelCurrent()`
-    /// returns true when it handled the Esc → we swallow it (nil) so the field doesn't also act on it.
+    /// Esc handling is LOCAL-ONLY (a global keyDown tap is exactly what Input Monitoring gates — never
+    /// add one): this monitor sees Esc whenever events route to Sentient — the focused type field (where
+    /// it consumes Esc *before* the text field so dismissing never beeps) and any notch state while a
+    /// Sentient window is frontmost. Over OTHER apps, a fresh right-⌘ press is the cancel instead
+    /// (CommandCoordinator.voicePressBegan). A LOCAL monitor needs no permission (it only sees events
+    /// already routed to us); `cancelCurrent()` returns true when it handled the Esc → we swallow it
+    /// (nil) so the field doesn't also act on it.
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
