@@ -112,10 +112,12 @@ enum NotchPhase { hidden · opening · listening · transcribing · typing · ru
 ```swift
 func submit(_ text:, mode: AgentMode, source: TriggerSource)   // .promptBar | .voice
 ```
-It guards one-run-at-a-time, sets `readBack` for voice (timed in §8), calls `run.start`, and `setPhase(.running)` — every command is computer use, which raises the notch.
+It guards one-run-at-a-time, sets `readBack` for voice (timed in §8), calls `run.start`, and `setPhase(.running)` — every command is computer use, which raises the notch. It also carries the
+**knowledge-base-only backstop** (free/go plans: flash the Plus aside, never fire — covers the
+command-bar path, which has no press).
 
 **The hotkey flow — press OPENS, then it branches to voice or type:**
-- `voicePressBegan()` (onPress, from idle only — `isInteracting` blocks a fresh press mid-interaction): `setPhase(.opening)` *immediately* (the "pull it open" feel). Start the mic **only if `VoiceCapture.isAuthorized`** — never PROMPT on a press.
+- `voicePressBegan()` (onPress, from idle only — `isInteracting` blocks a fresh press mid-interaction): **knowledge-base-only plans get answered RIGHT HERE** — a 2s `flash("get ChatGPT Plus to wake Sidekick")`, the same instant beat as the mic notice, and the notch never opens for listening or typing (live-checked per press, so it can never go stale; the run costs codex quota those plans don't have). Otherwise: `setPhase(.opening)` *immediately* (the "pull it open" feel). Start the mic **only if `VoiceCapture.isAuthorized`** — never PROMPT on a press.
 - `voiceHoldConfirmed()` (@250ms): `setPhase(.listening)` — committed to voice (the "lean in"); start the mic now if perms weren't pre-granted (the only first-use prompt path).
 - `voiceReleased(held:)` from `.opening`/`.listening`: `held ≥ 0.25` → `finalizeVoice()` (→ `.transcribing` → `stopAndTranscribe()` → empty? `flash` : `submit(.voice)`); else `beginTyping()` (cancel the mic → `setPhase(.typing)`).
 - **Tap-to-type:** `submitTyped(_)` (⏎ in the notch field) → `submit(.computer, .promptBar)`; `dismissTyping()` (click-away · empty-⏎) → `.hidden`. A **right-⌘ tap while the field is open** also dismisses it (`voicePressBegan` toggles it closed instead of opening a fresh interaction).

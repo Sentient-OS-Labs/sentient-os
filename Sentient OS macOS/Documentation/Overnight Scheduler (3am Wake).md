@@ -84,6 +84,10 @@ and *then* turn the scheduler on. The very first automatic overnight run has som
   even if the app just sits open). It is idempotent and:
   - **Latches** (`autoEnableFired`) so it acts at most once and never re-enables after a user turns it off.
   - **Never fights the user** — if the scheduler is already on (dev or prod flag), it just latches.
+  - **Knowledge-base-only mode (free/go plans) early-returns before everything** — no timer, no
+    production flag, no 3am runs (those plans have no quota for nightly codex work). Deliberately
+    NOT latched, so an upgrade + reset starts the 18h clock fresh. See `Plan Gate (CodexAuth &
+    Knowledge-Base-Only).md`.
   - **Gates on prerequisites** — only flips production ON once the root helper is **approved** *and*
     launch-at-login is on. If the 18h has elapsed but prerequisites aren't met, it sets
     `needsSchedulerSetup` (published, for the setup UX) and retries on the next tick — it never

@@ -80,6 +80,14 @@ final class CommandCoordinator {
         guard !trimmed.isEmpty else { return }
         guard !run.isRunning else { Log("submit ignored — a task is already running"); return }
 
+        // Knowledge-base-only backstop (the hotkey path already flashed at press) — covers the
+        // home command bar, which submits without a press. The run must never fire on free/go.
+        if CodexAuth.knowledgeBaseOnly {
+            flash(Self.needsPlusNotice, for: 2.0)
+            Log("submit blocked — knowledge-base-only plan (Sidekick needs Plus)")
+            return
+        }
+
         // First-use permission gate: while any of the four action grants is missing, the one-time
         // setup window takes over and holds this command — Continue fires it, close drops it.
         if ComputerUseGate.shared.intercept({ [weak self] in self?.launch(trimmed, mode: mode, source: source) }) {
@@ -117,11 +125,24 @@ final class CommandCoordinator {
     // trigger a permission prompt) · still-held @250ms → .listening (committed; start the mic now if it
     // wasn't pre-authorized) · release(hold) → transcribe → submit · release(tap) → .typing field.
 
+    /// The knowledge-base-only aside — one string for the press flash and the submit backstop.
+    /// Short on purpose (the notch truncates around ~45 characters), and shaped like the mic
+    /// notice: [do X] to [get Y], in the living-machine voice ("wake", not "unlock").
+    private static let needsPlusNotice = "get ChatGPT Plus to wake Sidekick"
+
     private func voicePressBegan() {
         guard VoiceCapture.isAvailable else { return }
         // A right-⌘ tap while the type field is open toggles it closed (no action) — a quick way to back out.
         if phase == .typing { dismissTyping(); return }
         guard !run.isRunning, !isInteracting else { Log("hotkey ignored — busy"); return }
+        // Knowledge-base-only plan (free/go): the notch answers the press INSTANTLY with the
+        // Plus aside — same immediate beat as the mic-perms notice — and never opens for
+        // listening or typing. Checked live per press, so it can never go stale.
+        if CodexAuth.knowledgeBaseOnly {
+            flash(Self.needsPlusNotice, for: 2.0)
+            Log("hotkey blocked — knowledge-base-only plan (Sidekick needs Plus)")
+            return
+        }
         setPhase(.opening)                                // you're pulling it open — reveal the instant you press
         if VoiceCapture.isAuthorized { startCapture() }   // never PROMPT on a press; defer to hold-confirm
     }
@@ -305,9 +326,9 @@ final class CommandCoordinator {
         }
     }
 
-    private func flash(_ message: String) {
+    private func flash(_ message: String, for seconds: Double = 1.5) {
         setPhase(.notice(message))
-        scheduleHide(after: 1.5)
+        scheduleHide(after: seconds)
     }
 
     private func setReadBack(_ text: String) {
