@@ -44,7 +44,7 @@ struct OnboardingPlanView: View {
                     .foregroundStyle(Theme.Ink.bright)
 
                 VStack(spacing: 6) {
-                    Text("Sentient uses your ChatGPT plan's Codex frontier model for a small part of its compute.")
+                    Text("Right now, Sentient uses your ChatGPT plan's Codex frontier model for a small part of its compute.")
                     Text("You can still build your private knowledge base from this Mac and offer it to your AIs.")
                 }
                 .font(.system(size: 14.5))
