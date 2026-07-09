@@ -43,15 +43,16 @@ struct OnboardingPlanView: View {
                     .display(26)
                     .foregroundStyle(Theme.Ink.bright)
 
+                // Two balanced single lines (no width cap — each takes its natural width, so
+                // neither ever wraps into an orphan on a normal window).
                 VStack(spacing: 6) {
-                    Text("Right now, Sentient uses your ChatGPT plan's Codex frontier model for a small part of its compute.")
+                    Text("Right now, Sentient's cloud thinking runs through your ChatGPT plan's Codex frontier model.")
                     Text("You can still build your private knowledge base from this Mac and offer it to your AIs.")
                 }
                 .font(.system(size: 14.5))
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
-                .frame(maxWidth: 620)
 
                 VStack(alignment: .leading, spacing: 11) {
                     MonoCaps("With ChatGPT Plus", size: 9, tracking: 2.2, color: Theme.Ink.label)
