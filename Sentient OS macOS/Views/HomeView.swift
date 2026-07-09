@@ -18,9 +18,10 @@
 //  sources + AIs + vault stats into this surface and its popovers.)
 //
 //  KNOWLEDGE-BASE-ONLY MODE (free/go plans, CodexAuth.knowledgeBaseOnly): cards never come and
-//  the command bar hides — the empty state instead carries the preview note under the orb
-//  (upgrade CTA + Reset jump), flipping to the reset-and-rebuild celebration once the plan
-//  claim reads Plus.
+//  the command bar hides — the preview note under the orb (upgrade CTA + Reset jump) is ALWAYS
+//  on this home. The gift envelope (the only card the free home can hold) perches top-center
+//  above the compact note; flinging the letter blooms the note into the full center. Once the
+//  plan claim reads Plus it becomes the reset-and-rebuild celebration.
 //
 //  Doc: Documentation/Home — Proactive Intelligence (For You).md · cards + the CodexCLI seam:
 //  Briefing.swift.
@@ -78,9 +79,13 @@ struct HomeView: View {
 
                 Group {
                     scatter(geo)
-                    if model.entries.isEmpty {
-                        (kbOnly ? AnyView(previewState) : AnyView(emptyState))
-                            .transition(.scale(scale: 0.86).combined(with: .opacity))
+                    if kbOnly {
+                        // The preview note is ALWAYS on the free home — the gift envelope (the
+                        // only card this home can ever hold) perches above it, never in front:
+                        // the pitch must not hide behind a fling.
+                        previewState
+                    } else if model.entries.isEmpty {
+                        emptyState.transition(.scale(scale: 0.86).combined(with: .opacity))
                     }
                     bottomDock
                     chrome                     // on top → the nav stays clickable
@@ -212,7 +217,11 @@ struct HomeView: View {
     // MARK: The scatter (the suggestion cards)
 
     private func scatter(_ geo: GeometryProxy) -> some View {
-        let slots = Self.slots(count: model.entries.count, in: geo.size)
+        // kb-only: the lone gift envelope gets a fixed top-center perch (the preview note owns
+        // the center beneath it). Any other population falls back to the normal scatter.
+        let slots = (kbOnly && model.entries.count == 1)
+            ? [CGPoint(x: geo.size.width / 2, y: geo.size.height * 0.24)]
+            : Self.slots(count: model.entries.count, in: geo.size)
         return ZStack {
             ForEach(Array(model.entries.enumerated()), id: \.element.id) { item in
                 DealtCard(
@@ -270,21 +279,24 @@ struct HomeView: View {
 
     // MARK: The knowledge-base-only preview state (free/go plans)
 
-    /// The free-plan home: the orb rises a touch and, where the cards would live, an honest,
-    /// nicely-set note — the knowledge base is real and theirs; the LIVING Sentient needs Plus.
-    /// Not a card: quiet centered text under the orb. The upgrade CTA carries this screen's one
-    /// glow (the command bar is hidden here, so the jewelry budget is free). Once the claim
-    /// reads Plus (they upgraded), the note flips to the reset-and-rebuild celebration.
+    /// The free-plan home: the orb and, where the cards would live, an honest, nicely-set
+    /// note — the knowledge base is real and theirs; the LIVING Sentient needs Plus. Not a
+    /// card: quiet centered text under the orb. The upgrade CTA carries this screen's one glow
+    /// (the command bar is hidden here, so the jewelry budget is free). ALWAYS mounted on the
+    /// kb-only home: while the gift envelope perches top-center the block rides compact and
+    /// low (feature rows tucked away); once the letter is flung it blooms into the full,
+    /// centered note. Once the claim reads Plus, it becomes the reset-and-rebuild celebration.
     private var previewState: some View {
-        VStack(spacing: 0) {
-            Orb(size: 104)
-            if planUpgraded { upgradedNote } else { previewNote }
+        let envelopePresent = !model.entries.isEmpty
+        return VStack(spacing: 0) {
+            Orb(size: envelopePresent ? 84 : 104)
+            if planUpgraded { upgradedNote } else { previewNote(compact: envelopePresent) }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .offset(y: -18)   // the orb rides a touch higher to make room for the note
+        .offset(y: envelopePresent ? 128 : -18)   // envelope above → the block waits lower
     }
 
-    @ViewBuilder private var previewNote: some View {
+    @ViewBuilder private func previewNote(compact: Bool) -> some View {
         Text("This is a preview of Sentient.")
             .display(24)
             .foregroundStyle(Theme.Ink.statusInk)
@@ -295,19 +307,21 @@ struct HomeView: View {
             .multilineTextAlignment(.center)
             .lineSpacing(4)
             .padding(.top, 10)
-        VStack(alignment: .leading, spacing: 11) {
-            previewRow("sunrise", "Mornings where things worth doing arrive already done")
-            previewRow("command", "Sidekick anywhere: hold right \u{2318} and just say it")
-            previewRow("moon.stars", "A knowledge base that keeps learning, night after night")
+        if !compact {   // the feature rows return once the envelope is gone
+            VStack(alignment: .leading, spacing: 11) {
+                previewRow("sunrise", "Mornings where things worth doing arrive already done")
+                previewRow("command", "Sidekick anywhere: hold right \u{2318} and just say it")
+                previewRow("moon.stars", "A knowledge base that keeps learning, night after night")
+            }
+            .padding(.top, 20)
         }
-        .padding(.top, 20)
         HStack(spacing: 14) {
             GlowButton(title: "Get ChatGPT Plus", systemImage: "arrow.up.forward",
                        glowIntensity: 0.5, action: { NSWorkspace.shared.open(CodexAuth.upgradeURL) })
                 .frame(width: 250)
             quietPill("Reset Sentient…", action: openSystemPane)
         }
-        .padding(.top, 28)
+        .padding(.top, compact ? 22 : 28)
         Text("Upgraded? Reset rebuilds your knowledge with Gmail, Calendar, and the full engine.")
             .font(.system(size: 11.5))
             .foregroundStyle(Theme.faint)
