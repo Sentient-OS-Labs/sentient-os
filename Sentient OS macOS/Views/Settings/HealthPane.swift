@@ -175,9 +175,9 @@ struct HealthPane: View {
                 }
                 .rise(3, revealed: revealed)
                 StatusLine(title: "Screen Recording",
-                           health: screenRec ? .ok : .bad,   // compulsory — Sidekick is half-blind without it
-                           note: screenRec ? "granted" : "not granted",
-                           tip: "Lets Sidekick snap a still of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}). Without it, Sidekick may not know which open app to start controlling to help you. Takes effect after you restart Sentient.",
+                           health: screenRec ? .ok : .warn,   // optional — Sidekick runs text-only without it
+                           note: screenRec ? "granted" : "optional",
+                           tip: "Optional. Lets Sidekick snap a still of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}). Without it, Sidekick may not know which open app to start controlling to help you. Takes effect after you restart Sentient.",
                            fixTitle: "Allow…") {
                     fixScreenRecording()
                 }

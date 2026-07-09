@@ -4,13 +4,14 @@
 //
 //  The first-use permission gate for everything that acts on the Mac. Every computer-use surface
 //  (the home command bar, Sidekick's hotkey, a proactive card's fire) funnels through
-//  `intercept(_:)`: while any of the four action grants is missing — Sentient's own Microphone &
-//  Speech and Screen Recording, plus the Codex Computer Use helper's Accessibility and Screen
-//  Recording — it stashes the pending action, raises the one-time setup window
-//  (ComputerUseGateView), and fires the action when the user taps Continue. Closing the window
-//  instead cancels the pending action. Shown at most once per app session; all four green means
-//  it never appears at all. Status probes reuse Permissions/VoiceCapture (the helper's grants are
-//  system-TCC, read via our FDA).
+//  `intercept(_:)`: while any REQUIRED action grant is missing — Sentient's own Microphone &
+//  Speech, plus the Codex Computer Use helper's Accessibility and Screen Recording — it stashes
+//  the pending action, raises the one-time setup window (ComputerUseGateView), and fires the
+//  action when the user taps Continue. Sentient's own Screen Recording rides along as an
+//  OPTIONAL row (screen context for Sidekick; missing it never gates anything — no grant means
+//  commands simply run text-only). Closing the window instead cancels the pending action. Shown
+//  at most once per app session; all required grants green means it never appears at all. Status
+//  probes reuse Permissions/VoiceCapture (the helper's grants are system-TCC, read via our FDA).
 //
 //  Key methods: intercept(_:) · refresh() · continueNow()
 //
@@ -33,7 +34,8 @@ final class ComputerUseGate {
     enum MicSpeechState { case granted, notAsked, denied }
     private(set) var micSpeech: MicSpeechState = .notAsked
 
-    /// Sentient's own Screen Recording — the screen context snapshot. Compulsory, not optional.
+    /// Sentient's own Screen Recording — the screen context snapshot. OPTIONAL: without it,
+    /// Sidekick runs text-only; it never gates an action.
     private(set) var sentientScreen = false
 
     /// The Codex Computer Use helper's presence + its two system-TCC grants (its hands and eyes).
@@ -41,8 +43,10 @@ final class ComputerUseGate {
     private(set) var helperAccessibility = false
     private(set) var helperScreen = false
 
-    var allGranted: Bool {
-        micSpeech == .granted && sentientScreen && helperAccessibility && helperScreen
+    /// The REQUIRED grants — what the gate holds actions for. Sentient's Screen Recording is
+    /// deliberately absent (optional row, shown but never blocking).
+    var allRequiredGranted: Bool {
+        micSpeech == .granted && helperAccessibility && helperScreen
     }
 
     // MARK: The gate
@@ -58,7 +62,7 @@ final class ComputerUseGate {
     /// this session.
     func intercept(_ action: @escaping @MainActor () -> Void) -> Bool {
         refresh()
-        guard !allGranted, !shownThisSession else { return false }
+        guard !allRequiredGranted, !shownThisSession else { return false }
         shownThisSession = true
         pending = action
         present()
@@ -97,7 +101,7 @@ final class ComputerUseGate {
     func continueNow() {
         let action = pending
         pending = nil
-        Analytics.signal("PermissionGate.continued", parameters: ["all_granted": String(allGranted)])
+        Analytics.signal("PermissionGate.continued", parameters: ["all_granted": String(allRequiredGranted)])
         dismissWindow()
         action?()
     }
