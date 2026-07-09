@@ -9,11 +9,11 @@ pieces (`SettingsComponents.swift`).
 
 ## ⚠️ NOT wired up yet (read this first)
 
-1. **Proactive instructions + Sidekick context/hotkey** (`ProactivePane`) — the controls work and
-   persist (`proactive.instructions` · `sidekick.context` · `sidekick.hotkey`), but **nothing
-   consumes the values yet**. The proactive/Sidekick prompts learn to read them with the
-   prompt-refinement work, and the Right ⌥ choice additionally needs `RightCommandMonitor`
-   support (it listens for right-⌘ only today).
+1. **Proactive instructions + Sidekick context** (`ProactivePane`) — these two text fields work and
+   persist (`proactive.instructions` · `sidekick.context`), but **nothing consumes the values yet**.
+   The proactive/Sidekick prompts learn to read them with the prompt-refinement work.
+   *(The Sidekick **hotkey** chip — `sidekick.hotkey`, right ⌘ / right ⌥ — is fully wired: toggling
+   it live-re-keys `SidekickHotkeyMonitor` with no restart. See `Notch Magic/Notch Magic.md` §4.)*
 2. **The E2E encryption claim front-runs the code** — the Connect-AIs privacy blurb says the cloud
    copy is end-to-end encrypted and unreadable even by Sentient's devs. That is LAUNCH truth,
    decided 2026-07-04: the mirror stores plaintext markdown today, and the "mcp encryption"
@@ -77,7 +77,9 @@ folders: one newline-joined UserDefaults string (`files.customRoots`) so views r
 sees custom folders. Verified by a headless selftest (7/7) on ship day.
 
 ### Proactive & Sidekick (`ProactivePane.swift`)
-Autosaving standing instructions + Sidekick's shortcut key and standing context. Stored, not yet
+Autosaving standing instructions + Sidekick's shortcut key and standing context. The **shortcut
+key** (right ⌘ / right ⌥) is live — toggling it posts `.sidekickHotkeyChanged`, which re-keys the
+running `SidekickHotkeyMonitor` with no restart. The two **text fields** are stored, not yet
 consumed — see the NOT-wired list above.
 
 ### Connect AIs to Knowledge (`YourAIsPane.swift`)
@@ -120,25 +122,28 @@ probe (the codex login check shells out and takes seconds), then rows cascade in
 staggered rise). Severity-ordered rows, each with an `InfoTip` (tiny info icon; hover 0.15s
 opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
 
-- **ON-DEVICE INTELLIGENCE** (the analysis machinery): Full Disk Access (grant deep-link +
-  relaunch link) · Overnight wake (🟢 = the installed daemon plist points at THIS binary; fix runs
-  `WakeHelperInstaller.installAsync()` — **[DECIDED 2026-07-04] the password install IS
-  production**, no Login Items migration) · Launch at login (yellow when off).
+- **ON-DEVICE INTELLIGENCE** (the analysis machinery): Full Disk Access (fix = the floating
+  drag-panel guide with Sentient as the card — `PermissionGuide`, see `Permission Guide
+  (First-Use Grants).md` — + the relaunch link) · Overnight wake (🟢 = the installed daemon plist
+  points at THIS binary; fix runs `WakeHelperInstaller.installAsync()` — **[DECIDED 2026-07-04]
+  the password install IS production**, no Login Items migration) · Launch at login (yellow when
+  off; a needs-approval state adds the guide's instruction panel over Login Items).
 - **SIDEKICK & PROACTIVE** (the magic's grants — lazy-asked, yellow while not-asked/off; only an explicit mic/speech DENIAL goes red):
   Microphone & Speech (one row: `VoiceCapture.requestPermissions()` asks both; denied deep-links
   to the actual blocker) · **Screen Recording** (Sentient's OWN grant — Sidekick snaps a screen
-  still per command, `Notch Magic/ScreenCapture.swift`; commands run text-only without it; fix =
-  `CGRequestScreenCaptureAccess`, which prompts only on the first-ever ask, else the Settings
-  deep-link; there's no macOS API to tell "never asked" from "denied") · Notifications (the
-  morning briefing note).
+  still per command, `Notch Magic/ScreenCapture.swift`; **OPTIONAL by decision [2026-07-09]**:
+  amber with an "optional" note, commands run text-only without it; fix = the drag-panel guide
+  with Sentient as the card — NOT `CGRequestScreenCaptureAccess`, which on Tahoe doesn't reliably
+  add the app to the list) · Notifications (the morning briefing note).
 
   **The lazy-grant policy (Sidekick permissions):** nothing is requested at launch or as an
   onboarding step. The mic + speech prompts surface the FIRST time the user holds the hotkey
-  (`VoiceCapture.authorize`, on a confirmed hold — never on a tap); the screen-recording ask joins
-  that same first-invoke moment when the onboarding gating lands (the wiring that arms Sidekick
-  only after initial processing — [WIP]). Until then this pane's "Allow…" rows are where the
-  grants happen; Sidekick degrades gracefully without them (voice needs mic; the screen still is
-  skipped).
+  (`VoiceCapture.authorize`, on a confirmed hold — never on a tap), and the FIRST computer-use
+  action (command bar, Sidekick, a card's fire) raises the one-time `ComputerUseGate` window,
+  which gathers mic+speech, the optional screen recording, and the codex helper's two grants in
+  one place (see `Permission Guide (First-Use Grants).md`). This pane stays the always-available
+  fallback; Sidekick degrades gracefully without the optional grants (voice needs mic; the screen
+  still is skipped).
 - **SET UP CODEX:** CLI / ChatGPT account / **ChatGPT plan** / computer use — the CLI, account,
   and computer-use rows go red when missing and their fixes open the shared `CodexSetupView`
   (statuses re-probe when the sheet closes). The plan row (shown once logged in, decoded via
@@ -147,13 +152,16 @@ opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
   upgrade shows up in seconds instead of on codex's 8-day timer; a limited plan also keeps the
   codex group expanded (it never folds into "Codex is all good").
 - **CODEX PERMISSIONS:** the helper's Accessibility + Screen Recording — system-TCC, read via
-  our FDA, status + deep-link only; shown once computer use exists.
+  our FDA; shown once computer use exists. Fix = the drag-panel guide with the HELPER as the
+  card (the plain deep-link survives only as the helper-missing fallback).
 - **The codex collapse:** when the WHOLE stack is green, the five codex rows fold into one line
   ("Codex is all good. · Details"); expanding is a one-way door per visit. Anything unhealthy
   keeps the full board open.
-- **Automation has NO row:** ~0.5s after the pane opens it probes the user-db grant and silently
-  re-runs `grantComputerUseAutomation()` if missing (idempotent, logged). The user has no job
-  there, so the UI gives them none.
+- **Automation has NO row:** ~0.5s after the pane opens, `Permissions.selfHealComputerUseAutomation`
+  probes the user-db grant and silently re-runs `grantComputerUseAutomation()` if missing
+  (idempotent, logged). The user has no job there, so the UI gives them none. (The same extracted
+  self-heal also runs when the first-use `ComputerUseGate` window presents — before the first fire
+  ever needs it.)
 - Red = a core capability is broken · yellow = optional or fixable-later. Statuses re-probe on
   every app foreground.
 

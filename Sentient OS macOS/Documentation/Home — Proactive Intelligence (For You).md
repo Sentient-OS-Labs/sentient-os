@@ -37,6 +37,14 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
   knowledge-base-only mode — computer use runs on quota those plans don't have). A small `DEV TOOLS`
   handle is pinned bottom-right (→ the `Views/Dev/DevToolsView.swift` sheet; the Release strip
   re-hides it).
+- **The morning-after caution — `cautionBanner` / `CautionCapsule`:** when last night's UNATTENDED
+  3am run failed for one of the three knowable reasons (codex signed out · no internet · usage
+  limit — recorded by `Scheduling/OvernightCaution` at `ProactiveCycle`'s catch sites, scheduled
+  runs only), a quiet amber capsule sits top-right in the blank space beside the greeting: amber
+  `HealthDot`, the first-person message, ✕ (clears the record), and on the logged-out one an
+  *Open Settings* pill that deep-links straight to Permissions & Health
+  (`SettingsView.requestedPane = .health`). The next fully successful cycle clears it on its own.
+  Amber on purpose: a caution, never an alarm — only the overnight magic was missed.
 - **The letter layer:** an always-mounted overlay (opacity/scale-driven — view *insertion* can miss a
   redraw on hidden-titlebar windows) that expands a card into the typeset reading view, with the
   **editable draft block** for real cards (below).
@@ -48,7 +56,15 @@ HomeView ⟷ ProcessingView cross-fade. **Analyze Now runs the shared `SourceSel
 mirror → gift → proactive → wipe), byte-for-byte what the 3am scheduler runs. `RootView` also owns
 **the onboarding finale**: when the first analysis finishes, onboarding dissolves into the home and
 the Knowledge window (the Constellation) opens ON TOP a beat later — every user's first sight of
-their knowledge base, whatever their plan.
+their knowledge base, whatever their plan. `RootView` also mounts the screen-agnostic
+**computer-use setup whisper** — a small spinner + "Setting up Codex computer use in the
+background." bottom-left, keyed to the live `CodexSetup.settingUpComputerUse` flag, so it rides
+onboarding's takeover, the knowledge-base phase, and (rarely) the home for exactly as long as the
+bootstrap actually runs.
+
+**First-use permission gate:** a real card's fire and the command bar both pass
+`ComputerUseGate.intercept` — while a required action grant is missing, the one-time setup window
+holds the action and fires it on Continue. See `Permission Guide (First-Use Grants).md`.
 
 ## Real cards vs the demo deck — `ForYouModel`
 

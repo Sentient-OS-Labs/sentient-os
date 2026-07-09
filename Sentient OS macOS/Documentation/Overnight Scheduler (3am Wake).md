@@ -64,6 +64,15 @@ re-armed for tomorrow; thermal is start-only) → `beginAwake` + a 60s heartbeat
 the Mac idle-sleeps (lid shut) → re-arm for the next night. Production default is **3:00 AM**
 (`defaultMinutes`; the dev UI can override).
 
+**The morning-after caution:** the scheduler is the ONE caller that passes
+`ProactiveCycle.run(scheduled: true, …)` — a failure in an unattended run classifies at the
+cycle's catch sites (`Scheduling/OvernightCaution`: typed `usageLimit` first → a local
+`codex login status` probe (works offline) → an `NWPathMonitor` snapshot → anything else records
+NOTHING) into codex-signed-out · no-internet · usage-limit, persisted for the home's amber banner
+(`HomeView.cautionBanner`). A watched Analyze Now records nothing (the takeover UI shows failures
+live); the next fully successful cycle clears the record. Each caution also emits a PII-free
+`overnight.caution{kind}` Sentry event.
+
 ⚠️ Known caveat: **Full Disk Access can read `false` when the app is launched from Terminal** (TCC
 attribution) — which silently excludes the DB sources. The arm-time `DETECTED …` / `FDA granted:`
 log lines surface it.
@@ -164,7 +173,8 @@ This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to th
 - `Scheduling/WakeHelperClient.swift` — daemon register/status/deep-link + the four XPC ops.
 - `Scheduling/WakeHelperInstaller.swift` — the PRODUCTION admin-password installer (decided 2026-07-04); also the DEBUG fallback in `ensureHelperReady`.
 - `jesai.Sentient-OS-macOS.WakeHelper.plist` (project root) — the bundled SMAppService daemon plist + its Copy Files phase.
-- `Proactive/ProactiveCycle.swift` — stamps "initial finished".
+- `Proactive/ProactiveCycle.swift` — stamps "initial finished"; classifies scheduled failures.
+- `Scheduling/OvernightCaution.swift` — the morning-after caution: classify + persist + clear.
 - `AppState.swift` / `Views/RootView.swift` — call `maybeAutoEnable()` at launch / after each cycle.
 - `Views/Dev/OvernightDevView.swift` — the standalone dev window (checklist + live status).
 - `Views/Dev/DevToolsView.swift` — the "Overnight Processing…" button that opens it.

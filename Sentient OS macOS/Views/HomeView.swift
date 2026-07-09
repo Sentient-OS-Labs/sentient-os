@@ -176,7 +176,12 @@ struct HomeView: View {
         Group {
             if let caution {
                 CautionCapsule(kind: caution.kind,
-                               onOpenSettings: { openWindow(id: SettingsView.windowID) },
+                               onOpenSettings: {
+                                   // Land directly on Permissions & Health — the codex login row
+                                   // lives there; never strand the user on the default pane.
+                                   SettingsView.requestedPane = .health
+                                   openWindow(id: SettingsView.windowID)
+                               },
                                onDismiss: {
                                    OvernightCaution.clear()
                                    withAnimation(.easeInOut(duration: 0.25)) { self.caution = nil }
