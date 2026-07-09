@@ -17,6 +17,12 @@
 //  that hands your eye straight to the command bar. (Retired ConstellationHome; harvested orb +
 //  sources + AIs + vault stats into this surface and its popovers.)
 //
+//  KNOWLEDGE-BASE-ONLY MODE (free/go plans, CodexAuth.knowledgeBaseOnly): cards never come and
+//  the command bar hides — the preview note under the orb (upgrade CTA + Reset jump) is ALWAYS
+//  on this home. The gift envelope (the only card the free home can hold) perches top-center
+//  above the compact note; flinging the letter blooms the note into the full center. Once the
+//  plan claim reads Plus it becomes the reset-and-rebuild celebration.
+//
 //  Doc: Documentation/Home — Proactive Intelligence (For You).md · cards + the CodexCLI seam:
 //  Briefing.swift.
 //
@@ -31,8 +37,18 @@ struct HomeView: View {
     var customRoots: [URL] = []        // session folders from RootView — shown in the Analysis popover, like Dev Tools
     var modelMissing: Bool = false
     var realCards: Bool = false        // true → show real proactive cards from latest(); false → the demo deck
+    var previewKBOnly = false          // preview-only: force the knowledge-base-only state
     var onAnalyze: () -> Void = {}
     var onShowDevTools: () -> Void = {}
+
+    /// Free/go knowledge-base-only mode: no cards ever come, the command bar hides (computer use
+    /// burns quota these plans don't have), and the empty state carries the preview message.
+    private var kbOnly: Bool { previewKBOnly || CodexAuth.knowledgeBaseOnly }
+    var previewUpgraded: Bool? = nil   // preview-only: force the upgraded/not-upgraded note
+    /// A kbOnly user whose claim now reads full — they upgraded (codex's own 8-day refresh, the
+    /// Health pane's Re-check, or the crossroads all re-mint it). Re-read every appearance, so
+    /// the preview note flips to the "reset & rebuild" celebration without any push machinery.
+    @State private var planUpgraded = false
 
     @Environment(\.openWindow) private var openWindow
     @Environment(AppState.self) private var appState
@@ -63,7 +79,12 @@ struct HomeView: View {
 
                 Group {
                     scatter(geo)
-                    if model.entries.isEmpty {
+                    if kbOnly {
+                        // The preview note is ALWAYS on the free home — the gift envelope (the
+                        // only card this home can ever hold) perches above it, never in front:
+                        // the pitch must not hide behind a fling.
+                        previewState
+                    } else if model.entries.isEmpty {
                         emptyState.transition(.scale(scale: 0.86).combined(with: .opacity))
                     }
                     bottomDock
@@ -82,6 +103,7 @@ struct HomeView: View {
             letter = nil
             letterShown = false
             model.beginVisit(realCards: realCards)
+            planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
         }
         .onChange(of: realCards) { _, v in model.beginVisit(realCards: v) }   // toggle flip → re-deal
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
@@ -155,7 +177,7 @@ struct HomeView: View {
     }
 
     /// The user's first name from their macOS account — full name's first word (e.g. "Jesai
-    /// Avadhani" → "Jesai"), falling back to the (capitalized) short login name, then to nothing
+    /// Tarun" → "Jesai"), falling back to the (capitalized) short login name, then to nothing
     /// (the greeting just drops the name). Resolved once per launch; no account, no network.
     static let macFirstName: String = {
         let full = NSFullUserName().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -195,7 +217,11 @@ struct HomeView: View {
     // MARK: The scatter (the suggestion cards)
 
     private func scatter(_ geo: GeometryProxy) -> some View {
-        let slots = Self.slots(count: model.entries.count, in: geo.size)
+        // kb-only: the lone gift envelope gets a fixed top-center perch (the preview note owns
+        // the center beneath it). Any other population falls back to the normal scatter.
+        let slots = (kbOnly && model.entries.count == 1)
+            ? [CGPoint(x: geo.size.width / 2, y: geo.size.height * 0.24)]
+            : Self.slots(count: model.entries.count, in: geo.size)
         return ZStack {
             ForEach(Array(model.entries.enumerated()), id: \.element.id) { item in
                 DealtCard(
@@ -251,6 +277,92 @@ struct HomeView: View {
         .allowsHitTesting(false)
     }
 
+    // MARK: The knowledge-base-only preview state (free/go plans)
+
+    /// The free-plan home: the orb and, where the cards would live, an honest, nicely-set
+    /// note — the knowledge base is real and theirs; the LIVING Sentient needs Plus. Not a
+    /// card: quiet centered text under the orb. The upgrade CTA carries this screen's one glow
+    /// (the command bar is hidden here, so the jewelry budget is free). ALWAYS mounted on the
+    /// kb-only home: while the gift envelope perches top-center the block rides compact and
+    /// low (feature rows tucked away); once the letter is flung it blooms into the full,
+    /// centered note. Once the claim reads Plus, it becomes the reset-and-rebuild celebration.
+    private var previewState: some View {
+        let envelopePresent = !model.entries.isEmpty
+        return VStack(spacing: 0) {
+            Orb(size: envelopePresent ? 84 : 104)
+            if planUpgraded { upgradedNote } else { previewNote(compact: envelopePresent) }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .offset(y: envelopePresent ? 128 : -18)   // envelope above → the block waits lower
+    }
+
+    @ViewBuilder private func previewNote(compact: Bool) -> some View {
+        Text("This is a preview of Sentient.")
+            .display(24)
+            .foregroundStyle(Theme.Ink.statusInk)
+            .padding(.top, 16)
+        Text("Your knowledge base is built, private, and yours to explore.\nThe living Sentient uses your ChatGPT Plus:")
+            .font(.system(size: 13.5))
+            .foregroundStyle(Theme.secondary)
+            .multilineTextAlignment(.center)
+            .lineSpacing(4)
+            .padding(.top, 10)
+        if !compact {   // the feature rows return once the envelope is gone
+            VStack(alignment: .leading, spacing: 11) {
+                previewRow("sunrise", "Mornings where things worth doing arrive already done")
+                previewRow("command", "Sidekick anywhere: hold right \u{2318} and just say it")
+                previewRow("moon.stars", "A knowledge base that keeps learning, night after night")
+            }
+            .padding(.top, 20)
+        }
+        HStack(spacing: 14) {
+            GlowButton(title: "Get ChatGPT Plus", systemImage: "arrow.up.forward",
+                       glowIntensity: 0.5, action: { NSWorkspace.shared.open(CodexAuth.upgradeURL) })
+                .frame(width: 250)
+            QuietPillButton(title: "Reset Sentient…", action: openSystemPane)
+        }
+        .padding(.top, compact ? 22 : 28)
+        Text("Upgraded? Reset rebuilds your knowledge with Gmail, Calendar, and the full engine.")
+            .font(.system(size: 11.5))
+            .foregroundStyle(Theme.faint)
+            .padding(.top, 12)
+    }
+
+    /// The claim reads Plus now — the one job left is the reset, so it gets the glow.
+    @ViewBuilder private var upgradedNote: some View {
+        Text("You're on Plus. Time to go live.")
+            .display(24)
+            .foregroundStyle(Theme.Ink.statusInk)
+            .padding(.top, 16)
+        Text("Reset Sentient and it rebuilds your knowledge with Gmail and Calendar,\nthen keeps it alive: proactive mornings, Sidekick, learning night after night.")
+            .font(.system(size: 13.5))
+            .foregroundStyle(Theme.secondary)
+            .multilineTextAlignment(.center)
+            .lineSpacing(4)
+            .padding(.top, 10)
+        GlowButton(title: "Reset & Rebuild", systemImage: "arrow.clockwise",
+                   glowIntensity: 0.5, action: openSystemPane)
+            .frame(width: 250)
+            .padding(.top, 28)
+    }
+
+    private func openSystemPane() {
+        SettingsView.requestedPane = .system
+        openWindow(id: SettingsView.windowID)
+    }
+
+    private func previewRow(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 11) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.Ink.label)
+                .frame(width: 16)
+            Text(text)
+                .font(.system(size: 13.5))
+                .foregroundStyle(.white.opacity(0.78))
+        }
+    }
+
     /// A discreet DEV TOOLS handle pinned bottom-right (DX continuity from the old home; the
     /// Phase-6 Release strip re-hides it). Opens the DevToolsView sheet via RootView.
     private var devToolsOverlay: some View {
@@ -275,10 +387,12 @@ struct HomeView: View {
 
     private var bottomDock: some View {
         VStack(spacing: 16) {
-            PromptBar(onSend: { text, mode in appState.commandCoordinator.submit(text, mode: mode, source: .promptBar) },
-                      onStop: { appState.commandCoordinator.stop() },
-                      isRunning: appState.commandCoordinator.run.isRunning,
-                      statusLine: appState.commandCoordinator.run.statusLine)
+            if !kbOnly {   // knowledge-base-only mode: computer use has no quota — no command bar
+                PromptBar(onSend: { text, mode in appState.commandCoordinator.submit(text, mode: mode, source: .promptBar) },
+                          onStop: { appState.commandCoordinator.stop() },
+                          isRunning: appState.commandCoordinator.run.isRunning,
+                          statusLine: appState.commandCoordinator.run.statusLine)
+            }
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
                 Text("Private by design. Your files never leave this Mac.")
@@ -827,6 +941,26 @@ private enum Demo {
     HomeView(thingsUnderstood: 3339,
              sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
              modelMissing: false)
+        .frame(width: 1180, height: 880)
+}
+
+#Preview("Home — knowledge-base-only (free plan)") {
+    HomeView(thingsUnderstood: 1704,
+             sources: .init(files: true),
+             modelMissing: false,
+             realCards: true,
+             previewKBOnly: true,
+             previewUpgraded: false)
+        .frame(width: 1180, height: 880)
+}
+
+#Preview("Home — kb-only, upgrade detected") {
+    HomeView(thingsUnderstood: 1704,
+             sources: .init(files: true),
+             modelMissing: false,
+             realCards: true,
+             previewKBOnly: true,
+             previewUpgraded: true)
         .frame(width: 1180, height: 880)
 }
 

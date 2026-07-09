@@ -78,10 +78,25 @@ struct ProcessingView: View {
     private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(String) }
     @State private var state: UIState = .loadingModel
     @State private var prepStatus = "Preparing your suggestions…"
+    /// Phase-appropriate caption under the phase line (nil = none) — the proactive stages get
+    /// the "things worth doing" promise; the knowledge-base/welcome phases speak for themselves.
+    @State private var prepSubtext: String?
     @State private var progress = RunProgress()
     @State private var started = false
     @State private var paused = false           // pausable only: frozen at the last item, awaiting Resume
     @State private var runTask: Task<RunProgress, Never>?
+    /// Generation token — pause/stop/disappear bump it, making the (cancelled, still-draining)
+    /// run() invocation STALE: it may finish whenever it likes, but it can no longer touch the
+    /// UI or fall into the proactive tail. `paused` alone couldn't guarantee that: a quick
+    /// pause→resume flipped it back to false before the old run drained, and the stale run
+    /// then fired the knowledge-base build mid-read.
+    @State private var runGeneration = 0
+    /// Counts carried across pause→resume WITHIN this takeover. The resumed engine correctly
+    /// plans only the REMAINING items (the marks are the truth), so its numbers restart — the
+    /// display composes carried + live instead, and the bar picks up where it froze (6 of 50,
+    /// never 1 of 45). In-session only: a relaunch shows the honest remaining count, exactly
+    /// like the crash-recovery resume always has.
+    @State private var carried = RunProgress()
     @State private var awake = DisplayAwake()   // keeps the screen on during the long first ingest
 
     var body: some View {
@@ -107,7 +122,7 @@ struct ProcessingView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task { await startIfNeeded() }
-        .onDisappear { runTask?.cancel() }
+        .onDisappear { runGeneration += 1; runTask?.cancel() }   // stale: no tail after the view is gone
     }
 
     // MARK: States
@@ -278,8 +293,10 @@ struct ProcessingView: View {
             Text(prepStatus)
                 .font(.title3.weight(.semibold)).foregroundStyle(.white)
                 .multilineTextAlignment(.center)
-            Text("Reading what's new, then preparing a few things worth doing.")
-                .font(.caption).foregroundStyle(.white.opacity(0.4))
+            if let prepSubtext {
+                Text(prepSubtext)
+                    .font(.caption).foregroundStyle(.white.opacity(0.4))
+            }
             ProgressView().tint(.white.opacity(0.4)).padding(.top, 2)
         }
     }
@@ -349,24 +366,62 @@ struct ProcessingView: View {
         }
     }
 
-    /// Stop the run and return. Pointers advance per durable save, so re-running resumes.
+    /// Stop the run and return. Pointers advance per durable save, so re-running resumes. The
+    /// generation bump keeps the draining run from starting the proactive tail behind the home.
     private func stop() {
+        runGeneration += 1
         runTask?.cancel()
         onDone()
     }
 
     /// Pause (pausable/onboarding only): cancel the run and FREEZE in place — the card keeps
-    /// showing the item it stopped on. Every item commits atomically, so nothing is lost.
+    /// showing the item it stopped on. Every item commits atomically, so nothing is lost; the
+    /// generation bump makes the draining run stale (see `runGeneration`).
     private func pause() {
         paused = true
+        runGeneration += 1
         runTask?.cancel()
     }
 
     /// Resume from the durable marks — the same restart the crash-safe design gives a 3am run.
+    /// Waits for the cancelled run to finish draining FIRST, so two engines never overlap on
+    /// the GPU and the stopped item's atomic commit lands before the fresh run reads the marks.
+    /// The drained run's REAL counts (it may have committed the item it was on mid-pause) fold
+    /// into `carried`, so the fresh run's numbers stack on top instead of restarting the bar.
     private func resume() {
         paused = false
         started = false
-        Task { await startIfNeeded() }
+        Task {
+            if let finished = await runTask?.value {
+                carried.done             += finished.done
+                carried.survivors        += finished.survivors
+                carried.junk             += finished.junk
+                carried.sensitive        += finished.sensitive
+                carried.failed           += finished.failed
+                carried.parseFailures    += finished.parseFailures
+                carried.extractionFailed += finished.extractionFailed
+                carried.totalSeconds     += finished.totalSeconds
+            }
+            await startIfNeeded()
+        }
+    }
+
+    /// Overlay a live run on the carried base: the counters add, and the total re-anchors to
+    /// carried.done + the live run's own total (which counts only what's LEFT) — so 5 done of
+    /// 50 resumes as 5 of 50, not 0 of 45. The just-processed card always shows the live item.
+    private static func composed(_ base: RunProgress, _ p: RunProgress) -> RunProgress {
+        guard base.done > 0 else { return p }
+        var c = p
+        c.done             = base.done + p.done
+        c.total            = base.done + p.total
+        c.survivors        = base.survivors + p.survivors
+        c.junk             = base.junk + p.junk
+        c.sensitive        = base.sensitive + p.sensitive
+        c.failed           = base.failed + p.failed
+        c.parseFailures    = base.parseFailures + p.parseFailures
+        c.extractionFailed = base.extractionFailed + p.extractionFailed
+        c.totalSeconds     = base.totalSeconds + p.totalSeconds
+        return c
     }
 
     private var percent: Int {
@@ -376,7 +431,8 @@ struct ProcessingView: View {
     // MARK: Run
 
     private func startIfNeeded() async {
-        guard !started else { return }
+        // !paused: the user re-paused while resume() was still draining the old run — they win.
+        guard !started, !paused else { return }
         started = true
         await run()
     }
@@ -386,6 +442,7 @@ struct ProcessingView: View {
     /// complete, internally-consistent snapshot, so dropping intermediate frames never desyncs the
     /// prompt pane from the card.
     private func run() async {
+        let generation = runGeneration   // this invocation's identity — stale once pause/stop bump it
         // Keep the display awake ONLY for the initial ingest — the long one. The home + 3am both run
         // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 18h auto-enable
         // uses (nil until the first full cycle completes). `defer` releases on completion, failure, or
@@ -395,8 +452,12 @@ struct ProcessingView: View {
         }
         defer { awake.end() }
 
-        state = .loadingModel
-        progress = RunProgress()
+        // A resumed run keeps the frozen card + composed bar on screen while the engine reloads
+        // (the reload is real, but "Loading on-device model" + a 0% bar read as progress lost).
+        if carried.done == 0 {
+            state = .loadingModel
+            progress = RunProgress()
+        }
         let (stream, continuation) = AsyncStream.makeStream(
             of: RunProgress.self, bufferingPolicy: .bufferingNewest(1))
         let task = Task<RunProgress, Never> {
@@ -415,12 +476,15 @@ struct ProcessingView: View {
         }
         runTask = task
         for await p in stream {
+            guard generation == runGeneration else { continue }   // stale: drain silently, freeze the card
             if state == .loadingModel { withAnimation { state = .processing } }
-            if !paused { progress = p }   // paused → freeze the card at the item it stopped on
+            progress = Self.composed(carried, p)
         }
         let final = await task.value
-        if paused { return }              // wait for Resume; never fall through to the cycle/completed
-        progress = final
+        // Paused, stopped, or superseded by a resume: this invocation is stale — the proactive
+        // tail (knowledge base + cycle) must ONLY ever run at the end of a live, complete read.
+        guard generation == runGeneration else { return }
+        progress = Self.composed(carried, final)   // completion shows the whole session's counts
 
         // Real-mode Analyze Now: after the read, file into the knowledge base + run all three proactive
         // steps + wipe the summaries — surfacing each phase — then reveal the real cards on the home.
@@ -429,10 +493,16 @@ struct ProcessingView: View {
             let failure = await ProactiveCycle.shared.run { phase in
                 Task { @MainActor in
                     switch phase {
-                    case .knowledgeBase(let s): prepStatus = s
-                    case .deciding:             prepStatus = "Deciding what's worth doing…"
-                    case .researching(let n):   prepStatus = "Preparing \(n) suggestion\(n == 1 ? "" : "s")…"
-                    case .done, .failed:        break
+                    case .knowledgeBase(let s):
+                        prepStatus = s; prepSubtext = nil            // the phase line says it all
+                    case .deciding:
+                        prepStatus = "Deciding what's worth doing…"
+                        prepSubtext = "Reading what's new, then preparing a few things worth doing."
+                    case .researching(let n):
+                        prepStatus = "Preparing \(n) suggestion\(n == 1 ? "" : "s")…"
+                        prepSubtext = "Reading what's new, then preparing a few things worth doing."
+                    case .done, .failed:
+                        break
                     }
                 }
             }

@@ -10,6 +10,7 @@
 //    1. file the summaries into the knowledge base (VaultCloud: create first time, else update)
 //    2. push the MCP mirror (no-op if it's off)
 //    3. PROACTIVE — decide (Proactive) → research + prepare (ProactiveResearch) → persisted `latest`
+//       (skipped entirely in knowledge-base-only mode — free/go plans have no quota for it)
 //    4. WIPE the summaries (CycleStore) — the knowledge base is the durable memory now
 //
 //  The read leg itself stays with the caller (ProcessingView's takeover UI / the scheduler's keep-
@@ -63,7 +64,8 @@ actor ProactiveCycle {
 
         // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
         let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
-        progress(.knowledgeBase(exists ? "Updating your knowledge…" : "Building your knowledge…"))
+        progress(.knowledgeBase(exists ? "Updating your knowledge…"
+                                       : "Creating your perfect knowledge base from everything we've analyzed…"))
         do {
             if exists { _ = try await VaultCloud.shared.update(notes: notes) }
             else      { _ = try await VaultCloud.shared.create(notes: notes) }
@@ -85,34 +87,40 @@ actor ProactiveCycle {
         }
 
         // 3) Proactive — decide, then research + prepare. Inject the live calendar when connected.
-        var calCtx: String?
-        if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") {
-            calCtx = await CalendarConnect.fetchProactiveContext()
-        }
-
-        progress(.deciding)
-        let items: [ActionItem]
-        do {
-            items = try await Proactive.shared.findActionItems(from: notes, calendarContext: calCtx)
-        } catch Proactive.ProError.noRecent {
-            items = []                                       // nothing recent enough — clear cards, still success
-        } catch {
-            let m = "Deciding: \(Self.msg(error))"
-            progress(.failed(m)); return m
-        }
-        Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
-
-        if items.isEmpty {
-            ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // clear any stale cards
+        //    Knowledge-base-only mode (free/go plan) skips the whole stage: no quota for it, and
+        //    no Gmail/Calendar to ground it — the knowledge base + mirror + gift ARE the product.
+        if CodexAuth.knowledgeBaseOnly {
+            ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // never leave stale cards
         } else {
-            progress(.researching(items.count))
+            var calCtx: String?
+            if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") {
+                calCtx = await CalendarConnect.fetchProactiveContext()
+            }
+
+            progress(.deciding)
+            let items: [ActionItem]
             do {
-                let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx)
-                Analytics.signal("Proactive.prepared", parameters: [
-                    "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"])
+                items = try await Proactive.shared.findActionItems(from: notes, calendarContext: calCtx)
+            } catch Proactive.ProError.noRecent {
+                items = []                                   // nothing recent enough — clear cards, still success
             } catch {
-                let m = "Preparing: \(Self.msg(error))"
+                let m = "Deciding: \(Self.msg(error))"
                 progress(.failed(m)); return m
+            }
+            Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
+
+            if items.isEmpty {
+                ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // clear any stale cards
+            } else {
+                progress(.researching(items.count))
+                do {
+                    let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx)
+                    Analytics.signal("Proactive.prepared", parameters: [
+                        "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"])
+                } catch {
+                    let m = "Preparing: \(Self.msg(error))"
+                    progress(.failed(m)); return m
+                }
             }
         }
 

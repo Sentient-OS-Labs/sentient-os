@@ -4,8 +4,9 @@
 //
 //  Settings → Permissions & Health: the health board. Live LED rows for every grant Sentient
 //  actually asks for, in severity order — SENTIENT (Full Disk Access · the overnight wake daemon ·
-//  launch-at-login · mic & speech · notifications), SET UP CODEX (CLI · account · computer use,
-//  via the shared CodexSetup engine), and CODEX PERMISSIONS (the helper's Accessibility + Screen
+//  launch-at-login · mic & speech · notifications), SET UP CODEX (CLI · account · ChatGPT plan
+//  via CodexAuth · computer use, via the shared CodexSetup engine), and CODEX PERMISSIONS (the
+//  helper's Accessibility + Screen
 //  Recording — system-TCC, status-only, shown once computer use exists). The Automation grant has
 //  NO row: it self-heals silently shortly after the pane opens (the user has no job there).
 //  Red = a core capability is broken · yellow = optional or fixable-later. When the whole codex
@@ -35,6 +36,10 @@ struct HealthPane: View {
     @State private var helperAccessibility = false
     @State private var helperScreenRecording = false
 
+    // ChatGPT plan (decoded from the user's own codex login — CodexAuth)
+    @State private var plan: CodexAuth.Plan?
+    @State private var planChecking = false
+
     @State private var showCodexSetup = false
     @State private var codexExpanded = false
     @State private var checked = false        // first full probe done (codex login check is seconds)
@@ -46,10 +51,12 @@ struct HealthPane: View {
     private var showCodexPermissions: Bool { fdaGranted && codex.computerUseReady }
 
     /// The whole codex stack, healthy — the CLI, the account, computer use, AND its two helper
-    /// grants (verifiable only with FDA; unverifiable never claims "all good").
+    /// grants (verifiable only with FDA; unverifiable never claims "all good"). A free/go plan
+    /// keeps the group expanded so its amber row stays visible.
     private var codexAllGreen: Bool {
         codex.installed && codex.loggedIn && codex.computerUseReady
             && fdaGranted && helperAccessibility && helperScreenRecording
+            && plan?.tier != .limited
     }
 
     private var allGreen: Bool {
@@ -288,9 +295,10 @@ struct HealthPane: View {
 
     private var notifNote: String {
         switch notifStatus {
-        case .authorized, .provisional: return "on"
-        case .notDetermined:            return "not asked yet"
-        default:                        return "off"
+        case .authorized:    return "on"
+        case .provisional:   return "quiet"   // the launch-banked provisional grant (no banners/sounds)
+        case .notDetermined: return "not asked yet"
+        default:             return "off"
         }
     }
 
@@ -349,6 +357,15 @@ struct HealthPane: View {
                            note: codex.loggedIn ? "logged in" : "not logged in",
                            tip: "Your own OpenAI login for Codex. The sign in happens in your browser; Sentient never sees your password.",
                            fixTitle: "Log in…") { showCodexSetup = true }
+                if codex.loggedIn, let plan {
+                    StatusLine(title: "ChatGPT plan",
+                               health: plan.tier == .limited ? .warn : .ok,
+                               note: planChecking ? "checking…"
+                                   : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
+                                                           : plan.displayName.lowercased(),
+                               tip: "Read from your own codex login. Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in knowledge-base-only mode; Plus unlocks proactive mornings, Sidekick, and nightly updates. Upgraded? Re-check picks it up right away.",
+                               fixTitle: "Re-check") { recheckPlan() }
+                }
                 StatusLine(title: "Computer use",
                            health: codex.computerUseReady ? .ok : .bad,
                            note: codex.computerUseReady ? "ready" : "not set up",
@@ -395,6 +412,18 @@ struct HealthPane: View {
         }
     }
 
+    /// The "Re-check" pill on a free/go row — re-mints the token (CodexAuth.refreshPlan) so an
+    /// upgrade shows up immediately instead of on codex's 8-day timer. Failure just keeps the
+    /// current claim; the row never blocks anything.
+    private func recheckPlan() {
+        guard !planChecking else { return }
+        planChecking = true
+        Task {
+            if let fresh = try? await CodexAuth.refreshPlan() { plan = fresh }
+            planChecking = false
+        }
+    }
+
     // MARK: - Probes
 
     private func refresh() async {
@@ -406,6 +435,7 @@ struct HealthPane: View {
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         codex.refreshInstalled()
         codex.refreshComputerUse()
+        plan = CodexAuth.currentPlan()   // pure file read (the JWT claim on disk)
         if fdaGranted {
             helperAccessibility = Permissions.isTCCGranted(
                 service: "kTCCServiceAccessibility",

@@ -4,6 +4,7 @@
 //
 //  First-launch onboarding: three intro slides (placeholder boxes for now — real design comes
 //  later), then permissions (OnboardingPermissionsView), then codex login (OnboardingCodexSteps),
+//  then the plan crossroads (OnboardingPlanView — free/go accounts only; full plans skip it),
 //  then the ready-to-process screen (OnboardingReadyView) whose Start Analysis presents the REAL
 //  ProcessingView takeover (pausable) — and only a finished run calls `onFinished` and reveals
 //  the home. The current step persists (UserDefaults "onboarding.step") so a quit-and-relaunch
@@ -17,6 +18,9 @@ import SwiftUI
 
 struct OnboardingView: View {
     let onFinished: () -> Void
+
+    /// For the DEBUG skip handle only — the quiet flag flip, no finale.
+    @Environment(AppState.self) private var appState
 
     /// Persisted so a relaunch mid-onboarding (the FDA grant needs one) resumes at the same step.
     @AppStorage("onboarding.step") private var step = 0
@@ -51,6 +55,10 @@ struct OnboardingView: View {
                 OnboardingPermissionsView(onContinue: advance).transition(.opacity)
             case Self.slideCount + 1:
                 OnboardingCodexLoginView(onContinue: advance).transition(.opacity)
+            case Self.slideCount + 2:
+                // The plan crossroads — free/go accounts decide here; full plans skip it
+                // before it renders (OnboardingPlanView auto-advances).
+                OnboardingPlanView(onContinue: advance).transition(.opacity)
             default:
                 if analyzing, let modelPath = Self.modelPath {
                     // The REAL first analysis — the same engine + takeover as the home's Analyze
@@ -85,6 +93,33 @@ struct OnboardingView: View {
                     .transition(.opacity)
             }
         }
+        // DEV-ONLY: skip straight to the home (testing relaunches land back in onboarding until
+        // a full first analysis flips the flag). Quietly marks onboarding complete — deliberately
+        // NOT onFinished, so the Constellation finale stays reserved for the real finish.
+        // Compile-gated out of Release entirely.
+        #if DEBUG
+        .overlay(alignment: .bottomTrailing) {
+            if !analyzing {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "forward.end").font(.system(size: 8.5))
+                        Text("SKIP TO HOME")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.6)
+                    }
+                    .foregroundStyle(Theme.Ink.deepMuted)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .opacity(0.6)
+                .padding(.trailing, 22).padding(.bottom, 13)
+                .transition(.opacity)
+            }
+        }
+        #endif
     }
 
     /// Two minutes into the first analysis, bootstrap codex computer use (setup step 3) silently
@@ -108,7 +143,11 @@ struct OnboardingView: View {
     }
 
     private func goBack() {
-        withAnimation(.easeInOut(duration: 0.25)) { step = max(0, step - 1) }
+        var target = step - 1
+        // The crossroads only exists for free/go accounts — never strand a full plan on an
+        // auto-advancing screen (back would visibly bounce forward again).
+        if target == Self.slideCount + 2 && !CodexAuth.isLimited() { target -= 1 }
+        withAnimation(.easeInOut(duration: 0.25)) { step = max(0, target) }
     }
 
     // MARK: The three intro slides (placeholders)

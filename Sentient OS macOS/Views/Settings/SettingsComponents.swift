@@ -152,45 +152,84 @@ struct ChipFlow: Layout {
 /// visibly counts. The label ink is ALWAYS pure white — the dot/wash/ring carry the on/off
 /// state, never a dimmed label (dim gray on OLED black was unreadable). `detail` carries counts
 /// ("12 chats"). Pure action chips ("+ Add Folder") pass `isAction: true`: no dot, a bright
-/// dashed border — an invitation, not a source.
+/// dashed border — an invitation, not a source. `locked` (knowledge-base-only mode's
+/// Gmail/Calendar) is the one deliberate exception to the always-white rule: a lock in place of
+/// the dot, softened ink, no action — unavailable, with the hover tip explaining why.
 struct SettingsChip: View {
     let label: String
     var detail: String? = nil
     let on: Bool
     var isAction: Bool = false
+    var locked: Bool = false
     var action: (() -> Void)? = nil
 
-    var body: some View {
-        Button { action?() } label: {
+    @State private var lockHover = false
+
+    @ViewBuilder var body: some View {
+        if locked {
+            chip
+                .onHover { lockHover = $0 }
+                .overlay(alignment: .top) {
+                    if lockHover { LockedChipTip().offset(y: -32) }
+                }
+                .animation(.easeInOut(duration: 0.15), value: lockHover)
+        } else {
+            chip
+        }
+    }
+
+    private var chip: some View {
+        Button { if !locked { action?() } } label: {
             HStack(spacing: 7) {
-                if !isAction {
+                if locked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.4))
+                } else if !isAction {
                     Circle()
                         .fill(on ? Theme.Ink.green : .white.opacity(0.4))
                         .frame(width: 5, height: 5)
                 }
                 Text(label)
                     .font(.system(size: 12, weight: on || isAction ? .medium : .regular))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.white.opacity(locked ? 0.55 : 1))
                 if let detail {
                     Text(detail).font(.system(size: 10.5))
                         .foregroundStyle(on ? Theme.Ink.green.opacity(0.85) : .white.opacity(0.62))
                 }
             }
             .padding(.horizontal, 13).padding(.vertical, 7)
-            .background(isAction ? Color.white.opacity(0.05) : (on ? Theme.Ink.green.opacity(0.13) : Color.clear),
+            .background(isAction ? Color.white.opacity(0.05) : (on && !locked ? Theme.Ink.green.opacity(0.13) : Color.clear),
                         in: Capsule())
             .overlay {
                 if isAction {
                     Capsule().strokeBorder(Color.white.opacity(0.32),
                                            style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                 } else {
-                    Capsule().strokeBorder(on ? Theme.Ink.green.opacity(0.38) : Color.white.opacity(0.16),
+                    Capsule().strokeBorder(on && !locked ? Theme.Ink.green.opacity(0.38)
+                                                         : Color.white.opacity(locked ? 0.10 : 0.16),
                                            lineWidth: 1)
                 }
             }
             .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// The instant hover notice on a locked (knowledge-base-only) connector chip — the system
+/// tooltip's delay made it look like there was none. Shared by SettingsChip and SourceChip.
+struct LockedChipTip: View {
+    var body: some View {
+        Text(CodexAuth.connectorLockedTip)
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.white.opacity(0.88))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(Color(white: 0.14), in: Capsule())
+            .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+            .fixedSize()
+            .allowsHitTesting(false)
+            .transition(.opacity)
     }
 }
 

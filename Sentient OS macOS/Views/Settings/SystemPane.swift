@@ -20,11 +20,12 @@ struct SystemPane: View {
     @AppStorage("diagnosticsEnabled") private var crashReportsEnabled = true
     @AppStorage("analyticsEnabled") private var analyticsEnabled = true
 
+    @Environment(\.dismiss) private var dismiss   // Reset closes Settings to reveal onboarding
+
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var confirmLoginOff = false
     @State private var confirmReset = false
     @State private var resetting = false
-    @State private var resetDone = false
     @State private var activity = PipelineActivity.shared   // Reset locks while a run is active
 
     var body: some View {
@@ -133,18 +134,13 @@ struct SystemPane: View {
     private var dangerGroup: some View {
         SettingsGroup(label: "Danger Zone") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, all suggestions, and the cloud copy your AIs read. You'll start over from scratch, including the initial processing. Your private link stays valid; the next processing run fills it again.")
+                SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, all suggestions, and the cloud copy your AIs read. Sentient takes you back through setup and starts over from scratch. Your private link stays valid; the next processing run fills it again.")
                 SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
                                    tint: Self.dangerRed) { confirmReset = true }
                     .disabled(resetting || activity.isRunning)
                 if activity.isRunning {
                     Text("A run is in progress. Reset unlocks when it finishes.")
                         .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
-                }
-                if resetDone {
-                    Text("Reset complete. Sentient is a blank slate.")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Theme.Ink.body)
                 }
             }
         }
@@ -153,13 +149,13 @@ struct SystemPane: View {
             Button("Erase Everything", role: .destructive) {
                 resetting = true
                 Task {
-                    await FactoryReset.run()
+                    await FactoryReset.run(appState: appState)
                     resetting = false
-                    resetDone = true
+                    dismiss()   // close Settings — the main window is now the start of onboarding
                 }
             }
         } message: {
-            Text("Your knowledge base and everything Sentient understood is deleted from this Mac, and the cloud copy is removed. This can't be undone; Sentient starts again from zero, beginning with the initial processing.")
+            Text("Your knowledge base and everything Sentient understood is deleted from this Mac, and the cloud copy is removed. This can't be undone; Sentient takes you back through setup, beginning with the initial processing.")
         }
     }
 }

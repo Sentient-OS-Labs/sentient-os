@@ -2,12 +2,16 @@
 //  OnboardingReadyView.swift
 //  Sentient OS macOS
 //
-//  Onboarding's final step — "ready to process". The source chips write the SAME dbg.run.* keys
-//  and open the SAME picker/connect sheets the Analysis popover uses, so this IS the real
-//  selection (it persists and feeds the 3am run too). Desktop, Documents, and Downloads ship
-//  armed; at least 3 FOLDERS must stay armed (apps are extra on top). The big Start Analysis
-//  button fires the exact run the home's Analyze Now fires, but wears the full-brightness glow
-//  (the popover's copy is deliberately subdued).
+//  Onboarding's final step — "ready to process". The source tiles are the SAME Settings-grade
+//  groups (SettingsGroup + SettingsChip) the Knowledge Sources pane uses, on the SAME dbg.run.*
+//  keys and the SAME picker/connect sheets — so this IS the real selection (it persists and
+//  feeds the 3am run too), styled to make connecting sources feel like the main event: we WANT
+//  a bunch connected before the first analysis. Desktop, Documents, and Downloads ship armed;
+//  at least 4 SELECTIONS must be armed to start (SourceSelection.selectionCount — the same rule
+//  Settings enforces; every folder/chat/notes/connector counts as one), so the default three
+//  folders alone never light the button. The big Start Analysis button
+//  fires the exact run the home's Analyze Now fires, but wears the full-brightness glow (the
+//  popover's copy is deliberately subdued).
 //
 
 import SwiftUI
@@ -38,12 +42,13 @@ struct OnboardingReadyView: View {
     @State private var showCalendarConnect = false
 
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
+    private var whatsappChats: Set<String> { Set(whatsappCSV.split(separator: ",").map(String.init)) }
+    private var imessageChats: Set<String> { Set(imessageCSV.split(separator: ",").map(String.init)) }
 
-    /// The min-3 rule counts FOLDERS only (defaults + custom); apps are extra on top.
-    private var folderCount: Int {
-        [runDownloads, runDesktop, runDocuments].count(where: { $0 }) + customRoots.count
-    }
-    private var canStart: Bool { folderCount >= 3 && !modelMissing }
+    /// The shared minimum: at least 4 SELECTIONS (each folder, chat source, Notes, or connector
+    /// counts as one) — the three default folders alone deliberately don't light the button.
+    private var selectionCount: Int { SourceSelection.selectionCount }
+    private var canStart: Bool { selectionCount >= SourceSelection.minimumSelections && !modelMissing }
 
     var body: some View {
         VStack(spacing: 40) {
@@ -51,37 +56,57 @@ struct OnboardingReadyView: View {
 
             OnboardingWhisper("READY")
 
-            Text("Sentient is ready to understand your life.\nPick what it can read. Everything stays on this Mac.")
+            Text("Sentient is ready to understand your life.\nConnect as much as you can; everything stays on this Mac.")
                 .font(.system(size: 15))
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)
                 .lineSpacing(4)
 
-            VStack(alignment: .leading, spacing: 10) {
-                MonoCaps("Sources", size: 9, tracking: 2.2, color: Theme.Ink.label)
-                HStack(spacing: 8) {
-                    SourceChip("Desktop",   on: runDesktop)   { runDesktop.toggle() }
-                    SourceChip("Documents", on: runDocuments) { runDocuments.toggle() }
-                    SourceChip("Downloads", on: runDownloads) { runDownloads.toggle() }
-                    ForEach(customRoots, id: \.self) { url in
-                        SourceChip(url.lastPathComponent, on: true) { CustomRoots.remove(url) }
+            // The Settings-grade source groups (same components as the Knowledge Sources pane) —
+            // connecting sources IS this screen's main event, so the tiles get real presence.
+            VStack(alignment: .leading, spacing: 26) {
+                SettingsGroup(label: "Folders") {
+                    ChipFlow {
+                        SettingsChip(label: "Desktop", on: runDesktop) { runDesktop.toggle() }
+                        SettingsChip(label: "Documents", on: runDocuments) { runDocuments.toggle() }
+                        SettingsChip(label: "Downloads", on: runDownloads) { runDownloads.toggle() }
+                        ForEach(customRoots, id: \.self) { url in
+                            SettingsChip(label: url.lastPathComponent, detail: "✕", on: true) {
+                                CustomRoots.remove(url)
+                            }
+                        }
+                        SettingsChip(label: "+ Add Folder", on: false, isAction: true) { addFolder() }
                     }
-                    SourceChip("+ Add Folder", on: false, action: addFolder)
                 }
-                HStack(spacing: 8) {
-                    if WhatsAppSource.isInstalled {
-                        SourceChip("WhatsApp", on: runWhatsApp && !whatsappCSV.isEmpty) { showWhatsAppPicker = true }
+                SettingsGroup(label: "Chats & Notes") {
+                    ChipFlow {
+                        if WhatsAppSource.isInstalled {
+                            SettingsChip(label: "WhatsApp",
+                                         detail: whatsappChats.isEmpty ? nil : "\(whatsappChats.count) chats",
+                                         on: runWhatsApp && !whatsappChats.isEmpty) { showWhatsAppPicker = true }
+                        }
+                        SettingsChip(label: "iMessage",
+                                     detail: imessageChats.isEmpty ? nil : "\(imessageChats.count) chats",
+                                     on: runIMessage && !imessageChats.isEmpty) { showIMessagePicker = true }
+                        SettingsChip(label: "Apple Notes", on: runNotes) { runNotes.toggle() }
                     }
-                    SourceChip("iMessage", on: runIMessage && !imessageCSV.isEmpty) { showIMessagePicker = true }
-                    SourceChip("Notes",    on: runNotes) { runNotes.toggle() }
-                    SourceChip("Gmail",    on: gmailConnected && runGmail)       { showGmailConnect = true }
-                    SourceChip("Calendar", on: calendarConnected && runCalendar) { showCalendarConnect = true }
                 }
-                if folderCount < 3 {
-                    MonoCaps("keep at least 3 folders on", size: 8.5, tracking: 1.6, color: Theme.Ink.amber)
-                        .padding(.top, 2)
+                SettingsGroup(label: "Through Your ChatGPT") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SettingsProse("Read through your own connectors, never our servers.")
+                        ChipFlow {
+                            SettingsChip(label: "Gmail", on: gmailConnected && runGmail,
+                                         locked: CodexAuth.knowledgeBaseOnly) { showGmailConnect = true }
+                            SettingsChip(label: "Google Calendar", on: calendarConnected && runCalendar,
+                                         locked: CodexAuth.knowledgeBaseOnly) { showCalendarConnect = true }
+                        }
+                    }
+                }
+                if selectionCount < SourceSelection.minimumSelections {
+                    MonoCaps("keep at least 4 sources on", size: 8.5, tracking: 1.6, color: Theme.Ink.amber)
                 }
             }
+            .frame(width: 640)
 
             GlowButton(title: "Start Analysis", active: canStart, action: onStart)
                 .frame(maxWidth: 380)

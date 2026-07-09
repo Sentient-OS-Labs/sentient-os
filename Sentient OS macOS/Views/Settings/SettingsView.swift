@@ -39,6 +39,11 @@ struct SettingsView: View {
         }
     }
 
+    /// One-shot deep link: set before `openWindow(id: windowID)` to land on a specific pane
+    /// (the free-plan home's "Reset Sentient…" → .system). Consumed on appear; if the window
+    /// is already open the focus just returns to it on its current pane.
+    static var requestedPane: Pane?
+
     @State private var selection: Pane = .sources
 
     var body: some View {
@@ -49,6 +54,9 @@ struct SettingsView: View {
         }
         .background(Theme.bg.ignoresSafeArea())
         .frame(minWidth: 880, minHeight: 600)
+        .onAppear {
+            if let pane = Self.requestedPane { selection = pane; Self.requestedPane = nil }
+        }
     }
 
     // MARK: - Sidebar

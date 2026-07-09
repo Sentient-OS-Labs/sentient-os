@@ -849,13 +849,14 @@ struct DevToolsView: View {
     }
 
     /// Factory reset — the shared FactoryReset wipe (cycle store + knowledge base + proactive
-    /// traces + lifetime counters + the cloud mirror copy), so the next "start / resume" run is a
-    /// fresh first run and the home's "For You" deck comes back empty. Same code path as
-    /// Settings → Reset Sentient.
+    /// traces + lifetime counters + the cloud mirror copy + the rewind to onboarding), so the
+    /// next "start / resume" run is a fresh first run and the home's "For You" deck comes back
+    /// empty. Same code path as Settings → Reset Sentient; the DEBUG "skip to home" handle gets
+    /// you straight back if you only wanted the data wipe.
     @MainActor
     private func runReset() async {
-        await FactoryReset.run()
+        await FactoryReset.run(appState: appState)
         let c = await CycleStore.shared.counts()
-        resetResult = "✓ reset — cycle store + knowledge base + proactive cards + cloud copy wiped (notes \(c.notes))"
+        resetResult = "✓ reset — cycle store + knowledge base + proactive cards + cloud copy wiped, rewound to onboarding (notes \(c.notes))"
     }
 }

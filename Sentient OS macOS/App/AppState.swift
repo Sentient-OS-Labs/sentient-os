@@ -9,6 +9,7 @@
 
 import Foundation
 import SwiftUI
+import UserNotifications
 
 @MainActor
 @Observable
@@ -38,7 +39,7 @@ final class AppState {
     /// whole object is), never the root wake-helper. Its `model` drives UpdateGateView. (Updates/)
     let update = UpdateController()
 
-    private static let onboardingKey = "hasCompletedOnboarding"
+    static let onboardingKey = "hasCompletedOnboarding"   // FactoryReset clears it (the rewind)
     var hasCompletedOnboarding: Bool {
         didSet {
             UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey)
@@ -51,9 +52,35 @@ final class AppState {
         self.notch = NotchWindowController(coordinator: commandCoordinator)
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
         scheduler.maybeAutoEnable()   // 18h after initial: flip the overnight scheduler on (or arm the timer)
-        commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
+        if CodexAuth.knowledgeBaseOnly {
+            // Free/go knowledge-base-only mode: Sidekick runs computer use through codex, and
+            // that quota doesn't exist on these plans — the hotkey never arms.
+            Log("Sidekick: knowledge-base-only plan — hotkey not armed")
+        } else {
+            commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
+        }
         notch.start()                // raise the notch overlay window
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
+
+        // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
+        // grants quiet Notification Center delivery and lists us in Settings → Notifications (the
+        // user sees at most the passive "Sentient OS can send you notifications" notice). Asked
+        // lazily after onboarding so that notice never lands mid-flow; the explicit alerts
+        // upgrade stays in Settings → Health's "Allow…". Only fires while status is untouched —
+        // a real Allow/Deny is never overridden.
+        if hasCompletedOnboarding {
+            Task {
+                let center = UNUserNotificationCenter.current()
+                let status = await center.notificationSettings().authorizationStatus
+                let names = ["notDetermined", "denied", "authorized", "provisional", "ephemeral"]
+                let label = names.indices.contains(status.rawValue) ? names[status.rawValue] : "\(status.rawValue)"
+                Log("Notifications: launch status = \(label)")
+                if status == .notDetermined {
+                    _ = try? await center.requestAuthorization(options: [.provisional])
+                    Log("Notifications: banked provisional (quiet) authorization")
+                }
+            }
+        }
 
         // First launch (onboarding not yet completed): kick off the codex CLI install silently in
         // the background, 1s after launch, while the user reads the intro slides. A USED codex

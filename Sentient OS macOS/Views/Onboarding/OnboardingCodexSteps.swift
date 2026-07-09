@@ -134,8 +134,8 @@ struct OnboardingWhisper: View {
     }
 }
 
-/// A green-dot "this step is done" line.
-private struct OnboardingDoneLine: View {
+/// A green-dot "this step is done" line (shared: the login step and the plan crossroads).
+struct OnboardingDoneLine: View {
     let text: String
     init(_ text: String) { self.text = text }
 
