@@ -61,12 +61,10 @@ final class CommandCoordinator {
         hotkey.onPress = { [weak self] in self?.voicePressBegan() }
         hotkey.onHoldConfirmed = { [weak self] in self?.voiceHoldConfirmed() }
         hotkey.onRelease = { [weak self] held in self?.voiceReleased(held: held) }
-        // Global Esc → cancel/dismiss the notch. Skips .typing: that's owned by the window's LOCAL key
-        // monitor, which can consume Esc before the text field (no beep) — here we'd only race it.
-        hotkey.onEscape = { [weak self] in
-            guard let self, self.phase != .typing else { return }
-            self.cancelCurrent()
-        }
+        // No global Esc: a keyDown tap is exactly what Input Monitoring gates, so the monitor
+        // listens to modifiers only. Esc still cancels via the window's LOCAL monitor whenever
+        // Sentient itself is frontmost; over other apps, a fresh right-⌘ press is the cancel
+        // (see voicePressBegan).
         hotkey.start()
         voice.prewarm()
         run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
@@ -134,6 +132,16 @@ final class CommandCoordinator {
         guard VoiceCapture.isAvailable else { return }
         // A right-⌘ tap while the type field is open toggles it closed (no action) — a quick way to back out.
         if phase == .typing { dismissTyping(); return }
+        // Right-⌘ doubles as the GLOBAL cancel (there is no global Esc — keyDown taps are what
+        // Input Monitoring gates): a press while a stuck finalize is spinning, or while the
+        // just-fired transcript is still shown ("you misheard me"), backs out — the beats the
+        // global Esc used to cover.
+        if phase == .transcribing { cancelCurrent(); return }
+        if phase == .running, readBack != nil, run.remembering == nil {
+            stop()                        // transcript shown → instant dismiss, run cancelled
+            Log("notch transcript cancelled (right-⌘)")
+            return
+        }
         guard !run.isRunning, !isInteracting else { Log("hotkey ignored — busy"); return }
         // Knowledge-base-only plan (free/go): the notch answers the press INSTANTLY with the
         // Plus aside — same immediate beat as the mic-perms notice — and never opens for
@@ -258,15 +266,16 @@ final class CommandCoordinator {
         Log("notch typing dismissed")
     }
 
-    /// Esc — back out of whatever the notch is doing, mirroring the obvious one-tap action for each state:
+    /// Cancel — back out of whatever the notch is doing, mirroring the obvious one-tap action for each state:
     /// dismiss the type field · abandon an open/listening/transcribing voice capture (so a later release
     /// fires nothing, and a stuck finalize can always be bailed) ·
     /// or, ONLY while the voice transcript is still on screen, cancel the just-fired run and dismiss INSTANTLY
     /// (no "Stopped" flourish — that's reserved for interrupting live computer use via STOP) so a misheard
     /// command can be killed and redone at a glance. The instant the transcript dissolves into the working /
-    /// "Remembering" line, Esc is left ALONE — computer use is now quietly running and the user needs Esc for
-    /// their own apps. Returns whether it consumed the Esc (so the key monitor swallows it). Caught GLOBALLY
-    /// via RightCommandMonitor.onEscape (typing is handled by the window's local consuming monitor instead).
+    /// "Remembering" line, cancel is left ALONE — computer use is now quietly running. Returns whether it
+    /// consumed the event (so the key monitor swallows it). Reached via the window's LOCAL Esc monitor
+    /// (works whenever Sentient is frontmost — no global keyDown tap, that's Input-Monitoring-gated) and
+    /// via a right-⌘ press for the transcribing beat (voicePressBegan).
     @discardableResult
     func cancelCurrent() -> Bool {
         switch phase {
