@@ -19,7 +19,9 @@ that BOTH the home's real-mode Analyze Now (`ProcessingView`, `fullCycle: true`)
 overnight scheduler run: knowledge base create/update → mirror push → *(first time only)* the welcome
 `GiftLetter` → decide → research + prepare → **wipe the cycle's summaries** (success only — a failed
 step keeps them for retry). The results land in `ProactiveResearch.latest()` (UserDefaults), which the
-home's For You deck renders as real cards.
+home's For You deck renders as real cards. **Knowledge-base-only mode (free/go plans) skips decide +
+research entirely** (an empty ready-list is saved so stale cards can't linger); the KB → mirror →
+gift → wipe legs still run — see `Plan Gate (CodexAuth & Knowledge-Base-Only).md`.
 
 ## PART 1 — What the judge does
 

@@ -56,8 +56,15 @@ for step in await codex.whatsNeeded() {        // e.g. [.computerUse] if 1 & 2 a
 - **Dev Tools → CODEX SETUP** (`Views/CodexSetupView.swift`) — the three step cards.
 - **Settings → Permissions & Health** — the SET UP CODEX rows' fix buttons open the same
   `CodexSetupView` sheet; statuses re-probe when it closes.
-- **Onboarding** (to build) presents its own polished screens over this same engine.
+- **Onboarding** (`Views/Onboarding/`) — REAL now: the CLI installs silently in the background from
+  launch (`AppState`'s kick, with retries; the login screen's poll re-kicks as a net), the login
+  screen notices the finished browser sign-in on its own (a 2s `codex login status` poll + a
+  foreground re-check — no "I'm done" button), and computer use bootstraps silently two minutes
+  into the first analysis (no screen of its own). **Right after login comes the plan crossroads**
+  (`OnboardingPlanView`): the fresh auth.json's plan claim decides — free/go accounts choose
+  upgrade-vs-knowledge-base-only, full plans skip it before it renders. See `Plan Gate (CodexAuth
+  & Knowledge-Base-Only).md`.
 
 ## Status
-Engine + both UIs are built and working; the computer-use bootstrap is proven end-to-end (the plain
-CLI + DMG-extracted files drive real computer use — see the bootstrap doc).
+Engine + all three UIs are built and working; the computer-use bootstrap is proven end-to-end (the
+plain CLI + DMG-extracted files drive real computer use — see the bootstrap doc).

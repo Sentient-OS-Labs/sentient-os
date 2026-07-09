@@ -28,7 +28,7 @@ pieces (`SettingsComponents.swift`).
 5. **Privacy toggles transmit only in RELEASE builds** — by design (Sentry/TelemetryDeck never
    boot in DEBUG), so a Debug QA can verify persistence but not transmission.
 6. **Small known holes, accepted for now:** removing the LAST custom folder can bypass the
-   three-connector minimum (the guard covers chip toggle-offs only) · the reset-vs-run race has
+   four-selection minimum (the guard covers chip toggle-offs only) · the reset-vs-run race has
    only the UI guard (see Reset below; the Layer-2 generation counter is deferred hardening) ·
    three Settings deep-link anchors (Speech Recognition, Accessibility, Screen Recording) are
    standard but unverified on Tahoe specifically.
@@ -62,10 +62,13 @@ The real source picker, on the SAME keys as Analyze Now / Dev Tools / the 3am ru
 (WhatsApp — hidden when not installed — and iMessage open the shared `ChatPicker`; Apple Notes
 toggles), **Through Your ChatGPT** (Gmail / Calendar open their real connect sheets; note:
 connecting ARMS the source — the initial read happens on the next run, same as connecting from
-the Home popover). A fix-it `StatusLine` appears when Full Disk Access is missing. The
-**three-connector minimum** guards chip toggle-offs on the 3→2 drop only (all folders together
-count as ONE connector; a pre-onboarding state below three is never trapped); violations flash
-the bottom whisper amber.
+the Home popover. In knowledge-base-only mode these two chips render LOCKED — dim + lock glyph +
+the instant `LockedChipTip` hover "Only supported on ChatGPT Plus"). A fix-it `StatusLine`
+appears when Full Disk Access is missing. The **four-selection minimum**
+(`SourceSelection.selectionCount` / `minimumSelections` — every folder, chat source, Notes, and
+connector counts as ONE; the same rule onboarding's ready screen enforces, so the two surfaces
+can never drift) guards chip toggle-offs on the 4→3 drop only (a pre-onboarding state below four
+is never trapped); violations flash the bottom whisper amber.
 
 **`CustomRoots`** (in `Sources/SourceSelection.swift`) is the persistent store for user-added
 folders: one newline-joined UserDefaults string (`files.customRoots`) so views react via plain
@@ -100,7 +103,13 @@ shared `FactoryReset` (`Ingestion/FactoryReset.swift` — cycle store + knowledg
 proactive traces + lifetime counters + the cloud mirror copy, deleted best-effort so an offline
 reset still succeeds; same code path as Dev Tools' "Reset everything", so the wipes can never
 drift. The mirror token + opt-in survive — the share URL pasted into the user's connectors keeps
-working, and the next push recreates the copy). **The Reset button locks while the pipeline runs**
+working, and the next push recreates the copy). **Reset also REWINDS to the start of onboarding**:
+it clears `onboarding.step`, `plan.kbOnly`, and `hasCompletedOnboarding` (flipping the live
+`AppState` so the main window switches immediately), and the Settings window dismisses itself to
+reveal it — this is the free→Plus "Reset & Rebuild" path (re-onboarding re-runs the plan
+crossroads, which re-detects the plan fresh). The free home's Reset buttons deep-link here via
+`SettingsView.requestedPane = .system` (a one-shot handoff consumed on appear).
+**The Reset button locks while the pipeline runs**
 (`Ingestion/PipelineActivity.swift`, a counter flag begun/ended by `IterativeRun` +
 `ProactiveCycle`) — wiping mid-run would leave high-water marks pointing past erased notes.
 
@@ -129,8 +138,13 @@ opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
   only after initial processing — [WIP]). Until then this pane's "Allow…" rows are where the
   grants happen; Sidekick degrades gracefully without them (voice needs mic; the screen still is
   skipped).
-- **SET UP CODEX:** CLI / ChatGPT account / computer use — all red when missing; every fix opens
-  the shared `CodexSetupView` (statuses re-probe when the sheet closes).
+- **SET UP CODEX:** CLI / ChatGPT account / **ChatGPT plan** / computer use — the CLI, account,
+  and computer-use rows go red when missing and their fixes open the shared `CodexSetupView`
+  (statuses re-probe when the sheet closes). The plan row (shown once logged in, decoded via
+  `CodexAuth.currentPlan()`) is amber on free/go — "free · knowledge base only" — with a
+  **Re-check** pill that runs `CodexAuth.refreshPlan()` (the on-demand token re-mint), so an
+  upgrade shows up in seconds instead of on codex's 8-day timer; a limited plan also keeps the
+  codex group expanded (it never folds into "Codex is all good").
 - **CODEX PERMISSIONS:** the helper's Accessibility + Screen Recording — system-TCC, read via
   our FDA, status + deep-link only; shown once computer use exists.
 - **The codex collapse:** when the WHOLE stack is green, the five codex rows fold into one line

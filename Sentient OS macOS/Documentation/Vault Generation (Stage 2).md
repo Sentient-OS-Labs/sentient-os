@@ -2,7 +2,9 @@
 
 `VaultGenerator.generate(notes:resume:onProgress:)` turns the on-device survivor summaries
 (passed as `[CloudNote]`) into the markdown knowledge base at `~/Sentient OS - Knowledge Base/`,
-through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.5` at **`.xhigh` effort**,
+through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.5` at **`.xhigh` effort**
+(**`.high` in knowledge-base-only mode** — a free/go plan's tiny monthly quota affords exactly
+one build, and only at high; see `Plan Gate (CodexAuth & Knowledge-Base-Only).md`),
 `workspace-write` sandbox, cwd = a staging dir; the model writes the `.md` files itself with its
 file tools. Without a working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — a ChatGPT
 subscription is a hard requirement; the old direct-Anthropic-API route and its

@@ -25,8 +25,18 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
 - **The empty state — the orb's ONE home:** when there are no cards, the living **`Orb`** rises into
   the center with *"I'm here to help."* The orb appears **only** here (plus the ProcessingView
   takeover); Settings and Connect use the static `OrbMark` glyph instead.
-- **The dock:** the `PromptBar` command bar + the trust footer. A small `DEV TOOLS` handle is pinned
-  bottom-right (→ the `Views/Dev/DevToolsView.swift` sheet; the Release strip re-hides it).
+- **Knowledge-base-only mode (free/go plans, `CodexAuth.knowledgeBaseOnly`):** cards never come, so
+  the empty state is replaced by the ALWAYS-mounted **preview note** — orb + "This is a preview of
+  Sentient." + the three feature rows + the *Get ChatGPT Plus* glow CTA + a *Reset Sentient…*
+  `QuietPillButton` (deep-links to Settings → System via `SettingsView.requestedPane`). The gift
+  envelope (the only card this home can hold) perches at a fixed top-center slot ABOVE a compact
+  version of the note; flinging the letter blooms the note into the full center. Once the plan claim
+  reads Plus (re-decoded every appearance), the note becomes *"You're on Plus. Time to go live."*
+  with a *Reset & Rebuild* glow. See `Plan Gate (CodexAuth & Knowledge-Base-Only).md`.
+- **The dock:** the `PromptBar` command bar + the trust footer (the command bar is HIDDEN in
+  knowledge-base-only mode — computer use runs on quota those plans don't have). A small `DEV TOOLS`
+  handle is pinned bottom-right (→ the `Views/Dev/DevToolsView.swift` sheet; the Release strip
+  re-hides it).
 - **The letter layer:** an always-mounted overlay (opacity/scale-driven — view *insertion* can miss a
   redraw on hidden-titlebar windows) that expands a card into the typeset reading view, with the
   **editable draft block** for real cards (below).
@@ -35,7 +45,10 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
 `modelMissing`, the `realCards` flag, and the `onAnalyze`/`onShowDevTools` callbacks) and owns the
 HomeView ⟷ ProcessingView cross-fade. **Analyze Now runs the shared `SourceSelection` picks through
 `ProcessingView` `.auto`** — with real cards ON it's the FULL cycle (read → `ProactiveCycle`: KB →
-mirror → gift → proactive → wipe), byte-for-byte what the 3am scheduler runs.
+mirror → gift → proactive → wipe), byte-for-byte what the 3am scheduler runs. `RootView` also owns
+**the onboarding finale**: when the first analysis finishes, onboarding dissolves into the home and
+the Knowledge window (the Constellation) opens ON TOP a beat later — every user's first sight of
+their knowledge base, whatever their plan.
 
 ## Real cards vs the demo deck — `ForYouModel`
 
@@ -43,7 +56,8 @@ The home has two modes, flipped by the dev "REAL FOR-YOU CARDS" toggle (`dev.pro
 ON by default):
 
 - **Real mode (the default):** `beginVisit` builds the deck from the persisted proactive results — the
-  welcome **`GiftLetter`** envelope first (sealed, wax-stamped; generated once from the user's own
+  welcome **`GiftLetter`** envelope first (sealed, wax-stamped, addressed "For \<macFirstName\>" from
+  the macOS account — "For you" when nameless; generated once from the user's own
   knowledge base), then one card per `PreparedAction` in `ProactiveResearch.latest()`
   (`Briefing(from:)` — method accent + `METHOD · TARGET` kicker, the `card_summary` body, the
   LLM-written fire button). **Firing is real:** `runReal` routes through
