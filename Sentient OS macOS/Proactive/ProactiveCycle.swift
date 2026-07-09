@@ -51,8 +51,12 @@ actor ProactiveCycle {
     /// Run the post-read tail (knowledge base → mirror → proactive → wipe). Returns nil on a fully
     /// successful cycle (summaries wiped), or the failure message if a step errored (summaries kept).
     /// Never throws — every failure is ALSO reported through `progress(.failed(…))` for the live UI.
+    /// `scheduled` marks the UNATTENDED 3am run: its failures additionally classify into the
+    /// morning-after caution (OvernightCaution → the home's banner); a watched Analyze Now doesn't
+    /// (the takeover UI already shows those live).
     @discardableResult
-    func run(progress: @escaping @Sendable (ProactiveCyclePhase) -> Void) async -> String? {
+    func run(scheduled: Bool = false,
+             progress: @escaping @Sendable (ProactiveCyclePhase) -> Void) async -> String? {
         PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
         defer { PipelineActivity.end() }
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
@@ -74,6 +78,7 @@ actor ProactiveCycle {
         } catch {
             let m = "Knowledge base: \(Self.msg(error))"
             Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
+            if scheduled { await OvernightCaution.note(error) }   // the morning-after banner
             progress(.failed(m)); return m                   // half-edited vault isn't dirty; summaries kept
         }
         await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
@@ -105,6 +110,7 @@ actor ProactiveCycle {
                 items = []                                   // nothing recent enough — clear cards, still success
             } catch {
                 let m = "Deciding: \(Self.msg(error))"
+                if scheduled { await OvernightCaution.note(error) }
                 progress(.failed(m)); return m
             }
             Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
@@ -119,6 +125,7 @@ actor ProactiveCycle {
                         "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"])
                 } catch {
                     let m = "Preparing: \(Self.msg(error))"
+                    if scheduled { await OvernightCaution.note(error) }
                     progress(.failed(m)); return m
                 }
             }
@@ -126,6 +133,7 @@ actor ProactiveCycle {
 
         // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.
         await CycleStore.shared.wipeAllNotes()
+        OvernightCaution.clear()                             // a full success retires any morning-after banner
         UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
         OvernightScheduler.noteFirstCycleCompleted()   // "initial processing ended" → start the 18h auto-enable clock (once)
         progress(.done(ready: ProactiveResearch.latest()?.ready.count ?? 0))

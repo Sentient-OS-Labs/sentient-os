@@ -289,7 +289,7 @@ final class OvernightScheduler {
         // Now runs (ProcessingView → ProactiveCycle), so a scheduled run produces the morning's
         // For-You cards too — there is no scheduler-specific knowledge-base path. Still held awake +
         // heartbeating throughout (proactive uses codex, same as the KB step already does).
-        if let failure = await ProactiveCycle.shared.run(progress: { phase in
+        if let failure = await ProactiveCycle.shared.run(scheduled: true, progress: { phase in
             Task { @MainActor in
                 switch phase {
                 case .knowledgeBase(let s): log.line("proactive: \(s)")
