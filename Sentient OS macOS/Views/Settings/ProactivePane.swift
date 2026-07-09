@@ -4,9 +4,10 @@
 //
 //  Settings → Proactive & Sidekick: the user's standing instructions for the proactive
 //  suggestion writer, and Sidekick's shortcut key + standing context. The strings persist and
-//  autosave (keys: proactive.instructions · sidekick.hotkey · sidekick.context) — the backends
-//  consume them when the prompt wiring lands (the "prompt refinement" todo); the Right ⌥ choice
-//  additionally awaits RightCommandMonitor support for that key.
+//  autosave (keys: proactive.instructions · sidekick.hotkey · sidekick.context). The hotkey choice
+//  (right ⌘ / right ⌥) is LIVE — toggling it posts `.sidekickHotkeyChanged`, which re-keys the
+//  running SidekickHotkeyMonitor with no restart. The two text fields are consumed when the prompt
+//  wiring lands (the "prompt refinement" todo).
 //
 
 import SwiftUI
@@ -37,6 +38,10 @@ struct ProactivePane: View {
                             SettingsChip(label: "Right ⌥", on: sidekickHotkey == "rightOption") {
                                 sidekickHotkey = "rightOption"
                             }
+                        }
+                        .onChange(of: sidekickHotkey) {
+                            // Re-key the live monitor immediately — no restart.
+                            NotificationCenter.default.post(name: .sidekickHotkeyChanged, object: nil)
                         }
                         SettingsTextBox(placeholder: "e.g. When I say text someone, use WhatsApp. My main browser is Microsoft Edge.",
                                         text: $sidekickContext)
