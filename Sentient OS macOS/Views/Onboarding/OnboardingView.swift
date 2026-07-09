@@ -19,6 +19,9 @@ import SwiftUI
 struct OnboardingView: View {
     let onFinished: () -> Void
 
+    /// For the DEBUG skip handle only — the quiet flag flip, no finale.
+    @Environment(AppState.self) private var appState
+
     /// Persisted so a relaunch mid-onboarding (the FDA grant needs one) resumes at the same step.
     @AppStorage("onboarding.step") private var step = 0
     private static let slideCount = 3
@@ -90,6 +93,33 @@ struct OnboardingView: View {
                     .transition(.opacity)
             }
         }
+        // DEV-ONLY: skip straight to the home (testing relaunches land back in onboarding until
+        // a full first analysis flips the flag). Quietly marks onboarding complete — deliberately
+        // NOT onFinished, so the Constellation finale stays reserved for the real finish.
+        // Compile-gated out of Release entirely.
+        #if DEBUG
+        .overlay(alignment: .bottomTrailing) {
+            if !analyzing {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "forward.end").font(.system(size: 8.5))
+                        Text("SKIP TO HOME")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.6)
+                    }
+                    .foregroundStyle(Theme.Ink.deepMuted)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .opacity(0.6)
+                .padding(.trailing, 22).padding(.bottom, 13)
+                .transition(.opacity)
+            }
+        }
+        #endif
     }
 
     /// Two minutes into the first analysis, bootstrap codex computer use (setup step 3) silently
