@@ -4,11 +4,12 @@
 //
 //  The one-time setup window's face (ComputerUseGate presents it): the four action grants as the
 //  same StatusLine rows Settings → Health uses, in two groups — SIDEKICK & PROACTIVE (Sentient's
-//  Microphone & Speech, Screen Recording) and CODEX PERMISSIONS (the helper's Accessibility,
-//  Screen Recording). Sentient's grants fix via the native system prompts; the helper's fix via
-//  PermissionGuide's floating drag panel (they're system-TCC — only the user can flip them).
-//  Continue fires the held action whether or not everything is green; the rows re-probe when the
-//  app foregrounds (returning from System Settings).
+//  Microphone & Speech, plus its OPTIONAL Screen Recording — amber, never blocking) and CODEX
+//  PERMISSIONS (the helper's Accessibility, Screen Recording). Mic & Speech fix via the native
+//  system prompts; the other three fix via PermissionGuide's floating drag panel (they're
+//  system-TCC lists — only the user can flip them). Continue fires the held action whether or
+//  not everything is green; the rows re-probe when the app foregrounds (returning from System
+//  Settings).
 //
 
 import SwiftUI
@@ -29,7 +30,7 @@ struct ComputerUseGateView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 18)
 
-            Text("Acting on your Mac needs these four grants, once. You will not be asked again.")
+            Text("Acting on your Mac needs these grants, once. You will not be asked again.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.secondary)
                 .frame(maxWidth: .infinity)
@@ -47,9 +48,9 @@ struct ComputerUseGateView: View {
                             fixMicSpeech()
                         }
                         StatusLine(title: "Screen Recording",
-                                   health: gate.sentientScreen ? .ok : .bad,
-                                   note: gate.sentientScreen ? "granted" : "not granted",
-                                   tip: "Lets Sentient snap a still of your screen the moment you fire a command, so it can see the thing you're asking about. Takes effect after you restart Sentient.",
+                                   health: gate.sentientScreen ? .ok : .warn,   // optional — amber, never blocking
+                                   note: gate.sentientScreen ? "granted" : "optional",
+                                   tip: "Optional. Lets Sentient snap a still of your screen the moment you fire a command, so it can see the thing you're asking about. Without it, commands run without screen context. Takes effect after you restart Sentient.",
                                    fixTitle: "Allow…") {
                             fixSentientScreen()
                         }
@@ -77,7 +78,7 @@ struct ComputerUseGateView: View {
             }
             .padding(.top, 30)
 
-            OnboardingNextButton(title: gate.allGranted ? "Continue" : "Continue anyway") {
+            OnboardingNextButton(title: gate.allRequiredGranted ? "Continue" : "Continue anyway") {
                 gate.continueNow()
             }
             .frame(maxWidth: .infinity)
