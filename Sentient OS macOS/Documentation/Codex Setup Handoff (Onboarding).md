@@ -48,7 +48,16 @@ for step in await codex.whatsNeeded() {        // e.g. [.computerUse] if 1 & 2 a
   skip rendering finished steps.
 - **Computer use is ~505 MB + a few minutes** (downloads OpenAI's DMG). Stream `computerUseStatus` to the
   UI (it carries live "Downloading… 42%", "Copying plugin…", "✓ ready" lines). Gate it behind step 1 (it
-  refuses if codex isn't installed).
+  refuses if codex isn't installed — and it re-probes the DISK for the binary, not the cached flag, so a
+  user who installed codex themselves mid-onboarding still gets computer use). While it runs, RootView
+  shows the screen-agnostic whisper ("Setting up Codex computer use in the background.") bottom-left of
+  whatever screen is up — keyed to the live `settingUpComputerUse` flag, so dev/Settings-triggered setups
+  surface it too.
+- **Detection-first is the law, both steps.** A user's own codex is never installed over
+  (`locateBinary` covers brew/npm/nvm/standalone + a login-shell `which`), and an existing computer use —
+  including one set up by OpenAI's real desktop app — is never re-downloaded (`ComputerUseSetup.isInstalled`
+  checks all three markers before a single byte moves). Has codex but no computer use → just computer use
+  installs. The only `force: true` lives on the dev window's explicit re-install button.
 - **No TCC here.** Accessibility / Screen-Recording consent for the helper is a separate UX step — the
   bootstrap writes none.
 
