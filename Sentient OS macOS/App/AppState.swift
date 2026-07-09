@@ -52,13 +52,9 @@ final class AppState {
         self.notch = NotchWindowController(coordinator: commandCoordinator)
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
         scheduler.maybeAutoEnable()   // 18h after initial: flip the overnight scheduler on (or arm the timer)
-        if CodexAuth.knowledgeBaseOnly {
-            // Free/go knowledge-base-only mode: Sidekick runs computer use through codex, and
-            // that quota doesn't exist on these plans — the hotkey never arms.
-            Log("Sidekick: knowledge-base-only plan — hotkey not armed")
-        } else {
-            commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
-        }
+        // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
+        // the coordinator: the notch experience still plays, the codex run just never fires.
+        commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
         notch.start()                // raise the notch overlay window
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
 

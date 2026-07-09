@@ -80,6 +80,16 @@ final class CommandCoordinator {
         guard !trimmed.isEmpty else { return }
         guard !run.isRunning else { Log("submit ignored — a task is already running"); return }
 
+        // Knowledge-base-only plan (free/go): Sidekick's computer use runs on codex quota these
+        // plans don't have. Gated HERE (not at arming) on purpose: the whole notch experience —
+        // the drop, the listening glow, the on-device transcription — still plays for free, and
+        // the run simply never fires. Checked live per invoke, so it's never stale.
+        if CodexAuth.knowledgeBaseOnly {
+            flash("Sidekick needs your ChatGPT Plus. Get it to continue.", for: 2.0)
+            Log("submit blocked — knowledge-base-only plan (Sidekick needs Plus)")
+            return
+        }
+
         // First-use permission gate: while any of the four action grants is missing, the one-time
         // setup window takes over and holds this command — Continue fires it, close drops it.
         if ComputerUseGate.shared.intercept({ [weak self] in self?.launch(trimmed, mode: mode, source: source) }) {
@@ -305,9 +315,9 @@ final class CommandCoordinator {
         }
     }
 
-    private func flash(_ message: String) {
+    private func flash(_ message: String, for seconds: Double = 1.5) {
         setPhase(.notice(message))
-        scheduleHide(after: 1.5)
+        scheduleHide(after: seconds)
     }
 
     private func setReadBack(_ text: String) {
