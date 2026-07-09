@@ -65,6 +65,8 @@ struct HomeView: View {
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
     @State private var showCalendarConnect = false
+    /// The morning-after caution (last night's scheduled run hit a known snag) — nil = no banner.
+    @State private var caution: OvernightCaution.Record?
 
     // Chat selections the Analysis popover's WhatsApp/iMessage chips pick into (same keys as SourceSelection).
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
@@ -89,6 +91,7 @@ struct HomeView: View {
                     }
                     bottomDock
                     chrome                     // on top → the nav stays clickable
+                    cautionBanner              // the morning-after caution, in the blank top-right
                     devToolsOverlay
                 }
                 .blur(radius: letterShown ? 7 : 0)
@@ -104,6 +107,7 @@ struct HomeView: View {
             letterShown = false
             model.beginVisit(realCards: realCards)
             planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
+            caution = OvernightCaution.latest()
         }
         .onChange(of: realCards) { _, v in model.beginVisit(realCards: v) }   // toggle flip → re-deal
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
@@ -158,6 +162,30 @@ struct HomeView: View {
             MonoCaps(readLine, size: 9.5, tracking: 2.2, color: Theme.Ink.deepMuted)
         }
         .padding(.leading, 30)
+    }
+
+    // MARK: The morning-after caution banner
+    //
+    // Last night's UNATTENDED run hit one of the three knowable snags (codex signed out · no
+    // internet · usage limit) — OvernightCaution recorded it at ProactiveCycle's choke point, and
+    // this quiet amber capsule surfaces it in the blank space beside the greeting. ✕ dismisses;
+    // the next fully successful cycle clears it on its own. Amber on purpose: a caution, never an
+    // alarm — the app still works, only the overnight magic was missed.
+
+    private var cautionBanner: some View {
+        Group {
+            if let caution {
+                CautionCapsule(kind: caution.kind,
+                               onOpenSettings: { openWindow(id: SettingsView.windowID) },
+                               onDismiss: {
+                                   OvernightCaution.clear()
+                                   withAnimation(.easeInOut(duration: 0.25)) { self.caution = nil }
+                               })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+        .padding(.trailing, 30).padding(.top, 64)
     }
 
     private var greeting: String {
@@ -440,6 +468,55 @@ struct HomeView: View {
     private func closeLetter() {
         withAnimation(.easeInOut(duration: 0.26)) { letterShown = false }
     }
+}
+
+// MARK: - The morning-after caution capsule (rendered by cautionBanner)
+
+private struct CautionCapsule: View {
+    let kind: OvernightCaution.Kind
+    let onOpenSettings: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            HealthDot(color: Theme.Ink.amber)
+            Text(kind.message)
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.Ink.statusInk)
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+            if kind == .loggedOut {
+                SettingsPillButton(title: "Open Settings", action: onOpenSettings)
+            }
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.Ink.label)
+                    .padding(4)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 11)
+        .frame(maxWidth: 480, alignment: .leading)
+        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .strokeBorder(Theme.Ink.amber.opacity(0.28), lineWidth: 1))
+    }
+}
+
+#Preview("Caution capsules") {
+    ZStack {
+        Color.black.ignoresSafeArea()
+        VStack(alignment: .trailing, spacing: 14) {
+            CautionCapsule(kind: .loggedOut, onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(kind: .noInternet, onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(kind: .usageLimit, onOpenSettings: {}, onDismiss: {})
+        }
+        .padding(40)
+    }
+    .frame(width: 620, height: 320)
+    .preferredColorScheme(.dark)
 }
 
 // MARK: - Top-bar nav item
