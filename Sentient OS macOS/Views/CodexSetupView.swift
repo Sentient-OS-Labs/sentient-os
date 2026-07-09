@@ -109,7 +109,7 @@ struct CodexSetupView: View {
                 .disabled(codex.settingUpComputerUse || !codex.installed)
             }
             statusLine(codex.computerUseStatus)
-            hint("Downloads OpenAI's official Codex app (~505 MB), lifts out the bundled computer-use plugin, and patches ~/.codex. No desktop app install; nothing hosted by us.")
+            hint("Downloads OpenAI's official ChatGPT (Codex) app (~535 MB), lifts out the bundled computer-use plugin, and patches ~/.codex. No desktop app install; nothing hosted by us.")
         }
     }
 

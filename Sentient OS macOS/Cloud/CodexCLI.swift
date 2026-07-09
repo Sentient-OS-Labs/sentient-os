@@ -361,6 +361,10 @@ actor CodexCLI {
         let t0 = Date()
         do {
             guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+            // Self-heal the relaxed confirmation policy: a plugin update (desktop app or a
+            // re-bootstrap) lays a fresh STOCK SKILL.md, whose policy stalls headless runs on
+            // "shall I proceed?" questions nothing can answer. Cheap file check, idempotent.
+            ComputerUseSkillPatch.ensureApplied()
             var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
                         "-m", Model.gpt55.rawValue,
                         "-c", "model_reasoning_effort=\"low\""]
@@ -562,7 +566,7 @@ actor CodexCLI {
                         "\(home)/.local/bin",
                         "/opt/homebrew/bin", "/opt/homebrew/sbin",
                         "/usr/local/bin",
-                        "/Applications/Codex.app/Contents/Resources/cua_node/bin",
+                        "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin",
                         "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
         return env

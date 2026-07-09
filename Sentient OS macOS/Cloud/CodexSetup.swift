@@ -140,7 +140,7 @@ final class CodexSetup {
     func refreshComputerUse() { computerUseReady = ComputerUseSetup.isInstalled }
 
     /// Step 3 — make computer use work on the plain Codex CLI (no desktop app). Detection-first:
-    /// a no-op if already set up. Downloads OpenAI's official Codex.dmg, lifts out the bundled
+    /// a no-op if already set up. Downloads OpenAI's official installer DMG, lifts out the bundled
     /// computer-use payload, lays it into ~/.codex, and patches config.toml — streaming progress.
     /// Both onboarding and the dev button call THIS — no duplicated logic.
     func setupComputerUse(force: Bool = false) async {
