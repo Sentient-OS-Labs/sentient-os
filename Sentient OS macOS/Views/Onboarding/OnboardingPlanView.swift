@@ -46,7 +46,7 @@ struct OnboardingPlanView: View {
                 // Two balanced single lines (no width cap — each takes its natural width, so
                 // neither ever wraps into an orphan on a normal window).
                 VStack(spacing: 6) {
-                    Text("Right now, Sentient's cloud thinking runs through your ChatGPT plan's Codex frontier model.")
+                    Text("Right now, Sentient uses your ChatGPT plan's Codex frontier model for a small part of its compute.")
                     Text("You can still build your private knowledge base from this Mac and offer it to your AIs.")
                 }
                 .font(.system(size: 14.5))
