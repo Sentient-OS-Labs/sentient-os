@@ -9,11 +9,11 @@ pieces (`SettingsComponents.swift`).
 
 ## ⚠️ NOT wired up yet (read this first)
 
-1. **Proactive instructions + Sidekick context/hotkey** (`ProactivePane`) — the controls work and
-   persist (`proactive.instructions` · `sidekick.context` · `sidekick.hotkey`), but **nothing
-   consumes the values yet**. The proactive/Sidekick prompts learn to read them with the
-   prompt-refinement work, and the Right ⌥ choice additionally needs `RightCommandMonitor`
-   support (it listens for right-⌘ only today).
+1. **Proactive instructions + Sidekick context** (`ProactivePane`) — these two text fields work and
+   persist (`proactive.instructions` · `sidekick.context`), but **nothing consumes the values yet**.
+   The proactive/Sidekick prompts learn to read them with the prompt-refinement work.
+   *(The Sidekick **hotkey** chip — `sidekick.hotkey`, right ⌘ / right ⌥ — is fully wired: toggling
+   it live-re-keys `SidekickHotkeyMonitor` with no restart. See `Notch Magic/Notch Magic.md` §4.)*
 2. **The E2E encryption claim front-runs the code** — the Connect-AIs privacy blurb says the cloud
    copy is end-to-end encrypted and unreadable even by Sentient's devs. That is LAUNCH truth,
    decided 2026-07-04: the mirror stores plaintext markdown today, and the "mcp encryption"
@@ -77,7 +77,9 @@ folders: one newline-joined UserDefaults string (`files.customRoots`) so views r
 sees custom folders. Verified by a headless selftest (7/7) on ship day.
 
 ### Proactive & Sidekick (`ProactivePane.swift`)
-Autosaving standing instructions + Sidekick's shortcut key and standing context. Stored, not yet
+Autosaving standing instructions + Sidekick's shortcut key and standing context. The **shortcut
+key** (right ⌘ / right ⌥) is live — toggling it posts `.sidekickHotkeyChanged`, which re-keys the
+running `SidekickHotkeyMonitor` with no restart. The two **text fields** are stored, not yet
 consumed — see the NOT-wired list above.
 
 ### Connect AIs to Knowledge (`YourAIsPane.swift`)
