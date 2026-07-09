@@ -38,6 +38,27 @@ struct GlowButton: View {
     }
 }
 
+/// The glow CTA's quiet sibling — a grey outlined capsule for the visible-but-subordinate
+/// choice beside it (the crossroads' "continue with just the knowledge base", the free home's
+/// "Reset Sentient…"). Present enough to read as a real button, never competing with the glow.
+struct QuietPillButton: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 13.5, weight: .medium))
+                .foregroundStyle(Theme.Ink.bright)
+                .padding(.horizontal, 22).padding(.vertical, 12)
+                .background(Capsule().fill(.white.opacity(0.07)))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
 /// Subtle scale-on-press, mirroring the website's hover/active scale.
 private struct GlowPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {

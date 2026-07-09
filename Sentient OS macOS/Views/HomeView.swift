@@ -319,7 +319,7 @@ struct HomeView: View {
             GlowButton(title: "Get ChatGPT Plus", systemImage: "arrow.up.forward",
                        glowIntensity: 0.5, action: { NSWorkspace.shared.open(CodexAuth.upgradeURL) })
                 .frame(width: 250)
-            quietPill("Reset Sentient…", action: openSystemPane)
+            QuietPillButton(title: "Reset Sentient…", action: openSystemPane)
         }
         .padding(.top, compact ? 22 : 28)
         Text("Upgraded? Reset rebuilds your knowledge with Gmail, Calendar, and the full engine.")
@@ -349,19 +349,6 @@ struct HomeView: View {
     private func openSystemPane() {
         SettingsView.requestedPane = .system
         openWindow(id: SettingsView.windowID)
-    }
-
-    private func quietPill(_ title: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 13.5, weight: .medium))
-                .foregroundStyle(Theme.Ink.bright)
-                .padding(.horizontal, 22).padding(.vertical, 12)
-                .background(Capsule().fill(.white.opacity(0.05)))
-                .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
-                .contentShape(Capsule())
-        }
-        .buttonStyle(PressScaleStyle())
     }
 
     private func previewRow(_ icon: String, _ text: String) -> some View {

@@ -43,12 +43,23 @@ struct OnboardingPlanView: View {
                     .display(26)
                     .foregroundStyle(Theme.Ink.bright)
 
-                Text("Sentient uses your ChatGPT plan's Codex frontier model for a small part of its compute. You can still build your private knowledge base from this Mac and offer it to your AIs. But to use all of Sentient, proactive mornings, Sidekick, Gmail and Calendar, a knowledge base that keeps learning, you'll need ChatGPT Plus.")
-                    .font(.system(size: 15))
-                    .foregroundStyle(Theme.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineSpacing(4)
-                    .frame(maxWidth: 580)
+                VStack(spacing: 6) {
+                    Text("Sentient uses your ChatGPT plan's Codex frontier model for a small part of its compute.")
+                    Text("You can still build your private knowledge base from this Mac and offer it to your AIs.")
+                }
+                .font(.system(size: 14.5))
+                .foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(4)
+                .frame(maxWidth: 620)
+
+                VStack(alignment: .leading, spacing: 11) {
+                    MonoCaps("With ChatGPT Plus", size: 9, tracking: 2.2, color: Theme.Ink.label)
+                        .padding(.bottom, 3)
+                    featureRow("sunrise", "Proactive mornings: things worth doing, already done")
+                    featureRow("command", "Sidekick anywhere: hold right \u{2318} and just say it")
+                    featureRow("moon.stars", "Gmail, Calendar, and a knowledge base that keeps learning")
+                }
 
                 VStack(spacing: 18) {
                     GlowButton(title: "Upgrade on ChatGPT",
@@ -155,20 +166,25 @@ struct OnboardingPlanView: View {
         }
     }
 
-    /// The quiet escape hatch — free users still get the knowledge base, honestly framed.
+    /// The escape hatch — a real (grey) button, visible without competing with the glow CTA.
     private var continueFreeButton: some View {
-        Button {
+        QuietPillButton(title: "Continue with just the knowledge base") {
             CodexAuth.knowledgeBaseOnly = true
             Analytics.signal("PlanGate.continuedFree")
             onContinue()
-        } label: {
-            Text("Continue with just the knowledge base")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.faint)
-                .underline(true, color: Theme.stroke)
-                .contentShape(Rectangle())
         }
-        .buttonStyle(PressScaleStyle())
+    }
+
+    private func featureRow(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 11) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.Ink.label)
+                .frame(width: 16)
+            Text(text)
+                .font(.system(size: 13.5))
+                .foregroundStyle(.white.opacity(0.78))
+        }
     }
 }
 
