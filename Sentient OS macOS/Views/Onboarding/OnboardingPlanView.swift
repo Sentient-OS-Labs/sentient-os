@@ -39,16 +39,16 @@ struct OnboardingPlanView: View {
             case .crossroads:
                 OnboardingWhisper("YOUR CHATGPT PLAN · \(planName.uppercased())")
 
-                Text("\(planName) covers a taste.")
-                    .display(30)
+                Text("We noticed you're not on ChatGPT Plus.")
+                    .display(26)
                     .foregroundStyle(Theme.Ink.bright)
 
-                Text("Your plan includes just enough Codex to build your knowledge base once, from what's on this Mac. The rest of Sentient, mornings where things are already done, Gmail and Calendar awareness, an assistant that keeps learning, runs on ChatGPT Plus.")
+                Text("Sentient uses your ChatGPT plan's Codex frontier model for a small part of its compute. You can still build your private knowledge base from this Mac and offer it to your AIs. But to use all of Sentient, proactive mornings, Sidekick, Gmail and Calendar, a knowledge base that keeps learning, you'll need ChatGPT Plus.")
                     .font(.system(size: 15))
                     .foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center)
                     .lineSpacing(4)
-                    .frame(maxWidth: 560)
+                    .frame(maxWidth: 580)
 
                 VStack(spacing: 18) {
                     GlowButton(title: "Upgrade on ChatGPT",
