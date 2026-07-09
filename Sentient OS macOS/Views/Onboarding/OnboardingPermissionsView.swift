@@ -109,7 +109,12 @@ struct OnboardingPermissionsView: View {
             OnboardingTrustFooter()
         }
         .padding(40)
-        .onAppear { refresh() }
+        .onAppear {
+            refresh()
+            // Ask for notifications silently, with no UI of its own — the native macOS prompt is
+            // the only thing the user sees. No-op if already answered (see Notify.ask()).
+            Task { await Notify.ask() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refresh()   // the user may just have flipped a switch in System Settings
         }

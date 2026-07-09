@@ -45,7 +45,7 @@ Every command is **computer use** (the dedicated browser-use channel was removed
 
 | File | Job |
 |---|---|
-| **`RightCommandMonitor.swift`** | Zero-permission global key tap (`flagsChanged` + `keyDown`): the right-⌘ trigger AND global Esc. Emits `onPress` / `onHoldConfirmed` / `onRelease(held:)` / `onEscape`. Self-healing. |
+| **`RightCommandMonitor.swift`** | Zero-permission global key tap (`flagsChanged` ONLY — never keyDown, §4): the right-⌘ trigger. Emits `onPress` / `onHoldConfirmed` / `onRelease(held:)`. Self-healing. |
 | **`QuickTranscriptionEngine.swift`** | The protocol both speech engines conform to + `VoiceError`. |
 | **`SpeechAnalyzerEngine.swift`** | macOS **26+** speech-to-text (`SpeechAnalyzer` + `SpeechTranscriber`, on-device, in-memory). |
 | **`SFSpeechRecognizerEngine.swift`** | macOS **15** fallback (`SFSpeechRecognizer`, server-capable). |
@@ -65,22 +65,21 @@ There is still a **DEV bench** `Views/Dev/HotkeyLabView.swift` (DEV TOOLS → HO
 
 ---
 
-## 4. The hotkey + global Esc — `RightCommandMonitor`
+## 4. The hotkey — `RightCommandMonitor` (flagsChanged ONLY)
 
-ONE listen-only `CGEventTap` (zero permissions) drives two things: the right-⌘ trigger and a global Esc to cancel/dismiss the notch.
+ONE listen-only `CGEventTap` (zero permissions) drives the right-⌘ trigger — and nothing else.
 
 **Right ⌘ needs ZERO permissions** because it's a *modifier* — it rides `flagsChanged`, which macOS doesn't gate. A listen-only tap masking `flagsChanged` sees it globally with no prompt, no Settings entry, no Accessibility — even in the notarized, Finder-launched app.
 
-**Esc is a regular key (`keyDown`) — and the long-held "keyDown is gated" assumption turned out to be WRONG.** [MEASURED, macOS Tahoe, Input Monitoring OFF, app unfocused] a **listen-only** tap masking `keyDown` receives keystrokes globally with no permission, no prompt, no Settings entry. So we add `keyDown` to the same tap and watch for Esc (keycode 53). ⚠️ This was measured only on Tahoe (26); the deploy floor is macOS 15 — **re-verify on a 15 machine before launch** (§13). If it's gated there, fall back to a right-⌘-tap cancel (a modifier is always free).
+**⚠️ NEVER add `keyDown`/`keyUp` to the mask.** We carried `keyDown` for a while (a global Esc), on a Tahoe measurement that a listen-only keyDown tap flowed permission-free. The field falsified it [2026-07-09, Tahoe, fresh TCC]: the keyboard tap put Sentient into the **Input Monitoring** pane with a stray permission request, and the system kept disabling the tap (~every 1.5s, endless health-tick re-arms). keyDown taps are exactly what Input Monitoring gates. The global Esc was removed for it — the cancel story now works like this (§6): Esc via the window's LOCAL monitor whenever Sentient is frontmost, a fresh right-⌘ press as the cancel over other apps (a modifier is always free — the fallback §4 always predicted).
 
-- **Esc is filtered in the C callback:** the mask now catches *every* keystroke, so the trampoline checks `keyboardEventKeycode == escKeyCode (53)` synchronously and only hops to the main actor for Esc — never per keystroke. The tap stays **listen-only**, so keys always pass through untouched (an Esc reaches whatever app you're in too — harmless, and the price of staying permission-free; see §6).
 - **Ground-truth right-⌘ state:** on every `flagsChanged`, read the **device-dependent right-⌘ bit** (`NX_DEVICERCMDKEYMASK = 0x10`) from `event.flags`. So press/release self-heals even if an event is dropped (we never toggle a fragile keycode set).
 - **Hold vs tap:** `holdThreshold = 0.25s`. `onHoldConfirmed` fires at 250ms if still held; `onRelease(held:)` reports the duration. The coordinator turns a held release into voice, a quick release into the type field (§6).
-- **Callbacks:** `onPress` · `onHoldConfirmed` · `onRelease(held:)` · **`onEscape`** (Esc pressed → the coordinator's `cancelCurrent()`, §6).
-- **Reliability:** re-enable on `.tapDisabledBy…`; re-arm on `NSWorkspace.didWake`; a 1.5s health timer rebuilds a dead tap and reconciles a missed release against `CGEventSource.flagsState(.combinedSessionState)`; a `maxHold` safety force-releases a stuck hold (set by the coordinator to the engine's transcription cap — see §5).
-- The C trampoline must be `nonisolated` (project builds with `-default-isolation=MainActor`; an actor-isolated func can't be a `@convention(c)` pointer) and hops to `@MainActor` to call `handle(type:flags:)` / `handleEscape()`. `escKeyCode` is `nonisolated static` so the off-main callback can read it.
+- **Callbacks:** `onPress` · `onHoldConfirmed` · `onRelease(held:)`.
+- **Reliability:** re-enable on `.tapDisabledBy…`; re-arm on `NSWorkspace.didWake`; a 1.5s health timer rebuilds a dead tap and reconciles a missed release against `CGEventSource.flagsState(.combinedSessionState)` — health-tick reinstalls log QUIETLY (one line at the first, then every 200th with a count; per-reinstall logging once drowned a whole session log); a `maxHold` safety force-releases a stuck hold (set by the coordinator to the engine's transcription cap — see §5).
+- The C trampoline must be `nonisolated` (project builds with `-default-isolation=MainActor`; an actor-isolated func can't be a `@convention(c)` pointer) and hops to `@MainActor` to call `handle(type:flags:)`.
 
-Keycodes for reference: right ⌘ = 54, left ⌘ = 55 (we use the *flag bit*, not the keycode), Esc = 53.
+Keycodes for reference: right ⌘ = 54, left ⌘ = 55 (we use the *flag bit*, not the keycode).
 
 ---
 
@@ -112,24 +111,33 @@ enum NotchPhase { hidden · opening · listening · transcribing · typing · ru
 ```swift
 func submit(_ text:, mode: AgentMode, source: TriggerSource)   // .promptBar | .voice
 ```
-It guards one-run-at-a-time, sets `readBack` for voice (timed in §8), calls `run.start`, and `setPhase(.running)` — every command is computer use, which raises the notch. It also carries the
+It guards one-run-at-a-time, sets `readBack` for voice (timed in §8), calls `run.start` (via the private `launch`), and `setPhase(.running)` — every command is computer use, which raises the notch. It also carries the
 **knowledge-base-only backstop** (free/go plans: flash the Plus aside, never fire — covers the
-command-bar path, which has no press).
+command-bar path, which has no press) and the **first-use permission gate**
+(`ComputerUseGate.intercept` — while a required action grant is missing, the one-time setup window
+takes over and HOLDS the command: Continue fires the stashed `launch`, closing drops it; the notch
+steps aside with `.hidden`. See `Permission Guide (First-Use Grants).md`).
 
 **The hotkey flow — press OPENS, then it branches to voice or type:**
-- `voicePressBegan()` (onPress, from idle only — `isInteracting` blocks a fresh press mid-interaction): **knowledge-base-only plans get answered RIGHT HERE** — a 2s `flash("get ChatGPT Plus to wake Sidekick")`, the same instant beat as the mic notice, and the notch never opens for listening or typing (live-checked per press, so it can never go stale; the run costs codex quota those plans don't have). Otherwise: `setPhase(.opening)` *immediately* (the "pull it open" feel). Start the mic **only if `VoiceCapture.isAuthorized`** — never PROMPT on a press.
+- `voicePressBegan()` (onPress): first the CANCEL beats (below), then — from idle only, `isInteracting` blocks a fresh press mid-interaction — **knowledge-base-only plans get answered RIGHT HERE** — a 2s `flash("get ChatGPT Plus to wake Sidekick")`, the same instant beat as the mic notice, and the notch never opens for listening or typing (live-checked per press, so it can never go stale; the run costs codex quota those plans don't have). Otherwise: `setPhase(.opening)` *immediately* (the "pull it open" feel). Start the mic **only if `VoiceCapture.isAuthorized`** — never PROMPT on a press.
 - `voiceHoldConfirmed()` (@250ms): `setPhase(.listening)` — committed to voice (the "lean in"); start the mic now if perms weren't pre-granted (the only first-use prompt path).
 - `voiceReleased(held:)` from `.opening`/`.listening`: `held ≥ 0.25` → `finalizeVoice()` (→ `.transcribing` → `stopAndTranscribe()` → empty? `flash` : `submit(.voice)`); else `beginTyping()` (cancel the mic → `setPhase(.typing)`).
+- **`finalizeVoice` carries a 15s WATCHDOG** — the finalize itself is <2s, but `voice.start()` can park on the on-device speech-model DOWNLOAD (unbounded; seen in the field as a notch spinning forever with every new press "busy"). Still `.transcribing` at 15s → cancel the capture, re-kick `prewarm()` so the download keeps moving, and `flash("voice isn't ready yet, try again in a moment")`. Both resolution paths re-check `phaseToken` so a timed-out/cancelled finalize can never double-speak. The notch must never wedge.
 - **Tap-to-type:** `submitTyped(_)` (⏎ in the notch field) → `submit(.computer, .promptBar)`; `dismissTyping()` (click-away · empty-⏎) → `.hidden`. A **right-⌘ tap while the field is open** also dismisses it (`voicePressBegan` toggles it closed instead of opening a fresh interaction).
 
-**Esc — `cancelCurrent()` backs out of whatever the notch is doing**, mirroring the obvious one-tap action per state (it returns whether it consumed the Esc):
+**Cancel — `cancelCurrent()` backs out of whatever the notch is doing**, mirroring the obvious one-tap action per state (it returns whether it consumed the event):
 - **typing** → `dismissTyping()`.
-- **opening / listening** → drop the voice capture, `.hidden` (a later key release then fires nothing).
-- **running, ONLY while the voice transcript is still on screen** (`readBack != nil && remembering == nil`) → cancel the run and **dismiss INSTANTLY** (the "you misheard me, redo" case — no "Stopped" flourish). Once the transcript dissolves into the working / "Remembering" line, Esc is left ALONE so it stays free for the user's own apps.
+- **opening / listening / transcribing** → drop the voice capture, `.hidden` (a later key release then fires nothing; a stuck finalize can always be bailed).
+- **running, ONLY while the voice transcript is still on screen** (`readBack != nil && remembering == nil`) → cancel the run and **dismiss INSTANTLY** (the "you misheard me, redo" case — no "Stopped" flourish). Once the transcript dissolves into the working / "Remembering" line, cancel is left ALONE — computer use is quietly running.
 
-Two routes feed it: the **global** Esc tap (`RightCommandMonitor.onEscape`, §4) handles every state where we're *not* the key window (a voice capture / a transcript over another app); a **local** key monitor in the window (§7) owns the *typing* field, where it can consume Esc before the text field so dismissing never beeps. The global route skips `.typing` so the two never race.
+Two routes feed the cancel (there is NO global Esc — a keyDown tap is Input-Monitoring-gated, §4):
+the window's **local** Esc monitor (§7) covers every state **whenever Sentient is frontmost** — the
+typing field (where it consumes Esc before the text field so dismissing never beeps) and any notch
+state over the app's own windows; over OTHER apps, a **fresh right-⌘ press IS the cancel** —
+`voicePressBegan` routes a press during `.transcribing` to `cancelCurrent()`, and a press while the
+transcript is still shown to `stop()` (instant dismiss), before any new interaction can begin.
 
-**STOP is transcript-aware too — `stop()` unifies both.** A STOP click (or Esc) *while the transcript shows* dismisses instantly: it sets `.hidden` first, so `runFinished` sees a non-running phase and skips the flourish — while the run is still cancelled underneath. Once computer use is working, STOP halts it with the honest "Stopped" beat. The STOP button (`onStop`) and Esc both route through `stop()`, so they behave identically.
+**STOP is transcript-aware too — `stop()` unifies both.** A STOP click (or a cancel) *while the transcript shows* dismisses instantly: it sets `.hidden` first, so `runFinished` sees a non-running phase and skips the flourish — while the run is still cancelled underneath. Once computer use is working, STOP halts it with the honest "Stopped" beat. The STOP button (`onStop`), Esc, and the right-⌘ press all route through `stop()`, so they behave identically.
 
 **Run completion** (`run.onFinished`): if `phase == .running` → `.finishing(outcome)` → `scheduleHide(1.5)` (the ✓/stopped/✗ flourish; a non-running phase skips straight to `.hidden`). Notices (`flash`, e.g. "didn't catch that") hold **1.5s** too.
 
@@ -167,7 +175,7 @@ This is where most of the hard bugs were fought and won. The window is a **FIXED
 
 **(d) Typing needs a key window.** Entering `.typing`, `reveal(makeKey: true)` → `makeKeyAndOrderFront`: the `.nonactivatingPanel` becomes key (takes keystrokes) WITHOUT bringing the app forward over what you're using. A `didResignKey` observer (guarded against the focus-setup race via `typingKeyAt`) dismisses the field on click-away. `NotchPanel.constrainFrameRect` is overridden so the window can sit flush at the very top (over the menu bar).
 
-**(e) Esc for the type field (local key monitor).** `installKeyMonitor()` adds an `NSEvent.addLocalMonitorForEvents(.keyDown)` that, on Esc, calls `coordinator.cancelCurrent()` and swallows the event when handled. A LOCAL monitor needs no permission (it only sees events already routed to our key panel) and fires *before* the text field, so dismissing the type field never beeps. The other states' Esc is handled globally (§4); this exists only for the consume-before-the-field case. `settleDelay = 0.6s` — long enough for the dismiss *retract* (§8) to finish merging into the cutout before the window orders out.
+**(e) Esc — the LOCAL key monitor (the only Esc there is).** `installKeyMonitor()` adds an `NSEvent.addLocalMonitorForEvents(.keyDown)` that, on Esc, calls `coordinator.cancelCurrent()` and swallows the event when handled. A LOCAL monitor needs no permission (it only sees events already routed to us) and fires *before* the text field, so dismissing the type field never beeps — and it covers every notch state whenever Sentient itself is frontmost. Over other apps there is no Esc (a global keyDown tap is Input-Monitoring-gated, §4) — a fresh right-⌘ press is the cancel there (§6). `settleDelay = 0.6s` — long enough for the dismiss *retract* (§8) to finish merging into the cutout before the window orders out.
 
 Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the notch shows in screen recordings — Jesai chose recordability). Observers (`didChangeScreenParameters`, `activeSpaceDidChange`, `didWake`, `didActivateApplication`) re-place the canvas on the menu-bar display (`CGMainDisplayID`, not `NSScreen.main`) and re-`reveal()`; `host.update(metrics:)` re-renders on display change.
 
@@ -175,7 +183,7 @@ Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the not
 
 ## 8. The notch visual — `NotchView` / `NotchContent` / `NotchShape` / `SpinningLogo`
 
-`NotchView` is a thin binder reading `coordinator`; `NotchContent` is the pure, previewable visual (`phase, readBack, statusLine, remembering, metrics, onStop, onSubmitText`). Esc-to-dismiss isn't a `NotchContent` callback — it's caught globally (§4) + by the window's local key monitor (§7).
+`NotchView` is a thin binder reading `coordinator`; `NotchContent` is the pure, previewable visual (`phase, readBack, statusLine, remembering, metrics, onStop, onSubmitText`). Cancel isn't a `NotchContent` callback — it's the window's local Esc monitor (§7) plus the right-⌘ press beats (§6).
 
 **The shape sits FLUSH at the bezel.** `NotchShape`'s concave top corners (the genuine-notch flare into the screen edge) are now VISIBLE — the window's top is at the screen edge and the shape's top edge lands on it (the old `topBleed` that shoved the top off-screen is gone). `NotchSkirtShape` is its open twin: the visible perimeter (concave top corners → sides → rounded bottom) but NOT the flat top edge — the glow strokes this, so it warps up into the corners yet never lights the bezel line.
 
@@ -220,7 +228,7 @@ Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the not
 10. **Build hygiene** (`3_Dev_Notes_and_Rules.md`): isolate CLI builds (`-derivedDataPath /tmp/...`) or prefer the Xcode MCP `BuildProject`. Synchronized file groups auto-join a `.swift` dropped into `Notch Magic/`.
 11. **Default-MainActor isolation** is on. Off-main code (the audio tap, the CGEvent trampoline) must be `nonisolated` and capture locals, not `self`. A `static let` the off-main callback reads (e.g. `escKeyCode`) must be `nonisolated static`.
 12. **The dismiss is a RETRACT, not a fade.** On `.hidden`, the black shell stays opaque and morphs to the *exact hardware-notch silhouette* (size + radius), so it merges into the real cutout and the window orders out invisibly — a physical "suck back in." Only the inner content fades. (Notch-less displays fade — there's nothing to merge into.) An earlier flat opacity fade read as cheap; don't go back.
-13. **Listen-only `keyDown` is NOT gated** [MEASURED, macOS Tahoe, Input Monitoring off, app unfocused] — the long-assumed "keyDown needs Input Monitoring" was wrong, so we catch Esc on the same zero-permission tap (filtered in the C callback so we never flood the main actor). This **overturns the old "never mask keyDown" rule.** ⚠️ Verify on the macOS-15 floor before launch (§13); if gated there, fall back to a right-⌘-tap cancel.
+13. **Listen-only `keyDown` IS gated after all — the "never mask keyDown" rule stands.** An early Tahoe measurement suggested a listen-only keyDown tap flowed permission-free, so we shipped a global Esc on it. The field falsified that [2026-07-09, fresh TCC state]: Sentient landed in the Input Monitoring pane with a stray request, and the system disabled the tap every ~1.5s forever. The mask is `flagsChanged` only, permanently; the cancel moved to the local Esc monitor + the right-⌘ press (§4, §6).
 
 ---
 
@@ -262,7 +270,7 @@ Thick, layered (3 passes), vivid, all around the silhouette incl. the concave co
 The morph is a longer, bouncier spring; the read-back→work swap is a blur-dissolve-pop; work lines morph in place (`.contentTransition(.interpolate)`); the notch grows/shrinks to fit the read-back; and the **dismiss retracts/merges into the cutout** (§8) instead of fading. Optional if you ever want more: a bezel-descend stagger, content stagger — Dynamic-Island-grade.
 
 ### ✅ D. Dismiss everywhere (Esc · ⌘ · STOP) — **DONE**
-Esc cancels/dismisses globally via the zero-permission `keyDown` tap (§4) — the type field, listening, and the voice transcript; a right-⌘ tap closes the type field; STOP and Esc both dismiss the transcript INSTANTLY (no flourish) yet halt live computer use with the "Stopped" beat (§6). Computer-use Esc is left for the user's own apps. (⚠️ verify the keyDown tap on macOS 15, §13.)
+Esc cancels/dismisses via the window's LOCAL monitor whenever Sentient is frontmost — the type field, listening, transcribing, and the voice transcript; over other apps a fresh right-⌘ press is the cancel (transcribing bail + the instant transcript dismiss). A right-⌘ tap closes the type field; STOP and the cancels all route through `stop()`, dismissing the transcript INSTANTLY (no flourish) yet halting live computer use with the "Stopped" beat (§6). Esc over other apps is left entirely alone (no global keyDown tap — Input-Monitoring-gated, §4).
 
 ### E. Deferred touches (each its own focused pass)
 - **Behind-mic color dance:** a small blurred colored glow *behind the mic icon* in the listening state (distinct from the edge glow — the `.opening`→`.listening` "lean in" is the hook).
@@ -277,7 +285,7 @@ Esc cancels/dismisses globally via the zero-permission `keyDown` tap (§4) — t
 - **Arm the hotkey only after onboarding** — `CommandCoordinator.start()` is called unconditionally in `AppState.init` today (so it's testable). Gate it on `hasCompletedOnboarding`.
 - **Trim the Speech permission** if `SpeechAnalyzer` works mic-only (drop `VoiceCapture.requestSpeech()`; keep the Info.plist key).
 - **Smoke-test the macOS-15 voice fallback** on an old Mac.
-- **Verify global Esc on macOS 15.** The listen-only `keyDown` tap is measured permission-free on Tahoe only; confirm Esc still flows (app unfocused, Input Monitoring off) on the 15 floor — same old-Mac trip as the voice fallback. If gated there, fall back to a right-⌘-tap cancel (a modifier is always free).
+- ~~Verify global Esc on macOS 15~~ — RESOLVED 2026-07-09: the keyDown tap turned out to be Input-Monitoring-gated on Tahoe too (lesson 13); the global Esc is gone and the right-⌘ press is the cancel over other apps. Nothing left to verify on 15 for this.
 - **Confirm** the SkyLight pin + order-out never leaves the notch stuck visible when idle.
 - **Reduced-motion / VoiceOver** sanity pass.
 - **Retire the dev bench** `Views/Dev/HotkeyLabView.swift` + its DEV TOOLS → HOTKEY LAB button once the real hotkey is proven.
