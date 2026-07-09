@@ -150,6 +150,7 @@ final class CodexSetup {
             computerUseStatus = "✓ Computer use already set up"
             return
         }
+        refreshInstalled()   // fresh probe, not the cached flag — the user may have installed codex themselves
         guard installed else { computerUseStatus = "✗ Install Codex first (step 1)"; return }
         settingUpComputerUse = true
         computerUseStatus = force ? "Re-installing…" : "Starting…"
