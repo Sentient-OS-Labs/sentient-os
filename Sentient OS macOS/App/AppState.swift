@@ -71,7 +71,11 @@ final class AppState {
         if hasCompletedOnboarding {
             Task {
                 let center = UNUserNotificationCenter.current()
-                if await center.notificationSettings().authorizationStatus == .notDetermined {
+                let status = await center.notificationSettings().authorizationStatus
+                let names = ["notDetermined", "denied", "authorized", "provisional", "ephemeral"]
+                let label = names.indices.contains(status.rawValue) ? names[status.rawValue] : "\(status.rawValue)"
+                Log("Notifications: launch status = \(label)")
+                if status == .notDetermined {
                     _ = try? await center.requestAuthorization(options: [.provisional])
                     Log("Notifications: banked provisional (quiet) authorization")
                 }
