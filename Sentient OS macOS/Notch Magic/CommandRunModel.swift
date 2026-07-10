@@ -10,7 +10,7 @@
 //  lets the coordinator move the notch from running → finishing. Everything also tees to Log()
 //  (tail /tmp/sentient-dev.log). Doc: Documentation/Notch Magic/.
 //
-//  Key methods: start(_:mode:) · stop() · commandPrompt(task:mode:hasScreenshot:).
+//  Key methods: start(_:mode:) · stop() · commandPrompt(task:mode:hasScreenshot:spoken:).
 //
 
 import Foundation
@@ -58,7 +58,8 @@ final class CommandRunModel {
             // Screen Recording grant is missing → runs text-only). Deleted the moment codex is done.
             let shot = await ScreenCapture.grab()
             defer { ScreenCapture.discard(shot) }
-            let prompt = Self.commandPrompt(task: task0, mode: mode, hasScreenshot: shot != nil)
+            let prompt = Self.commandPrompt(task: task0, mode: mode, hasScreenshot: shot != nil,
+                                            spoken: source == "voice")
             Log("CMD: launching codex exec (gpt-5.6-sol · \(mode.promptPhrase) · bypass sandbox · screenshot: \(shot != nil))…")
             #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
                         // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
@@ -210,7 +211,14 @@ final class CommandRunModel {
     /// read the knowledge base (path resolved from `~`) with its shell/file tools — NOT by opening it in a
     /// GUI app like Obsidian. When `hasScreenshot`, a frame of the user's live screen is attached (via
     /// `codex exec -i`), so the prompt tells the agent to ground "this"/"here" in what it can see.
-    nonisolated static func commandPrompt(task: String, mode: AgentMode, hasScreenshot: Bool) -> String {
+    /// When `spoken` (Sidekick's hold-to-talk), the agent is told the task is a speech-to-text transcript,
+    /// so it reads through mis-transcriptions instead of taking them literally — but doesn't gamble on an
+    /// uncertain reading when the outcome would be non-trivial.
+    nonisolated static func commandPrompt(task: String, mode: AgentMode, hasScreenshot: Bool,
+                                          spoken: Bool = false) -> String {
+        let voiceLine = spoken
+            ? "\nThe task above was spoken by me and transcribed with speech-to-text. Use common sense for anything that may have been mis-transcribed; but if picking the wrong reading could have a non-trivial outcome, don't act on a guess.\n"
+            : ""
         let screenLine = hasScreenshot
             ? "\nAttached is a screenshot of my screen exactly as it looks right now. Use it to see what I'm currently looking at — resolve any \"this\", \"here\", \"that form\", etc. against what's on screen before you act.\n"
             : ""
@@ -221,7 +229,7 @@ final class CommandRunModel {
             : "\nStanding preferences I've set for you (apply them wherever they're relevant to this task): \(context)\n"
         return """
         Using \(mode.promptPhrase), \(task)
-        \(screenLine)
+        \(voiceLine)\(screenLine)
         Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate). Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
         \(contextLine)
         For context about me, my knowledge base is a folder of markdown files at '\(VaultGenerator.vaultRoot.path)'. When you need it, read it directly with your shell/file tools — `ls`, `cat`, and `grep` the .md files. Do NOT open it in Obsidian or any GUI app to read it.
