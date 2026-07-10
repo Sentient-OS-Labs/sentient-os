@@ -22,6 +22,8 @@ import Speech
 import UserNotifications
 
 struct HealthPane: View {
+    /// Optional on purpose: the pane's #Preview renders without an AppState in the environment.
+    @Environment(AppState.self) private var appState: AppState?
     @State private var codex = CodexSetup.shared
 
     // Sentient's own grants
@@ -219,6 +221,9 @@ struct HealthPane: View {
         Task {
             _ = await WakeHelperInstaller.installAsync()
             refreshDaemon()
+            // A fresh install may be the last missing prerequisite — re-run the 18h check now
+            // instead of waiting for the next launch (this app rarely relaunches).
+            if daemon == .ready { appState?.scheduler.maybeAutoEnable() }
         }
     }
 

@@ -50,6 +50,10 @@ struct RootView: View {
                 // knowledge base, before the cards (or the free-plan preview message) behind it.
                 OnboardingView {
                     withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
+                    // The first full cycle just stamped "initial done" — arm the 18h clock NOW.
+                    // (The app lives in the menu bar and rarely relaunches, so waiting for the
+                    // next launch tick could delay auto-enable by days.)
+                    appState.scheduler.maybeAutoEnable()
                     Task {
                         try? await Task.sleep(for: .seconds(0.6))   // let the home settle first
                         openWindow(id: KnowledgeView.windowID)

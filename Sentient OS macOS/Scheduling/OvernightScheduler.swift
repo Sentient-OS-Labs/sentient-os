@@ -29,9 +29,10 @@ final class OvernightScheduler {
     /// One-line status for the dev UI ("off" / "armed for 4:00 PM" / "running…").
     var statusLine = "off"
 
-    /// Set true when the 18h auto-enable wants to arm but the prerequisites (approved root helper +
-    /// launch-at-login) aren't in place yet. The setup UX (dev section today, onboarding later) reads
-    /// this to prompt the user; it clears itself once auto-enable succeeds.
+    /// Set true when the 18h auto-enable wants to arm but a prerequisite is missing: the root
+    /// helper isn't installed (onboarding's permissions step and Settings → Health own the
+    /// install), or launch-at-login is off. The setup UX reads this to prompt the user; it
+    /// clears itself once auto-enable succeeds.
     var needsSchedulerSetup = false
 
     // The DEV toggle (testing) and the PRODUCTION flag are separate keys but either one runs the
@@ -116,8 +117,8 @@ final class OvernightScheduler {
     /// Decide whether to auto-enable the production scheduler. Idempotent + safe to call repeatedly —
     /// from launch (AppState.init), right after any cycle finishes, and from the one-shot timer it arms.
     /// Fires at most once (a latch), never fights a user who toggled the scheduler off, and only arms
-    /// when the prerequisites (approved root helper + launch-at-login) are in place — otherwise it flags
-    /// `needsSchedulerSetup` for the setup UX and retries on the next tick.
+    /// when the prerequisites (installed root helper + launch-at-login) are in place — otherwise it
+    /// flags `needsSchedulerSetup` for the setup UX and retries on the next tick.
     func maybeAutoEnable() {
         // Free/go knowledge-base-only mode: no quota for nightly runs — auto-enable never fires.
         // Deliberately NOT latched, so an upgrade (+ reset) later starts the 18h clock fresh.
@@ -125,21 +126,35 @@ final class OvernightScheduler {
         let d = UserDefaults.standard
         guard !d.bool(forKey: Self.autoEnableFiredKey) else { return }      // already handled once
 
-        // The user already turned the scheduler on (dev or prod) — latch and never auto-touch it.
-        if d.bool(forKey: Self.enabledKey) || d.bool(forKey: Self.prodEnabledKey) {
+        // The production scheduler is already on — latch and never auto-touch it. ONLY the prod
+        // flag latches: the DEV toggle is a test arm, and burning the one-shot on it would kill
+        // auto-enable for the install (the exact drift the two-keys design exists to prevent).
+        if d.bool(forKey: Self.prodEnabledKey) {
             d.set(true, forKey: Self.autoEnableFiredKey); return
         }
 
         guard let fireAt = Self.autoEnableFireDate else { return }          // initial not finished yet
         if Date() < fireAt { armAutoEnableTimer(at: fireAt); return }       // not time yet — wait
 
-        // Time's up. Only enable if the overnight run can actually happen: approved helper + login item.
-        guard WakeHelperClient.shared.isReady else {
+        // Time's up. Only enable if the overnight run can actually happen: an installed helper.
+        // The PRODUCTION install (WakeHelperInstaller — onboarding + Settings → Health) lives at
+        // /Library/LaunchDaemons and is INVISIBLE to SMAppService, so the plist check comes first;
+        // `isReady` is the dev cockpit's SMAppService approval path.
+        guard WakeHelperInstaller.isInstalledAndCurrent() || WakeHelperClient.shared.isReady else {
             needsSchedulerSetup = true                                      // surface setup; retry next tick
-            Log("Scheduler: 18h elapsed but root helper not approved — awaiting setup")
+            Log("Scheduler: 18h elapsed but root helper not installed — awaiting setup")
             return
         }
-        LoginItem.enable()                                                  // ensure the app relaunches to host 3am
+        // The app must be alive at 3am to host the run — enable launch-at-login, and treat a
+        // refusal (the user revoked it in System Settings; macOS won't let us silently re-enable)
+        // as a missing prerequisite. Enabling anyway would mean silent empty mornings with no
+        // caution banner: the run never starts, so nothing ever classifies as failed.
+        LoginItem.enable()
+        guard LoginItem.isEnabled else {
+            needsSchedulerSetup = true
+            Log("Scheduler: 18h elapsed but launch-at-login is off (revoked?) — awaiting setup")
+            return
+        }
         d.set(true, forKey: Self.prodEnabledKey)
         d.set(true, forKey: Self.autoEnableFiredKey)
         needsSchedulerSetup = false
@@ -162,45 +177,40 @@ final class OvernightScheduler {
 
     // MARK: - Helper readiness
 
-    /// Ensure the root daemon is registered & approved before arming. Returns true when it's ready to
-    /// accept XPC. PRODUCTION path: SMAppService (one-click System Settings approval, no password) —
-    /// `.enabled` means go, `.requiresApproval` bails and lets the setup UX walk the user through it.
-    /// DEBUG dev builds (unsigned, or the plist not bundled → `.notFound`) fall back to the proven
-    /// admin-password installer so testing keeps working without a signed distribution build.
+    /// Ensure the root daemon is installed before arming. Returns true when it's ready to accept
+    /// XPC. PRODUCTION path: the admin-password installer's plist at /Library/LaunchDaemons
+    /// (WakeHelperInstaller — onboarding and Settings → Health both run it). That install is
+    /// INVISIBLE to SMAppService, so the plist check comes FIRST in every config; the SMAppService
+    /// `.enabled` read second covers the dev cockpit's approval flow. Neither present → DEBUG
+    /// self-installs (the proven admin fallback, so a clean dev slate still works); Release flags
+    /// `needsSchedulerSetup` for the setup UX — it never registers or prompts on its own (a
+    /// `register()` here would park a stray "Sentient OS" approval in System Settings > Login Items).
     private func ensureHelperReady(log: SchedulerLog) async -> Bool {
-        let client = WakeHelperClient.shared
-        if client.isReady { return true }
-
-        let status = client.register()   // may surface the System Settings approval prompt
-        log.line("helper SMAppService status after register: \(status.rawValue)")
-        switch status {
-        case .enabled:
-            try? await Task.sleep(for: .seconds(1))   // let launchd settle before the first connection
+        // ① The production install — the /Library/LaunchDaemons plist pointing at this binary.
+        if WakeHelperInstaller.isInstalledAndCurrent() {
             needsSchedulerSetup = false
             return true
-        case .requiresApproval:
-            needsSchedulerSetup = true
-            statusLine = "approve in System Settings"
-            log.line("helper needs approval in System Settings > Login Items — awaiting user")
-            return false
-        default:   // .notRegistered / .notFound — plist not bundled or build not signed for SMAppService
-            #if DEBUG
-            log.line("SMAppService unavailable (\(status.rawValue)) — DEBUG fallback to admin-password installer")
-            if !WakeHelperInstaller.isInstalledAndCurrent() {
-                statusLine = "installing helper…"
-                let ok = await WakeHelperInstaller.installAsync()
-                log.line("helper install (admin): \(ok ? "OK" : "declined/failed")")
-                guard ok else { statusLine = "needs your password; toggle off then on to retry"; return false }
-                try? await Task.sleep(for: .seconds(1))
-            }
-            return true
-            #else
-            needsSchedulerSetup = true
-            statusLine = "helper unavailable"
-            log.line("helper unavailable in Release (status \(status.rawValue)) — awaiting setup")
-            return false
-            #endif
         }
+        // ② The dev cockpit's SMAppService daemon, approved in System Settings.
+        if WakeHelperClient.shared.isReady {
+            needsSchedulerSetup = false
+            return true
+        }
+        #if DEBUG
+        log.line("helper not installed — DEBUG fallback to the admin-password installer")
+        statusLine = "installing helper…"
+        let ok = await WakeHelperInstaller.installAsync()
+        log.line("helper install (admin): \(ok ? "OK" : "declined/failed")")
+        guard ok else { statusLine = "needs your password; toggle off then on to retry"; return false }
+        try? await Task.sleep(for: .seconds(1))   // let launchd settle before the first connection
+        needsSchedulerSetup = false
+        return true
+        #else
+        needsSchedulerSetup = true
+        statusLine = "helper not set up"
+        log.line("helper not installed — awaiting setup (onboarding / Settings → Health)")
+        return false
+        #endif
     }
 
     private func loop() async {

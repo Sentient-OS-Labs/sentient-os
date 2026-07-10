@@ -32,7 +32,17 @@ enum FactoryReset {
         d.removeObject(forKey: CodexAuth.kbOnlyKey)     // the crossroads re-detects the plan fresh
         d.removeObject(forKey: AppState.onboardingKey)
         d.removeObject(forKey: ComputerUseGate.screenRecordingOfferedKey)   // re-offer Sentient's screen recording on rebuild
+        // The overnight scheduler starts over too: the 18h clock re-stamps at the REBUILD's first
+        // cycle (not the wiped one's), the auto-enable one-shot is re-armed, and the production
+        // flag comes off — otherwise a 3am run could fire mid-onboarding, racing the user's own
+        // first analysis on an empty store. (The dev toggle and the installed helper survive —
+        // one is a dev choice, the other a grant, not a learning.)
+        d.removeObject(forKey: OvernightScheduler.firstCycleAtKey)
+        d.removeObject(forKey: OvernightScheduler.autoEnableFiredKey)
+        d.removeObject(forKey: OvernightScheduler.prodEnabledKey)
+        appState?.scheduler.needsSchedulerSetup = false
+        appState?.scheduler.reevaluate()                // prod flag is gone → stops the loop + cancels the armed wake
         appState?.hasCompletedOnboarding = false        // live flip (didSet re-persists false)
-        Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy · rewound to onboarding")
+        Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy + scheduler state · rewound to onboarding")
     }
 }
