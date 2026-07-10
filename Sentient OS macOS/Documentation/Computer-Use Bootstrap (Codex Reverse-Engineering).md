@@ -8,8 +8,9 @@ Implementation: `ComputerUseSetup.swift` (the bootstrap), `CodexSetup.swift` (st
 `CodexSetupView.swift` (the dev button). Onboarding usage: `Codex Setup Handoff (Onboarding).md`.
 
 > Values like the DMG size, plugin version, and sha256s in this doc are **snapshots from the June 2026
-> teardown** (Codex.app 26.623.42026, computer-use plugin 1.0.857). They WILL drift. The *method* is what
-> stays true — §4 and §5 are the parts that matter long-term.
+> teardown** (Codex.app 26.623.42026, computer-use plugin 1.0.857), updated for the **July 2026
+> ChatGPT-app rename** (§1.5). They WILL drift. The *method* is what stays true — §4 and §5 are the
+> parts that matter long-term.
 
 ---
 
@@ -35,15 +36,62 @@ hosted by us.
 ```
 Official, public, no-auth CDN URL (found in the codex CLI binary's strings):
     https://persistent.oaistatic.com/codex-app-prod/Codex.dmg
-    (≈505 MB · Cloudflare · application/x-apple-diskimage · override via `codex app --download-url`)
+    (≈535 MB · Cloudflare · application/x-apple-diskimage · override via `codex app --download-url`)
 ```
+
+---
+
+## 1.5 The July 2026 update: the ChatGPT app rename, skill variants, and the two runtimes
+
+OpenAI merged the Codex desktop app into the new **ChatGPT desktop app** (2026-07). Same DMG URL,
+but four things changed — all verified against a real desktop-app install on 2026-07-09 and re-verified
+end-to-end after a full wipe:
+
+1. **The app at the DMG root is now `ChatGPT.app`** (was `Codex.app`). The bootstrap no longer
+   hardcodes the name: `marketplace(inMount:)` scans the DMG root for any `.app` and keys on the
+   payload's shape (`Contents/Resources/plugins/openai-bundled` existing), so the next rename can't
+   break it.
+
+2. **The plugin ships skill VARIANTS.** The `skills/computer-use/SKILL.md` inside the payload is a
+   policy-only stub; the real CLI skill (node_repl runtime bootstrap + API docs + the confirmation
+   policy) sits beside the manifest as `.codex-plugin/computer-use-node-repl.md`. The desktop app's
+   enable flow **swaps the variant in** as `SKILL.md` (in BOTH the plugin-cache and marketplace trees)
+   and stamps `"bundledContentVariant": "node-repl"` into both `plugin.json` copies. Our bootstrap
+   reproduces that byte-for-byte (`selectNodeReplVariant`). ⚠️ A plain ditto without the swap installs
+   the stub → codex has no runtime instructions and flails (`js_add_node_module_dir` roulette in the
+   logs — the field signature of this failure).
+
+3. **The client ships TWO runtimes, and the CLI picks at launch.** `SkyComputerUseClient` carries
+   `CODEX_COMPUTER_USE_MCP_RUNTIME_NODE_REPL` and `…_LEGACY_MCP` flags:
+   - **node_repl mode** (seen on codex v0.142.5): the MCP server exposes a generic JavaScript REPL
+     (`node_repl/js`, `js_reset`, `js_add_node_module_dir`); the model imports the plugin's wrapper
+     (`scripts/computer-use-client.mjs` → `setupComputerUseRuntime()`) and drives a `sky.*` JS API.
+     The JS is hosted **in-process via WebKit** — no node binary needed on the Mac (measured: works
+     on a machine with zero node installs; the desktop app's `cua_node/` is for other plugins).
+   - **legacy/direct mode** (seen on codex v0.144.1): the classic direct MCP tools
+     (`computer-use/get_app_state`, `click`, …) — faster for simple commands (no bootstrap round trips).
+   The runtime choice is the CLI's, independent of the static skill file — v0.144.1 even ignores the
+   `bundledContentVariant` stamp. So the skill text can describe node_repl while the tools offered are
+   direct: **that mismatch is OpenAI's transition seam, not ours** (an official desktop install produces
+   the identical file), and it's harmless — the model uses the tools that exist. **Both runtimes verified
+   working with our bootstrap output.**
+
+4. **macOS re-asks for the helper's Screen Recording after updates.** The TCC grant itself survives
+   (same bundle id `com.openai.sky.CUAService`, same signing), but replacing the helper binary triggers
+   macOS's screen-capture **re-approval popup** (the `replayd` layer) on the next capture. It's invisible
+   to TCC reads — the health rows show granted while capture silently waits — undetectable and
+   unpreventable by us; the user clicks Allow once. Don't chase this ghost.
+
+The confirmation-policy patch also changed shape with this update — see
+`Computer-Use Skill Patch (Confirmation Policy).md` (now section-scoped and automated).
 
 ---
 
 ## 2. What we copy, where, and why (the bootstrap spec)
 
 Everything comes from one source subtree in the mounted DMG:
-`/<mount>/Codex.app/Contents/Resources/plugins/openai-bundled/`
+`/<mount>/<app>.app/Contents/Resources/plugins/openai-bundled/` (the app is `ChatGPT.app` since
+2026-07, `Codex.app` before — located by shape, never by name; §1.5)
 
 | Dest under `~/.codex/` | Source (inside `…/openai-bundled/`) | Why it's needed |
 |---|---|---|
@@ -70,6 +118,12 @@ enabled = true
 `[marketplaces.openai-bundled]`, the `computer-use/` native app) was written earlier, at desktop-app
 **install/first-launch**, not at the toggle. We do it all in one shot.
 
+**Plus the variant swap (since 2026-07, §1.5):** after the copies, overwrite
+`skills/computer-use/SKILL.md` with `.codex-plugin/computer-use-node-repl.md` in BOTH installed trees
+and stamp `"bundledContentVariant": "node-repl"` into both `plugin.json` copies — exactly what the
+desktop app's enable flow produces. A payload without the variant file predates the mechanism → no-op.
+Then the confirmation-policy patch is applied (`ComputerUseSkillPatch.ensureApplied()` — its own doc).
+
 ### Why the plugin is portable (important)
 The plugin's `.mcp.json` launches the helper with a **relative** command and `cwd: "."`:
 ```json
@@ -82,9 +136,10 @@ copy-into-`~/.codex` works with no path rewriting. **Re-verify this if things ch
 switches to absolute paths, the copy alone won't be enough.
 
 ### What we deliberately DON'T copy
-- **`cua_node/`** (`Codex.app/Contents/Resources/cua_node`) — the Node runtime for the **browser/chrome**
-  plugins (the `[mcp_servers.node_repl]` block). Computer use does **not** need it; we omit that block
-  entirely. (Only vendor `cua_node/` + rewrite its two paths if we ever want browser control too.)
+- **`cua_node/`** (`<app>.app/Contents/Resources/cua_node`) — the Node runtime for the **browser/chrome**
+  plugins (the `[mcp_servers.node_repl]` block). Computer use does **not** need it — even the plugin's
+  node_repl runtime hosts its JS in-process via WebKit (§1.5), measured working on a Mac with zero node
+  installs. (Only vendor `cua_node/` + rewrite its two paths if we ever want browser control too.)
 - **`~/.codex/tmp/`** (no dot) — volatile execve-wrapper scratch (symlinks to the codex binary). Transient.
 - **`plugins/cache/openai-curated-remote/…`** (gmail, gcal, github, …) — unrelated, network-installed plugins.
 
@@ -98,7 +153,7 @@ skip ours rather than clobber it.
 Copying files does **not** grant Accessibility / Screen Recording. The native helper needs them at runtime;
 the desktop app uses an `Installer.app` / `CodexComputerUseAuthorizationPlugin` for that. In Sentient this
 is handled separately (`Permissions.grantComputerUseAutomation()` writes the Automation TCC row; the rest
-is onboarding UX). The bootstrap intentionally writes no TCC.
+is onboarding UX). The bootstrap intentionally writes no TCC. (Since 2026-07 the SETUP ENGINE self-heals the Automation grant right after install — `CodexSetup` → `Permissions.selfHealComputerUseAutomation` — still via Permissions, never in the bootstrap itself.)
 
 ---
 
@@ -107,18 +162,24 @@ is onboarding UX). The bootstrap intentionally writes no TCC.
 `install(force:onLine:)` runs the whole flow, streaming human-readable progress:
 1. **Download** the DMG via `URLSession` (a small `URLSessionDownloadDelegate` reports % progress).
 2. **Mount** read-only: `hdiutil attach <dmg> -nobrowse -readonly -mountpoint <tmp>`.
-3. **Extract** each of the 3 trees with **`ditto`** (not `cp`) — `ditto` preserves the code signatures and
+3. **Locate** the payload by shape (`marketplace(inMount:)` — any `.app` at the DMG root carrying
+   `Contents/Resources/plugins/openai-bundled`; name-agnostic since the ChatGPT rename).
+4. **Extract** each of the 3 trees with **`ditto`** (not `cp`) — `ditto` preserves the code signatures and
    extended attributes of the signed `.app` bundles. Each dest is removed first, then copied (clean replace).
-4. **Patch** `config.toml` idempotently (prepend `notify`, append the two tables, each only if its marker
+5. **Select the node-repl skill variant** (`selectNodeReplVariant` — §1.5/§2) and apply the
+   confirmation-policy patch (`ComputerUseSkillPatch.ensureApplied()`).
+6. **Patch** `config.toml` idempotently (prepend `notify`, append the two tables, each only if its marker
    is absent).
-5. **Clean up:** `hdiutil detach` and delete the 505 MB DMG — both via `defer`, so they run on every exit
+7. **Clean up:** `hdiutil detach` and delete the ~535 MB DMG — both via `defer`, so they run on every exit
    path (success or throw). The only thing left on disk is the ~300 MB of extracted files in `~/.codex`.
 
 **Idempotency / repair:** `ComputerUseSetup.isInstalled` is a 3-part AND — (a) the native Mach-O exists
 (`…/SkyComputerUseService`, not just the `.app` dir → catches a half-copy), (b) a plugin version dir with
-its `plugin.json` exists, (c) `config.toml` contains the enable block. All true → skip (no wasteful
-re-download), including an install done by the *real* desktop app. Any missing → it re-runs and repairs.
-`force: true` (the "Re-install" button) bypasses the skip for a clean replace.
+its `plugin.json` AND the node-repl skill (`SKILL.md` contains `setupComputerUseRuntime` — a policy-only
+stub is a broken half-install and must read as "not installed"), (c) `config.toml` contains the enable
+block. All true → skip (no wasteful re-download), including an install done by the *real* desktop app.
+Any missing → it re-runs and repairs. `force: true` (the "Re-install" button) bypasses the skip for a
+clean replace.
 
 **Idempotent config-patch detail:** the top-level `notify` key must precede any `[table]` in TOML, so it's
 *prepended*; the two tables are *appended*. Each is guarded by a `contains`/regex check so re-runs don't
@@ -198,14 +259,19 @@ server won't launch; or a real `codex exec` computer-use call errors.
 
 **Fast path (just the layout changed):**
 1. Download the *current* DMG and mount it (or install the current desktop app once).
-2. Inspect `Codex.app/Contents/Resources/plugins/openai-bundled/` — has the structure moved? Is
+2. Inspect `<app>.app/Contents/Resources/plugins/openai-bundled/` — has the structure moved? Is
    `plugins/computer-use/` still there? Is `Codex Computer Use.app` still inside it? Is the plugin's
-   `.mcp.json` still using **relative** paths (`cwd:"."`)? Note the new `plugin.json` `version`.
-3. Update the constants in **`ComputerUseSetup.swift`** to match — they're all in one place:
+   `.mcp.json` still using **relative** paths (`cwd:"."`)? Are the skill variants still in
+   `.codex-plugin/` (§1.5)? Note the new `plugin.json` `version`.
+3. Update **`ComputerUseSetup.swift`** to match — it's all in one place:
    - `dmgURL` (if the CDN path changed),
-   - `marketplaceInDMG` (the in-DMG source path),
+   - `marketplace(inMount:)` (the shape-based payload lookup),
+   - `selectNodeReplVariant` (if the variant mechanism changed),
    - the three dest paths in `install(...)` and the `isInstalled` checks,
    - the `config.toml` blocks in `patchConfig()`.
+4. **The reliable shortcut:** install the current desktop app once, enable computer use, and diff its
+   `~/.codex` output against our bootstrap's — the desktop app's output is the ground truth we mirror
+   (that's exactly how the 2026-07 variant swap was derived).
 
 **Full path (behaviour changed — e.g. it now downloads, or pins, or uses absolute paths):** re-run the
 **§4 protocol** end-to-end against the current desktop app. If the 3-snapshot diff shows a network fetch,
@@ -228,7 +294,9 @@ call; the computer-use action needs Accessibility/Screen-Recording granted — h
 
 ---
 
-## 7. Reference data — June 2026 teardown (will drift)
+## 7. Reference data — snapshots (will drift)
+
+**June 2026 teardown:**
 
 | Thing | Value |
 |---|---|
@@ -240,12 +308,25 @@ call; the computer-use action needs Accessibility/Screen-Recording granted — h
 | `SkyComputerUseService` (computer-use) sha256 | `9fb6b35012117308f65c…` |
 | codex CLI tested | `0.142.3` (npm) |
 
+**July 2026 (the ChatGPT-app rename, §1.5):**
+
+| Thing | Value |
+|---|---|
+| DMG URL | unchanged |
+| DMG size | 560,958,016 B (≈535 MB) |
+| App at DMG root | `ChatGPT.app` |
+| computer-use plugin | `1.0.1000366` |
+| Helper bundle id / version | `com.openai.sky.CUAService` · `26.708.1000366` (unchanged id + signing → TCC grants survive) |
+| codex CLI verified | `0.142.5` (node_repl runtime) · `0.144.1` (legacy/direct runtime) — both working |
+
 ---
 
 ## 8. Code map
 
-- **`ComputerUseSetup.swift`** — the bootstrap (download → mount → ditto → patch → cleanup), `isInstalled`,
-  `install(force:onLine:)`, the `Downloader` (URLSession progress).
+- **`ComputerUseSetup.swift`** — the bootstrap (download → mount → ditto → variant swap → patch →
+  cleanup), `isInstalled`, `install(force:onLine:)`, the `Downloader` (URLSession progress).
+- **`ComputerUseSkillPatch.swift`** — the confirmation-policy relaxation (section-scoped, automated;
+  its own doc).
 - **`CodexSetup.swift`** — the shared setup engine; step 3 = `setupComputerUse(force:)` +
   `computerUseReady`/`refreshComputerUse()`; `whatsNeeded()` for the onboarding driver.
 - **`CodexSetupView.swift`** — the dev "CODEX SETUP" window; the "Set up computer use" / "Re-install" button.

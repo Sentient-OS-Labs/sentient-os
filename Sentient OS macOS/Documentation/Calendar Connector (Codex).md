@@ -77,16 +77,16 @@ succeed under the bypass flag. So the write path needed **no change**; all of `C
 are read-only and need no bypass.
 
 ## Models & effort (the light cloud tier, like Gmail)
-`gpt-5.4-mini` / `.medium` carries every Calendar **read** (connect-check, monthly/iterative summaries,
+`gpt-5.6-luna` / `.medium` carries every Calendar **read** (connect-check, monthly/iterative summaries,
 the proactive fetch) — calendar data is small and structured. The **write** (executor) uses the default
-`gpt-5.5` / `.high`. Set via `CodexCLI.Invocation.model` + `.effort`.
+`gpt-5.6-sol` / `.high`. Set via `CodexCLI.Invocation.model` + `.effort`.
 
 | Call | Model | Effort | Sandbox |
 |---|---|---|---|
-| Connect-check (`probeConnected`) | `gpt-5.4-mini` | `medium` | read-only |
-| Reads (`runInitial`/`runIterative`) | `gpt-5.4-mini` | `medium` | read-only |
-| Proactive fetch (`fetchProactiveContext`) | `gpt-5.4-mini` | `medium` | read-only |
-| Add-event (`ProactiveExecutor.fireCalendar`) | `gpt-5.5` | `high` | **bypassApprovals** |
+| Connect-check (`probeConnected`) | `gpt-5.6-luna` | `medium` | read-only |
+| Reads (`runInitial`/`runIterative`) | `gpt-5.6-luna` | `medium` | read-only |
+| Proactive fetch (`fetchProactiveContext`) | `gpt-5.6-luna` | `medium` | read-only |
+| Add-event (`ProactiveExecutor.fireCalendar`) | `gpt-5.6-sol` | `high` | **bypassApprovals** |
 
 ## Gotchas (measured live, June 21)
 - **The connector works regardless of `--ignore-user-config`.** The calendar tools are account-level

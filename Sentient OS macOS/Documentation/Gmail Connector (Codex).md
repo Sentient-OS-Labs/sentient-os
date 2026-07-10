@@ -45,19 +45,21 @@ dense summary with an explicit **action-items** section, built to feed the proac
 Structured reply (`--output-schema`): `{ thread_count, notable, has_action_items, summary }`.
 
 ## Models & effort (per the model tiers)
-The light model carries the Gmail tier; gpt-5.5 carries the knowledge base. Set via
+The light model carries the Gmail tier; gpt-5.6-sol carries the knowledge base. Set via
 `CodexCLI.Invocation.model` + `.effort`:
 
 | Call | Model | Effort |
 |---|---|---|
-| Connect-check (`probeConnected`) | `gpt-5.4-mini` | `medium` |
-| Gmail reads (`runInitial`/`runIterative`) | `gpt-5.4-mini` | `medium` |
-| Initial vault build (`VaultGenerator`) | `gpt-5.5` | `xhigh` |
-| KB update + proactive + everything else | `gpt-5.5` | `high` |
+| Connect-check (`probeConnected`) | `gpt-5.6-luna` | `medium` |
+| Gmail reads (`runInitial`/`runIterative`) | `gpt-5.6-luna` | `medium` |
+| Initial vault build (`VaultGenerator`) | `gpt-5.6-sol` | `xhigh` |
+| KB update + proactive + everything else | `gpt-5.6-sol` | `high` |
 
-⚠️ On a **ChatGPT-account** auth (no API key) only **gpt-5.5** and the **gpt-5.4** family are
-available — `gpt-5.4-spark`, `gpt-5.5-codex`, and the gpt-5/5.5 `-mini`s are all rejected. `gpt-5.4-mini`
-is the light model we landed on for Gmail [MEASURED June 15]. `.high` is the `Invocation` default (the initial vault build overrides to `.xhigh`).
+⚠️ Not every SKU rides a **ChatGPT-account** auth (no API key): in the June 15 measurement (the
+gpt-5.5 era) `gpt-5.4-spark`, `gpt-5.5-codex`, and the older `-mini`s were all rejected. The current
+gpt-5.6 lineup (sol/luna, adopted 2026-07-09) works on ChatGPT plans — verified live — but re-verify
+any NEW model through `codex exec` before adopting it. `.high` is the `Invocation` default (the
+initial vault build overrides to `.xhigh`).
 
 ## Gotchas (measured live, June 15)
 - **The Gmail connector works regardless of `--ignore-user-config`.** The Gmail tools are

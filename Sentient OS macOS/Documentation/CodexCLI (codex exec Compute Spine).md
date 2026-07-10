@@ -35,7 +35,7 @@ plumbing).
   `$ command`s, `→ mcp.tool`s, `🔎 search`es) for live UIs (the For You cards).
 - `runAgentCommand(_:timeout:onLine:)` — **the computer-use spine** (the command bar, Sidekick, and
   the executor's `computer` channel): a raw `codex exec` with the exact flag set measured to make
-  Codex's computer use work on the CLI (`--dangerously-bypass-approvals-and-sandbox`, gpt-5.5,
+  Codex's computer use work on the CLI (`--dangerously-bypass-approvals-and-sandbox`, gpt-5.6-sol,
   `model_reasoning_effort=low`, NO `--json` — human-readable output, prompt in argv), streaming each
   output line live. ⚠️ It runs with the FULL inherited environment + a rich PATH
   (`richEnvironment`) — computer use's helper IPC socket lives under the real `$TMPDIR`, so the
@@ -44,8 +44,8 @@ plumbing).
 - **Cancellation is real:** cancelling the awaiting Task (a card's STOP, the notch's stop button)
   terminates the codex child process via a `withTaskCancellationHandler` + process holder.
 
-`Invocation`: `prompt` (always over **stdin**, never argv) · `model` (`.gpt55` = `gpt-5.5`, the
-default for knowledge-base work and everything else / `.gpt54mini` = `gpt-5.4-mini`, the Gmail
+`Invocation`: `prompt` (always over **stdin**, never argv) · `model` (`.gpt56sol` = `gpt-5.6-sol`, the
+default for knowledge-base work and everything else / `.gpt56luna` = `gpt-5.6-luna`, the Gmail
 tier) · `effort` (`.low` / `.medium` / `.high` / `.xhigh`; **default `.high`** — the initial vault
 build overrides to `.xhigh`, the Gmail tier to `.medium`) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` · `addDirs`
 (extra writable roots) · `webSearch` (**default `true`** — web search is available to every call)
@@ -67,7 +67,7 @@ like Gmail `send_email` fires headless — TRUSTED prompts only, no sandbox) · 
 | `--skip-git-repo-check` | staging dirs and the vault aren't git repos; codex refuses to run otherwise |
 | `--ignore-user-config` | **Default OFF (we DON'T pass it):** `Invocation.includeUserConfig` defaults `true`, so every call loads the user's `~/.codex` config + MCP servers (their Gmail MCP, etc.). We pass `--ignore-user-config` ONLY for an explicitly hermetic run (`includeUserConfig = false`). |
 | `-c tools.web_search=true` | added whenever `Invocation.webSearch` is true — now the **default**, so web search is an available tool on every call |
-| `-m <model>` + `-c model_reasoning_effort=…` | the per-call `Invocation.model` (`gpt-5.5` for KB work / `gpt-5.4-mini` for Gmail) and `Invocation.effort` — explicit beats the binary's drifting default |
+| `-m <model>` + `-c model_reasoning_effort=…` | the per-call `Invocation.model` (`gpt-5.6-sol` for KB work / `gpt-5.6-luna` for Gmail) and `Invocation.effort` — explicit beats the binary's drifting default |
 | `-c approval_policy="never"` (default path) | headless `exec` can't ask a human, so without it codex would stall on shell/file approvals. `never` = don't prompt; the Seatbelt sandbox (`-s`) stays the real guardrail. **Caveat:** for hosted-connector WRITE tools this resolves to auto-CANCEL, not auto-allow (`gmail.send_email` → "user cancelled MCP tool call") — that needs `bypassApprovals` instead |
 | `--dangerously-bypass-approvals-and-sandbox` (`bypassApprovals`) | the ONLY lever that makes an approval-gated connector write (Gmail `send_email`) fire headless. Removes BOTH approvals AND the sandbox, so it's mutually exclusive with `-s`/`approval_policy`. Used for the For You "send it" action. **TRUSTED, app-authored prompts only** — there's no sandbox left |
 | `-s <sandbox>` | OS-level Seatbelt confinement — stronger than a tool allowlist; even model-run shell commands can't escape cwd + addDirs |
@@ -102,7 +102,7 @@ ChatGPT-plan limit message is still unverified — refine the markers during dog
 | `--output-schema` | clean conforming JSON for the proactive `{time, text}` shape |
 | Resume | same thread id, full memory; workspace = process cwd (see above) |
 | Web search | `-c tools.web_search=true` → `web_search` items, correct live answer |
-| Context | GPT-5.5: 1M API context, **400k input limit through codex** — covers the 10k-summary corpus (200–400k tokens) over stdin (the Gmail tier on `gpt-5.4-mini` chunks weekly to stay well under its own cap) |
+| Context | Measured on gpt-5.5: 1M API context, **400k input limit through codex** — covered the 10k-summary corpus (200–400k tokens) over stdin. gpt-5.6-sol (same flagship class, adopted 2026-07-09) has run the same corpus fine; re-measure the limit if a corpus-size failure ever appears. (The Gmail tier on `gpt-5.6-luna` chunks weekly to stay well under its own cap.) |
 | Overhead | ~25k input tokens per call (codex system prompt + tools), almost fully cached |
 
 ## Notes

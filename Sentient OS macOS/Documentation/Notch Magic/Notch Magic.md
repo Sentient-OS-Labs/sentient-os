@@ -148,7 +148,7 @@ transcript is still shown to `stop()` (instant dismiss), before any new interact
 
 **Plumbing:** `setPhase` bumps `phaseToken`; `scheduleHide`/`flash`/`setReadBack` capture the token and only fire if unchanged — a delayed transition can never clobber a newer one.
 
-**`CommandRunModel` cleans codex's raw stream into the bar.** `codex exec` (computer use, human-readable, gpt-5.5 + `model_reasoning_effort=low`) emits a noisy play-by-play; `push(line)` distills it:
+**`CommandRunModel` cleans codex's raw stream into the bar.** `codex exec` (computer use, human-readable, gpt-5.6-sol + `model_reasoning_effort=low`) emits a noisy play-by-play; `push(line)` distills it:
 - **strip** the `stderr:` channel tag (before trimming, so empty `stderr:` lines don't flash);
 - **track sections** by codex's bare headers (`user`/`codex`/`exec`/…) — show only codex's narration + tool/`mcp:` lines; drop the startup banner, the user-prompt echo, and raw shell output (`barLine`);
 - in the **`exec`** section, surface knowledge-base reads as the **`remembering`** state — `knowledgeBaseRead` slices the note path out of a `cat`/`grep`/`sed`/… command (command-agnostic: keys off the vault path, requires it shell-quoted so grep *output* isn't mistaken for a read). `setRemembering` holds it ≥1.5s (so the bloom completes for a single file);
