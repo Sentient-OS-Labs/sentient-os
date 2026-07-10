@@ -78,7 +78,11 @@ struct ComputerUseGateView: View {
             }
             .padding(.top, 30)
 
-            OnboardingNextButton(title: gate.allRequiredGranted ? "Continue" : "Continue anyway") {
+            // No bypass: while any required grant is red the button is disabled and says so, so a
+            // feature can never be fired half-granted. It enables the instant every row goes green
+            // (the rows re-probe on foreground + after the mic prompt).
+            OnboardingNextButton(title: gate.allRequiredGranted ? "Continue" : "Grant permissions to continue",
+                                 enabled: gate.allRequiredGranted) {
                 gate.continueNow()
             }
             .frame(maxWidth: .infinity)

@@ -51,24 +51,40 @@ final class ComputerUseGate {
 
     // MARK: The gate
 
-    private var shownThisSession = false
     private var pending: (@MainActor () -> Void)?
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
 
     /// The one entry point. Returns true when the action was intercepted (the setup window is up
-    /// and the action is stashed — fired by Continue, dropped by close). Returns false when the
-    /// caller should just proceed: everything granted, or the gate already had its one showing
-    /// this session.
+    /// and the action is stashed — fired by Continue once every required grant is green, dropped
+    /// by close). Returns false ONLY when everything required is already granted, so the caller
+    /// may proceed. While any required grant is missing the gate ALWAYS takes over — re-showing
+    /// (or re-focusing an already-open window) and re-holding the action on every attempt, so a
+    /// feature can never fire half-granted no matter how many times the window was dismissed.
     func intercept(_ action: @escaping @MainActor () -> Void) -> Bool {
         refresh()
-        guard !allRequiredGranted, !shownThisSession else { return false }
-        shownThisSession = true
+        guard !allRequiredGranted else { return false }
+        let wasVisible = window?.isVisible ?? false
         pending = action
         present()
-        Analytics.signal("PermissionGate.shown")
-        Log("ComputerUseGate: intercepted first computer-use action — setup window up")
+        if wasVisible {
+            Log("ComputerUseGate: re-intercepted — setup window already up, action re-held")
+        } else {
+            Analytics.signal("PermissionGate.shown")
+            Log("ComputerUseGate: intercepted computer-use action — setup window up (required grants missing)")
+        }
         return true
+    }
+
+    /// Gate a surface that must not even OPEN while a required grant is missing — the Sidekick
+    /// hotkey PRESS, which has no command to hold yet. Without this the notch drops open to listen
+    /// and only meets the gate at submit(), after a whole listen-and-transcribe dance. Same
+    /// show/re-show behavior as `intercept`; there's simply nothing to fire on Continue, so the
+    /// user re-presses to talk once everything's granted. Returns true when the gate took over and
+    /// the caller must abort (don't open the notch).
+    @discardableResult
+    func interceptBeforeStart() -> Bool {
+        intercept({})
     }
 
     /// Re-probe all four grants (cheap; the TCC reads are two tiny indexed SELECTs).
@@ -97,11 +113,18 @@ final class ComputerUseGate {
             clientBundleID: Permissions.computerUseHelperBundleID)
     }
 
-    /// The window's main button — dismiss and fire the held action (granted or not; the user decides).
+    /// The window's main button — dismiss and fire the held action. Only ever fires once every
+    /// required grant is green (the button is disabled until then); the re-probe + guard here make
+    /// that a hard invariant, so a stale tap can never launch a feature that would just fail.
     func continueNow() {
+        refresh()
+        guard allRequiredGranted else {
+            Log("ComputerUseGate: Continue blocked — a required grant is still missing")
+            return
+        }
         let action = pending
         pending = nil
-        Analytics.signal("PermissionGate.continued", parameters: ["all_granted": String(allRequiredGranted)])
+        Analytics.signal("PermissionGate.continued", parameters: ["all_granted": "true"])
         dismissWindow()
         action?()
     }
