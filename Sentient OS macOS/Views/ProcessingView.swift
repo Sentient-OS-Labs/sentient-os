@@ -336,6 +336,16 @@ struct ProcessingView: View {
             }
             .buttonStyle(.plain).padding(.top, 6)
         }
+        // Auto-advance: 5s after completion the takeover dismisses itself, so a user who left
+        // the analysis running returns to the home + cards (onboarding: the Constellation
+        // finale), never a stale "complete" screen. The Done button stays for the impatient;
+        // dev runs (showPrompt) keep manual Done so the final counts can be inspected. The
+        // cancellation check keeps a manual Done from double-firing the finale.
+        .task {
+            guard !showPrompt else { return }
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled { onDone() }
+        }
     }
 
     private func failedView(_ message: String) -> some View {
