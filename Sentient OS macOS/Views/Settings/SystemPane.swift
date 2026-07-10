@@ -119,9 +119,18 @@ struct SystemPane: View {
                                   isOn: $crashReportsEnabled)
                 SettingsHairline()
                 SettingToggleLine(title: "Share anonymous analytics",
-                                  sub: "A privacy-friendly ping that tells us how many people use Sentient; nothing more.",
+                                  sub: "Anonymous usage signals through a privacy-first, open-source analytics framework; structure only, never any of your personal information.",
                                   isOn: $analyticsEnabled)
+                if !analyticsEnabled {
+                    Text("Even with this off, Sentient sends a single anonymous ping so we can count how many people use it. No identity, no device details, nothing else, ever.")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(Theme.Ink.deepMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 1)
+                        .transition(.opacity)
+                }
             }
+            .animation(.easeInOut(duration: 0.2), value: analyticsEnabled)
         }
         .onChange(of: crashReportsEnabled) { _, _ in CrashReporting.applyEnabledChange() }
         .onChange(of: analyticsEnabled) { _, _ in Analytics.applyEnabledChange() }

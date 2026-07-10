@@ -17,5 +17,6 @@ if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
 } else {
     CrashReporting.start(.app)          // crash reporting for the GUI app
     Analytics.start()                   // product analytics (TelemetryDeck) — GUI app only
+    Analytics.countInstallOnce()        // the one anonymous install ping — fires even when opted out
     SentientOSApp.main()                // normal GUI app
 }

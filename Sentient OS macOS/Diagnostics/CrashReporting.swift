@@ -112,8 +112,11 @@ enum CrashReporting {
                 $0.lifecycle = .trace
             }
 
-            // Sessions (release health) + app-hang ("beachball") detection.
-            options.enableAutoSessionTracking = true
+            // App-hang ("beachball") detection. Auto session tracking is deliberately OFF: release-
+            // health sessions are a "how many people use Sentient" signal, and ALL usage counting
+            // belongs to the ANALYTICS toggle (TelemetryDeck), never the crash toggle. So a user who
+            // keeps crash reports on but opts OUT of analytics is never counted here.
+            options.enableAutoSessionTracking = false
             options.enableAppHangTracking = true
 
             options.environment = "release"
