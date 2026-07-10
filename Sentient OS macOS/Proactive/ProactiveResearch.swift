@@ -314,7 +314,7 @@ actor ProactiveResearch {
         nothing left to decide or look up.
 
         Today is \(today).
-
+        \(Proactive.instructionsBlock)
         ## TWO INVIOLABLE RULES
         **1 — Total accuracy, ZERO fabrication.** The user will ACT on what you produce, so a confident \
         wrong answer is catastrophic, far worse than admitting uncertainty.

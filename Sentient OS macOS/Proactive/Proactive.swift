@@ -69,6 +69,27 @@ actor Proactive {
         return notes.filter { itemDate($0) >= cutoff }.sorted { itemDate($0) > itemDate($1) }
     }
 
+    /// The user's OWN standing proactive instructions (Settings → Proactive & Sidekick), rendered as a
+    /// prompt block — or "" when they've set none. Shared by PART 1 (decide) and PART 2 (research +
+    /// prepare), like `recent`/`summaryLines`, so both honor the user's wishes with one wording. It's a
+    /// high-priority directive but NEVER overrides the accuracy / never-fire rules.
+    static var instructionsBlock: String {
+        let t = CustomInstructions.proactive
+        guard !t.isEmpty else { return "" }
+        return """
+
+        ## THE USER'S OWN STANDING INSTRUCTIONS (they set these in Settings — honor them)
+        In their own words, the user has told you what they care about and what to skip in their \
+        proactive suggestions. Treat this as a high-priority directive and follow it wherever it \
+        applies: drop what they ask you to drop, favor what they say matters, and respect how they \
+        want things handled. It NEVER overrides the hard accuracy rules (never fabricate a date, fact, \
+        or source) or the never-fire rule; within those, the user's wishes win over your defaults.
+
+        \(t)
+
+        """
+    }
+
     /// Render summaries as the numbered prompt block both parts show:
     /// `#n · [source] location · date` then `title — summary`.
     static func summaryLines(_ notes: [CloudNote]) -> String {
@@ -229,7 +250,7 @@ actor Proactive {
         single time. When in doubt, leave it out.
 
         Today is \(today).
-
+        \(Self.instructionsBlock)
         ## YOUR EDGE IS BREADTH — you see every source at once
         Everyone else's AI is trapped inside one app. You are not. These summaries span the user's \
         ENTIRE digital life at once — files, WhatsApp, iMessage, Apple Notes, Calendar, and email. \

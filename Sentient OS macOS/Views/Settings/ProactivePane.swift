@@ -4,18 +4,19 @@
 //
 //  Settings → Proactive & Sidekick: the user's standing instructions for the proactive
 //  suggestion writer, and Sidekick's shortcut key + standing context. The strings persist and
-//  autosave (keys: proactive.instructions · sidekick.hotkey · sidekick.context). The hotkey choice
-//  (right ⌘ / right ⌥) is LIVE — toggling it posts `.sidekickHotkeyChanged`, which re-keys the
-//  running SidekickHotkeyMonitor with no restart. The two text fields are consumed when the prompt
-//  wiring lands (the "prompt refinement" todo).
+//  autosave. The hotkey choice (right ⌘ / right ⌥) is LIVE — toggling it posts `.sidekickHotkeyChanged`,
+//  which re-keys the running SidekickHotkeyMonitor with no restart. The two text fields are LIVE too:
+//  `proactive.instructions` feeds the proactive prompts (Proactive.instructionsBlock, PART 1 + 2) and
+//  `sidekick.context` feeds the command/Sidekick prompt (CommandRunModel.commandPrompt) — the two keys
+//  live in CustomInstructions so producer and consumers can't drift.
 //
 
 import SwiftUI
 
 struct ProactivePane: View {
-    @AppStorage("proactive.instructions") private var proactiveInstructions = ""
+    @AppStorage(CustomInstructions.proactiveKey) private var proactiveInstructions = ""
     @AppStorage("sidekick.hotkey") private var sidekickHotkey = "rightCommand"
-    @AppStorage("sidekick.context") private var sidekickContext = ""
+    @AppStorage(CustomInstructions.sidekickKey) private var sidekickContext = ""
 
     var body: some View {
         SettingsPane(title: "Proactive & Sidekick",

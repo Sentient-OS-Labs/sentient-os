@@ -9,26 +9,21 @@ pieces (`SettingsComponents.swift`).
 
 ## ⚠️ NOT wired up yet (read this first)
 
-1. **Proactive instructions + Sidekick context** (`ProactivePane`) — these two text fields work and
-   persist (`proactive.instructions` · `sidekick.context`), but **nothing consumes the values yet**.
-   The proactive/Sidekick prompts learn to read them with the prompt-refinement work.
-   *(The Sidekick **hotkey** chip — `sidekick.hotkey`, right ⌘ / right ⌥ — is fully wired: toggling
-   it live-re-keys `SidekickHotkeyMonitor` with no restart. See `Notch Magic/Notch Magic.md` §4.)*
-2. **The E2E encryption claim front-runs the code** — the Connect-AIs privacy blurb says the cloud
+1. **The E2E encryption claim front-runs the code** — the Connect-AIs privacy blurb says the cloud
    copy is end-to-end encrypted and unreadable even by Sentient's devs. That is LAUNCH truth,
    decided 2026-07-04: the mirror stores plaintext markdown today, and the "mcp encryption"
    backlog item (Aditya) MUST ship before launch or the copy must change. Do not soften the copy;
    ship the encryption.
-3. **The morning notification** — the Notifications permission row is real, and the permission ask
+2. **The morning notification** — the Notifications permission row is real, and the permission ask
    is now wired: onboarding's permissions screen fires `Notify.ask()` on appear, so the native
    macOS prompt happens once with no extra UI (`ask()` no-ops unless status is still
    `.notDetermined`). What's still dormant is the *sending* — `Notify.now()` has zero call sites;
    the "Proactive Intelligence is ready" morning note ships with the reminders/scheduler work.
-4. **The Updates group** (System pane) — doesn't exist until Sparkle lands; it brings its own
+3. **The Updates group** (System pane) — doesn't exist until Sparkle lands; it brings its own
    keep-it-on message.
-5. **Privacy toggles transmit only in RELEASE builds** — by design (Sentry/TelemetryDeck never
+4. **Privacy toggles transmit only in RELEASE builds** — by design (Sentry/TelemetryDeck never
    boot in DEBUG), so a Debug QA can verify persistence but not transmission.
-6. **Small known holes, accepted for now:** removing the LAST custom folder can bypass the
+5. **Small known holes, accepted for now:** removing the LAST custom folder can bypass the
    four-selection minimum (the guard covers chip toggle-offs only) · the reset-vs-run race has
    only the UI guard (see Reset below; the Layer-2 generation counter is deferred hardening) ·
    three Settings deep-link anchors (Speech Recognition, Accessibility, Screen Recording) are
@@ -79,8 +74,11 @@ sees custom folders. Verified by a headless selftest (7/7) on ship day.
 ### Proactive & Sidekick (`ProactivePane.swift`)
 Autosaving standing instructions + Sidekick's shortcut key and standing context. The **shortcut
 key** (right ⌘ / right ⌥) is live — toggling it posts `.sidekickHotkeyChanged`, which re-keys the
-running `SidekickHotkeyMonitor` with no restart. The two **text fields** are stored, not yet
-consumed — see the NOT-wired list above.
+running `SidekickHotkeyMonitor` with no restart. The two **text fields** are live too: the keys
+live in `CustomInstructions` (so producer and consumers can't drift), and `proactive.instructions`
+feeds both proactive prompts (`Proactive.instructionsBlock` — PART 1 + PART 2) while
+`sidekick.context` feeds the command/Sidekick prompt (`CommandRunModel.commandPrompt`, §6b of the
+Notch doc). Each is `""`-safe: no text → the prompt is unchanged.
 
 ### Connect AIs to Knowledge (`YourAIsPane.swift`)
 The story leads: a value blurb (your ChatGPT/Claude, phone apps included, read the knowledge
