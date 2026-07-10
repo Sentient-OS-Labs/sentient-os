@@ -168,6 +168,14 @@ final class CodexSetup {
             }
             computerUseReady = true
             computerUseStatus = "✓ Computer use ready"
+            // The helper is now on disk, so pre-grant the Automation right (Sentient → the helper
+            // over Apple Events) HERE — user-invisible, FDA-writable — so the first fire never
+            // waits on it. Idempotent + fully guarded (no-op without FDA, or if already granted).
+            // A short settle first: the code-signature blob is read off the freshly-laid bundle.
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                Permissions.selfHealComputerUseAutomation(context: "CodexSetup.computerUse")
+            }
         } catch {
             computerUseReady = ComputerUseSetup.isInstalled
             computerUseStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
