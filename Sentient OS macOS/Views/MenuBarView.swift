@@ -2,7 +2,7 @@
 //  MenuBarView.swift
 //  Sentient OS macOS
 //
-//  Glanceable status in the macOS menu bar. A stub today (status line + Quit) — the richer
+//  Glanceable status in the macOS menu bar. A stub today (Open + status line + Quit) — the richer
 //  dropdown ("412 / 3,000 · paused (in use)") is still to build.
 //
 
@@ -11,8 +11,12 @@ import AppKit
 
 struct MenuBarView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Button("Open Sentient OS") { openHome() }
+
+        Divider()
         switch appState.status {
         case .idle:                            Text("Sentient OS · idle")
         case .processing(let done, let total): Text("Processing \(done) / \(total)")
@@ -26,5 +30,21 @@ struct MenuBarView: View {
 
         Divider()
         Button("Quit Sentient OS") { NSApplication.shared.terminate(nil) }
+    }
+
+    /// Bring the proactive home window to the front — focus it if it's open, otherwise reopen it
+    /// (a red-button close destroys the WindowGroup's window, so it must be recreated).
+    private func openHome() {
+        let homeID = SentientOSApp.homeWindowID
+        if let home = NSApp.windows.first(where: {
+            guard let raw = $0.identifier?.rawValue else { return false }
+            return raw == homeID || raw.hasPrefix(homeID + "-")
+        }) {
+            home.makeKeyAndOrderFront(nil)
+            home.orderFrontRegardless()
+        } else {
+            openWindow(id: homeID)
+        }
+        NSApp.activate()
     }
 }
