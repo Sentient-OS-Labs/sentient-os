@@ -2,27 +2,30 @@
 //  SidekickHotkeyMonitor.swift
 //  Sentient OS macOS
 //
-//  The global notch trigger via a SINGLE listen-only CGEventTap — ZERO permissions: hold / tap the
-//  user's chosen Sidekick key (right ⌘ or right ⌥ — push-to-talk · tap-to-type), read from the
-//  device-dependent flag bit on every `flagsChanged`, so press/release self-heals even if an event
-//  is dropped. The key is configurable at runtime (`setKey`) — both choices are MODIFIERS, the half
-//  macOS does not gate, so switching between them never changes the (permission-free) tap mask.
+//  The global notch trigger via NSEvent `flagsChanged` monitors (one global + one local) — ZERO
+//  permissions, ZERO prompts: hold / tap the user's chosen Sidekick key (right ⌘ or right ⌥ —
+//  push-to-talk · tap-to-type), read from the device-dependent flag bit on every `flagsChanged`,
+//  so press/release self-heals even if an event is dropped. The key is configurable at runtime
+//  (`setKey`) — both choices are MODIFIERS, the half macOS hands out freely.
 //
-//  ⚠️ The mask is `flagsChanged` ONLY — modifiers are the half macOS does not gate. NEVER add
-//  keyDown/keyUp: keyboard taps are exactly what Input Monitoring gates, and the one time we
-//  carried keyDown (for a global Esc) the system kept disabling the tap and surfaced a stray
-//  Input Monitoring request. Esc still cancels whenever Sentient is frontmost (the notch window's
-//  LOCAL monitor — no permission); over other apps, a fresh hotkey press is the cancel
-//  (CommandCoordinator.voicePressBegan).
+//  ⚠️ NEVER use a CGEventTap here — not even listen-only masking flagsChanged ONLY. Creating ANY
+//  keyboard-class tap pings the Input Monitoring TCC service: on a fresh Mac that raises the
+//  "would like to receive keystrokes from any application" dialog at first launch and records a
+//  system-set denial (which also lists the app, unchecked, in the Input Monitoring pane). The tap
+//  then *works* anyway — modifier delivery is unenforced — which is exactly how the dialog hid
+//  during development (field-proven with a minimal repro app, 2026-07-09). NSEvent monitors carry
+//  the same modifier information and never touch TCC. And NEVER monitor keyDown/keyUp globally
+//  either — real keystrokes are the gated half (a global keyDown monitor delivers nothing without
+//  Accessibility). Esc still cancels whenever Sentient is frontmost (the notch window's LOCAL
+//  monitor); over other apps, a fresh hotkey press is the cancel (CommandCoordinator.voicePressBegan).
 //
 //  Emits: onPress (key down) · onHoldConfirmed (still down at the hold threshold) ·
-//  onRelease(held:) (key up, with duration). Reliability: re-enables a system-disabled tap,
-//  re-arms on wake, and a periodic health check reconciles a missed release + rebuilds a dead tap.
-//  Doc: Documentation/Notch Magic/Notch Magic.md.
+//  onRelease(held:) (key up, with duration). The two monitors cover both worlds — global (events
+//  routed to other apps) + local (Sentient itself frontmost) — and a periodic health check
+//  reconciles a missed release. Doc: Documentation/Notch Magic/Notch Magic.md.
 //
 
 import AppKit
-import CoreGraphics
 
 /// The Sidekick trigger key — the single source of truth mapping the persisted `sidekick.hotkey`
 /// choice to the flag bits we read and a label for logs / UI. Both are RIGHT-side modifiers, so
@@ -44,8 +47,8 @@ enum SidekickHotkey: String {
     /// (there we can only tell "some ⌘/⌥ is down", not which side).
     var genericBit: UInt64 {
         switch self {
-        case .rightCommand: return CGEventFlags.maskCommand.rawValue
-        case .rightOption:  return CGEventFlags.maskAlternate.rawValue
+        case .rightCommand: return UInt64(NSEvent.ModifierFlags.command.rawValue)
+        case .rightOption:  return UInt64(NSEvent.ModifierFlags.option.rawValue)
         }
     }
 
@@ -69,28 +72,13 @@ extension Notification.Name {
     static let sidekickHotkeyChanged = Notification.Name("sidekick.hotkey.changed")
 }
 
-// MARK: - C trampoline (captures nothing → bridges to a C function pointer; hops onto the main actor)
-//
-// `nonisolated` is load-bearing: the project builds with default MainActor isolation, and an
-// actor-isolated function can't be formed into a @convention(c) function pointer.
-
-private nonisolated func sidekickHotkeyTapCallback(_ proxy: CGEventTapProxy, _ type: CGEventType,
-                                                   _ event: CGEvent, _ refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
-    guard let refcon else { return Unmanaged.passUnretained(event) }
-    let monitor = Unmanaged<SidekickHotkeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
-    let flags = event.flags.rawValue
-    let t = type
-    Task { @MainActor in monitor.handle(type: t, flags: flags) }
-    return Unmanaged.passUnretained(event)   // listen-only: return the event unchanged
-}
-
 @MainActor
 final class SidekickHotkeyMonitor {
     /// Held ≥ this long = a HOLD (push-to-talk). Below = a TAP (type mode).
     static let holdThreshold: TimeInterval = 0.25
 
-    /// The key we currently watch. Swap it at runtime with `setKey` — no tap rebuild needed (the
-    /// mask stays `flagsChanged`); we just read a different device bit.
+    /// The key we currently watch. Swap it at runtime with `setKey` — the monitors hear every
+    /// modifier transition regardless; we just read a different device bit.
     private(set) var key: SidekickHotkey = .rightCommand
 
     /// Force-release a hold after this long — set from the active speech engine's transcription limit
@@ -101,14 +89,13 @@ final class SidekickHotkeyMonitor {
     var onHoldConfirmed: (() -> Void)?
     var onRelease: ((TimeInterval) -> Void)?
 
-    private var port: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
     private var keyIsDown = false
     private var downAt: Date?
     private var holdConfirmTask: Task<Void, Never>?
     private var maxHoldTask: Task<Void, Never>?
     private var healthTimer: Timer?
-    private var wakeObserver: NSObjectProtocol?
     private var running = false
 
     // MARK: Lifecycle
@@ -131,13 +118,8 @@ final class SidekickHotkeyMonitor {
     func start() {
         guard !running else { return }
         running = true
-        installTap()
-        // A tap can die across sleep/wake — rebuild it on wake.
-        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reinstallIfNeeded() }
-        }
-        // Periodic health check: rebuild a dead tap + reconcile a missed release.
+        installMonitors()
+        // Periodic health check: reconcile a missed release (+ re-install a failed monitor).
         healthTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.healthCheck() }
         }
@@ -145,76 +127,65 @@ final class SidekickHotkeyMonitor {
 
     func stop() {
         running = false
-        teardownTap()
+        teardownMonitors()
         holdConfirmTask?.cancel(); holdConfirmTask = nil
         maxHoldTask?.cancel(); maxHoldTask = nil
         healthTimer?.invalidate(); healthTimer = nil
-        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
-        wakeObserver = nil
         keyIsDown = false
         downAt = nil
     }
 
-    // MARK: The tap
+    // MARK: The monitors
 
-    private func installTap(quiet: Bool = false) {
-        teardownTap()
-        // flagsChanged ONLY (the hotkey is a modifier — the ungated half). NEVER add keyDown/keyUp:
-        // that's what Input Monitoring gates (see the top-of-file warning).
-        let mask = CGEventMask(1) << UInt64(CGEventType.flagsChanged.rawValue)
-        guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
-                                           options: .listenOnly, eventsOfInterest: mask,
-                                           callback: sidekickHotkeyTapCallback,
-                                           userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            Log("hotkey: tapCreate failed (a modifier-only tap shouldn't need anything) — will retry on the health tick")
+    private func installMonitors() {
+        // ⚠️ NEVER register NSEvent monitors before the app finishes launching. start() runs inside
+        // AppState.init — during SwiftUI App construction, mid-NSApplicationMain — and a monitor
+        // registered that early wedges the app's event routing for the life of the process: every
+        // window draws but receives NO input, activation never completes ("AppleEvent activation
+        // suspension timed out"), the main thread sits idle waiting for events that never come.
+        // Field-proven 2026-07-09 (the launch-freeze hunt). At that moment NSApp itself can still
+        // be nil (NSApplication not yet created — hence the optional chain, never a bare NSApp).
+        // Too early → bail; the health tick can only fire once the run loop is pumping
+        // (post-launch by construction), so it installs them within ~1.5s of launch.
+        guard NSApp?.isRunning == true else {
+            Log("hotkey: app still launching — monitor install deferred to the health tick")
             return
         }
-        let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
-        CGEvent.tapEnable(tap: port, enable: true)
-        self.port = port
-        self.runLoopSource = src
-        if !quiet { Log("hotkey: listening for \(key.label) (flagsChanged-only, zero-permission)") }
-    }
-
-    private func teardownTap() {
-        if let runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes) }
-        if let port { CGEvent.tapEnable(tap: port, enable: false); CFMachPortInvalidate(port) }
-        runLoopSource = nil
-        port = nil
-    }
-
-    /// Health-tick reinstalls of a dead tap run QUIET, with a periodic count instead — the system
-    /// can keep disabling a listen-only tap (seen after a full TCC reset), and per-reinstall logging
-    /// floods a session log at 1.5s intervals until it drowns everything else.
-    private var reinstalls = 0
-
-    private func reinstallIfNeeded() {
-        guard running else { return }
-        let enabled = port.map { CGEvent.tapIsEnabled(tap: $0) } ?? false
-        if !enabled {
-            reinstalls += 1
-            if reinstalls == 1 || reinstalls % 200 == 0 {
-                Log("hotkey: tap was disabled — re-armed (×\(reinstalls) this session)")
-            }
-            installTap(quiet: true)
+        teardownMonitors()
+        // flagsChanged ONLY — modifier transitions, the ungated half (see the top-of-file warning).
+        // The global monitor hears events routed to other apps; the local one hears them whenever
+        // Sentient itself is frontmost. Between them, every press is seen exactly once — and the
+        // transition guard in handle() makes even a duplicate harmless.
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handle(flags: UInt64(event.modifierFlags.rawValue))
+        }
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handle(flags: UInt64(event.modifierFlags.rawValue))
+            return event
+        }
+        if globalMonitor == nil || localMonitor == nil {
+            Log("hotkey: monitor install failed (global \(globalMonitor != nil) · local \(localMonitor != nil)) — will retry on the health tick")
+        } else {
+            Log("hotkey: listening for \(key.label) (flagsChanged NSEvent monitors, zero-permission)")
         }
     }
 
-    // MARK: Event handling (on the main actor, via the trampoline)
+    private func teardownMonitors() {
+        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        globalMonitor = nil
+        localMonitor = nil
+    }
 
-    func handle(type: CGEventType, flags: UInt64) {
-        switch type {
-        case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            if let port { CGEvent.tapEnable(tap: port, enable: true) }   // the system throttled us — re-arm
-        case .flagsChanged:
-            let nowDown = (flags & key.deviceBit) != 0
-            guard nowDown != keyIsDown else { return }   // not a transition on our key
-            keyIsDown = nowDown
-            if nowDown { beginPress() } else { endPress() }
-        default:
-            break
-        }
+    // MARK: Event handling
+
+    /// Both monitors funnel here: read OUR key's device bit and act only on a TRANSITION — so a
+    /// duplicate or dropped event can never wedge the press state.
+    private func handle(flags: UInt64) {
+        let nowDown = (flags & key.deviceBit) != 0
+        guard nowDown != keyIsDown else { return }
+        keyIsDown = nowDown
+        if nowDown { beginPress() } else { endPress() }
     }
 
     private func beginPress() {
@@ -249,13 +220,13 @@ final class SidekickHotkeyMonitor {
 
     private func healthCheck() {
         guard running else { return }
-        reinstallIfNeeded()
+        if globalMonitor == nil || localMonitor == nil { installMonitors() }
         // Reconcile a missed release: if we think the key is down but NO matching modifier is
         // physically down now, we missed the up event → release. (Conservative: if the modifier is
         // down we can't tell left vs right here, so we leave it — better a late release than a false
         // one.)
         if keyIsDown {
-            let live = CGEventSource.flagsState(.combinedSessionState).rawValue
+            let live = UInt64(NSEvent.modifierFlags.rawValue)
             if (live & key.genericBit) == 0 {
                 Log("hotkey: reconciled a missed release")
                 keyIsDown = false

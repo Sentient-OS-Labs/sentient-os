@@ -4,38 +4,25 @@
 //
 //  DEV-ONLY bench (DEV TOOLS → HOTKEY LAB) for the global push-to-talk trigger: hold RIGHT ⌘.
 //
-//  The discovery this encodes: watching a *modifier* key needs NO permission. Right ⌘ arrives as a
-//  `flagsChanged` event, and macOS only gates `keyDown`/`keyUp` (the actual letters you type) behind
-//  Input Monitoring. So a listen-only session tap masking ONLY flagsChanged sees right ⌘ globally —
-//  no prompt, no Settings entry, no Accessibility — and the same holds in the notarized, Finder-launched
-//  app. The one rule: NEVER add keyDown/keyUp to the global mask (that's the gated half; the future
-//  tap-to-type captures typing in our own focused field, not via a global tap).
+//  The discovery this encodes (v2, corrected 2026-07-09): watch modifiers via NSEvent
+//  `flagsChanged` monitors, NEVER via a CGEventTap. A tap — even listen-only, flagsChanged-only —
+//  pings the Input Monitoring TCC service on creation: a fresh Mac gets the "would like to receive
+//  keystrokes from any application" dialog and a system-set denial (the app then appears,
+//  unchecked, in the Input Monitoring pane). The tap works anyway (modifier delivery is
+//  unenforced), which is how the dialog hid during development. NSEvent monitors deliver the same
+//  flagsChanged stream — keyCode and device bits included — with zero TCC contact. The one rule
+//  still stands: NEVER monitor keyDown/keyUp globally (real keystrokes are the gated half).
 //
-//  This bench just lets us FEEL the trigger (hold vs quick-tap) and confirm it stays permission-free.
-//  Scaffolding — delete once the trigger is wired for real.
+//  This bench just lets us FEEL the trigger (hold vs quick-tap) and confirm it stays prompt-free.
+//  Scaffolding — delete once the trigger is beyond question in the field.
 //
-//  Key methods: HotkeyLab.startTap()/stopTap(), onTap(type:keycode:) (the handler the C trampoline hops into).
+//  Key methods: HotkeyLab.startListening()/stopListening(), onFlags(keycode:) (both monitors' handler).
 //
 
 import SwiftUI
 import AppKit
-import CoreGraphics         // CGEvent tap APIs + CGPreflightListenEventAccess (diagnostic only)
+import CoreGraphics         // CGPreflightListenEventAccess (diagnostic only — never prompts)
 import ApplicationServices  // AXIsProcessTrusted (diagnostic only)
-
-// MARK: - C trampoline (captures nothing → bridges to a C function pointer; hops onto the main actor)
-//
-// `nonisolated` is load-bearing: the project builds with -default-isolation=MainActor, and an
-// actor-isolated function can't be formed into a @convention(c) function pointer.
-
-private nonisolated func hotkeyTapCallback(_ proxy: CGEventTapProxy, _ type: CGEventType,
-                                           _ event: CGEvent, _ refcon: UnsafeMutableRawPointer?) -> Unmanaged<CGEvent>? {
-    guard let refcon else { return Unmanaged.passUnretained(event) }
-    let lab = Unmanaged<HotkeyLab>.fromOpaque(refcon).takeUnretainedValue()
-    let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-    let t = type
-    Task { @MainActor in lab.onTap(type: t, keycode: keycode) }
-    return Unmanaged.passUnretained(event)   // listen-only: return the event unchanged
-}
 
 // MARK: - The bench model
 
@@ -48,21 +35,21 @@ final class HotkeyLab {
     /// Right-Command virtual keycode (kVK_RightCommand). Hard-coded so this file needs no Carbon import.
     private static let rightCommandKey: Int64 = 54
 
-    // Diagnostics ONLY — both are unreliable and NOT required for a modifier-only tap. Surfaced just to
-    // make the "the preflight says granted, and we don't care" point visible.
+    // Diagnostics ONLY — neither is required for modifier monitoring. Surfaced to make the
+    // "the preflight can even say denied, and we don't care" point visible.
     var preflightListenEvent = false
     var trustedForAccessibility = false
 
-    var tapActive = false
-    var tapNote = "tap not started"
+    var listening = false
+    var note = "not listening"
     var rightCmdHeld = false
     var liveHold: TimeInterval = 0
     var lastVerdict = "—"
 
     var log: [String] = []
 
-    private var machPort: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
     private var heldMods: Set<Int64> = []
     private var rightCmdDownAt: Date?
     private var liveTimer: Timer?
@@ -72,62 +59,55 @@ final class HotkeyLab {
         trustedForAccessibility = AXIsProcessTrusted()
     }
 
-    // MARK: The listen-only, flagsChanged-only tap (zero permission)
+    // MARK: The NSEvent flagsChanged monitors (zero permission, zero TCC contact)
 
-    func startTap() {
-        stopTap()
+    func startListening() {
+        stopListening()
         refreshDiagnostics()
-        // ONLY flagsChanged — modifier transitions, which macOS does not gate. Never add keyDown/keyUp.
-        let mask = CGEventMask(1) << UInt64(CGEventType.flagsChanged.rawValue)
-        guard let port = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
-                                           options: .listenOnly, eventsOfInterest: mask,
-                                           callback: hotkeyTapCallback,
-                                           userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            tapActive = false
-            tapNote = "tapCreate failed (unexpected — a modifier-only tap shouldn't need anything)."
-            append("✗ tap create failed")
+        // ONLY flagsChanged — modifier transitions, the ungated half. Never keyDown/keyUp, and
+        // never a CGEventTap (its creation trips the Input Monitoring dialog — see the top comment).
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.onFlags(keycode: Int64(event.keyCode))
+        }
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.onFlags(keycode: Int64(event.keyCode))
+            return event
+        }
+        guard globalMonitor != nil, localMonitor != nil else {
+            listening = false
+            note = "monitor install failed (unexpected — NSEvent monitors need nothing)."
+            append("✗ monitor install failed")
             return
         }
-        let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
-        CGEvent.tapEnable(tap: port, enable: true)
-        machPort = port
-        runLoopSource = src
-        tapActive = true
-        tapNote = "listening — hold right ⌘, then release. No permission needed (it's a modifier)."
-        append("✓ listen-only tap started (flagsChanged only — zero permission)")
+        listening = true
+        note = "listening — hold right ⌘, then release. No permission needed (it's a modifier)."
+        append("✓ flagsChanged NSEvent monitors started (global + local — zero permission)")
     }
 
-    func stopTap() {
-        if let src = runLoopSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes) }
-        if let port = machPort { CGEvent.tapEnable(tap: port, enable: false); CFMachPortInvalidate(port) }
-        runLoopSource = nil
-        machPort = nil
+    func stopListening() {
+        if let globalMonitor { NSEvent.removeMonitor(globalMonitor) }
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        globalMonitor = nil
+        localMonitor = nil
         heldMods.removeAll()
         rightCmdDownAt = nil
         rightCmdHeld = false
         liveTimer?.invalidate(); liveTimer = nil
-        tapActive = false
+        listening = false
     }
 
-    func onTap(type: CGEventType, keycode: Int64) {
-        switch type {
-        case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            if let port = machPort { CGEvent.tapEnable(tap: port, enable: true) }
-            append("⚠︎ system disabled the tap — re-enabled")
-        case .flagsChanged:
-            guard let name = Self.modifierName(keycode) else { return }
-            if heldMods.contains(keycode) {
-                heldMods.remove(keycode)
-                append("\(name) ↑")
-                if keycode == Self.rightCommandKey { endRightCmd() }
-            } else {
-                heldMods.insert(keycode)
-                append("\(name) ↓")
-                if keycode == Self.rightCommandKey { beginRightCmd() }
-            }
-        default:
-            break
+    /// Both monitors land here: a `flagsChanged` toggles the keycode's held-state (down on first
+    /// sight, up on the second) — enough for the bench's per-key ↓/↑ log.
+    func onFlags(keycode: Int64) {
+        guard let name = Self.modifierName(keycode) else { return }
+        if heldMods.contains(keycode) {
+            heldMods.remove(keycode)
+            append("\(name) ↑")
+            if keycode == Self.rightCommandKey { endRightCmd() }
+        } else {
+            heldMods.insert(keycode)
+            append("\(name) ↓")
+            if keycode == Self.rightCommandKey { beginRightCmd() }
         }
     }
 
@@ -216,9 +196,9 @@ struct HotkeyLabView: View {
         .background(Theme.bg)
         .onAppear {
             lab.refreshDiagnostics()
-            lab.startTap()
+            lab.startListening()
         }
-        .onDisappear { lab.stopTap() }
+        .onDisappear { lab.stopListening() }
     }
 
     // MARK: Why this is free + the throwaway diagnostic
@@ -229,13 +209,13 @@ struct HotkeyLabView: View {
                 Image(systemName: "checkmark.seal.fill").foregroundStyle(Theme.verdictColor(.survivor))
                 Text("Zero permission").font(.caption.weight(.semibold)).foregroundStyle(.white)
                 Spacer()
-                Button("Restart tap") { lab.startTap() }
+                Button("Restart monitors") { lab.startListening() }
                     .buttonStyle(.bordered).controlSize(.small).tint(Theme.accent)
             }
-            Text("Right ⌘ arrives as a modifier (flagsChanged) event, which macOS does NOT gate — only letter-keys (keyDown/keyUp) need Input Monitoring. So this works with no prompt, no Settings, no restart — in the shipped app too.")
+            Text("Right ⌘ arrives as a modifier (flagsChanged) event, which NSEvent monitors deliver to anyone — only real keystrokes (keyDown/keyUp) are permission-gated. A CGEventTap would hear the same thing but trips the Input Monitoring dialog the moment it's created — that's why this lab (and Sidekick) use monitors, never taps.")
                 .font(.caption2).foregroundStyle(Theme.faint).fixedSize(horizontal: false, vertical: true)
             HStack {
-                Text("diagnostic (ignore — unreliable, NOT required):  ListenEvent preflight = \(lab.preflightListenEvent ? "true" : "false")  ·  Accessibility = \(lab.trustedForAccessibility ? "true" : "false")")
+                Text("diagnostic (ignore — NOT required):  ListenEvent preflight = \(lab.preflightListenEvent ? "true" : "false")  ·  Accessibility = \(lab.trustedForAccessibility ? "true" : "false")")
                     .font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.faint)
                 Spacer()
                 Button("Re-check") { lab.refreshDiagnostics() }
@@ -253,10 +233,10 @@ struct HotkeyLabView: View {
                 Circle().fill(lab.rightCmdHeld ? Theme.accent : Theme.stroke).frame(width: 10, height: 10)
                 Text("Hold right ⌘").font(.caption.weight(.semibold)).foregroundStyle(.white)
                 Spacer()
-                Text(lab.tapActive ? "LISTENING" : "OFF").font(.caption2.weight(.bold))
-                    .foregroundStyle(lab.tapActive ? Theme.verdictColor(.survivor) : Theme.faint)
+                Text(lab.listening ? "LISTENING" : "OFF").font(.caption2.weight(.bold))
+                    .foregroundStyle(lab.listening ? Theme.verdictColor(.survivor) : Theme.faint)
             }
-            Text(lab.tapNote).font(.caption2).foregroundStyle(Theme.faint).fixedSize(horizontal: false, vertical: true)
+            Text(lab.note).font(.caption2).foregroundStyle(Theme.faint).fixedSize(horizontal: false, vertical: true)
             Text(lab.rightCmdHeld ? String(format: "holding… %.2fs", lab.liveHold) : "idle")
                 .font(.system(.title3, design: .monospaced))
                 .foregroundStyle(lab.rightCmdHeld ? Theme.accent : Theme.secondary)
