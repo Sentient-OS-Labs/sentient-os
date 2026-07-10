@@ -35,6 +35,9 @@ final class AppState {
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
 
+    /// Drops the Dock icon when every window is closed (the menu bar item is the home then).
+    private let dockPolicy = DockPolicy()
+
     /// The Sparkle auto-updater + our OLED forced-update UI. Only ever built in the GUI app (this
     /// whole object is), never the root wake-helper. Its `model` drives UpdateGateView. (Updates/)
     let update = UpdateController()
@@ -56,6 +59,7 @@ final class AppState {
         // the coordinator: the notch experience still plays, the codex run just never fires.
         commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
         notch.start()                // raise the notch overlay window
+        dockPolicy.start()           // drop the Dock icon whenever the last window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
 
         // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
