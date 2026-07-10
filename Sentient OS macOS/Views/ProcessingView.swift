@@ -78,6 +78,8 @@ struct ProcessingView: View {
     private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(String) }
     @State private var state: UIState = .loadingModel
     @State private var prepStatus = "Preparing your suggestions…"
+    /// The 10-minute patience flip for the cloud tail's bottom line (see `patienceLine`).
+    @State private var patienceLong = false
     /// Phase-appropriate caption under the phase line (nil = none) — the proactive stages get
     /// the "things worth doing" promise; the knowledge-base/welcome phases speak for themselves.
     @State private var prepSubtext: String?
@@ -116,6 +118,8 @@ struct ProcessingView: View {
                 Spacer(minLength: 0)
                 if state == .loadingModel || state == .processing {
                     footer.padding(.bottom, 30)
+                } else if state == .preparing {
+                    patienceLine.padding(.bottom, 30)
                 }
             }
             .padding(.horizontal, 28)
@@ -299,6 +303,21 @@ struct ProcessingView: View {
             }
             ProgressView().tint(.white.opacity(0.4)).padding(.top, 2)
         }
+    }
+
+    /// The quiet expectation-setter under the cloud phases (knowledge base + proactive) — honest
+    /// about the wait, and warmer once the wait is genuinely long (the 10-minute flip).
+    private var patienceLine: some View {
+        Text(patienceLong
+             ? "You've got an incredible knowledge base; still working hard to make it perfect. It's going to take another 15 mins or so."
+             : "This can take around 15 minutes.")
+            .font(.caption).foregroundStyle(.white.opacity(0.35))
+            .multilineTextAlignment(.center)
+            .frame(maxWidth: 440)
+            .task {
+                try? await Task.sleep(for: .seconds(600))
+                withAnimation(.easeInOut(duration: 0.6)) { patienceLong = true }
+            }
     }
 
     private var completedView: some View {
@@ -496,7 +515,7 @@ struct ProcessingView: View {
                     case .knowledgeBase(let s):
                         prepStatus = s; prepSubtext = nil            // the phase line says it all
                     case .deciding:
-                        prepStatus = "Deciding what's worth doing…"
+                        prepStatus = "Creating proactive intelligence…"
                         prepSubtext = "Reading what's new, then preparing a few things worth doing."
                     case .researching(let n):
                         prepStatus = "Preparing \(n) suggestion\(n == 1 ? "" : "s")…"
