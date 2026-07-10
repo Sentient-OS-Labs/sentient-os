@@ -70,6 +70,39 @@ existing B7 "length, not the command text" log — same discipline.
 
 Plus what the SDK sends automatically: app launches, sessions, new-install, and device/OS/version.
 
+**This is the SOLE owner of usage/session counting.** Sentry's auto session tracking is deliberately
+off (`CrashReporting.swift`), so "how many people use Sentient" lives entirely behind *this* toggle —
+with **one deliberate exception**: the anonymous install ping (below).
+
+## The one anonymous install ping (`countInstallOnce()` — opt-out-INDEPENDENT)
+
+`countInstallOnce()` sends a **single, totally anonymous** "an install exists" beacon that fires at
+most once per install and, unlike everything else here, fires **even when analytics are opted out**.
+It's how we always know how many people use Sentient, without making the opt-out a lie: it's
+**disclosed in the opt-out's own Settings copy** (a caption appears under the toggle the moment it's
+switched off).
+
+- **Anonymity.** It carries a throwaway random hash as `clientUser` (a fresh `UUID`, SHA-256'd, never
+  stored, never reused — so it ties to nothing: not the install id, not the crash-report id, not each
+  other), an empty payload, and no version / device / locale / content. Just a bare count.
+  TelemetryDeck stores no IP and salts the hash again server-side.
+- **Not via the SDK.** It's a single direct `POST` to TelemetryDeck's V2 ingest
+  (`https://nom.telemetrydeck.com/v2/`, matching the SDK's `SignalPostBody` wire shape), *not*
+  `TelemetryDeck.initialize` — because initializing the SDK would spin up ongoing session tracking,
+  which is exactly what an opted-out user must not get.
+- **Exactly once.** Latched by the `analytics.installCounted` UserDefaults flag, set **only after a
+  confirmed 2xx** — so an offline first launch simply retries next launch until the count lands once
+  (a reinstall clears the flag and counts again, same coarseness as `installID`).
+- **Release-only**, like everything else here (a dev's Debug launches never inflate the count).
+- **Fires for every install** (opted in or out), so the headline metric is clean and uniform: build a
+  TelemetryDeck Insight on **unique users of the `App.anonymousInstall` signal** = total installs.
+  Opted-in installs additionally send the rich signals in the table above; this ping is the one
+  number that's complete across everyone.
+
+Called once from `main.swift` (the `.app` branch), right after `Analytics.start()`. Opting out of
+analytics therefore silences *all* rich product signals and any correlatable identity; the only thing
+that still leaves the Mac is this one anonymous, uncountable-to-you tally.
+
 The knowledge-base and proactive-stage signals live centrally in `ProactiveCycle.run()` — the one
 place with all the counts and the create-vs-update decision — rather than scattered into
 `VaultCloud`/`Proactive`/`ProactiveResearch`, so they can't double-fire.
@@ -99,8 +132,8 @@ Because sends are Release-only, verify from a **Release build** (Debug sends not
 
 ## Files
 
-- `Diagnostics/Analytics.swift` — `start()`, `signal(_:parameters:)`, `applyEnabledChange()`, the `analyticsEnabled` opt-out, the App ID constant.
-- `App/main.swift` — `Analytics.start()` in the `.app` branch.
+- `Diagnostics/Analytics.swift` — `start()`, `signal(_:parameters:)`, `countInstallOnce()` (the opt-out-independent anonymous install ping), `applyEnabledChange()`, the `analyticsEnabled` opt-out, the App ID constant.
+- `App/main.swift` — `Analytics.start()` and `Analytics.countInstallOnce()` in the `.app` branch.
 - `Diagnostics/CrashReporting.swift` — the `installID` identity (shared) + Sentry's separate `diagnosticsEnabled` opt-out.
 - `Views/Settings/SystemPane.swift` — the two Privacy toggles; each `onChange` calls its own `applyEnabledChange()`.
 - The ~12 call sites in the table above.

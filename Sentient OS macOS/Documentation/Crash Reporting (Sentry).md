@@ -25,11 +25,19 @@ if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
 Each role tags every event with `process: app` or `process: wakeHelper`, so a 3am overnight-run
 crash is told apart from a UI crash in the dashboard.
 
-`start(_:)` boots Sentry with everything on: native crash handler + attached stack traces,
-app-hang ("beachball") detection, release-health sessions, 100% trace sampling, and trace-lifecycle
-profiling. It's idempotent (guarded by `started`), a no-op if the DSN is blank, and — the two hard
-gates — a no-op in DEBUG and whenever the `diagnosticsEnabled` opt-out is off (the full gate story:
+`start(_:)` boots Sentry with the crash surface on: native crash handler + attached stack traces,
+app-hang ("beachball") detection, 100% trace sampling, and trace-lifecycle profiling. It's
+idempotent (guarded by `started`), a no-op if the DSN is blank, and — the two hard gates — a no-op
+in DEBUG and whenever the `diagnosticsEnabled` opt-out is off (the full gate story:
 `Diagnostics (Sentry).md`).
+
+⚠️ **Auto session tracking is deliberately OFF** (`enableAutoSessionTracking = false`). Release-
+health sessions are a "how many people use Sentient" signal, and **all** usage counting belongs to
+the *analytics* toggle (TelemetryDeck), never the *crash* toggle. If it were on, a user who keeps
+crash reports on but opts OUT of analytics would still be counted here — which would break the
+promise the analytics toggle makes. Sentry therefore reports crashes, errors, hangs, and traces
+only; user/session counting lives solely in `Analytics.swift`. (This costs us Sentry's crash-free-
+session % — TelemetryDeck's counts plus crash volume cover it.)
 
 ## The DSN — safe in the code
 
