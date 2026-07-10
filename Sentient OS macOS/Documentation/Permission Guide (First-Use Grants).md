@@ -46,7 +46,15 @@ with no row to flip. The drag panel works on every macOS.
   coordinator.
 - Presenting the gate also runs `Permissions.selfHealComputerUseAutomation` — the Apple Events
   grant (Sentient → the helper) is user-invisible and FDA-writable, so it's healed before the
-  first fire ever needs it. (Settings → Health runs the same self-heal on open.)
+  first fire ever needs it.
+- **The self-heal has FOUR triggers**, all idempotent and fully guarded (no-op without FDA, or if
+  the helper's not on disk, or if it's already granted): the gate above, Settings → Health on open,
+  the Dev Tools button, and — earliest — **right after a successful computer-use install**
+  (`CodexSetup.setupComputerUse`, 2s after `✓ Computer use ready`). That last one is the ideal
+  moment: the helper is freshly on disk and onboarding already holds FDA, so the row is written
+  proactively *during setup* — the grant is in place well before the first fire, and the gate's
+  copy is just a backstop. The 2s delay lets the just-written helper bundle settle before its
+  code-signature blob is read.
 - Analytics: `PermissionGate.shown` / `PermissionGate.continued` (all_granted flag only).
 
 ## PermissionGuide (the floating drag panel)
