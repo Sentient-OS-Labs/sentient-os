@@ -266,14 +266,16 @@ struct PermissionPanelView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 8) {
-            GuideDirectionIcon(isDragging: guide.isDraggingApp, isDragMode: guide.job?.appURL != nil)
-            VStack(alignment: .leading, spacing: 3) {
-                MonoCaps(guide.job?.pane.title.uppercased() ?? "", size: 8.5, tracking: 2.0,
-                         color: Theme.Ink.label)
-                Text(guide.instruction)
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white)
-                    .fixedSize(horizontal: false, vertical: true)
+            HStack(alignment: .center, spacing: 8) {
+                GuideDirectionIcon(isDragging: guide.isDraggingApp, isDragMode: guide.job?.appURL != nil)
+                VStack(alignment: .leading, spacing: 3) {
+                    MonoCaps(guide.job?.pane.title.uppercased() ?? "", size: 8.5, tracking: 2.0,
+                             color: Theme.Ink.label)
+                    Text(guide.instruction)
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 8)
             HStack(alignment: .top, spacing: 4) {
@@ -297,12 +299,13 @@ struct PermissionPanelView: View {
     }
 }
 
-/// The little animated pointer — wiggles at rest, pulses while the card is being dragged.
+/// The little animated pointer — drifts gently up and down at rest, pulses while the card is
+/// being dragged.
 private struct GuideDirectionIcon: View {
     let isDragging: Bool
     let isDragMode: Bool
 
-    @State private var wigglePhase = false
+    @State private var driftPhase = false
     @State private var scalePhase = false
 
     var body: some View {
@@ -310,26 +313,24 @@ private struct GuideDirectionIcon: View {
             .font(.system(size: 14, weight: .bold))
             .symbolRenderingMode(.hierarchical)
             .foregroundStyle(Theme.Ink.green)
-            .rotationEffect(.degrees(isDragging || !isDragMode ? 0 : (wigglePhase ? 12 : -12)))
-            .offset(y: isDragging || !isDragMode ? 0 : (wigglePhase ? -2 : 1))
+            .offset(y: isDragging || !isDragMode ? 0 : (driftPhase ? -2 : 2))
             .scaleEffect(isDragging ? (scalePhase ? 1.18 : 0.88) : 1)
             .animation(
                 isDragging
                     ? .easeInOut(duration: 0.68).repeatForever(autoreverses: true)
-                    : .easeInOut(duration: 0.22).repeatForever(autoreverses: true),
-                value: isDragging ? scalePhase : wigglePhase
+                    : .easeInOut(duration: 1.6).repeatForever(autoreverses: true),
+                value: isDragging ? scalePhase : driftPhase
             )
-            .onAppear { if isDragMode { wigglePhase = true } }
+            .onAppear { if isDragMode { driftPhase = true } }
             .onChange(of: isDragging) { _, dragging in
                 if dragging {
                     scalePhase = true
-                    wigglePhase = false
+                    driftPhase = false
                 } else {
                     scalePhase = false
-                    wigglePhase = isDragMode
+                    driftPhase = isDragMode
                 }
             }
-            .padding(.top, 2)
     }
 }
 
