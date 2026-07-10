@@ -25,7 +25,7 @@ gift → wipe legs still run — see `Plan Gate (CodexAuth & Knowledge-Base-Only
 
 ## PART 1 — What the judge does
 
-A **hermetic, summaries-only** Codex call (gpt-5.5, **high** effort — this judgment is the product)
+A **hermetic, summaries-only** Codex call (gpt-5.6-sol, **high** effort — this judgment is the product)
 that reads ONE input and ranks it:
 
 - **The last 7 days of summaries** from every source — files, WhatsApp, iMessage, Apple Notes,
@@ -183,7 +183,7 @@ Cancellation is real: the awaiting Task's cancel (a card's STOP) terminates the 
 
 ## The welcome gift — `Proactive/GiftLetter.swift`
 
-The day-one "letter from Sentient" card: ONE hermetic codex call (gpt-5.5, high, `workspace-write`
+The day-one "letter from Sentient" card: ONE hermetic codex call (gpt-5.6-sol, high, `workspace-write`
 over the user's own knowledge base, no web/MCP) reads the whole vault and writes a short, delightful
 cross-life-patterns letter as `Gift from Sentient.md`; the app reads it back, persists it
 (`gift.latestLetter`), and deletes the file so nothing strays into the vault or the mirror.

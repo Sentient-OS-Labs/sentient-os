@@ -14,7 +14,12 @@ Reverse-Engineering).md`.)
 - **Detection (no side effects):** `installed`, `loggedIn`, `computerUseReady` (Bool state), refreshed by
   `refreshInstalled()`, `refreshLoginStatus()` (async — runs `codex login status`), `refreshComputerUse()`.
 - **Actions (each self-guards / idempotent):** `installCodex()`, `startLogin()`, `setupComputerUse()` —
-  every one **no-ops when its step is already done**, so they're safe to call blindly.
+  login and computer-use **no-op when their step is already done**, so they're safe to call blindly.
+  ⚠️ Exception (since 2026-07-09): `installCodex()` **always runs** — OpenAI's install script doubles as
+  the CLI updater (update-in-place; auth/config untouched), and setup should hand the latest CLI to the
+  computer-use step. It's still safe to call blindly (a failed update over a working codex reads as
+  "present, update skipped", never a ✗); the onboarding codex screen kicks it once per launch via
+  `ranInstallerThisLaunch`.
 
 Plus one driver helper: **`whatsNeeded() async -> [Step]`** — does a *fresh* check of all three and returns
 the steps still pending, in order.
