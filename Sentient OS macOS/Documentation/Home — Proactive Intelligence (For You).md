@@ -56,7 +56,11 @@ HomeView ⟷ ProcessingView cross-fade. **Analyze Now runs the shared `SourceSel
 mirror → gift → proactive → wipe), byte-for-byte what the 3am scheduler runs. `RootView` also owns
 **the onboarding finale**: when the first analysis finishes, onboarding dissolves into the home and
 the Knowledge window (the Constellation) opens ON TOP a beat later — every user's first sight of
-their knowledge base, whatever their plan. `RootView` also mounts the screen-agnostic
+their knowledge base, whatever their plan. ProcessingView's "Analysis complete" screen
+**auto-advances after 5s** (the Done button stays as a skip; a cancellation check stops a manual
+Done from double-firing the finale) — so someone who left the first run going overnight wakes up
+to the Constellation + cards, never a stale complete screen. Dev runs (`showPrompt`) keep the
+manual Done so final counts can be inspected. `RootView` also mounts the screen-agnostic
 **computer-use setup whisper** — a small spinner + "Setting up Codex computer use in the
 background." bottom-left, keyed to the live `CodexSetup.settingUpComputerUse` flag, so it rides
 onboarding's takeover, the knowledge-base phase, and (rarely) the home for exactly as long as the
