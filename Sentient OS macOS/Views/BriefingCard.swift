@@ -189,13 +189,14 @@ struct BriefingCard: View {
 struct OfferButton: View {
     let label: String
     let accent: Color
+    var icon: String = "sparkles"
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Image(systemName: "sparkles").font(.system(size: 10.5, weight: .semibold))
+                Image(systemName: icon).font(.system(size: 10.5, weight: .semibold))
                 Text(label).font(.system(size: 12.5, weight: .semibold))
             }
             .foregroundStyle(.white)
