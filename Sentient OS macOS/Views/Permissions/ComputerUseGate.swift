@@ -51,27 +51,47 @@ final class ComputerUseGate {
 
     // MARK: The gate
 
+    /// Persisted so Sentient's OPTIONAL Screen Recording is offered exactly once in the app's
+    /// lifetime. The gate blocks only on REQUIRED grants, so without this a user who already had
+    /// the Codex helper's grants (e.g. set up via the ChatGPT app) would sail straight past and
+    /// never be asked for Sentient's own screen recording. Cleared by FactoryReset so a rebuild
+    /// re-offers it.
+    static let screenRecordingOfferedKey = "computerUse.screenRecordingOffered"
+    private static var screenRecordingOffered: Bool {
+        get { UserDefaults.standard.bool(forKey: screenRecordingOfferedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: screenRecordingOfferedKey) }
+    }
+
     private var pending: (@MainActor () -> Void)?
+    private var presentedBlocking = false   // window up because a REQUIRED grant is missing (vs. the optional offer)
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
 
-    /// The one entry point. Returns true when the action was intercepted (the setup window is up
-    /// and the action is stashed — fired by Continue once every required grant is green, dropped
-    /// by close). Returns false ONLY when everything required is already granted, so the caller
-    /// may proceed. While any required grant is missing the gate ALWAYS takes over — re-showing
-    /// (or re-focusing an already-open window) and re-holding the action on every attempt, so a
-    /// feature can never fire half-granted no matter how many times the window was dismissed.
+    /// The one entry point. Returns true when the gate took over (window up, action stashed) and
+    /// the caller must abort; false when the caller may just proceed. It takes over in two cases:
+    ///   • a REQUIRED grant is missing → BLOCKING: always re-shows (or re-focuses) and re-holds the
+    ///     action until every required grant is green — so a feature can never fire half-granted no
+    ///     matter how many times the window was dismissed (Continue is disabled, close drops it).
+    ///   • all required are green but Sentient's OPTIONAL Screen Recording is missing and hasn't
+    ///     been offered yet → NON-BLOCKING, once ever: Continue is enabled immediately and closing
+    ///     still FIRES the held command, so an optional nudge never eats what the user fired.
     func intercept(_ action: @escaping @MainActor () -> Void) -> Bool {
         refresh()
-        guard !allRequiredGranted else { return false }
+        let blocking = !allRequiredGranted
+        if !blocking {
+            // Nothing required is missing — the only reason to appear is the one-time optional offer.
+            guard !sentientScreen, !Self.screenRecordingOffered else { return false }
+        }
+        if !sentientScreen { Self.screenRecordingOffered = true }   // the row is shown → they've now been offered it
+        presentedBlocking = blocking
         let wasVisible = window?.isVisible ?? false
         pending = action
         present()
         if wasVisible {
             Log("ComputerUseGate: re-intercepted — setup window already up, action re-held")
         } else {
-            Analytics.signal("PermissionGate.shown")
-            Log("ComputerUseGate: intercepted computer-use action — setup window up (required grants missing)")
+            Analytics.signal("PermissionGate.shown", parameters: ["blocking": String(blocking)])
+            Log("ComputerUseGate: intercepted computer-use action — setup window up (\(blocking ? "required grants missing" : "optional screen-recording offer"))")
         }
         return true
     }
@@ -164,11 +184,18 @@ final class ComputerUseGate {
         window?.close()                  // willClose → windowClosed(), which finds pending already nil on Continue
     }
 
-    /// The red button / X — a held action the user didn't Continue is dropped, not fired blind.
+    /// The red button / X. A BLOCKING gate drops the held action (never fired blind — a required
+    /// grant is missing). The optional Screen-Recording offer is non-blocking, so dismissing it
+    /// still fires the command the user actually asked for.
     private func windowClosed() {
-        if pending != nil {
+        if let action = pending {
             pending = nil
-            Log("ComputerUseGate: setup window closed — held action dropped")
+            if presentedBlocking {
+                Log("ComputerUseGate: setup window closed — held action dropped (required grant missing)")
+            } else {
+                Log("ComputerUseGate: optional Screen-Recording offer dismissed — firing the held command")
+                action()
+            }
         }
         PermissionGuide.shared.close()
     }

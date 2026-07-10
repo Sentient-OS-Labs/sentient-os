@@ -49,8 +49,8 @@ struct ComputerUseGateView: View {
                         }
                         StatusLine(title: "Screen Recording",
                                    health: gate.sentientScreen ? .ok : .warn,   // optional — amber, never blocking
-                                   note: gate.sentientScreen ? "granted" : "optional",
-                                   tip: "Optional. Lets Sentient snap a still of your screen the moment you fire a command, so it can see the thing you're asking about. Without it, commands run without screen context. Takes effect after you restart Sentient.",
+                                   note: gate.sentientScreen ? "granted" : "recommended",
+                                   tip: "Optional, but heavily recommended. Lets Sentient snap a still of your screen the moment you fire a command, so it can see the thing you're asking about. Without it, commands run without screen context. Takes effect after you restart Sentient.",
                                    fixTitle: "Allow…") {
                             fixSentientScreen()
                         }

@@ -31,6 +31,7 @@ enum FactoryReset {
         d.removeObject(forKey: "onboarding.step")
         d.removeObject(forKey: CodexAuth.kbOnlyKey)     // the crossroads re-detects the plan fresh
         d.removeObject(forKey: AppState.onboardingKey)
+        d.removeObject(forKey: ComputerUseGate.screenRecordingOfferedKey)   // re-offer Sentient's screen recording on rebuild
         appState?.hasCompletedOnboarding = false        // live flip (didSet re-persists false)
         Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy · rewound to onboarding")
     }
