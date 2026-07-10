@@ -159,6 +159,14 @@ final class CommandCoordinator {
             Log("hotkey blocked — knowledge-base-only plan (Sidekick needs Plus)")
             return
         }
+        // First-use permission gate — BEFORE the notch opens. If any required action grant is
+        // missing, the setup window takes the press; the notch never drops open to listen (which
+        // would only meet the gate at submit, after a whole listen-and-transcribe dance). The user
+        // grants, then presses again to talk. Same window the command bar + proactive cards raise.
+        if ComputerUseGate.shared.interceptBeforeStart() {
+            Log("hotkey press intercepted — computer-use permissions missing, gate up")
+            return
+        }
         setPhase(.opening)                                // you're pulling it open — reveal the instant you press
         if VoiceCapture.isAuthorized { startCapture() }   // never PROMPT on a press; defer to hold-confirm
     }
