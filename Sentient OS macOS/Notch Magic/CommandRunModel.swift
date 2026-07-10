@@ -214,11 +214,16 @@ final class CommandRunModel {
         let screenLine = hasScreenshot
             ? "\nAttached is a screenshot of my screen exactly as it looks right now. Use it to see what I'm currently looking at — resolve any \"this\", \"here\", \"that form\", etc. against what's on screen before you act.\n"
             : ""
+        // The user's standing Sidekick context (Settings → Proactive & Sidekick) — preferred apps,
+        // browser, norms. Empty string when they've set none, so the prompt is unchanged by default.
+        let context = CustomInstructions.sidekick
+        let contextLine = context.isEmpty ? ""
+            : "\nStanding preferences I've set for you (apply them wherever they're relevant to this task): \(context)\n"
         return """
         Using \(mode.promptPhrase), \(task)
         \(screenLine)
         Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate). Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
-
+        \(contextLine)
         For context about me, my knowledge base is a folder of markdown files at '\(VaultGenerator.vaultRoot.path)'. When you need it, read it directly with your shell/file tools — `ls`, `cat`, and `grep` the .md files. Do NOT open it in Obsidian or any GUI app to read it.
         """
     }

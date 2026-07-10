@@ -79,6 +79,12 @@ Accuracy-first and deliberately detailed. Cross-source context is the moat, but 
   teaches the SHAPE, not specific facts.
 - Standard guardrails: never invent a date/fact; no raw private specifics; a confident wrong item is
   worse than a miss.
+- **The user's own standing instructions** — `Proactive.instructionsBlock` injects the free text from
+  Settings → Proactive & Sidekick (`proactive.instructions`, via `CustomInstructions`) as a
+  high-priority directive block near the top: honor what they say to surface / skip, but it never
+  overrides the accuracy or never-fire rules. The block is `""` when unset (prompt unchanged), and the
+  SAME block is reused in PART 2 (like `recent`/`summaryLines`) so exclusions and preferences hold
+  end-to-end.
 
 ### Invocation specifics
 
@@ -110,7 +116,9 @@ Research surfaces (all read-only): the **full last-week summary corpus** (the SA
 as background context), the **knowledge base** (`cwd` — identity anchor + the user's **voice** + the
 facts a draft/form needs), the **Gmail MCP** if connected (read the live thread; skip gracefully +
 mark `unverified` if absent), **web search** (external facts, identity-matched), and the
-**live-calendar context** (the same `calendarContext:` block as PART 1).
+**live-calendar context** (the same `calendarContext:` block as PART 1). It also carries the user's
+**standing instructions** — the SAME `Proactive.instructionsBlock` PART 1 shows — so preferences that
+shape staging (a channel to prefer, a draft tone, a thing to skip) hold through the prune-to-5.
 
 `CodexCLI.Invocation`: `effort .high`, `sandbox .readOnly`, `cwd = vault`, `webSearch = true`,
 `includeUserConfig = true`, `bypassApprovals = false`, `outputSchema`, `timeout 1800s`, `feature
@@ -187,8 +195,6 @@ the code itself — `GiftLetter.prompt(vaultPath:)` is the source of truth (the 
 
 - **Retiring the demo deck** — real cards are the default now; deleting the hard-coded demo cards
   (they carry real investor names) is a pre-launch checklist item.
-- **Consuming `proactive.instructions`** — the Settings → Proactive & Sidekick standing instructions
-  are stored but not yet read by the judge/research prompts (the "prompt refinement" todo).
 - **Tier 1 reminders** — a scheduled macOS notification from a `reminder`/dated action
   (`System/Notify.swift` is the dormant hook).
 - **The ≤1/day taste cap** in code (today the cycle runs whenever triggered).

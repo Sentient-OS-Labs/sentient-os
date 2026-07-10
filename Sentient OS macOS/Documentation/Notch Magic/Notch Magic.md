@@ -164,6 +164,10 @@ So the agent can act on what you're *actually looking at*, every command attache
 - **Privacy note:** the frame goes to the user's OWN codex/OpenAI — the same trust boundary computer use already crosses (it reads the live screen anyway). It never touches Sentient servers, and only the file *size* is logged, never the pixels.
 - **Known rough edges (§13):** no downscale yet (~0.5–1.5 MB per frame) · our own notch overlay is *in* the shot (recordable window) · main-display only (multi-monitor grabs the wrong screen sometimes) · the **home command-bar path is weak** — Sentient is frontmost there, so the frame is often our own UI; the two *notch* doors (non-activating panel) are where the shot is genuinely useful.
 
+### 6b. Standing context — `sidekick.context`
+
+`CommandRunModel.commandPrompt` injects the user's free-text Sidekick context from Settings → Proactive & Sidekick (`sidekick.context`, read via `CustomInstructions.sidekick`) as a "standing preferences" line — e.g. *"when I say text someone, use WhatsApp; my main browser is Edge."* It's `""` by default (prompt unchanged), and because `commandPrompt` is the ONE builder both the hotkey and the home command bar drive, the context applies to voice and typed runs alike. Trusted (user-authored), so it's stated as a directive, not wrapped as DATA. (The other pane key, `sidekick.hotkey`, is unrelated — it re-keys `SidekickHotkeyMonitor`, §4.)
+
 ---
 
 ## 7. The notch window — `NotchWindowController` + `NotchSpace`
