@@ -35,6 +35,10 @@ struct MenuBarView: View {
     /// Bring the proactive home window to the front — focus it if it's open, otherwise reopen it
     /// (a red-button close destroys the WindowGroup's window, so it must be recreated).
     private func openHome() {
+        // We may be .accessory (Dock icon hidden because no window is up). Restore .regular BEFORE
+        // opening/activating so the window takes focus and the Dock icon reappears cleanly — the
+        // DockPolicy observer would do it on didBecomeKey, but that lands too late for activate().
+        NSApp.setActivationPolicy(.regular)
         let homeID = SentientOSApp.homeWindowID
         if let home = NSApp.windows.first(where: {
             guard let raw = $0.identifier?.rawValue else { return false }
