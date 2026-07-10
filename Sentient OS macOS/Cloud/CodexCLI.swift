@@ -32,7 +32,8 @@ actor CodexCLI {
 
     /// Reasoning-effort tier (codex `model_reasoning_effort`). All four are accepted by codex.
     /// Per-call: Gmail connect-check = `.low`, Gmail processing = `.high`, knowledge-base work
-    /// (and everything else) = `.high`; the initial vault build overrides to `.xhigh`.
+    /// (and everything else) = `.high`. Nothing runs `.xhigh` anymore — gpt-5.6-sol thinks far
+    /// too long there (the initial vault build was downgraded to `.high`, 2026-07-10).
     enum Effort: String, Sendable {
         case low
         case medium
@@ -60,7 +61,7 @@ actor CodexCLI {
     struct Invocation: Sendable {
         var prompt: String
         var model: Model = .gpt56sol              // gpt-5.6-sol for everything except the Gmail tier
-        var effort: Effort = .high             // gpt-5.6-sol default; initial vault build → .xhigh; Gmail tier → .medium
+        var effort: Effort = .high             // gpt-5.6-sol default (nothing overrides upward); Gmail tier → .medium
         var sandbox: Sandbox = .readOnly
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd

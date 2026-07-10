@@ -52,14 +52,13 @@ The light model carries the Gmail tier; gpt-5.6-sol carries the knowledge base. 
 |---|---|---|
 | Connect-check (`probeConnected`) | `gpt-5.6-luna` | `medium` |
 | Gmail reads (`runInitial`/`runIterative`) | `gpt-5.6-luna` | `medium` |
-| Initial vault build (`VaultGenerator`) | `gpt-5.6-sol` | `xhigh` |
-| KB update + proactive + everything else | `gpt-5.6-sol` | `high` |
+| Vault build/update + proactive + everything else | `gpt-5.6-sol` | `high` |
 
 ⚠️ Not every SKU rides a **ChatGPT-account** auth (no API key): in the June 15 measurement (the
 gpt-5.5 era) `gpt-5.4-spark`, `gpt-5.5-codex`, and the older `-mini`s were all rejected. The current
 gpt-5.6 lineup (sol/luna, adopted 2026-07-09) works on ChatGPT plans — verified live — but re-verify
-any NEW model through `codex exec` before adopting it. `.high` is the `Invocation` default (the
-initial vault build overrides to `.xhigh`).
+any NEW model through `codex exec` before adopting it. `.high` is the `Invocation` default (nothing
+overrides upward since 2026-07-10 — the initial vault build's `.xhigh` overthought).
 
 ## Gotchas (measured live, June 15)
 - **The Gmail connector works regardless of `--ignore-user-config`.** The Gmail tools are

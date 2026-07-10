@@ -2,9 +2,10 @@
 
 `VaultGenerator.generate(notes:resume:onProgress:)` turns the on-device survivor summaries
 (passed as `[CloudNote]`) into the markdown knowledge base at `~/Sentient OS - Knowledge Base/`,
-through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.6-sol` at **`.xhigh` effort**
-(**`.high` in knowledge-base-only mode** — a free/go plan's tiny monthly quota affords exactly
-one build, and only at high; see `Plan Gate (CodexAuth & Knowledge-Base-Only).md`),
+through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.6-sol` at **`.high` effort**
+(every plan — the initial build's `.xhigh` override was retired 2026-07-10, it thinks far too
+long; `.high` is also all a free/go plan's tiny monthly quota affords, see
+`Plan Gate (CodexAuth & Knowledge-Base-Only).md`),
 `workspace-write` sandbox, cwd = a staging dir; the model writes the `.md` files itself with its
 file tools. Without a working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — a ChatGPT
 subscription is a hard requirement; the old direct-Anthropic-API route and its
@@ -43,7 +44,7 @@ A mid-run death (limit / crash / kill) leaves the previous vault untouched and t
 **Durable resume for BOTH** — `VaultCloud` persists the `ResumeToken(sessionID, stagingPath[, vaultFingerprint])`
 to UserDefaults (`vault.create.resume` / `vault.update.resume`), loaded in `init`, discarded if the
 staging dir is gone or there's no session. So a usage limit **or an app restart** resumes over staging
-instead of re-running the expensive `xhigh` build from scratch. (`ResumeToken` is `Codable`.)
+instead of re-running the expensive initial build from scratch. (`ResumeToken` is `Codable`.)
 
 **Update freshness check (concurrent editor edits)** — the Knowledge editor writes note files directly
 into the live vault, so `update()` guards against clobbering a user edit: it (a) **skips** the merge if
