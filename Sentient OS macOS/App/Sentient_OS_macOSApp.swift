@@ -14,11 +14,14 @@ import SwiftUI
 struct SentientOSApp: App {
     @State private var appState = AppState()
 
+    /// Scene id for the primary home window, so the menu bar's "Open Sentient OS" can reopen/focus it.
+    static let homeWindowID = "home"
+
     // To add a headless self-test, restore the one-line hook here — see
     // Documentation/Self-Testing (Eval Harness).md (the `Self Tests - Temp/` folder is kept empty).
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: Self.homeWindowID) {
             RootView()
                 .environment(appState)
                 .preferredColorScheme(.dark)   // Sentient OS is dark-only — no light mode
