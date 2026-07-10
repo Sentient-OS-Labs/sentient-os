@@ -1,7 +1,8 @@
 # Plan Gate — CodexAuth & Knowledge-Base-Only Mode
 
 Sentient knows the user's ChatGPT plan and adapts. Free/Go accounts carry a tiny **monthly**
-codex quota (the initial knowledge-base build alone eats ~70% of it, even at `.high`) and no
+codex quota (the initial knowledge-base build alone eats ~70% of it at `.high` — the effort every
+plan runs since 2026-07-10) and no
 ChatGPT connectors (Gmail/Calendar) — so instead of a broken full experience they get an honest
 fork at onboarding and a scoped **knowledge-base-only mode**. Everything here shipped and was
 verified on real hardware (a real Free login walked end-to-end), July 2026.
@@ -80,7 +81,6 @@ flips:
 |---|---|
 | `OvernightScheduler.maybeAutoEnable()` | Early-returns — no 18h auto-enable, no timer, no 3am runs. Deliberately NOT latched: upgrade + reset starts the clock fresh. |
 | `ProactiveCycle` | Skips decide + research (saves an empty ready-list — no stale cards). Still runs: read → KB build/update → mirror push → gift letter → wipe. |
-| `VaultGenerator` initial build | `.high` instead of `.xhigh` (the quota math above). |
 | Sidekick | Gated at **invoke**, not arming: the hotkey stays armed for everyone; on press the notch answers instantly with the 2s aside "get ChatGPT Plus to wake Sidekick" (the mic-notice pattern) and never opens for listening/typing. `submit()` carries a backstop for the command-bar path. Live-checked per press — no stale-launch-flag hole. |
 | Home | Command bar hidden. The **preview note** (orb + "This is a preview of Sentient." + feature rows + Get Plus glow + Reset Sentient… pill) is ALWAYS mounted; the gift envelope perches top-center above a compact version of it and the note blooms to full center when the letter is flung. Once the claim reads Plus (re-read every appearance), it becomes "You're on Plus. Time to go live." + a Reset & Rebuild glow. |
 | Gmail/Calendar chips | Locked (dim + lock glyph + instant `LockedChipTip` hover: "Only supported on ChatGPT Plus") in onboarding's ready screen, the Analysis popover, and Settings → Knowledge Sources. |

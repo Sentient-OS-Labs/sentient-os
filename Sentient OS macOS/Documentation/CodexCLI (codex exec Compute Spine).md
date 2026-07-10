@@ -46,8 +46,9 @@ plumbing).
 
 `Invocation`: `prompt` (always over **stdin**, never argv) · `model` (`.gpt56sol` = `gpt-5.6-sol`, the
 default for knowledge-base work and everything else / `.gpt56luna` = `gpt-5.6-luna`, the Gmail
-tier) · `effort` (`.low` / `.medium` / `.high` / `.xhigh`; **default `.high`** — the initial vault
-build overrides to `.xhigh`, the Gmail tier to `.medium`) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` · `addDirs`
+tier) · `effort` (`.low` / `.medium` / `.high` / `.xhigh`; **default `.high`** — the Gmail tier
+overrides to `.medium`; nothing runs `.xhigh` since 2026-07-10, gpt-5.6-sol thinks far too long
+there) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` · `addDirs`
 (extra writable roots) · `webSearch` (**default `true`** — web search is available to every call)
 · `includeUserConfig` (**default `true`** — loads `~/.codex` + the user's MCP servers, e.g. their
 Gmail MCP, on every call; set `false` for a hermetic run) · `bypassApprovals` (default `false`;
