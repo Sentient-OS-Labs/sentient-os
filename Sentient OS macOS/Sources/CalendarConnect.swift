@@ -70,8 +70,8 @@ enum CalendarConnect {
     static func probeConnected() async -> Bool {
         var inv = CodexCLI.Invocation(prompt: probePrompt)
         inv.feature = "calendar"
-        inv.model = .gpt54mini               // light model for the connect-check
-        inv.effort = .medium                 // gpt-5.4-mini → medium
+        inv.model = .gpt56luna               // light model for the connect-check
+        inv.effort = .medium                 // gpt-5.6-luna → medium
         inv.sandbox = .readOnly
         inv.webSearch = false
         inv.timeout = 120
@@ -170,7 +170,7 @@ enum CalendarConnect {
     static func fetchProactiveContext() async -> String? {
         var inv = CodexCLI.Invocation(prompt: proactiveFetchPrompt)
         inv.feature = "calendar-proactive"
-        inv.model = .gpt54mini
+        inv.model = .gpt56luna
         inv.effort = .medium
         inv.sandbox = .readOnly
         inv.webSearch = false
@@ -200,8 +200,8 @@ enum CalendarConnect {
     private static func read(prompt: String) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "calendar"
-        inv.model = .gpt54mini               // light model — calendar data is small + structured
-        inv.effort = .medium                 // gpt-5.4-mini → medium
+        inv.model = .gpt56luna               // light model — calendar data is small + structured
+        inv.effort = .medium                 // gpt-5.6-luna → medium
         inv.sandbox = .readOnly              // we only read the calendar + return text (no writes)
         inv.webSearch = false                // the calendar is the only source this needs
         inv.outputSchema = readSchema
