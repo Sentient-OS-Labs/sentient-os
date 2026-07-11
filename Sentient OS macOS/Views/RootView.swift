@@ -21,7 +21,10 @@ struct RootView: View {
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
-    @AppStorage("dev.proactive.realCards") private var realCards = true   // DEFAULT: real cards + full-cycle Analyze Now (dev toggle OFF = the investor demo deck)
+    // The 3-way card mode (Dev Tools → Proactive Cards…). DEFAULT: real cards + full-cycle
+    // Analyze Now; .jesai/.launch swap in a hard-coded demo deck (pitch / launch-video mode).
+    @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
+    private var deck: BriefingDeck { BriefingDeck(rawValue: deckRaw) ?? .real }
     // Cloud sources — same flags the scheduler reads, so Analyze Now processes exactly what an
     // overnight run would (a no-op until Gmail/Calendar are actually connected + selected).
     @AppStorage("dbg.gmail.connected")    private var gmailConnected = false
@@ -68,7 +71,7 @@ struct RootView: View {
                                mode: .auto,
                                runGmail: gmailConnected && runGmail,
                                runCalendar: calendarConnected && runCalendar,
-                               fullCycle: realCards) {   // real mode → read + knowledge base + proactive + wipe
+                               fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
                     appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 18h clock
                 }
@@ -119,7 +122,7 @@ struct RootView: View {
                 whatsappAvailable: WhatsAppSource.isInstalled),
             customRoots: customRoots,
             modelMissing: Self.modelPath == nil,
-            realCards: realCards,
+            deck: deck,
             onAnalyze: { withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true } },
             onShowDevTools: { showDevTools = true })
     }
