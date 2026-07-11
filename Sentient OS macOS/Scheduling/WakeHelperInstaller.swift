@@ -41,6 +41,32 @@ enum WakeHelperInstaller {
         await Task.detached { install() }.value
     }
 
+    /// True when the daemon plist exists on disk AT ALL — stale or current. `isInstalledAndCurrent()`
+    /// additionally checks the binary path; for uninstall a stale plist still must die.
+    static func isInstalled() -> Bool { FileManager.default.fileExists(atPath: plistPath) }
+
+    /// Tear the helper down — the installer's mirror image, behind the same ONE admin prompt:
+    /// restore normal sleep, cancel the armed wake (read from the helper's persisted spec, which
+    /// must happen BEFORE its dir is removed), bootout + delete the daemon, and sweep the
+    /// root-owned support/log files. Clauses are `;`-separated best-effort so a single failure
+    /// never blocks the rest (the daemon self-heals disablesleep + the armed wake anyway); the
+    /// wake is cancelled by its exact spec, never `cancelall`, so other apps' wakes survive.
+    /// No plist on disk = true with no prompt; false = the user declined the password dialog.
+    static func uninstallAsync() async -> Bool {
+        guard isInstalled() else { return true }
+        return await Task.detached { runAdmin(uninstallScript) }.value
+    }
+
+    private static var uninstallScript: String {
+        "/usr/bin/pmset -a disablesleep 0"
+            + "; spec=$(/bin/cat '/Library/Application Support/SentientOS/armed-wake' 2>/dev/null)"
+            + "; [ -n \"$spec\" ] && /usr/bin/pmset schedule cancel wake \"$spec\""
+            + "; /bin/launchctl bootout system '\(plistPath)' 2>/dev/null"
+            + "; /bin/rm -f '\(plistPath)'"
+            + "; /bin/rm -rf '/Library/Application Support/SentientOS'"
+            + "; /bin/rm -f '/Library/Logs/SentientOS-wakehelper.log'"
+    }
+
     private static func install() -> Bool {
         let tmp = (NSTemporaryDirectory() as NSString).appendingPathComponent("sentient-wakehelper.plist")
         guard (try? plistXML(binary: currentBinary).write(toFile: tmp, atomically: true, encoding: .utf8)) != nil

@@ -53,6 +53,14 @@ final class AppState {
     init() {
         self.hasCompletedOnboarding = UserDefaults.standard.bool(forKey: Self.onboardingKey)
         self.notch = NotchWindowController(coordinator: commandCoordinator)
+
+        // Headless self-tests (SENTIENT_SELFTEST) boot this whole app shell before exiting, and
+        // they share the real UserDefaults — so NONE of the launch side effects may fire. Field
+        // lesson (2026-07-10): a self-test instance running from a CLI build let the scheduler's
+        // DEBUG helper self-install re-home the ROOT wake daemon onto the temp binary, behind a
+        // very real admin-password dialog. Same convention as Notify.swift's self-test silence.
+        guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
+
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
         scheduler.maybeAutoEnable()   // 18h after initial: flip the overnight scheduler on (or arm the timer)
         // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
@@ -78,6 +86,21 @@ final class AppState {
                 if status == .notDetermined {
                     _ = try? await center.requestAuthorization(options: [.provisional])
                     Log("Notifications: banked provisional (quiet) authorization")
+                }
+            }
+        }
+
+        // Onboarding model download: the on-device model (3.66 GB) starts pulling 2s after the
+        // launch that follows the Full Disk Access grant — FDA is the one onboarding step that
+        // forces a relaunch, and it lands minutes before Start Analysis needs the model, so the
+        // downloading screen usually only covers the tail. Strictly an onboarding affair, and a
+        // no-op whenever ModelLocator already finds a model (dev checkouts, a finished download).
+        // A quit-and-relaunch mid-download resumes from the finished byte ranges, not from zero.
+        if !hasCompletedOnboarding {
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                if Permissions.hasFullDiskAccess() {
+                    ModelDownload.shared.kickIfNeeded()
                 }
             }
         }

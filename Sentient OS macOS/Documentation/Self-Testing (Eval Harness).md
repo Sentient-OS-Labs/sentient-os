@@ -102,6 +102,7 @@ them. Recreate the one you need with the pattern above:
 | `tokens` | exact prefill/decode token counts for the chat window budget |
 | `parse` / `whatsapp` | Triage JSON parsing / the WhatsApp windows the model would see |
 | `imdecode` / `notesdecode` | the iMessage `attributedBody` / Apple Notes gunzip+protobuf decoders |
+| `modeldownload` | `ModelFetch` (the onboarding model downloader) with the REAL Gemma job into a scratch dir — legs: `crash` (hard-exit mid-download), `complete` (resume → full 3.66 GB → pinned-SHA verify), `badsha` (flipped hash must refuse + wipe). Knobs: `SENTIENT_MODELDL_LEG`, `SENTIENT_MODELDL_KILL_AFTER`, `SENTIENT_MODELDL_DIR`. ⚠️ Run from an isolated CLI build; AppState skips launch side effects under `SENTIENT_SELFTEST` (added after a test instance's DEBUG scheduler repair re-homed the root wake daemon). |
 
 > Keep this doc true: if you build a self-test worth keeping around for a while, note its mode here;
 > when you delete it, the folder goes back to empty.

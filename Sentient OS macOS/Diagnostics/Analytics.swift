@@ -33,6 +33,7 @@
 //   - start()                          → boot TelemetryDeck (Release-only, unconditional)
 //   - signal(_:parameters:floatValue:tier:) → send one product event (.extended = opt-out gated · .core = always)
 //   - countInstallOnce()               → the one-off anonymous install count (Release-only, uncorrelatable)
+//   - countUninstall()                 → its farewell twin, fired as the uninstall teardown begins
 //   - applyEnabledChange()             → react to a mid-session flip of the extended-tier switch
 //
 //  Doc: Documentation/Product Analytics (TelemetryDeck).md · twin: Documentation/Crash Reporting (Sentry).md
@@ -126,6 +127,7 @@ enum Analytics {
 
     private static let installCountedKey = "analytics.installCounted"
     private static let installSignalType = "App.anonymousInstall"
+    private static let uninstallSignalType = "App.anonymousUninstall"
     private static let ingestURL = URL(string: "https://nom.telemetrydeck.com/v2/")!
 
     /// Send the single anonymous install ping — see the file header. Fires at most once per install
@@ -141,7 +143,7 @@ enum Analytics {
         #else
         guard !appID.hasPrefix("PASTE_") else { return }
         guard !UserDefaults.standard.bool(forKey: installCountedKey) else { return }   // one-off, forever
-        postAnonymousInstall { ok in
+        postAnonymousSignal(type: installSignalType) { ok in
             guard ok else { return }   // not latched → retried next launch until it lands exactly once
             UserDefaults.standard.set(true, forKey: installCountedKey)
             Log("Analytics: anonymous install counted (one-off)")
@@ -149,17 +151,31 @@ enum Analytics {
         #endif
     }
 
+    /// The install count's farewell twin: one anonymous "an install left" ping, fired as the
+    /// uninstall teardown begins. Same hard line as `countInstallOnce()` — a throwaway hash
+    /// correlatable to nothing, an empty payload, one direct POST (the SDK's queue may never
+    /// flush this close to quit). Release-only, fire-and-forget: the teardown never waits on the
+    /// network, and a lost ping is simply lost (no retry — the app is about to be gone).
+    static func countUninstall() {
+        #if DEBUG
+        Log("Analytics: DEBUG build — anonymous uninstall ping skipped (Release-only)")
+        #else
+        guard !appID.hasPrefix("PASTE_") else { return }
+        postAnonymousSignal(type: uninstallSignalType) { _ in }
+        #endif
+    }
+
     /// The direct one-shot ingest POST, matching TelemetryDeck's V2 signal body. `clientUser` is a
     /// throwaway random hash (never stored, never reused — so it ties to nothing), the payload is
     /// empty, and no version/device/content rides along: a truly bare count. TelemetryDeck stores no
     /// IP and salts the hash again, so this stays anonymous end to end.
-    private static func postAnonymousInstall(_ done: @escaping @Sendable (Bool) -> Void) {
+    private static func postAnonymousSignal(type: String, _ done: @escaping @Sendable (Bool) -> Void) {
         let body: [[String: Any]] = [[
             "receivedAt": ingestDateFormatter.string(from: Date()),
             "appID": appID,
             "clientUser": sha256Hex(UUID().uuidString),
             "sessionID": UUID().uuidString,
-            "type": installSignalType,
+            "type": type,
             "payload": [String: String](),
             "isTestMode": "false",
         ]]

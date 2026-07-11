@@ -33,7 +33,9 @@ struct RootView: View {
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
     // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
-    private static let modelPath = ModelLocator.resolve()
+    // State, not a static let: onboarding's model download can land the file mid-session, and
+    // the finish closure below re-resolves so the home's Analyze Now works without a relaunch.
+    @State private var modelPath = ModelLocator.resolve()
 
     /// Observed for the global "setting up computer use" whisper (the overlay below).
     @State private var codex = CodexSetup.shared
@@ -52,6 +54,7 @@ struct RootView: View {
                 // window (the Constellation) assembles on top — the user's first sight of their
                 // knowledge base, before the cards (or the free-plan preview message) behind it.
                 OnboardingView {
+                    modelPath = ModelLocator.resolve()   // the onboarding download may have just landed it
                     withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
                     // The first full cycle just stamped "initial done" — arm the 18h clock NOW.
                     // (The app lives in the menu bar and rarely relaunches, so waiting for the
@@ -63,7 +66,7 @@ struct RootView: View {
                     }
                 }
                 .transition(.opacity)
-            } else if isProcessing, let modelPath = Self.modelPath {
+            } else if isProcessing, let modelPath {
                 // Same engine + UI as the dev "start on device" buttons; .auto = backfill new
                 // buckets, catch up the rest. (Gmail is a dev-tools leg; the home button is on-device.)
                 ProcessingView(modelPath: modelPath,
@@ -131,7 +134,7 @@ struct RootView: View {
                 notes: sources.contains(.notes),
                 whatsappAvailable: WhatsAppSource.isInstalled),
             customRoots: customRoots,
-            modelMissing: Self.modelPath == nil,
+            modelMissing: modelPath == nil,
             deck: deck,
             onAnalyze: { withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true } },
             onShowDevTools: { showDevTools = true })
