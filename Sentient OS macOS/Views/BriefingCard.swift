@@ -34,7 +34,7 @@ struct BriefingCard: View {
     var body: some View {
         Group {
             if phase == .sealed {
-                EnvelopeFace(onOpened: onOpenEnvelope)
+                EnvelopeFace(recipient: briefing.envelopeName, onOpened: onOpenEnvelope)
             } else {
                 face
             }
@@ -220,6 +220,7 @@ struct OfferButton: View {
 /// wax seal carrying the orb mark. Tap anywhere → flap opens → `onOpened` (the parent then
 /// expands the letter and the card lives on as a normal welcome card).
 private struct EnvelopeFace: View {
+    var recipient: String?      // the briefing's override ("You" on demo decks); nil = the Mac account's first name
     var onOpened: () -> Void
     @State private var open = false
 
@@ -239,10 +240,14 @@ private struct EnvelopeFace: View {
                         .strokeBorder(BriefingCard.welcomeGradient, lineWidth: 1))
 
                 VStack(spacing: 7) {
-                    MonoCaps("A letter from your Sentient", size: 9, tracking: 2.4, color: Theme.Ink.label)
-                    // The recipient: the Mac account's first name (same source as the home
-                    // greeting); a nameless account just gets "For you".
-                    Text(HomeView.macFirstName.isEmpty ? "For you" : "For \(HomeView.macFirstName)")
+                    MonoCaps("A gift from your Sentient", size: 9, tracking: 2.4, color: Theme.Ink.label)
+                    // The recipient: the briefing's override when set (demo decks say "For You"),
+                    // else the Mac account's first name (same source as the home greeting);
+                    // a nameless account just gets "For you".
+                    Text({
+                        if let recipient { return "For \(recipient)" }
+                        return HomeView.macFirstName.isEmpty ? "For you" : "For \(HomeView.macFirstName)"
+                    }())
                         .font(.system(size: 22, design: .serif).italic())
                         .foregroundStyle(Theme.Ink.statusInk)
                 }
@@ -326,28 +331,28 @@ private struct BlinkingCursor: View {
 
 #Preview("Offer") {
     ZStack { Color.black
-        BriefingCard(briefing: Briefing.demo[0], phase: .offer,
+        BriefingCard(briefing: Briefing.jesaiDemo[0], phase: .offer,
                      onOffer: {}, onDetail: {}, onOpenEnvelope: {})
     }.frame(width: 420, height: 300)
 }
 
 #Preview("Working") {
     ZStack { Color.black
-        BriefingCard(briefing: Briefing.demo[3], phase: .working(3),
+        BriefingCard(briefing: Briefing.jesaiDemo[3], phase: .working(3),
                      onOffer: {}, onDetail: {}, onOpenEnvelope: {})
     }.frame(width: 420, height: 320)
 }
 
 #Preview("Done") {
     ZStack { Color.black
-        BriefingCard(briefing: Briefing.demo[0], phase: .done,
+        BriefingCard(briefing: Briefing.jesaiDemo[0], phase: .done,
                      onOffer: {}, onDetail: {}, onOpenEnvelope: {})
     }.frame(width: 420, height: 240)
 }
 
 #Preview("Sealed envelope") {
     ZStack { Color.black
-        BriefingCard(briefing: Briefing.demo[5], phase: .sealed,
+        BriefingCard(briefing: Briefing.jesaiDemo[5], phase: .sealed,
                      onOffer: {}, onDetail: {}, onOpenEnvelope: {})
     }.frame(width: 420, height: 300)
 }

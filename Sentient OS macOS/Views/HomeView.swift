@@ -36,7 +36,7 @@ struct HomeView: View {
     var sources: HomeSources = .init()
     var customRoots: [URL] = []        // session folders from RootView — shown in the Analysis popover, like Dev Tools
     var modelMissing: Bool = false
-    var realCards: Bool = false        // true → show real proactive cards from latest(); false → the demo deck
+    var deck: BriefingDeck = .jesai    // .real → real proactive cards from latest(); .jesai/.launch → a demo deck
     var previewKBOnly = false          // preview-only: force the knowledge-base-only state
     var onAnalyze: () -> Void = {}
     var onShowDevTools: () -> Void = {}
@@ -105,11 +105,11 @@ struct HomeView: View {
         .onAppear {                        // every appearance starts fresh: sealed envelope, full deal
             letter = nil
             letterShown = false
-            model.beginVisit(realCards: realCards)
+            model.beginVisit(deck: deck)
             planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
             caution = OvernightCaution.latest()
         }
-        .onChange(of: realCards) { _, v in model.beginVisit(realCards: v) }   // toggle flip → re-deal
+        .onChange(of: deck) { _, v in model.beginVisit(deck: v) }   // mode flip → re-deal
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
         .sheet(isPresented: $showWhatsAppPicker) {
             ChatPicker(sourceName: "WhatsApp", loadChats: { try WhatsAppSource().listChats() },
@@ -222,7 +222,7 @@ struct HomeView: View {
     private var analysisPopover: some View {
         AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
                         modelMissing: modelMissing,
-                        syncedLabel: syncedLabel, pending: realCards ? 0 : Demo.pending,
+                        syncedLabel: syncedLabel, pending: deck == .real ? 0 : Demo.pending,
                         onAnalyze: { showAnalysis = false; onAnalyze() },
                         onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
                         onPickIMessage: { showAnalysis = false; showIMessagePicker = true },
@@ -234,7 +234,7 @@ struct HomeView: View {
 
     /// Real mode: the actual last-cycle stamp; demo mode: the showcase string.
     private var syncedLabel: String {
-        guard realCards else { return Demo.synced }
+        guard deck == .real else { return Demo.synced }
         guard let d = UserDefaults.standard.object(forKey: ProactiveCycle.lastCycleKey) as? Date else {
             return "Not yet analyzed"
         }
@@ -277,7 +277,8 @@ struct HomeView: View {
     /// top chrome (nav + greeting) and the command-bar dock. The two rows cluster toward the
     /// vertical centre with a tight, deliberate gap (one composed spread, not two stranded rows)
     /// and a gentle stagger. Pinned, not gridded; reflows as cards leave. (y-fraction is WITHIN
-    /// the zone.)
+    /// the zone.) Convention: the LAST slot of every population is the rightmost/lowest one —
+    /// the welcome gift envelope always rides last in the deck, so that slot is its perch.
     private static func slots(count: Int, in size: CGSize) -> [CGPoint] {
         let top = size.height * 0.20
         let bottom = size.height * 0.86
@@ -579,24 +580,27 @@ final class ForYouModel {
     }
 
     /// A fresh visit. Real mode → the verified cards from the latest proactive run (empty → the orb's
-    /// "I'm here to help."). Demo mode → the investor deck (welcome re-sealed). Then the orb deals the
-    /// cards with staggered springs from above the header.
-    func beginVisit(realCards: Bool) {
+    /// "I'm here to help."). Demo modes → the picked hard-coded deck (welcome re-sealed). Then the orb
+    /// deals the cards with staggered springs from above the header.
+    func beginVisit(deck: BriefingDeck) {
         visit += 1
         let v = visit
         runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
-        if realCards {
-            var built: [Entry] = []
-            // The day-one welcome "gift" leads the deck as a sealed envelope (generated from the user's
-            // own knowledge base by the proactive cycle; absent until that's run once).
+        switch deck {
+        case .real:
+            var built: [Entry] = (ProactiveResearch.latest()?.ready ?? [])
+                .map { Entry(b: Briefing(from: $0), action: $0, phase: .offer) }
+            // The day-one welcome "gift" rides LAST as a sealed envelope (generated from the user's
+            // own knowledge base by the proactive cycle; absent until that's run once) — last in
+            // the deck = the bottom-right scatter slot, the envelope's fixed perch in every mode.
             if let gift = GiftLetter.latest() {
                 built.append(Entry(b: Briefing(fromGiftMarkdown: gift), action: nil, phase: .sealed))
             }
-            let ready = ProactiveResearch.latest()?.ready ?? []
-            built.append(contentsOf: ready.map { Entry(b: Briefing(from: $0), action: $0, phase: .offer) })
             entries = built
-        } else {
-            entries = Briefing.demo.map { Entry(b: $0, action: nil, phase: $0.kind == .welcome ? .sealed : .offer) }
+        case .jesai, .launch:
+            // Both demo decks keep their welcome card LAST for the same bottom-right perch.
+            let cards = deck == .launch ? Briefing.launchDemo : Briefing.jesaiDemo
+            entries = cards.map { Entry(b: $0, action: nil, phase: $0.kind == .welcome ? .sealed : .offer) }
         }
         for (i, e) in entries.enumerated() {
             Task {
@@ -984,7 +988,7 @@ private struct LetterView: View {
     }
 }
 
-// MARK: - Demo data (the home's own showcase strings — cards live in Briefing.demo)
+// MARK: - Demo data (the home's own showcase strings — cards live in Briefing.jesaiDemo/.launchDemo)
 
 private enum Demo {
     static let synced = "Synced · 3:41 AM"
@@ -998,11 +1002,19 @@ private enum Demo {
         .frame(width: 1180, height: 880)
 }
 
+#Preview("Home — launch demo deck") {
+    HomeView(thingsUnderstood: 3339,
+             sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
+             modelMissing: false,
+             deck: .launch)
+        .frame(width: 1180, height: 880)
+}
+
 #Preview("Home — knowledge-base-only (free plan)") {
     HomeView(thingsUnderstood: 1704,
              sources: .init(files: true),
              modelMissing: false,
-             realCards: true,
+             deck: .real,
              previewKBOnly: true,
              previewUpgraded: false)
         .frame(width: 1180, height: 880)
@@ -1012,7 +1024,7 @@ private enum Demo {
     HomeView(thingsUnderstood: 1704,
              sources: .init(files: true),
              modelMissing: false,
-             realCards: true,
+             deck: .real,
              previewKBOnly: true,
              previewUpgraded: true)
         .frame(width: 1180, height: 880)

@@ -35,7 +35,7 @@ struct OnboardingView: View {
     @State private var computerUseArmed = false
 
     // The same run flags the home's Analyze Now reads (RootView).
-    @AppStorage("dev.proactive.realCards") private var realCards = true
+    @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
     @AppStorage("dbg.gmail.connected")     private var gmailConnected = false
     @AppStorage("dbg.run.gmail")           private var runGmail = false
     @AppStorage("dbg.calendar.connected")  private var calendarConnected = false
@@ -69,7 +69,7 @@ struct OnboardingView: View {
                                    mode: .auto,
                                    runGmail: gmailConnected && runGmail,
                                    runCalendar: calendarConnected && runCalendar,
-                                   fullCycle: realCards,
+                                   fullCycle: BriefingDeck(rawValue: deckRaw) == .real,
                                    pausable: true,
                                    onExitEarly: { withAnimation(.easeInOut(duration: 0.3)) { analyzing = false } },
                                    onDone: onFinished)

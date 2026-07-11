@@ -89,9 +89,9 @@ struct DevToolsView: View {
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
-    // Real For-You cards — ON by default (decided 2026-07-05). OFF = the hard-coded investor-demo
-    // deck (pitch mode); the deck itself gets scrubbed before the repo goes public.
-    @AppStorage("dev.proactive.realCards") private var realCards = true
+    // The 3-way card mode (which deck the home deals) — see BriefingDeck (Briefing.swift).
+    @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
+
 
     // MCP mirror (the hosted Render copy). Local mirrors of MirrorClient's actor state, refreshed
     // when "More" opens and after each action.
@@ -133,20 +133,37 @@ struct DevToolsView: View {
         .buttonStyle(.plain)
     }
 
-    /// Toggle: real For-You cards vs the demo deck. ON also makes Analyze Now run the full cycle.
-    private var realCardsSection: some View {
+    /// The 3-way deck mode, inline: which deck the home deals. Three segment buttons; clicking one
+    /// switches the mode and the home re-deals instantly (HomeView re-deals on the deck change).
+    private var proactiveCardsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("REAL FOR-YOU CARDS").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
-                Spacer()
-                Toggle("", isOn: $realCards).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            Text("PROACTIVE CARDS").font(.caption2.weight(.bold)).tracking(2).foregroundStyle(Theme.faint)
+            HStack(spacing: 8) {
+                deckButton(.real, "REAL CARDS")
+                deckButton(.jesai, "JESAI'S DEMO")
+                deckButton(.launch, "LAUNCH DEMO")
             }
-            Text("ON (the default): the home shows REAL proactive cards from your processed data, and Analyze Now runs the full cycle — read → knowledge base → decide / research / prepare → wipe summaries. OFF: the hard-coded investor-demo deck (pitch mode).")
+            Text("Real cards come from your latest proactive run, and Analyze Now runs the full cycle — read → knowledge base → decide / research / prepare → wipe. The demo decks are hard-coded; fires play scripted theater.")
                 .font(.caption2).foregroundStyle(Theme.faint.opacity(0.7))
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    /// One deck segment — lit when it's the active mode.
+    private func deckButton(_ mode: BriefingDeck, _ label: String) -> some View {
+        let selected = (BriefingDeck(rawValue: deckRaw) ?? .real) == mode
+        return Button { deckRaw = mode.rawValue } label: {
+            Text(label)
+                .font(.caption2.weight(.bold)).tracking(1.5)
+                .foregroundStyle(selected ? .white : Theme.faint)
+                .frame(maxWidth: .infinity, minHeight: 32)
+                .background(.white.opacity(selected ? 0.14 : 0.04), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(.white.opacity(selected ? 0.25 : 0.08), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     /// Opens the one CODEX SETUP window (install · log in · computer use) — all three steps live in
@@ -185,7 +202,7 @@ struct DevToolsView: View {
                         await runResearch(progress: progress)
                     }
                     executeButton
-                    realCardsSection
+                    proactiveCardsSection
                     HStack(spacing: 10) {
                         viewSummariesButton
                         viewActionItemsButton

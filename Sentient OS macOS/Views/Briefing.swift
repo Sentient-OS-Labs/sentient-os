@@ -12,11 +12,31 @@
 //  context). The demo plays the hard-coded `workLog` theater instead; swapping in the real
 //  call is a one-line change at the seam in HomeView (ForYouModel.run).
 //
-//  ALL content below is the hard-coded investor-demo set (mined from the real vault for
-//  authenticity). The proactive-intelligence module generates real ones post-launch.
+//  The hard-coded content below is TWO demo decks — `jesaiDemo` (the investor-pitch set, mined
+//  from the real vault) and `launchDemo` (the audience-safe launch-video set) — picked by the
+//  `BriefingDeck` dev mode (Dev Tools → Proactive Cards…). Real cards come from PreparedActions.
 //
 
 import SwiftUI
+
+/// Which deck the home deals — the dev cockpit's 3-way mode (Dev Tools → Proactive Cards…).
+/// `.real` (the shipping default) also makes Analyze Now / onboarding run the FULL proactive
+/// cycle; either demo deck plays the scripted theater instead.
+enum BriefingDeck: String {
+    case real, jesai, launch
+
+    static let key = "dev.proactive.deck"
+
+    /// The @AppStorage default: `.real`, unless this install had the old bool toggle
+    /// (`dev.proactive.realCards`) switched OFF — those devs were pitching, keep them on Jesai's deck.
+    static let defaultRaw: String = {
+        let d = UserDefaults.standard
+        if d.object(forKey: "dev.proactive.realCards") != nil, !d.bool(forKey: "dev.proactive.realCards") {
+            return BriefingDeck.jesai.rawValue
+        }
+        return BriefingDeck.real.rawValue
+    }()
+}
 
 struct Briefing: Identifiable {
     enum Kind {
@@ -51,12 +71,13 @@ struct Briefing: Identifiable {
     let doneBody: String
     let codexPrompt: String?    // what real execution hands to CodexCLI (see THE CODEX SEAM above)
     let accent: Color           // the card's one accent (jewelry rule). Demo: kind.accent; real: per method.
+    let envelopeName: String?   // welcome only: the envelope's recipient ("You" on demo decks); nil = the Mac account's first name
 
     init(id: String, kind: Kind, kicker: String, title: String, body: String,
          letter: String? = nil, draft: String? = nil, draftLabel: String? = nil,
          detailLabel: String? = nil, offer: String? = nil, workLog: [String] = [],
          doneTitle: String = "", doneBody: String = "", codexPrompt: String? = nil,
-         accent: Color? = nil) {
+         accent: Color? = nil, envelopeName: String? = nil) {
         self.id = id
         self.kind = kind
         self.kicker = kicker
@@ -72,6 +93,7 @@ struct Briefing: Identifiable {
         self.doneBody = doneBody
         self.codexPrompt = codexPrompt
         self.accent = accent ?? kind.accent
+        self.envelopeName = envelopeName
     }
 
     // MARK: Real cards — built from a prepared proactive action (the toggle's real mode)
@@ -121,7 +143,7 @@ struct Briefing: Identifiable {
             id: "welcome", kind: .welcome,
             kicker: "Welcome · Read across your whole life",
             title: title,
-            body: "A letter from your Sentient.",
+            body: "A gift from your Sentient.",
             letter: body,
             detailLabel: "read it",
             offer: nil,
@@ -159,7 +181,7 @@ struct Briefing: Identifiable {
         }
     }
 
-    // MARK: The demo six
+    // MARK: Jesai's demo six (the investor-pitch deck)
 
     /// The EXACT reply we send Serena — ONE source of truth, shared by the Anthos card's draft
     /// PREVIEW (what you read when you click the card) and the `codexPrompt` that actually sends
@@ -181,7 +203,7 @@ struct Briefing: Identifiable {
         Jesai
         """
 
-    static let demo: [Briefing] = [
+    static let jesaiDemo: [Briefing] = [
         Briefing(
             id: "charles", kind: .plan,
             kicker: "Prep · 4 PM today · Researched",
@@ -323,7 +345,161 @@ struct Briefing: Identifiable {
             """,
             detailLabel: "read it again",
             offer: nil,
-            doneTitle: "", doneBody: ""),
+            doneTitle: "", doneBody: "", envelopeName: "You"),
+    ]
+
+    // MARK: The launch five (the launch-video deck)
+    //
+    // Audience-safe cards for the launch video: one relatable persona's week, each card grounded
+    // in a visible cross-source stitch (question in one source, answer in another). No real names,
+    // no real investors — copy finalized with Jesai/Aditya 2026-07-10. Theater-only (codexPrompt
+    // nil): fires play the workLog; the video stages any real runs separately.
+
+    static let launchDemo: [Briefing] = [
+        Briefing(
+            id: "carl", kind: .overdue,
+            kicker: "Overdue · 3 days · Gmail",
+            title: "You ghosted Carl.",
+            body: "Carl asked to meet Wednesday at 1 about the event. You're free then, I checked. I've drafted your yes, and included the venue quote that came in yesterday.",
+            letter: """
+            Carl emailed Monday asking for Wednesday at 1 to talk through the event; it's been three days. Your calendar is clear, with nothing for two hours on either side.
+
+            Better still: the venue's quote arrived in your inbox yesterday, $2,400 with AV included, so I folded the numbers into the reply. You two walk in looking at the same page. Draft's below; one tap sends it and puts Wednesday on your calendar.
+            """,
+            draft: """
+            Hey Carl,
+
+            Sorry for the slow reply! Wednesday at 1 works; I've just put it on my calendar.
+
+            Good timing, too: the venue's quote came in yesterday. $2,400 all-in, AV included. I'll bring the breakdown Wednesday so we can go through it together.
+
+            See you then!
+            """,
+            draftLabel: "Draft · Gmail",
+            detailLabel: "read the draft",
+            offer: "Reply & add the meeting to your cal?",
+            workLog: ["→ opening Gmail",
+                      "→ replying to Carl…",
+                      "→ adding Wednesday 1:00 PM to Calendar",
+                      "✓ replied & scheduled"],
+            doneTitle: "Wednesday's locked in.",
+            doneBody: "Carl has your reply; the meeting's on your calendar."),
+
+        Briefing(
+            id: "canva", kind: .deadline,
+            kicker: "Renews tomorrow · $119 · Computer use",
+            title: "You signed up for Canva Pro to make one birthday invite.",
+            body: "It's going to renew tomorrow for $119 for the year. You signed up just to make that invite you'd sent out.",
+            letter: """
+            Canva's receipt is dated June 2: a Pro trial, converting tomorrow to **$119 a year**. The invite you made is in your Downloads from that same week, already sent out, and you haven't made a thing since.
+
+            I'll cancel it the way you would: open canva.com in your own logged-in browser, Settings → Billing & plans, and end the trial before it converts. Your account and the invite stay exactly as they are; only the renewal dies.
+            """,
+            draft: "Open canva.com in your logged-in browser → Settings → Billing & plans → cancel the Pro trial before it renews. Account and files untouched; only the $119 charge goes.",
+            draftLabel: "What I'll do · Computer use",
+            detailLabel: "read the plan",
+            offer: "Shall I cancel it for you?",
+            workLog: ["→ opening canva.com in your browser",
+                      "→ Settings → Billing & plans",
+                      "→ cancelling the Pro trial…",
+                      "→ confirming: free plan, files untouched",
+                      "✓ cancelled · $119 saved"],
+            doneTitle: "Canva Pro cancelled.",
+            doneBody: "The $119 stays yours; your account and the invite are untouched."),
+
+        Briefing(
+            id: "amtrak", kind: .meeting,
+            kicker: "This weekend · Computer use",
+            title: "You still need to book your train to New York.",
+            body: "Your trip to New York is this weekend, but you still haven't booked the Amtrak. The best one I found: $30, two hours, gets in at 11 AM, right as your hotel check-in opens.",
+            letter: """
+            Your New York weekend is all set except the part where you get there: the hotel confirmation has been in your inbox for two weeks, and there's still no train ticket next to it.
+
+            I compared Saturday morning's trains. The winner is the **8:53 Northeast Regional**: $30, two hours, into Moynihan at 10:58, and your check-in opens at 11. The later trains run $49 and up. I'll book the 8:53 on amtrak.com in your own browser, and the confirmation lands in your inbox.
+            """,
+            draft: "Book Saturday's 8:53 AM Northeast Regional on amtrak.com: coach, $30, arriving 10:58 AM. Pay with your saved card; confirmation goes to your inbox.",
+            draftLabel: "What I'll do · Computer use",
+            detailLabel: "read the plan",
+            offer: "Shall I book it for you?",
+            workLog: ["→ opening amtrak.com in your browser",
+                      "→ Saturday · the 8:53 Northeast Regional",
+                      "→ coach · $30 · arrives 10:58 AM",
+                      "→ checking out with your saved card…",
+                      "✓ booked · confirmation's in your inbox"],
+            doneTitle: "You're on the 8:53.",
+            doneBody: "Two hours, $30, in at 10:58; check-in opens at 11."),
+
+        Briefing(
+            id: "expenses", kind: .plan,
+            kicker: "Due Friday · 11 receipts · Gmail",
+            title: "Your Denver trip expenses are due Friday. The receipts are everywhere.",
+            body: "Two flights, the Marriott, six Ubers and a conference dinner, scattered across three weeks of inbox. I can upload and fill out everything for you, so you can just click submit.",
+            letter: """
+            Your expense report for the Denver trip is due Friday, and the receipts are scattered exactly where you left them: eleven, across three weeks of inbox.
+
+            ✦ **Flights:** $284 out, $301 back
+            ✦ **The Marriott, three nights:** $687
+            ✦ **Six Ubers:** $132
+            ✦ **The conference dinner:** $118
+
+            $1,522 total. I'll open Concur in your browser, create the report, and file all eleven lines with the right categories and every receipt attached. It stays in Draft; nothing submits until you click it.
+            """,
+            draft: "In Concur: new report 'Denver conference', 11 line items, categories set, receipt PDFs attached, $1,522 total. Left in Draft for your review; you click submit.",
+            draftLabel: "What I'll do · Computer use",
+            detailLabel: "read the plan",
+            offer: "File my expenses",
+            workLog: ["→ pulling 11 receipts from Gmail",
+                      "→ opening Concur in your browser",
+                      "→ flights · hotel · six Ubers · dinner",
+                      "→ attaching receipts, line by line…",
+                      "✓ report ready · waiting on your submit"],
+            doneTitle: "Expenses filed.",
+            doneBody: "Eleven lines, $1,522, receipts attached; it's waiting on your submit."),
+
+        Briefing(
+            id: "hawaii", kind: .promise,
+            kicker: "Group plan · Researched · WhatsApp",
+            title: "The Hawaii trip needs to leave the group chat.",
+            body: "You four have been circling July dates for days. I found three flight options and two houses that fit everyone's dates and the $1,500 budget Jake mentioned. Priced list drafted for the group.",
+            letter: """
+            Days of July-date ping-pong in the group chat, and nobody's booked anything. So I did the digging: everyone's free **July 10–17** (I checked the dates each of you floated against your calendar), and Jake said $1,500 max.
+
+            ✦ **Flights:** $389 round trip on Hawaiian, direct, if booked this week
+            ✦ **Beach house in Kailua:** sleeps four, $370 each for the week
+            ✦ **Or the North Shore cottage:** $320 each, ten minutes from the surf
+
+            All in around $1,400 a person, under Jake's line. The message below sends the priced list to the group so you four can finally pick.
+            """,
+            draft: "ok I actually looked into Hawaii 🌺 July 10–17 works for all of us. Flights are $389 round trip on Hawaiian if we book this week. Houses: beach house in Kailua ($370 each for the week) or the North Shore cottage ($320 each). All in ~$1,400 per person, under Jake's $1,500. Vote: Kailua or North Shore?",
+            draftLabel: "Draft · WhatsApp group",
+            detailLabel: "read the message",
+            offer: "Send it to the group",
+            workLog: ["→ opening WhatsApp",
+                      "→ finding the Hawaii group chat",
+                      "→ sending the priced list…",
+                      "✓ sent · the group's deciding"],
+            doneTitle: "The plan's with the group.",
+            doneBody: "Flights and two houses, priced per person; now they just have to vote."),
+
+        Briefing(
+            id: "welcome", kind: .welcome,
+            kicker: "Welcome · Read across your whole life",
+            title: "A gift: connections across your life.",
+            body: "Three patterns you might not have seen yourself, visible only with everything in one place.",
+            letter: """
+            I read **1,847 things** across your life last night. Three patterns you might not have seen yourself:
+
+            ✦ **You're the one who turns "we should" into plans.** The Hawaii dates, Carl's event, the group dinners: every plan in your circle routes through you. You book everyone's things first, and your own train last.
+
+            ✦ **You research the small money and ignore the quiet money.** You'll compare three trains to save $19 while a design tool you used once renews itself for $119. Deliberate at the register, generous with subscriptions.
+
+            ✦ **Your replies drift, but they land with care.** Carl waited three days and got a reply with the venue's numbers already folded in. You answer late and thoroughly, never carelessly.
+
+            I'll keep watch from here. — **your Sentient**
+            """,
+            detailLabel: "read it again",
+            offer: nil,
+            doneTitle: "", doneBody: "", envelopeName: "You"),
     ]
 
     // MARK: - Parked / alternate demo cards (swap-in library)
