@@ -4,30 +4,36 @@
 //
 //  TelemetryDeck integration — the app's privacy-safe PRODUCT analytics (how many people use the app,
 //  how far they get in onboarding, which features actually fire). The twin of CrashReporting.swift
-//  (Sentry, which is crashes/errors). Two gates, mirroring Sentry's:
+//  (Sentry, which is crashes/errors). Two gates:
 //    1. RELEASE builds only — a no-op in DEBUG, so a dev's day-to-day Debug runs never pollute the
 //       real usage numbers. Verify the pipeline from a Release build (same rule as Sentry).
-//    2. Its OWN opt-OUT switch — `analyticsEnabled` (default ON), the "Share anonymous analytics"
-//       toggle in Settings → System. Crash reports keep their separate switch (CrashReporting's
-//       `diagnosticsEnabled`) — the two consents split when the real Settings shipped, so a user
-//       can keep crash reports on while opting out of usage analytics (or vice versa).
+//    2. A TIERED consent switch — `analyticsEnabled` (default ON), the "Share anonymous analytics"
+//       toggle in Settings → System, gates the EXTENDED tier: the rich funnel + health signals
+//       (onboarding, processing stats, scheduler, mirror, gates). A tiny CORE tier keeps sending
+//       even when the switch is off: the handful of feature-use counts that tell us Sentient is
+//       alive and used (Sidekick/command runs, proactive fires, suggestions prepared, computer-use
+//       seconds, home opens) plus the SDK's automatic launch/session signals — so the SDK now boots
+//       unconditionally in Release. The core tier is disclosed in the switch's own off-state
+//       caption (SystemPane), so the toggle is never a lie: off = "share the richer picture: no",
+//       not "invisible". Crash reports keep their separate switch (CrashReporting's
+//       `diagnosticsEnabled`), so a user can keep crash reports on while opting out (or vice versa).
 //  Identity is the same anonymous per-install UUID (`CrashReporting.installID`); TelemetryDeck hashes
 //  it again on-device and once more on their server, and stores no PII and no IP address by design —
 //  so this upholds the Privacy Constitution (no accounts, nothing personal leaves the Mac). Signals
 //  carry structure only (names + counts/enums/versions), never user content — clean at the source.
+//  `floatValue` is TelemetryDeck's one numeric field — dashboards can SUM it, which is how the
+//  worldwide totals work (suggestions generated, agent-seconds worked).
 //
-//  The ONE thing the opt-out switch does NOT silence: `countInstallOnce()`, a single, totally
-//  anonymous "an install exists" ping that fires at most once per install EVEN when analytics are
-//  off, so we can always count how many people use Sentient. It carries no identity (a throwaway
-//  random hash, never stored, uncorrelatable to the install id or the crash-report id), no device
-//  info, and no content — just a bare count. It is disclosed in the opt-out's own Settings copy, so
-//  the switch is never a lie. All richer product analytics remain fully behind the opt-out.
+//  `countInstallOnce()` predates the tiers and stays deliberately harder-line than core: a single
+//  "an install exists" ping, at most once per install, carrying a throwaway random hash that is
+//  uncorrelatable to anything (not the install id, not the crash-report id) — the one complete,
+//  uniform count across every install ever.
 //
 //  Key members:
-//   - start()                 → boot TelemetryDeck (Release-only, opt-out gated)
-//   - signal(_:parameters:)   → send one product event (no-op until started / when opted out)
-//   - countInstallOnce()      → the one-off anonymous install count (Release-only, opt-out-INDEPENDENT)
-//   - applyEnabledChange()    → react to a mid-session flip of the shared opt-out switch
+//   - start()                          → boot TelemetryDeck (Release-only, unconditional)
+//   - signal(_:parameters:floatValue:tier:) → send one product event (.extended = opt-out gated · .core = always)
+//   - countInstallOnce()               → the one-off anonymous install count (Release-only, uncorrelatable)
+//   - applyEnabledChange()             → react to a mid-session flip of the extended-tier switch
 //
 //  Doc: Documentation/Product Analytics (TelemetryDeck).md · twin: Documentation/Crash Reporting (Sentry).md
 //
@@ -45,12 +51,21 @@ enum Analytics {
 
     private static var started = false
 
-    // MARK: - Opt-out gate
+    /// Process-boot timestamp, stamped by `start()` — lets Home.opened tell a window that opened
+    /// with the launch apart from a deliberate later reopen (menu bar / Dock).
+    static let bootTime = Date()
+
+    // MARK: - The consent tiers
+
+    /// Which consent a signal rides. `.extended` (the default) is the rich picture, gated by the
+    /// "Share anonymous analytics" switch; `.core` is the bare-minimum telemetry that always sends
+    /// (Release-only) — the feature-use counts disclosed in the switch's off-state caption.
+    enum Tier { case core, extended }
 
     private static let analyticsKey = "analyticsEnabled"
 
-    /// The opt-OUT switch: default ON, gates all TelemetryDeck sends. Treats an unset key as ON
-    /// (a bare `bool(forKey:)` reads a missing key as false → would wrongly read as opted out).
+    /// The extended-tier switch: default ON. Treats an unset key as ON (a bare `bool(forKey:)`
+    /// reads a missing key as false → would wrongly read as opted out).
     nonisolated static var analyticsEnabled: Bool {
         let d = UserDefaults.standard
         if d.object(forKey: analyticsKey) == nil { return true }
@@ -59,15 +74,14 @@ enum Analytics {
 
     // MARK: - Boot
 
-    /// Boot TelemetryDeck for the GUI app — Release-only, and only if analytics are on. A deliberate
-    /// no-op in DEBUG and while the App ID is still the placeholder. Called from main.swift's `.app`
-    /// branch (NOT the root wake-helper — the privileged path sends no analytics). Idempotent.
+    /// Boot TelemetryDeck for the GUI app — Release-only, UNCONDITIONAL of the analytics switch
+    /// (the switch gates the extended tier per-signal; the SDK must run for the core tier and its
+    /// automatic launch/session signals). A deliberate no-op in DEBUG and while the App ID is still
+    /// the placeholder. Called from main.swift's `.app` branch (NOT the root wake-helper — the
+    /// privileged path sends no analytics). Idempotent.
     static func start() {
         guard !started else { return }
-        guard analyticsEnabled else {
-            Log("Analytics: analytics opted out — TelemetryDeck disabled")
-            return
-        }
+        _ = bootTime   // stamp process boot now, so Home.opened's launch-vs-reopen read is true
         #if DEBUG
         Log("Analytics: DEBUG build — TelemetryDeck disabled (Release-only, like Sentry)")
         #else
@@ -80,7 +94,7 @@ enum Analytics {
         config.defaultParameters = { ["model": ModelLocator.fileName] }  // stamps every signal
         TelemetryDeck.initialize(config: config)
         started = true
-        Log("Analytics: TelemetryDeck started")
+        Log("Analytics: TelemetryDeck started (extended signals \(analyticsEnabled ? "on" : "off"))")
         #endif
     }
 
@@ -88,39 +102,39 @@ enum Analytics {
 
     /// Send one product event. Guard-railed to structure only — a dotted name plus count/enum/version
     /// parameters, NEVER user content (TelemetryDeck stores no PII; same clean-at-source rule as
-    /// diagnostics). No-op until started and whenever analytics are opted out.
-    static func signal(_ name: String, parameters: [String: String] = [:]) {
-        guard started, analyticsEnabled else { return }
-        TelemetryDeck.signal(name, parameters: parameters)
+    /// diagnostics). `floatValue` is the SDK's one numeric field — the dashboard can sum/average it
+    /// (durations, per-cycle counts). `.extended` signals no-op when the switch is off; `.core`
+    /// signals always send once the SDK is up (never in DEBUG — `started` stays false there).
+    static func signal(_ name: String, parameters: [String: String] = [:],
+                       floatValue: Double? = nil, tier: Tier = .extended) {
+        guard started else { return }
+        if tier == .extended, !analyticsEnabled { return }
+        TelemetryDeck.signal(name, parameters: parameters, floatValue: floatValue)
     }
 
     // MARK: - Opt-out
 
-    /// React to a mid-session flip of the "Share anonymous analytics" switch (Settings → System). On →
-    /// boot; off → latch off so nothing more is sent (TelemetryDeck has no explicit teardown, and the
-    /// per-signal gate already blocks sends the instant the switch is off).
+    /// React to a mid-session flip of the "Share anonymous analytics" switch (Settings → System).
+    /// The SDK stays up either way (the core tier keeps sending); the per-signal tier gate starts or
+    /// stops the extended signals the instant the switch flips, so there's nothing to tear down.
     static func applyEnabledChange() {
-        if analyticsEnabled {
-            start()
-        } else {
-            started = false
-            Log("Analytics: analytics turned off — TelemetryDeck silenced")
-        }
+        start()   // a first-ever flip on a boot that somehow never started — harmless if already up
+        Log("Analytics: extended analytics \(analyticsEnabled ? "on" : "off") — core telemetry unaffected")
     }
 
-    // MARK: - The one-off anonymous install count (opt-out-INDEPENDENT)
+    // MARK: - The one-off anonymous install count (uncorrelatable, switch-independent)
 
     private static let installCountedKey = "analytics.installCounted"
     private static let installSignalType = "App.anonymousInstall"
     private static let ingestURL = URL(string: "https://nom.telemetrydeck.com/v2/")!
 
     /// Send the single anonymous install ping — see the file header. Fires at most once per install
-    /// (latched in UserDefaults once it lands), and — unlike everything else here — does so even when
-    /// analytics are OPTED OUT: it's the bare "an install exists" beacon that lets us count how many
-    /// people use Sentient, and it's disclosed in the opt-out's Settings copy so the switch stays
-    /// honest. Release-only (a dev's Debug launches never inflate the count). It goes NOT through the
-    /// SDK (which would spin up ongoing session tracking) but as one direct, minimal POST carrying no
-    /// identity, no device info, and no content. Fire-and-forget; called once from main.swift.
+    /// (latched in UserDefaults once it lands), independent of the analytics switch, and harder-line
+    /// than even the core tier: where core signals ride the anonymous install id, this one carries a
+    /// throwaway hash correlatable to NOTHING — the bare "an install exists" beacon. Release-only
+    /// (a dev's Debug launches never inflate the count). It goes NOT through the SDK but as one
+    /// direct, minimal POST carrying no identity, no device info, and no content. Fire-and-forget;
+    /// called once from main.swift.
     static func countInstallOnce() {
         #if DEBUG
         Log("Analytics: DEBUG build — anonymous install ping skipped (Release-only)")

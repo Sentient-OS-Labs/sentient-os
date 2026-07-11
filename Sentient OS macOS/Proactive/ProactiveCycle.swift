@@ -125,8 +125,11 @@ actor ProactiveCycle {
                 progress(.researching(items.count))
                 do {
                     let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx)
+                    // Core tier; floatValue = the staged-card count, so a dashboard Sum is the
+                    // "suggestions Sentient has prepared across the world" total.
                     Analytics.signal("Proactive.prepared", parameters: [
-                        "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"])
+                        "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"],
+                        floatValue: Double(result.ready.count), tier: .core)
                 } catch {
                     let m = "Preparing: \(Self.msg(error))"
                     if scheduled { await OvernightCaution.note(error) }

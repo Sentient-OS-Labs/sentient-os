@@ -191,6 +191,13 @@ final class CommandRunModel {
             ExecutorScoreboard.record(method: "computer", source: source, outcome: board,
                                       durationS: Date().timeIntervalSince(runStarted))
         }
+        // Core tier: how long the agent worked this run — EVERY outcome (a stopped run still had
+        // the notch lit that long). floatValue sums server-side into total agent-seconds, the
+        // "Sidekick saved users N hours" headline.
+        let outcomeTag = outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed")
+        Analytics.signal("ComputerUse.finished",
+                         parameters: ["source": source, "method": mode.rawValue, "outcome": outcomeTag],
+                         floatValue: Date().timeIntervalSince(runStarted), tier: .core)
         clearRemembering()
         statusLine = line
         isRunning = false
