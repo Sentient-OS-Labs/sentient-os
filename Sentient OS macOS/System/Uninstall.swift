@@ -127,10 +127,15 @@ enum Uninstall {
 
     /// The gone screen's Quit: spawn a detached sweeper for the files the DYING process itself can
     /// resurrect on the way out (cfprefsd re-writing the preferences plist, SwiftData flushing store
-    /// files into a recreated support dir, the saved-state write at quit), then terminate. The
+    /// files into a recreated support dir, the saved-state write at quit), then hard-exit. The
     /// sweeper outlives us (it reparents to launchd), so the last traces die a beat after we do.
+    /// ⚠️ `exit(0)`, NOT `NSApp.terminate`: graceful termination is exactly wrong after a full
+    /// wipe — it invites the frameworks to write state back, and SwiftUI's scene teardown can
+    /// wedge behind the presented farewell sheet, leaving a zombie app the user can't quit
+    /// (field-seen 2026-07-11). There is deliberately nothing left to clean up; just die.
     @MainActor
-    static func finishAndQuit() {
+    static func finishAndQuit() -> Never {
+        Log("Uninstall: goodbye — spawning the post-exit sweeper and exiting")
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let stragglers = ["\(home)/Library/Application Support/SentientOS",
                           "\(home)/Library/Preferences/\(bundleID).plist",
@@ -140,7 +145,7 @@ enum Uninstall {
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
         p.arguments = ["-c", "sleep 2; rm -rf " + stragglers.map { "'\($0)'" }.joined(separator: " ")]
         try? p.run()
-        NSApp.terminate(nil)
+        exit(0)
     }
 
     /// A short breath between stages so each whisper is readable — the work itself is near-instant,
