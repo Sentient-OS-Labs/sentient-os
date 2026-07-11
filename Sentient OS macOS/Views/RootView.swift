@@ -78,6 +78,16 @@ struct RootView: View {
             }
         }
         .frame(minWidth: 1040, minHeight: 800)
+        // Core tier: the home window came up (fires once per window instantiation — launch opens it
+        // automatically; anything later is a deliberate menu-bar/Dock reopen, hence the trigger
+        // param). Sidekick-only users who never look at home are exactly who this measures.
+        // Onboarding appearances don't count; the SDK's session signals cover day one.
+        .onAppear {
+            guard appState.hasCompletedOnboarding else { return }
+            let sinceBoot = Date().timeIntervalSince(Analytics.bootTime)
+            Analytics.signal("Home.opened",
+                             parameters: ["trigger": sinceBoot < 5 ? "launch" : "reopen"], tier: .core)
+        }
         // The computer-use setup whisper — screen-agnostic on purpose: the bootstrap is an
         // unstructured background task that outlives onboarding's processing takeover (knowledge
         // base creation, even the home in rare cases), so as long as it's actually running, this

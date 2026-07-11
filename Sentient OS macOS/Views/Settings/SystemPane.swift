@@ -119,10 +119,12 @@ struct SystemPane: View {
                                   isOn: $crashReportsEnabled)
                 SettingsHairline()
                 SettingToggleLine(title: "Share anonymous analytics",
-                                  sub: "Anonymous usage signals through a privacy-first, open-source analytics framework; structure only, never any of your personal information.",
+                                  sub: "Share the fuller picture: anonymous usage signals through a privacy-first, open-source analytics framework; structure only, never any of your personal information.",
                                   isOn: $analyticsEnabled)
                 if !analyticsEnabled {
-                    Text("Even with this off, Sentient sends a single anonymous ping so we can count how many people use it. No identity, no device details, nothing else, ever.")
+                    // The core-tier disclosure — keeps the switch honest (Analytics.swift, Tier.core):
+                    // a bare minimum of anonymous feature-use counts always sends.
+                    Text("Even with this off, Sentient keeps a bare minimum of anonymous telemetry: simple counts of app opens and feature use that are core to building Sentient. Never your content, never anything personal.")
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.Ink.deepMuted)
                         .fixedSize(horizontal: false, vertical: true)

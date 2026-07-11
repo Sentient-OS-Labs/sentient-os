@@ -30,7 +30,9 @@ enum NotchPhase: Equatable {
 }
 
 /// Where a task came from — voice gets a 4–9s read-back grace (scaled to length); typed doesn't.
-enum TriggerSource: String { case promptBar, voice }
+/// promptBar = the home command bar · notchTyped = the notch's tap-to-type field — split so the
+/// analytics can see Sidekick-only users who never open the home window.
+enum TriggerSource: String { case promptBar, notchTyped, voice }
 
 @MainActor @Observable
 final class CommandCoordinator {
@@ -107,7 +109,9 @@ final class CommandCoordinator {
     private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource) {
         guard !run.isRunning else { Log("launch ignored — a task is already running"); return }
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
-        Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label])   // count only, never the text
+        // Core tier: THE Sidekick-usage count (count only, never the text) — one of the handful of
+        // always-on telemetry signals disclosed in Settings.
+        Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label], tier: .core)
         run.start(trimmed, mode: mode, source: source.rawValue)
         // Every command is computer use, which raises the notch.
         setPhase(.running)
@@ -272,7 +276,7 @@ final class CommandCoordinator {
         guard phase == .typing else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { dismissTyping(); return }
-        submit(trimmed, mode: .computer, source: .promptBar)   // typed → no read-back
+        submit(trimmed, mode: .computer, source: .notchTyped)   // typed → no read-back
     }
 
     /// Esc · click-away · empty-⏎ — close the type field with no action.
