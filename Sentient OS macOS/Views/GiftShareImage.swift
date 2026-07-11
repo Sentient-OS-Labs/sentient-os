@@ -41,8 +41,10 @@ struct GiftShareView: View {
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(BriefingCard.welcomeGradient, lineWidth: 1))
 
-            // The branding footer — the line below the gift that travels with every share.
-            VStack(spacing: 9) {
+            // The branding colophon — left-aligned flush with the card, one shared edge (wordmark,
+            // tagline, and URL all start together), so a shared screenshot carries its attribution
+            // like a poster credit, not a greeting card.
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 9) {
                     OrbMark(size: 16)
                     Text("Sentient OS")
@@ -50,12 +52,12 @@ struct GiftShareView: View {
                 }
                 Text("On-device intelligence that understands your entire life to proactively help you. Open-source & free.")
                     .font(.system(size: 12)).foregroundStyle(.white.opacity(0.55))
-                    .multilineTextAlignment(.center)
                 MonoCaps("sentient-os.ai", size: 10, tracking: 2.4, color: .white.opacity(0.4))
+                    .padding(.top, 1)
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(.horizontal, 40).padding(.top, 40).padding(.bottom, 30)
+        .padding(.horizontal, 40).padding(.top, 40).padding(.bottom, 34)
         .frame(width: Self.width)
         .fixedSize(horizontal: false, vertical: true)
         .background(Color.black)
