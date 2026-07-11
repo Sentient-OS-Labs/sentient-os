@@ -85,7 +85,11 @@ actor ProactiveCycle {
 
         // 2.5) The welcome "gift" — write it ONCE, the first time a knowledge base exists to read.
         //      Best-effort: it's a delight, never load-bearing, so a failure never fails the cycle.
-        if GiftLetter.latest() == nil {
+        //      A gift that ALREADY existed before this cycle has had its day-one morning — it retires
+        //      when this cycle's proactive stage replaces the deck (kb-only mode has no replace, so
+        //      the free home's lone envelope lives on).
+        let giftPreexisted = GiftLetter.latest() != nil
+        if !giftPreexisted {
             progress(.knowledgeBase("Writing your welcome…"))
             do { _ = try await GiftLetter.shared.generate() }
             catch { Log("GiftLetter: welcome skipped — \(Self.msg(error))") }
@@ -129,6 +133,8 @@ actor ProactiveCycle {
                     progress(.failed(m)); return m
                 }
             }
+            // The deck was replaced (new cards or a clean empty) — a pre-existing gift's day is done.
+            if giftPreexisted { GiftLetter.clear() }
         }
 
         // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.

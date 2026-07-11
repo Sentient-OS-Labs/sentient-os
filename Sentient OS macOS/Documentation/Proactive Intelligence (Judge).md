@@ -191,6 +191,24 @@ Generated ONCE by `ProactiveCycle` (best-effort — never fails the cycle), rend
 envelope card (`Briefing(fromGiftMarkdown:)`). The prompt lives in
 the code itself — `GiftLetter.prompt(vaultPath:)` is the source of truth (the old Our_Stuff scratch md is temporary).
 
+**Lifecycle — the gift lives exactly one deck.** `ProactiveCycle` notes whether a gift already
+existed before the run (`giftPreexisted`); when the proactive stage successfully replaces the deck,
+a pre-existing gift is cleared. A failed cycle never eats it (the clear sits after the research leg's
+early returns), and knowledge-base-only mode never reaches it (no proactive stage — the envelope is
+the free home's only card, so it lives on). A gift whose generation failed on cycle 1 regenerates on
+cycle 2 and still gets its full day.
+
+**The keepsake — `Views/GiftShareImage.swift`.** The expanded welcome letter carries a footer only
+the gift wears: **Save to Desktop** + the whisper "Your gift will be cleared from the home screen
+soon." The button renders the letter as a @2x poster PNG — the letter card in the welcome-gradient
+hairline on OLED black, plus the left-aligned branding colophon (orb + wordmark, the one-line pitch,
+sentient-os.ai) — via `ImageRenderer`, drawn by the SAME shared `LetterBody` renderer as the
+on-screen letter (extracted from `LetterView` for exactly this parity). It saves as
+`~/Desktop/Gift from Sentient.png` (counter-suffixed, never overwrites) and reveals the file
+selected in Finder, so sharing it is one drag. The share view takes the built `Briefing`, not raw
+markdown — the gift init promotes `# Title` out of the letter text, so the briefing is the only
+faithful carrier of both.
+
 ## Not wired yet (next steps)
 
 - **Retiring the demo deck** — real cards are the default now; deleting the hard-coded demo cards

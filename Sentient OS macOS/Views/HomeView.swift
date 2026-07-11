@@ -805,6 +805,7 @@ private struct LetterView: View {
     @State private var editedDraft = ""        // the live editor text
     @State private var savedDraft = ""         // the last COMMITTED text — drift from editedDraft = unsaved edits
     @State private var saveTask: Task<Void, Never>?   // in-flight debounced auto-save
+    @State private var giftSaved = false       // the welcome letter's keepsake PNG landed on the Desktop
 
     /// Auto-save is pending (unsaved edits still settling). Drives the ambient "Saving…" status.
     private var isDirty: Bool { editable && editedDraft != savedDraft }
@@ -861,6 +862,7 @@ private struct LetterView: View {
                 })
                     .padding(.top, 16)
             }
+            if briefing.kind == .welcome { giftFooter.padding(.top, 16) }
         }
         .padding(28)
         .background(Theme.Ink.cardBG, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -879,79 +881,49 @@ private struct LetterView: View {
         // and reseed. editedDraft + savedDraft start equal — a freshly-opened card has no unsaved edits.
         .onChange(of: briefing.id) { _, _ in
             saveTask?.cancel(); editedDraft = liveDraft; savedDraft = liveDraft; copied = false
+            giftSaved = false
         }
         // Every keystroke reschedules the debounced commit, so edits persist without a Save click.
         .onChange(of: editedDraft) { _, _ in if isDirty { scheduleAutoSave() } }
         .onDisappear { saveTask?.cancel() }
     }
 
-    /// The letter body, rendered line-by-line. Supports the editorial Markdown subset our letters use:
-    /// `##`/`###` section headings, `✦ ` accent bullets, a closing sign-off line, and plain paragraphs
-    /// (with `**bold**` inline). A blank line is a paragraph break. (`# H1` is promoted to the card
-    /// title upstream, but we still render one defensively.)
-    @ViewBuilder
+    /// The letter body — the shared editorial-Markdown renderer (LetterBody), so the expanded letter
+    /// and the saved share image draw the exact same thing.
     private var paragraphs: some View {
-        let lines = (briefing.letter ?? briefing.body).components(separatedBy: "\n")
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, raw in
-                letterBlock(raw.trimmingCharacters(in: .whitespaces))
+        LetterBody(text: briefing.letter ?? briefing.body, accent: briefing.accent)
+    }
+
+    /// The welcome letter's keepsake row: "Save to Desktop" (a poster PNG of the gift, revealed in
+    /// Finder so sharing is one drag) + the quiet why ("it will be cleared soon" — the gift retires
+    /// when the next cycle replaces the deck).
+    private var giftFooter: some View {
+        HStack(spacing: 14) {
+            if giftSaved {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark").font(.system(size: 10.5, weight: .semibold))
+                    Text("Saved to your Desktop").font(.system(size: 12.5, weight: .semibold))
+                }
+                .foregroundStyle(Theme.Ink.green)
+                .padding(.vertical, 8)
+            } else {
+                OfferButton(label: "Save to Desktop", accent: briefing.accent,
+                            icon: "square.and.arrow.down", action: saveGift)
             }
+            Text("Your gift will be cleared from the home screen soon.")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.label)
+            Spacer(minLength: 0)
         }
     }
 
-    @ViewBuilder
-    private func letterBlock(_ line: String) -> some View {
-        if line.isEmpty {
-            Color.clear.frame(height: 2)                              // a paragraph break
-        } else if line.hasPrefix("### ") {
-            Text(Self.inline(String(line.dropFirst(4))))             // soulful subhead (serif italic)
-                .font(.system(size: 16, design: .serif).italic())
-                .foregroundStyle(.white.opacity(0.92))
-                .padding(.top, 6)
-        } else if line.hasPrefix("## ") {
-            MonoCaps(String(line.dropFirst(3)).uppercased(), size: 10, tracking: 2.2,
-                     color: briefing.accent.opacity(0.95))           // section whisper (mono-caps)
-                .padding(.top, 12)
-        } else if line.hasPrefix("# ") {
-            Text(Self.inline(String(line.dropFirst(2))))             // a stray title, defensive
-                .font(.system(size: 22, design: .serif)).foregroundStyle(.white)
-                .padding(.top, 4)
-        } else if let bullet = Self.bulletText(line) {
-            HStack(alignment: .firstTextBaseline, spacing: 9) {
-                Text("✦").font(.system(size: 12)).foregroundStyle(briefing.accent)
-                Text(Self.inline(bullet))
-                    .font(.system(size: 13.5)).foregroundStyle(.white.opacity(0.84)).lineSpacing(4.5)
-            }
-        } else if Self.isSignoff(line) {
-            Text(Self.inline(line))                                  // "-- Your Sentient"
-                .font(.system(size: 13, design: .serif).italic())
-                .foregroundStyle(.white.opacity(0.55))
-                .padding(.top, 10)
-        } else {
-            Text(Self.inline(line))
-                .font(.system(size: 14)).foregroundStyle(.white.opacity(0.84)).lineSpacing(5)
+    private func saveGift() {
+        do {
+            let url = try GiftShareImage.save(briefing: briefing)
+            withAnimation(.easeInOut(duration: 0.2)) { giftSaved = true }
+            NSWorkspace.shared.activateFileViewerSelecting([url])   // sharing = one drag from here
+        } catch {
+            Log("GiftShareImage: save failed — \(error)")
         }
-    }
-
-    /// "✦ …" (tolerating a stray word-joiner / nbsp the model sometimes slips in) → the bullet's text;
-    /// nil if the line isn't a bullet.
-    private static func bulletText(_ line: String) -> String? {
-        guard line.first == "✦" else { return nil }
-        let rest = line.dropFirst().drop { $0 == " " || $0 == "\t" || $0 == "\u{2060}" || $0 == "\u{00A0}" }
-        return rest.isEmpty ? nil : String(rest)
-    }
-
-    /// A closing line like "-- Your Sentient" / "— your Sentient" (line-start only, so inline em-dashes
-    /// mid-paragraph aren't mistaken for a sign-off).
-    private static func isSignoff(_ line: String) -> Bool {
-        line.hasPrefix("--") || line.hasPrefix("—") || line.hasPrefix("– ")
-    }
-
-    /// Inline-markdown parse (**bold** etc.) so letters can carry a skimmable bold rail.
-    private static func inline(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s,
-                               options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(s)
     }
 
     private func draftBlock(_ draft: String) -> some View {
