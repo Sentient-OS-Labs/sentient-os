@@ -253,6 +253,15 @@ actor MirrorClient {
                      lastAccess: last)
     }
 
+    /// Uninstall's sweep of the mirror identity — the ONE caller that deletes the Keychain password
+    /// (+ the legacy token). Everywhere else the password survives by design (the share URL pasted
+    /// into the user's connectors must outlive resets and off→on); uninstall is where that virtue
+    /// ends. Call AFTER `deleteRemote()` — the cloud DELETE needs the password to authorize.
+    nonisolated static func destroyKeychainIdentity() {
+        Keychain.delete(passwordKey)
+        Keychain.delete(legacyTokenKey)
+    }
+
     // MARK: Helpers
 
     private static let passwordKey = "mcp.mirror.password"  // Keychain: the root secret (persists)

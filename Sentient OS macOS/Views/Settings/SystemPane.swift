@@ -6,7 +6,8 @@
 //  not a control — 3 AM is our taste, not a dial), the launch-at-login toggle (LoginItem.swift)
 //  with its keep-Sentient-alive confirm, the privacy pledge with the two anonymous-reporting
 //  switches (crash reports → CrashReporting/Sentry · analytics → Analytics/TelemetryDeck), and
-//  the danger-zone Reset (the shared FactoryReset wipe — a system-level act, so it lives here).
+//  the danger-zone Reset (the shared FactoryReset wipe — a system-level act, so it lives here),
+//  and the Uninstall group (the farewell sheet → the full System/Uninstall teardown).
 //  The updates group lands here once Sparkle ships.
 //
 
@@ -26,7 +27,8 @@ struct SystemPane: View {
     @State private var confirmLoginOff = false
     @State private var confirmReset = false
     @State private var resetting = false
-    @State private var activity = PipelineActivity.shared   // Reset locks while a run is active
+    @State private var showUninstall = false
+    @State private var activity = PipelineActivity.shared   // Reset + Uninstall lock while a run is active
 
     var body: some View {
         SettingsPane(title: "System", whisper: "How Sentient lives on this Mac.") {
@@ -36,6 +38,7 @@ struct SystemPane: View {
                 updatesGroup
                 privacyGroup
                 dangerGroup
+                uninstallGroup
             }
         }
         .task { launchAtLogin = LoginItem.isEnabled }   // live status — revocable in System Settings
@@ -168,6 +171,25 @@ struct SystemPane: View {
         } message: {
             Text("Your knowledge base and everything Sentient understood is deleted from this Mac, and the cloud copy is removed. This can't be undone; Sentient takes you back through setup, beginning with the initial processing.")
         }
+    }
+
+    // MARK: - Uninstall (the full teardown — UninstallView + System/Uninstall.swift)
+
+    private var uninstallGroup: some View {
+        SettingsGroup(label: "Uninstall") {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsProse("Uninstall removes everything Sentient created on this Mac: the on-device model, your knowledge base, the private cloud copy your AIs read, the overnight wake helper, and every setting. Your own files stay exactly where they are.")
+                SettingsPillButton(title: "Uninstall Sentient…", tint: Self.dangerRed) {
+                    showUninstall = true
+                }
+                .disabled(activity.isRunning)
+                if activity.isRunning {
+                    Text("A run is in progress. Uninstall unlocks when it finishes.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
+                }
+            }
+        }
+        .sheet(isPresented: $showUninstall) { UninstallView() }
     }
 }
 
