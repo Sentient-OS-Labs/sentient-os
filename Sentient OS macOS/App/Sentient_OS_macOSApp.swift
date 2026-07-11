@@ -42,6 +42,13 @@ struct SentientOSApp: App {
         // restoration would otherwise bring back JUST the Settings window — an app with no home.
         .defaultLaunchBehavior(.presented)
 
+        // Every auxiliary window below carries .restorationBehavior(.disabled): the home is the
+        // app's ONLY launch surface, so macOS window restoration must never reopen a stray
+        // Settings/Knowledge/dev window at launch. This can't be handled by sweeping files —
+        // on macOS 26 the restoration record lives outside the app's reach (~/Library/Saved
+        // Application State is gone entirely), field-proven by the post-uninstall relaunch
+        // resurrecting the Settings window (2026-07-11).
+
         // PROACTIVE · EXECUTE — the dev window for PART 3 (the executor). Lists the real
         // ready-to-fire actions from the latest research+prepare run, each with a working FIRE
         // button. Opened from DEV TOOLS; a normal titled window so it's obviously closable.
@@ -52,6 +59,7 @@ struct SentientOSApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 760, height: 820)
+        .restorationBehavior(.disabled)
 
         // The Knowledge reader is its OWN resizable window (native traffic-light controls, closed
         // with the red button) — an Obsidian-style browser over the on-disk markdown vault.
@@ -64,6 +72,7 @@ struct SentientOSApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1100, height: 720)
+        .restorationBehavior(.disabled)
 
         // Settings — its own window, opened from the home's top-bar gear. Two-pane layout
         // (sidebar + pane), so it wants a wider canvas than the old single-column placeholder.
@@ -74,6 +83,7 @@ struct SentientOSApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 940, height: 660)
+        .restorationBehavior(.disabled)
 
         // Connect your AIs — the guided setup (per-AI video steps + the sharing toggle), opened
         // by the glow CTAs in the Your AIs popover and Settings → Your AIs.
@@ -84,6 +94,7 @@ struct SentientOSApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 880, height: 900)
+        .restorationBehavior(.disabled)
 
         // Overnight Processing — the dev cockpit for the 3am scheduler (helper approval, launch-at-
         // login, 18h auto-enable, manual arm). Opened from DEV TOOLS → "Overnight Processing…".
@@ -94,6 +105,7 @@ struct SentientOSApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 780)
+        .restorationBehavior(.disabled)
 
         MenuBarExtra {
             MenuBarView()
