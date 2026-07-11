@@ -2,10 +2,11 @@
 //  DockPolicy.swift
 //  Sentient OS macOS
 //
-//  Hides the Dock icon when every real Sentient window is closed — the menu bar item is the
-//  app's ever-present home, so an empty Dock tile is just clutter. Flips NSApp between
-//  .regular (a window is up) and .accessory (none are), driven by NSWindow open/close
-//  notifications. `start()` once from AppState; `reevaluate()` does the counting.
+//  The Dock icon belongs to the HOME window: it shows while home is up and drops when home
+//  closes — auxiliary windows (Settings, Knowledge, Connect AIs) float without a Dock tile,
+//  like a menu-bar app's panels, with the menu bar item as the ever-present anchor. Flips
+//  NSApp between .regular (home is up) and .accessory (it isn't), driven by NSWindow
+//  open/close notifications. `start()` once from AppState; `reevaluate()` does the check.
 //
 
 import AppKit
@@ -27,21 +28,20 @@ final class DockPolicy {
                 }
             })
         }
-        // A window appeared/focused → the Dock icon comes back; the last one closed → it drops.
+        // The home window appeared/focused → the Dock icon comes back; it closed → the icon drops.
         watch(NSWindow.didBecomeKeyNotification, closing: false)
         watch(NSWindow.willCloseNotification, closing: true)
     }
 
-    /// Show the Dock icon iff at least one real Sentient window is up. `closing` is the window in
-    /// the middle of a willClose — still listed in NSApp.windows, so it's excluded from the count.
+    /// Show the Dock icon iff the home window is up. `closing` is the window in the middle of a
+    /// willClose — still listed in NSApp.windows, so it's excluded from the check.
     func reevaluate(closing: NSWindow? = nil) {
-        let hasRealWindow = NSApp.windows.contains { window in
+        let homeIsUp = NSApp.windows.contains { window in
             window !== closing
-                && !(window is NSPanel)                    // the notch + permission-drag panels are always-on furniture
-                && window.canBecomeMain                    // skips the status-item / menu-bar helper windows
+                && SentientOSApp.isHomeWindow(window)
                 && (window.isVisible || window.isMiniaturized)
         }
-        let target: NSApplication.ActivationPolicy = hasRealWindow ? .regular : .accessory
+        let target: NSApplication.ActivationPolicy = homeIsUp ? .regular : .accessory
         guard NSApp.activationPolicy() != target else { return }
         NSApp.setActivationPolicy(target)
     }
