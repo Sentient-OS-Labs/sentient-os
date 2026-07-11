@@ -86,22 +86,15 @@ actor MirrorClient {
     /// Documentation/MCP Mirror Client.md).
     /// Lives here (the MCP owner) so every surface that offers "Copy System Prompt" shares one copy.
     static let systemPrompt = """
-        Use the Sentient OS MCP whenever relevant. It gives you access to the user's personal knowledge \
-        base, created just for you! It's basically an Obsidian vault of notes about their actual life: \
-        their work, projects, plans, relationships, places, preferences, and history, built from their \
-        entire digital life (notes, messages, emails, etc.) using on-device LLMs that analyzed their \
-        whole digital life.
+        You have access to the user's personal knowledge base through the Sentient OS MCP: an \
+        Obsidian-style vault of markdown notes created just for you, to give you context about their \
+        entire life (work, projects, plans, relationships, places, preferences, history…). It was \
+        built by Sentient OS privately on their own device from their notes, messages, emails, and files.
 
-        In fact, using it would help you improve almost anything you need to help the user with!
-
-        ALWAYS call get_structure at the start of ANY chat with the user.
-
-        It returns the folder and file-name index structure of the vault (so you can know if there's \
-        anything you want to read in full), and it also returns the README file of the vault with some \
-        incredible general context. So ALWAYS call this at the start of EVERY chat.
-
-        And yeah, any time you think another file is really relevant to a conversation/prompt, go read \
-        it in full using get_files!
+        At the start of any conversation where knowing the user could help (that's most of them!), \
+        call `get_structure`. It returns the vault's folder and file index, plus the README: a \
+        portrait of the user with the most important context. Then call `get_files` to actually \
+        read any relevant notes you may want to read.
         """
 
     struct Stats: Sendable {

@@ -7,8 +7,8 @@
 //   · AnalysisPopover — the work glance: things understood, vault size, the synced stamp, an
 //     Analyze Now control, and the source chips (sources are the INPUTS to analysis, so they
 //     live under "Analysis"). A discreet Dev Tools link sits at the bottom.
-//   · YourAIsPopover — the access-log glance ("ChatGPT read 5 notes yesterday") + the glowing
-//     "Connect your AIs" CTA that opens the setup window.
+//   · YourAIsPopover — the pitch + the glowing "Connect your AIs" CTA that opens the guided
+//     setup window (ConnectAIsView owns sharing on/off, the link, and the prompt).
 //  Pure presentation; harvested from the retired Constellation home. Demo strings (synced
 //  stamp, access log) stand in until the real polls land; the vault counts ARE real (disk).
 //
@@ -157,171 +157,32 @@ struct AnalysisPopover: View {
 
 // MARK: - Your AIs
 
-/// The MCP glance + control. Wires straight to MirrorClient: an on/off toggle (mint pill) that
-/// mints the token + pushes the vault (or deletes the cloud copy), live access stats when on, and
-/// Copy Link / Copy System Prompt — the two things the user pastes into ChatGPT/Claude. Same
-/// MirrorClient the Dev Tools MCP panel drives, so the home and Dev Tools are one system.
+/// The MCP door. One job: the glowing "Connect your AIs" CTA, always shown, opening the guided
+/// setup window — ConnectAIsView owns sharing on/off, the private link, and the system prompt,
+/// so the popover carries no state and no controls of its own.
 struct YourAIsPopover: View {
-    @State private var enabled = false
-    @State private var url: String?
-    @State private var stats: MirrorClient.Stats?
-    @State private var busy = false
-    @State private var note: String?       // transient feedback (copied / turned on) — overrides the footer
-    @State private var flashID = 0
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                MonoCaps("Connect AIs", size: 10, tracking: 2.4, color: Theme.Ink.label)
-                Spacer()
-                togglePill
-            }
+            MonoCaps("Connect AIs", size: 10, tracking: 2.4, color: Theme.Ink.label)
 
-            Text(headline)
+            Text("Offer your life to every AI.")
                 .display(20).foregroundStyle(.white)
                 .padding(.top, 11)
-            if let sub = subLineText {
-                MonoCaps(sub, size: 10, tracking: 1.0, color: Theme.Ink.body).padding(.top, 7)
+
+            GlowButton(title: "Connect your AIs", systemImage: "link", glowIntensity: 0.28) {
+                openWindow(id: ConnectAIsView.windowID)
             }
+            .padding(.top, 18)
 
-            actions.padding(.top, 18)
-
-            MonoCaps(note ?? "Your whole life · offered to every AI", size: 8.5, tracking: 1.6,
-                     color: note == nil ? Theme.Ink.deepMuted : Theme.Ink.green)
+            MonoCaps("Your whole life · offered to every AI", size: 8.5, tracking: 1.6,
+                     color: Theme.Ink.deepMuted)
                 .padding(.top, 13)
         }
         .padding(20)
         .frame(width: 300)
         .background(Theme.Ink.cardBG)
-        .task { await refresh() }
-    }
-
-    // MARK: Pieces
-
-    /// The on/off toggle — a tappable mint pill mirroring the Analysis popover's synced stamp.
-    private var togglePill: some View {
-        Button(action: toggle) {
-            HStack(spacing: 5) {
-                if busy { ProgressView().controlSize(.mini) }
-                else { Circle().fill(enabled ? Theme.Ink.green : Theme.Ink.deepMuted).frame(width: 6, height: 6) }
-                Text(enabled ? "ON" : "OFF")
-            }
-            .font(.system(size: 8.5, weight: .semibold, design: .monospaced)).tracking(1.4)
-            .foregroundStyle(enabled ? Theme.Ink.green : Theme.Ink.label)
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .overlay(Capsule().strokeBorder((enabled ? Theme.Ink.green : Theme.Ink.label).opacity(0.3), lineWidth: 1))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .disabled(busy)
-    }
-
-    private var headline: String {
-        if !enabled { return "Offer your life to every AI." }
-        if let n = stats?.notesRead24h, n > 0 { return "Read \(n) note\(n == 1 ? "" : "s") today." }
-        return "Connected. Ready for your AIs."
-    }
-
-    /// The mono sub-line — shown only when ON (live access stats). OFF shows nothing; the footer
-    /// already carries the "offered to every AI" pitch, so no "private · no account · lease" line.
-    private var subLineText: String? {
-        guard enabled else { return nil }
-        if let s = stats, s.toolCalls24h > 0 || s.lastAccess != nil {
-            let last = s.lastAccess.map { RelativeDateTimeFormatter().localizedString(for: $0, relativeTo: Date()) }
-            return "\(s.toolCalls24h) calls" + (last.map { " · \($0)" } ?? "")
-        }
-        return "No reads yet · paste your link into ChatGPT"
-    }
-
-    /// On → Copy Link + Copy System Prompt (the two things to paste). Off → the glow CTA that turns it on.
-    @ViewBuilder private var actions: some View {
-        if enabled {
-            HStack(spacing: 8) {
-                CopyPill(title: "Copy Link", systemImage: "link", action: copyLink)
-                CopyPill(title: "Copy Prompt", systemImage: "text.quote", action: copyPrompt)
-            }
-        } else {
-            GlowButton(title: "Connect your AIs", systemImage: "link", glowIntensity: 0.28, action: toggle)
-        }
-    }
-
-    // MARK: Actions (all through MirrorClient — the SAME path Dev Tools uses)
-
-    @MainActor private func refresh() async {
-        enabled = await MirrorClient.shared.isEnabled
-        url = await MirrorClient.shared.shareURL
-        stats = enabled ? (try? await MirrorClient.shared.stats()) : nil
-    }
-
-    private func toggle() {
-        guard !busy else { return }
-        Task { @MainActor in
-            busy = true
-            if enabled {
-                await MirrorClient.shared.disable()
-                flash("Mirror off · cloud copy deleted")
-            } else {
-                do {
-                    _ = try await MirrorClient.shared.enable()
-                    try await MirrorClient.shared.push()
-                    VaultActivity.shared.vaultDirty = false
-                    flash("On · your knowledge is live")
-                } catch MirrorClient.MirrorError.noVault {
-                    flash("On · syncs on your first analysis")
-                } catch MirrorClient.MirrorError.tokenGenerationFailed, MirrorClient.MirrorError.keychainWriteFailed {
-                    flash("Couldn't turn on; try again")
-                } catch {
-                    flash("On · sync will retry")
-                }
-            }
-            await refresh()
-            busy = false
-        }
-    }
-
-    private func copyLink() {
-        guard let url else { return }
-        setPasteboard(url); flash("Link copied · add it as a connector")
-    }
-    private func copyPrompt() {
-        setPasteboard(MirrorClient.systemPrompt); flash("Prompt copied · paste into custom instructions")
-    }
-    private func setPasteboard(_ s: String) {
-        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string)
-    }
-
-    /// Show a transient feedback line in place of the footer, then revert (unless superseded).
-    private func flash(_ s: String) {
-        note = s; flashID += 1; let id = flashID
-        Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2.6))
-            if flashID == id { note = nil }
-        }
-    }
-}
-
-/// A quiet outlined copy button (the popover's secondary action — glow is reserved for the ON CTA).
-private struct CopyPill: View {
-    let title: String
-    let systemImage: String
-    let action: () -> Void
-    @State private var hover = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: systemImage).font(.system(size: 9))
-                Text(title)
-            }
-            .font(.system(size: 9.5, weight: .medium, design: .monospaced)).tracking(0.5)
-            .foregroundStyle(.white.opacity(0.82))
-            .frame(maxWidth: .infinity).padding(.vertical, 9)
-            .background(Capsule().fill(.white.opacity(hover ? 0.08 : 0.04)))
-            .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
     }
 }
 

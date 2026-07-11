@@ -64,15 +64,15 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 940, height: 660)
 
-        // Connect your AIs — opened by the glowing CTA in the Your AIs popover (setup guide is
-        // a deferred stub for now).
+        // Connect your AIs — the guided setup (per-AI video steps + the sharing toggle), opened
+        // by the glow CTAs in the Your AIs popover and Settings → Your AIs.
         Window("", id: ConnectAIsView.windowID) {
             ConnectAIsView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 520, height: 560)
+        .defaultSize(width: 880, height: 900)
 
         // Overnight Processing — the dev cockpit for the 3am scheduler (helper approval, launch-at-
         // login, 18h auto-enable, manual arm). Opened from DEV TOOLS → "Overnight Processing…".
