@@ -78,7 +78,9 @@ ON by default):
 - **Real mode (the default):** `beginVisit` builds the deck from the persisted proactive results — the
   welcome **`GiftLetter`** envelope first (sealed, wax-stamped, addressed "For \<macFirstName\>" from
   the macOS account — "For you" when nameless; generated once from the user's own
-  knowledge base), then one card per `PreparedAction` in `ProactiveResearch.latest()`
+  knowledge base, and retired when the NEXT full cycle replaces the deck — its letter footer carries
+  the **Save to Desktop** keepsake, a branded share PNG revealed in Finder; see
+  `Proactive Intelligence (Judge).md` §The welcome gift), then one card per `PreparedAction` in `ProactiveResearch.latest()`
   (`Briefing(from:)` — method accent + `METHOD · TARGET` kicker, the `card_summary` body, the
   LLM-written fire button). **Firing is real:** `runReal` routes through
   `ProactiveExecutor.fire`, streams codex's live play-by-play into the card (`liveLines`, with a
