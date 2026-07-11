@@ -9,6 +9,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 // Entry point is main.swift (the binary doubles as the root wake helper) — so no @main here.
 struct SentientOSApp: App {
@@ -16,6 +17,13 @@ struct SentientOSApp: App {
 
     /// Scene id for the primary home window, so the menu bar's "Open Sentient OS" can reopen/focus it.
     static let homeWindowID = "home"
+
+    /// True when `window` is the home WindowGroup's window. SwiftUI suffixes the scene id on the
+    /// NSWindow identifier ("home-AppWindow-1"), so match the id exactly or as a prefix.
+    static func isHomeWindow(_ window: NSWindow) -> Bool {
+        guard let raw = window.identifier?.rawValue else { return false }
+        return raw == homeWindowID || raw.hasPrefix(homeWindowID + "-")
+    }
 
     // To add a headless self-test, restore the one-line hook here — see
     // Documentation/Self-Testing (Eval Harness).md (the `Self Tests - Temp/` folder is kept empty).
@@ -30,6 +38,9 @@ struct SentientOSApp: App {
         .windowStyle(.hiddenTitleBar)            // OLED black runs edge-to-edge; no gray trim
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1180, height: 880)   // the proactive home's canvas
+        // Always present the home at launch: after a quit with only Settings open, state
+        // restoration would otherwise bring back JUST the Settings window — an app with no home.
+        .defaultLaunchBehavior(.presented)
 
         // PROACTIVE · EXECUTE — the dev window for PART 3 (the executor). Lists the real
         // ready-to-fire actions from the latest research+prepare run, each with a working FIRE
