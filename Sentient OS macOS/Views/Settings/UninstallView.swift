@@ -21,6 +21,8 @@ struct UninstallView: View {
     @State private var stage: Uninstall.Stage = .helper
     /// Fulfilled by the interstitial's buttons while the teardown awaits a helper decision.
     @State private var helperResolver: ((Uninstall.HelperChoice) -> Void)?
+    /// Feedback fallback: true briefly after the address was copied because no mail app answered.
+    @State private var feedbackCopied = false
 
     init() {}
 
@@ -166,18 +168,49 @@ struct UninstallView: View {
     }
 
     private var feedbackButton: some View {
-        Button {
-            if let url = URL(string: "mailto:feedback@sentient-os.ai?subject=Sentient%20OS%20feedback") {
-                NSWorkspace.shared.open(url)
-            }
-        } label: {
+        Button(action: shareFeedback) {
             HStack(spacing: 6) {
-                Image(systemName: "envelope").font(.system(size: 10))
-                Text("Share feedback").font(.system(size: 11.5))
+                Image(systemName: feedbackCopied ? "checkmark" : "envelope").font(.system(size: 10))
+                Text(feedbackCopied ? "feedback@sentient-os.ai copied" : "Share feedback")
+                    .font(.system(size: 11.5))
             }
             .foregroundStyle(Theme.Ink.bright.opacity(0.9))
         }
         .buttonStyle(PressScaleStyle())
+        .animation(.easeInOut(duration: 0.2), value: feedbackCopied)
+    }
+
+    /// Open a pre-addressed compose in a real mail app. The naive `open(mailto:)` is not enough:
+    /// when a BROWSER owns the mailto scheme (Chrome et al. — field-seen 2026-07-11), it reports
+    /// success and then silently swallows the link unless the user once opted into its webmail
+    /// handling. So: a dedicated mail app as handler → the default route; the handler is the web
+    /// browser (or nothing) → Apple Mail directly; Mail missing too → copy the address and say so
+    /// on the button. The click must never silently do nothing.
+    private func shareFeedback() {
+        let mailto = URL(string: "mailto:feedback@sentient-os.ai?subject=Sentient%20OS%20feedback")!
+        let mailtoHandler = NSWorkspace.shared.urlForApplication(toOpen: mailto)
+        let webHandler = NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!)
+
+        if let mailtoHandler, mailtoHandler != webHandler {
+            Log("UninstallView: feedback compose via the default mail app (\(mailtoHandler.lastPathComponent))")
+            NSWorkspace.shared.open(mailto)
+        } else if let mailApp = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.mail") {
+            Log("UninstallView: mailto handler is the web browser — opening Apple Mail directly")
+            NSWorkspace.shared.open([mailto], withApplicationAt: mailApp,
+                                    configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                if error != nil { Task { @MainActor in copyFeedbackAddress() } }
+            }
+        } else {
+            copyFeedbackAddress()
+        }
+    }
+
+    private func copyFeedbackAddress() {
+        Log("UninstallView: no mail app answered — copied the feedback address instead")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("feedback@sentient-os.ai", forType: .string)
+        feedbackCopied = true
+        Task { try? await Task.sleep(for: .seconds(4)); feedbackCopied = false }
     }
 
     /// The same trust ribbon Settings rides — continuity to the very last screen.
