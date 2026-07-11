@@ -7,11 +7,15 @@
 //  then the plan crossroads (OnboardingPlanView — free/go accounts only; full plans skip it),
 //  then the ready-to-process screen (OnboardingReadyView) whose Start Analysis presents the REAL
 //  ProcessingView takeover (pausable) — and only a finished run calls `onFinished` and reveals
-//  the home. The current step persists (UserDefaults "onboarding.step") so a quit-and-relaunch
-//  mid-onboarding — which granting Full Disk Access requires — resumes exactly where the user
-//  left. The background codex install is NOT here: AppState kicks it off 1s after launch while
-//  the user reads the slides. Computer use (codex step 3) IS here: Start Analysis arms a silent
-//  one-shot that bootstraps it 2 minutes into the first analysis (armComputerUseSetup).
+//  the home. If the on-device model hasn't finished downloading (ModelDownload — AppState kicks
+//  it 2s after the post-FDA-relaunch launch), Start Analysis shows the downloading-model screen
+//  first and the analysis takes over by itself the moment the model verifies. The current step
+//  persists (UserDefaults "onboarding.step") so a quit-and-relaunch mid-onboarding — which
+//  granting Full Disk Access requires — resumes exactly where the user left. The background
+//  codex install is NOT here: AppState kicks it off 1s after launch while the user reads the
+//  slides. Computer use (codex step 3) IS here: the analysis takeover appearing arms a silent
+//  one-shot that bootstraps it 2 minutes in (armComputerUseSetup) — armed at analysis start,
+//  not at Start Analysis, so its ~535 MB DMG never competes with the model download's tail.
 //
 
 import SwiftUI
@@ -41,8 +45,18 @@ struct OnboardingView: View {
     @AppStorage("dbg.calendar.connected")  private var calendarConnected = false
     @AppStorage("dbg.run.calendar")        private var runCalendar = false
 
-    // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
-    private static let modelPath = ModelLocator.resolve()
+    /// The onboarding model download (AppState kicks it post-FDA-relaunch; the downloading
+    /// screen renders it). Held here so this body observes its phase.
+    @State private var download = ModelDownload.shared
+
+    /// Live model path (env → bundle → App Support → repo root); nil = not on this Mac YET.
+    /// Reading the download phase first makes SwiftUI re-evaluate this body when the download
+    /// verifies, so the path flips non-nil in place and the analysis takes over by itself (the
+    /// old `static let` would have needed an app relaunch to notice the freshly-landed model).
+    private var modelPath: String? {
+        _ = download.phase
+        return ModelLocator.resolve()
+    }
 
     var body: some View {
         ZStack {
@@ -60,7 +74,7 @@ struct OnboardingView: View {
                 // before it renders (OnboardingPlanView auto-advances).
                 OnboardingPlanView(onContinue: advance).transition(.opacity)
             default:
-                if analyzing, let modelPath = Self.modelPath {
+                if analyzing, let modelPath {
                     // The REAL first analysis — the same engine + takeover as the home's Analyze
                     // Now, in pausable onboarding dress. Home appears only when this finishes.
                     ProcessingView(modelPath: modelPath,
@@ -74,10 +88,16 @@ struct OnboardingView: View {
                                    onExitEarly: { withAnimation(.easeInOut(duration: 0.3)) { analyzing = false } },
                                    onDone: onFinished)
                         .transition(.opacity)
+                        .onAppear(perform: armComputerUseSetup)
+                } else if analyzing {
+                    // Start Analysis outran the model download — the honest wait, never a dead
+                    // button. The `modelPath` read above re-resolves when the phase flips, so
+                    // this hands off to the analysis on its own.
+                    OnboardingModelDownloadView(download: download)
+                        .transition(.opacity)
                 } else {
-                    OnboardingReadyView(modelMissing: Self.modelPath == nil) {
+                    OnboardingReadyView {
                         withAnimation(.easeInOut(duration: 0.3)) { analyzing = true }
-                        armComputerUseSetup()
                     }
                     .transition(.opacity)
                 }
@@ -124,7 +144,9 @@ struct OnboardingView: View {
 
     /// Two minutes into the first analysis, bootstrap codex computer use (setup step 3) silently
     /// in the background — so it's ready by the time the home's cards and Sidekick need it, with
-    /// no onboarding screen of its own. An unstructured Task on purpose: pausing or exiting the
+    /// no onboarding screen of its own. Armed when the analysis takeover APPEARS (not at Start
+    /// Analysis), so its ~535 MB DMG never races the model download still finishing behind the
+    /// downloading screen. An unstructured Task on purpose: pausing or exiting the
     /// analysis must NOT cancel a DMG download mid-flight. setupComputerUse() self-guards (no-op
     /// when already bootstrapped, requires the codex binary), so a quit-and-relaunch that restarts
     /// the analysis just re-arms harmlessly; failures land in the log + Sentry, never in the UI.

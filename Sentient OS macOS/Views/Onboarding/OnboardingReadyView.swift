@@ -18,7 +18,6 @@ import SwiftUI
 import AppKit
 
 struct OnboardingReadyView: View {
-    let modelMissing: Bool
     let onStart: () -> Void
 
     // The live selection — the same keys SourceSelection / the popover / Settings / 3am all share.
@@ -47,8 +46,10 @@ struct OnboardingReadyView: View {
 
     /// The shared minimum: at least 4 SELECTIONS (each folder, chat source, Notes, or connector
     /// counts as one) — the three default folders alone deliberately don't light the button.
+    /// (A still-downloading model deliberately doesn't gate this: Start Analysis hands off to
+    /// the downloading-model screen, which waits honestly.)
     private var selectionCount: Int { SourceSelection.selectionCount }
-    private var canStart: Bool { selectionCount >= SourceSelection.minimumSelections && !modelMissing }
+    private var canStart: Bool { selectionCount >= SourceSelection.minimumSelections }
 
     var body: some View {
         VStack(spacing: 40) {
@@ -144,7 +145,7 @@ struct OnboardingReadyView: View {
 #Preview("Onboarding — ready to process") {
     ZStack {
         Theme.bg.ignoresSafeArea()
-        OnboardingReadyView(modelMissing: false, onStart: {})
+        OnboardingReadyView(onStart: {})
     }
     .frame(width: 1180, height: 880)
     .preferredColorScheme(.dark)
