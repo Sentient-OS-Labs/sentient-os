@@ -21,6 +21,25 @@ func Log(_ items: Any..., separator: String = " ", terminator: String = "\n") {
     #endif
 }
 
+/// Content-safe error rendering for `Log()` error paths. In RELEASE it yields the enum case /
+/// type name only ("CLIError.exitFailure", "CocoaError(NSCocoaErrorDomain 512)") — never the
+/// description, because error payloads embed content (CLIError carries up to 300 chars of codex
+/// stderr; Cocoa file errors carry note titles in paths) and every Log() line ships to Sentry as
+/// a Release breadcrumb. DEBUG builds return the full description (the dev log wants the meat;
+/// Sentry never boots in DEBUG).
+func ErrorLabel(_ error: Error) -> String {
+    #if DEBUG
+    return "\(error)"
+    #else
+    let mirror = Mirror(reflecting: error)
+    if mirror.displayStyle == .enum, let caseName = mirror.children.first?.label {
+        return "\(type(of: error)).\(caseName)"
+    }
+    let ns = error as NSError
+    return "\(type(of: error))(\(ns.domain) \(ns.code))"
+    #endif
+}
+
 #if DEBUG
 /// Serial appender for /tmp/sentient-dev.log. All writes funnel through one queue,
 /// so calls are safe from any thread or actor.

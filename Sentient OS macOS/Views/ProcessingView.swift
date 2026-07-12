@@ -663,7 +663,7 @@ struct ProcessingView: View {
             p.lastFilePath = nil
             box.value = p
             yield(p)
-            Log("ProcessingView.gmail: ✗ \(error)")
+            Log("ProcessingView.gmail: ✗ \(ErrorLabel(error))")
         }
         return box.value
     }
@@ -713,7 +713,7 @@ struct ProcessingView: View {
             p.lastFilePath = nil
             box.value = p
             yield(p)
-            Log("ProcessingView.calendar: ✗ \(error)")
+            Log("ProcessingView.calendar: ✗ \(ErrorLabel(error))")
         }
         return box.value
     }

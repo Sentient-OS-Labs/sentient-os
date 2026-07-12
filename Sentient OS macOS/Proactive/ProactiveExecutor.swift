@@ -166,7 +166,7 @@ actor ProactiveExecutor {
             case .noSentinel:          return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: false, errorClass: nil)
             }
         } catch {
-            Log("ProactiveExecutor/\(channel): ✗ \(error)")
+            Log("ProactiveExecutor/\(channel): ✗ \(ErrorLabel(error))")
             return FireResult(outcome: .failed(describe(error)), board: .failed, statusPresent: true,
                               errorClass: String(describing: type(of: error)))
         }
@@ -191,7 +191,7 @@ actor ProactiveExecutor {
             case .noSentinel:          return FireResult(outcome: .fired(String(final.prefix(300))), board: .fired, statusPresent: false, errorClass: nil)
             }
         } catch {
-            Log("ProactiveExecutor/computer: ✗ \(error)")
+            Log("ProactiveExecutor/computer: ✗ \(ErrorLabel(error))")
             return FireResult(outcome: .failed(describe(error)), board: .failed, statusPresent: true,
                               errorClass: String(describing: type(of: error)))
         }

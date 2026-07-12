@@ -176,8 +176,9 @@ actor VaultCloud {
             // next cycle re-seeds from the now-current vault (their edit included).
             guard VaultGenerator.vaultFingerprint(vault) == baseline else {
                 Log("VaultCloud.update: ⚠️ vault changed during the run (editor?) — swap aborted, re-run next cycle")
-                CrashReporting.captureEvent("vault.update.stale_swap_averted", level: .info,
-                    fingerprint: ["vault", "update", "stale_swap_averted"])
+                // Working as designed (the freshness check doing its job) — a counter for
+                // TelemetryDeck, not a Sentry issue (2026-07-12).
+                Analytics.signal("KnowledgeBase.staleSwapAverted")
                 setUpdateResume(nil)
                 try? fm.removeItem(at: staging)
                 return 0
@@ -185,7 +186,7 @@ actor VaultCloud {
             try VaultGenerator.swapStagingIntoVault(staging)        // atomic; live vault untouched until here
             setUpdateResume(nil)
             await markDirty()
-            Log("VaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1)) — \(envelope.result.prefix(120))")
+            Log("VaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1), \(envelope.result.count) char report)")
             return notes.count
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
             // Staging is kept; the live vault was never touched. Carry the seed baseline forward so a
@@ -236,7 +237,7 @@ actor VaultCloud {
                 tags: ["error": String(describing: type(of: error))],
                 extra: ["http_status": status],
                 fingerprint: ["mirror", "push_failed"])
-            Log("VaultCloud: mirror push failed — \((error as? LocalizedError)?.errorDescription ?? "\(error)") (retries next trigger)")
+            Log("VaultCloud: mirror push failed — \(ErrorLabel(error)) (retries next trigger)")
         }
     }
 
