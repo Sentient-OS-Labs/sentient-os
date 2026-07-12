@@ -119,6 +119,13 @@ automatically — **Release only** (Debug has symbols locally; the phase skips w
   after any Release/Archive build it's worth glancing at the build log for the
   "Sentry: uploading dSYMs" line. A missed build can be repaired after the fact:
   `sentry-cli debug-files upload --include-sources <archive>.xcarchive/dSYMs`.
+  *(Epilogue, 2026-07-12: the main beta build's dSYMs were uploaded after the fact and its events
+  symbolicate; three other beta builds' dSYMs were already gone — overwritten Debug products — so
+  their events stay unreadable permanently. Keep the archive of any build that leaves a dev Mac.)*
+- **`release.sh` now hard-gates on this** (step 2/6, added 2026-07-12): publishing a DMG requires
+  its matching dSYMs to be found locally and (re-)uploaded to Sentry, or the release aborts — a loud
+  seatbelt over the silent build phase, at the moment it matters. `SKIP_SENTRY=1` opts out knowingly.
+  Details: `Auto-Update (Sparkle).md` §Releasing.
 
 Build settings already cooperate: Release is `dwarf-with-dsym`, Debug is `dwarf` (no dSYM, fast),
 and user script sandboxing is off so the upload script can reach the network.
