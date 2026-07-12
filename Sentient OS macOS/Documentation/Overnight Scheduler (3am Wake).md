@@ -49,8 +49,17 @@ code-signing check. Files: `Scheduling/WakeHelper.swift` (root side) · `WakeHel
 - **Stale-wake hygiene:** the helper persists the armed wake spec, cancels it when the app's XPC
   connection drops (quit / crash / force-quit — a Mac with Sentient closed never wakes on a stale
   schedule), and the loop wipes all wakes (`cancelAllWakes`) before arming exactly one.
-- ⚠️ **The code-sign gate is DEBUG-permissive** (allows-and-logs on a failed check so dev testing
-  isn't blocked); Release MUST enforce it — pin the Developer ID team before launch.
+- **The code-sign gate is system-enforced in EVERY config (reworked 2026-07-11):**
+  `conn.setCodeSigningRequirement` armed with the daemon's OWN designated requirement — the app
+  and the helper are the same signed binary, so "signed exactly like me" is airtight AND
+  signer-agnostic (the Developer ID release, a dev's Apple Development build, an OSS self-build,
+  even ad-hoc dev signing). The static identifier+anchor string in
+  `WakeHelperConfig.clientRequirement` survives only as the fallback if self-inspection fails.
+  This replaced a hand-rolled audit-token check whose private `value(forKey: "auditToken")` read
+  came back empty on macOS 26 — every client "failed", DEBUG allowed-and-logged it, and the first
+  Release build would have slammed the door on our own app (field-found 2026-07-11). Debug now
+  exercises the exact gate Release ships. Client-side, `isReachable()` probes log quietly (a
+  missing daemon is an expected state, not an error); real ops keep the loud XPC error line.
 - ⚠️ **Liveness is the ONLY honest status (field-found 2026-07-11).** System Settings' App
   Background Activity toggle boots a disabled daemon OUT of launchd while leaving its plist on
   disk — so every file check reads green on a dead helper (and unprivileged
