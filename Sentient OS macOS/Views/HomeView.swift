@@ -108,7 +108,7 @@ struct HomeView: View {
         .onAppear {                        // every appearance starts fresh: sealed envelope, full deal
             letter = nil
             letterShown = false
-            model.beginVisit(deck: deck)
+            if !appState.isUninstalling { model.beginVisit(deck: deck) }
             planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
             caution = OvernightCaution.latest()
             probeHealth()
@@ -119,7 +119,16 @@ struct HomeView: View {
             withAnimation(.easeInOut(duration: 0.25)) { caution = OvernightCaution.latest() }
             probeHealth()
         }
-        .onChange(of: deck) { _, v in model.beginVisit(deck: v) }   // mode flip → re-deal
+        .onChange(of: deck) { _, v in
+            // The teardown's defaults wipe re-publishes the deck key — never re-deal mid-uninstall.
+            guard !appState.isUninstalling else { return }
+            model.beginVisit(deck: v)                               // mode flip → re-deal
+        }
+        .onChange(of: appState.isUninstalling) { _, tearing in
+            // Uninstall began → take every card off the table; a cancel deals them back in.
+            if tearing { withAnimation(.easeInOut(duration: 0.3)) { model.clear() } }
+            else { model.beginVisit(deck: deck) }
+        }
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
         .sheet(isPresented: $showWhatsAppPicker) {
             ChatPicker(sourceName: "WhatsApp", loadChats: { try WhatsAppSource().listChats() },
@@ -666,6 +675,13 @@ final class ForYouModel {
                 }
             }
         }
+    }
+
+    /// Uninstall's quiet home: cancel any running theater and take every card off the table.
+    func clear() {
+        visit += 1
+        runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
+        entries.removeAll()
     }
 
     /// The welcome envelope opened: the card lives on un-sealed (the view opens the letter).

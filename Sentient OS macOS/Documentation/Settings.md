@@ -114,6 +114,22 @@ crossroads, which re-detects the plan fresh). The free home's Reset buttons deep
 (`Ingestion/PipelineActivity.swift`, a counter flag begun/ended by `IterativeRun` +
 `ProactiveCycle`) — wiping mid-run would leave high-water marks pointing past erased notes.
 
+**Uninstall Sentient…** (Danger Zone) opens the farewell sheet — `Views/Settings/UninstallView.swift`
+driving `System/Uninstall.swift`, four phases. The farewell: "Before you go." + the founders' note
+(open source / free forever), a mono-caps **manifest** of what gets removed (a 2×2 grid: model ·
+knowledge base · cloud copy · wake helper), the uniform Keep/Uninstall pill pair (`FarewellPill` —
+one equal-width capsule shape for the whole sheet), **Email the founders** centered beneath (a
+mailto that routes around browser-owned handlers → Apple Mail → copies the address; the click never
+silently no-ops), and the **GitHub mark** bottom-right (`GitHubMark` template SVG asset → the org
+repo) — deliberately no trust footer on this sheet. Then: the working teardown (stage whispers) →
+the helper-password interstitial (only if the admin prompt is declined) → gone (drag the .app to
+the Trash, hard-exit Quit). The teardown removes the wake helper, cloud copy, Keychain identity,
+knowledge base, model, caches, the TCC automation grant, and every default — leaving the .app,
+`~/.codex`, and gift keepsakes. ⚠️ It raises `AppState.isUninstalling` FIRST: the defaults wipe
+re-publishes every @AppStorage key (the card deck's included), and without that gate the home
+re-dealt a demo deck behind the sheet (field-found 2026-07-11). The home empties its deck while
+the flag is up; a cancel deals the cards back in.
+
 ### Permissions & Health (`HealthPane.swift`)
 The health board. A spinner line ("Checking your Sentient…") holds the pane through the first
 probe (the codex login check shells out and takes seconds), then rows cascade in (a gentle
