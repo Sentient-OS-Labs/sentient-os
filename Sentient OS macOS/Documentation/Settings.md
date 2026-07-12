@@ -122,10 +122,13 @@ opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
 
 - **ON-DEVICE INTELLIGENCE** (the analysis machinery): Full Disk Access (fix = the floating
   drag-panel guide with Sentient as the card — `PermissionGuide`, see `Permission Guide
-  (First-Use Grants).md` — + the relaunch link) · Overnight wake (🟢 = the installed daemon plist
-  points at THIS binary; fix runs `WakeHelperInstaller.installAsync()` — **[DECIDED 2026-07-04]
-  the password install IS production**, no Login Items migration) · Launch at login (yellow when
-  off; a needs-approval state adds the guide's instruction panel over Login Items).
+  (First-Use Grants).md` — + the relaunch link) · Overnight wake (🟢 = the daemon ANSWERS over
+  XPC — `WakeHelperClient.healthProbe()`, the only check the System Settings background toggle
+  can't fool [2026-07-11]; `notSetUp` fixes with `WakeHelperInstaller.installAsync()` —
+  **[DECIDED 2026-07-04] the password install IS production** — while `disabled` ("turned off in
+  login items") gets a **Turn On…** that deep-links to the switch, since a reinstall can't
+  override it) · Launch at login (yellow when off; a needs-approval state adds the guide's
+  instruction panel over Login Items).
 - **SIDEKICK & PROACTIVE** (the magic's grants — lazy-asked, yellow while not-asked/off; only an explicit mic/speech DENIAL goes red):
   Microphone & Speech (one row: `VoiceCapture.requestPermissions()` asks both; denied deep-links
   to the actual blocker) · **Screen Recording** (Sentient's OWN grant — Sidekick snaps a screen
@@ -143,12 +146,18 @@ opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
   fallback; Sidekick degrades gracefully without the optional grants (voice needs mic; the screen
   still is skipped).
 - **SET UP CODEX:** CLI / ChatGPT account / **ChatGPT plan** / computer use — the CLI, account,
-  and computer-use rows go red when missing and their fixes open the shared `CodexSetupView`
-  (statuses re-probe when the sheet closes). The plan row (shown once logged in, decoded via
-  `CodexAuth.currentPlan()`) is amber on free/go — "free · knowledge base only" — with a
-  **Re-check** pill that runs `CodexAuth.refreshPlan()` (the on-demand token re-mint), so an
-  upgrade shows up in seconds instead of on codex's 8-day timer; a limited plan also keeps the
-  codex group expanded (it never folds into "Codex is all good").
+  and computer-use rows go red when missing, and their fixes drive the shared `CodexSetup` engine
+  **INLINE** (no sheet — the old wiring bounced through `CodexSetupView`, now dev-tools-only;
+  decided 2026-07-11): while a step runs its LED goes AMBER (a third meaning: *working on it*),
+  the note narrates ("installing…" / "finish in your browser" / "setting up…"), the pill hides,
+  and failures land as a quiet prose line under the row. The browser login is auto-noticed (the
+  same 2s `codex login status` poll onboarding uses — no "I'm done" button; the pill stays as
+  **Re-open…** so an abandoned browser never strands the row), and the computer-use bootstrap
+  streams its progress line under the row (a ~535 MB download deserves narration). The plan row
+  (shown once logged in, decoded via `CodexAuth.currentPlan()`) is amber on free/go — "free ·
+  knowledge base only" — with a **Re-check** pill that runs `CodexAuth.refreshPlan()` (the
+  on-demand token re-mint), so an upgrade shows up in seconds instead of on codex's 8-day timer;
+  a limited plan also keeps the codex group expanded (it never folds into "Codex is all good").
 - **CODEX PERMISSIONS:** the helper's Accessibility + Screen Recording — system-TCC, read via
   our FDA; shown once computer use exists. Fix = the drag-panel guide with the HELPER as the
   card (the plain deep-link survives only as the helper-missing fallback).
@@ -160,11 +169,16 @@ opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
   (idempotent, logged). The user has no job there, so the UI gives them none. (The same extracted
   self-heal also runs when the first-use `ComputerUseGate` window presents — before the first fire
   ever needs it.)
-- Red = a core capability is broken · yellow = optional or fixable-later. Statuses re-probe on
-  every app foreground.
+- Red = a core capability is broken · yellow = optional, fixable-later, or working on it.
+  Statuses re-probe on every app foreground. The home's live health banner
+  (`System/HealthCaution.swift`, see the Home doc) is this board's herald: it watches the same
+  ground truths and its *Open Settings* lands here.
 
 ## Copy rules learned here
 
 No em dashes in user-facing settings copy (reads as AI slop; use commas/semicolons/colons/
 breaks). Guilt-trip confirms on the toggles that keep Sentient alive. Info-tip copy is short,
 plain, and trust-first: who the grant belongs to, what it unlocks, what stays on the Mac.
+Dense tips break into short paragraphs (`\n\n` in the string — `InfoTip` renders them natively):
+what-it-does first, mechanics/privacy after; a tip that appears on multiple surfaces carries the
+SAME copy everywhere (mic, FDA, overnight wake, screen recording all have twins).

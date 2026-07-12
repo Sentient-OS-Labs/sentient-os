@@ -67,6 +67,9 @@ struct HomeView: View {
     @State private var showCalendarConnect = false
     /// The morning-after caution (last night's scheduled run hit a known snag) — nil = no banner.
     @State private var caution: OvernightCaution.Record?
+    /// The LIVE health issue (essential perms · codex · computer use) — HealthCaution's ladder;
+    /// nil = healthy or muted. Outranks the morning-after caution in the banner slot.
+    @State private var liveIssue: HealthCaution.Issue?
 
     // Chat selections the Analysis popover's WhatsApp/iMessage chips pick into (same keys as SourceSelection).
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
@@ -108,6 +111,13 @@ struct HomeView: View {
             model.beginVisit(deck: deck)
             planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
             caution = OvernightCaution.latest()
+            probeHealth()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            // The user may just have fixed something in System Settings (or a cycle cleared last
+            // night's caution) — re-probe so the banner melts away the moment they return.
+            withAnimation(.easeInOut(duration: 0.25)) { caution = OvernightCaution.latest() }
+            probeHealth()
         }
         .onChange(of: deck) { _, v in model.beginVisit(deck: v) }   // mode flip → re-deal
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
@@ -164,24 +174,32 @@ struct HomeView: View {
         .padding(.leading, 30)
     }
 
-    // MARK: The morning-after caution banner
+    // MARK: The caution banner (one slot, most severe first)
     //
-    // Last night's UNATTENDED run hit one of the three knowable snags (codex signed out · no
-    // internet · usage limit) — OvernightCaution recorded it at ProactiveCycle's choke point, and
-    // this quiet amber capsule surfaces it in the blank space beside the greeting. ✕ dismisses;
-    // the next fully successful cycle clears it on its own. Amber on purpose: a caution, never an
-    // alarm — the app still works, only the overnight magic was missed.
+    // The blank space beside the greeting holds AT MOST ONE capsule. A LIVE issue outranks
+    // history: HealthCaution's ladder (an essential permission off · codex gone/signed out ·
+    // computer use regressed) renders red, because the product is broken RIGHT NOW; otherwise
+    // the morning-after caution renders amber (last night's UNATTENDED run hit a knowable snag —
+    // OvernightCaution recorded it at ProactiveCycle's choke point; the next fully successful
+    // cycle clears it on its own). Both roads lead to Settings → Permissions & Health. Live
+    // issues re-probe on foreground and melt away when fixed; ✕ mutes a live issue's kind for
+    // the session (a lower rung may then surface), while the amber ✕ clears the record.
 
     private var cautionBanner: some View {
         Group {
-            if let caution {
-                CautionCapsule(kind: caution.kind,
-                               onOpenSettings: {
-                                   // Land directly on Permissions & Health — the codex login row
-                                   // lives there; never strand the user on the default pane.
-                                   SettingsView.requestedPane = .health
-                                   openWindow(id: SettingsView.windowID)
-                               },
+            if let issue = liveIssue {
+                CautionCapsule(message: issue.message, accent: Theme.Ink.red, showsSettings: true,
+                               onOpenSettings: openHealthSettings,
+                               onDismiss: {
+                                   HealthCaution.dismiss(issue)
+                                   withAnimation(.easeInOut(duration: 0.25)) { liveIssue = nil }
+                                   probeHealth()   // the muted kind may have been hiding a lower rung
+                               })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if let caution {
+                CautionCapsule(message: caution.kind.message,
+                               showsSettings: caution.kind == .loggedOut,
+                               onOpenSettings: openHealthSettings,
                                onDismiss: {
                                    OvernightCaution.clear()
                                    withAnimation(.easeInOut(duration: 0.25)) { self.caution = nil }
@@ -191,6 +209,25 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.trailing, 30).padding(.top, 64)
+    }
+
+    /// Land directly on Permissions & Health — every banner's fix lives there; never strand the
+    /// user on the default pane.
+    private func openHealthSettings() {
+        SettingsView.requestedPane = .health
+        openWindow(id: SettingsView.windowID)
+    }
+
+    /// Run HealthCaution's ladder off the main thread of thought: cheap sync probes, plus a
+    /// cached codex login check (forced fresh while a codex banner is up, so a fix clears on the
+    /// very next foreground). Quiet on pitch decks (demo cards must never share the stage with a
+    /// red capsule) and on the free home (HealthCaution guards kbOnly too — defense in depth).
+    private func probeHealth() {
+        guard deck == .real, !kbOnly else { return }
+        Task {
+            let issue = await HealthCaution.probe(forceCodexRecheck: liveIssue?.kindKey == "codex")
+            withAnimation(.easeInOut(duration: 0.25)) { liveIssue = issue }
+        }
     }
 
     private var greeting: String {
@@ -476,22 +513,25 @@ struct HomeView: View {
     }
 }
 
-// MARK: - The morning-after caution capsule (rendered by cautionBanner)
+// MARK: - The caution capsule (rendered by cautionBanner — amber for the morning-after event,
+// red for a live HealthCaution issue)
 
 private struct CautionCapsule: View {
-    let kind: OvernightCaution.Kind
+    let message: String
+    var accent: Color = Theme.Ink.amber
+    var showsSettings = false
     let onOpenSettings: () -> Void
     let onDismiss: () -> Void
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            HealthDot(color: Theme.Ink.amber)
-            Text(kind.message)
+            HealthDot(color: accent)
+            Text(message)
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.Ink.statusInk)
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
-            if kind == .loggedOut {
+            if showsSettings {
                 SettingsPillButton(title: "Open Settings", action: onOpenSettings)
             }
             Button(action: onDismiss) {
@@ -507,7 +547,7 @@ private struct CautionCapsule: View {
         .frame(maxWidth: 480, alignment: .leading)
         .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(Theme.Ink.amber.opacity(0.28), lineWidth: 1))
+            .strokeBorder(accent.opacity(0.28), lineWidth: 1))
     }
 }
 
@@ -515,13 +555,28 @@ private struct CautionCapsule: View {
     ZStack {
         Color.black.ignoresSafeArea()
         VStack(alignment: .trailing, spacing: 14) {
-            CautionCapsule(kind: .loggedOut, onOpenSettings: {}, onDismiss: {})
-            CautionCapsule(kind: .noInternet, onOpenSettings: {}, onDismiss: {})
-            CautionCapsule(kind: .usageLimit, onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(message: OvernightCaution.Kind.loggedOut.message, showsSettings: true,
+                           onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(message: OvernightCaution.Kind.noInternet.message,
+                           onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(message: OvernightCaution.Kind.usageLimit.message,
+                           onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(message: HealthCaution.Issue.permissions([.fullDiskAccess]).message,
+                           accent: Theme.Ink.red, showsSettings: true,
+                           onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(message: HealthCaution.Issue.permissions([.fullDiskAccess, .launchAtLogin]).message,
+                           accent: Theme.Ink.red, showsSettings: true,
+                           onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(message: HealthCaution.Issue.codexSignedOut.message,
+                           accent: Theme.Ink.red, showsSettings: true,
+                           onOpenSettings: {}, onDismiss: {})
+            CautionCapsule(message: HealthCaution.Issue.computerUseBroken(payloadGone: true).message,
+                           accent: Theme.Ink.red, showsSettings: true,
+                           onOpenSettings: {}, onDismiss: {})
         }
         .padding(40)
     }
-    .frame(width: 620, height: 320)
+    .frame(width: 620, height: 560)
     .preferredColorScheme(.dark)
 }
 

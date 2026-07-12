@@ -177,24 +177,32 @@ final class OvernightScheduler {
 
     // MARK: - Helper readiness
 
-    /// Ensure the root daemon is installed before arming. Returns true when it's ready to accept
-    /// XPC. PRODUCTION path: the admin-password installer's plist at /Library/LaunchDaemons
-    /// (WakeHelperInstaller — onboarding and Settings → Health both run it). That install is
-    /// INVISIBLE to SMAppService, so the plist check comes FIRST in every config; the SMAppService
-    /// `.enabled` read second covers the dev cockpit's approval flow. Neither present → DEBUG
-    /// self-installs (the proven admin fallback, so a clean dev slate still works); Release flags
-    /// `needsSchedulerSetup` for the setup UX — it never registers or prompts on its own (a
+    /// Ensure the root daemon is ALIVE before arming — WakeHelperClient.healthProbe's XPC ground
+    /// truth, which covers both install paths (the admin-password plist AND the dev cockpit's
+    /// SMAppService daemon) and can't be fooled by the System Settings background toggle.
+    /// Toggled off → surface setup and stop (a reinstall can't override the switch). Not set up →
+    /// DEBUG self-installs (the proven admin fallback, so a clean dev slate still works); Release
+    /// flags `needsSchedulerSetup` for the setup UX — it never registers or prompts on its own (a
     /// `register()` here would park a stray "Sentient OS" approval in System Settings > Login Items).
     private func ensureHelperReady(log: SchedulerLog) async -> Bool {
-        // ① The production install — the /Library/LaunchDaemons plist pointing at this binary.
-        if WakeHelperInstaller.isInstalledAndCurrent() {
+        // WakeHelperClient.healthProbe is the ground truth: the daemon must ANSWER over XPC —
+        // one probe covers BOTH install paths (the production plist and the dev cockpit's
+        // SMAppService daemon share the mach service), and it's the only check the System
+        // Settings background toggle can't fool (the toggle boots the daemon out of launchd
+        // while leaving every file check green — field-found 2026-07-11).
+        switch await WakeHelperClient.shared.healthProbe() {
+        case .ready:
             needsSchedulerSetup = false
             return true
-        }
-        // ② The dev cockpit's SMAppService daemon, approved in System Settings.
-        if WakeHelperClient.shared.isReady {
-            needsSchedulerSetup = false
-            return true
+        case .disabled:
+            // Launchd honors the toggle over any bootstrap, so a reinstall can't help — only
+            // the user flipping it back on can (Health's row and the home's banner say so).
+            needsSchedulerSetup = true
+            statusLine = "background item turned off"
+            log.line("helper installed but unreachable — background item toggled off in System Settings")
+            return false
+        case .notSetUp:
+            break   // fall through to the install path below
         }
         #if DEBUG
         log.line("helper not installed — DEBUG fallback to the admin-password installer")

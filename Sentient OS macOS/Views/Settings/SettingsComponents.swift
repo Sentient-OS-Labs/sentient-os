@@ -312,12 +312,12 @@ struct StatusLine: View {
     var fixTitle: String = "Fix…"
     var fix: (() -> Void)? = nil
 
-    /// Punchier than the ink palette on purpose — these are status LEDs, not labels.
+    /// Status-LED colors — warn stays punchier than the ink amber on purpose.
     private var dot: Color {
         switch health {
         case .ok:   return Theme.Ink.green
         case .warn: return Color(red: 1.0, green: 0.72, blue: 0.30)
-        case .bad:  return Color(red: 1.0, green: 0.36, blue: 0.36)
+        case .bad:  return Theme.Ink.red
         }
     }
 
