@@ -1,10 +1,11 @@
 # Crash Reporting (Sentry)
 
 `CrashReporting.swift` wires the app to [Sentry](https://sentry.io) so we get crash logs,
-unhandled errors, and performance/profiling from real runs. It's the "black box" for diagnosing
-a crash we can't reproduce — including a crash during the root overnight run, when nobody's
-watching. Runtime reporting needs only the DSN (already in the code); readable production stack
-traces additionally need the Release dSYM-upload build phase (below).
+unhandled errors, and app-hangs from real runs. It's the "black box" for diagnosing a crash we
+can't reproduce — including a crash during the root overnight run, when nobody's watching. Runtime
+reporting needs only the DSN (already in the code); readable production stack traces additionally
+need the Release dSYM-upload build phase (below). Sentry is the smoke detector, NOT an APM: there
+is no performance tracing or profiling (see the options note below).
 
 ## How it boots
 
@@ -25,18 +26,33 @@ if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
 Each role tags every event with `process: app` or `process: wakeHelper`, so a 3am overnight-run
 crash is told apart from a UI crash in the dashboard.
 
-`start(_:)` boots Sentry with the crash surface on: native crash handler + attached stack traces,
-app-hang ("beachball") detection, 100% trace sampling, and trace-lifecycle profiling. It's
-idempotent (guarded by `started`), a no-op if the DSN is blank, and — the two hard gates — a no-op
-in DEBUG and whenever the `diagnosticsEnabled` opt-out is off (the full gate story:
+`start(_:)` boots Sentry with the crash surface on — and only the crash surface (curated
+2026-07-12):
+
+- **Native crash handler + attached stack traces**, PLUS `enableUncaughtNSExceptionReporting =
+  true` — ⚠️ that flag **defaults OFF on macOS** (unlike iOS), so without it a whole class of
+  AppKit/ObjC crashes silently never reports.
+- **App-hang ("beachball") detection at 10s** (`appHangTimeoutInterval = 10`, not the SDK's 2s
+  default — 2s paged us for harmless onboarding/codex-install stalls all through the beta).
+- **No tracing, no profiling.** The old 100%-traces + profiling config never produced a single
+  ingested transaction (the SDK's auto-instrumentation is UIKit-shaped; macOS SwiftUI generates
+  none) — deleted as dead weight.
+- **⚠️ `enableNetworkBreadcrumbs = false` and `enableCaptureFailedRequests = false` — a LEAK
+  GUARD, never re-enable.** Both SDK defaults record full request URLs, and the MCP mirror URL
+  carries the user's mirror password in its path (§8's "request paths must NEVER be logged").
+  Found leaking a real password into stored events on 2026-07-12; the events were deleted and
+  both flags forced off. The `beforeBreadcrumb` scrub of `crumb.data` is the backstop only.
+
+It's idempotent (guarded by `started`), a no-op if the DSN is blank, and — the two hard gates — a
+no-op in DEBUG and whenever the `diagnosticsEnabled` opt-out is off (the full gate story:
 `Diagnostics (Sentry).md`).
 
 ⚠️ **Auto session tracking is deliberately OFF** (`enableAutoSessionTracking = false`). Release-
 health sessions are a "how many people use Sentient" signal, and **all** usage counting belongs to
 the *analytics* toggle (TelemetryDeck), never the *crash* toggle. If it were on, a user who keeps
 crash reports on but opts OUT of analytics would still be counted here — which would break the
-promise the analytics toggle makes. Sentry therefore reports crashes, errors, hangs, and traces
-only; user/session counting lives solely in `Analytics.swift`. (This costs us Sentry's crash-free-
+promise the analytics toggle makes. Sentry therefore reports crashes, errors, and hangs only;
+user/session counting lives solely in `Analytics.swift`. (This costs us Sentry's crash-free-
 session % — TelemetryDeck's counts plus crash volume cover it.)
 
 ## The DSN — safe in the code
@@ -54,6 +70,15 @@ handled by Sentry's inbound filters + rate limits, and the DSN rotates in one cl
 
 Every `Log()` call (Log.swift) also feeds a Sentry breadcrumb, so a crash report arrives carrying
 the recent log trail that led to it. No-op until Sentry has started.
+
+**⚠️ That means every non-`#if DEBUG` `Log()` line SHIPS in Release.** Two rules keep the trail
+content-free:
+- Content-bearing logs (prompts, transcripts, codex output, proactive dumps) are `#if DEBUG`.
+- Error paths use **`ErrorLabel(error)`** (Log.swift), never `\(error)` or
+  `error.localizedDescription`: in Release it renders the enum case / type name only
+  ("CLIError.exitFailure"), in DEBUG the full description. Raw interpolation leaked codex stderr
+  (which embeds Gmail/calendar/screen content) and note titles through ~22 error logs until the
+  2026-07-12 sweep — don't reintroduce.
 
 ## Verifying the pipeline
 
@@ -86,6 +111,14 @@ automatically — **Release only** (Debug has symbols locally; the phase skips w
 - The phase **fails safe**: every guard exits 0, so a missing token, missing `sentry-cli`, or a
   failed upload never breaks the build — Debug builds, OSS clones, and CI without the config just
   skip it.
+- ⚠️ **Fail-safe cuts both ways — the phase fails SILENTLY.** Field lesson (2026-07-12): the first
+  beta DMG shipped with no dSYM on Sentry — it was built on a Mac whose gitignored `.sentryclirc`
+  didn't exist, and the other Mac's copy held a dead (revoked) token — so every beta crash/hang
+  arrived unsymbolicated ("Processing Error" badge, `<redacted>` frames). **Both dev Macs need a
+  current `.sentryclirc` at the repo root** (hand-copy it — AirDrop/Signal, never commit), and
+  after any Release/Archive build it's worth glancing at the build log for the
+  "Sentry: uploading dSYMs" line. A missed build can be repaired after the fact:
+  `sentry-cli debug-files upload --include-sources <archive>.xcarchive/dSYMs`.
 
 Build settings already cooperate: Release is `dwarf-with-dsym`, Debug is `dwarf` (no dSYM, fast),
 and user script sandboxing is off so the upload script can reach the network.
