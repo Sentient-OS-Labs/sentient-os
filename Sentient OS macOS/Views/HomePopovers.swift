@@ -167,7 +167,7 @@ struct YourAIsPopover: View {
         VStack(alignment: .leading, spacing: 0) {
             MonoCaps("Connect AIs", size: 10, tracking: 2.4, color: Theme.Ink.label)
 
-            Text("Offer your life to every AI.")
+            Text("Offer your knowledge to every AI.")
                 .display(20).foregroundStyle(.white)
                 .padding(.top, 11)
 
@@ -176,7 +176,7 @@ struct YourAIsPopover: View {
             }
             .padding(.top, 18)
 
-            MonoCaps("Your whole life · offered to every AI", size: 8.5, tracking: 1.6,
+            MonoCaps("Your whole knowledge · offered to every AI", size: 8.5, tracking: 1.6,
                      color: Theme.Ink.deepMuted)
                 .padding(.top, 13)
         }
