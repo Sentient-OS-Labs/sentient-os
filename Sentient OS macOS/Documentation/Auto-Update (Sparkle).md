@@ -119,9 +119,16 @@ and does the rest — no notary credentials needed in the script:
 
 1. **Validates** the DMG is genuinely signed + notarized + stapled (mounts it, `spctl` + `stapler`),
    and refuses a placeholder-key build — a broken DMG can't reach users.
-2. Reads the version from the DMG, **EdDSA-signs** it, runs `generate_appcast`.
-3. Cuts a **GitHub Release** (uploads the DMG the appcast points at) and bumps the **Homebrew cask**.
-4. Prints the final manual step: publish the emitted `appcast.xml` to the `SUFeedURL`. The feed lives
+2. **Ensures the build's crash symbols are on Sentry** (added 2026-07-12): reads the app binary's
+   UUIDs from the mounted DMG, finds the matching dSYMs in `~/Library/Developer/Xcode/Archives`, and
+   idempotently uploads them (`--include-sources`). No matching archive or a failed upload **aborts
+   the release** — the Xcode upload build phase fails silently by design, and a build shipped without
+   its dSYM has unreadable crashes forever (the beta-wave lesson; see `Crash Reporting (Sentry).md`).
+   `SKIP_SENTRY=1` skips knowingly; `DSYM_SEARCH=<dir>` overrides the search root. *(Match + upload +
+   abort paths verified against the live org; first full-release run still pending.)*
+3. Reads the version from the DMG, **EdDSA-signs** it, runs `generate_appcast`.
+4. Cuts a **GitHub Release** (uploads the DMG the appcast points at) and bumps the **Homebrew cask**.
+5. Prints the final manual step: publish the emitted `appcast.xml` to the `SUFeedURL`. The feed lives
    in the `sentient-os-website` repo at `public/appcast.xml` (Vercel deploys it).
 
 `./release.sh keys` is the one-time key generator. Sparkle's CLI tools resolve automatically from the
