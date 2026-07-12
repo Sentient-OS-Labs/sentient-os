@@ -101,23 +101,35 @@ enum CrashReporting {
         SentrySDK.start { options in
             options.dsn = dsn
 
-            // Crashes: native signals + unhandled NSExceptions, with the full stack on every event.
+            // Crashes: native signals + uncaught NSExceptions, with the full stack on every event.
+            // ⚠️ NSException reporting DEFAULTS OFF on macOS (unlike iOS) — without the explicit
+            // flag a whole class of AppKit/ObjC crashes never reached Sentry (found 2026-07-12).
             options.attachStacktrace = true
             options.enableCrashHandler = true
+            options.enableUncaughtNSExceptionReporting = true
 
-            // Performance: trace + profile everything — a single-user desktop app, so 100% is cheap.
-            options.tracesSampleRate = 1.0
-            options.configureProfiling = {
-                $0.sessionSampleRate = 1.0
-                $0.lifecycle = .trace
-            }
+            // No APM: tracing/profiling stays at the OFF default. The SDK's auto transactions
+            // never fire on a macOS SwiftUI app (measured: 0 ingested over the whole beta) — the
+            // old 100% traces+profiling config was dead weight. Sentry is the smoke detector;
+            // durations live in TelemetryDeck.
 
-            // App-hang ("beachball") detection. Auto session tracking is deliberately OFF: release-
-            // health sessions are a "how many people use Sentient" signal, and ALL usage counting
-            // belongs to the ANALYTICS toggle (TelemetryDeck), never the crash toggle. So a user who
-            // keeps crash reports on but opts OUT of analytics is never counted here.
-            options.enableAutoSessionTracking = false
+            // App-hang ("beachball") detection at 10s — NOT the SDK's 2s default: onboarding and
+            // codex-install legs stall the main thread for a beat routinely, and 2s pages us with
+            // unactionable noise (field-proven by the beta wave, 2026-07-12). Only a real freeze
+            // should report. Auto session tracking is deliberately OFF: release-health sessions
+            // are a "how many people use Sentient" signal, and ALL usage counting belongs to the
+            // ANALYTICS toggle (TelemetryDeck), never the crash toggle.
             options.enableAppHangTracking = true
+            options.appHangTimeoutInterval = 10
+            options.enableAutoSessionTracking = false
+
+            // ⚠️ The SDK's URL-capturing defaults are a LEAK VECTOR and must stay OFF: network
+            // breadcrumbs and failed-request capture both record full request URLs — and the MCP
+            // mirror's URL carries the user's mirror password in its path (the §8 invariant:
+            // request paths must NEVER be logged; found leaking via these defaults 2026-07-12).
+            // The beforeBreadcrumb data scrub below is the backstop, not the defense.
+            options.enableNetworkBreadcrumbs = false
+            options.enableCaptureFailedRequests = false
 
             options.environment = "release"
 
@@ -126,6 +138,12 @@ enum CrashReporting {
             options.beforeSend = { event in scrub(event) }
             options.beforeBreadcrumb = { crumb in
                 crumb.message = crumb.message.map(scrub(text:))
+                // SDK-authored crumbs carry their payload in `data`, not `message` (URLs live
+                // here) — it never met the scrubber before, which is how the mirror password
+                // leaked. Scrub every string value as the backstop.
+                if let data = crumb.data {
+                    crumb.data = data.mapValues { ($0 as? String).map(scrub(text:)) ?? $0 }
+                }
                 return crumb
             }
         }
@@ -238,6 +256,10 @@ enum CrashReporting {
         func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
         return [
             (re("/Users/[^/\\s\"']+"), "/Users/<redacted>"),                 // home-dir paths
+            // The mirror password's URL path segment (/u_<id>/p_<password>/…) — the §8 invariant.
+            // Network breadcrumbs are off, but ANY future surface that logs the share URL is
+            // covered here by construction.
+            (re("/p_[A-Za-z0-9_\\-]{8,}"), "/p_<redacted>"),
             (re("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"), "<email>"),
             (re("\\+?\\d[\\d ()\\-]{7,}\\d"), "<phone>"),                     // 9+ digit runs w/ separators
             // Long tokens / base64 blobs — but ONLY high-entropy runs (≥1 uppercase or digit). This

@@ -89,10 +89,10 @@ enum GmailConnect {
             let env = try await CodexCLI.shared.run(inv)
             let answer = env.result.uppercased()
             let yes = answer.contains("YES") && !answer.contains("NO")
-            Log("GmailConnect.probe: codex → \"\(env.result.prefix(40))\" ⇒ \(yes ? "connected" : "NOT connected")")
+            Log("GmailConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
             return yes
         } catch {
-            Log("GmailConnect.probe: ⚠️ \(error) — treating as NOT connected")
+            Log("GmailConnect.probe: ⚠️ \(ErrorLabel(error)) — treating as NOT connected")
             return false
         }
     }

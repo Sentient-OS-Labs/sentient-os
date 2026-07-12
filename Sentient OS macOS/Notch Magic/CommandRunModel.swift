@@ -88,7 +88,7 @@ final class CommandRunModel {
                     self?.complete(.stopped, line: "■ stopped")
                 } else {
                     Log("──────── 🤖 ✗ FAILED after \(secs)s ────────")
-                    Log("CMD: \(error)")
+                    Log("CMD: \(ErrorLabel(error))")
                     self?.complete(.failed, line: "✗ \(Self.short(error))")
                 }
             }

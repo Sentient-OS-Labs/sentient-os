@@ -167,7 +167,7 @@ actor VaultGenerator {
             return try await CodexCLI.shared.run(invocation, onLine: onLine)
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
-            Log("VaultGenerator: ⚠️ usage limit (session \(sessionID ?? "nil")); staging kept for resume — \(message.prefix(160))")
+            Log("VaultGenerator: ⚠️ usage limit (session \(sessionID ?? "nil")); staging kept for resume")
             throw VaultError.usageLimit(message: message,
                                         resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
         }
@@ -237,7 +237,7 @@ actor VaultGenerator {
         do {
             try Self.swapStagingIntoVault(staging)
         } catch {
-            Log("VaultGenerator: ❌ swap failed, vault left intact — \(error)")
+            Log("VaultGenerator: ❌ swap failed, vault left intact — \(ErrorLabel(error))")
             CrashReporting.capture(error)                            // TODO(P2): structured `vault_swap_failed`
             throw error
         }

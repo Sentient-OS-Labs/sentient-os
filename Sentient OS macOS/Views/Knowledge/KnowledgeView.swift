@@ -247,7 +247,7 @@ struct KnowledgeView: View {
         do {
             try editText.write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            Log("Knowledge editor: save failed — \(error.localizedDescription)")
+            Log("Knowledge editor: save failed — \(ErrorLabel(error))")
             return   // stay in edit mode so the user's text isn't lost
         }
         savedText = editText
@@ -289,7 +289,7 @@ struct KnowledgeView: View {
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         } catch {
-            Log("Knowledge: delete failed — \(error.localizedDescription)")
+            Log("Knowledge: delete failed — \(ErrorLabel(error))")
             return
         }
         let lostSelection = selection == url || (selection?.path.hasPrefix(url.path + "/") ?? false)
@@ -318,7 +318,7 @@ struct KnowledgeView: View {
         do {
             try "# \(title)\n\n".write(to: url, atomically: true, encoding: .utf8)
         } catch {
-            Log("Knowledge: create note failed — \(error.localizedDescription)")
+            Log("Knowledge: create note failed — \(ErrorLabel(error))")
             return
         }
         reloadVault()
@@ -333,7 +333,7 @@ struct KnowledgeView: View {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         } catch {
-            Log("Knowledge: create folder failed — \(error.localizedDescription)")
+            Log("Knowledge: create folder failed — \(ErrorLabel(error))")
             return
         }
         reloadVault()

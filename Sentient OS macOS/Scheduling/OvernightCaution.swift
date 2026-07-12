@@ -69,8 +69,9 @@ enum OvernightCaution {
             UserDefaults.standard.set(data, forKey: key)
         }
         Log("OvernightCaution: recorded .\(kind.rawValue)")
-        CrashReporting.captureEvent("overnight.caution", level: .info,
-            tags: ["kind": kind.rawValue], fingerprint: ["overnight", "caution", kind.rawValue])
+        // Environment weather (signed out / offline / usage limit), not an app defect — product
+        // telemetry, so TelemetryDeck, never the Sentry issue feed (2026-07-12).
+        Analytics.signal("Scheduler.caution", parameters: ["kind": kind.rawValue])
     }
 
     /// One NWPathMonitor snapshot — the first path update arrives immediately; guarded so the

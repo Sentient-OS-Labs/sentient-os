@@ -277,11 +277,8 @@ final class OvernightScheduler {
         log.line("power: ac=\(PowerState.onACPower()) lowPower=\(PowerState.lowPowerMode) thermal=\(PowerState.thermalLabel)")
         if let blocked = PowerState.overnightBlockReason() {
             log.line("GATED — \(blocked); skipping this run (retry next night).")
+            // Telemetry, not a defect — TelemetryDeck counts it; Sentry stays quiet (2026-07-12).
             Analytics.signal("Scheduler.gated", parameters: ["reason": blocked])
-            CrashReporting.captureEvent("overnight.gated", level: .info,
-                tags: ["reason": blocked],
-                extra: ["thermal": PowerState.thermalLabel],
-                fingerprint: ["overnight", "gated", blocked])
             return
         }
 
@@ -314,11 +311,12 @@ final class OvernightScheduler {
                 case .deciding:             log.line("proactive: deciding what's worth doing…")
                 case .researching(let n):   log.line("proactive: researching + preparing \(n) item(s)…")
                 case .done(let ready):      log.line("proactive: ✅ cycle done — \(ready) card(s) ready.")
-                case .failed(let m):        log.line("proactive: FAILED — \(m)")
+                case .failed:               log.line("proactive: FAILED")   // reason withheld — it can embed codex output, and every log line is a Release breadcrumb
                 }
             }
         }) {
-            log.line("proactive cycle ended with a failure (summaries kept for retry): \(failure)")
+            // Detail withheld (can embed codex output); the morning caution + codex.failure carry the kind.
+            log.line("proactive cycle ended with a failure (summaries kept for retry)")
         }
 
         heart.cancel()
@@ -330,7 +328,7 @@ final class OvernightScheduler {
     private func cloudLeg(_ name: String, log: SchedulerLog, _ body: () async throws -> Void) async {
         log.line("\(name) leg…")
         do { try await body(); log.line("\(name) DONE") }
-        catch { log.line("\(name) FAILED: \((error as? LocalizedError)?.errorDescription ?? "\(error)")") }
+        catch { log.line("\(name) FAILED: \(ErrorLabel(error))") }
     }
 
     // MARK: - Time helpers

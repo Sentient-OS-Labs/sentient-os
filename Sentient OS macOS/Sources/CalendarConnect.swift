@@ -79,10 +79,10 @@ enum CalendarConnect {
             let env = try await CodexCLI.shared.run(inv)
             let answer = env.result.uppercased()
             let yes = answer.contains("YES") && !answer.contains("NO")
-            Log("CalendarConnect.probe: codex → \"\(env.result.prefix(40))\" ⇒ \(yes ? "connected" : "NOT connected")")
+            Log("CalendarConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
             return yes
         } catch {
-            Log("CalendarConnect.probe: ⚠️ \(error) — treating as NOT connected")
+            Log("CalendarConnect.probe: ⚠️ \(ErrorLabel(error)) — treating as NOT connected")
             return false
         }
     }
@@ -190,7 +190,7 @@ enum CalendarConnect {
             Log("CalendarConnect.fetchProactiveContext: ✅ \(text.count) chars of live calendar context")
             return text
         } catch {
-            Log("CalendarConnect.fetchProactiveContext: ⚠️ \(error) — proactive runs without calendar")
+            Log("CalendarConnect.fetchProactiveContext: ⚠️ \(ErrorLabel(error)) — proactive runs without calendar")
             return nil
         }
     }

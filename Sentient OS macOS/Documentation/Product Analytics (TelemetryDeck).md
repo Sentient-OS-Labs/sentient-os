@@ -59,14 +59,17 @@ existing B7 "length, not the command text" log — same discipline.
 | `Engine.reloaded` | `Ingestion/IterativeRun.swift` | GPU-wedge self-heal fired (`reason`: preemptive/reactive) |
 | `Scheduler.overnightStarted` / `.overnightCompleted` | `Scheduling/OvernightScheduler.swift` | 3am run began / finished |
 | `Scheduler.gated` | `Scheduling/OvernightScheduler.swift` | Nightly run skipped (`reason`: battery/lowPower/thermal) |
+| `Scheduler.caution` | `Scheduling/OvernightCaution.swift` | An unattended run failed for a knowable reason (`kind`: usageLimit/loggedOut/noInternet) — was Sentry's `overnight.caution` until the 2026-07-12 curation |
 | `Scheduler.autoEnabled` | `Scheduling/OvernightScheduler.swift` | The 18h auto-enable flipped the scheduler on |
 | `KnowledgeBase.built` / `.updated` / `.failed` | `Proactive/ProactiveCycle.swift` | First build / incremental update / error |
+| `KnowledgeBase.staleSwapAverted` | `Vault/VaultCloud.swift` | The freshness check aborted a swap over a mid-run editor save (working as designed — was Sentry's `vault.update.stale_swap_averted`) |
 | `Proactive.decided` | `Proactive/ProactiveCycle.swift` | # things-worth-doing found |
 | `Proactive.prepared` | `Proactive/ProactiveCycle.swift` | # survived research (+ # dropped) |
 | `Proactive.actionFired` | `Proactive/ProactiveExecutor.swift` | A user fired an action — `method` + `outcome` (the headline number) |
 | `Mirror.enabled` / `.pushed` / `.disabled` / `.regenerated` | `Cloud/MirrorClient.swift` | MCP mirror lifecycle |
 | `Command.submitted` | `Notch Magic/CommandCoordinator.swift` | "Do stuff for me" bar used (`source` + `mode`) |
 | `Source.connected` | `Views/{Gmail,Calendar}ConnectSheet.swift` | A source hooked up (`source`) |
+| `Notify.notAuthorized` | `System/Notify.swift` | A reminder was suppressed by a declined notification permission (`status`) — user choice, not a defect (was Sentry's `notify.not_authorized`) |
 
 Plus what the SDK sends automatically: app launches, sessions, new-install, and device/OS/version.
 

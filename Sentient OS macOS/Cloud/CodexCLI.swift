@@ -305,10 +305,14 @@ actor CodexCLI {
         do {
             return try await runInner(invocation, onLine: onLine)
         } catch {
-            Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
-                                  model: invocation.model, effort: invocation.effort,
-                                  resumed: invocation.resumeSessionID != nil,
-                                  durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+            // A cancelled Task is the user's STOP: the SIGTERM'd process exits non-zero, which
+            // masqueraded as a real exitFailure in Sentry (field-found 2026-07-12). Not a defect.
+            if !Task.isCancelled {
+                Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
+                                      model: invocation.model, effort: invocation.effort,
+                                      resumed: invocation.resumeSessionID != nil,
+                                      durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+            }
             throw error
         }
     }
@@ -379,10 +383,14 @@ actor CodexCLI {
             }
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
-            // §7.9: computer-use runs are the highest-risk executions (bypass-sandbox). Case name only.
-            Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                  model: .gpt56sol, effort: .low, resumed: false,
-                                  durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+            // §7.9: computer-use runs are the highest-risk executions (bypass-sandbox). Case name
+            // only — and never on a cancelled Task (the user's STOP kills codex → non-zero exit,
+            // which is not a failure; field-found polluting Sentry 2026-07-12).
+            if !Task.isCancelled {
+                Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
+                                      model: .gpt56sol, effort: .low, resumed: false,
+                                      durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+            }
             throw error
         }
     }
@@ -394,7 +402,7 @@ actor CodexCLI {
         let caseName: String
         let level: CrashReporting.DiagLevel
         switch error {
-        case CLIError.usageLimit:   (caseName, level) = ("usageLimit", .info)      // expected, not a defect
+        case CLIError.usageLimit:   return   // expected, not a defect — the amber caution + resume own it
         case CLIError.notAvailable: (caseName, level) = ("notAvailable", .warning)
         case CLIError.timedOut:     (caseName, level) = ("timedOut", .warning)
         case CLIError.launchFailed: (caseName, level) = ("launchFailed", .error)
