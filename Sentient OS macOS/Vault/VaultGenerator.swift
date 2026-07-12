@@ -152,7 +152,8 @@ actor VaultGenerator {
     /// mapping a usage limit to a resumable `VaultError.usageLimit` carrying the staging path. Shared
     /// by build + update so both get identical resume semantics.
     func runCodexInStaging(_ invocation: CodexCLI.Invocation, staging: URL,
-                           onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> CodexCLI.Envelope {
+                           onProgress: @Sendable @escaping (Progress) -> Void = { _ in },
+                           onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
         onProgress(.calling)
         let poller = Task.detached {
             while !Task.isCancelled {
@@ -163,7 +164,7 @@ actor VaultGenerator {
         }
         defer { poller.cancel() }
         do {
-            return try await CodexCLI.shared.run(invocation)
+            return try await CodexCLI.shared.run(invocation, onLine: onLine)
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
             Log("VaultGenerator: ⚠️ usage limit (session \(sessionID ?? "nil")); staging kept for resume — \(message.prefix(160))")
@@ -182,7 +183,8 @@ actor VaultGenerator {
     func generate(
         notes: [CloudNote],
         resume: ResumeToken? = nil,
-        onProgress: @Sendable @escaping (Progress) -> Void = { _ in }
+        onProgress: @Sendable @escaping (Progress) -> Void = { _ in },
+        onLine: (@Sendable (String) -> Void)? = nil
     ) async throws -> Result {
         onProgress(.gathering(notes.count))
         let fm = FileManager.default
@@ -220,7 +222,7 @@ actor VaultGenerator {
 
         Log("VaultGenerator: \(resume == nil ? "starting" : "RESUMING") initial generation — \(notes.count) summaries → \(staging.lastPathComponent)")
 
-        let envelope = try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress)
+        let envelope = try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine)
 
         let (notes, folders) = Self.census(of: staging)
         Log("VaultGenerator: codex finished (turns \(envelope.numTurns ?? -1), \(envelope.durationMS ?? -1)ms) — \(notes) notes / \(folders) folders in staging")

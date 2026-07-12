@@ -47,7 +47,7 @@ actor GiftLetter {
     /// no stray note ever lingers (or gets mirrored). Hermetic — no web, no user MCP. Throws on
     /// no-vault / empty / usage-limit / failure.
     @discardableResult
-    func generate() async throws -> String {
+    func generate(onLine: (@Sendable (String) -> Void)? = nil) async throws -> String {
         let vault = VaultGenerator.vaultRoot
         let fm = FileManager.default
         guard fm.fileExists(atPath: vault.path) else { throw GiftError.noVault }
@@ -67,7 +67,7 @@ actor GiftLetter {
 
         Log("GiftLetter: writing the welcome gift from the knowledge base at \(vault.lastPathComponent)…")
         do {
-            let env = try await CodexCLI.shared.run(inv)
+            let env = try await CodexCLI.shared.run(inv, onLine: onLine)
             // The letter is the file the model wrote; fall back to its final message if it skipped it.
             let fromFile = (try? String(contentsOf: giftFile, encoding: .utf8)) ?? ""
             let letter = Self.cleanMarkdown(fromFile.isEmpty ? env.result : fromFile)

@@ -22,6 +22,9 @@ step keeps them for retry). The results land in `ProactiveResearch.latest()` (Us
 home's For You deck renders as real cards. **Knowledge-base-only mode (free/go plans) skips decide +
 research entirely** (an empty ready-list is saved so stale cards can't linger); the KB → mirror →
 gift → wipe legs still run — see `Plan Gate (CodexAuth & Knowledge-Base-Only).md`.
+`run(progress:onLine:)` also streams codex's humanized play-by-play from every cloud stage (KB
+build/update · gift · judge · research) — the takeover's live "THINKING" line (see the Progress
+section of `Vault Generation (Stage 2).md`); the scheduler passes no `onLine` and streams nothing.
 
 ## PART 1 — What the judge does
 
