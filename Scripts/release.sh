@@ -5,7 +5,8 @@
 # YOU build the DMG yourself (Xcode → Archive → Distribute App → Direct Distribution → notarize →
 # a .dmg containing the notarized .app). This script takes that finished DMG and does the rest:
 #
-#   validate it's really notarized → EdDSA-sign → generate appcast → GitHub Release → Homebrew cask
+#   validate it's really notarized → verify its dSYMs are on Sentry → EdDSA-sign → generate
+#   appcast → GitHub Release → Homebrew cask
 #
 # Run on JESAI'S Mac: the EdDSA private seed lives in THIS Mac's login Keychain, and the GitHub
 # release + cask push ride the already-authed `gh`. Notarization is NOT done here (you do it in
@@ -13,8 +14,10 @@
 #
 # ── ONE-TIME SETUP (done) ─────────────────────────────────────────────────────────────────────
 #   EdDSA key:  ./release.sh keys   → prints SUPublicEDKey (already baked into ../Info.plist).
-#               Minted 2026-07-07; private seed stays in the Keychain, NEVER in the repo. Back it
-#               up: `generate_keys -x <file>` → 1Password.
+#               Minted 2026-07-07; private seed stays in the Keychain, NEVER in the repo.
+#               ⚠️ TODO (pre-launch): back the seed up — `generate_keys -x <file>` → 1Password
+#               (shared with Aditya). NOT verified done as of 2026-07-12; the Keychain copy on
+#               Jesai's Mac may be the only one.
 #   Sparkle CLI tools resolve automatically from the SwiftPM checkout in DerivedData (or set
 #   SPARKLE_BIN, or `brew install --cask sparkle`).
 #
@@ -97,7 +100,7 @@ echo "────────────────────────�
 rm -rf "$BUILD_DIR"; mkdir -p "$BUILD_DIR"
 
 # ── 1. Mount, VALIDATE (signed + notarized + stapled), read the shipped version ──────────────────
-echo "→ [1/5] Validating the DMG and reading its version…"
+echo "→ [1/6] Validating the DMG and reading its version…"
 MOUNT="$(mktemp -d)"
 hdiutil attach "$INPUT_DMG" -nobrowse -readonly -mountpoint "$MOUNT" >/dev/null
 trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
@@ -120,6 +123,11 @@ TEAM="$(codesign -dv --verbose=4 "$APP" 2>&1 | awk -F= '/TeamIdentifier/{print $
 SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
 BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
 EDKEY="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+
+# The binary's UUIDs (one per arch) — read while mounted; step 2 matches dSYMs against them.
+EXEC_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Contents/Info.plist")"
+APP_UUIDS="$(dwarfdump --uuid "$APP/Contents/MacOS/$EXEC_NAME" | awk '{print $2}')"
+[[ -n "$APP_UUIDS" ]] || { echo "❌ Couldn't read the app binary's UUIDs. Aborting."; exit 1; }
 [[ "$EDKEY" == "$PLACEHOLDER_EDKEY" ]] && {
   echo "❌ This build carries the PLACEHOLDER EdDSA key — it could never verify updates. Rebuild with the real key. Aborting."; exit 1; }
 
@@ -127,17 +135,49 @@ hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
 trap - EXIT
 echo "   ✅ notarized · team $TEAM · version $SHORT ($BUILD)"
 
+# ── 2. Ensure THIS build's crash symbols (dSYMs) are on Sentry ────────────────────────────────────
+# The Xcode build phase uploads dSYMs at Archive time but fails SILENTLY by design (OSS clones
+# must build without our token). This is the loud seatbelt: find the local dSYMs matching the
+# DMG's binary UUIDs and (re-)upload them — idempotent, sentry-cli skips what the server has.
+# No symbols = every crash from this build is unreadable FOREVER (the beta-wave failure), so a
+# miss ABORTS the release. Doc: Documentation/Crash Reporting (Sentry).md
+if [[ -n "${SKIP_SENTRY:-}" ]]; then
+  echo "→ [2/6] Skipping the Sentry symbol check (SKIP_SENTRY set)."
+else
+  echo "→ [2/6] Verifying this build's crash symbols are on Sentry…"
+  command -v sentry-cli >/dev/null || { echo "❌ sentry-cli not found (brew install getsentry/tools/sentry-cli), or SKIP_SENTRY=1 to knowingly release without crash symbols. Aborting."; exit 1; }
+  [[ -f "$REPO_ROOT/.sentryclirc" || -n "${SENTRY_AUTH_TOKEN:-}" ]] || { echo "❌ No .sentryclirc at $REPO_ROOT and no SENTRY_AUTH_TOKEN — can't talk to Sentry. Aborting."; exit 1; }
+  DSYM_DIR=""
+  for d in "${DSYM_SEARCH:-$HOME/Library/Developer/Xcode/Archives}"/*/*.xcarchive/dSYMs; do
+    [[ -d "$d" ]] || continue
+    have="$(find "$d" -type f -path '*/Resources/DWARF/*' -exec dwarfdump --uuid {} + 2>/dev/null | awk '{print $2}')"
+    all=1
+    while read -r u; do grep -Fqxi "$u" <<<"$have" || { all=0; break; }; done <<<"$APP_UUIDS"
+    [[ $all == 1 ]] && { DSYM_DIR="$d"; break; }
+  done
+  [[ -n "$DSYM_DIR" ]] || {
+    echo "❌ No local dSYMs match this DMG's binary UUIDs:"
+    sed 's/^/     /' <<<"$APP_UUIDS"
+    echo "   Searched ~/Library/Developer/Xcode/Archives (override the root: DSYM_SEARCH=<dir>)."
+    echo "   Was this DMG archived on this Mac? Without its dSYM every crash it ever has is"
+    echo "   unreadable, permanently. Not shipping that. Aborting."; exit 1; }
+  echo "   dSYMs: $DSYM_DIR"
+  (cd "$REPO_ROOT" && sentry-cli debug-files upload --include-sources "$DSYM_DIR") || {
+    echo "❌ Sentry symbol upload failed. Aborting."; exit 1; }
+  echo "   ✅ symbols on Sentry for $SHORT ($BUILD)"
+fi
+
 TAG="$SHORT"
 STAGE="$BUILD_DIR/appcast"; mkdir -p "$STAGE"
 DMG="$STAGE/SentientOS-$SHORT.dmg"      # canonical, space-free asset name → clean appcast URLs
 cp "$INPUT_DMG" "$DMG"
 
-# ── 2. EdDSA-sign the DMG (explicit — generate_appcast re-signs, this prints + verifies the sig) ──
-echo "→ [2/5] EdDSA-signing the DMG…"
+# ── 3. EdDSA-sign the DMG (explicit — generate_appcast re-signs, this prints + verifies the sig) ──
+echo "→ [3/6] EdDSA-signing the DMG…"
 "$BIN/sign_update" "$DMG" --account "$KEYCHAIN_ACCOUNT"
 
-# ── 3. Generate the appcast (enclosure URL points at the GitHub Release asset) ────────────────────
-echo "→ [3/5] Generating appcast…"
+# ── 4. Generate the appcast (enclosure URL points at the GitHub Release asset) ────────────────────
+echo "→ [4/6] Generating appcast…"
 FEED_PREFIX="https://github.com/$GH_REPO/releases/download/$TAG/"
 "$BIN/generate_appcast" "$STAGE" \
   --account "$KEYCHAIN_ACCOUNT" \
@@ -145,18 +185,18 @@ FEED_PREFIX="https://github.com/$GH_REPO/releases/download/$TAG/"
   -o "$STAGE/appcast.xml"
 echo "   appcast → $STAGE/appcast.xml"
 
-# ── 4. GitHub Release (uploads the DMG the appcast points at) ─────────────────────────────────────
-echo "→ [4/5] Creating GitHub release ${TAG}…"
+# ── 5. GitHub Release (uploads the DMG the appcast points at) ─────────────────────────────────────
+echo "→ [5/6] Creating GitHub release ${TAG}…"
 gh release create "$TAG" "$DMG" \
   --repo "$GH_REPO" --title "$APP_NAME $SHORT" \
   --notes "Sentient OS $SHORT ($BUILD)" || \
   echo "   (release may already exist — upload manually with: gh release upload $TAG \"$DMG\")"
 
-# ── 5. Bump + push the Homebrew cask (own tap) ────────────────────────────────────────────────────
+# ── 6. Bump + push the Homebrew cask (own tap) ────────────────────────────────────────────────────
 if [[ -n "${SKIP_CASK:-}" ]]; then
-  echo "→ [5/5] Skipping Homebrew cask bump (SKIP_CASK set)."
+  echo "→ [6/6] Skipping Homebrew cask bump (SKIP_CASK set)."
 else
-  echo "→ [5/5] Updating Homebrew cask…"
+  echo "→ [6/6] Updating Homebrew cask…"
   bump_cask || echo "   ⚠️  cask bump failed — update $TAP_REPO/Casks/sentient-os.rb by hand (version \"$SHORT\" + the sha256 of $DMG), then push."
 fi
 
