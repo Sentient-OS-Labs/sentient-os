@@ -66,7 +66,13 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
 `modelMissing`, the `realCards` flag, and the `onAnalyze`/`onShowDevTools` callbacks) and owns the
 HomeView ⟷ ProcessingView cross-fade. **Analyze Now runs the shared `SourceSelection` picks through
 `ProcessingView` `.auto`** — with real cards ON it's the FULL cycle (read → `ProactiveCycle`: KB →
-mirror → gift → proactive → wipe), byte-for-byte what the 3am scheduler runs. `RootView` also owns
+mirror → gift → proactive → wipe), byte-for-byte what the 3am scheduler runs. During the cycle's
+cloud tail the takeover shows the phase line plus codex's own reasoning as a one-line mono ticker
+under a "THINKING" whisper (`ProcessingView.liveThought`, fed by `ProactiveCycle`'s `onLine` hook —
+shell `$ ` lines filtered as noise, thoughts promoted at a 1.4s cadence, cleared per phase), and the
+footer sets expectations in three lines: the ~15-minute estimate (with the 10-minute warm flip), the
+keep-Sentient-open/lid-up instruction, and the reassurance that 3am runs wake a lid-shut, plugged-in
+Mac on their own. `RootView` also owns
 **the onboarding finale**: when the first analysis finishes, onboarding dissolves into the home and
 the Knowledge window (the Constellation) opens ON TOP a beat later — every user's first sight of
 their knowledge base, whatever their plan. ProcessingView's "Analysis complete" screen

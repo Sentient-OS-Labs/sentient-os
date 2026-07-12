@@ -101,10 +101,11 @@ actor VaultCloud {
 
     @discardableResult
     func create(notes: [CloudNote],
-                onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void = { _ in }) async throws -> VaultGenerator.Result {
+                onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void = { _ in },
+                onLine: (@Sendable (String) -> Void)? = nil) async throws -> VaultGenerator.Result {
         guard !notes.isEmpty else { throw CloudError.empty }
         do {
-            let result = try await VaultGenerator().generate(notes: notes, resume: createResume, onProgress: onProgress)
+            let result = try await VaultGenerator().generate(notes: notes, resume: createResume, onProgress: onProgress, onLine: onLine)
             setCreateResume(nil)
             await markDirty()
             return result
@@ -123,7 +124,7 @@ actor VaultCloud {
     /// corrupt the real vault — worst case the staging copy is discarded (or kept for a durable
     /// resume). This replaced the old in-place edit + `.bak` restore (B1), which is now obsolete.
     @discardableResult
-    func update(notes: [CloudNote]) async throws -> Int {
+    func update(notes: [CloudNote], onLine: (@Sendable (String) -> Void)? = nil) async throws -> Int {
         guard !notes.isEmpty else { return 0 }
         let fm = FileManager.default
         let vault = VaultGenerator.vaultRoot
@@ -168,7 +169,7 @@ actor VaultCloud {
 
         Log("VaultCloud.update: merging \(notes.count) notes in staging (\(updateResume == nil ? "fresh" : "resume"))…")
         do {
-            let envelope = try await VaultGenerator().runCodexInStaging(invocation, staging: staging)
+            let envelope = try await VaultGenerator().runCodexInStaging(invocation, staging: staging, onLine: onLine)
             // Freshness check (B11): did the live vault change under us — i.e. did the user save a note
             // in the Knowledge editor during the run? If so, our staging snapshot is stale and swapping
             // would CLOBBER their edit. Discard staging instead; the notes stay in CycleStore and the

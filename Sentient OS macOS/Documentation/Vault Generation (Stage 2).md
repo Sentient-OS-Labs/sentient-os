@@ -1,6 +1,6 @@
 # Vault Generation — Stage 2 (the agentic build)
 
-`VaultGenerator.generate(notes:resume:onProgress:)` turns the on-device survivor summaries
+`VaultGenerator.generate(notes:resume:onProgress:onLine:)` turns the on-device survivor summaries
 (passed as `[CloudNote]`) into the markdown knowledge base at `~/Sentient OS - Knowledge Base/`,
 through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.6-sol` at **`.high` effort**
 (every plan — the initial build's `.xhigh` override was retired 2026-07-10, it thinks far too
@@ -59,9 +59,16 @@ that whole choreography, B1, is now deleted.)*
 
 ## Progress
 
-Progress is the filesystem itself: a 2s poll of the staging dir's `.md` count →
-`Progress.writing(notes:)` → the caller's status line (Dev Tools shows "… writing N notes"; the
-home's takeover shows the preparing phase). No CLI stream parsing.
+Two channels, both optional:
+- **The filesystem poller** — a 2s poll of the staging dir's `.md` count → `Progress.writing(notes:)`
+  → the caller's status line (Dev Tools shows "… writing N notes").
+- **The live thought stream (2026-07-11)** — `generate`/`runCodexInStaging` (and
+  `VaultCloud.create/update`) take an optional `onLine`, forwarded to `CodexCLI.run(_:onLine:)`,
+  whose `humanLine` adapter reduces the `--json` events to readable play-by-play (reasoning ·
+  `$ commands` · tool calls · web searches). `ProactiveCycle.run(progress:onLine:)` threads it from
+  EVERY cloud stage (build/update · gift · judge · research) into the takeover's "THINKING" ticker
+  (`ProcessingView.liveThought`) — which drops the `$ ` shell lines as noise and promotes one quiet
+  mono line at a 1.4s cadence. The 3am scheduler passes nothing.
 
 ## The prompt
 

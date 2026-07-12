@@ -116,7 +116,8 @@ actor ProactiveResearch {
     /// recipe). Read-only — it researches and stages, it NEVER fires. Verify-only — it never adds a new
     /// item. Returns the ready + dropped split; throws on no-items / no-vault / usage-limit / failure.
     func researchAndPrepare(items: [ActionItem], notes: [CloudNote] = [], now: Date = Date(),
-                            calendarContext: String? = nil) async throws -> ReadyResult {
+                            calendarContext: String? = nil,
+                            onLine: (@Sendable (String) -> Void)? = nil) async throws -> ReadyResult {
         guard !items.isEmpty else { throw ResError.noItems }
         let recent = Proactive.recent(from: notes, now: now)   // the SAME last-week corpus PART 1 saw
 
@@ -138,7 +139,7 @@ actor ProactiveResearch {
 
         Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, Gmail MCP + web, never fire)…")
         do {
-            let env = try await CodexCLI.shared.run(inv)
+            let env = try await CodexCLI.shared.run(inv, onLine: onLine)
             let parsed = Self.parse(env.result)
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
             let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)

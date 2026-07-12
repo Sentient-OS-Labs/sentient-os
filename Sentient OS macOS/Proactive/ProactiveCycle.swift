@@ -15,7 +15,8 @@
 //
 //  The read leg itself stays with the caller (ProcessingView's takeover UI / the scheduler's keep-
 //  awake loop). The wipe happens ONLY on a fully successful chain — a failure leaves the summaries in
-//  place so a retry can pick up where it stopped. `progress` carries human-readable phases for the UI.
+//  place so a retry can pick up where it stopped. `progress` carries human-readable phases for the UI;
+//  `onLine` streams codex's live play-by-play (the takeover's thought line — unused by the 3am run).
 //
 //  Key method: run(progress:) → String?  (nil = cycle completed; a message = the step that failed)
 //
@@ -54,9 +55,12 @@ actor ProactiveCycle {
     /// `scheduled` marks the UNATTENDED 3am run: its failures additionally classify into the
     /// morning-after caution (OvernightCaution → the home's banner); a watched Analyze Now doesn't
     /// (the takeover UI already shows those live).
+    /// `onLine` streams codex's humanized play-by-play (reasoning · commands · tool calls) from
+    /// every cloud stage — the takeover's live thought line. nil (the 3am run) streams nothing.
     @discardableResult
     func run(scheduled: Bool = false,
-             progress: @escaping @Sendable (ProactiveCyclePhase) -> Void) async -> String? {
+             progress: @escaping @Sendable (ProactiveCyclePhase) -> Void,
+             onLine: (@Sendable (String) -> Void)? = nil) async -> String? {
         PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
         defer { PipelineActivity.end() }
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
@@ -71,8 +75,8 @@ actor ProactiveCycle {
         progress(.knowledgeBase(exists ? "Updating your knowledge…"
                                        : "Creating your perfect knowledge base from everything we've analyzed…"))
         do {
-            if exists { _ = try await VaultCloud.shared.update(notes: notes) }
-            else      { _ = try await VaultCloud.shared.create(notes: notes) }
+            if exists { _ = try await VaultCloud.shared.update(notes: notes, onLine: onLine) }
+            else      { _ = try await VaultCloud.shared.create(notes: notes, onLine: onLine) }
             Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
                              parameters: ["newSummaries": "\(notes.count)"])
         } catch {
@@ -91,7 +95,7 @@ actor ProactiveCycle {
         let giftPreexisted = GiftLetter.latest() != nil
         if !giftPreexisted {
             progress(.knowledgeBase("Writing your welcome…"))
-            do { _ = try await GiftLetter.shared.generate() }
+            do { _ = try await GiftLetter.shared.generate(onLine: onLine) }
             catch { Log("GiftLetter: welcome skipped — \(Self.msg(error))") }
         }
 
@@ -109,7 +113,7 @@ actor ProactiveCycle {
             progress(.deciding)
             let items: [ActionItem]
             do {
-                items = try await Proactive.shared.findActionItems(from: notes, calendarContext: calCtx)
+                items = try await Proactive.shared.findActionItems(from: notes, calendarContext: calCtx, onLine: onLine)
             } catch Proactive.ProError.noRecent {
                 items = []                                   // nothing recent enough — clear cards, still success
             } catch {
@@ -124,7 +128,7 @@ actor ProactiveCycle {
             } else {
                 progress(.researching(items.count))
                 do {
-                    let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx)
+                    let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx, onLine: onLine)
                     // Core tier; floatValue = the staged-card count, so a dashboard Sum is the
                     // "suggestions Sentient has prepared across the world" total.
                     Analytics.signal("Proactive.prepared", parameters: [

@@ -109,7 +109,8 @@ actor Proactive {
     /// does not verify, write, or notify. Throws on no-recent / usage-limit / failure so the caller
     /// can surface a clear status.
     func findActionItems(from notes: [CloudNote], now: Date = Date(),
-                         calendarContext: String? = nil) async throws -> [ActionItem] {
+                         calendarContext: String? = nil,
+                         onLine: (@Sendable (String) -> Void)? = nil) async throws -> [ActionItem] {
         // 1. Window the summaries to the last N days (shared with PART 2 via Self.recent).
         let recent = Self.recent(from: notes, now: now)
         guard !recent.isEmpty else { throw ProError.noRecent }
@@ -133,7 +134,7 @@ actor Proactive {
 
         Log("Proactive.judge: \(recent.count) summaries in the last \(Self.lookbackDays)d → asking Codex (summaries-only, hermetic)…")
         do {
-            let env = try await CodexCLI.shared.run(inv)
+            let env = try await CodexCLI.shared.run(inv, onLine: onLine)
             let items = Array(Self.parse(env.result).prefix(Self.maxItems))
             Log("Proactive.judge: ✅ \(items.count) action item(s) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
             #if DEBUG   // B7: title/action/importance/sources are the user's life — DEBUG-only so it can
