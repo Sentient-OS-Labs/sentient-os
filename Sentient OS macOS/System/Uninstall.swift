@@ -56,6 +56,7 @@ enum Uninstall {
                     progress: @escaping @MainActor (Stage) -> Void = { _ in },
                     helperDecision: @escaping @MainActor () async -> HelperChoice = { .skip }) async -> Bool {
         Analytics.countUninstall()   // fire-and-forget; the teardown never waits on the network
+        appState?.isUninstalling = true   // the home clears its cards + won't re-deal off the defaults wipe
 
         // Quiet the scheduler FIRST so nothing re-arms a wake while the daemon comes down. The
         // flags are snapshotted so a cancel at the password prompt restores them untouched.
@@ -82,6 +83,7 @@ enum Uninstall {
                 if schedulerFlags.dev { d.set(true, forKey: OvernightScheduler.enabledKey) }
                 if schedulerFlags.prod { d.set(true, forKey: OvernightScheduler.prodEnabledKey) }
                 appState?.scheduler.reevaluate()
+                appState?.isUninstalling = false   // the home re-deals its deck
                 Log("Uninstall: cancelled at the admin prompt — nothing removed")
                 return false
             }

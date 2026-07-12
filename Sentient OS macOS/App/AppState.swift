@@ -25,6 +25,12 @@ final class AppState {
 
     var status: Status = .idle
 
+    /// True while Uninstall.run is tearing the app down (flipped back only by a cancel). The
+    /// home reads it to keep the deck empty: the teardown's defaults wipe re-publishes every
+    /// @AppStorage (including the card deck's), and without this gate the home re-deals a
+    /// fresh deck mid-teardown. In-memory on purpose — a persisted key would pollute the wipe.
+    var isUninstalling = false
+
     /// The in-app scheduler — only ever runs while the app is alive (DEV TOOLS "Scheduled run").
     let scheduler = OvernightScheduler()
 

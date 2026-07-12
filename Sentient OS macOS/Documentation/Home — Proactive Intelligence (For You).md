@@ -85,27 +85,35 @@ holds the action and fires it on Continue. See `Permission Guide (First-Use Gran
 
 ## Real cards vs the demo deck — `ForYouModel`
 
-The home has two modes, flipped by the dev "REAL FOR-YOU CARDS" toggle (`dev.proactive.realCards`,
-ON by default):
+The deck is the 3-way dev mode `BriefingDeck` (Dev Tools → Proactive Cards…; `dev.proactive.deck`):
+`.real` ships as the default (installs whose legacy `dev.proactive.realCards` bool was OFF default
+to the jesai deck — those devs were pitching), `.jesai` / `.launch` are the hard-coded demo decks:
 
-- **Real mode (the default):** `beginVisit` builds the deck from the persisted proactive results — the
-  welcome **`GiftLetter`** envelope first (sealed, wax-stamped, addressed "For \<macFirstName\>" from
+- **Real mode (the default):** `beginVisit` builds the deck from the persisted proactive results —
+  one card per `PreparedAction` in `ProactiveResearch.latest()`
+  (`Briefing(from:)` — method accent + `METHOD · TARGET` kicker, the `card_summary` body, the
+  LLM-written fire button), with the welcome **`GiftLetter`** envelope riding LAST (the
+  bottom-right scatter perch; sealed, wax-stamped, addressed "For \<macFirstName\>" from
   the macOS account — "For you" when nameless; generated once from the user's own
   knowledge base, and retired when the NEXT full cycle replaces the deck — its letter footer carries
   the **Save to Desktop** keepsake, a branded share PNG revealed in Finder; see
-  `Proactive Intelligence (Judge).md` §The welcome gift), then one card per `PreparedAction` in `ProactiveResearch.latest()`
-  (`Briefing(from:)` — method accent + `METHOD · TARGET` kicker, the `card_summary` body, the
-  LLM-written fire button). **Firing is real:** `runReal` routes through
+  `Proactive Intelligence (Judge).md` §The welcome gift). **Firing is real:** `runReal` routes through
   `ProactiveExecutor.fire`, streams codex's live play-by-play into the card (`liveLines`, with a
   per-card **STOP** that terminates the codex process), flies the card away on success and removes it
   from the persisted set; a failure returns it to the offer state for edit + retry. **Drafts are
   editable:** the letter view's draft block is a `TextEditor` for real cards — Save persists the edit
   into `preparedContent` (both in-memory and in `ProactiveResearch.latest()`), so what the user edited
   is verbatim what fires.
-- **Demo mode (toggle OFF — pitch mode):** the hard-coded investor showcase deck
-  (`Briefing.demo` — Charles/EWOR · Anthos · AIM · SSN prep · Supabase · the welcome letter), playing
-  the scripted `workLog` theater. Parked/alternate cards live commented at the bottom of
-  `Briefing.swift` as a swap-in library.
+- **Demo modes (pitch / launch-video):** the hard-coded decks — `Briefing.jesaiDemo` (the investor
+  showcase: Charles/EWOR · Anthos · AIM · SSN prep · Supabase · the welcome letter) and
+  `Briefing.launchDemo` (the audience-safe launch-video set) — playing the scripted `workLog`
+  theater. Parked/alternate cards live commented at the bottom of `Briefing.swift` as a swap-in
+  library.
+- **Mid-uninstall, the deck is off the table:** `Uninstall.run` raises `AppState.isUninstalling`,
+  and the home clears its cards (`ForYouModel.clear()`) and refuses every re-deal while it's up —
+  the teardown's `removePersistentDomain` re-publishes EVERY @AppStorage key (the deck's included),
+  and without the gate the home dealt a fresh demo deck behind the farewell sheet (field-found
+  2026-07-11). A cancelled uninstall deals the deck back in.
 
 ## The nav popovers — `Views/HomePopovers.swift`
 

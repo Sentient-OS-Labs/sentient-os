@@ -3,9 +3,10 @@
 //  Sentient OS macOS
 //
 //  The farewell sheet (Settings → System → Uninstall Sentient…). Four phases: the farewell
-//  (the two-college-students note, Share Feedback via mailto, Keep Sentient, and the red
-//  Uninstall), the working teardown (Uninstall.Stage whispers over a quiet spinner), the
-//  helper-password interstitial (Enter Password / Skip / Cancel — shown only when the admin
+//  (the two-college-students note, the what-gets-removed manifest, Keep Sentient / the red
+//  Uninstall as a uniform pill pair, Email the Founders below, the GitHub mark bottom-right),
+//  the working teardown (Uninstall.Stage whispers over a quiet spinner), the helper-password
+//  interstitial (Enter Password / Skip, Cancel as a quiet link — shown only when the admin
 //  prompt is declined), and the gone screen (drag Sentient to the Trash, then Quit via
 //  Uninstall.finishAndQuit). Drives System/Uninstall.swift; the teardown itself lives there.
 //
@@ -30,20 +31,16 @@ struct UninstallView: View {
     fileprivate init(previewPhase: Phase) { _phase = State(initialValue: previewPhase) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Group {
-                switch phase {
-                case .farewell:     farewell
-                case .working:      working
-                case .helperPrompt: helperPrompt
-                case .gone:         gone
-                }
+        Group {
+            switch phase {
+            case .farewell:     farewell
+            case .working:      working
+            case .helperPrompt: helperPrompt
+            case .gone:         gone
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 34).padding(.top, 30).padding(.bottom, 26)
-
-            trustFooter
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 34).padding(.top, 30).padding(.bottom, 24)
         .frame(width: 470)
         .background(Theme.bg)
         .preferredColorScheme(.dark)
@@ -55,21 +52,65 @@ struct UninstallView: View {
 
     private var farewell: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps("Before you go", size: 9.5, tracking: 2.4, color: .white.opacity(0.7), weight: .semibold)
-            Text("Sorry to see you go.")
+            Text("Before you go.")
                 .display(24).foregroundStyle(.white)
-                .padding(.top, 12)
-            prose("We are two college students who built Sentient in the open, because we believed your Mac could truly know you while keeping everything private. We are sad to see you leave, and we would genuinely love to hear what did not land for you.")
+            prose("We’re two college students who built Sentient to push the bounds of what private, on-device LLM inference can do: understand your entire life, and proactively offer to help with anything you have going on. That future should be accessible to everyone, so Sentient is 100% open source and free forever.")
                 .padding(.top, 14)
-            prose("Uninstalling removes everything Sentient made on this Mac: the on-device model, your knowledge base, the private cloud copy your AIs read, the overnight wake helper, and every setting. Your own files are never touched.")
+            prose("Something here didn’t land for you, and we would love to hear what. We read every note.")
                 .padding(.top, 10)
-            HStack(spacing: 10) {
-                feedbackButton
-                Spacer()
-                QuietPillButton(title: "Keep Sentient") { dismiss() }
-                DangerPillButton(title: "Uninstall Sentient") { beginUninstall() }
+
+            MonoCaps("Uninstalling removes", size: 9, tracking: 2.2, color: Theme.Ink.label, weight: .semibold)
+                .padding(.top, 22)
+            Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 9) {
+                GridRow {
+                    manifestRow("cpu", "The on-device model")
+                    manifestRow("book.closed", "Your knowledge base")
+                }
+                GridRow {
+                    manifestRow("cloud", "The private cloud copy")
+                    manifestRow("moon.zzz", "The overnight wake helper")
+                }
             }
-            .padding(.top, 24)
+            .padding(.top, 12)
+
+            HStack(spacing: 10) {
+                FarewellPill(title: "Keep Sentient", style: .quiet) { dismiss() }
+                FarewellPill(title: "Uninstall Sentient", style: .danger) { beginUninstall() }
+            }
+            .padding(.top, 26)
+
+            feedbackButton
+                .frame(maxWidth: .infinity)
+                .overlay(alignment: .trailing) { githubButton }
+                .padding(.top, 16)
+        }
+    }
+
+    /// The quiet GitHub mark in the sheet's bottom-right corner — the receipt for the
+    /// "100% open source" line above it.
+    private var githubButton: some View {
+        Button {
+            NSWorkspace.shared.open(URL(string: "https://github.com/Sentient-OS-Labs/sentient-os")!)
+        } label: {
+            Image("GitHubMark")
+                .resizable().scaledToFit()
+                .frame(width: 15, height: 15)
+                .foregroundStyle(Theme.Ink.label)
+                .padding(4)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleStyle())
+        .help("Sentient OS on GitHub")
+    }
+
+    /// One line of the what-gets-removed manifest — a quiet symbol + body ink.
+    private func manifestRow(_ symbol: String, _ text: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.Ink.label)
+                .frame(width: 15)
+            Text(text).font(.system(size: 12.5)).foregroundStyle(Theme.Ink.body)
         }
     }
 
@@ -104,13 +145,25 @@ struct UninstallView: View {
             prose("Sentient set up a small system helper so it could wake your Mac for the overnight run. macOS asks for your password to remove it; that is the same prompt you saw when it was installed. You can also skip it for now, and Sentient will still clear everything else.")
                 .padding(.top, 14)
             HStack(spacing: 10) {
-                QuietPillButton(title: "Cancel Uninstall") { helperResolver?(.cancel) }
-                Spacer()
-                QuietPillButton(title: "Skip for Now") { helperResolver?(.skip) }
-                BrightPillButton(title: "Enter Password") { helperResolver?(.retry) }
+                FarewellPill(title: "Skip for Now", style: .quiet) { helperResolver?(.skip) }
+                FarewellPill(title: "Enter Password", style: .bright) { helperResolver?(.retry) }
             }
-            .padding(.top, 24)
+            .padding(.top, 26)
+            quietLink("Cancel Uninstall") { helperResolver?(.cancel) }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 16)
         }
+    }
+
+    /// The centered quiet text action that sits under a pill pair (Cancel Uninstall here;
+    /// the feedback button is its sibling on the farewell and gone screens).
+    private func quietLink(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Theme.Ink.bright.opacity(0.9))
+        }
+        .buttonStyle(PressScaleStyle())
     }
 
     // MARK: - Phase 4 · gone
@@ -121,17 +174,18 @@ struct UninstallView: View {
             Text("Sentient is gone from this Mac.")
                 .display(24).foregroundStyle(.white)
                 .padding(.top, 12)
-            prose("Everything Sentient made here has been removed. To finish, drag the Sentient OS app from your Applications folder to the Trash. Thank you for giving us a try; it meant a lot to the two of us.")
+            prose("Everything Sentient made here has been removed. To finish, drag the Sentient OS app from your Applications folder to the Trash. Thank you for giving Sentient a try; it meant a lot to the two of us.")
                 .padding(.top, 14)
             HStack(spacing: 10) {
-                feedbackButton
-                Spacer()
-                QuietPillButton(title: "Show App in Finder") {
+                FarewellPill(title: "Show App in Finder", style: .quiet) {
                     NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
                 }
-                BrightPillButton(title: "Quit Sentient") { Uninstall.finishAndQuit() }
+                FarewellPill(title: "Quit Sentient", style: .bright) { Uninstall.finishAndQuit() }
             }
-            .padding(.top, 24)
+            .padding(.top, 26)
+            feedbackButton
+                .frame(maxWidth: .infinity)
+                .padding(.top, 16)
         }
     }
 
@@ -171,7 +225,7 @@ struct UninstallView: View {
         Button(action: shareFeedback) {
             HStack(spacing: 6) {
                 Image(systemName: feedbackCopied ? "checkmark" : "envelope").font(.system(size: 10))
-                Text(feedbackCopied ? "feedback@sentient-os.ai copied" : "Share feedback")
+                Text(feedbackCopied ? "feedback@sentient-os.ai copied" : "Email the founders")
                     .font(.system(size: 11.5))
             }
             .foregroundStyle(Theme.Ink.bright.opacity(0.9))
@@ -213,56 +267,54 @@ struct UninstallView: View {
         Task { try? await Task.sleep(for: .seconds(4)); feedbackCopied = false }
     }
 
-    /// The same trust ribbon Settings rides — continuity to the very last screen.
-    private var trustFooter: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "shield").font(.system(size: 10.5)).foregroundStyle(Theme.Ink.label)
-            Text("Private by design. Your files never leave this Mac.")
-                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.label)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 13)
-        .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.05)).frame(height: 1) }
-    }
 }
 
-/// QuietPillButton's destructive sibling — red ink on a faint red wash. Local on purpose:
-/// Settings' small SettingsPillButton stays the pane-level danger affordance.
-private struct DangerPillButton: View {
+/// The sheet's one action shape — equal-width capsules that share a two-up row, so every
+/// phase's choices sit as a uniform pair. Quiet for the safe choice, danger for the
+/// destructive one, bright for the single primary (no halo: the glow is jewelry, and a
+/// farewell is not the place to wear it). Local on purpose: Settings' small
+/// SettingsPillButton stays the pane-level danger affordance.
+private struct FarewellPill: View {
+    enum Style { case quiet, danger, bright }
     let title: String
-    let action: () -> Void
-    private static let red = Color(red: 1.0, green: 0.36, blue: 0.36)
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 13.5, weight: .medium))
-                .foregroundStyle(Self.red)
-                .padding(.horizontal, 22).padding(.vertical, 12)
-                .background(Capsule().fill(Self.red.opacity(0.09)))
-                .overlay(Capsule().strokeBorder(Self.red.opacity(0.42), lineWidth: 1))
-                .contentShape(Capsule())
-        }
-        .buttonStyle(PressScaleStyle())
-    }
-}
-
-/// The sheet's one primary affordance — a white capsule, GlowButton's calm cousin (no halo:
-/// the glow is jewelry, and a farewell is not the place to wear it).
-private struct BrightPillButton: View {
-    let title: String
+    let style: Style
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 13.5, weight: .medium))
-                .foregroundStyle(.black)
-                .padding(.horizontal, 22).padding(.vertical, 12)
-                .background(Capsule().fill(.white))
+                .lineLimit(1)
+                .foregroundStyle(ink)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(Capsule().fill(fill))
+                .overlay(Capsule().strokeBorder(stroke, lineWidth: 1))
                 .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
+    }
+
+    private var ink: Color {
+        switch style {
+        case .quiet:  Theme.Ink.bright
+        case .danger: Theme.Ink.red
+        case .bright: .black
+        }
+    }
+    private var fill: Color {
+        switch style {
+        case .quiet:  .white.opacity(0.07)
+        case .danger: Theme.Ink.red.opacity(0.09)
+        case .bright: .white
+        }
+    }
+    private var stroke: Color {
+        switch style {
+        case .quiet:  .white.opacity(0.16)
+        case .danger: Theme.Ink.red.opacity(0.42)
+        case .bright: .clear
+        }
     }
 }
 
