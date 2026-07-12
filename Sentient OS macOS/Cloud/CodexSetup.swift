@@ -103,14 +103,16 @@ final class CodexSetup {
     /// the "awaiting browser" state; the user finishes in the browser, then taps "Finished logging
     /// into codex" → `confirmLogin()`. Both onboarding and the dev button call THIS.
     func startLogin(force: Bool = false) {
-        guard installed else { loginStatusLine = "✗ Install Codex first (step 1)"; return }
+        guard installed else { loginStatusLine = "✗ Install the Codex CLI first"; return }
         if !force, loggedIn { loginStatusLine = "✓ Already logged in"; return }   // self-guard; "Log in again" passes force
         loginProcess?.terminate()          // kill any stale attempt before re-opening
         loginProcess = nil
         do {
             loginProcess = try CodexCLI.startLogin { line in Log("[codex-login] \(line)") }
             loggingIn = true
-            loginStatusLine = "A browser window opened; finish signing in, then tap “Finished logging into codex”."
+            // UI-neutral on purpose: onboarding and Settings → Health both auto-notice the
+            // finished sign-in (no confirm button); only the dev sheet still has one.
+            loginStatusLine = "A browser window opened; finish signing in there. Sentient notices on its own when you're done."
         } catch {
             loggingIn = false
             loginStatusLine = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
@@ -158,7 +160,7 @@ final class CodexSetup {
             return
         }
         refreshInstalled()   // fresh probe, not the cached flag — the user may have installed codex themselves
-        guard installed else { computerUseStatus = "✗ Install Codex first (step 1)"; return }
+        guard installed else { computerUseStatus = "✗ Install the Codex CLI first"; return }
         settingUpComputerUse = true
         computerUseStatus = force ? "Re-installing…" : "Starting…"
         do {

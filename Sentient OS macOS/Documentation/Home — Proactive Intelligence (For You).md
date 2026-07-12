@@ -37,14 +37,27 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
   knowledge-base-only mode — computer use runs on quota those plans don't have). A small `DEV TOOLS`
   handle is pinned bottom-right (→ the `Views/Dev/DevToolsView.swift` sheet; the Release strip
   re-hides it).
-- **The morning-after caution — `cautionBanner` / `CautionCapsule`:** when last night's UNATTENDED
-  3am run failed for one of the three knowable reasons (codex signed out · no internet · usage
-  limit — recorded by `Scheduling/OvernightCaution` at `ProactiveCycle`'s catch sites, scheduled
-  runs only), a quiet amber capsule sits top-right in the blank space beside the greeting: amber
-  `HealthDot`, the first-person message, ✕ (clears the record), and on the logged-out one an
-  *Open Settings* pill that deep-links straight to Permissions & Health
-  (`SettingsView.requestedPane = .health`). The next fully successful cycle clears it on its own.
-  Amber on purpose: a caution, never an alarm — only the overnight magic was missed.
+- **The caution banner — `cautionBanner` / `CautionCapsule` (ONE slot, most severe first):** the
+  blank space top-right beside the greeting holds at most ONE capsule; a LIVE issue outranks
+  history. Both roads lead to Permissions & Health (`SettingsView.requestedPane = .health`).
+  - **The live health ladder (red) — `System/HealthCaution.swift`:** probes CURRENT state on
+    appear + every app foreground, rung by rung: ① an essential permission is off (Full Disk
+    Access · the overnight wake helper via `WakeHelperClient.isReachable()` — the XPC ground
+    truth a file check can't fake, see the scheduler doc · launch at login) → ② codex is gone or
+    signed out (`codex login status`, verdict cached ~5 min; cache bypassed while a codex banner
+    is up so a fix clears on the next foreground) → ③ computer use REGRESSED — gated on the
+    `computerUse.everReady` latch (set by the probe and by `ComputerUseGate` at its moment of
+    truth; cleared by FactoryReset), so a user who never set it up is never nagged. Nothing
+    persists: broken shows, fixed melts away on the next probe. ✕ mutes an issue KIND for the
+    session (lower rungs still surface). Suppressed entirely in knowledge-base-only mode (nothing
+    nightly runs there) and on demo decks (no red capsules mid-pitch).
+  - **The morning-after caution (amber):** when last night's UNATTENDED 3am run failed for one of
+    the three knowable reasons (codex signed out · no internet · usage limit — recorded by
+    `Scheduling/OvernightCaution` at `ProactiveCycle`'s catch sites, scheduled runs only): amber
+    `HealthDot`, the first-person message, ✕ (clears the record), *Open Settings* on the
+    logged-out one. The next fully successful cycle clears it on its own; the foreground refresh
+    also re-reads it. Amber on purpose: a caution, never an alarm — only the overnight magic was
+    missed.
 - **The letter layer:** an always-mounted overlay (opacity/scale-driven — view *insertion* can miss a
   redraw on hidden-titlebar windows) that expands a card into the typeset reading view, with the
   **editable draft block** for real cards (below).

@@ -43,14 +43,14 @@ struct ComputerUseGateView: View {
                         StatusLine(title: "Microphone & Speech",
                                    health: micSpeechHealth,
                                    note: micSpeechNote,
-                                   tip: "Lets Sidekick hear you and turn your words into text when you hold the shortcut key. Your voice is heard and transcribed on this Mac, never in the cloud.",
+                                   tip: "Lets Sidekick hear you and turn your words into text when you hold the shortcut key.\n\nYour voice is heard and transcribed on this Mac, never in the cloud.",
                                    fixTitle: gate.micSpeech == .notAsked ? "Allow…" : "Fix…") {
                             fixMicSpeech()
                         }
                         StatusLine(title: "Screen Recording",
                                    health: gate.sentientScreen ? .ok : .warn,   // optional — amber, never blocking
                                    note: gate.sentientScreen ? "granted" : "recommended",
-                                   tip: "Optional, but heavily recommended. Lets Sentient snap a still of your screen the moment you fire a command, so it can see the thing you're asking about. Without it, commands run without screen context. Takes effect after you restart Sentient.",
+                                   tip: "Optional but recommended.\nLets Sentient see a screenshot of your screen the moment you fire a command, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}).\n\nWithout it, you'll have to explicitly tell it which app you want it to start controlling.",
                                    fixTitle: "Allow…") {
                             fixSentientScreen()
                         }

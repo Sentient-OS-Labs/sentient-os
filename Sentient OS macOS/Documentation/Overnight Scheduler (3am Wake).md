@@ -51,6 +51,18 @@ code-signing check. Files: `Scheduling/WakeHelper.swift` (root side) · `WakeHel
   schedule), and the loop wipes all wakes (`cancelAllWakes`) before arming exactly one.
 - ⚠️ **The code-sign gate is DEBUG-permissive** (allows-and-logs on a failed check so dev testing
   isn't blocked); Release MUST enforce it — pin the Developer ID team before launch.
+- ⚠️ **Liveness is the ONLY honest status (field-found 2026-07-11).** System Settings' App
+  Background Activity toggle boots a disabled daemon OUT of launchd while leaving its plist on
+  disk — so every file check reads green on a dead helper (and unprivileged
+  `launchctl print system/…` answers "could not find service" for *everything*, loaded or not, so
+  it can't tell either). The ground truth is `WakeHelperClient.isReachable()`: a real XPC
+  `heartbeat` (the one op harmless in every state — mid-run it's what the app sends every 60s
+  anyway; idle it arms a deadman whose firing is a no-op). `healthProbe()` classifies the verdict:
+  **ready** (answers over XPC) · **disabled** (unreachable with the files all correct → the toggle
+  is off; launchd honors it over any bootstrap, so only the user flipping it back on helps) ·
+  **notSetUp** (stale/missing plist → the installer fixes it). `ensureHelperReady`, Settings →
+  Health, onboarding's permissions step, and the home's health banner all gate on this probe —
+  never on files alone.
 
 ## The nightly run (`OvernightScheduler.runProcessing`)
 
@@ -71,7 +83,8 @@ cycle's catch sites (`Scheduling/OvernightCaution`: typed `usageLimit` first →
 NOTHING) into codex-signed-out · no-internet · usage-limit, persisted for the home's amber banner
 (`HomeView.cautionBanner`). A watched Analyze Now records nothing (the takeover UI shows failures
 live); the next fully successful cycle clears the record. Each caution also emits a PII-free
-`overnight.caution{kind}` Sentry event.
+`overnight.caution{kind}` Sentry event. *(The home's banner slot also carries a LIVE health ladder
+— `System/HealthCaution.swift`, red, outranks this amber event — see the Home doc.)*
 
 ⚠️ Known caveat: **Full Disk Access can read `false` when the app is launched from Terminal** (TCC
 attribution) — which silently excludes the DB sources. The arm-time `DETECTED …` / `FDA granted:`
@@ -111,18 +124,30 @@ dialog (osascript admin) that writes the LaunchDaemon plist (pointing at THIS bi
 `/Library/LaunchDaemons`, chowns/chmods it, and `launchctl bootstrap`s it. It's measured-and-working
 on real hardware, self-heals when the binary path goes stale (`isInstalledAndCurrent()` checks the
 plist points at the running executable), and — the UX line we hold — never sends the user into
-System Settings. **Settings → Permissions & Health's "Overnight wake" fix button runs exactly this.**
-The SMAppService.daemon migration (a Login Items approval toggle) was considered and rejected.
+System Settings. **Settings → Permissions & Health's "Overnight wake" fix button runs exactly this**
+(except the `disabled` verdict, whose only fix is the Login Items switch — the button becomes
+"Turn On…" and deep-links there). The SMAppService.daemon migration (a Login Items approval toggle)
+was considered and rejected.
+
+Two plist facts (both 2026-07-11):
+- The plist carries **`AssociatedBundleIdentifiers`**, so the System Settings background item
+  displays as **"Sentient OS"** — without it, a bare LaunchDaemon shows under the signing
+  identity's human name (the "Jesai Tarun" jumpscare, field-seen).
+- That key is part of `isInstalledAndCurrent()`'s currency check, so an old-format plist reads
+  stale and refreshes on the next setup pass. ⚠️ And remember its limit: `isInstalledAndCurrent()`
+  answers "are the files right", never "is it alive" — liveness questions go through
+  `WakeHelperClient.isReachable()` / `healthProbe()` (see the privilege-model section).
 
 **SMAppService plumbing survives for the dev cockpit only:**
 - A LaunchDaemon plist is still bundled at `Contents/Library/LaunchDaemons/…WakeHelper.plist` (repo
   file at the project root, a "Copy wake-helper daemon plist" build phase) so
   `WakeHelperClient.register()` / `.status` / `openLoginItemsSettings()` keep working for
   experiments (`OvernightDevView` step ①).
-- `OvernightScheduler.ensureHelperReady()` still checks SMAppService first (`.enabled` → go) and, in
-  DEBUG, falls back to the password installer when SMAppService reports `.notFound`/`.notRegistered`.
-  Since the production install path is the installer (via the Health pane), a user who set up through
-  Settings passes the DEBUG fallback's `isInstalledAndCurrent()` check without any SMAppService state.
+- `OvernightScheduler.ensureHelperReady()` gates on `WakeHelperClient.healthProbe()` — ONE probe
+  covers both install paths, since the production plist and the dev cockpit's SMAppService daemon
+  share the mach service. `ready` → arm; `disabled` → surface setup and stop (a reinstall can't
+  override the Login Items switch); `notSetUp` → DEBUG self-installs via the password installer,
+  Release flags `needsSchedulerSetup` for the setup UX.
 
 > **Signing note (SMAppService, dev only):** approval works on any validly-signed build — a standard
 > Apple Development Debug build is enough; only a fully unsigned `CODE_SIGNING_ALLOWED=NO` CLI build
@@ -170,7 +195,7 @@ This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to th
 
 - `Scheduling/OvernightScheduler.swift` — the scheduler, the 18h auto-enable state machine, `ensureHelperReady`.
 - `Scheduling/LoginItem.swift` — launch-at-login via `SMAppService.mainApp`.
-- `Scheduling/WakeHelperClient.swift` — daemon register/status/deep-link + the four XPC ops.
+- `Scheduling/WakeHelperClient.swift` — daemon register/status/deep-link + the XPC ops + `isReachable()`/`healthProbe()` (the liveness ground truth).
 - `Scheduling/WakeHelperInstaller.swift` — the PRODUCTION admin-password installer (decided 2026-07-04); also the DEBUG fallback in `ensureHelperReady`.
 - `jesai.Sentient-OS-macOS.WakeHelper.plist` (project root) — the bundled SMAppService daemon plist + its Copy Files phase.
 - `Proactive/ProactiveCycle.swift` — stamps "initial finished"; classifies scheduled failures.

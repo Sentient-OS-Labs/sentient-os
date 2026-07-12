@@ -28,10 +28,17 @@ enum WakeHelperInstaller {
 
     /// True when the daemon plist exists AND points at this exact binary (a moved/rebuilt-to-a-new
     /// path app fails this, so we reinstall). World-readable, so no privileges needed to check.
+    /// The plist FORMAT must be current too: one without AssociatedBundleIdentifiers (added
+    /// 2026-07-11) predates the "display as Sentient OS in Login Items" fix and reads stale, so
+    /// the next setup pass refreshes it. ⚠️ This answers "are the files right", not "is it
+    /// alive" — the System Settings background toggle disables the daemon WITHOUT touching the
+    /// plist; anything asking "will the 3am machinery actually work?" must use
+    /// `WakeHelperClient.isReachable()` instead.
     static func isInstalledAndCurrent() -> Bool {
         guard let data = FileManager.default.contents(atPath: plistPath),
               let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) as? [String: Any],
-              let args = plist["ProgramArguments"] as? [String]
+              let args = plist["ProgramArguments"] as? [String],
+              plist["AssociatedBundleIdentifiers"] != nil
         else { return false }
         return args.first == currentBinary
     }
@@ -95,6 +102,7 @@ enum WakeHelperInstaller {
           <key>MachServices</key><dict><key>\(label)</key><true/></dict>
           <key>RunAtLoad</key><true/>
           <key>KeepAlive</key><false/>
+          <key>AssociatedBundleIdentifiers</key><array><string>\(Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS")</string></array>
         </dict></plist>
         """
     }

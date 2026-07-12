@@ -9,10 +9,12 @@
 //  helper's Accessibility + Screen
 //  Recording — system-TCC, status-only, shown once computer use exists). The Automation grant has
 //  NO row: it self-heals silently shortly after the pane opens (the user has no job there).
-//  Red = a core capability is broken · yellow = optional or fixable-later. When the whole codex
+//  Red = a core capability is broken · yellow = optional, fixable-later, or working on it. The
+//  codex fix buttons drive the shared engine INLINE (install / browser login with auto-notice /
+//  computer-use bootstrap — no sheet; CodexSetupView is dev-tools-only now). When the whole codex
 //  stack is green it collapses to one glowing summary line (tap for details) — a browsing user
-//  shouldn't wade through five rows of "fine". Statuses re-probe on app foreground and after the
-//  codex sheet closes. (Reset lives in Settings → System.)
+//  shouldn't wade through five rows of "fine". Statuses re-probe on app foreground.
+//  (Reset lives in Settings → System.)
 //
 
 import SwiftUI
@@ -42,12 +44,11 @@ struct HealthPane: View {
     @State private var plan: CodexAuth.Plan?
     @State private var planChecking = false
 
-    @State private var showCodexSetup = false
     @State private var codexExpanded = false
     @State private var checked = false        // first full probe done (codex login check is seconds)
     @State private var revealed = false       // drives the rise-in cascade after the first probe
 
-    private enum DaemonState { case ready, installing, notSetUp }
+    private enum DaemonState { case ready, installing, notSetUp, disabled }
     private enum MicSpeechState { case granted, notAsked, denied }
 
     private var showCodexPermissions: Bool { fdaGranted && codex.computerUseReady }
@@ -103,8 +104,15 @@ struct HealthPane: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refresh() }   // the user may just have fixed something in System Settings
         }
-        .sheet(isPresented: $showCodexSetup, onDismiss: { Task { await refresh() } }) {
-            CodexSetupView()
+        .task(id: codex.loggingIn) {
+            // The browser-login auto-notice, same as onboarding: while a login is out, poll
+            // `codex login status` every 2s so the row flips green the moment they finish —
+            // no "I'm done" button. The task re-keys (and cancels) with the loggingIn flag.
+            while !Task.isCancelled, codex.loggingIn, !codex.loggedIn {
+                try? await Task.sleep(for: .seconds(2))
+                await codex.refreshLoginStatus()
+            }
+            if codex.loggedIn { plan = CodexAuth.currentPlan() }   // the plan row rides the login
         }
     }
 
@@ -129,7 +137,7 @@ struct HealthPane: View {
                     StatusLine(title: "Full Disk Access",
                                health: fdaGranted ? .ok : .bad,
                                note: fdaGranted ? "granted" : "not granted",
-                               tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac. Everything is read right here on your Mac; your data never leaves it.",
+                               tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac.\n\nEverything is read right here on your Mac; your data never leaves it.",
                                fixTitle: "Grant…") {
                         PermissionGuide.shared.guide(.fullDiskAccess, dragging: Bundle.main.bundleURL)
                     }
@@ -151,8 +159,8 @@ struct HealthPane: View {
                 StatusLine(title: "Overnight wake",
                            health: daemon == .ready ? .ok : .bad,
                            note: daemonNote,
-                           tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep. It only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
-                           fixTitle: "Set Up…") {
+                           tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep.\n\nIt only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
+                           fixTitle: daemon == .disabled ? "Turn On…" : "Set Up…") {
                     fixDaemon()
                 }
                 .rise(1, revealed: revealed)
@@ -178,7 +186,7 @@ struct HealthPane: View {
                 StatusLine(title: "Microphone & Speech",
                            health: micSpeechHealth,
                            note: micSpeechNote,
-                           tip: "Lets Sidekick hear you and turn your words into text when you hold the shortcut key. Your voice is heard and transcribed on this Mac, never in the cloud.",
+                           tip: "Lets Sidekick hear you and turn your words into text when you hold the shortcut key.\n\nYour voice is heard and transcribed on this Mac, never in the cloud.",
                            fixTitle: micSpeech == .notAsked ? "Allow…" : "Fix…") {
                     fixMicSpeech()
                 }
@@ -186,7 +194,7 @@ struct HealthPane: View {
                 StatusLine(title: "Screen Recording",
                            health: screenRec ? .ok : .warn,   // optional — Sidekick runs text-only without it
                            note: screenRec ? "granted" : "optional",
-                           tip: "Optional. Lets Sidekick snap a still of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}). Without it, Sidekick may not know which open app to start controlling to help you. Takes effect after you restart Sentient.",
+                           tip: "Optional but recommended.\nLets Sidekick see a screenshot of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}).\n\nWithout it, you'll have to explicitly tell Sidekick which app you want it to start controlling.",
                            fixTitle: "Allow…") {
                     fixScreenRecording()
                 }
@@ -210,26 +218,41 @@ struct HealthPane: View {
         case .ready:      return "ready"
         case .installing: return "installing…"
         case .notSetUp:   return "not set up"
+        case .disabled:   return "turned off in login items"
         }
     }
 
     /// [DECIDED 2026-07-04] The password install IS the production path (no Login Items
-    /// migration — one native admin prompt, no trip to System Settings). Fix = run the installer.
+    /// migration — one native admin prompt, no trip to System Settings). Fix = run the installer —
+    /// EXCEPT when the daemon is installed but toggled off in System Settings: launchd honors that
+    /// switch over any bootstrap, so the only fix is the user flipping it back on.
     private func fixDaemon() {
-        guard daemon == .notSetUp else { return }
-        daemon = .installing
-        Task {
-            _ = await WakeHelperInstaller.installAsync()
-            refreshDaemon()
-            // A fresh install may be the last missing prerequisite — re-run the 18h check now
-            // instead of waiting for the next launch (this app rarely relaunches).
-            if daemon == .ready { appState?.scheduler.maybeAutoEnable() }
+        switch daemon {
+        case .ready, .installing:
+            return
+        case .disabled:
+            WakeHelperClient.shared.openLoginItemsSettings()
+        case .notSetUp:
+            daemon = .installing
+            Task {
+                _ = await WakeHelperInstaller.installAsync()
+                try? await Task.sleep(for: .seconds(1))   // let launchd settle before the XPC probe
+                await refreshDaemon()
+                // A fresh install may be the last missing prerequisite — re-run the 18h check now
+                // instead of waiting for the next launch (this app rarely relaunches).
+                if daemon == .ready { appState?.scheduler.maybeAutoEnable() }
+            }
         }
     }
 
-    /// Green = the installed daemon plist exists AND points at this exact binary.
-    private func refreshDaemon() {
-        daemon = WakeHelperInstaller.isInstalledAndCurrent() ? .ready : .notSetUp
+    /// Green = the daemon ANSWERS over XPC (the only check the System Settings background toggle
+    /// can't fool) — WakeHelperClient.healthProbe is the shared verdict.
+    private func refreshDaemon() async {
+        switch await WakeHelperClient.shared.healthProbe() {
+        case .ready:    daemon = .ready
+        case .disabled: daemon = .disabled
+        case .notSetUp: daemon = .notSetUp
+        }
     }
 
     // MARK: Microphone & Speech (one row — one call asks for both)
@@ -348,35 +371,63 @@ struct HealthPane: View {
     }
 
     // MARK: - SET UP CODEX (the cloud brain — all three are core, red when missing)
+    //
+    // The fix buttons drive the shared CodexSetup engine DIRECTLY — no intermediate sheet (the
+    // old wiring bounced every button through CodexSetupView, which is the dev cockpit; decided
+    // gone 2026-07-11). While a step runs, its LED goes amber, the note narrates, and the pill
+    // hides; failures surface as a quiet prose line under the row. The browser login is
+    // noticed automatically (the same 2s poll onboarding uses) — no "I'm done" button.
 
     private var codexSetupGroup: some View {
         SettingsGroup(label: "Set Up Codex") {
             VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Codex CLI",
-                           health: codex.installed ? .ok : .bad,
-                           note: codex.installed ? "installed" : "not installed",
-                           tip: "OpenAI's official Codex command line tool. Sentient runs its cloud steps through it, using your own ChatGPT subscription.",
-                           fixTitle: "Install…") { showCodexSetup = true }
+                           health: codex.installed ? .ok : (codex.installing ? .warn : .bad),
+                           note: codex.installing ? "installing…" : (codex.installed ? "installed" : "not installed"),
+                           tip: "OpenAI's official Codex command line tool. Sentient runs its cloud thinking through it, using your own ChatGPT subscription.\n\nInstall runs OpenAI's own installer; if codex is already there it simply updates in place, and your login and settings are untouched.",
+                           fixTitle: "Install…",
+                           fix: codex.installing ? nil : { Task { await codex.installCodex() } })
+                failureLine(codex.installStatus)
                 StatusLine(title: "ChatGPT account",
-                           health: codex.loggedIn ? .ok : .bad,
-                           note: codex.loggedIn ? "logged in" : "not logged in",
-                           tip: "Your own OpenAI login for Codex. The sign in happens in your browser; Sentient never sees your password.",
-                           fixTitle: "Log in…") { showCodexSetup = true }
+                           health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
+                           note: codex.loggedIn ? "logged in"
+                               : codex.loggingIn ? "finish in your browser" : "not logged in",
+                           tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
+                           fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
+                           fix: codex.loggedIn ? nil : { codex.startLogin() })
+                failureLine(codex.loginStatusLine)
                 if codex.loggedIn, let plan {
                     StatusLine(title: "ChatGPT plan",
                                health: plan.tier == .limited ? .warn : .ok,
                                note: planChecking ? "checking…"
                                    : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
                                                            : plan.displayName.lowercased(),
-                               tip: "Read from your own codex login. Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in knowledge-base-only mode; Plus unlocks proactive mornings, Sidekick, and nightly updates. Upgraded? Re-check picks it up right away.",
+                               tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.",
                                fixTitle: "Re-check") { recheckPlan() }
                 }
                 StatusLine(title: "Computer use",
-                           health: codex.computerUseReady ? .ok : .bad,
-                           note: codex.computerUseReady ? "ready" : "not set up",
-                           tip: "The Codex add-on that can click, type, and act on your Mac when you fire an action. Downloaded once from OpenAI.",
-                           fixTitle: "Set up…") { showCodexSetup = true }
+                           health: codex.computerUseReady ? .ok : (codex.settingUpComputerUse ? .warn : .bad),
+                           note: codex.settingUpComputerUse ? "setting up…"
+                               : (codex.computerUseReady ? "ready" : "not set up"),
+                           tip: "The Codex add-on that can click, type, and act on your Mac when you fire an action.\n\nSet up downloads OpenAI's official Codex Desktop app package straight from OpenAI (about 535 MB), lifts out its computer-use plugin, and wires it into Codex CLI on this Mac. No desktop app installs; nothing is hosted by us.",
+                           fixTitle: "Set up…",
+                           fix: codex.settingUpComputerUse ? nil : { Task { await codex.setupComputerUse() } })
+                // The ~535 MB download deserves live narration, not just an amber dot.
+                if codex.settingUpComputerUse, let line = codex.computerUseStatus {
+                    SettingsProse(line).padding(.top, 2).padding(.bottom, 6)
+                } else {
+                    failureLine(codex.computerUseStatus)
+                }
             }
+        }
+    }
+
+    /// A quiet prose line under a row, shown only when the engine's last word was a failure —
+    /// success is already the row's green dot, and progress has its own treatment.
+    @ViewBuilder
+    private func failureLine(_ status: String?) -> some View {
+        if let status, status.hasPrefix("✗") {
+            SettingsProse(status).padding(.top, 2).padding(.bottom, 6)
         }
     }
 
@@ -434,7 +485,7 @@ struct HealthPane: View {
     private func refresh() async {
         fdaGranted = Permissions.hasFullDiskAccess()
         loginOn = LoginItem.isEnabled
-        refreshDaemon()
+        await refreshDaemon()
         refreshMicSpeech()
         screenRec = Permissions.hasScreenRecording()
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus

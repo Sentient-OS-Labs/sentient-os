@@ -23,7 +23,7 @@ struct OnboardingPermissionsView: View {
     @State private var loginOn = LoginItem.isEnabled
     @State private var loginNeedsApproval = LoginItem.needsApproval
 
-    private enum DaemonState { case ready, installing, notSetUp }
+    private enum DaemonState { case ready, installing, notSetUp, disabled }
 
     private var allGreen: Bool { fdaGranted && daemon == .ready && loginOn }
 
@@ -56,7 +56,7 @@ struct OnboardingPermissionsView: View {
                         StatusLine(title: "Overnight wake",
                                    health: daemon == .ready ? .ok : .bad,
                                    note: daemonNote,
-                                   tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep. It only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
+                                   tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep.\n\nIt only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
                                    fixTitle: "Set Up…") {
                             fixDaemon()
                         }
@@ -77,7 +77,7 @@ struct OnboardingPermissionsView: View {
                               StatusLine(title: "Full Disk Access",
                                          health: fdaGranted ? .ok : .bad,
                                          note: fdaGranted ? "granted" : "not granted",
-                                         tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac. Everything is read right here on your Mac; your data never leaves it.",
+                                         tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac.\n\nEverything is read right here on your Mac; your data never leaves it.",
                                          fixTitle: "Grant…") {
                             // The floating guide carries Sentient itself as the drag card — no
                             // hunting through the "+" file picker.
@@ -127,15 +127,25 @@ struct OnboardingPermissionsView: View {
         case .ready:      return "ready"
         case .installing: return "installing…"
         case .notSetUp:   return "not set up"
+        case .disabled:   return "turned off in login items"
         }
     }
 
+    /// Install for the normal case; a daemon that's installed but toggled off in System Settings
+    /// (possible after a Reset on a machine that had flipped it) can only be fixed at the switch.
     private func fixDaemon() {
-        guard daemon == .notSetUp else { return }
-        daemon = .installing
-        Task {
-            _ = await WakeHelperInstaller.installAsync()
-            daemon = WakeHelperInstaller.isInstalledAndCurrent() ? .ready : .notSetUp
+        switch daemon {
+        case .ready, .installing:
+            return
+        case .disabled:
+            WakeHelperClient.shared.openLoginItemsSettings()
+        case .notSetUp:
+            daemon = .installing
+            Task {
+                _ = await WakeHelperInstaller.installAsync()
+                try? await Task.sleep(for: .seconds(1))   // let launchd settle before the XPC probe
+                daemon = await WakeHelperClient.shared.healthProbe() == .ready ? .ready : .notSetUp
+            }
         }
     }
 
@@ -143,8 +153,17 @@ struct OnboardingPermissionsView: View {
         fdaGranted = Permissions.hasFullDiskAccess()
         loginOn = LoginItem.isEnabled
         loginNeedsApproval = LoginItem.needsApproval
-        if daemon != .installing {
-            daemon = WakeHelperInstaller.isInstalledAndCurrent() ? .ready : .notSetUp
+        guard daemon != .installing else { return }
+        Task {
+            // The XPC ground truth, same as Settings → Health (a file check reads green even
+            // when the System Settings background toggle has the daemon off).
+            let verdict = await WakeHelperClient.shared.healthProbe()
+            guard daemon != .installing else { return }   // an install started mid-probe wins
+            switch verdict {
+            case .ready:    daemon = .ready
+            case .disabled: daemon = .disabled
+            case .notSetUp: daemon = .notSetUp
+            }
         }
     }
 }

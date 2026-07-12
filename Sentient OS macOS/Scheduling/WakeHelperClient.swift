@@ -54,6 +54,31 @@ final class WakeHelperClient {
     /// setup UX when `register()` returns `.requiresApproval`.
     func openLoginItemsSettings() { SMAppService.openSystemSettingsLoginItems() }
 
+    /// Liveness — can the daemon actually be reached over XPC right now? This catches what file
+    /// checks can't: the App Background Activity toggle in System Settings boots a disabled
+    /// daemon OUT of launchd while leaving its plist on disk, so every disk read stays green on a
+    /// dead helper (field-found 2026-07-11; `launchctl print system/…` can't tell either — it
+    /// answers "could not find service" for everything unprivileged). One probe covers BOTH
+    /// install paths (the production plist and the dev cockpit's SMAppService daemon share the
+    /// mach service). Probes with `heartbeat`, the one op harmless in every state: mid-run it's
+    /// exactly what the app already sends every 60s; idle it arms a deadman whose firing is a
+    /// no-op (disablesleep is already 0). A booted-out service invalidates immediately, so the
+    /// false case answers in milliseconds.
+    func isReachable() async -> Bool { await heartbeat() }
+
+    /// The user-facing daemon verdict, shared by Settings → Health and onboarding's permissions
+    /// step. ready = answers over XPC · disabled = unreachable with the files all correct (the
+    /// background toggle is off — launchd honors it over any bootstrap, so only the user flipping
+    /// it back on helps) · notSetUp = unreachable with a stale or missing plist (the installer
+    /// fixes it).
+    enum DaemonHealth { case ready, disabled, notSetUp }
+
+    func healthProbe() async -> DaemonHealth {
+        if await isReachable() { return .ready }
+        if WakeHelperInstaller.isInstalledAndCurrent() || isReady { return .disabled }
+        return .notSetUp
+    }
+
     // MARK: - The four ops
 
     func beginAwake(timeout: Int = 7200) async -> Bool { await call { $0.beginAwake(timeoutSeconds: timeout, withReply: $1) } }

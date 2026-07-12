@@ -79,6 +79,8 @@ final class ComputerUseGate {
         refresh()
         let blocking = !allRequiredGranted
         if !blocking {
+            // Seen working — arm the home's regression banner (HealthCaution rung ③).
+            HealthCaution.latchComputerUse()
             // Nothing required is missing — the only reason to appear is the one-time optional offer.
             guard !sentientScreen, !Self.screenRecordingOffered else { return false }
         }
@@ -142,6 +144,7 @@ final class ComputerUseGate {
             Log("ComputerUseGate: Continue blocked — a required grant is still missing")
             return
         }
+        HealthCaution.latchComputerUse()   // the gate's moment of truth — regressions may now banner
         let action = pending
         pending = nil
         Analytics.signal("PermissionGate.continued", parameters: ["all_granted": "true"])
