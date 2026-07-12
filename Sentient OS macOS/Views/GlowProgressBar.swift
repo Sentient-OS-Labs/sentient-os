@@ -6,6 +6,10 @@
 //  tip-concentrated bloom — the "act of analyzing" jewelry from the shipped ProcessingView
 //  design. Born there; now shared with onboarding's downloading-model screen. One bar, one place.
 //
+//  ⚠️ The gradient rect tiles from the bar's measured width (`ceil(w / band) + 1` tiles) — a
+//  fixed tile count can't cover fills wider than `band` right after a phase wrap, so the tip
+//  visibly snapped back every ~5s once progress passed band/width (field-found 2026-07-11).
+//
 
 import SwiftUI
 
@@ -27,28 +31,28 @@ struct GlowProgressBar: View {
         Color(red: 0.29, green: 0.87, blue: 0.50),  // green (Ink.green)
     ]
 
-    /// Stops tiled twice with explicit locations → the gradient is periodic over `band` points,
-    /// so scrolling it by `band` is seamless.
-    private static let gradientStops: [Gradient.Stop] = {
+    /// Stops tiled `tiles` times with explicit locations → the gradient is periodic over `band`
+    /// points, so scrolling it by `band` is seamless.
+    private static func gradientStops(tiles: Int) -> [Gradient.Stop] {
         var result: [Gradient.Stop] = []
         let n = stops.count
-        for rep in 0..<2 {
+        for rep in 0..<tiles {
             for (i, color) in stops.enumerated() {
-                result.append(.init(color: color, location: (Double(rep) + Double(i) / Double(n)) / 2.0))
+                result.append(.init(color: color, location: (Double(rep) + Double(i) / Double(n)) / Double(tiles)))
             }
         }
         result.append(.init(color: stops[0], location: 1.0))
         return result
-    }()
+    }
 
     /// The fill-width capsule of the scrolling color gradient — rendered crisp on top and blurred
     /// behind (= the glow). Same gradient/offset, so the glow flows with the colors.
     @ViewBuilder
-    private func coloredCapsule(p: CGFloat, fill: CGFloat) -> some View {
+    private func coloredCapsule(p: CGFloat, fill: CGFloat, tiles: Int, gradient: [Gradient.Stop]) -> some View {
         ZStack(alignment: .leading) {
             Rectangle()
-                .fill(LinearGradient(stops: Self.gradientStops, startPoint: .leading, endPoint: .trailing))
-                .frame(width: band * 2, height: 9)
+                .fill(LinearGradient(stops: gradient, startPoint: .leading, endPoint: .trailing))
+                .frame(width: band * CGFloat(tiles), height: 9)
                 .offset(x: -band + p)
         }
         .frame(width: fill, height: 9, alignment: .leading)
@@ -59,9 +63,9 @@ struct GlowProgressBar: View {
     /// tip (fading out toward the start) BEFORE blurring, so it blooms freely but only at the
     /// leading edge — a long bar never glows end-to-end.
     @ViewBuilder
-    private func tipGlow(p: CGFloat, fill: CGFloat, blur: CGFloat) -> some View {
+    private func tipGlow(p: CGFloat, fill: CGFloat, tiles: Int, gradient: [Gradient.Stop], blur: CGFloat) -> some View {
         let t = min(1.0, value * 3.0)   // how strongly the back is dimmed (tune the 3.0)
-        coloredCapsule(p: p, fill: fill)
+        coloredCapsule(p: p, fill: fill, tiles: tiles, gradient: gradient)
             .mask {
                 LinearGradient(stops: [
                     .init(color: .white.opacity(1 - t), location: 0.0),   // trailing (start)
@@ -77,15 +81,19 @@ struct GlowProgressBar: View {
             let w = geo.size.width
             let fill = value > 0 ? max(min(value, 1) * w, 14) : 0
             let p = CGFloat(phase.truncatingRemainder(dividingBy: Double(band)))
+            // Enough tiles that the gradient covers the widest fill even right after a phase
+            // wrap: coverage's right edge is p + band × (tiles − 1), worst case p = 0.
+            let tiles = Int(ceil(w / band)) + 1
+            let gradient = Self.gradientStops(tiles: tiles)
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.08))
                 if fill > 0 {
                     ZStack(alignment: .leading) {
-                        tipGlow(p: p, fill: fill, blur: 38)
-                        tipGlow(p: p, fill: fill, blur: 22)
-                        tipGlow(p: p, fill: fill, blur: 11)
-                        tipGlow(p: p, fill: fill, blur: 5)
-                        coloredCapsule(p: p, fill: fill)
+                        tipGlow(p: p, fill: fill, tiles: tiles, gradient: gradient, blur: 38)
+                        tipGlow(p: p, fill: fill, tiles: tiles, gradient: gradient, blur: 22)
+                        tipGlow(p: p, fill: fill, tiles: tiles, gradient: gradient, blur: 11)
+                        tipGlow(p: p, fill: fill, tiles: tiles, gradient: gradient, blur: 5)
+                        coloredCapsule(p: p, fill: fill, tiles: tiles, gradient: gradient)
                     }
                 }
             }
