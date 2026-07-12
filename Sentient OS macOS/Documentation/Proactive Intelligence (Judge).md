@@ -108,12 +108,18 @@ things **in one read-only pass** — verify then stage:
 2. **PREPARE** every survivor **ready to fire** — draft it in the user's voice (`prepared_content`) +
    write the routing-only `execution_recipe` PART 3 runs.
 
-Two inviolable rules, enforced in the prompt AND the invocation:
+Three inviolable rules, enforced in the prompt AND the invocation:
 - **Accuracy / anti-hallucination** — receipts-only (state a live fact only if a tool returned it this
   run), mandatory identity-match for any external fact, "couldn't confirm" → `status: unverified` as a
   valid outcome. Verify-only on discovery (never invents a new item — that's PART 1).
 - **Never fires** — it stages but never sends/submits/pays/RSVPs. `bypassApprovals = false` + sandbox
   means a connector WRITE (e.g. Gmail `send_email`) would auto-cancel headless anyway.
+- **Never computer use** — verification never drives the Mac, its apps, or its browser; Gmail MCP +
+  web + vault are the ONLY surfaces. Needed because `includeUserConfig = true` (for the Gmail MCP)
+  also rides the computer-use skill along from `~/.codex` — the sandbox stops writes, but nothing else
+  stopped a "let me just look at the screen to verify" detour. Computer use belongs solely to PART 3,
+  on the user's press, and only when the card's method calls for it (research cards fire nothing). The
+  judge's prompt carries a matching line for symmetry, though its hermetic call has no tools anyway.
 
 Research surfaces (all read-only): the **full last-week summary corpus** (the SAME window PART 1 saw,
 as background context), the **knowledge base** (`cwd` — identity anchor + the user's **voice** + the

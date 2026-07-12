@@ -272,7 +272,9 @@ actor Proactive {
         step runs AFTER you and verifies each item you pick against the live sources (Gmail, the web) \
         and the user's knowledge base — correcting details and dropping anything already done. So you \
         do NOT need to be perfectly certain or fully grounded here; that's handled next. But you must \
-        NOT pad: only the genuinely strongest candidates earn a slot.
+        NOT pad: only the genuinely strongest candidates earn a slot. And you must NEVER use computer \
+        use (or any other tool) to verify anything — you judge from the summaries alone; acting on \
+        the user's Mac belongs only to a later step the user explicitly fires.
 
         ## YOUR INPUT: the last 7 days of summaries
         The last \(lookbackDays) days of summaries (at the end of this message) are your ONLY input, \
