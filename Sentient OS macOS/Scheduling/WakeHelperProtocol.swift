@@ -37,7 +37,9 @@ enum WakeHelperConfig {
     static let daemonPlistName = "jesai.Sentient-OS-macOS.WakeHelper.plist"
     /// CLI flag that puts the shared binary into root helper mode.
     static let helperFlag = "--wake-helper"
-    /// Code-signing requirement a client must satisfy to talk to the root helper. Bundle id +
-    /// Apple anchor blocks arbitrary/other code; pin the Developer ID team for Release hardening.
+    /// FALLBACK code-signing requirement for the helper's client gate. The primary gate is the
+    /// daemon's OWN designated requirement ("signed exactly like me" — `WakeHelper.clientRequirement`,
+    /// enforced by the system via `setCodeSigningRequirement`); this static string steps in only
+    /// if self-inspection fails. Bundle id + Apple anchor blocks arbitrary/other code.
     static let clientRequirement = "anchor apple generic and identifier \"jesai.Sentient-OS-macOS\""
 }

@@ -24,7 +24,7 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
         let listener = NSXPCListener(machServiceName: WakeHelperConfig.machServiceName)
         listener.delegate = helper
         listener.resume()
-        helper.log("listening on \(WakeHelperConfig.machServiceName)")
+        helper.log("listening on \(WakeHelperConfig.machServiceName) · client requirement: \(clientRequirement)")
         RunLoop.current.run()
         fatalError("wake helper run loop exited")
     }
@@ -37,16 +37,35 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
 
     // MARK: - NSXPCListenerDelegate
 
-    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
-        let trusted = isClientTrusted(conn)
-        log("connection from pid \(conn.processIdentifier): codesign check \(trusted ? "PASSED" : "FAILED")")
-        if !trusted {
-            #if DEBUG
-            log("DEBUG build: allowing despite failed check (verify the codesign gate before Release).")
-            #else
-            return false
-            #endif
+    /// The requirement a connecting client must satisfy: this daemon's OWN designated
+    /// requirement — the app and the daemon are the same signed binary, so "signed exactly like
+    /// me" is airtight AND signer-agnostic (holds for the Developer ID release, a dev's Apple
+    /// Development build, and an OSS self-build alike; even ad-hoc dev signing works, its DR
+    /// being the shared binary's cdhash). Falls back to the static identifier+anchor requirement
+    /// if self-inspection somehow fails. Computed once; both sources are valid requirement
+    /// strings by construction (setCodeSigningRequirement raises on a malformed one).
+    private static let clientRequirement: String = {
+        var code: SecCode?
+        var staticCode: SecStaticCode?
+        var requirement: SecRequirement?
+        var text: CFString?
+        if SecCodeCopySelf([], &code) == errSecSuccess, let code,
+           SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+           SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess, let requirement,
+           SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text {
+            return text as String
         }
+        return WakeHelperConfig.clientRequirement
+    }()
+
+    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
+        // The client gate, enforced by the SYSTEM per message via the official API (macOS 13+).
+        // This replaced a hand-rolled audit-token check whose private `value(forKey: "auditToken")`
+        // read came back empty on macOS 26 — every client "failed", DEBUG allowed-and-logged it,
+        // and the first Release build slammed the door on our own app (field-found 2026-07-11).
+        // Enforced in ALL configs now, so Debug exercises the same gate Release ships.
+        conn.setCodeSigningRequirement(Self.clientRequirement)
+        log("connection from pid \(conn.processIdentifier): accepted (code-sign requirement armed)")
         conn.exportedInterface = NSXPCInterface(with: WakeHelperProtocol.self)
         conn.exportedObject = self
         conn.invalidationHandler = { [weak self] in
@@ -173,19 +192,6 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
     private func loadArmed() -> String? {
         (try? String(contentsOf: URL(fileURLWithPath: Self.armedFile), encoding: .utf8))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// Verifies the connecting process is our signed app via its audit token (PID is racy).
-    private func isClientTrusted(_ conn: NSXPCConnection) -> Bool {
-        guard let tokenData = conn.value(forKey: "auditToken") as? Data,
-              tokenData.count == MemoryLayout<audit_token_t>.size else { return false }
-        let attrs = [kSecGuestAttributeAudit: tokenData] as CFDictionary
-        var code: SecCode?
-        guard SecCodeCopyGuestWithAttributes(nil, attrs, [], &code) == errSecSuccess, let code else { return false }
-        var req: SecRequirement?
-        guard SecRequirementCreateWithString(WakeHelperConfig.clientRequirement as CFString, [], &req) == errSecSuccess,
-              let req else { return false }
-        return SecCodeCheckValidity(code, [], req) == errSecSuccess
     }
 
     /// Root-side diagnostics. Goes to a root-writable log + stderr (visible in Console.app).

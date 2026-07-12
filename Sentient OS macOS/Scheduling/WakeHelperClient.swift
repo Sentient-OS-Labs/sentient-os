@@ -63,8 +63,9 @@ final class WakeHelperClient {
     /// mach service). Probes with `heartbeat`, the one op harmless in every state: mid-run it's
     /// exactly what the app already sends every 60s; idle it arms a deadman whose firing is a
     /// no-op (disablesleep is already 0). A booted-out service invalidates immediately, so the
-    /// false case answers in milliseconds.
-    func isReachable() async -> Bool { await heartbeat() }
+    /// false case answers in milliseconds. Quiet on purpose: a miss here is an EXPECTED state
+    /// (not installed / toggled off), not an error worth a scary log line — real ops keep theirs.
+    func isReachable() async -> Bool { await call(quiet: true) { $0.heartbeat(withReply: $1) } }
 
     /// The user-facing daemon verdict, shared by Settings → Health and onboarding's permissions
     /// step. ready = answers over XPC · disabled = unreachable with the files all correct (the
@@ -102,13 +103,17 @@ final class WakeHelperClient {
 
     /// Every call is guarded three ways so it can NEVER hang at 3am: the reply block, the XPC
     /// error handler (fires if the helper is unreachable), and a 30s timeout — all resume-once.
-    private func call(_ body: @escaping (WakeHelperProtocol, @escaping (Bool) -> Void) -> Void) async -> Bool {
+    /// `quiet` softens the error line for probes, where a miss is an expected state, not a fault.
+    private func call(quiet: Bool = false,
+                      _ body: @escaping (WakeHelperProtocol, @escaping (Bool) -> Void) -> Void) async -> Bool {
         let connection = conn()
         return await withCheckedContinuation { cont in
             let once = Once { cont.resume(returning: $0) }
             DispatchQueue.global().asyncAfter(deadline: .now() + 30) { once.fire(false) }
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ err in
-                Log("WakeHelper XPC error: \(err)"); once.fire(false)
+                if quiet { Log("WakeHelper probe: no daemon answering") }
+                else { Log("WakeHelper XPC error: \(err)") }
+                once.fire(false)
             }) as? WakeHelperProtocol else { once.fire(false); return }
             body(proxy) { ok in once.fire(ok) }
         }
