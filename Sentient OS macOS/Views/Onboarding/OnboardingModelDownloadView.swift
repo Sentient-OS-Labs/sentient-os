@@ -81,6 +81,8 @@ struct OnboardingModelDownloadView: View {
     }
 }
 
+// previewInstance is DEBUG-only, and #Preview bodies compile in Release too — so these must be guarded.
+#if DEBUG
 #Preview("Downloading — mid-flight") {
     ZStack {
         Theme.bg.ignoresSafeArea()
@@ -99,3 +101,4 @@ struct OnboardingModelDownloadView: View {
     .frame(width: 1180, height: 880)
     .preferredColorScheme(.dark)
 }
+#endif
