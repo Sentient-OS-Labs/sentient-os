@@ -77,8 +77,13 @@ struct ProcessingView: View {
         self.onDone = onDone
     }
 
-    private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(String) }
+    private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(CycleFailure) }
     @State private var state: UIState = .loadingModel
+    /// The failed screen's inline codex login (the "Codex isn't logged in" fix) — same shared
+    /// engine Settings → Health drives; `loginStarted` scopes the auto-notice poll + auto-retry
+    /// to a login WE opened from that screen.
+    @State private var codex = CodexSetup.shared
+    @State private var loginStarted = false
     @State private var prepStatus = "Preparing your suggestions…"
     /// The 10-minute patience flip for the cloud tail's bottom line (see `patienceLine`).
     @State private var patienceLong = false
@@ -418,18 +423,66 @@ struct ProcessingView: View {
         }
     }
 
-    private func failedView(_ message: String) -> some View {
+    private func failedView(_ failure: CycleFailure) -> some View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 46))
                 .foregroundStyle(.orange.opacity(0.85))
-            Text("Processing failed").font(.title3.weight(.semibold)).foregroundStyle(.white)
-            Text(message).font(.caption).foregroundStyle(.white.opacity(0.5))
+            Text(Self.failTitle(failure.kind)).font(.title3.weight(.semibold)).foregroundStyle(.white)
+            Text(Self.failBody(failure)).font(.caption).foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             HStack(spacing: 12) {
                 Button("Back", action: onExitEarly ?? onDone).buttonStyle(.bordered).tint(.white)
-                Button("Retry") { Task { started = false; await startIfNeeded() } }
-                    .buttonStyle(.borderedProminent).tint(.white)
+                if failure.kind == .loggedOut {
+                    Button("Retry") { Task { started = false; await startIfNeeded() } }
+                        .buttonStyle(.bordered).tint(.white)
+                    Button("Log in to Codex") { loginStarted = true; codex.startLogin(force: true) }
+                        .buttonStyle(.borderedProminent).tint(.white)
+                        .disabled(codex.loggingIn)
+                } else {
+                    Button("Retry") { Task { started = false; await startIfNeeded() } }
+                        .buttonStyle(.borderedProminent).tint(.white)
+                }
             }
+            if loginStarted, codex.loggingIn {
+                Text("A browser window opened. Finish signing in there; I'll retry on my own.")
+                    .font(.caption).foregroundStyle(.white.opacity(0.4))
+            }
+        }
+        // The browser-login auto-notice, same as Settings → Health and onboarding: while our
+        // login is out, poll `codex login status` (the codex login process self-exits once
+        // auth.json lands, no confirm button); the moment it reads logged-in, retry the cycle
+        // on our own. Leaving the failed state cancels the poll.
+        .task(id: loginStarted) {
+            guard loginStarted else { return }
+            while !Task.isCancelled, !codex.loggedIn {
+                try? await Task.sleep(for: .seconds(1.5))
+                await codex.refreshLoginStatus()
+            }
+            guard !Task.isCancelled, codex.loggedIn else { return }
+            loginStarted = false
+            // Unstructured on purpose: the retry flips state out of .failed, which tears THIS
+            // task down — the run must survive that.
+            Task { started = false; await startIfNeeded() }
+        }
+    }
+
+    private static func failTitle(_ kind: OvernightCaution.Kind?) -> String {
+        switch kind {
+        case .loggedOut:  "Codex isn't logged in"
+        case .usageLimit: "We hit ChatGPT's usage limit"
+        case .noInternet: "No internet connection"
+        case nil:         "Processing failed"
+        }
+    }
+
+    /// Classified failures get a friendly, actionable line (the raw detail is in the log +
+    /// Sentry); unclassified ones show the step's own message, as before.
+    private static func failBody(_ failure: CycleFailure) -> String {
+        switch failure.kind {
+        case .loggedOut:  "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
+        case .usageLimit: "Your plan's window resets on its own. Everything so far is saved; retry in a while and I'll pick up right where we stopped."
+        case .noInternet: "This step runs in the cloud. Once you're back online, hit Retry; everything so far is saved."
+        case nil:         failure.message
         }
     }
 
