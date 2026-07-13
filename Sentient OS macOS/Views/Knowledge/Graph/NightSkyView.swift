@@ -118,6 +118,7 @@ struct NightSkyView: View {
 struct SkyDoor: View {
     let icon: String
     let label: String
+    var glowRim = false        // the sky's Reader View door wears the moving rim (discoverability)
     let action: () -> Void
 
     var body: some View {
@@ -126,6 +127,29 @@ struct SkyDoor: View {
         }
         .labelStyle(.titleAndIcon)
         .keyboardShortcut("g", modifiers: [.command, .shift])
+        .overlay { if glowRim { SkyDoorRim() } }
+    }
+}
+
+/// The slow-moving gradient rim on the sky's Reader View door — field-tested: behind plain glass,
+/// users never found the reader at all. Theme.magicGlow (teal → cyan → blue → indigo → purple)
+/// circles the capsule once every 8s: a soft bloom under a crisp 1pt edge. Cosmetic only — it
+/// never intercepts the cursor.
+private struct SkyDoorRim: View {
+    private static let period: Double = 8.0
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+            let t = ctx.date.timeIntervalSinceReferenceDate
+            let angle = (t.truncatingRemainder(dividingBy: Self.period) / Self.period) * 360.0
+            let rim = AngularGradient(colors: Theme.magicGlow, center: .center, angle: .degrees(angle))
+            ZStack {
+                Capsule(style: .continuous).strokeBorder(rim, lineWidth: 2.5)
+                    .blur(radius: 3).opacity(0.55)
+                Capsule(style: .continuous).strokeBorder(rim, lineWidth: 1)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -135,11 +159,12 @@ struct SkyDoorToolbarItem: ToolbarContent {
     let label: String
     let help: String
     var placement: ToolbarItemPlacement = .principal   // sky: top-center · reader: .navigation (top-left)
+    var glowRim = false
     let action: () -> Void
 
     var body: some ToolbarContent {
         ToolbarItem(placement: placement) {
-            SkyDoor(icon: icon, label: label, action: action).help(help)
+            SkyDoor(icon: icon, label: label, glowRim: glowRim, action: action).help(help)
         }
     }
 }
@@ -322,6 +347,16 @@ private final class SkyEventNSView: NSView {
     }
     .frame(width: 400, height: 240)
     .preferredColorScheme(.dark)
+}
+
+#Preview("Sky door — glow rim") {
+    Theme.bg
+        .frame(width: 460, height: 140)
+        .toolbar {
+            SkyDoorToolbarItem(icon: "doc.plaintext", label: "Reader View",
+                               help: "", glowRim: true) {}
+        }
+        .preferredColorScheme(.dark)
 }
 
 #Preview("Night Sky — real vault") {
