@@ -238,6 +238,8 @@ final class CommandRunModel {
         Using \(mode.promptPhrase), \(task)
         \(voiceLine)\(screenLine)
         Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate). Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
+
+        You will not be able to ask me follow-up questions to clarify: in this harness, the moment you stop responding I see the task attempt as completed. So don't stop to ask trivial follow-up questions. Either do the task, or if it's genuinely too ambiguous to act on, just don't — say what was unclear instead. No follow-up questions.
         \(contextLine)
         For context about me, my knowledge base is a folder of markdown files at '\(VaultGenerator.vaultRoot.path)'. When you need it, read it directly with your shell/file tools — `ls`, `cat`, and `grep` the .md files. Do NOT open it in Obsidian or any GUI app to read it.
         """
