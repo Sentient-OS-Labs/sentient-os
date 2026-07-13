@@ -49,12 +49,7 @@ final class OvernightScheduler {
     static let firstCycleAtKey = "scheduler.firstCycleCompletedAt"   // Double epoch — set ONCE
     static let autoEnableFiredKey = "scheduler.autoEnableFired"      // latch — flip prod ON at most once
     static let autoEnableDelayKey = "scheduler.autoEnableDelaySeconds"  // dev override of the 18h wait
-    #if DEBUG
     static let defaultAutoEnableDelay: TimeInterval = 18 * 3600      // 18 hours after initial finishes
-    #else
-    // ⚠️ TEMP TESTING VALUE — Release auto-enables 3 minutes after the first cycle. Restore 18 * 3600 before shipping.
-    static let defaultAutoEnableDelay: TimeInterval = 3 * 60
-    #endif
 
     /// The configured time-of-day in minutes since midnight (shared default so the UI and the loop agree).
     nonisolated static var configuredMinutes: Int { (UserDefaults.standard.object(forKey: minutesKey) as? Int) ?? defaultMinutes }
