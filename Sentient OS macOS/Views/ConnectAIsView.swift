@@ -379,8 +379,9 @@ struct ConnectAIsView: View {
 
 // MARK: - The take-me-there link (under each video card)
 
-/// A quiet inline link that opens the AI's own screen in the browser — body ink, brightens on
-/// hover, the small arrow marking it as a door out of the app.
+/// The take-me-there bubble above each card — a quiet capsule pill (glassy fill, hairline ring)
+/// that opens the AI's own screen in the browser; the small arrow marks it as a door out of the
+/// app. Brightens on hover, same family as the cards' copy pills.
 private struct StepLink: View {
     let title: String
     let urlString: String
@@ -395,10 +396,13 @@ private struct StepLink: View {
                 Image(systemName: "arrow.up.right").font(.system(size: 8.5, weight: .semibold))
             }
             .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(hover ? Theme.Ink.bright : Theme.Ink.body)
-            .contentShape(Rectangle())
+            .foregroundStyle(hover ? .white : Theme.Ink.bright)
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(Capsule().fill(.white.opacity(hover ? 0.08 : 0.04)))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+            .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressScaleStyle())
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.15), value: hover)
     }
