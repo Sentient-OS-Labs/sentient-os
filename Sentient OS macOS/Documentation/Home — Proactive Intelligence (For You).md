@@ -35,8 +35,8 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
   with a *Reset & Rebuild* glow. See `Plan Gate (CodexAuth & Knowledge-Base-Only).md`.
 - **The dock:** the `PromptBar` command bar + the trust footer (the command bar is HIDDEN in
   knowledge-base-only mode — computer use runs on quota those plans don't have). A small `DEV TOOLS`
-  handle is pinned bottom-right (→ the `Views/Dev/DevToolsView.swift` sheet; the Release strip
-  re-hides it).
+  handle is pinned bottom-right (→ the `Views/Dev/DevToolsView.swift` sheet; `#if DEBUG` — compiled
+  out of Release, and it's the sheet's only opener, so Dev Tools is unreachable there).
 - **The caution banner — `cautionBanner` / `CautionCapsule` (ONE slot, most severe first):** the
   blank space top-right beside the greeting holds at most ONE capsule; a LIVE issue outranks
   history. Both roads lead to Permissions & Health (`SettingsView.requestedPane = .health`).

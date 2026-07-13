@@ -6,7 +6,7 @@
 //  ProcessingView takeover (today they cross-fade). RootView owns the analyze/source state and
 //  feeds HomeView its live context; Analyze Now (in the home's Analysis popover) runs whatever
 //  the dev source picker has armed (SourceSelection). The picker + all debug controls live in
-//  DevToolsView, a sheet reached from the Analysis popover's DEV TOOLS link.
+//  DevToolsView, a sheet reached from the home's DEV TOOLS handle (DEBUG builds only).
 //
 
 import SwiftUI
