@@ -49,6 +49,11 @@ struct OnboardingView: View {
     /// screen renders it). Held here so this body observes its phase.
     @State private var download = ModelDownload.shared
 
+    /// Keeps the screen on for ALL of onboarding — the model download runs behind the slides
+    /// and the first analysis takes hours; idle-sleep would kill both. Held for this view's
+    /// whole lifetime (see body), released when the home replaces onboarding.
+    @State private var awake = DisplayAwake()
+
     /// Live model path (env → bundle → App Support → repo root); nil = not on this Mac YET.
     /// Reading the download phase first makes SwiftUI re-evaluate this body when the download
     /// verifies, so the path flips non-nil in place and the analysis takes over by itself (the
@@ -103,6 +108,13 @@ struct OnboardingView: View {
                 }
             }
         }
+        // The whole-onboarding display hold: slides → permissions → codex login → downloads →
+        // analysis → finale, pauses included. The FDA quit-and-relaunch re-begins on remount;
+        // the DEBUG skip and the real finish both release via onDisappear when RootView swaps
+        // to home. (ProcessingView's own hold covers home-launched first ingests; during
+        // onboarding the two overlap harmlessly — independent tokens.)
+        .onAppear { awake.begin(reason: "Onboarding — keeping the screen on") }
+        .onDisappear { awake.end() }
         // A quiet back door on every screen but the first (and never over the analysis takeover,
         // which owns its own pause/exit). One shared code path, so every step gets it for free.
         .overlay(alignment: .topLeading) {
