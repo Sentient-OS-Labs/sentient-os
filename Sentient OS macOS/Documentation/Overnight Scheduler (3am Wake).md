@@ -4,7 +4,7 @@ The overnight scheduler wakes the Mac at 3am (lid shut), runs the exact same pip
 Analyze Now (`IterativeRun .auto` + the Gmail/Calendar legs → `ProactiveCycle`), then sleeps — so a
 fresh "For You" briefing is waiting when you open the lid. This doc is the whole scheduler story:
 the proven wake mechanism, the root privilege model, the nightly run, and the production wiring
-(install · login item · enable flags · the 18h auto-enable).
+(install · login item · enable flags · the 14h auto-enable).
 
 The in-app scheduler lives in `Scheduling/OvernightScheduler.swift` (owned by `AppState`); it only
 runs while Sentient is open. Everything logs to `~/Library/Logs/SentientOS/scheduler.log`
@@ -103,31 +103,31 @@ record. *(The home's banner slot also carries a LIVE health ladder —
 attribution) — which silently excludes the DB sources. The arm-time `DETECTED …` / `FDA granted:`
 log lines surface it.
 
-## The 18h auto-enable — why, and how
+## The 14h auto-enable — why, and how
 
 Right after the first big **initial** processing run, everything is caught up — there's nothing new
 to chew on. If we armed the 3am wake immediately and initial finished at, say, 10pm, the run five
 hours later would find almost nothing → a wasted wake and an **empty morning briefing**. So we wait
-**18 hours after the first full cycle finishes**, by which point a full day of real life has piled up,
+**14 hours after the first full cycle finishes**, by which point a full day of real life has piled up,
 and *then* turn the scheduler on. The very first automatic overnight run has something worth surfacing.
 
 - **"Initial finished" = the first full `ProactiveCycle`.** `ProactiveCycle.run()` calls
   `OvernightScheduler.noteFirstCycleCompleted()` on its success path, which stamps
   `firstCycleCompletedAt` **once** (later calls are ignored, so the clock starts at the true first finish).
 - **The checker — `maybeAutoEnable()`** runs at launch (`AppState.init`), after every cycle
-  (`RootView`'s processing `onDone`), and from a one-shot timer it arms for the 18h mark (so it fires
+  (`RootView`'s processing `onDone`), and from a one-shot timer it arms for the 14h mark (so it fires
   even if the app just sits open). It is idempotent and:
   - **Latches** (`autoEnableFired`) so it acts at most once and never re-enables after a user turns it off.
   - **Never fights the user** — if the scheduler is already on (dev or prod flag), it just latches.
   - **Knowledge-base-only mode (free/go plans) early-returns before everything** — no timer, no
     production flag, no 3am runs (those plans have no quota for nightly codex work). Deliberately
-    NOT latched, so an upgrade + reset starts the 18h clock fresh. See `Plan Gate (CodexAuth &
+    NOT latched, so an upgrade + reset starts the 14h clock fresh. See `Plan Gate (CodexAuth &
     Knowledge-Base-Only).md`.
   - **Gates on prerequisites** — only flips production ON once the root helper is **approved** *and*
-    launch-at-login is on. If the 18h has elapsed but prerequisites aren't met, it sets
+    launch-at-login is on. If the 14h has elapsed but prerequisites aren't met, it sets
     `needsSchedulerSetup` (published, for the setup UX) and retries on the next tick — it never
     silently half-enables.
-- **The wait is 18h** (`defaultAutoEnableDelay`); a dev key (`autoEnableDelaySeconds`) shortens it for testing.
+- **The wait is 14h** (`defaultAutoEnableDelay`); a dev key (`autoEnableDelaySeconds`) shortens it for testing.
 
 ## A — Installing the root daemon
 
@@ -207,8 +207,8 @@ every 2s, so approving in System Settings updates without a refresh) sits above 
 - **① Approve the root helper** — one "Approve helper" button that registers the daemon *and* jumps to
   System Settings to flip it on; shows `enabled ✓` when done.
 - **② Launch at login** — a single toggle.
-- **③ Test the 18h auto-enable** — a plain-language readout of what will happen, a **Wait** picker
-  (18h real / 10s / 60s) to shorten the delay, and *Simulate first analyze done* / *Run check now* / *Reset*.
+- **③ Test the 14h auto-enable** — a plain-language readout of what will happen, a **Wait** picker
+  (14h real / 10s / 60s) to shorten the delay, and *Simulate first analyze done* / *Run check now* / *Reset*.
 - **④ Manual arm (bypass)** — the time picker + on/off for a direct end-to-end wake test.
 
 This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to the same seams
@@ -225,7 +225,7 @@ This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to th
 
 ## Files
 
-- `Scheduling/OvernightScheduler.swift` — the scheduler, the 18h auto-enable state machine, `ensureHelperReady`.
+- `Scheduling/OvernightScheduler.swift` — the scheduler, the 14h auto-enable state machine, `ensureHelperReady`.
 - `Scheduling/LoginItem.swift` — launch-at-login via `SMAppService.mainApp`.
 - `Scheduling/WakeHelperClient.swift` — daemon register/status/deep-link + the XPC ops + `isReachable()`/`healthProbe()` (the liveness ground truth).
 - `Scheduling/WakeHelperInstaller.swift` — the PRODUCTION admin-password installer (decided 2026-07-04); also the DEBUG fallback in `ensureHelperReady`.

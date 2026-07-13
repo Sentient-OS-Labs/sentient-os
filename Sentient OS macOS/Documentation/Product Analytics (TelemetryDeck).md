@@ -60,7 +60,7 @@ existing B7 "length, not the command text" log — same discipline.
 | `Scheduler.overnightStarted` / `.overnightCompleted` | `Scheduling/OvernightScheduler.swift` | 3am run began / finished |
 | `Scheduler.gated` | `Scheduling/OvernightScheduler.swift` | Nightly run skipped (`reason`: battery/lowPower/thermal) |
 | `Scheduler.caution` | `Scheduling/OvernightCaution.swift` | An unattended run failed for a knowable reason (`kind`: usageLimit/loggedOut/noInternet) — was Sentry's `overnight.caution` until the 2026-07-12 curation |
-| `Scheduler.autoEnabled` | `Scheduling/OvernightScheduler.swift` | The 18h auto-enable flipped the scheduler on |
+| `Scheduler.autoEnabled` | `Scheduling/OvernightScheduler.swift` | The 14h auto-enable flipped the scheduler on |
 | `KnowledgeBase.built` / `.updated` / `.failed` | `Proactive/ProactiveCycle.swift` | First build / incremental update / error |
 | `KnowledgeBase.staleSwapAverted` | `Vault/VaultCloud.swift` | The freshness check aborted a swap over a mid-run editor save (working as designed — was Sentry's `vault.update.stale_swap_averted`) |
 | `Proactive.decided` | `Proactive/ProactiveCycle.swift` | # things-worth-doing found |

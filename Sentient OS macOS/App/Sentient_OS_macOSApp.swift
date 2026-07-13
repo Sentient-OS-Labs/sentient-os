@@ -97,7 +97,7 @@ struct SentientOSApp: App {
         .restorationBehavior(.disabled)
 
         // Overnight Processing — the dev cockpit for the 3am scheduler (helper approval, launch-at-
-        // login, 18h auto-enable, manual arm). Opened from DEV TOOLS → "Overnight Processing…".
+        // login, 14h auto-enable, manual arm). Opened from DEV TOOLS → "Overnight Processing…".
         Window("Overnight Processing", id: OvernightDevView.windowID) {
             OvernightDevView()
                 .environment(appState)

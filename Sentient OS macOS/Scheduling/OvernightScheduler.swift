@@ -29,14 +29,14 @@ final class OvernightScheduler {
     /// One-line status for the dev UI ("off" / "armed for 4:00 PM" / "running…").
     var statusLine = "off"
 
-    /// Set true when the 18h auto-enable wants to arm but a prerequisite is missing: the root
+    /// Set true when the 14h auto-enable wants to arm but a prerequisite is missing: the root
     /// helper isn't installed (onboarding's permissions step and Settings → Health own the
     /// install), or launch-at-login is off. The setup UX reads this to prompt the user; it
     /// clears itself once auto-enable succeeds.
     var needsSchedulerSetup = false
 
     // The DEV toggle (testing) and the PRODUCTION flag are separate keys but either one runs the
-    // scheduler. The dev toggle is hand-flipped in DevToolsView; the production flag is what the 18h
+    // scheduler. The dev toggle is hand-flipped in DevToolsView; the production flag is what the 14h
     // auto-enable (and a future Settings switch) writes. Keeping them apart means a dev testing the
     // toggle never trips the production auto-enable latch, and vice-versa.
     static let enabledKey = "dbg.scheduler.enabled"        // DEV toggle
@@ -45,16 +45,16 @@ final class OvernightScheduler {
     static let defaultMinutes = 3 * 60                     // 3:00 AM — the production overnight time (the dev
                                                           // UI can override `minutesKey` for testing)
 
-    // 18h auto-enable state (all UserDefaults; survive restarts).
+    // 14h auto-enable state (all UserDefaults; survive restarts).
     static let firstCycleAtKey = "scheduler.firstCycleCompletedAt"   // Double epoch — set ONCE
     static let autoEnableFiredKey = "scheduler.autoEnableFired"      // latch — flip prod ON at most once
-    static let autoEnableDelayKey = "scheduler.autoEnableDelaySeconds"  // dev override of the 18h wait
-    static let defaultAutoEnableDelay: TimeInterval = 18 * 3600      // 18 hours after initial finishes
+    static let autoEnableDelayKey = "scheduler.autoEnableDelaySeconds"  // dev override of the 14h wait
+    static let defaultAutoEnableDelay: TimeInterval = 14 * 3600      // 14 hours after initial finishes
 
     /// The configured time-of-day in minutes since midnight (shared default so the UI and the loop agree).
     nonisolated static var configuredMinutes: Int { (UserDefaults.standard.object(forKey: minutesKey) as? Int) ?? defaultMinutes }
 
-    /// The auto-enable wait (default 18h; a dev key shortens it for testing). (Pure UserDefaults read.)
+    /// The auto-enable wait (default 14h; a dev key shortens it for testing). (Pure UserDefaults read.)
     nonisolated static var autoEnableDelay: TimeInterval {
         let v = UserDefaults.standard.double(forKey: autoEnableDelayKey)
         return v > 0 ? v : defaultAutoEnableDelay
@@ -71,12 +71,12 @@ final class OvernightScheduler {
 
     /// Stamp "initial processing finished" exactly once — called from ProactiveCycle on the first full,
     /// successful cycle (knowledge base now exists). Nonisolated: it's a single UserDefaults write, safe
-    /// from the cycle actor. Later calls are ignored, so the 18h clock starts at the TRUE first finish.
+    /// from the cycle actor. Later calls are ignored, so the 14h clock starts at the TRUE first finish.
     nonisolated static func noteFirstCycleCompleted() {
         let d = UserDefaults.standard
         guard d.double(forKey: firstCycleAtKey) == 0 else { return }
         d.set(Date().timeIntervalSince1970, forKey: firstCycleAtKey)
-        Log("Scheduler: first full cycle done — 18h auto-enable clock started (fires \(Date().addingTimeInterval(autoEnableDelay)))")
+        Log("Scheduler: first full cycle done — 14h auto-enable clock started (fires \(Date().addingTimeInterval(autoEnableDelay)))")
     }
 
     private var loopTask: Task<Void, Never>?
@@ -112,7 +112,7 @@ final class OvernightScheduler {
         // the scheduler ON even while it's currently off (that's the whole point of auto-enable).
     }
 
-    // MARK: - 18h auto-enable
+    // MARK: - 14h auto-enable
 
     /// Decide whether to auto-enable the production scheduler. Idempotent + safe to call repeatedly —
     /// from launch (AppState.init), right after any cycle finishes, and from the one-shot timer it arms.
@@ -121,7 +121,7 @@ final class OvernightScheduler {
     /// flags `needsSchedulerSetup` for the setup UX and retries on the next tick.
     func maybeAutoEnable() {
         // Free/go knowledge-base-only mode: no quota for nightly runs — auto-enable never fires.
-        // Deliberately NOT latched, so an upgrade (+ reset) later starts the 18h clock fresh.
+        // Deliberately NOT latched, so an upgrade (+ reset) later starts the 14h clock fresh.
         guard !CodexAuth.knowledgeBaseOnly else { return }
         let d = UserDefaults.standard
         guard !d.bool(forKey: Self.autoEnableFiredKey) else { return }      // already handled once
@@ -142,7 +142,7 @@ final class OvernightScheduler {
         // `isReady` is the dev cockpit's SMAppService approval path.
         guard WakeHelperInstaller.isInstalledAndCurrent() || WakeHelperClient.shared.isReady else {
             needsSchedulerSetup = true                                      // surface setup; retry next tick
-            Log("Scheduler: 18h elapsed but root helper not installed — awaiting setup")
+            Log("Scheduler: 14h elapsed but root helper not installed — awaiting setup")
             return
         }
         // The app must be alive at 3am to host the run — enable launch-at-login, and treat a
@@ -152,19 +152,19 @@ final class OvernightScheduler {
         LoginItem.enable()
         guard LoginItem.isEnabled else {
             needsSchedulerSetup = true
-            Log("Scheduler: 18h elapsed but launch-at-login is off (revoked?) — awaiting setup")
+            Log("Scheduler: 14h elapsed but launch-at-login is off (revoked?) — awaiting setup")
             return
         }
         d.set(true, forKey: Self.prodEnabledKey)
         d.set(true, forKey: Self.autoEnableFiredKey)
         needsSchedulerSetup = false
-        Log("Scheduler: 18h elapsed + prerequisites met — auto-enabled overnight processing")
+        Log("Scheduler: 14h elapsed + prerequisites met — auto-enabled overnight processing")
         Analytics.signal("Scheduler.autoEnabled")
         reevaluate()
     }
 
     /// Arm a one-shot wake-up for the auto-enable moment (so it fires even if the app just sits open
-    /// past the 18h mark). Replaces any pending timer; the timer just re-invokes maybeAutoEnable().
+    /// past the 14h mark). Replaces any pending timer; the timer just re-invokes maybeAutoEnable().
     private func armAutoEnableTimer(at fireAt: Date) {
         autoEnableTask?.cancel()
         let delay = max(1, fireAt.timeIntervalSinceNow)

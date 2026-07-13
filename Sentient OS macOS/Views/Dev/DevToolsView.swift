@@ -113,14 +113,14 @@ struct DevToolsView: View {
     // MARK: Overnight processing
 
     /// One door into the OVERNIGHT PROCESSING window — all the fiddly controls (helper approval,
-    /// launch-at-login, the 18h auto-enable, manual arm) live there (OvernightDevView), not inline.
+    /// launch-at-login, the 14h auto-enable, manual arm) live there (OvernightDevView), not inline.
     private var overnightSection: some View {
         Button { openWindow(id: OvernightDevView.windowID) } label: {
             HStack(spacing: 10) {
                 Image(systemName: "moon.stars")
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Overnight Processing…").font(.callout.weight(.medium)).foregroundStyle(.white)
-                    Text("Helper approval · launch-at-login · 18h auto-enable · manual arm")
+                    Text("Helper approval · launch-at-login · 14h auto-enable · manual arm")
                         .font(.caption2).foregroundStyle(Theme.faint)
                 }
                 Spacer()

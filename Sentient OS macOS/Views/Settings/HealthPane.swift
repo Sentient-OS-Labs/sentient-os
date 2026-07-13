@@ -239,7 +239,7 @@ struct HealthPane: View {
                 _ = await WakeHelperInstaller.installAsync()
                 try? await Task.sleep(for: .seconds(1))   // let launchd settle before the XPC probe
                 await refreshDaemon()
-                // A fresh install may be the last missing prerequisite — re-run the 18h check now
+                // A fresh install may be the last missing prerequisite — re-run the 14h check now
                 // instead of waiting for the next launch (this app rarely relaunches).
                 if daemon == .ready { appState?.scheduler.maybeAutoEnable() }
             }

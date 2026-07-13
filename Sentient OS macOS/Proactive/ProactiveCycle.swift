@@ -155,7 +155,7 @@ actor ProactiveCycle {
         await CycleStore.shared.wipeAllNotes()
         OvernightCaution.clear()                             // a full success retires any morning-after banner
         UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
-        OvernightScheduler.noteFirstCycleCompleted()   // "initial processing ended" → start the 18h auto-enable clock (once)
+        OvernightScheduler.noteFirstCycleCompleted()   // "initial processing ended" → start the 14h auto-enable clock (once)
         progress(.done(ready: ProactiveResearch.latest()?.ready.count ?? 0))
         return nil
     }

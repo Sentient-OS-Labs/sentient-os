@@ -79,7 +79,7 @@ flips:
 
 | Surface | Behavior |
 |---|---|
-| `OvernightScheduler.maybeAutoEnable()` | Early-returns — no 18h auto-enable, no timer, no 3am runs. Deliberately NOT latched: upgrade + reset starts the clock fresh. |
+| `OvernightScheduler.maybeAutoEnable()` | Early-returns — no 14h auto-enable, no timer, no 3am runs. Deliberately NOT latched: upgrade + reset starts the clock fresh. |
 | `ProactiveCycle` | Skips decide + research (saves an empty ready-list — no stale cards). Still runs: read → KB build/update → mirror push → gift letter → wipe. |
 | Sidekick | Gated at **invoke**, not arming: the hotkey stays armed for everyone; on press the notch answers instantly with the 2s aside "get ChatGPT Plus to wake Sidekick" (the mic-notice pattern) and never opens for listening/typing. `submit()` carries a backstop for the command-bar path. Live-checked per press — no stale-launch-flag hole. |
 | Home | Command bar hidden. The **preview note** (orb + "This is a preview of Sentient." + feature rows + Get Plus glow + Reset Sentient… pill) is ALWAYS mounted; the gift envelope perches top-center above a compact version of it and the note blooms to full center when the letter is flung. Once the claim reads Plus (re-read every appearance), it becomes "You're on Plus. Time to go live." + a Reset & Rebuild glow. |
