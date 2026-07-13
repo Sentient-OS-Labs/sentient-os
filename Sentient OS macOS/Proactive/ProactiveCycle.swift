@@ -105,7 +105,7 @@ actor ProactiveCycle {
         if !giftPreexisted {
             progress(.knowledgeBase("Writing your welcome…"))
             do { _ = try await GiftLetter.shared.generate(onLine: onLine) }
-            catch { Log("GiftLetter: welcome skipped — \(Self.msg(error))") }
+            catch { Log("GiftLetter: welcome skipped — \(ErrorLabel(error))") }   // type only: msg() embeds raw codex output → Sentry breadcrumb
         }
 
         // 3) Proactive — decide, then research + prepare. Inject the live calendar when connected.

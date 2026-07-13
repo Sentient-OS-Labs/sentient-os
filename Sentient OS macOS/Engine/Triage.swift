@@ -164,6 +164,13 @@ enum Triage {
         if summary.isEmpty {
             return Outcome(verdict: .junk, title: title, summary: summary, reason: .emptySummary)
         }
+        // Backstop behind the model: if a high-risk identifier (US SSN, Luhn-valid card number, or
+        // passport number) slipped into a would-be survivor despite the prompt, drop the whole item
+        // as sensitive — nothing stored, zero trace, never sent to the cloud (drop the summary/title
+        // too so the PII isn't even carried in the Outcome).
+        if PIIScan.containsHighRiskPII(summary) || PIIScan.containsHighRiskPII(title ?? "") {
+            return Outcome(verdict: .sensitive, title: nil, summary: "", reason: .sensitive)
+        }
         return Outcome(verdict: .survivor, title: title, summary: summary, reason: .survivor)
     }
 

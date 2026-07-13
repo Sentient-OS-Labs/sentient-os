@@ -255,7 +255,7 @@ struct IterativeRun {
                         .sorted { $0.key > $1.key }                      // newest → oldest (top-down)
                 case .iterative:
                     guard let s = state, s.floor == nil else {
-                        Log("IterativeRun: \(bucket.key) — \(state == nil ? "no pointer" : "first run unfinished"); run initial first; skipping.")
+                        Log("IterativeRun: \(CycleStore.scheme(bucket.key)) — \(state == nil ? "no pointer" : "first run unfinished"); run initial first; skipping.")
                         continue
                     }
                     top = nil

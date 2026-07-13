@@ -242,7 +242,9 @@ actor VaultGenerator {
             try Self.swapStagingIntoVault(staging)
         } catch {
             Log("VaultGenerator: ❌ swap failed, vault left intact — \(ErrorLabel(error))")
-            CrashReporting.capture(error)                            // TODO(P2): structured `vault_swap_failed`
+            // Structured event, not capture(error): a Cocoa move error embeds the failing note's
+            // PATH (i.e. a note title) which the scrubber can't fully strip from a spaced vault path.
+            CrashReporting.captureEvent("vault_swap_failed", tags: ["error": ErrorLabel(error)])
             throw error
         }
         Log("VaultGenerator: ✅ vault swapped into place — \(notes) notes at \(Self.vaultRoot.path)")
