@@ -122,8 +122,7 @@ struct KnowledgeView: View {
                      onExit: { requestMode(.reader) })
             .toolbar {
                 SkyDoorToolbarItem(icon: "doc.plaintext", label: "Reader View",
-                                   help: "Back to the reader (Esc or ⌘⇧G)",
-                                   glowRim: true) { requestMode(.reader) }
+                                   help: "Back to the reader (Esc or ⌘⇧G)") { requestMode(.reader) }
             }
     }
 
