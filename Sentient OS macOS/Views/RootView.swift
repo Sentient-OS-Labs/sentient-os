@@ -114,7 +114,7 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.35), value: codex.settingUpComputerUse)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a
         // required update is found it takes over; otherwise it draws nothing. (Updates/)
-        .overlay { UpdateGateView() }
+        .overlay { UpdateGateView(host: .home) }
         .sheet(isPresented: $showDevTools) {
             DevToolsView()
         }

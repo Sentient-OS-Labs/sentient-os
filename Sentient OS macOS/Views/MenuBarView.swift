@@ -25,7 +25,10 @@ struct MenuBarView: View {
         }
 
         Divider()
-        Button("Check for Updates…") { appState.update.checkForUpdatesNow() }
+        Button("Check for Updates…") {
+            openHome()   // the check's info card lives in the home window — make sure it's up front
+            appState.update.checkForUpdatesNow(from: .home)
+        }
         Text("Version \(UpdateController.currentVersionString)")
 
         Divider()

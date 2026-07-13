@@ -5,7 +5,7 @@
 //  Owns the Sparkle updater and wires it to our own UI. Creates one SPUUpdater targeting the app's
 //  main bundle, driven by SentientUpdateDriver (our OLED gate) with this object as the SPUUpdaterDelegate.
 //  AppState holds one of these and calls `start()` — GUI path only (never the root wake-helper). The
-//  menu bar and Settings call `checkForUpdatesNow()`.
+//  menu bar and Settings call `checkForUpdatesNow(from:)`, tagging which window hosts the info card.
 //
 //  Chrome-style silent relaunch: once Sparkle has silently downloaded + staged an update, it calls our
 //  `willInstallUpdateOnQuit` hook. We take over and, the moment it's SAFE (no pipeline run in flight and
@@ -60,10 +60,12 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     }
 
     /// A user-asked check (menu bar / Settings). Shows the small info card for "checking" and
-    /// "you're up to date"; escalates to the full gate if a real update is found.
-    func checkForUpdatesNow() {
+    /// "you're up to date" in the originating window; escalates to the full gate if a real
+    /// update is found.
+    func checkForUpdatesNow(from origin: UpdateModel.CheckOrigin) {
         guard updater.canCheckForUpdates else { return }
         model.userInitiated = true
+        model.checkOrigin = origin
         updater.checkForUpdates()
     }
 

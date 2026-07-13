@@ -54,6 +54,10 @@ struct SettingsView: View {
         }
         .background(Theme.bg.ignoresSafeArea())
         .frame(minWidth: 880, minHeight: 600)
+        // The update surface, hosted here too: System's "Check for Updates Now" shows its info
+        // card over THIS window (not buried in the home behind it), and a mandatory gate takes
+        // this window over as well. Draws nothing otherwise. (Updates/)
+        .overlay { UpdateGateView(host: .settings) }
         .onAppear {
             if let pane = Self.requestedPane { selection = pane; Self.requestedPane = nil }
         }
@@ -89,7 +93,7 @@ struct SettingsView: View {
     /// The About corner — what used to want its own tab, tucked where it belongs.
     private var aboutFooter: some View {
         VStack(alignment: .leading, spacing: 9) {
-            MonoCaps("Sentient OS · v\(appVersion)", size: 8, tracking: 1.6, color: Theme.Ink.deepMuted)
+            MonoCaps("Sentient OS · v\(UpdateController.currentVersionString)", size: 8, tracking: 1.6, color: Theme.Ink.deepMuted)
             footerLink("Open source on GitHub", icon: "heart.fill",
                        url: "https://github.com/Sentient-OS-Labs/sentient-os")
             footerLink("Report an issue", icon: "ladybug",
@@ -109,10 +113,6 @@ struct SettingsView: View {
             .foregroundStyle(Theme.Ink.label)
         }
         .buttonStyle(PressScaleStyle())
-    }
-
-    private var appVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.1"
     }
 
     // MARK: - Detail

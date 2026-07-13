@@ -32,11 +32,19 @@ final class UpdateModel {
     /// Which surface to present over the app, if any.
     enum Surface: Equatable { case none, gate, info }
 
+    /// Which window a user-initiated check came from. The small info card renders only in that
+    /// window (so a Settings-triggered check shows over Settings, not buried under it in the
+    /// home); the mandatory gate takes over every hosting window regardless.
+    enum CheckOrigin { case home, settings }
+
     private(set) var phase: Phase = .idle
 
     /// Was the in-flight check user-triggered? Governs whether "checking"/"up to date"/"check
     /// failed" surface a small info card (yes) or stay silent (a background check finding nothing).
     var userInitiated = false
+
+    /// Where the in-flight user-initiated check was started (see CheckOrigin).
+    var checkOrigin: CheckOrigin = .home
 
     // Download byte accounting (feeds the determinate progress bar).
     private var expectedBytes: UInt64 = 0
