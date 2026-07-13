@@ -68,7 +68,7 @@ window and follows it live. Two modes:
   string) — the exact mix System Settings accepts into its privacy lists. While dragging, the
   panel goes mouse-transparent so the drop lands in Settings.
 - **Instruction** (`appURL` nil): toggle-only panes with no drag target — Login Items approval
-  ("Flip Sentient OS on under Allow in the Background").
+  ("Flip Sentient OS on under App Background Activity" — matches the pane's section header).
 
 Panes: `.fullDiskAccess` (onboarding + Health, Sentient as card) · `.accessibility` /
 `.screenRecording` (the helper, or Sentient for its own screen recording) · `.loginItems`

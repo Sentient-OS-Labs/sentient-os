@@ -18,6 +18,9 @@
 //   · One Canvas glow pass per side, not two.
 //   · The planet's diameter is FIXED (vector-crisp); breathing lives in the heart's glow,
 //     the halo, and the ring — never in a scaleEffect over the whole orb (bitmap fuzz).
+//   · Focus-aware clock (FocusThrottledTimeline): an unfocused window swaps the display-link
+//     schedule for a fixed timer, hard-locking the orb to 60fps (halo 30) — otherwise a
+//     ProMotion Mac renders a background orb at 120fps.
 //
 
 import SwiftUI
@@ -32,8 +35,7 @@ struct Orb: View {
     var body: some View {
         ZStack {
             haloLayer
-            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
+            FocusThrottledTimeline(minimumInterval: 1.0 / 60.0) { t in
                 let breath = (sin(t * 2 * .pi / 5.5) + 1) / 2     // 0…1, the 5.5s heartbeat
                 ZStack {
                     ringCanvas(front: false, t: t, breath: breath)
@@ -49,8 +51,7 @@ struct Orb: View {
     // MARK: Ambient halo — a cached texture, spun and breathed (never re-blurred)
 
     private var haloLayer: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
-            let t = ctx.date.timeIntervalSinceReferenceDate
+        FocusThrottledTimeline(minimumInterval: 1.0 / 30.0) { t in
             let breath = (sin(t * 2 * .pi / 5.5) + 1) / 2
             HaloTexture(size: size, mode: mode)
                 .rotationEffect(.radians(t * 2 * .pi / 18))
@@ -375,6 +376,30 @@ struct Orb: View {
                 twinkleSpeed: .random(in: 0.4...1.5, using: &rng))
         }
     }()
+}
+
+/// The orb's frame clock, focus-aware. While the window is active it rides the display-link
+/// `.animation` schedule (a ProMotion Mac may render at up to 120fps); the moment the window
+/// loses focus it swaps to a fixed timer cadence, hard-locking the rate to `minimumInterval` —
+/// `.animation(minimumInterval:)` alone doesn't reliably cap a 120Hz panel, and a background
+/// orb has no business burning frames. Motion never jumps across the swap: every phase is a
+/// pure function of wall time.
+private struct FocusThrottledTimeline<Content: View>: View {
+    @Environment(\.appearsActive) private var appearsActive
+    let minimumInterval: TimeInterval
+    @ViewBuilder let content: (_ t: TimeInterval) -> Content
+
+    var body: some View {
+        if appearsActive {
+            TimelineView(.animation(minimumInterval: minimumInterval)) { ctx in
+                content(ctx.date.timeIntervalSinceReferenceDate)
+            }
+        } else {
+            TimelineView(.periodic(from: .now, by: minimumInterval)) { ctx in
+                content(ctx.date.timeIntervalSinceReferenceDate)
+            }
+        }
+    }
 }
 
 /// The tiny static orb glyph (header scale): the logo's ring + dot with a soft glow.

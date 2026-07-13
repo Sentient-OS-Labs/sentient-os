@@ -26,7 +26,11 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
   drag physics, or tapped to expand into a full typeset letter.
 - **The empty state — the orb's ONE home:** when there are no cards, the living **`Orb`** rises into
   the center with *"I'm here to help."* The orb appears **only** here (plus the ProcessingView
-  takeover); Settings and Connect use the static `OrbMark` glyph instead.
+  takeover); Settings and Connect use the static `OrbMark` glyph instead. The orb's clock is
+  focus-aware (`FocusThrottledTimeline` in `Orb.swift`): window focused = the display-link schedule
+  (up to 120fps on ProMotion), unfocused = a fixed timer hard-locked to 60fps (halo 30) — so a
+  background window (overnight runs especially) never burns 120Hz frames. Full performance rules
+  live in `Orb.swift`'s header comment.
 - **Knowledge-base-only mode (free/go plans, `CodexAuth.knowledgeBaseOnly`):** cards never come, so
   the empty state is replaced by the ALWAYS-mounted **preview note** — orb + "This is a preview of
   Sentient." + the three feature rows + the *Get ChatGPT Plus* glow CTA + a *Reset Sentient…*
