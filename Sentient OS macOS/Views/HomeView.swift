@@ -502,7 +502,8 @@ struct HomeView: View {
                            // The LIVE content for THIS card (reflects any prior edit) — seeds the editor
                            // per briefing so a reused letter view never shows the previous card's draft.
                            liveDraft: model.entry(b.id)?.action?.preparedContent ?? b.draft ?? "",
-                           onCommitEdit: { model.applyEdit(b.id, content: $0) },
+                           liveRecipient: model.entry(b.id)?.action?.recipient ?? "",
+                           onCommitEdit: { model.applyEdit(b.id, content: $0, recipient: $1) },
                            onOffer: {
                                closeLetter()
                                model.run(b.id)   // real card → fires for real; demo → theater
@@ -775,16 +776,17 @@ final class ForYouModel {
         }
     }
 
-    /// Apply an edited draft to a card (its `preparedContent`) and persist it, so the fire sends it.
-    func applyEdit(_ id: String, content: String) {
+    /// Apply an edited draft + recipient to a card and persist them, so the fire sends exactly this
+    /// content to exactly this "To:".
+    func applyEdit(_ id: String, content: String, recipient: String) {
         update(id) {
             guard let old = $0.action else { return }
-            $0.action = Self.replacingContent(old, with: content)
+            $0.action = Self.replacing(old, content: content, recipient: recipient)
         }
-        guard var result = ProactiveResearch.latest() else { return }
-        result = ReadyResult(ready: result.ready.map { $0.id == id ? Self.replacingContent($0, with: content) : $0 },
-                             dropped: result.dropped)
-        ProactiveResearch.saveLatest(result)
+        guard let result = ProactiveResearch.latest() else { return }
+        ProactiveResearch.saveLatest(ReadyResult(
+            ready: result.ready.map { $0.id == id ? Self.replacing($0, content: content, recipient: recipient) : $0 },
+            dropped: result.dropped))
     }
 
     /// Drop a fired card from the persisted `latest` so a re-deal (next visit) won't show it again.
@@ -794,11 +796,12 @@ final class ForYouModel {
                                                  dropped: result.dropped))
     }
 
-    /// A copy of a PreparedAction with new `preparedContent` (the rest unchanged).
-    private static func replacingContent(_ a: PreparedAction, with content: String) -> PreparedAction {
+    /// A copy of a PreparedAction with new `preparedContent` + `recipient` (the rest unchanged).
+    private static func replacing(_ a: PreparedAction, content: String, recipient: String) -> PreparedAction {
         PreparedAction(title: a.title, method: a.method, target: a.target, urgency: a.urgency,
                        dueDate: a.dueDate, status: a.status, verification: a.verification,
                        cardSummary: a.cardSummary, preparedContent: content, executionRecipe: a.executionRecipe,
+                       recipient: recipient,
                        buttonText: a.buttonText, detailLabel: a.detailLabel, sources: a.sources,
                        reviewNote: a.reviewNote)
     }
@@ -877,24 +880,31 @@ private struct LetterView: View {
     let phase: BriefingPhase
     var editable: Bool = false                       // real card with a draft → the draft is editable
     var liveDraft: String = ""                       // THIS card's current content (seeds the editor)
-    var onCommitEdit: (String) -> Void = { _ in }    // persist the edited draft (so it's what fires)
+    var liveRecipient: String = ""                   // THIS card's "To:" (seeds the recipient field); "" = no recipient
+    var onCommitEdit: (String, String) -> Void = { _, _ in }   // persist (edited draft, edited recipient) → what fires
     var onOffer: () -> Void
     var onClose: () -> Void
 
     @State private var copied = false
     @State private var editedDraft = ""        // the live editor text
     @State private var savedDraft = ""         // the last COMMITTED text — drift from editedDraft = unsaved edits
+    @State private var editedRecipient = ""    // the live "To:" text
+    @State private var savedRecipient = ""     // the last COMMITTED "To:"
     @State private var saveTask: Task<Void, Never>?   // in-flight debounced auto-save
     @State private var giftSaved = false       // the welcome letter's keepsake PNG landed on the Desktop
 
-    /// Auto-save is pending (unsaved edits still settling). Drives the ambient "Saving…" status.
-    private var isDirty: Bool { editable && editedDraft != savedDraft }
+    /// This card sends a message to someone, so it shows an editable "To:" (the model filled a recipient).
+    private var hasRecipient: Bool { !liveRecipient.isEmpty }
 
-    /// Commit the current draft so it persists + is what fires. Cancels any pending debounce.
+    /// Auto-save is pending (unsaved edits still settling). Drives the ambient "Saving…" status.
+    private var isDirty: Bool { editable && (editedDraft != savedDraft || editedRecipient != savedRecipient) }
+
+    /// Commit the current draft + recipient so they persist + are what fires. Cancels any pending debounce.
     private func commitEdit() {
         saveTask?.cancel()
-        onCommitEdit(editedDraft)
+        onCommitEdit(editedDraft, editedRecipient)
         savedDraft = editedDraft
+        savedRecipient = editedRecipient
     }
 
     /// Debounced auto-save: commit ~0.6s after the user stops typing.
@@ -956,15 +966,17 @@ private struct LetterView: View {
         // briefing opens. The letter layer is always-mounted and REUSED across cards (stable identity),
         // so .onAppear fires only once; without the .onChange a second card would show the first card's
         // draft. editedDraft + savedDraft start equal (a freshly-opened card has no unsaved edits).
-        .onAppear { editedDraft = liveDraft; savedDraft = liveDraft }
+        .onAppear { editedDraft = liveDraft; savedDraft = liveDraft; editedRecipient = liveRecipient; savedRecipient = liveRecipient }
         // A different card opened: cancel any pending auto-save (it belongs to the OLD card's closure)
-        // and reseed. editedDraft + savedDraft start equal — a freshly-opened card has no unsaved edits.
+        // and reseed. edited + saved start equal — a freshly-opened card has no unsaved edits.
         .onChange(of: briefing.id) { _, _ in
-            saveTask?.cancel(); editedDraft = liveDraft; savedDraft = liveDraft; copied = false
+            saveTask?.cancel(); editedDraft = liveDraft; savedDraft = liveDraft
+            editedRecipient = liveRecipient; savedRecipient = liveRecipient; copied = false
             giftSaved = false
         }
-        // Every keystroke reschedules the debounced commit, so edits persist without a Save click.
+        // Every keystroke (draft OR recipient) reschedules the debounced commit, so edits persist without a Save click.
         .onChange(of: editedDraft) { _, _ in if isDirty { scheduleAutoSave() } }
+        .onChange(of: editedRecipient) { _, _ in if isDirty { scheduleAutoSave() } }
         .onDisappear { saveTask?.cancel() }
     }
 
@@ -1043,6 +1055,24 @@ private struct LetterView: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                }
+                // "To:" — WHO this message goes to. Shown only for cards that send to a person; editable
+                // (the executor sends to exactly this), so a wrong recipient is visible and correctable.
+                if hasRecipient {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        MonoCaps("To", size: 9, tracking: 2.0, color: Theme.Ink.label)
+                        if editable {
+                            TextField("", text: $editedRecipient)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13)).foregroundStyle(.white.opacity(0.92))
+                                .tint(briefing.accent)
+                        } else {
+                            Text(editedRecipient.isEmpty ? liveRecipient : editedRecipient)
+                                .font(.system(size: 13)).foregroundStyle(.white.opacity(0.92))
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Rectangle().fill(.white.opacity(0.07)).frame(height: 1)   // hairline between "who" and "what"
                 }
                 if editable {
                     TextEditor(text: $editedDraft)

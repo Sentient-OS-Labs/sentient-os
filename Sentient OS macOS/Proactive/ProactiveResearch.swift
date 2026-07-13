@@ -50,6 +50,12 @@ struct PreparedAction: Sendable, Identifiable, Codable {
     let executionRecipe: String    // ROUTING ONLY: which thread/recipient/chat/app/URL + which field
                                    // takes which content. References preparedContent, never duplicates
                                    // the body. "none" for research.
+    var recipient: String = ""     // WHO a message-send goes to — display name + handle/email
+                                   // ("Serena Saxena · serena@anthos.com"). Shown + EDITABLE as the
+                                   // card's "To:"; "" for cards that send to nobody (calendar / a
+                                   // form-fill task / research). Authoritative: the executor routes to
+                                   // exactly this, so a user edit re-targets the actual send. `var`
+                                   // (not `let`) so a memberwise init keeps compiling everywhere.
     let buttonText: String         // LLM-written fire CTA ("Should I send it for you?"); "" = no fire (research)
     let detailLabel: String        // LLM-written "read the …" link ("read the draft", "read the brief")
     let sources: [String]          // grounding receipts (vault notes, the thread, web results)
@@ -199,11 +205,12 @@ actor ProactiveResearch {
     "card_summary":{"type":"string"},\
     "prepared_content":{"type":"string"},\
     "execution_recipe":{"type":"string"},\
+    "recipient":{"type":"string"},\
     "button_text":{"type":"string"},\
     "detail_label":{"type":"string"},\
     "sources":{"type":"array","items":{"type":"string"}},\
     "review_note":{"type":"string"}},\
-    "required":["title","method","target","urgency","due_date","status","verification","card_summary","prepared_content","execution_recipe","button_text","detail_label","sources","review_note"]}},\
+    "required":["title","method","target","urgency","due_date","status","verification","card_summary","prepared_content","execution_recipe","recipient","button_text","detail_label","sources","review_note"]}},\
     "dropped":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
     "title":{"type":"string"},\
     "reason":{"type":"string"}},\
@@ -237,6 +244,7 @@ actor ProactiveResearch {
                 cardSummary: (d["card_summary"] as? String) ?? "",
                 preparedContent: (d["prepared_content"] as? String) ?? "",
                 executionRecipe: (d["execution_recipe"] as? String) ?? "",
+                recipient: ((d["recipient"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 buttonText: ((d["button_text"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 detailLabel: ((d["detail_label"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 sources: (d["sources"] as? [String]) ?? [],
@@ -376,6 +384,12 @@ actor ProactiveResearch {
         fires exactly as written — in the user's own voice wherever it's something they'd say.
         - Write `execution_recipe`: ROUTING only (where the action goes), referencing `prepared_content` \
         — never restate the message body in the recipe.
+        - Set `recipient`: WHO the message goes TO — the person's display name plus their handle/email \
+        when you have it (e.g. "Priya Sharma · priya@example.com"). Fill it for any action that sends a \
+        message to a person (a gmail reply/new email; a chat message via computer); leave it "" for \
+        actions that send to nobody (calendar, a form-fill/registration task, research). The user sees \
+        and can EDIT this as the card's "To:", and the executor sends to EXACTLY it — so name the real \
+        intended recipient, and keep it consistent with the recipient in `execution_recipe`. \
         - If something irreversible genuinely can't be resolved (an unknown recipient, a real either/or \
         choice), prepare everything else and put exactly what the user must check/decide in \
         `review_note` — never guess on the irreversible specifics.
