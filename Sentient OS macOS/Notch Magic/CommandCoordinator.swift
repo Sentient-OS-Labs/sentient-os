@@ -196,6 +196,14 @@ final class CommandCoordinator {
 
     private func voiceHoldConfirmed() {
         guard phase == .opening else { return }
+        // Mic or speech DENIED → a hold can never work and no native prompt can re-appear, so the
+        // permission window rises as the fix surface (non-blocking — voice is optional; only a
+        // committed HOLD reaches this, taps and typed commands never do).
+        if !VoiceCapture.isAuthorized, ComputerUseGate.shared.presentVoiceFixIfDenied() {
+            setPhase(.hidden)
+            Log("hold answered with the permission window — mic/speech denied")
+            return
+        }
         // A genuine first-run model download → say so instead of pretending to listen (the mic tap
         // only installs after the model lands, so anything spoken now would be silently lost). Only
         // a committed HOLD gets this beat — tap-to-type stays fully alive during the download.

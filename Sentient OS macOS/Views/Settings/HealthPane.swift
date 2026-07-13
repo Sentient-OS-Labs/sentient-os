@@ -185,9 +185,9 @@ struct HealthPane: View {
         SettingsGroup(label: "Sidekick & Proactive") {
             VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Microphone & Speech",
-                           health: micSpeechHealth,
+                           health: micSpeech == .granted ? .ok : .warn,   // optional — Sidekick's voice; tap-to-type works without it
                            note: micSpeechNote,
-                           tip: "Lets Sidekick hear you and turn your words into text when you hold the shortcut key.\n\nYour voice is heard and transcribed on this Mac, never in the cloud.",
+                           tip: "Optional but recommended.\nLets Sidekick hear you and turn your words into text when you hold the shortcut key.\n\nWithout it, hold-to-talk stays off — you can still tap the key (or click the notch) and type.\n\nYour voice is heard and transcribed on this Mac, never in the cloud.",
                            fixTitle: micSpeech == .notAsked ? "Allow…" : "Fix…") {
                     fixMicSpeech()
                 }
@@ -256,21 +256,13 @@ struct HealthPane: View {
         }
     }
 
-    // MARK: Microphone & Speech (one row — one call asks for both)
-
-    private var micSpeechHealth: StatusLine.Health {
-        switch micSpeech {
-        case .granted:  return .ok
-        case .notAsked: return .warn
-        case .denied:   return .bad
-        }
-    }
+    // MARK: Microphone & Speech (one row — one call asks for both; optional, so yellow, never red)
 
     private var micSpeechNote: String {
         switch micSpeech {
         case .granted:  return "granted"
         case .notAsked: return "not asked yet"
-        case .denied:   return "denied"
+        case .denied:   return "off"
         }
     }
 

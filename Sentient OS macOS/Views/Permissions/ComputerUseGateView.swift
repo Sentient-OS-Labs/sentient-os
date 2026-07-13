@@ -4,12 +4,12 @@
 //
 //  The one-time setup window's face (ComputerUseGate presents it): the four action grants as the
 //  same StatusLine rows Settings → Health uses, in two groups — SIDEKICK & PROACTIVE (Sentient's
-//  Microphone & Speech, plus its OPTIONAL Screen Recording — amber, never blocking) and CODEX
-//  PERMISSIONS (the helper's Accessibility, Screen Recording). Mic & Speech fix via the native
-//  system prompts; the other three fix via PermissionGuide's floating drag panel (they're
-//  system-TCC lists — only the user can flip them). Continue fires the held action whether or
-//  not everything is green; the rows re-probe when the app foregrounds (returning from System
-//  Settings).
+//  OPTIONAL Microphone & Speech and Screen Recording — amber, never blocking) and CODEX
+//  PERMISSIONS (the helper's Accessibility, Screen Recording — the REQUIRED pair). Mic & Speech
+//  fix via the native system prompts; the other three fix via PermissionGuide's floating drag
+//  panel (they're system-TCC lists — only the user can flip them). Continue fires the held action
+//  whether or not the optionals are green; the rows re-probe when the app foregrounds (returning
+//  from System Settings).
 //
 
 import SwiftUI
@@ -41,9 +41,9 @@ struct ComputerUseGateView: View {
                 SettingsGroup(label: "Sidekick & Proactive") {
                     VStack(alignment: .leading, spacing: 2) {
                         StatusLine(title: "Microphone & Speech",
-                                   health: micSpeechHealth,
+                                   health: gate.micSpeech == .granted ? .ok : .warn,   // optional — amber, never blocking
                                    note: micSpeechNote,
-                                   tip: "Lets Sidekick hear you and turn your words into text when you hold the shortcut key.\n\nYour voice is heard and transcribed on this Mac, never in the cloud.",
+                                   tip: "Optional but recommended.\nLets Sidekick hear you and turn your words into text when you hold the shortcut key.\n\nWithout it, hold-to-talk stays off — you can still tap the key (or click the notch) and type.\n\nYour voice is heard and transcribed on this Mac, never in the cloud.",
                                    fixTitle: gate.micSpeech == .notAsked ? "Allow…" : "Fix…") {
                             fixMicSpeech()
                         }
@@ -110,19 +110,11 @@ struct ComputerUseGateView: View {
 
     // MARK: Sentient's grants — native prompts first, the guide as the fallback
 
-    private var micSpeechHealth: StatusLine.Health {
-        switch gate.micSpeech {
-        case .granted:  return .ok
-        case .notAsked: return .bad   // compulsory here — this window exists to get them granted
-        case .denied:   return .bad
-        }
-    }
-
     private var micSpeechNote: String {
         switch gate.micSpeech {
         case .granted:  return "granted"
-        case .notAsked: return "not asked yet"
-        case .denied:   return "denied"
+        case .notAsked: return "recommended"
+        case .denied:   return "off"
         }
     }
 
