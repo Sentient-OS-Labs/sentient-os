@@ -46,8 +46,8 @@ final class OvernightScheduler {
     static let defaultMinutes = 3 * 60                     // 3:00 AM — the production overnight time (the dev
                                                           // UI can override `minutesKey` for testing)
     #else
-    // ⚠️ TEMP TESTING VALUE — Release runs the "overnight" cycle at 7:30 PM. Restore 3 * 60 before shipping.
-    static let defaultMinutes = 19 * 60 + 30
+    // ⚠️ TEMP TESTING VALUE — Release runs the "overnight" cycle at 12:45 AM. Restore 3 * 60 before shipping.
+    static let defaultMinutes = 45
     #endif
 
     // 18h auto-enable state (all UserDefaults; survive restarts).
