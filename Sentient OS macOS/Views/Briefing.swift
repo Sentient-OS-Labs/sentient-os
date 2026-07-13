@@ -247,7 +247,7 @@ struct Briefing: Identifiable {
             codexPrompt: """
             You are running fully headless and autonomous, with the user's explicit prior approval to act on their behalf for THIS task — they clicked "send it for me." Do NOT ask for confirmation or approval, do NOT pause to verify, and do NOT merely draft. Actually SEND. If any tool surfaces a confirmation or approval step, treat it as already granted by the user and proceed.
 
-            Use the Gmail MCP to reply to the email from jesaitarun@gmail.com with the subject "Sentient OS test". Reply in that thread and send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
+            Use the Gmail MCP to reply to the email from you@example.com with the subject "Sentient OS test". Reply in that thread and send EXACTLY the message below, verbatim — do not change, rephrase, summarize, or add anything:
 
             \(Briefing.anthosReply)
 
