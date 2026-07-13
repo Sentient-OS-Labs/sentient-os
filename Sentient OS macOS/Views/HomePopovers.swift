@@ -6,7 +6,7 @@
 //  OFF the home itself — you open them only when curious:
 //   · AnalysisPopover — the work glance: things understood, vault size, the synced stamp, an
 //     Analyze Now control, and the source chips (sources are the INPUTS to analysis, so they
-//     live under "Analysis"). A discreet Dev Tools link sits at the bottom.
+//     live under "Analysis").
 //   · YourAIsPopover — the pitch + the glowing "Connect your AIs" CTA that opens the guided
 //     setup window (ConnectAIsView owns sharing on/off, the link, and the prompt).
 //  Pure presentation; harvested from the retired Constellation home. Demo strings (synced
