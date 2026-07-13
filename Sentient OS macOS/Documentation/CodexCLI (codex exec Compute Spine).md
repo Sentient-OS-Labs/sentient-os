@@ -28,8 +28,13 @@ plumbing).
 - `startLogin(onLine:)` / `loginStatus()` — step 2: spawns `codex login` as a background process (it
   opens the browser + runs the localhost OAuth callback server, self-exits once `~/.codex/auth.json`
   lands); `loginStatus()` is the ground-truth `codex login status` check (exit 0 = logged in).
-- `validate(force:)` — ping (`Reply with exactly: PIGGYBACK_OK`, 30 s), cached per app launch;
-  `force: true` re-probes (the installer flow).
+- `validate(force:)` — ping (`Reply with exactly: PIGGYBACK_OK`, 30 s). **Only a good verdict is
+  cached** (per app launch); a failed probe re-checks on every call, so codex fixed mid-session
+  (re-login, reinstall) is seen by the very next retry. ⚠️ Never cache the failure: it once made
+  the processing takeover's Retry unwinnable until relaunch (field-found 2026-07-12 — a
+  server-side-invalidated token 401'd the ping, the user re-logged in, and four more retries
+  still failed in 0 ms off the cached verdict). `force: true` re-probes past a good cache too
+  (the installer flow).
 - `run(Invocation) → Envelope` — one headless `--json` call, typed errors. An optional `onLine:`
   streams a human-readable play-by-play (each JSONL item reduced by `humanLine` — agent messages,
   `$ command`s, `→ mcp.tool`s, `🔎 search`es) for live UIs (the For You cards).

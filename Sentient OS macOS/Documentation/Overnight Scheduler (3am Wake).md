@@ -85,15 +85,19 @@ re-armed for tomorrow; thermal is start-only) → `beginAwake` + a 60s heartbeat
 the Mac idle-sleeps (lid shut) → re-arm for the next night. Production default is **3:00 AM**
 (`defaultMinutes`; the dev UI can override).
 
-**The morning-after caution:** the scheduler is the ONE caller that passes
-`ProactiveCycle.run(scheduled: true, …)` — a failure in an unattended run classifies at the
-cycle's catch sites (`Scheduling/OvernightCaution`: typed `usageLimit` first → a local
-`codex login status` probe (works offline) → an `NWPathMonitor` snapshot → anything else records
-NOTHING) into codex-signed-out · no-internet · usage-limit, persisted for the home's amber banner
-(`HomeView.cautionBanner`). A watched Analyze Now records nothing (the takeover UI shows failures
-live); the next fully successful cycle clears the record. Each caution also emits a PII-free
-`overnight.caution{kind}` Sentry event. *(The home's banner slot also carries a LIVE health ladder
-— `System/HealthCaution.swift`, red, outranks this amber event — see the Home doc.)*
+**The morning-after caution:** EVERY cycle failure classifies at the cycle's catch sites
+(`OvernightCaution.classify`, since 2026-07-12: typed `usageLimit` first → a `401`/`unauthorized`
+marker in codex's own output (⚠️ a token invalidated SERVER-side still reads logged-in to the
+local probe — that marker is the only tell; field-found 2026-07-12) → a local `codex login
+status` probe (works offline) → an `NWPathMonitor` snapshot → anything else classifies as
+NOTHING) into codex-signed-out · no-internet · usage-limit. The scheduler is the ONE caller that
+passes `ProactiveCycle.run(scheduled: true, …)`, which PERSISTS the kind
+(`OvernightCaution.record`) for the home's amber banner (`HomeView.cautionBanner`) and emits the
+PII-free `Scheduler.caution{kind}` TelemetryDeck signal. A watched Analyze Now records nothing —
+the takeover's failed screen speaks the same classified kind live instead ("Codex isn't logged
+in" + an inline login button; see the Home doc). The next fully successful cycle clears the
+record. *(The home's banner slot also carries a LIVE health ladder —
+`System/HealthCaution.swift`, red, outranks this amber event — see the Home doc.)*
 
 ⚠️ Known caveat: **Full Disk Access can read `false` when the app is launched from Terminal** (TCC
 attribution) — which silently excludes the DB sources. The arm-time `DETECTED …` / `FDA granted:`
@@ -226,8 +230,8 @@ This is the dev cockpit; the shipping onboarding/Settings UX (Jesai) binds to th
 - `Scheduling/WakeHelperClient.swift` — daemon register/status/deep-link + the XPC ops + `isReachable()`/`healthProbe()` (the liveness ground truth).
 - `Scheduling/WakeHelperInstaller.swift` — the PRODUCTION admin-password installer (decided 2026-07-04); also the DEBUG fallback in `ensureHelperReady`.
 - `jesai.Sentient-OS-macOS.WakeHelper.plist` (project root) — the bundled SMAppService daemon plist + its Copy Files phase.
-- `Proactive/ProactiveCycle.swift` — stamps "initial finished"; classifies scheduled failures.
-- `Scheduling/OvernightCaution.swift` — the morning-after caution: classify + persist + clear.
+- `Proactive/ProactiveCycle.swift` — stamps "initial finished"; classifies EVERY failure (returns `CycleFailure`), persists the caution on scheduled runs only.
+- `Scheduling/OvernightCaution.swift` — `classify` (shared with the takeover's failed screen) + `record` + `latest`/`clear`.
 - `AppState.swift` / `Views/RootView.swift` — call `maybeAutoEnable()` at launch / after each cycle.
 - `Views/Dev/OvernightDevView.swift` — the standalone dev window (checklist + live status).
 - `Views/Dev/DevToolsView.swift` — the "Overnight Processing…" button that opens it.

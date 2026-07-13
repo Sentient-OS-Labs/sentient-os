@@ -18,7 +18,8 @@
 //  place so a retry can pick up where it stopped. `progress` carries human-readable phases for the UI;
 //  `onLine` streams codex's live play-by-play (the takeover's thought line — unused by the 3am run).
 //
-//  Key method: run(progress:) → String?  (nil = cycle completed; a message = the step that failed)
+//  Key method: run(progress:) → CycleFailure?  (nil = cycle completed; else the step that failed,
+//  classified so the UI can offer the right fix)
 //
 
 import Foundation
@@ -29,7 +30,14 @@ enum ProactiveCyclePhase: Sendable {
     case deciding                // PART 1 — the judge
     case researching(Int)        // PART 2 — verifying + preparing N items
     case done(ready: Int)        // finished; N ready-to-fire cards await
-    case failed(String)          // a step errored; summaries were kept for retry
+    case failed(CycleFailure)    // a step errored; summaries were kept for retry
+}
+
+/// A failed cycle step. `kind` is the verified, user-actionable reason (codex signed out ·
+/// offline · usage limit) when one could be established — nil means show `message` as-is.
+struct CycleFailure: Sendable, Equatable {
+    let message: String
+    let kind: OvernightCaution.Kind?
 }
 
 actor ProactiveCycle {
@@ -50,17 +58,18 @@ actor ProactiveCycle {
     }
 
     /// Run the post-read tail (knowledge base → mirror → proactive → wipe). Returns nil on a fully
-    /// successful cycle (summaries wiped), or the failure message if a step errored (summaries kept).
-    /// Never throws — every failure is ALSO reported through `progress(.failed(…))` for the live UI.
-    /// `scheduled` marks the UNATTENDED 3am run: its failures additionally classify into the
-    /// morning-after caution (OvernightCaution → the home's banner); a watched Analyze Now doesn't
-    /// (the takeover UI already shows those live).
+    /// successful cycle (summaries wiped), or the classified failure if a step errored (summaries
+    /// kept). Never throws — every failure is ALSO reported through `progress(.failed(…))` for the
+    /// live UI. Every failure classifies (OvernightCaution.classify — signed out · offline · usage
+    /// limit); `scheduled` marks the UNATTENDED 3am run, which additionally persists the kind as
+    /// the morning-after caution (the home's banner) — a watched Analyze Now instead shows it live
+    /// on the takeover's failed screen.
     /// `onLine` streams codex's humanized play-by-play (reasoning · commands · tool calls) from
     /// every cloud stage — the takeover's live thought line. nil (the 3am run) streams nothing.
     @discardableResult
     func run(scheduled: Bool = false,
              progress: @escaping @Sendable (ProactiveCyclePhase) -> Void,
-             onLine: (@Sendable (String) -> Void)? = nil) async -> String? {
+             onLine: (@Sendable (String) -> Void)? = nil) async -> CycleFailure? {
         PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
         defer { PipelineActivity.end() }
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
@@ -80,10 +89,10 @@ actor ProactiveCycle {
             Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
                              parameters: ["newSummaries": "\(notes.count)"])
         } catch {
-            let m = "Knowledge base: \(Self.msg(error))"
             Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
-            if scheduled { await OvernightCaution.note(error) }   // the morning-after banner
-            progress(.failed(m)); return m                   // half-edited vault isn't dirty; summaries kept
+            // half-edited vault isn't dirty; summaries kept
+            return await Self.fail("Knowledge base: \(Self.msg(error))", error: error,
+                                   scheduled: scheduled, progress: progress)
         }
         await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
 
@@ -117,9 +126,8 @@ actor ProactiveCycle {
             } catch Proactive.ProError.noRecent {
                 items = []                                   // nothing recent enough — clear cards, still success
             } catch {
-                let m = "Deciding: \(Self.msg(error))"
-                if scheduled { await OvernightCaution.note(error) }
-                progress(.failed(m)); return m
+                return await Self.fail("Deciding: \(Self.msg(error))", error: error,
+                                       scheduled: scheduled, progress: progress)
             }
             Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
 
@@ -135,9 +143,8 @@ actor ProactiveCycle {
                         "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"],
                         floatValue: Double(result.ready.count), tier: .core)
                 } catch {
-                    let m = "Preparing: \(Self.msg(error))"
-                    if scheduled { await OvernightCaution.note(error) }
-                    progress(.failed(m)); return m
+                    return await Self.fail("Preparing: \(Self.msg(error))", error: error,
+                                           scheduled: scheduled, progress: progress)
                 }
             }
             // The deck was replaced (new cards or a clean empty) — a pre-existing gift's day is done.
@@ -154,4 +161,14 @@ actor ProactiveCycle {
     }
 
     private static func msg(_ e: Error) -> String { (e as? LocalizedError)?.errorDescription ?? "\(e)" }
+
+    /// The one shape every catch site shares: classify the failure, persist the caution on the
+    /// unattended run, surface it to the live UI, and hand it back for the caller's return.
+    private static func fail(_ message: String, error: Error, scheduled: Bool,
+                             progress: @Sendable (ProactiveCyclePhase) -> Void) async -> CycleFailure {
+        let failure = CycleFailure(message: message, kind: await OvernightCaution.classify(error))
+        if scheduled { OvernightCaution.record(failure.kind) }   // the morning-after banner
+        progress(.failed(failure))
+        return failure
+    }
 }
