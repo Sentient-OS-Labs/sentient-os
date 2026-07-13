@@ -44,19 +44,26 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
     /// being the shared binary's cdhash). Falls back to the static identifier+anchor requirement
     /// if self-inspection somehow fails. Computed once; both sources are valid requirement
     /// strings by construction (setCodeSigningRequirement raises on a malformed one).
-    private static let clientRequirement: String = {
+    private static let clientRequirement: String = selfDesignatedRequirement() ?? WakeHelperConfig.clientRequirement
+
+    /// This binary's OWN designated requirement string ("signed exactly like me"), or nil if the
+    /// system can't produce it. Shared by TWO callers: the XPC client gate here (which decides who
+    /// may connect) AND `WakeHelperInstaller`, which bakes it into the daemon's launch-time
+    /// `codesign --verify` so launchd never runs a tampered or foreign-signed binary as root. The
+    /// app and the daemon are the same signed binary, so the value the installer captures in the
+    /// app process matches what this gate expects in the daemon process.
+    static func selfDesignatedRequirement() -> String? {
         var code: SecCode?
         var staticCode: SecStaticCode?
         var requirement: SecRequirement?
         var text: CFString?
-        if SecCodeCopySelf([], &code) == errSecSuccess, let code,
-           SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
-           SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess, let requirement,
-           SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text {
-            return text as String
-        }
-        return WakeHelperConfig.clientRequirement
-    }()
+        guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+              SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+              SecCodeCopyDesignatedRequirement(staticCode, [], &requirement) == errSecSuccess, let requirement,
+              SecRequirementCopyString(requirement, [], &text) == errSecSuccess, let text
+        else { return nil }
+        return text as String
+    }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection conn: NSXPCConnection) -> Bool {
         // The client gate, enforced by the SYSTEM per message via the official API (macOS 13+).
