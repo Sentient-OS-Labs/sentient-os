@@ -1,18 +1,19 @@
 //
-//  YourAIsPane.swift
+//  ShareKnowledgePane.swift
 //  Sentient OS macOS
 //
-//  Settings → Your AIs: the value + privacy story up top, the share toggle (off = confirm, then
-//  the cloud copy is deleted; the token is kept so the link survives re-enabling), and the HERO:
-//  the glowing "Connect your AIs" button → the real guided setup (ConnectAIsView), which owns the
-//  secret link + system prompt. Live activity from /stats below. Regenerate lives in MirrorClient
-//  only (a support/dev remediation; a UI button was a footgun that bricks every connector).
+//  Settings → Give AIs Knowledge: the value + privacy story up top, the share toggle (off =
+//  confirm, then the cloud copy is deleted; the token is kept so the link survives re-enabling),
+//  and the HERO: the glowing "Set up in 2 minutes" button → the real guided setup (ConnectAIsView),
+//  which owns the secret link + system prompt. Live activity from /stats below. Regenerate lives
+//  in MirrorClient only (a support/dev remediation; a UI button was a footgun that bricks every
+//  connector).
 //
 
 import SwiftUI
 import AppKit
 
-struct YourAIsPane: View {
+struct ShareKnowledgePane: View {
     @Environment(\.openWindow) private var openWindow
 
     @State private var enabled = false
@@ -186,7 +187,7 @@ private struct ConnectCTA: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles").font(.system(size: 12, weight: .semibold))
-                Text("Connect your AIs").font(.system(size: 13, weight: .semibold))
+                Text("Set up in 2 minutes").font(.system(size: 13, weight: .semibold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 22).padding(.vertical, 10)
@@ -199,8 +200,8 @@ private struct ConnectCTA: View {
     }
 }
 
-#Preview("Your AIs pane") {
-    YourAIsPane()
+#Preview("Give AIs Knowledge pane") {
+    ShareKnowledgePane()
         .background(Theme.bg)
         .frame(width: 720, height: 640)
 }

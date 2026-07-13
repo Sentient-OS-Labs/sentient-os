@@ -33,10 +33,16 @@ struct SystemPane: View {
     var body: some View {
         SettingsPane(title: "System", whisper: "How Sentient lives on this Mac.") {
             VStack(alignment: .leading, spacing: 34) {
+                // Three chapters, two dividers: how Sentient runs · privacy · the exit door —
+                // the second line is red on purpose (you cross it into destructive territory).
                 overnightGroup
                 startupGroup
                 updatesGroup
+                SettingsHairline(opacity: 0.12)
+                    .padding(.vertical, -8)
                 privacyGroup
+                SettingsHairline(color: Theme.Ink.red, opacity: 0.25)
+                    .padding(.vertical, -8)
                 dangerGroup
                 uninstallGroup
             }

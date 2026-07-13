@@ -354,8 +354,9 @@ actor CodexCLI {
     /// The command bar's "Let me DO stuff for you" spine — computer use (the "computer use" phrase is
     /// built into the prompt by the caller, NOT a flag here). Runs a raw `codex exec` with the prompt
     /// passed as ARGV and the exact flag set verified to make Codex's computer use work via the CLI:
-    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -c model_reasoning_effort="low"
-    /// --skip-git-repo-check`, NO `--json` (human-readable output, not JSONL). Each output LINE is
+    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -c model_reasoning_effort=<the
+    /// user's ComputerUseSpeed slider; default low> --skip-git-repo-check`, NO `--json`
+    /// (human-readable output, not JSONL). Each output LINE is
     /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
     /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
     /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
@@ -368,6 +369,9 @@ actor CodexCLI {
     func runAgentCommand(_ prompt: String, imagePath: String? = nil, timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
+        // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
+        // per run, so a change applies to the very next fire with no restart.
+        let effort = ComputerUseSpeed.current.effort
         do {
             guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
             // Self-heal the relaxed confirmation policy: a plugin update (desktop app or a
@@ -376,7 +380,7 @@ actor CodexCLI {
             ComputerUseSkillPatch.ensureApplied()
             var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
                         "-m", Model.gpt56sol.rawValue,
-                        "-c", "model_reasoning_effort=\"low\""]
+                        "-c", "model_reasoning_effort=\"\(effort.rawValue)\""]
             if let imagePath { args += ["-i", imagePath] }   // followed by a flag → variadic stops at one file
             args += ["--skip-git-repo-check", prompt]
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
@@ -391,7 +395,7 @@ actor CodexCLI {
             // which is not a failure; field-found polluting Sentry 2026-07-12).
             if !Task.isCancelled {
                 Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                      model: .gpt56sol, effort: .low, resumed: false,
+                                      model: .gpt56sol, effort: effort, resumed: false,
                                       durationMS: Int(Date().timeIntervalSince(t0) * 1000))
             }
             throw error

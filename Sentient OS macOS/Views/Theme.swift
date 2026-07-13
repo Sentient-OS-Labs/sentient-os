@@ -72,6 +72,7 @@ enum Theme {
         static let bright = Color(red: 0.812, green: 0.804, blue: 0.839)       // #cfcdd6
         static let green = Color(red: 0.290, green: 0.871, blue: 0.502)        // #4ade80 (was mint #47d7ac — too seafoam)
         static let amber = Color(red: 1.0, green: 0.765, blue: 0.443)          // #ffc371
+        static let gold = Color(red: 0.851, green: 0.702, blue: 0.294)         // #d9b34b — the open-source pride mark (Settings footer); NOT the caution amber
         static let red = Color(red: 1.0, green: 0.36, blue: 0.36)              // status-LED red (StatusLine .bad · the home's live caution)
         static let chipInk = Color(red: 0.541, green: 0.537, blue: 0.565)      // #8a8990
         static let chipBorder = Color(red: 0.114, green: 0.114, blue: 0.133)   // #1d1d22

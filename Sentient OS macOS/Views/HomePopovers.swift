@@ -7,7 +7,7 @@
 //   · AnalysisPopover — the work glance: things understood, vault size, the synced stamp, an
 //     Analyze Now control, and the source chips (sources are the INPUTS to analysis, so they
 //     live under "Analysis").
-//   · YourAIsPopover — the pitch + the glowing "Connect your AIs" CTA that opens the guided
+//   · ShareKnowledgePopover — the pitch + the glowing "Set up in 2 minutes" CTA that opens the guided
 //     setup window (ConnectAIsView owns sharing on/off, the link, and the prompt).
 //  Pure presentation; harvested from the retired Constellation home. Demo strings (synced
 //  stamp, access log) stand in until the real polls land; the vault counts ARE real (disk).
@@ -155,28 +155,28 @@ struct AnalysisPopover: View {
     }
 }
 
-// MARK: - Your AIs
+// MARK: - Give AIs Knowledge
 
-/// The MCP door. One job: the glowing "Connect your AIs" CTA, always shown, opening the guided
+/// The MCP door. One job: the glowing "Set up in 2 minutes" CTA, always shown, opening the guided
 /// setup window — ConnectAIsView owns sharing on/off, the private link, and the system prompt,
 /// so the popover carries no state and no controls of its own.
-struct YourAIsPopover: View {
+struct ShareKnowledgePopover: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps("Connect AIs", size: 10, tracking: 2.4, color: Theme.Ink.label)
+            MonoCaps("Give AIs Knowledge", size: 10, tracking: 2.4, color: Theme.Ink.label)
 
-            Text("Offer your knowledge to every AI.")
+            Text("Offer your knowledge base to your ChatGPT or Claude.")
                 .display(20).foregroundStyle(.white)
                 .padding(.top, 11)
 
-            GlowButton(title: "Connect your AIs", systemImage: "link", glowIntensity: 0.28) {
+            GlowButton(title: "Set up in 2 minutes", systemImage: "link", glowIntensity: 0.28) {
                 openWindow(id: ConnectAIsView.windowID)
             }
             .padding(.top, 18)
 
-            MonoCaps("Your whole knowledge · offered to every AI", size: 8.5, tracking: 1.6,
+            MonoCaps("Private · over MCP · two simple steps", size: 8.5, tracking: 1.6,
                      color: Theme.Ink.deepMuted)
                 .padding(.top, 13)
         }
@@ -262,8 +262,8 @@ enum HomeStats {
     }.frame(width: 380, height: 460).preferredColorScheme(.dark)
 }
 
-#Preview("Your AIs") {
+#Preview("Give AIs Knowledge") {
     ZStack { Theme.bg
-        YourAIsPopover()
+        ShareKnowledgePopover()
     }.frame(width: 360, height: 300).preferredColorScheme(.dark)
 }
