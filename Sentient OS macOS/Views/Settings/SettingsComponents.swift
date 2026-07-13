@@ -367,9 +367,13 @@ struct SettingsTextBox: View {
     }
 }
 
-/// The hairline that separates lines inside a group.
+/// The hairline that separates lines inside a group — or, a touch brighter, whole groups.
+/// `color` is for the one semantic exception: the red line guarding System's destructive tail.
 struct SettingsHairline: View {
+    var color: Color = .white
+    var opacity: Double = 0.06
+
     var body: some View {
-        Rectangle().fill(.white.opacity(0.06)).frame(height: 1)
+        Rectangle().fill(color.opacity(opacity)).frame(height: 1)
     }
 }

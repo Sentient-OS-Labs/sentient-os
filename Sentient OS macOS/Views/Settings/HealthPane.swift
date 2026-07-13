@@ -79,7 +79,8 @@ struct HealthPane: View {
                 VStack(alignment: .leading, spacing: 30) {
                     onDeviceGroup
                     sidekickGroup
-                    SettingsHairline()
+                    SettingsHairline(opacity: 0.12)
+                        .padding(.vertical, -7)   // the brighter, tighter group splitter (matches ProactivePane's)
                         .rise(6, revealed: revealed)
                     Group {
                         if codexAllGreen && !codexExpanded {

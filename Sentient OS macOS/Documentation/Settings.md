@@ -2,28 +2,28 @@
 
 The real Settings (shipped 2026-07-04, PRs #107 + #109): a modern two-pane window in the
 OLED-editorial design language. Sidebar of five sections on the left (plus the About footer:
-version, GitHub, report-an-issue), the selected pane on the right, the trust ribbon riding the
-foot. Opened from the home's top-bar gear (`windowID "settings"`, 940×660 default). Everything
-lives in `Views/Settings/`: the shell (`SettingsView.swift`), one file per pane, and the shared
-pieces (`SettingsComponents.swift`).
+version, GitHub, report-an-issue — the "Open source on GitHub" link + heart wear
+**`Theme.Ink.gold`**, the open-source pride mark, deliberately louder than the footer's whisper
+and distinct from the caution amber), the selected pane on the right, and the trust ribbon —
+since 2026-07-13 riding ONLY Knowledge Sources and Permissions & Health (the panes where the
+files story is the message), not every pane. Opened from the home's top-bar gear
+(`windowID "settings"`, 940×660 default). Everything lives in `Views/Settings/`: the shell
+(`SettingsView.swift`), one file per pane, and the shared pieces (`SettingsComponents.swift`).
 
 ## ⚠️ NOT wired up yet (read this first)
 
-1. **The E2E encryption claim front-runs the code** — the Connect-AIs privacy blurb says the cloud
-   copy is end-to-end encrypted and unreadable even by Sentient's devs. That is LAUNCH truth,
-   decided 2026-07-04: the mirror stores plaintext markdown today, and the "mcp encryption"
-   backlog item (Aditya) MUST ship before launch or the copy must change. Do not soften the copy;
-   ship the encryption.
-2. **The morning notification** — the Notifications permission row is real, and the permission ask
+*(Two former items are DONE and gone from this list: the mirror's encryption at rest shipped —
+AES-256-GCM before upload, see `MCP Mirror Client.md` — so the pane's E2E copy is now true; and
+the System pane's Updates group is live with Sparkle, see `Auto-Update (Sparkle).md`.)*
+
+1. **The morning notification** — the Notifications permission row is real, and the permission ask
    is now wired: onboarding's permissions screen fires `Notify.ask()` on appear, so the native
    macOS prompt happens once with no extra UI (`ask()` no-ops unless status is still
    `.notDetermined`). What's still dormant is the *sending* — `Notify.now()` has zero call sites;
    the "Proactive Intelligence is ready" morning note ships with the reminders/scheduler work.
-3. **The Updates group** (System pane) — doesn't exist until Sparkle lands; it brings its own
-   keep-it-on message.
-4. **Privacy toggles transmit only in RELEASE builds** — by design (Sentry/TelemetryDeck never
+2. **Privacy toggles transmit only in RELEASE builds** — by design (Sentry/TelemetryDeck never
    boot in DEBUG), so a Debug QA can verify persistence but not transmission.
-5. **Small known holes, accepted for now:** removing the LAST custom folder can bypass the
+3. **Small known holes, accepted for now:** removing the LAST custom folder can bypass the
    four-selection minimum (the guard covers chip toggle-offs only) · the reset-vs-run race has
    only the UI guard (see Reset below; the Layer-2 generation counter is deferred hardening) ·
    three Settings deep-link anchors (Speech Recognition, Accessibility, Screen Recording) are
@@ -80,13 +80,28 @@ feeds both proactive prompts (`Proactive.instructionsBlock` — PART 1 + PART 2)
 `sidekick.context` feeds the command/Sidekick prompt (`CommandRunModel.commandPrompt`, §6b of the
 Notch doc). Each is `""`-safe: no text → the prompt is unchanged.
 
-### Connect AIs to Knowledge (`YourAIsPane.swift`)
+**The Speed vs Intelligence slider (2026-07-13):** a compact custom three-detent slider
+(`SpeedIntelligenceSlider`, private to the pane — 300×24pt pill permanently wearing its own
+three-stop spectrum, `Theme.Ink.green` → cyan → purple, glow beneath; only the white thumb moves;
+the readout docks the tier name under the left edge and "GPT-5.6 SOL · LOW/MED/HIGH THINKING"
+under the right, live mid-drag). It writes `ComputerUseSpeed` (`Cloud/ComputerUseSpeed.swift` —
+the one source of truth: key `sidekick.speed`, tiers Faster/Medium/Smarter → gpt-5.6-sol effort
+low/medium/high, default Faster = the pre-slider behavior). **It governs EVERY computer-use run**
+— Sidekick, the command bar, and a card's fire all ride `runAgentCommand`, which reads the
+setting fresh per run (live, no restart). A brighter `SettingsHairline(opacity: 0.12)` splits the
+Proactive and Sidekick groups (same splitter as Health's codex divider).
+
+### Give AIs Knowledge (`ShareKnowledgePane.swift`)
+*(Renamed 2026-07-13 from "Connect AIs to Knowledge"/`YourAIsPane` — the whole surface family is
+now `ShareKnowledge*`: the pane, the home's `ShareKnowledgePopover`, `Pane.shareKnowledge`. The
+guided `ConnectAIsView` window keeps its name — in there "connect" is the literal action.)*
 The story leads: a value blurb (your ChatGPT/Claude, phone apps included, read the knowledge
 base and choose what's relevant) then the plain-language privacy explainer (local-first,
-PII-stripped summaries only, E2E-encrypted [see the NOT-wired list], no accounts, the 30-day
+PII-stripped summaries only, E2E-encrypted, no accounts, the 30-day
 self-delete in plain words, open-source backend). Then the share toggle (OFF = confirm dialog →
 `disable()`, which deletes the cloud copy but keeps the token), and the pane's HERO: the glowing
-**Connect your AIs** `GlowButton` → **`ConnectAIsView`, now the REAL guided setup**: step 1 =
+**Set up in 2 minutes** capsule (`ConnectCTA` — same label as the home popover's CTA) →
+**`ConnectAIsView`, the REAL guided setup**: step 1 =
 the masked link (`MirrorClient.maskedURL`) + Copy, step 2 = Copy the system prompt, closing with
 the magic line ("ask it: what do you know about me?"); a sharing-off state points back at
 Settings. Live `stats()` activity below; local-only story when sharing is off.
@@ -96,6 +111,10 @@ Settings. Live `stats()` activity below; local-only story when sharing is off.
 contains "/mcp", and a forward hit inverts the range (a shipped-then-fixed crash).
 
 ### System (`SystemPane.swift`)
+Reads as three chapters split by two dividers (2026-07-13): *how Sentient runs* (Overnight ·
+Startup · Updates), then a bright hairline; *privacy*; then a **red-tinted hairline**
+(`SettingsHairline(color: Theme.Ink.red, opacity: 0.25)` — the app's one semantic divider, the
+line you cross into destructive territory) guarding the exit door (Danger Zone · Uninstall).
 The overnight-intelligence story (prose; 3 AM is our taste, not a dial), launch-at-login
 (`LoginItem`) with a keep-Sentient-alive confirm on the way off, the privacy pledge with the two
 split consents (crash reports `diagnosticsEnabled` → Sentry · analytics `analyticsEnabled` →

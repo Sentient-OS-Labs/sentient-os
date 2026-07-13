@@ -13,8 +13,10 @@ stats were reused in this surface and its popovers. Arch §10.)*
 The main window's content (rendered by `RootView`). Layers, bottom-to-top:
 
 - **Chrome (on top, so the nav stays clickable):** a slim top bar — `OrbMark` + "Sentient OS"
-  wordmark on the left; on the right four **doors** — `Analysis ▾` and `Connect AIs ▾` (popovers) ·
-  `Knowledge` and `⚙ Settings` (their own windows). Below it, the editorial voice: an hour-aware
+  wordmark on the left; on the right four **doors** — `Analysis ▾` and `Give AIs Knowledge ▾`
+  (popovers; the latter renamed from "Connect AIs" 2026-07-13 — users read "connect" as the codex
+  plumbing they'd already done) · `Knowledge` and `⚙ Settings` (their own windows; the gear is
+  17pt **bold** since 2026-07-12 — user studies showed the old 14pt one got missed). Below it, the editorial voice: an hour-aware
   greeting in the SF display voice (`.display(27)` — "Good evening, Jesai.", the name from the
   macOS account, `macFirstName`) over a mono-caps read-line (the REAL lifetime count from
   `LifetimeStats`). Card titles stay upright serif — serif marks content about the user's life.
@@ -33,7 +35,9 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
   version of the note; flinging the letter blooms the note into the full center. Once the plan claim
   reads Plus (re-decoded every appearance), the note becomes *"You're on Plus. Time to go live."*
   with a *Reset & Rebuild* glow. See `Plan Gate (CodexAuth & Knowledge-Base-Only).md`.
-- **The dock:** the `PromptBar` command bar + the trust footer (the command bar is HIDDEN in
+- **The dock:** the `PromptBar` command bar + the trust footer — just "Private by design." here
+  since 2026-07-13; the full "Your files never leave this Mac." line is reserved for the surfaces
+  where files are the message (the command bar is HIDDEN in
   knowledge-base-only mode — computer use runs on quota those plans don't have). A small `DEV TOOLS`
   handle is pinned bottom-right (→ the `Views/Dev/DevToolsView.swift` sheet; `#if DEBUG` — compiled
   out of Release, and it's the sheet's only opener, so Dev Tools is unreachable there).
@@ -141,9 +145,11 @@ Status lives here, never cluttering the home:
   time), **Analyze Now**, and the **source chips** — live on the SAME `SourceSelection` keys as
   Settings/Dev Tools (folder chips toggle; WhatsApp/iMessage open the shared `ChatPicker`;
   Gmail/Calendar open their connect sheets; the WhatsApp chip hides when it isn't installed).
-- **`YourAIsPopover`** — the real MCP mirror control: an ON/OFF pill wired to `MirrorClient`
-  (enable + push / disable), live `stats()` ("Read 5 notes today"), Copy Link + Copy Prompt, and the
-  glowing **Connect your AIs** CTA when off.
+- **`ShareKnowledgePopover`** (renamed from `YourAIsPopover` with the door, 2026-07-13) — the MCP
+  door, deliberately control-free: the mono-caps "Give AIs Knowledge" header, the pitch ("Offer
+  your knowledge base to your ChatGPT or Claude."), the glowing **Set up in 2 minutes** CTA that
+  opens the guided `ConnectAIsView` (which owns sharing on/off, the link, and the prompt), and the
+  "Private · over MCP · two simple steps" whisper.
 
 ## The cards — `Briefing.swift` · `BriefingCard.swift`
 

@@ -9,7 +9,7 @@
 //  bar at the foot lets you ask it to DO anything (computer use).
 //
 //  The chrome is deliberately quiet: a wordmark, and four doors at the top-right —
-//  Analysis ▾ and Connect AIs ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
+//  Analysis ▾ and Give AIs Knowledge ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
 //  Settings (their own windows). Status lives inside Analysis, never cluttering the home.
 //
 //  WHEN THERE ARE NO CARDS, the living Orb blooms into the vacated center with "I'm here to
@@ -60,7 +60,7 @@ struct HomeView: View {
     @State private var letter: Briefing?
     @State private var letterShown = false
     @State private var showAnalysis = false
-    @State private var showYourAIs = false
+    @State private var showShareKnowledge = false
     @State private var showWhatsAppPicker = false
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
@@ -168,8 +168,8 @@ struct HomeView: View {
             NavItem(title: "Analysis", dot: Theme.Ink.green) { showAnalysis = true }
                 .popover(isPresented: $showAnalysis) { analysisPopover }
             NavItem(title: "Knowledge") { openWindow(id: KnowledgeView.windowID) }
-            NavItem(title: "Connect AIs") { showYourAIs = true }
-                .popover(isPresented: $showYourAIs) { yourAIsPopover }
+            NavItem(title: "Give AIs Knowledge") { showShareKnowledge = true }
+                .popover(isPresented: $showShareKnowledge) { shareKnowledgePopover }
             NavItem(icon: "gearshape") { openWindow(id: SettingsView.windowID) }
         }
         .padding(.horizontal, 30).padding(.top, 18)
@@ -290,8 +290,8 @@ struct HomeView: View {
         return "Synced · \(f.string(from: d))"
     }
 
-    private var yourAIsPopover: some View {
-        YourAIsPopover()   // self-contained: toggles the real MCP mirror + copies the link / system prompt
+    private var shareKnowledgePopover: some View {
+        ShareKnowledgePopover()   // self-contained: toggles the real MCP mirror + copies the link / system prompt
             .preferredColorScheme(.dark)
     }
 
@@ -480,7 +480,7 @@ struct HomeView: View {
             }
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
-                Text("Private by design. Your files never leave this Mac.")
+                Text("Private by design.")
                     .font(.system(size: 12)).foregroundStyle(Theme.Ink.label)
             }
         }
@@ -608,7 +608,7 @@ private struct NavItem: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 if let dot { Circle().fill(dot).frame(width: 5, height: 5).opacity(0.9) }
-                if let icon { Image(systemName: icon).font(.system(size: 14, weight: .medium)) }
+                if let icon { Image(systemName: icon).font(.system(size: 17, weight: .bold)) }
                 if let title { Text(title).font(.system(size: 13.5, weight: .medium)) }
             }
             .foregroundStyle(hover ? .white : Theme.Ink.bright)

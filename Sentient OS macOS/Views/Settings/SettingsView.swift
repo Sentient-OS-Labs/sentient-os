@@ -5,7 +5,7 @@
 //  The Settings window — a modern two-pane layout: a quiet sidebar of sections on the left
 //  (with the About footer: version + the open-source link), the selected pane on the right,
 //  and the trust ribbon riding the foot. Every pane is real and lives beside this file:
-//  SourcesPane · ProactivePane · YourAIsPane · SystemPane · HealthPane.
+//  SourcesPane · ProactivePane · ShareKnowledgePane · SystemPane · HealthPane.
 //
 
 import SwiftUI
@@ -16,14 +16,14 @@ struct SettingsView: View {
 
     /// The five sections, in sidebar order.
     enum Pane: CaseIterable, Identifiable {
-        case sources, proactive, yourAIs, system, health
+        case sources, proactive, shareKnowledge, system, health
 
         var id: Self { self }
         var title: String {
             switch self {
             case .sources:   return "Knowledge Sources"
             case .proactive: return "Proactive & Sidekick"
-            case .yourAIs:   return "Connect AIs to Knowledge"
+            case .shareKnowledge: return "Give AIs Knowledge"
             case .system:    return "System"
             case .health:    return "Permissions & Health"
             }
@@ -32,7 +32,7 @@ struct SettingsView: View {
             switch self {
             case .sources:   return "tray.full"
             case .proactive: return "sparkles"
-            case .yourAIs:   return "antenna.radiowaves.left.and.right"
+            case .shareKnowledge: return "antenna.radiowaves.left.and.right"
             case .system:    return "gearshape"
             case .health:    return "checkmark.shield"
             }
@@ -95,14 +95,16 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 9) {
             MonoCaps("Sentient OS · v\(UpdateController.currentVersionString)", size: 8, tracking: 1.6, color: Theme.Ink.deepMuted)
             footerLink("Open source on GitHub", icon: "heart.fill",
-                       url: "https://github.com/Sentient-OS-Labs/sentient-os")
+                       url: "https://github.com/Sentient-OS-Labs/sentient-os",
+                       color: Theme.Ink.gold)   // the pride mark — gold, deliberately louder than the footer's whisper
             footerLink("Report an issue", icon: "ladybug",
                        url: "https://github.com/Sentient-OS-Labs/sentient-os/issues")
         }
         .padding(.horizontal, 10)
     }
 
-    private func footerLink(_ title: String, icon: String, url: String) -> some View {
+    private func footerLink(_ title: String, icon: String, url: String,
+                            color: Color = Theme.Ink.label) -> some View {
         Button {
             if let u = URL(string: url) { NSWorkspace.shared.open(u) }
         } label: {
@@ -110,7 +112,7 @@ struct SettingsView: View {
                 Image(systemName: icon).font(.system(size: 8.5))
                 Text(title).font(.system(size: 10.5))
             }
-            .foregroundStyle(Theme.Ink.label)
+            .foregroundStyle(color)
         }
         .buttonStyle(PressScaleStyle())
     }
@@ -123,18 +125,20 @@ struct SettingsView: View {
                 switch selection {
                 case .sources:   SourcesPane()
                 case .proactive: ProactivePane()
-                case .yourAIs:   YourAIsPane()
+                case .shareKnowledge: ShareKnowledgePane()
                 case .system:    SystemPane()
                 case .health:    HealthPane()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            trustFooter
+            if selection == .sources || selection == .health { trustFooter }
         }
     }
 
-    /// The trust ribbon — rides every surface, Settings included.
+    /// The trust ribbon — in Settings it rides ONLY Knowledge Sources and Permissions & Health,
+    /// the panes where the files story is the message (what we read · what the grants allow);
+    /// boilerplate on every pane would cheapen it.
     private var trustFooter: some View {
         HStack(spacing: 8) {
             Image(systemName: "shield").font(.system(size: 10.5)).foregroundStyle(Theme.Ink.label)

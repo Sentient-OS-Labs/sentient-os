@@ -13,7 +13,7 @@ await mirror.isEnabled                 // is mirroring ON? (the toggle flag — 
 let url = try mirror.enable()          // opt in → mints the password if absent → returns the share URL
 await mirror.shareURL                  // the "Copy MCP Link" value, or nil
 try await mirror.push()                // zip + ENCRYPT the vault, replace the mirror (call after any change)
-let s = try await mirror.stats()       // {notesRead24h, toolCalls24h, lastAccess} for "Connect AIs"
+let s = try await mirror.stats()       // {notesRead24h, toolCalls24h, lastAccess} for "Give AIs Knowledge"
 try await mirror.deleteRemote()        // delete the cloud copy (keeps the password → stable URL)
 await mirror.disable()                 // opt out: flip OFF + delete remote, but KEEP the password (stable link)
 let u2 = try await mirror.regenerateToken()  // leak remediation: mint a NEW password, delete old copy, re-push
@@ -99,7 +99,8 @@ is never marked clean.
 
 ## Turning the mirror on (today)
 
-The user-facing opt-in is **Settings → Connect AIs to Knowledge** (`Views/Settings/YourAIsPane.swift`)
+The user-facing opt-in is **Settings → Give AIs Knowledge** (`Views/Settings/ShareKnowledgePane.swift`,
+renamed 2026-07-13 from "Connect AIs to Knowledge"/`YourAIsPane`)
 and the guided **`ConnectAIsView`** window: the value/privacy story, the share toggle (ON =
 `enable()` + a first push; OFF = a confirm dialog, then `disable()`), the per-AI setup (masked link
 + Copy · Copy-the-system-prompt · the "what do you know about me?" closer), and live `stats()`

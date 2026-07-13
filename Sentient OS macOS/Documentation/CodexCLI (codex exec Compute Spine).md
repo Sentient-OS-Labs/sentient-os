@@ -41,8 +41,10 @@ plumbing).
 - `runAgentCommand(_:timeout:onLine:)` — **the computer-use spine** (the command bar, Sidekick, and
   the executor's `computer` channel): a raw `codex exec` with the exact flag set measured to make
   Codex's computer use work on the CLI (`--dangerously-bypass-approvals-and-sandbox`, gpt-5.6-sol,
-  `model_reasoning_effort=low`, NO `--json` — human-readable output, prompt in argv), streaming each
-  output line live. ⚠️ It runs with the FULL inherited environment + a rich PATH
+  `model_reasoning_effort=<the user's Speed vs Intelligence slider — `ComputerUseSpeed.current`,
+  Cloud/ComputerUseSpeed.swift: Faster/Medium/Smarter → low/medium/high, default low; read fresh
+  per run, so the Settings change is live>, NO `--json` — human-readable output, prompt in argv),
+  streaming each output line live. ⚠️ It runs with the FULL inherited environment + a rich PATH
   (`richEnvironment`) — computer use's helper IPC socket lives under the real `$TMPDIR`, so the
   sanitized env that's right for every other call would hang it at `list_apps`. `codex login` needs
   the same for its browser launch.

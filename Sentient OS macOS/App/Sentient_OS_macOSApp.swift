@@ -86,7 +86,7 @@ struct SentientOSApp: App {
         .restorationBehavior(.disabled)
 
         // Connect your AIs — the guided setup (per-AI video steps + the sharing toggle), opened
-        // by the glow CTAs in the Your AIs popover and Settings → Your AIs.
+        // by the glow CTAs in the Give-AIs-Knowledge popover and Settings pane of the same name.
         Window("", id: ConnectAIsView.windowID) {
             ConnectAIsView()
                 .environment(appState)
