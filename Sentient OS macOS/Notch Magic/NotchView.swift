@@ -41,6 +41,24 @@ struct NotchMetrics: Equatable {
 
     var runningWidth: CGFloat { max(baseWidth + 160, 360) }
 
+    // MARK: Hover — the click-to-type affordance (the idle notch swells under the cursor)
+
+    /// The grown silhouette while the cursor hovers the IDLE notch: noticeably wider, only a touch
+    /// deeper than the hardware cutout — enough to read as "press me", small enough to stay a notch,
+    /// not a state. (Tuned on Jesai's bezel: the swell reads mostly sideways; too much depth looks
+    /// like the notch drooping.)
+    var hoverSize: CGSize {
+        let base = hardwareNotch ?? CGSize(width: baseWidth, height: baseHeight)
+        return CGSize(width: base.width + 22, height: base.height + 3)
+    }
+
+    /// The genuine notch radius (height / 3) scaled to the hover depth, so the swollen shape keeps
+    /// the real cutout's character instead of going balloon-round.
+    var hoverRadii: (top: CGFloat, bottom: CGFloat) {
+        let r = hoverSize.height / 3
+        return (top: max(r - 4, 0), bottom: r)
+    }
+
     /// The running/finishing notch height for a given caption-row height (the only variable bit). Kept as
     /// tight as possible — camera band + the text + a small bottom pad — so it eats minimally into apps.
     func runningHeight(caption: CGFloat) -> CGFloat { baseHeight + caption + bottomPad }
@@ -145,9 +163,11 @@ struct NotchView: View {
                      readBack: coordinator.readBack,
                      statusLine: coordinator.run.statusLine,
                      remembering: coordinator.run.remembering,
+                     hovering: coordinator.notchHovering,
                      metrics: metrics,
                      onStop: { coordinator.stop() },
-                     onSubmitText: { coordinator.submitTyped($0) })
+                     onSubmitText: { coordinator.submitTyped($0) },
+                     onNotchClick: { coordinator.notchClicked() })
     }
 }
 
@@ -158,28 +178,53 @@ struct NotchContent: View {
     let readBack: String?
     let statusLine: String
     var remembering: String? = nil
+    /// The cursor is over the IDLE notch (the click-to-type affordance): the shell swells with a
+    /// drop shadow — no glow, no content — and a click opens the type field. Honored only while
+    /// `.hidden`; any real phase owns the shape.
+    var hovering: Bool = false
     let metrics: NotchMetrics
     var onStop: () -> Void = {}
     var onSubmitText: (String) -> Void = { _ in }
+    var onNotchClick: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draft = ""
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
-        let size = metrics.size(for: phase, readBack: readBack, remembering: remembering)
-        let radii = metrics.radii(for: phase)
+        let hoverIdle = hovering && phase == .hidden     // the swollen click affordance — idle only
+        let size = hoverIdle ? metrics.hoverSize
+                             : metrics.size(for: phase, readBack: readBack, remembering: remembering)
+        let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: phase)
         let visible = phase != .hidden
         // The notch sits FLUSH at the screen's top edge — its concave top corners visible on the bezel
         // (the genuine-notch flare). The glow traces only the sides + bottom (NotchSkirtShape), so the
         // bezel line never lights up and there's no need to bleed the window off-screen to hide a top glow.
 
         ZStack(alignment: .top) {
+            // The depth bed — the silhouette's drop shadow, at the very BOTTOM of the stack so it
+            // sits BEHIND the color glow: the spectrum reads against darkness instead of the user's
+            // wallpaper, and the hover swell reads solid (hover deliberately has NO glow — the shadow
+            // alone says "pressable"). The bed's own fill never shows (the real shell covers it
+            // exactly); only its shadow escapes. Opacity-only fade, so it rides whichever morph is
+            // driving (the phase spring or the hover spring) and vanishes for the retract-merge.
+            NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom)
+                .fill(.black)
+                .shadow(color: .black.opacity(0.55), radius: 9, y: 3)
+                .opacity(visible || hoverIdle ? 1 : 0)
+                .allowsHitTesting(false)
             glow(radii, lineWidth: 13, blur: 17, strength: 0.75)   // wide soft outer halo (behind the fill)
             glow(radii, lineWidth: 6,  blur: 6,  strength: 0.95)   // denser halo hugging the edge
             NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom)
                 .fill(.black)
-                .allowsHitTesting(false)
+                // Clickable ONLY as the hover affordance — every other state keeps the shell
+                // hit-transparent (STOP / the type field stay the notch's only interactive elements).
+                // The generous contentShape makes a click pinned against the screen's top edge (a point
+                // ON the shape's boundary, which path hit-testing excludes) still land on the tap; the
+                // window only delivers clicks over the silhouette anyway, so this over-claims nothing.
+                .contentShape(Rectangle().inset(by: -4))
+                .onTapGesture(perform: onNotchClick)
+                .allowsHitTesting(hoverIdle)
             glow(radii, lineWidth: 3,  blur: 0.6, strength: 1.0)   // crisp bright rim, over the fill
             content(size: size)
                 .opacity(visible ? 1 : 0)              // icons + caption dissolve as the shell retracts into the cutout
@@ -188,12 +233,13 @@ struct NotchContent: View {
         .frame(width: size.width, height: size.height)
         .accessibilityElement(children: .combine)        // on the notch itself, never the full canvas
         .accessibilityLabel(a11yLabel)
-        .scaleEffect(visible ? 1 : 0.94, anchor: .top)
+        .scaleEffect(visible || hoverIdle ? 1 : 0.94, anchor: .top)
         .opacity(shellOpacity)                           // shell stays opaque & MERGES into a real notch on dismiss (fades only if there's none)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(morph, value: phase)
         .animation(morph, value: readBack)               // grow/shrink the notch as the read-back appears/clears
         .animation(morph, value: remembering)            // shrink back to one line when "Remembering" takes over
+        .animation(hoverMorph, value: hovering)          // the hover swell/settle — snappier than the phase morph
         .onChange(of: phase) { _, newPhase in
             if newPhase == .typing {
                 draft = ""
@@ -208,6 +254,18 @@ struct NotchContent: View {
         // Longer + bouncier than a flat ease — fast out of the gate, then a gentle overshoot-and-settle
         // (the Dynamic Island "alive" curve). Lower damping = visible bounce; ~0.52 response = slightly slower.
         reduceMotion ? .easeInOut(duration: 0.24) : .spring(response: 0.52, dampingFraction: 0.72)
+    }
+
+    private var hoverMorph: Animation {
+        // The hover swell — a quick ease-out with one tiny overshoot at the end (the Dynamic Island
+        // "press me" bounce), snappier than the phase morph. The EXIT is slower and with the bounce
+        // damped out: a shrink's overshoot lands INSIDE the black cutout where it's invisible, and a
+        // fully-damped spring spends its tail creeping imperceptibly — so the exit needs extra time
+        // on paper for its VISIBLE portion to match the entry (tuned on Jesai's bezel).
+        // (`hovering` is already the new value when this is read, so it picks the right direction.)
+        if reduceMotion { return .easeOut(duration: 0.18) }
+        return hovering ? .spring(response: 0.38, dampingFraction: 0.6)
+                        : .spring(response: 0.52, dampingFraction: 0.95)
     }
 
     // MARK: Content
@@ -451,7 +509,7 @@ struct NotchContent: View {
 
     private var a11yLabel: String {
         switch phase {
-        case .hidden: return ""
+        case .hidden: return hovering ? "Sentient — click to type a task" : ""
         case .opening, .listening, .transcribing: return "Sentient is listening"
         case .typing: return "Type a task for Sentient"
         case .running: return "Sentient is working. \(statusLine)"
@@ -527,6 +585,9 @@ private struct NotchPreviewStage<Content: View>: View {
     }
 }
 
+#Preview("hover (click affordance)") {
+    NotchPreviewStage { NotchContent(phase: .hidden, readBack: nil, statusLine: "", hovering: true, metrics: .preview) }
+}
 #Preview("listening") {
     NotchPreviewStage { NotchContent(phase: .listening, readBack: nil, statusLine: "", metrics: .preview) }
 }

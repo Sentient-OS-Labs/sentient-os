@@ -10,11 +10,12 @@ Documentation for **Notch Magic** — Sentient OS's global hold-to-talk / tap-to
 
 ## 1. What Notch Magic is
 
-**A global way to tell Sentient to *do something*, and a universal status surface for when it's working.** Three front doors, one backend, one notch:
+**A global way to tell Sentient to *do something*, and a universal status surface for when it's working.** Four front doors, one backend, one notch:
 
 1. **Press-and-hold the Sidekick key anywhere** → the notch *drops open the instant you press* (you're pulling it open); *speak* a task → release → it transcribes (on-device) and fires it as a **computer-use** command.
 2. **Tap the Sidekick key** (a quick press-release, no hold) → the open notch becomes a focused **text field** → type a task, hit ⏎ → same computer-use backend.
-3. **Type in the home command bar** (`PromptBar`) → same backend, same notch.
+3. **Click the notch itself** — mousing over the idle notch makes it *swell* under the cursor with a trackpad haptic tick and a drop shadow (the Dynamic-Island "press me" affordance); a click opens the same tap-to-type field. §7a.
+4. **Type in the home command bar** (`PromptBar`) → same backend, same notch.
 
 The **Sidekick key** is the user's choice in Settings → Proactive & Sidekick: **right ⌘** (default) or **right ⌥**. Both are right-side modifiers, so either works permission-free (§4); the rest of this doc says "right ⌘" as the default, but everything applies to whichever key is chosen.
 
@@ -54,12 +55,12 @@ Every command is **computer use** (the dedicated browser-use channel was removed
 | **`VoiceCapture.swift`** | Façade: mic + speech permissions, engine selection, `prewarm` / `start` / `stopAndTranscribe` / `cancel`. |
 | **`CommandRunModel.swift`** | Runs ONE codex task; **cleans codex's raw human-readable stream** into the bar's `statusLine` + the `remembering` state (§6); `stop()`, `onFinished(Outcome)`. Grabs + attaches the screen still at run start (§6a). |
 | **`ScreenCapture.swift`** | Grabs the screen to a temp JPEG for computer-use context (`/usr/sbin/screencapture`, main display). `grab() -> URL?` (nil if no Screen Recording grant) · `discard(_:)`. §6a. |
-| **`CommandCoordinator.swift`** | The brain: owns the run + hotkey + voice, drives `phase` (`NotchPhase`), the press→branch flow, `submit()` / `submitTyped()` / `dismissTyping()` / `cancelCurrent()` / `stop()`. |
+| **`CommandCoordinator.swift`** | The brain: owns the run + hotkey + voice, drives `phase` (`NotchPhase`), the press→branch flow, `submit()` / `submitTyped()` / `dismissTyping()` / `cancelCurrent()` / `stop()`. Also the hover affordance's seams: the `notchHovering` render state + `notchClicked()` (§7a). |
 | **`NotchSpace.swift`** | SkyLight private-API wrapper — pins the panel into a top-level window-server space so it's fixed over the notch on every Space. |
-| **`NotchWindowController.swift`** | The `NSPanel` host: a **fixed canvas** flush at the bezel; click-through by toggling `ignoresMouseEvents` per cursor position; all-Spaces; observers. Also `NotchPanel`, `NotchHostingView`, the `NSScreen.notchSize`/`displayID` extension. |
+| **`NotchWindowController.swift`** | The `NSPanel` host: a **fixed canvas** flush at the bezel; click-through by toggling `ignoresMouseEvents` per cursor position (two-tier poll, §7b); all-Spaces; observers. Also the hover affordance's mechanics (mouseMoved monitors → swell + haptic + click, §7a), `NotchPanel`, `NotchHostingView`, the `NSScreen.notchSize`/`displayID` extension. |
 | **`NotchShape.swift`** | The silhouette `Shape` (animatable corner radii) **+ `NotchSkirtShape`** — its open twin (sides + rounded bottom + concave top corners, no flat top edge) that the glow strokes. |
 | **`SpinningLogo.swift`** | The 2D spectrum-ring logo (matches the app icon). |
-| **`NotchView.swift`** | `NotchView` (binder) + `NotchContent` (the pure visual: morph, phases, layered edge glow, the read-back / Remembering / status captions) + `NotchMetrics` (per-phase sizing) + `NotchStopButton` + the `.blurDissolve` transition. |
+| **`NotchView.swift`** | `NotchView` (binder) + `NotchContent` (the pure visual: morph, phases, the depth-bed shadow, layered edge glow, the read-back / Remembering / status captions, the hover swell + its asymmetric springs) + `NotchMetrics` (per-phase + hover sizing) + `NotchStopButton` + the `.blurDissolve` transition. |
 
 Edits outside this folder: `AppState.swift` (owns/starts the two objects), `Views/HomeView.swift` (`PromptBar` drives `appState.commandCoordinator`), `Cloud/CodexCLI.swift` (`runAgentCommand` gained an optional `imagePath` → `codex exec -i`, §6a), `System/Permissions.swift` (`hasScreenRecording()`, already present), and the project's `INFOPLIST_KEY_NSMicrophoneUsageDescription` + `INFOPLIST_KEY_NSSpeechRecognitionUsageDescription` build settings.
 
@@ -177,7 +178,8 @@ This is where most of the hard bugs were fought and won. The window is a **FIXED
 **(a) Fixed canvas, top-flush, NEVER resized during a morph.** The panel is sized once to `canvasSize` — the biggest notch state + slack (`canvasHSlack 140`, `canvasVSlack 90`) for the bounce-overshoot and glow bloom — pinned with its top at the screen's edge. `applyPhase` just `placeCanvas()` + `reveal()`; on `.hidden` it `orderOut`s after `settleDelay` (idle = no window at all). Because the window never moves/resizes mid-animation, the notch **can't detach from the bezel**.
 > ⚠️ The OLD approach — resize the window to the notch on every phase change (grow-to-union, shrink-after-settle) — made the notch visibly **jump off the bezel** mid-morph (the AppKit frame and the SwiftUI animation fought, worse with a bouncy spring). Don't go back to per-state window resizing.
 
-**(b) Click-through = `ignoresMouseEvents` toggled by CURSOR POSITION.** macOS does per-pixel hit-testing: a click on ANY non-transparent pixel (incl. the glow bloom) is caught by the window *before* `hitTest` runs, and a nil `hitTest` then **swallows** it rather than passing through. So a static hitTest can't make the glow click-through. Instead a ~60 Hz cursor poll (`mouseTimer`, added in `.common` run-loop mode) sets `ignoresMouseEvents = false` **only while the cursor is over the actual notch silhouette** (`cursorOverSilhouette` — a `NotchShape` path test in screen coords); everywhere else the whole window ignores the mouse, so clicks (over the glow, the empty canvas, an inch away) sail straight through. `hitTest` then just returns `super ?? self`; `acceptsFirstMouse` so STOP/the field fire on the first click.
+**(b) Click-through = `ignoresMouseEvents` toggled by CURSOR POSITION.** macOS does per-pixel hit-testing: a click on ANY non-transparent pixel (incl. the glow bloom) is caught by the window *before* `hitTest` runs, and a nil `hitTest` then **swallows** it rather than passing through. So a static hitTest can't make the glow click-through. Instead a cursor poll (`mouseTimer`, added in `.common` run-loop mode) sets `ignoresMouseEvents = false` **only while the cursor is over the actual notch silhouette** (`cursorOverSilhouette` — a `NotchShape` path test in screen coords); everywhere else the whole window ignores the mouse, so clicks (over the glow, the empty canvas, an inch away) sail straight through. `hitTest` then just returns `super ?? self`; `acceptsFirstMouse` so STOP/the field fire on the first click.
+The poll is **two-tier by proximity** (`retuneMouseTimer`, 2026-07-13): 60 Hz while the cursor is inside the canvas, 10 Hz when it's far — the far tick is one rect test (the canvas box also gates the silhouette test, so a far cursor never pays for a Path build or the read-back text measurement), timer tolerance lets macOS coalesce wakeups, and the always-on hover monitors (§7a) bump far → near the instant the cursor re-approaches, so the lazy tier never delays a STOP click.
 > ⚠️ Don't gate click-through on a static `hitTest`/rect — the glow's drawn pixels are caught before hitTest, and a rect over-claims the area beside the rounded notch. Gate on **where the cursor is**, against the **shape path**.
 
 **(c) Present on ALL Spaces + no slide.** Both still needed: `collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]`, **re-asserted on EVERY `reveal()`** (macOS drops `.canJoinAllSpaces` on re-order); and `NotchSpace.shared?.pin(panel)` (the SkyLight private API, level `Int32.max`) so it doesn't slide during the 3-finger Spaces swipe (`.stationary` is Exposé-only; best-effort, falls back to the public behaviour).
@@ -189,6 +191,17 @@ This is where most of the hard bugs were fought and won. The window is a **FIXED
 Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the notch shows in screen recordings — Jesai chose recordability). Observers (`didChangeScreenParameters`, `activeSpaceDidChange`, `didWake`, `didActivateApplication`) re-place the canvas on the menu-bar display (`CGMainDisplayID`, not `NSScreen.main`) and re-`reveal()`; `host.update(metrics:)` re-renders on display change.
 
 ---
+
+## 7a. The notch as a button — hover swell + click-to-type  *(✅ built & verified on hardware 2026-07-13)*
+
+Mouse over the IDLE notch → a trackpad haptic tick (`NSHapticFeedbackManager`, `.alignment`) and the shell **swells** (`NotchMetrics.hoverSize`: +22pt wide, +3pt deep — the grow reads sideways; more depth looks like drooping) with a drop shadow and deliberately **NO glow** (the shadow alone says "solid, pressable"). Click → the same tap-to-type field as a hotkey tap, via `CommandCoordinator.notchClicked()` — the knowledge-base-only Plus aside and the first-use permission gate run first, mirroring the press beats. **Real-notch displays only** (a nil `notchSize` never arms it).
+
+The mechanics (all in `NotchWindowController`):
+- **Entry: zero-permission `.mouseMoved` NSEvent monitors** (global + local — mouse monitors are not keyboard-class, zero TCC contact; installed post-launch per lesson 14, with a retry tick). Idle costs NOTHING but the per-move callback: a couple of guards + ONE cached rect test (`hoverEntryRect`, recomputed on build + display changes) against the event's own screen coordinates (no `NSEvent.mouseLocation` round-trip).
+- **The window arrives invisibly:** the panel orders in with the shell at the EXACT hardware silhouette — black over the black cutout — then springs to the grown shape: the dismiss retract-merge trick (§8) played in reverse.
+- **Exit + click-through ride the §7b poll:** while hovering the poll detects the cursor leaving and flips `ignoresMouseEvents` over the swollen silhouette. Enter/exit have **hysteresis** (entry = the tight hardware cutout; exit = the grown box + 4pt) so the swollen lip can't flicker. Hover yields the instant a real phase opens the notch (`clearHover` — the phase owns the shape); `endHover`'s order-out waits **1.0s** (longer than `settleDelay`) because the exit glide outlives the phase retract.
+- **Asymmetric springs** (`NotchContent.hoverMorph`): entry `response 0.38 / damping 0.6` — quick, one tiny overshoot; exit `0.52 / 0.95` — a shrink's overshoot lands INSIDE the cutout where it's invisible, so a bouncy exit reads as a hard cut; the slower fully-damped glide is what *feels* symmetric. Tuned live on Jesai's bezel.
+- ⚠️ **The screen's top edge must stay clickable** — three separate boundary traps once made the notch's top row click-dead; see lesson 15 before touching any cursor-vs-top-edge math.
 
 ## 8. The notch visual — `NotchView` / `NotchContent` / `NotchShape` / `SpinningLogo`
 
@@ -202,6 +215,7 @@ Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the not
 - **running/finishing:** `runningHeight(caption:) = baseHeight + caption + bottomPad` — `caption` is the read-back's measured height (grows to fit, below) or the tight one-line status (`captionHeight 18`). `topPad 0` + zero VStack spacing so the text sits right under the hardware notch; `bottomPad 4`.
 - **typing:** wider + one focusable field row.
 - **hidden (the dismiss RETRACT):** size collapses to the **exact hardware notch** (`hardwareNotch`, with the real notch radius), and the black shell stays **opaque** (`shellOpacity = 1`) while only the *content* fades. So on dismiss the shell morphs back into the real cutout and **merges with it** — a physical "suck back into the notch," then the window orders out invisibly (`settleDelay 0.6s`). No fade. (On a notch-less display there's nothing to merge into, so `shellOpacity` fades it instead.)
+- **hover (idle only):** `hoverSize` / `hoverRadii` — the hardware cutout +22pt wide, +3pt deep, the genuine radius scaled to the new depth. Rendered with the depth-bed shadow and zero glow (§7a).
 
 **Layout (camera-flanking):** a top row (`SpinningLogo` · `Spacer(centerGap 64)` · `rightControl`) at the camera band, then the caption / type-field row. `hPad 18` clearance. The logo AND every `rightControl` fill the **same `controlSlot` (17pt) square**, so the two flanks are twinned in size and on one optical center axis — no per-state drift. `rightControl` cross-fades between **the mic at 14pt** (opening calmer → listening "leans in") · spinner (transcribing) · the `TextField` (typing) · `NotchStopButton` (running) · outcome glyph (finishing).
 
@@ -211,6 +225,8 @@ Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the not
 - **Status** — codex's work lines, mono, `.contentTransition(.interpolate)` so only the CHANGED glyphs morph in place (shared prefixes stay put — e.g. one tool line → the next).
 
 **The morph:** one spring `.spring(response: 0.52, dampingFraction: 0.72)` drives size/radii/content/glow together on `phase`, `readBack`, and `remembering` (reduced-motion → 0.24s ease) — fast-out, gentle settle, slight bounce.
+
+**The depth bed** (2026-07-13): a drop shadow (`0.55 / radius 9 / y+3`) cast by an identical silhouette at the very BOTTOM of the ZStack — **behind the glow layers**, so the spectrum reads against darkness instead of the user's wallpaper. Its fill never shows (the real shell covers it exactly); only the shadow escapes. Present in every visible state AND the hover swell; opacity-only fade so it rides whichever spring is driving and vanishes for the retract-merge. (It can't live on the main fill — that layer sits ABOVE the halo glows.)
 
 **The edge glow** (`glow` ×3 → `glowLayer`): a rotating `AngularGradient(GlowHalo.stops)` **masked by `NotchSkirtShape.stroke`** — the mask lives in the body so it morphs in LOCKSTEP with the black fill (no "separate entity" pop-in). Three layers (wide soft halo + dense halo behind the fill, crisp bright rim over it) make it thick + vivid. It's **always present**, fading via `.opacity(glowStrength)` so the edges light up in place; `glowStrength` is non-zero for **every visible state** (opening/listening/typing/running…), so the notch glows from the moment it's summoned. ⚠️ Each layer expands its gradient `(lineWidth/2 + blur + 6)` past every edge (`.padding(-m)` + `.mask(skirt.padding(m))`) so the BOTTOM edge isn't thinner than the sides (the gradient must reach beyond the stroke + blur on ALL sides, and the bottom edge sits at the frame edge).
 
@@ -239,6 +255,7 @@ Other notes: `level = .mainMenu + 3`; `sharingType` **left at default** (the not
 12. **The dismiss is a RETRACT, not a fade.** On `.hidden`, the black shell stays opaque and morphs to the *exact hardware-notch silhouette* (size + radius), so it merges into the real cutout and the window orders out invisibly — a physical "suck back in." Only the inner content fades. (Notch-less displays fade — there's nothing to merge into.) An earlier flat opacity fade read as cheap; don't go back.
 13. **Keyboard-class `CGEventTap`s are TCC-radioactive — Sidekick rides NSEvent monitors, permanently.** Two field-proven layers [both 2026-07-09]: (a) listen-only keyDown taps are Input-Monitoring-gated outright — the old global Esc landed Sentient in the pane with a stray request and the system disabled the tap every ~1.5s forever; (b) even a listen-only **flagsChanged-ONLY** tap fires a real `kTCCServiceListenEvent` access request at creation — fresh Mac → the "receive keystrokes from any application" dialog at first launch + a system-set denial (the app listed, unchecked, in the Input Monitoring pane) — while the tap *works anyway*, which is how it hid on never-pristine dev Macs. NSEvent global+local `flagsChanged` monitors deliver the same modifier stream with zero TCC contact (§4). The cancel story is the local Esc monitor + the hotkey press (§6).
 14. **NSEvent monitors must be installed AFTER the app finishes launching.** Registered during `AppState.init` (mid-`NSApplicationMain`, `NSApp` still nil) they wedge event routing for the life of the process — windows draw, the main thread idles, zero input is ever delivered ("AppleEvent activation suspension timed out"). Guard on `NSApp?.isRunning == true` and let the health tick install on its first post-launch pass (§4).
+15. **The screen's top edge must stay clickable (Fitts's law) — THREE boundary traps, all field-found 2026-07-13.** A cursor slammed against the top of the screen reports EXACTLY the boundary coordinate, and three independent layers each treat the boundary as "outside": (a) `Path.contains` excludes boundary points → the silhouette gate tests a point clamped 2pt INTO the shape; (b) SwiftUI shape hit-testing has the same exclusion → the shell's tap gesture rides a generous `contentShape(Rectangle().inset(by: -4))` (the window gate keeps it honest); (c) `NSRect.contains` is half-open (excludes the max edge) → every cursor rect touching the screen top (`hoverEntryRect`, `nearZone`) must overhang it by +2. Fixing one or two is not enough — the click dies at whichever layer still excludes the edge.
 
 ---
 
@@ -265,6 +282,7 @@ All of the below is **confirmed working on Jesai's bezel** (live screenshots/rec
 - **The logo** matches the app icon — twinned to the right control in a shared 17pt slot, the warm seam stop deepened to gold (no white spot), the white ring extra-fine, spinning 2× faster while processing.
 - **Dismiss & Esc:** the notch *retracts/merges into the cutout* on dismiss (no fade); Esc cancels globally (type field · listening · transcript), a hotkey tap closes the type field, and STOP/Esc dismiss the transcript instantly while still halting live computer use with the "Stopped" beat.
 - **The hotkey mechanism swap (2026-07-09):** the CGEventTap was replaced with NSEvent global+local `flagsChanged` monitors (lesson 13) with a post-launch install guard (lesson 14) — verified live on hardware: fresh TCC state (`tccutil reset`) → **no Keystroke Receiving dialog**, hold-to-talk + tap-to-type + Esc cancel all working, launch clean.
+- **The notch as a button (2026-07-13):** hover swell + haptic + depth-bed drop shadow + click-to-type (§7a), the asymmetric enter/exit springs, the two-tier proximity poll (§7b), and the top-edge Fitts fixes (lesson 15) — all verified on Jesai's bezel, including top-edge clicks across the notch's width and menu-bar click-through immediately beside it.
 - **Not yet done:** §12 polish backlog; productionization (§13). Reduced-motion + VoiceOver coded but unverified.
 
 ---
@@ -283,9 +301,11 @@ The morph is a longer, bouncier spring; the read-back→work swap is a blur-diss
 ### ✅ D. Dismiss everywhere (Esc · ⌘ · STOP) — **DONE**
 Esc cancels/dismisses via the window's LOCAL monitor whenever Sentient is frontmost — the type field, listening, transcribing, and the voice transcript; over other apps a fresh hotkey press is the cancel (transcribing bail + the instant transcript dismiss). A hotkey tap closes the type field; STOP and the cancels all route through `stop()`, dismissing the transcript INSTANTLY (no flourish) yet halting live computer use with the "Stopped" beat (§6). Esc over other apps is left entirely alone (no global keyDown tap — Input-Monitoring-gated, §4).
 
+### ✅ E1. Hover-haptic — **DONE and upgraded (2026-07-13)**
+Grew into the full notch-as-a-button affordance: hover swell + haptic + drop shadow + click-to-type. §7a.
+
 ### E. Deferred touches (each its own focused pass)
 - **Behind-mic color dance:** a small blurred colored glow *behind the mic icon* in the listening state (distinct from the edge glow — the `.opening`→`.listening` "lean in" is the hook).
-- **Hover-haptic:** a trackpad haptic (`NSHapticFeedbackManager`) when the cursor crosses the notch's boundary.
 - **2-line status:** the bar now shows a tight ONE status line (for compactness); if a 2-line codex narration matters, widen `captionHeight` / show the last 2.
 - **Multi-task "↓ N tasks":** today it's one run at a time; the future is a stack you pull down (per-task rows + STOPs). Big change to the coordinator (a list of runs) + the notch.
 

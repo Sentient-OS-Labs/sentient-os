@@ -9,10 +9,15 @@
 //  state, pinned with its top flush at the screen's edge. It NEVER resizes during a morph — the notch
 //  shape animates INSIDE it — so the notch can never detach from the bezel mid-animation. Click-through
 //  is guaranteed by toggling window-level `ignoresMouseEvents` by CURSOR POSITION: the window only stops
-//  ignoring the mouse while the cursor is over the actual notch SILHOUETTE (running/typing) — so every
-//  other point, INCLUDING the glow bloom's drawn pixels, passes straight through. (A static hitTest can't
-//  do this: macOS catches a click on ANY non-transparent pixel — the glow — before hitTest can pass it on,
-//  and a nil hitTest then SWALLOWS it rather than passing through.) Ordered OUT when idle.
+//  ignoring the mouse while the cursor is over the actual notch SILHOUETTE (running/typing/hovering) — so
+//  every other point, INCLUDING the glow bloom's drawn pixels, passes straight through. (A static hitTest
+//  can't do this: macOS catches a click on ANY non-transparent pixel — the glow — before hitTest can pass
+//  it on, and a nil hitTest then SWALLOWS it rather than passing through.) Ordered OUT when idle.
+//
+//  Also owns the HOVER affordance (the notch as a button): zero-permission `.mouseMoved` NSEvent
+//  monitors detect the cursor entering the hardware cutout while idle → haptic tick + the shell swells
+//  (rendered by NotchView off coordinator.notchHovering) → a click opens tap-to-type. Real-notch
+//  displays only. Exit + the swollen shape's click-through ride the same cursor poll as running/typing.
 //
 
 import SwiftUI
@@ -29,9 +34,24 @@ final class NotchWindowController {
     /// When the panel last became KEY for the type field — used to ignore the transient resign during focus setup.
     private var typingKeyAt = Date.distantPast
     /// Polls the cursor while interactive to toggle `ignoresMouseEvents` (silhouette-only click-through).
+    /// Two-tier rate — crisp near the notch, lazy when the cursor is far (see `retuneMouseTimer`).
     private var mouseTimer: Timer?
+    /// The live poll rate, so re-tuning only rebuilds the timer on an actual tier change.
+    private var mouseTimerInterval: TimeInterval = 0
     /// Local key monitor: Esc cancels the notch's pending input (type field / voice capture). See §4.
     private var keyMonitor: Any?
+    /// Hover entry detection: `.mouseMoved` NSEvent monitors, global + local — the same zero-permission
+    /// pattern as the hotkey (mouse monitors are not keyboard-class; zero TCC contact). They only ever
+    /// BEGIN a hover; exit + click-through are the cursor poll's job while the swell is up.
+    private var hoverMonitors: [Any] = []
+    /// Retries the hover-monitor install until the app has finished launching (lesson 14 — an NSEvent
+    /// monitor registered mid-NSApplicationMain wedges event routing for the life of the process).
+    private var hoverInstallTimer: Timer?
+    /// The cursor is over the idle notch — the shell is swollen and clickable.
+    private var hovering = false
+    /// The hardware notch cutout in screen coords — the hover ENTRY zone, cached so the per-mouse-move
+    /// idle check is a bare rect test (recomputed only on build + display changes). `.null` = no notch.
+    private var hoverEntryRect: NSRect = .null
 
     /// Extra room around the largest notch state so the morph's bounce-overshoot + the glow bloom never
     /// clip at the fixed window's edge. The notch is centered + top-anchored inside this canvas.
@@ -53,6 +73,7 @@ final class NotchWindowController {
             self?.build()
             self?.installObservers()
             self?.installKeyMonitor()
+            self?.installHoverMonitorsWhenReady()
             self?.observePhase()
             self?.applyPhase()          // sync the initial state (hidden → stays ordered out)
         }
@@ -79,6 +100,7 @@ final class NotchWindowController {
     private func build() {
         guard panel == nil, let screen = Self.menuBarScreen() else { return }
         metrics = Self.metrics(for: screen)
+        refreshHoverEntryRect(for: screen)
         let frame = windowFrame(for: canvasSize, on: screen)
         let panel = NotchPanel(contentRect: frame,
                                styleMask: [.borderless, .nonactivatingPanel],
@@ -121,10 +143,16 @@ final class NotchWindowController {
         sizeToken &+= 1
         let token = sizeToken
 
+        // The hover affordance is idle-only: the instant the notch opens for real (a hotkey press,
+        // a click landing in .typing, a notice), hover yields — the phase owns the shape now, and
+        // the window is already up so there's nothing to choreograph.
+        if coordinator.phase != .hidden, hovering { clearHover() }
+
         // Click-through: while interactive, a cursor poll lets the window receive clicks ONLY over the
         // notch silhouette (the glow + canvas always pass through); otherwise the whole window ignores
-        // the mouse so every click sails past.
-        if coordinator.phase == .running || coordinator.phase == .typing {
+        // the mouse so every click sails past. Hovering counts as interactive — the same poll also
+        // detects the cursor LEAVING the hover zone (updateMousePassthrough → endHover).
+        if coordinator.phase == .running || coordinator.phase == .typing || hovering {
             startMouseTracking()
         } else {
             stopMouseTracking()
@@ -134,11 +162,12 @@ final class NotchWindowController {
         if coordinator.phase != .hidden {
             placeCanvas()                                   // the fixed canvas — NEVER resized per morph
             reveal(makeKey: coordinator.phase == .typing)
-        } else {
+        } else if !hovering {
             // Order the window out only AFTER the SwiftUI retract animation has played.
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(Self.settleDelay))
-                guard let self, self.sizeToken == token, self.coordinator.phase == .hidden else { return }
+                guard let self, self.sizeToken == token, self.coordinator.phase == .hidden,
+                      !self.hovering else { return }
                 self.panel?.orderOut(nil)                   // idle → no window at all
             }
         }
@@ -192,47 +221,226 @@ final class NotchWindowController {
 
     // MARK: Click-through (silhouette-only, by cursor position)
 
-    /// Poll the cursor (~60 Hz) while interactive so `ignoresMouseEvents` flips the instant the cursor
-    /// crosses into / out of the notch silhouette. Added in `.common` modes so it keeps ticking during
-    /// tracking loops. Idempotent.
+    /// Poll tiers: crisp while the cursor is anywhere near the notch (inside the canvas), lazy when
+    /// it's across the screen — the far tick is just "did they come back?" (one rect test), so timer
+    /// wakeups drop 6× during long computer-use runs. The always-on hover monitors bump far → near
+    /// the instant the cursor re-approaches, so the lazy tier never delays a real interaction.
+    private static let pollNear: TimeInterval = 1.0 / 60.0
+    private static let pollFar: TimeInterval = 1.0 / 10.0
+
+    /// Start (or keep) the cursor poll at the rate the cursor's position deserves. Idempotent.
     private func startMouseTracking() {
         updateMousePassthrough()
-        guard mouseTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateMousePassthrough() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        mouseTimer = timer
+        retuneMouseTimer()
     }
 
     private func stopMouseTracking() {
         mouseTimer?.invalidate()
         mouseTimer = nil
+        mouseTimerInterval = 0
+    }
+
+    /// Each tick re-checks passthrough, then re-tunes its own rate by proximity.
+    private func mouseTick() {
+        updateMousePassthrough()
+        if mouseTimer != nil { retuneMouseTimer() }   // a hover exit may have just stopped the poll
+    }
+
+    /// (Re)build the poll timer when the proximity tier changes. `.common` mode so it keeps ticking
+    /// during tracking loops; tolerance lets the system coalesce wakeups for energy.
+    private func retuneMouseTimer() {
+        let interval = cursorNearNotch() ? Self.pollNear : Self.pollFar
+        guard mouseTimerInterval != interval else { return }
+        mouseTimer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.mouseTick() }
+        }
+        timer.tolerance = interval * 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        mouseTimer = timer
+        mouseTimerInterval = interval
+    }
+
+    /// The "near" zone — the fixed canvas plus a hair ABOVE the screen's top edge. ⚠️ `NSRect.contains`
+    /// excludes the max edge, and a cursor slammed against the top of the screen reports EXACTLY that
+    /// boundary y — without the overhang, the proximity gate goes click-dead along the notch's top edge
+    /// (the same half-open trap the hover entry rect dodges with its own +2).
+    private var nearZone: NSRect {
+        guard let panel else { return .null }
+        var zone = panel.frame
+        zone.size.height += 2
+        return zone
+    }
+
+    /// Cheap proximity test — the canvas (biggest notch state + slack) IS the "near" zone.
+    private func cursorNearNotch() -> Bool {
+        nearZone.contains(NSEvent.mouseLocation)
     }
 
     /// The window receives the mouse ONLY while the cursor is over the live notch silhouette; everywhere
-    /// else (glow, canvas) it ignores the mouse, so those clicks pass straight through.
+    /// else (glow, canvas) it ignores the mouse, so those clicks pass straight through. While hovering,
+    /// the same tick doubles as the LEAVE detector (the mouseMoved monitors only ever begin a hover).
     private func updateMousePassthrough() {
         guard let panel else { return }
+        if hovering, coordinator.phase == .hidden, !cursorStillHovering() { endHover(); return }
         let interactive = coordinator.phase == .running || coordinator.phase == .typing
-        let receive = interactive && cursorOverSilhouette()
+            || (hovering && coordinator.phase == .hidden)
+        // The canvas box gates the EXPENSIVE silhouette test (a Path build + the read-back text
+        // measurement): a far cursor can't be over the silhouette, so it never pays for one.
+        let receive = interactive && cursorNearNotch() && cursorOverSilhouette()
         if panel.ignoresMouseEvents == receive { panel.ignoresMouseEvents = !receive }
     }
 
     /// Is the cursor over the actual notch shape right now? Works in screen coordinates (no view-flip
-    /// guesswork): a bounding-box early-out, then the exact `NotchShape` path test.
+    /// guesswork): a bounding-box early-out, then the exact `NotchShape` path test. During a hover the
+    /// live silhouette is the swollen hover shape, not the phase's.
     private func cursorOverSilhouette() -> Bool {
         guard let screen = Self.menuBarScreen() else { return false }
-        let s = metrics.size(for: coordinator.phase, readBack: coordinator.readBack,
-                             remembering: coordinator.run.remembering)
+        let hoverIdle = hovering && coordinator.phase == .hidden
+        let s = hoverIdle ? metrics.hoverSize
+                          : metrics.size(for: coordinator.phase, readBack: coordinator.readBack,
+                                         remembering: coordinator.run.remembering)
         let p = NSEvent.mouseLocation                        // screen coords, origin bottom-left
         let localX = p.x - (screen.frame.midX - s.width / 2)
         let depthFromTop = screen.frame.maxY - p.y           // 0 at the bezel, increasing downward
         guard localX >= 0, localX <= s.width, depthFromTop >= 0, depthFromTop <= s.height else { return false }
-        let radii = metrics.radii(for: coordinator.phase)
+        let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: coordinator.phase)
+        // ⚠️ Fitts's law at the bezel: a cursor slammed against the screen's top edge reports depth ≈ 0 —
+        // a point ON the path's boundary, which `contains` excludes — so the top edge of the notch went
+        // click-dead. Test a couple of points INTO the shape instead: the screen edge itself is part of
+        // the notch (macOS's own menu bar works this way).
         return NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom)
             .path(in: CGRect(x: 0, y: 0, width: s.width, height: s.height))
-            .contains(CGPoint(x: localX, y: depthFromTop))
+            .contains(CGPoint(x: localX, y: max(depthFromTop, 2)))
+    }
+
+    // MARK: Hover — the notch as a button (swell + haptic; click opens tap-to-type)
+
+    /// Install now if the app is already running, else retry on a short tick. ⚠️ Lesson 14: an NSEvent
+    /// monitor registered during app init (NSApp can still be nil, mid-NSApplicationMain) wedges the
+    /// app's event routing for the LIFE of the process — and a Timer can only fire once the run loop
+    /// is pumping, i.e. post-launch by construction, so the tick path is safe by shape.
+    private func installHoverMonitorsWhenReady() {
+        installHoverMonitors()
+        guard hoverMonitors.isEmpty, hoverInstallTimer == nil else { return }
+        hoverInstallTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.installHoverMonitors()
+                if !self.hoverMonitors.isEmpty {
+                    self.hoverInstallTimer?.invalidate()
+                    self.hoverInstallTimer = nil
+                }
+            }
+        }
+    }
+
+    /// The `.mouseMoved` monitors — ENTRY detection only, so the idle cost is one rect test per mouse
+    /// move (no timers, no polling while idle). Global hears moves over other apps; local hears them
+    /// whenever Sentient itself is frontmost. Mouse monitors are not keyboard-class: zero TCC contact.
+    private func installHoverMonitors() {
+        guard hoverMonitors.isEmpty, NSApp?.isRunning == true else { return }
+        let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] event in
+            self?.hoverMouseMoved(at: Self.screenLocation(of: event))
+        })
+        if let global { hoverMonitors.append(global) }
+        let local = NSEvent.addLocalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] event in
+            self?.hoverMouseMoved(at: Self.screenLocation(of: event))
+            return event
+        })
+        if let local { hoverMonitors.append(local) }
+        if !hoverMonitors.isEmpty {
+            Log("notch hover affordance armed (mouseMoved NSEvent monitors, zero-permission)")
+        }
+    }
+
+    /// The event's own screen-coord location — spares a per-move window-server query
+    /// (`NSEvent.mouseLocation`). Global-monitor events carry no window (already screen coords);
+    /// local ones convert from theirs.
+    private static func screenLocation(of event: NSEvent) -> NSPoint {
+        guard let window = event.window else { return event.locationInWindow }
+        return window.convertPoint(toScreen: event.locationInWindow)
+    }
+
+    /// Every mouse move funnels here — so the common case must stay a couple of guards and ONE cached
+    /// rect test. Begin the hover the moment the cursor enters the hardware cutout while the notch is
+    /// idle; and if the far-tier poll is watching an interactive notch, a re-approaching cursor bumps
+    /// it back to the crisp tier instantly (no tier lag before a STOP click must land).
+    private func hoverMouseMoved(at location: NSPoint) {
+        if mouseTimerInterval == Self.pollFar, nearZone.contains(location) {
+            retuneMouseTimer()
+        }
+        guard !hovering, coordinator.phase == .hidden, hoverEntryRect.contains(location) else { return }
+        beginHover()
+    }
+
+    /// Cache the hover ENTRY zone — the hardware notch cutout in screen coords. Notch-less displays
+    /// get `.null` (matches nothing): the affordance only exists on a real bezel. The rect extends
+    /// 2pt past the screen's top edge so a cursor pinned at the very top still counts.
+    private func refreshHoverEntryRect(for screen: NSScreen) {
+        guard let notch = screen.notchSize else { hoverEntryRect = .null; return }
+        hoverEntryRect = NSRect(x: screen.frame.midX - notch.width / 2,
+                                y: screen.frame.maxY - notch.height,
+                                width: notch.width, height: notch.height + 2)
+    }
+
+    /// LEAVE detection while hovering (polled): the swollen silhouette's box plus a small margin.
+    /// Entry is the tighter hardware cutout, exit is the grown box — that hysteresis keeps the swollen
+    /// lip from flickering enter/exit under a cursor resting right on the hardware boundary.
+    private func cursorStillHovering() -> Bool {
+        guard let screen = Self.menuBarScreen() else { return false }
+        let s = metrics.hoverSize
+        let m: CGFloat = 4
+        let rect = NSRect(x: screen.frame.midX - s.width / 2 - m,
+                          y: screen.frame.maxY - s.height - m,
+                          width: s.width + m * 2, height: s.height + m + 2)
+        return rect.contains(NSEvent.mouseLocation)
+    }
+
+    /// The cursor crossed into the idle notch: a trackpad haptic tick + the shell swells (NotchView
+    /// renders the grow + drop shadow off `coordinator.notchHovering`). The panel appears at the exact
+    /// hardware silhouette — black over the black cutout, so its arrival is invisible — then springs
+    /// to the grown shape: the dismiss retract-merge trick, played in reverse.
+    private func beginHover() {
+        guard panel != nil else { return }
+        hovering = true
+        sizeToken &+= 1                       // cancel any pending orderOut (a just-finished retract)
+        coordinator.setNotchHovering(true)
+        placeCanvas()
+        reveal()
+        startMouseTracking()                  // leave detection + click-through over the swollen shape
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        Log("notch hover began")
+    }
+
+    /// The cursor left the hover zone: shrink back into the cutout, then order out after the settle —
+    /// token-guarded, so a re-hover mid-retract cleanly cancels the order-out. The wait is LONGER than
+    /// the phase retract's `settleDelay`: the hover exit glide (NotchContent.hoverMorph) is a slower,
+    /// fully-damped spring whose last few points are still outside the cutout at 0.6s — ordering out
+    /// then would visibly snip the tail.
+    private func endHover() {
+        guard hovering else { return }
+        hovering = false
+        coordinator.setNotchHovering(false)
+        Log("notch hover ended")
+        guard coordinator.phase == .hidden else { return }   // an open notch owns the window now
+        stopMouseTracking()
+        panel?.ignoresMouseEvents = true
+        sizeToken &+= 1
+        let token = sizeToken
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1.0))
+            guard let self, self.sizeToken == token, self.coordinator.phase == .hidden,
+                  !self.hovering else { return }
+            self.panel?.orderOut(nil)
+        }
+    }
+
+    /// Hover yields to a real phase (the notch opened under the cursor) — just drop the flags; the
+    /// window is already up and applyPhase choreographs everything else.
+    private func clearHover() {
+        hovering = false
+        coordinator.setNotchHovering(false)
     }
 
     // MARK: Observers (display / Space / wake / app activation)
@@ -266,8 +474,10 @@ final class NotchWindowController {
     }
 
     private func reposition() {
-        guard let panel, let screen = Self.menuBarScreen() else { panel?.orderOut(nil); return }
+        guard panel != nil, let screen = Self.menuBarScreen() else { panel?.orderOut(nil); return }
+        if hovering { endHover() }                      // the display changed under the cursor — re-detect fresh
         metrics = Self.metrics(for: screen)
+        refreshHoverEntryRect(for: screen)
         host?.update(metrics: metrics)
         placeCanvas()                                   // re-size/re-center the canvas for the new display
         if coordinator.phase != .hidden { reveal(makeKey: coordinator.phase == .typing) }
@@ -276,6 +486,7 @@ final class NotchWindowController {
     deinit {
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        hoverMonitors.forEach { NSEvent.removeMonitor($0) }
     }
 
     // MARK: Screen helpers

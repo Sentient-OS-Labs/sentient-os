@@ -46,6 +46,12 @@ final class CommandCoordinator {
     /// `readBack ?? run.statusLine` while running.
     private(set) var readBack: String?
 
+    /// True while the cursor hovers the IDLE notch — the click-to-type affordance (the shell swells
+    /// with a haptic tick; a click opens the type field). Set by NotchWindowController, which owns
+    /// the cursor geometry; read by NotchView for the grow + drop shadow. Idle-only by construction:
+    /// the controller clears it the instant the notch opens for real.
+    private(set) var notchHovering = false
+
     private let hotkey = SidekickHotkeyMonitor()
     private let voice = VoiceCapture()
     private var hotkeyChangeObserver: NSObjectProtocol?
@@ -302,6 +308,34 @@ final class CommandCoordinator {
         guard phase == .typing else { return }
         setPhase(.hidden)
         Log("notch typing dismissed")
+    }
+
+    // MARK: The notch as a button (the hover affordance)
+
+    /// NotchWindowController's seam for the hover state (it owns the cursor geometry; the view
+    /// renders the swell + shadow off this).
+    func setNotchHovering(_ hovering: Bool) {
+        guard notchHovering != hovering else { return }
+        notchHovering = hovering
+    }
+
+    /// A click on the idle, hover-swollen notch — the pointer's twin of a hotkey TAP: open the
+    /// tap-to-type field. Mirrors voicePressBegan's beats minus the voice branches (a click can only
+    /// mean typing): the knowledge-base-only aside, then the first-use permission gate, then the
+    /// field. The window controller makes the panel key on .typing, same as the hotkey path.
+    func notchClicked() {
+        guard phase == .hidden, !run.isRunning else { return }
+        if CodexAuth.knowledgeBaseOnly {
+            flash(Self.needsPlusNotice, for: 2.0)
+            Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
+            return
+        }
+        if ComputerUseGate.shared.interceptBeforeStart() {
+            Log("notch click intercepted — computer-use permissions missing, gate up")
+            return
+        }
+        setPhase(.typing)
+        Log("notch clicked → typing")
     }
 
     /// Cancel — back out of whatever the notch is doing, mirroring the obvious one-tap action for each state:
