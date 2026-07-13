@@ -269,8 +269,9 @@ actor ProactiveExecutor {
 
         NEVER use AppleScript, osascript, the Terminal, or any shell automation — use COMPUTER USE \
         only. Do not take screenshots via the shell, do not run unrelated commands, and do not touch \
-        unrelated apps or files. If you cannot complete the task with computer use, STOP and reply with \
-        `STATUS: COULD_NOT — <reason>`.
+        unrelated apps or files. You cannot ask the user follow-up questions — the moment you stop \
+        responding, the attempt is over. If you cannot complete the task with computer use, STOP and \
+        reply with `STATUS: COULD_NOT — <reason>`.
 
         <<<CONTENT
         \(content)
