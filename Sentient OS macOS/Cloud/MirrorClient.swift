@@ -89,9 +89,9 @@ actor MirrorClient {
     }
 
     /// The coached system prompt the user pastes into ChatGPT/Claude/Gemini (custom instructions).
-    /// Naming the connector + "always call get_structure" is what reliably makes the client load and
-    /// use the tools — clients lazy-load connector tools behind a search gate (field lessons in
-    /// Documentation/MCP Mirror Client.md).
+    /// Naming the connector + coaching the get_structure-first habit is what reliably makes the
+    /// client load and use the tools — clients lazy-load connector tools behind a search gate
+    /// (field lessons in Documentation/MCP Mirror Client.md).
     /// Lives here (the MCP owner) so every surface that offers "Copy System Prompt" shares one copy.
     static let systemPrompt = """
         You have access to the user's personal knowledge base through the Sentient OS MCP: an \
