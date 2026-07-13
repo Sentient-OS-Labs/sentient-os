@@ -16,6 +16,7 @@
 //
 
 import Speech
+import os
 @preconcurrency import AVFAudio
 
 @available(macOS 26, *)
@@ -28,6 +29,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<String, Error>?
     private var tapInstalled = false
+    private var yieldedBuffers: OSAllocatedUnfairLock<Int>?   // shared with the audio-thread tap (diagnostic)
 
     // MARK: Warm-up (best-effort, called when the hotkey arms so first use is instant)
 
@@ -81,8 +83,11 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat) else {
             throw VoiceError.modelUnavailable
         }
+        let yielded = OSAllocatedUnfairLock(initialState: 0)   // buffers fed to the analyzer (diagnostic)
+        self.yieldedBuffers = yielded
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
             guard let converted = Self.convert(buffer, using: converter, to: analyzerFormat) else { return }
+            yielded.withLock { $0 += 1 }
             continuation.yield(AnalyzerInput(buffer: converted))
         }
         tapInstalled = true
@@ -96,7 +101,20 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         stopAudio()
         inputContinuation?.finish()
         inputContinuation = nil
-        try await analyzer?.finalizeAndFinishThroughEndOfInput()
+        // Bounded finalize: finalizeAndFinishThroughEndOfInput can park indefinitely inside the
+        // speech daemon (field-proven 15s+ — and cancelAndFinishNow unwedged it in ~16ms). Give
+        // the graceful path 5s, then force-close the session; whatever the results stream already
+        // produced still comes back below.
+        if let analyzer {
+            let finalize = Task { try await analyzer.finalizeAndFinishThroughEndOfInput() }
+            let bound = Task {
+                try await Task.sleep(for: .seconds(5))
+                Log("voice: finalize parked — force-closing the session")
+                await analyzer.cancelAndFinishNow()
+            }
+            _ = try? await finalize.value
+            bound.cancel()
+        }
         let transcript: String
         if let resultsTask {
             transcript = (try? await resultsTask.value) ?? ""
@@ -104,7 +122,8 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
             transcript = ""
         }
         teardown()
-        Log("voice: finalized (\(Self.msLabel(clock.now - started))ms)")
+        let buffers = yieldedBuffers?.withLock { $0 } ?? 0
+        Log("voice: finalized (\(Self.msLabel(clock.now - started))ms · \(buffers) buffers)")
         return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
