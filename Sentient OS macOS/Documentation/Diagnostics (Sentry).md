@@ -62,11 +62,17 @@ Two defenses:
   (Log.swift), never `\(error)` / `localizedDescription`** — in Release it renders the enum case /
   type name only. Raw interpolation shipped codex stderr (`CLIError`'s description embeds up to
   300 chars of it — Gmail/calendar/screen content), note titles (Cocoa file errors carry the path),
-  and the mirror server's response body through ~22 error logs until the 2026-07-12 sweep.
+  and the mirror server's response body through ~22 error logs until the 2026-07-12 sweep. A second
+  sweep (2026-07-12) closed the last identifier-bearing sources: the on-device pipeline's error logs
+  logged only a bucketKey's **scheme prefix** (`CycleStore.scheme` — `whatsapp`/`file`/`notes`), never
+  the raw key (a chat's phone-number JID or a user file path); and the vault-swap failure became a
+  structured `vault_swap_failed` event (its Cocoa error embeds the failing note's path = a note title,
+  which the path scrubber can't fully strip from a spaced vault path).
 - **`beforeSend` / `beforeBreadcrumb` scrubber (backstop).** A pure closure set in `boot()` that
-  redacts free text on outgoing events + `Log()`-fed breadcrumbs: home-dir paths → `/Users/<redacted>`,
-  the mirror password path segment `/p_…` → `/p_<redacted>`, emails → `<email>`, phone runs →
-  `<phone>`, and **high-entropy** long tokens → `<token>`. Since 2026-07-12 the breadcrumb scrub
+  redacts free text on outgoing events + `Log()`-fed breadcrumbs: home-dir paths → `/Users/<redacted>`
+  (the WHOLE remainder — a folder/file name is PII, not just the username), external-volume paths →
+  `/Volumes/<redacted>`, the mirror password path segment `/p_…` → `/p_<redacted>`, emails → `<email>`,
+  phone runs → `<phone>`, and **high-entropy** long tokens → `<token>`. Since 2026-07-12 the breadcrumb scrub
   also walks `crumb.data` string values (SDK-authored crumbs carry their payload there, not in
   `message` — see §2.5).
   ⚠️ The token rule requires ≥1 uppercase/digit on purpose — a plain `{24,}` rule wrongly redacted our
