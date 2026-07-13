@@ -20,10 +20,14 @@ enum ModelLocator {
     static func resolve() -> String? {
         let fm = FileManager.default
 
+        #if DEBUG
+        // DEBUG-only: a Release build must not let a same-user process point the engine at a
+        // planted (poisoned) model via an env var. Self-tests run the Debug binary, so they keep it.
         if let env = ProcessInfo.processInfo.environment["SENTIENT_MODEL_PATH"],
            fm.fileExists(atPath: env) {
             return env
         }
+        #endif
 
         if let bundled = Bundle.main.path(forResource: "gemma-4-E4B-it", ofType: "litertlm") {
             return bundled

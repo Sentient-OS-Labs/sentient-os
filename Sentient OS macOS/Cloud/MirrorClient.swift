@@ -75,9 +75,17 @@ actor MirrorClient {
 
     static let shared = MirrorClient()
 
-    /// Production mirror. Overridable for local server testing via SENTIENT_MIRROR_BASE.
+    /// Production mirror. Overridable for local server testing via SENTIENT_MIRROR_BASE — but
+    /// DEBUG ONLY: the password rides in the URL path, so in a Release build a same-user process
+    /// must NOT be able to redirect the push (and thereby harvest the password + encrypted vault)
+    /// merely by launching the app with an env var. Self-tests run the Debug binary, so they keep it.
     static var baseURL: String {
-        ProcessInfo.processInfo.environment["SENTIENT_MIRROR_BASE"] ?? "https://mcp.sentient-os.ai"
+        #if DEBUG
+        if let override = ProcessInfo.processInfo.environment["SENTIENT_MIRROR_BASE"], !override.isEmpty {
+            return override
+        }
+        #endif
+        return "https://mcp.sentient-os.ai"
     }
 
     /// The coached system prompt the user pastes into ChatGPT/Claude/Gemini (custom instructions).

@@ -70,9 +70,13 @@ actor VaultGenerator {
     /// `SENTIENT_VAULT_ROOT` overrides for self-tests (the updater harness points everything
     /// vault-shaped at a fixture dir instead of the real vault).
     static var vaultRoot: URL {
+        #if DEBUG
+        // DEBUG-only: a Release build must not let a same-user process redirect the real vault to an
+        // attacker-chosen directory via an env var. Self-tests run the Debug binary, so they keep it.
         if let override = ProcessInfo.processInfo.environment["SENTIENT_VAULT_ROOT"], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
+        #endif
         return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Sentient OS - Knowledge Base", isDirectory: true)
     }
