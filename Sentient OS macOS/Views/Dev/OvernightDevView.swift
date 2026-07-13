@@ -4,7 +4,7 @@
 //
 //  The dev cockpit for overnight processing, in its OWN window (opened from DEV TOOLS → "Overnight
 //  Processing…"). A simple top-to-bottom checklist to set up + test the 3am self-processing:
-//    ① approve the root wake helper  ② launch-at-login  ③ test the 18h auto-enable  ④ manual arm.
+//    ① approve the root wake helper  ② launch-at-login  ③ test the 14h auto-enable  ④ manual arm.
 //  A live status panel at the top mirrors reality (helper approval + login item are polled every 2s,
 //  so approving in System Settings updates here without a manual refresh). Dev-only; the shipping
 //  onboarding/Settings UX binds to the same seams (WakeHelperClient / LoginItem / OvernightScheduler).
@@ -108,11 +108,11 @@ struct OvernightDevView: View {
         }
     }
 
-    // MARK: - ③ Test the 18h auto-enable
+    // MARK: - ③ Test the 14h auto-enable
 
     private var autoEnableStep: some View {
-        stepCard("3", "Test the 18h auto-enable",
-                 "Normally the scheduler turns itself on 18h after your first full analyze — but only once steps 1 & 2 are done. Shorten the wait here to test it in seconds.") {
+        stepCard("3", "Test the 14h auto-enable",
+                 "Normally the scheduler turns itself on 14h after your first full analyze — but only once steps 1 & 2 are done. Shorten the wait here to test it in seconds.") {
             VStack(alignment: .leading, spacing: 12) {
                 Text(autoEnableSummary).font(.callout).foregroundStyle(.white.opacity(0.85))
                     .fixedSize(horizontal: false, vertical: true)
@@ -120,7 +120,7 @@ struct OvernightDevView: View {
                 HStack(spacing: 8) {
                     Text("Wait:").font(.caption).foregroundStyle(.secondary)
                     Picker("", selection: $delayOverride) {
-                        Text("18h (real)").tag(0.0)
+                        Text("14h (real)").tag(0.0)
                         Text("10s").tag(10.0)
                         Text("60s").tag(60.0)
                     }.pickerStyle(.segmented).frame(width: 240).labelsHidden()
@@ -138,11 +138,11 @@ struct OvernightDevView: View {
         }
     }
 
-    // MARK: - ④ Manual arm (bypass the 18h logic)
+    // MARK: - ④ Manual arm (bypass the 14h logic)
 
     private var manualStep: some View {
         stepCard("4", "Manual arm (bypass)",
-                 "Directly arm a wake at a set time, ignoring the 18h logic — the fastest end-to-end test.") {
+                 "Directly arm a wake at a set time, ignoring the 14h logic — the fastest end-to-end test.") {
             HStack(spacing: 12) {
                 Toggle("On", isOn: $schedEnabled).toggleStyle(.switch)
                     .onChange(of: schedEnabled) { _, _ in appState.scheduler.reevaluate() }

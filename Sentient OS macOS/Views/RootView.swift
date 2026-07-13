@@ -56,7 +56,7 @@ struct RootView: View {
                 OnboardingView {
                     modelPath = ModelLocator.resolve()   // the onboarding download may have just landed it
                     withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
-                    // The first full cycle just stamped "initial done" — arm the 18h clock NOW.
+                    // The first full cycle just stamped "initial done" — arm the 14h clock NOW.
                     // (The app lives in the menu bar and rarely relaunches, so waiting for the
                     // next launch tick could delay auto-enable by days.)
                     appState.scheduler.maybeAutoEnable()
@@ -76,7 +76,7 @@ struct RootView: View {
                                runCalendar: calendarConnected && runCalendar,
                                fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
-                    appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 18h clock
+                    appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 14h clock
                 }
                 .transition(.opacity)
             } else {

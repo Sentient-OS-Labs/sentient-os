@@ -625,7 +625,7 @@ struct ProcessingView: View {
     private func run() async {
         let generation = runGeneration   // this invocation's identity — stale once pause/stop bump it
         // Keep the display awake ONLY for the initial ingest — the long one. The home + 3am both run
-        // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 18h auto-enable
+        // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 14h auto-enable
         // uses (nil until the first full cycle completes). `defer` releases on completion, failure, or
         // cancellation; the 3am path never reaches here (it never presents this view).
         if mode == .initial || OvernightScheduler.firstCycleCompletedAt == nil {

@@ -69,7 +69,7 @@ final class AppState {
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
 
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
-        scheduler.maybeAutoEnable()   // 18h after initial: flip the overnight scheduler on (or arm the timer)
+        scheduler.maybeAutoEnable()   // 14h after initial: flip the overnight scheduler on (or arm the timer)
         // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
         // the coordinator: the notch experience still plays, the codex run just never fires.
         commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
