@@ -78,7 +78,7 @@ final class PermissionGuide {
         if job.appURL != nil {
             markdown = "Drag **\(appName)** into the list, then flip its switch on."
         } else if job.pane == .loginItems {
-            markdown = "Flip **Sentient OS** on under \"Allow in the Background\"."
+            markdown = "Flip **Sentient OS** on under \"App Background Activity\"."
         } else {
             markdown = "Flip **Sentient OS** on in the list."
         }
