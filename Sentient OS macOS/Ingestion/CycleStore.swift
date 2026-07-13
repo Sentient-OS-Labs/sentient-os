@@ -185,12 +185,17 @@ actor CycleStore {
         ).first
     }
 
+    /// The scheme prefix of a bucketKey ("whatsapp" / "imessage" / "file" / "notes") — the only part
+    /// safe to log: the full key carries a chat's phone-number JID or a user file path, and every
+    /// Log() line ships to Sentry as a Release breadcrumb.
+    nonisolated static func scheme(_ bucketKey: String) -> Substring { bucketKey.prefix(while: { $0 != ":" }) }
+
     /// Read-only convenience (pointer / pointerState). A failed fetch degrades to nil (re-listing),
     /// but is now surfaced instead of silently swallowed.
     private func row(_ bucketKey: String) -> BucketPointer? {
         do { return try fetchRow(bucketKey) }
         catch {
-            Log("CycleStore.row(\(bucketKey)) fetch failed: \(error)")
+            Log("CycleStore.row(\(Self.scheme(bucketKey))) fetch failed: \(ErrorLabel(error))")
             CrashReporting.capture(error)
             return nil
         }
@@ -210,7 +215,7 @@ actor CycleStore {
         }
         do { try attempt() }
         catch {
-            Log("CycleStore.commit(\(bucketKey)) failed: \(error) — rolling back, retrying as update")
+            Log("CycleStore.commit(\(Self.scheme(bucketKey))) failed: \(ErrorLabel(error)) — rolling back, retrying as update")
             CrashReporting.capture(error)
             modelContext.rollback()
             do {
@@ -220,7 +225,7 @@ actor CycleStore {
                 try modelContext.save()
             } catch {
                 modelContext.rollback()
-                Log("CycleStore.commit(\(bucketKey)) recovery failed: \(error) — mark NOT persisted this item")
+                Log("CycleStore.commit(\(Self.scheme(bucketKey))) recovery failed: \(ErrorLabel(error)) — mark NOT persisted this item")
                 CrashReporting.capture(error)
             }
         }
@@ -277,7 +282,7 @@ actor CycleStore {
             if let r = try fetchRow(bucketKey) { r.floorOrder = nil; r.floorTiebreak = nil; r.updatedAt = Date() }
             try modelContext.save()
         } catch {
-            Log("CycleStore.collapseFloor(\(bucketKey)) failed: \(error)")
+            Log("CycleStore.collapseFloor(\(Self.scheme(bucketKey))) failed: \(ErrorLabel(error))")
             CrashReporting.capture(error)
         }
     }

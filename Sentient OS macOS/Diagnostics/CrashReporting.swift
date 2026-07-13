@@ -255,7 +255,10 @@ enum CrashReporting {
     private static let scrubbers: [(NSRegularExpression, String)] = {
         func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
         return [
-            (re("/Users/[^/\\s\"']+"), "/Users/<redacted>"),                 // home-dir paths
+            // Home-dir paths — redact the WHOLE remainder, not just the username: a folder name
+            // ("…/Divorce lawyer/…") or filename ("…/Lab results.pdf") is exactly the PII we can't ship.
+            (re("/Users/[^\\s\"']+"), "/Users/<redacted>"),
+            (re("/Volumes/[^\\s\"']+"), "/Volumes/<redacted>"),              // custom roots on external volumes
             // The mirror password's URL path segment (/u_<id>/p_<password>/…) — the §8 invariant.
             // Network breadcrumbs are off, but ANY future surface that logs the share URL is
             // covered here by construction.
