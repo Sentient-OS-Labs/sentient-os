@@ -143,6 +143,9 @@ calendar cobalt · computer teal · research mint), `init(fromGiftMarkdown:)` (t
 `# Title` promoted to the card title), or the hard-coded demo set (kind accents; the welcome card
 alone wears the full gradient — jewelry rule). The card lives four lives: `sealed` (the envelope) →
 `offer` → `working(n)` (scripted theater, or the real `liveLines` stream + STOP) → `done`.
+In the **offer** phase the WHOLE face is the tap target for the letter (not just "read more") — the
+fire CTA and "read more" buttons sit above the ancestor tap in hit-testing, so they keep their own
+actions; working/done faces don't tap-expand (a stray click mid-run shouldn't cover the STOP).
 
 ## The command bar — "Let me DO stuff for you"
 

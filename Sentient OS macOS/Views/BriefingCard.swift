@@ -65,6 +65,10 @@ struct BriefingCard: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .strokeBorder(border, lineWidth: 1))
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: phase)
+        // The whole offer face expands the card — the buttons (fire CTA, "read more") sit above
+        // this ancestor tap in hit-testing, so they keep their own actions.
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture { if phase == .offer { onDetail() } }
     }
 
     private var offerFace: some View {
