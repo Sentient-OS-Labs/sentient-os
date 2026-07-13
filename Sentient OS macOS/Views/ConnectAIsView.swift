@@ -7,11 +7,11 @@
 //   · sharing OFF → the single glowing "Connect your AIs" CTA (enables the mirror + first push,
 //     then the guide assembles in place); a quiet MCP ON/OFF pill top-right mirrors the state
 //     and flips it off behind the same confirm-and-delete alert Settings uses.
-//   · sharing ON → per-AI tabs (ChatGPT · Claude · Other AIs). ChatGPT/Claude each show two
-//     portrait video steps side by side: ① paste the private MCP link (masked; the real one
-//     lands on the clipboard), ② copy the coached system prompt (MirrorClient.systemPrompt) —
-//     with a take-me-there link under each card (GuideSpec URLs are placeholders until the real
-//     deep links land). Other AIs is the compact no-video pair of the same two steps.
+//   · sharing ON → per-AI tabs (ChatGPT · Claude · Other AIs). ChatGPT/Claude show their
+//     GuideSpec's portrait video steps side by side (ChatGPT three: developer mode → paste the
+//     private MCP link → paste the system prompt; Claude two: link → prompt), each with a
+//     take-me-there deep link above the card. The masked link + Copy and the coached
+//     MirrorClient.systemPrompt ride the cards; Other AIs is the compact no-video pair.
 //  Tutorial clips load from the bundle by name — connect-chatgpt-1/2.mp4, connect-claude-1/2.mp4;
 //  a missing file renders a quiet glass placeholder, so the recordings can land later with zero
 //  code changes. Closes with the magic demo line: ask it "What do you know about me?".
@@ -57,7 +57,7 @@ struct ConnectAIsView: View {
         .overlay(alignment: .topTrailing) {
             if loaded { sharingPill.padding(16) }
         }
-        .frame(minWidth: 820, minHeight: 880)
+        .frame(minWidth: 1100, minHeight: 880)
         .task { await refresh() }
         .alert("Stop sharing your knowledge base?", isPresented: $confirmOff) {
             Button("Keep Sharing", role: .cancel) {}
@@ -110,8 +110,8 @@ struct ConnectAIsView: View {
             tabSwitcher.padding(.top, 26)
             ZStack {
                 switch tab {
-                case .chatgpt: videoPair(Self.chatgptGuide)
-                case .claude:  videoPair(Self.claudeGuide)
+                case .chatgpt: videoRow(Self.chatgptGuide)
+                case .claude:  videoRow(Self.claudeGuide)
                 case .other:   otherPair
                 }
             }
@@ -124,33 +124,58 @@ struct ConnectAIsView: View {
         }
     }
 
-    /// One AI's guide content: captions + the take-me-there destinations under each card.
+    /// One card of an AI's guide: the take-me-there link above it, the video, the copy control.
+    private struct GuideStep {
+        enum Control { case none, link, prompt }
+        let title: String
+        let caption: String
+        let linkLabel: String
+        let linkURL: String
+        let control: Control
+    }
+
+    /// One AI's guide: its cards in order (videos load as "<videoPrefix>-<n>.mp4"), at the
+    /// recordings' own aspect so aspect-fill never crops.
     private struct GuideSpec {
         let name: String
         let videoPrefix: String
-        let linkCaption: String
-        let promptCaption: String
-        let connectorsURL: String
-        let instructionsLabel: String
-        let instructionsURL: String
+        let videoAspect: CGFloat
+        let steps: [GuideStep]
     }
 
-    // ⚠️ The two URLs per AI are PLACEHOLDERS (the AI's home) until the real deep links to the
-    // connector / instructions screens land — swap them here, nothing else changes.
     private static let chatgptGuide = GuideSpec(
-        name: "ChatGPT", videoPrefix: "connect-chatgpt",
-        linkCaption: "In ChatGPT: Settings → Connectors → Create, then paste your link.",
-        promptCaption: "In ChatGPT: Settings → Personalization → Custom instructions, then paste.",
-        connectorsURL: "https://chatgpt.com",
-        instructionsLabel: "Open ChatGPT's instructions",
-        instructionsURL: "https://chatgpt.com")
+        name: "ChatGPT", videoPrefix: "connect-chatgpt", videoAspect: 996.0 / 1080.0,
+        steps: [
+            GuideStep(title: "Turn on developer mode",
+                      caption: "In ChatGPT: Settings → Security and login → Developer mode, switch it on.",
+                      linkLabel: "Open ChatGPT's security settings",
+                      linkURL: "https://chatgpt.com/plugins#settings/Security",
+                      control: .none),
+            GuideStep(title: "Paste your private link",
+                      caption: "Plugins → New Plugin: name it Sentient OS, paste your link as the Server URL, No Auth, then Create.",
+                      linkLabel: "Open ChatGPT's plugins",
+                      linkURL: "https://chatgpt.com/plugins#settings/Connectors?create-connector=true&redirectAfter=%2Fplugins",
+                      control: .link),
+            GuideStep(title: "Tell ChatGPT to use it",
+                      caption: "In ChatGPT: Settings → Personalization → Custom instructions, then paste.",
+                      linkLabel: "Open ChatGPT's instructions",
+                      linkURL: "https://chatgpt.com/plugins#settings/Personalization",
+                      control: .prompt),
+        ])
     private static let claudeGuide = GuideSpec(
-        name: "Claude", videoPrefix: "connect-claude",
-        linkCaption: "In Claude: Settings → Connectors → Add custom connector, then paste your link.",
-        promptCaption: "In Claude: Settings → Profile → your preferences, then paste.",
-        connectorsURL: "https://claude.ai",
-        instructionsLabel: "Open Claude's preferences",
-        instructionsURL: "https://claude.ai")
+        name: "Claude", videoPrefix: "connect-claude", videoAspect: 916.0 / 1080.0,
+        steps: [
+            GuideStep(title: "Paste your private link",
+                      caption: "In Claude: Settings → Connectors → Add custom connector, then paste your link.",
+                      linkLabel: "Open Claude's connectors",
+                      linkURL: "https://claude.ai/new#settings/customize-connectors",
+                      control: .link),
+            GuideStep(title: "Tell Claude to use it",
+                      caption: "In Claude: Settings → General → Instructions for Claude, then paste.",
+                      linkLabel: "Open Claude's instructions",
+                      linkURL: "https://claude.ai/new#settings/general",
+                      control: .prompt),
+        ])
 
     private var tabSwitcher: some View {
         HStack(spacing: 4) {
@@ -171,22 +196,29 @@ struct ConnectAIsView: View {
         .overlay(Capsule().strokeBorder(Theme.stroke, lineWidth: 1))
     }
 
-    /// ChatGPT / Claude: the two video steps side by side, a take-me-there link under each.
-    private func videoPair(_ g: GuideSpec) -> some View {
+    /// ChatGPT / Claude: the guide's video steps side by side, a take-me-there link above each.
+    private func videoRow(_ g: GuideSpec) -> some View {
         HStack(alignment: .top, spacing: 14) {
-            VStack(spacing: 12) {
-                videoStep(1, "Paste your private link",
-                          video: "\(g.videoPrefix)-1", caption: g.linkCaption) { linkRow }
-                StepLink(title: "Open \(g.name)'s connectors", urlString: g.connectorsURL)
-            }
-            VStack(spacing: 12) {
-                videoStep(2, "Tell \(g.name) to use it",
-                          video: "\(g.videoPrefix)-2", caption: g.promptCaption) { promptButton }
-                StepLink(title: g.instructionsLabel, urlString: g.instructionsURL)
+            ForEach(Array(g.steps.enumerated()), id: \.offset) { i, s in
+                VStack(alignment: .leading, spacing: 12) {
+                    StepLink(title: s.linkLabel, urlString: s.linkURL)
+                    videoStep(i + 1, s.title, video: "\(g.videoPrefix)-\(i + 1)",
+                              aspect: g.videoAspect, caption: s.caption) {
+                        stepControl(s.control)
+                    }
+                }
             }
         }
         .fixedSize(horizontal: false, vertical: true)
         .transition(.opacity)
+    }
+
+    @ViewBuilder private func stepControl(_ c: GuideStep.Control) -> some View {
+        switch c {
+        case .link:   linkRow
+        case .prompt: promptButton
+        case .none:   EmptyView()
+        }
     }
 
     /// Other AIs: the same two steps, compact, no videos.
@@ -238,10 +270,11 @@ struct ConnectAIsView: View {
     // MARK: - The step cards
 
     /// A video step (ChatGPT / Claude tabs): clip on top, whisper + title + controls + caption below.
-    private func videoStep<Controls: View>(_ n: Int, _ title: String, video: String, caption: String,
+    private func videoStep<Controls: View>(_ n: Int, _ title: String, video: String, aspect: CGFloat,
+                                           caption: String,
                                            @ViewBuilder controls: () -> Controls) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            StepVideo(resource: video)
+            StepVideo(resource: video, aspect: aspect)
             MonoCaps("Step \(n)", size: 9, tracking: 2.2, color: Theme.Ink.label)
                 .padding(.top, 14)
             Text(title).font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
@@ -378,6 +411,7 @@ private struct StepLink: View {
 /// ships now and the .mp4s drop in later with zero code changes.
 private struct StepVideo: View {
     let resource: String   // e.g. "connect-chatgpt-1" → connect-chatgpt-1.mp4 in the bundle
+    let aspect: CGFloat    // the recordings' own shape (GuideSpec.videoAspect) so fill never crops
 
     var body: some View {
         Group {
@@ -392,9 +426,7 @@ private struct StepVideo: View {
                 }
             }
         }
-        // The frame matches the recordings' shape (908×1080 portrait) so aspect-fill never crops;
-        // keep new clips at this aspect.
-        .aspectRatio(908.0 / 1080.0, contentMode: .fit)
+        .aspectRatio(aspect, contentMode: .fit)
         .frame(maxWidth: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
