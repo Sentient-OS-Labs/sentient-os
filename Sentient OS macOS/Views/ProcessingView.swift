@@ -8,8 +8,9 @@
 //  connectors, optionally followed by the cloud Gmail leg, and shows a breathing sparkle, an
 //  "Analyzing ___" cycling-gradient title, a glowing progress bar, live verdict counts, and a
 //  "just processed" preview (thumbnail + verdict + title + summary). The real-mode cloud tail
-//  (knowledge base → gift → proactive) streams codex's live play-by-play as a one-line mono
-//  "thought" under the phase line (liveThought — ProactiveCycle's onLine hook).
+//  (knowledge base → gift → proactive) is the living orb over the phase line, with codex's live
+//  play-by-play as a fading three-line mono "thought" trail (liveThought — ProactiveCycle's
+//  onLine hook).
 //
 //  The ONLY dev/prod difference is `showPrompt`: the dev buttons pass `true`, which adds a left
 //  pane showing the EXACT prompt fed to the model for the item currently on the card. Same engine,
@@ -85,11 +86,16 @@ struct ProcessingView: View {
     /// Phase-appropriate caption under the phase line (nil = none) — the proactive stages get
     /// the "things worth doing" promise; the knowledge-base/welcome phases speak for themselves.
     @State private var prepSubtext: String?
-    /// The cloud tail's live "thought" — codex's latest reasoning/action line (humanized by
-    /// CodexCLI). `pending` updates freely as lines stream in; `shown` is what's actually on
-    /// screen, promoted at a readable cadence so bursts never strobe. Cleared per phase.
+    /// The cloud tail's live "thoughts" — codex's reasoning/action lines (humanized by
+    /// CodexCLI). `pending` updates freely as lines stream in; `trail` is what's actually on
+    /// screen — the last three promoted lines, newest brightest — advanced at a readable
+    /// cadence so bursts never strobe. Cleared per phase.
     @State private var thoughtPending: String?
-    @State private var thoughtShown: String?
+    @State private var thoughtTrail: [Thought] = []
+    @State private var thoughtCounter = 0
+    /// One promoted thought line. The counter id keeps the trail's ForEach stable even when
+    /// codex repeats itself minutes apart.
+    private struct Thought: Identifiable, Equatable { let id: Int; let text: String }
     @State private var progress = RunProgress()
     @State private var started = false
     @State private var paused = false           // pausable only: frozen at the last item, awaiting Resume
@@ -296,68 +302,83 @@ struct ProcessingView: View {
     }
 
     /// Real-mode tail: the read is done; now we're filing into the knowledge base + preparing the
-    /// proactive suggestions. A calm breathing sparkle, the live phase line, and — once codex
-    /// starts thinking — its live thought stream where the anonymous spinner used to sit.
+    /// proactive suggestions. The living orb (processing: alive, fast) over the phase line in the
+    /// display voice, and — once codex starts thinking — its fading thought trail where the
+    /// anonymous spinner used to sit.
     private var preparingView: some View {
-        VStack(spacing: 22) {
-            Image(systemName: "sparkles").font(.system(size: 46))
-                .foregroundStyle(.white.opacity(0.65)).symbolEffect(.breathe, options: .speed(0.7))
+        VStack(spacing: 18) {
+            Orb(mode: .processing, size: 110)
             Text(prepStatus)
-                .font(.title3.weight(.semibold)).foregroundStyle(.white)
+                .display(22)
+                .foregroundStyle(.white)
                 .multilineTextAlignment(.center)
             if let prepSubtext {
                 Text(prepSubtext)
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
-            liveThought.padding(.top, 2)
+            liveThought.padding(.top, 6)
         }
     }
 
-    /// The spinner until the first thought lands, then codex's live play-by-play: a tiny
-    /// "THINKING" whisper (so a passing thought never reads as an app statement) over one quiet
-    /// mono line, blur-morphing as thoughts arrive. Fixed-height slot so the layout never jumps;
-    /// the pump task gives the stream a readable cadence.
+    /// The spinner until the first thought lands, then codex's live play-by-play as a fading
+    /// trail: a tiny "THINKING" whisper (so a passing thought never reads as an app statement)
+    /// over the last three promoted lines — newest brightest at the bottom, older thoughts
+    /// dimming as they age out. Fixed-height slot so the layout never jumps; the pump task gives
+    /// the stream a readable cadence.
     private var liveThought: some View {
         ZStack {
-            if let thought = thoughtShown {
+            if thoughtTrail.isEmpty {
+                ProgressView().tint(.white.opacity(0.4))
+                    .transition(.blurReplace)
+            } else {
                 VStack(spacing: 7) {
                     Text("THINKING").font(.caption2).tracking(1.5)
                         .foregroundStyle(.white.opacity(0.3))
-                    Text(thought)
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.52))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: 620)
-                        .id(thought)
-                        .transition(.blurReplace)
+                    VStack(spacing: 5) {
+                        ForEach(Array(thoughtTrail.enumerated()), id: \.element.id) { i, thought in
+                            Text(thought.text)
+                                .font(.system(size: 11.5, design: .monospaced))
+                                .foregroundStyle(.white.opacity(trailOpacity(age: thoughtTrail.count - 1 - i)))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: 620)
+                                .transition(.blurReplace)
+                        }
+                    }
                 }
                 .transition(.blurReplace)
-            } else {
-                ProgressView().tint(.white.opacity(0.4))
-                    .transition(.blurReplace)
             }
         }
-        .frame(height: 46)
-        .animation(.easeInOut(duration: 0.55), value: thoughtShown)
+        .frame(height: 84)
+        .animation(.easeInOut(duration: 0.55), value: thoughtTrail)
         .task {
             // Promote the newest streamed line at a readable pace — raw JSONL arrives in bursts
             // that would strobe the transition into noise. Dedup is free: identical consecutive
-            // lines (codex emits items as both .started and .completed) never trigger a swap.
+            // lines (codex emits items as both .started and .completed) never extend the trail.
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1.4))
-                if thoughtShown != thoughtPending { thoughtShown = thoughtPending }
+                if let next = thoughtPending, next != thoughtTrail.last?.text {
+                    thoughtCounter += 1
+                    thoughtTrail.append(Thought(id: thoughtCounter, text: next))
+                    if thoughtTrail.count > 3 { thoughtTrail.removeFirst() }
+                }
             }
         }
     }
 
+    /// Trail brightness by age: the newest line reads, the older two linger as texture.
+    private func trailOpacity(age: Int) -> Double { [0.52, 0.30, 0.16][min(age, 2)] }
+
     /// One streamed codex line → a clean single-line thought (nil = nothing showable). Shell
-    /// commands are dropped outright — "$ /bin/zsh -lc …" is machinery, not narration; reasoning,
+    /// commands and structured output are dropped outright — "$ /bin/zsh -lc …" and the research
+    /// stage's closing JSON verdict ({"ready":…}) are machinery, not narration; reasoning,
     /// tool calls, and web searches make the cut. The humanized lines can carry markdown bold +
     /// multi-paragraph reasoning; the ticker wants one quiet line, so markup is stripped and
     /// paragraphs join with the house "·".
     private static func thought(_ raw: String) -> String? {
         guard !raw.hasPrefix("$ ") else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.hasPrefix("{"), !trimmed.hasPrefix("[") else { return nil }
         let flat = raw.replacingOccurrences(of: "**", with: "")
             .replacingOccurrences(of: "`", with: "")
             .split(separator: "\n")
@@ -367,23 +388,31 @@ struct ProcessingView: View {
         return flat.isEmpty ? nil : flat
     }
 
-    /// The quiet expectation-setter under the cloud phases (knowledge base + proactive) — honest
-    /// about the wait (warmer once it's genuinely long — the 10-minute flip), the one instruction
-    /// that matters (app open, lid up), and the reassurance that the ask is first-run-only: the
-    /// 3am runs wake a lid-shut, plugged-in Mac themselves (the root wake helper).
+    /// The expectation-setter under the cloud phases (knowledge base + proactive). The instruction
+    /// is the headline — big, display-voice, impossible to miss (duration + app open, lid up;
+    /// warmer once the wait is genuinely long — the 10-minute flip) — and the subtext is pure
+    /// reassurance that the ask is first-run-only: the 3am runs wake a lid-shut, plugged-in Mac
+    /// themselves (the root wake helper).
     private var patienceLine: some View {
-        VStack(spacing: 7) {
-            Text(patienceLong
-                 ? "You've got an incredible knowledge base; still working hard to make it perfect. It's going to take another 15 mins or so."
-                 : "This can take around 15 minutes.")
-                .font(.callout).foregroundStyle(.white.opacity(0.55))
-            Text("Leave Sentient open and don't shut the lid of your Mac for this initial processing.")
-                .font(.callout).foregroundStyle(.white.opacity(0.6))
-            Text("Future 3 AM knowledge base updates can work even when your Mac's asleep with the lid closed, as long as it's plugged in & Sentient was alive in your menu bar.")
-                .font(.caption).foregroundStyle(.white.opacity(0.35))
+        VStack(spacing: 12) {
+            Text(patienceLong ? "STILL WORKING · ANOTHER 15 MINUTES OR SO" : "FIRST RUN · ABOUT 15 MINUTES")
+                .font(.caption2).tracking(1.5)
+                .foregroundStyle(.white.opacity(0.3))
+            HStack(spacing: 9) {
+                Image(systemName: "macbook")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.6))
+                Text("Leave Sentient open and don't shut the lid of your Mac.")
+                    .display(17)
+                    .foregroundStyle(.white.opacity(0.92))
+            }
+            Text("Just this once. In the future, Sentient can update your knowledge base at 3 AM even if your Mac's asleep with its lid closed, as long as it's plugged in and Sentient's alive in your menu bar.")
+                .font(.callout).foregroundStyle(.white.opacity(0.45))
+                .lineSpacing(2)
+                .padding(.top, 2)
         }
         .multilineTextAlignment(.center)
-        .frame(maxWidth: 520)
+        .frame(maxWidth: 560)
         .task {
             try? await Task.sleep(for: .seconds(600))
             withAnimation(.easeInOut(duration: 0.6)) { patienceLong = true }
@@ -589,10 +618,10 @@ struct ProcessingView: View {
         // steps + wipe the summaries — surfacing each phase — then reveal the real cards on the home.
         if fullCycle {
             withAnimation { state = .preparing }
-            thoughtPending = nil; thoughtShown = nil
+            thoughtPending = nil; thoughtTrail = []
             let failure = await ProactiveCycle.shared.run(progress: { phase in
                 Task { @MainActor in
-                    thoughtPending = nil; thoughtShown = nil         // a new phase, a fresh thought stream
+                    thoughtPending = nil; thoughtTrail = []          // a new phase, a fresh thought stream
                     switch phase {
                     case .knowledgeBase(let s):
                         prepStatus = s; prepSubtext = nil            // the phase line says it all
@@ -784,4 +813,33 @@ private struct AnalyzingTitle: View {
         return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
     }
 }
+
+// MARK: - Previews
+
+#if DEBUG
+/// The cloud-tail "preparing" stage, frozen at a representative moment. The real view starts the
+/// actual pipeline on appear, so this factory pre-sets `started` — `startIfNeeded()` no-ops and
+/// the REAL layout renders with nothing running.
+extension ProcessingView {
+    static func preparingPreview() -> ProcessingView {
+        var view = ProcessingView(modelPath: "", connectors: [], mode: .auto, fullCycle: true, onDone: {})
+        view._started = State(initialValue: true)
+        view._state = State(initialValue: .preparing)
+        view._prepStatus = State(initialValue: "Creating your perfect knowledge base from everything we've analyzed…")
+        view._thoughtPending = State(initialValue: "The corpus resolves into five durable domains: education, AI research, creative interests…")
+        view._thoughtTrail = State(initialValue: [
+            Thought(id: 1, text: "Reading the week's summaries for durable facts worth keeping long-term…"),
+            Thought(id: 2, text: "Searched the web: \"YC S26 interview format\" — 6 results"),
+            Thought(id: 3, text: "The corpus resolves into five durable domains: education, AI research, creative interests…"),
+        ])
+        view._thoughtCounter = State(initialValue: 3)
+        return view
+    }
+}
+
+#Preview("Preparing — cloud tail") {
+    ProcessingView.preparingPreview()
+        .frame(width: 1160, height: 780)
+}
+#endif
 

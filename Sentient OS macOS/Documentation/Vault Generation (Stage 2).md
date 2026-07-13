@@ -66,9 +66,11 @@ Two channels, both optional:
   `VaultCloud.create/update`) take an optional `onLine`, forwarded to `CodexCLI.run(_:onLine:)`,
   whose `humanLine` adapter reduces the `--json` events to readable play-by-play (reasoning ·
   `$ commands` · tool calls · web searches). `ProactiveCycle.run(progress:onLine:)` threads it from
-  EVERY cloud stage (build/update · gift · judge · research) into the takeover's "THINKING" ticker
-  (`ProcessingView.liveThought`) — which drops the `$ ` shell lines as noise and promotes one quiet
-  mono line at a 1.4s cadence. The 3am scheduler passes nothing.
+  EVERY cloud stage (build/update · gift · judge · research) into the takeover's "THINKING" trail
+  (`ProcessingView.liveThought`) — which drops `$ ` shell lines AND structured JSON output (the
+  research stage's closing `{"ready":…}` verdict) as noise, and promotes thoughts at a 1.4s cadence
+  into a fading three-line trail (newest brightest at the bottom; cleared per phase). The 3am
+  scheduler passes nothing.
 
 ## The prompt
 
