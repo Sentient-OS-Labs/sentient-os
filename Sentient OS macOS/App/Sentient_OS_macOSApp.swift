@@ -93,7 +93,7 @@ struct SentientOSApp: App {
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 880, height: 900)
+        .defaultSize(width: 1120, height: 900)
         .restorationBehavior(.disabled)
 
         // Overnight Processing — the dev cockpit for the 3am scheduler (helper approval, launch-at-
