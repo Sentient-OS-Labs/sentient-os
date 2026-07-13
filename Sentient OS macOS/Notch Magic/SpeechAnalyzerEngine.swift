@@ -24,12 +24,18 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     /// SpeechAnalyzer handles long-form audio; we cap a single spoken command at 3 minutes.
     static let maxUtteranceDuration: TimeInterval = 180
 
-    private let audioEngine = AVAudioEngine()
+    /// ONE audio engine for the process. A fresh AVAudioEngine per capture opens a new HAL IO proc
+    /// each press, and rapid press/cancel churn wedges CoreAudio input into delivering ZERO buffers
+    /// (field-proven: a 2.3s hold fed the analyzer nothing). Reuse the instance; only the tap and
+    /// start/stop cycle per capture.
+    private static let sharedAudioEngine = AVAudioEngine()
     private var analyzer: SpeechAnalyzer?
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<String, Error>?
     private var tapInstalled = false
-    private var yieldedBuffers: OSAllocatedUnfairLock<Int>?   // shared with the audio-thread tap (diagnostic)
+    /// (tap callbacks, buffers fed to the analyzer) — shared with the audio-thread tap (diagnostic:
+    /// tap 0 = the mic never delivered; fed 0 with tap >0 = the format conversion failed).
+    private var tapCounts: OSAllocatedUnfairLock<(Int, Int)>?
 
     // MARK: Warm-up (best-effort, called when the hotkey arms so first use is instant)
 
@@ -78,21 +84,24 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
 
         // Mic → convert to the analyzer's format → stream in. The tap runs on an audio thread and
         // touches only these locals (never the MainActor self), so there's no isolation violation.
-        let input = audioEngine.inputNode
+        let engine = Self.sharedAudioEngine
+        let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
         guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat) else {
             throw VoiceError.modelUnavailable
         }
-        let yielded = OSAllocatedUnfairLock(initialState: 0)   // buffers fed to the analyzer (diagnostic)
-        self.yieldedBuffers = yielded
+        let counts = OSAllocatedUnfairLock(initialState: (0, 0))
+        self.tapCounts = counts
+        input.removeTap(onBus: 0)   // defensive: a stale tap from an interrupted capture must not linger
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
+            counts.withLock { $0.0 += 1 }
             guard let converted = Self.convert(buffer, using: converter, to: analyzerFormat) else { return }
-            yielded.withLock { $0 += 1 }
+            counts.withLock { $0.1 += 1 }
             continuation.yield(AnalyzerInput(buffer: converted))
         }
         tapInstalled = true
-        audioEngine.prepare()
-        try audioEngine.start()
+        engine.prepare()
+        try engine.start()
         Log("voice: capture started (\(Self.msLabel(clock.now - started))ms)")
     }
 
@@ -101,9 +110,28 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         stopAudio()
         inputContinuation?.finish()
         inputContinuation = nil
-        // Bounded finalize: finalizeAndFinishThroughEndOfInput can park indefinitely inside the
-        // speech daemon (field-proven 15s+ — and cancelAndFinishNow unwedged it in ~16ms). Give
-        // the graceful path 5s, then force-close the session; whatever the results stream already
+        let (taps, fed) = tapCounts?.withLock { $0 } ?? (0, 0)
+
+        // No audio ever reached the analyzer (a dead/warming mic): there is nothing to transcribe,
+        // and an EMPTY session is exactly the one that parks — its finalize no-ops but its results
+        // stream never terminates (field-proven: Esc's resultsTask.cancel unwedged it in 2ms).
+        // Close the session immediately and answer honestly.
+        if fed == 0 {
+            resultsTask?.cancel()
+            if let analyzer {
+                let previous = Self.closingSession
+                Self.closingSession = Task {
+                    await previous?.value
+                    await analyzer.cancelAndFinishNow()
+                }
+            }
+            teardown()
+            Log("voice: finalized (\(Self.msLabel(clock.now - started))ms · tap \(taps) · fed 0 — no audio, session closed)")
+            return ""
+        }
+
+        // Bounded finalize: it can park inside the speech daemon; cancelAndFinishNow reliably
+        // unwedges it, so give the graceful path 5s then force-close. Whatever the results stream
         // produced still comes back below.
         if let analyzer {
             let finalize = Task { try await analyzer.finalizeAndFinishThroughEndOfInput() }
@@ -115,15 +143,21 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
             _ = try? await finalize.value
             bound.cancel()
         }
+        // Bounded collection: the results stream is the OTHER half that can refuse to end.
         let transcript: String
         if let resultsTask {
+            let bound = Task {
+                try await Task.sleep(for: .seconds(2))
+                Log("voice: results stream parked — cancelling collection")
+                resultsTask.cancel()
+            }
             transcript = (try? await resultsTask.value) ?? ""
+            bound.cancel()
         } else {
             transcript = ""
         }
         teardown()
-        let buffers = yieldedBuffers?.withLock { $0 } ?? 0
-        Log("voice: finalized (\(Self.msLabel(clock.now - started))ms · \(buffers) buffers)")
+        Log("voice: finalized (\(Self.msLabel(clock.now - started))ms · tap \(taps) · fed \(fed))")
         return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -153,11 +187,12 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     // MARK: Internals
 
     private func stopAudio() {
+        let engine = Self.sharedAudioEngine
         if tapInstalled {
-            audioEngine.inputNode.removeTap(onBus: 0)
+            engine.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
-        if audioEngine.isRunning { audioEngine.stop() }
+        if engine.isRunning { engine.stop() }
     }
 
     private func teardown() {
