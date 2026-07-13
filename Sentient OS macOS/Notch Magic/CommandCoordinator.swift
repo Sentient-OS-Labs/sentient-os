@@ -172,7 +172,9 @@ final class CommandCoordinator {
             return
         }
         setPhase(.opening)                                // you're pulling it open — reveal the instant you press
-        if VoiceCapture.isAuthorized { startCapture() }   // never PROMPT on a press; defer to hold-confirm
+        // Never PROMPT on a press (defer to hold-confirm), and never capture into a model that's
+        // still downloading — the audio could never be transcribed.
+        if VoiceCapture.isAuthorized, !VoiceCapture.isModelDownloading { startCapture() }
     }
 
     /// Open the mic (idempotent). On first-ever use this is what prompts — so it's gated to a confirmed hold.
@@ -188,6 +190,14 @@ final class CommandCoordinator {
 
     private func voiceHoldConfirmed() {
         guard phase == .opening else { return }
+        // A genuine first-run model download → say so instead of pretending to listen (the mic tap
+        // only installs after the model lands, so anything spoken now would be silently lost). Only
+        // a committed HOLD gets this beat — tap-to-type stays fully alive during the download.
+        if VoiceCapture.isModelDownloading {
+            flash("still downloading the voice model", for: 2.0)
+            Log("hold answered with a download notice — speech model installing")
+            return
+        }
         setPhase(.listening)               // committed to voice — the "lean in" beat
         if !listening { startCapture() }   // perms weren't pre-granted → start now (the first-use prompt)
     }
@@ -213,20 +223,22 @@ final class CommandCoordinator {
         setPhase(.transcribing)
         let token = phaseToken
 
-        // Watchdog: transcription must resolve promptly (the finalize itself is <2s; the trap is
-        // voice.start() still parked on the on-device speech model DOWNLOAD, which has no bound of
-        // its own — seen in the field as a notch spinning forever with every new press "busy").
-        // Still transcribing after 15s → cancel the capture, keep the model download moving for
-        // the next attempt, and say so honestly. The notch must never wedge.
+        // Watchdog — the last-resort backstop: the finalize itself is <2s, and the old trap
+        // (voice.start() parked on the asset daemon EVERY press — assetInstallationRequest returns
+        // a request even when the model is installed) is gone now that readiness is memoized and
+        // gated on installedLocales. What's left is the rare genuine stall (a first-run download
+        // reaching a hold, a wedged finalize). Still transcribing after 15s → cancel the capture
+        // and say so honestly. The notch must never wedge.
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(15))
             guard let self, self.phaseToken == token, self.phase == .transcribing else { return }
-            Log("✗ transcription timed out — cancelling the capture (speech model likely still downloading)")
+            let downloading = VoiceCapture.isModelDownloading
+            Log("✗ transcription timed out — cancelling the capture (\(downloading ? "model still downloading" : "capture stalled"))")
             self.listening = false
             self.voiceStartTask?.cancel(); self.voiceStartTask = nil
             self.voice.cancel()
-            self.voice.prewarm()   // best-effort: resume/continue the model install in the background
-            self.flash("voice isn’t ready yet, try again in a moment")
+            self.voice.prewarm()   // best-effort: keep a genuine model install moving (no-op when ready)
+            self.flash(downloading ? "voice isn’t ready yet, try again in a moment" : "voice got stuck — try again")
         }
 
         Task { [weak self] in
@@ -261,11 +273,17 @@ final class CommandCoordinator {
         listening = false
         voiceStartTask = nil
         voice.cancel()
+        if error is CancellationError { return }   // an intentional bail (tap-to-type / Esc / watchdog) — not a failure
         if case VoiceError.notAuthorized = error {
             flash("turn on the microphone to talk to Sentient")
         } else {
             Log("voice start failed — \(error.localizedDescription)")
-            setPhase(.hidden)
+            // Hide only if we're still in the voice moment — a late failure must never clobber a
+            // newer phase (the watchdog's notice, an open type field, a running task).
+            switch phase {
+            case .opening, .listening, .transcribing: setPhase(.hidden)
+            default: break
+            }
         }
     }
 

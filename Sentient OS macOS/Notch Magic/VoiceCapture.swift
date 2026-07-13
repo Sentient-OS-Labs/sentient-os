@@ -34,6 +34,14 @@ final class VoiceCapture {
         return SFSpeechRecognizerEngine.maxUtteranceDuration
     }
 
+    /// True while the on-device speech model is genuinely downloading (first run / post-OS-purge) —
+    /// a voice hold is answered honestly instead of listening into a model that isn't there.
+    /// macOS 15's engine needs no model download.
+    static var isModelDownloading: Bool {
+        if #available(macOS 26, *) { return SpeechAnalyzerEngine.isModelDownloading }
+        return false
+    }
+
     /// Install the on-device speech model ahead of first use (best-effort, off-main).
     func prewarm() {
         if #available(macOS 26, *) {
@@ -50,6 +58,7 @@ final class VoiceCapture {
         do {
             try await engine.start()
         } catch {
+            engine.cancel()   // a failed/bailed start still closes its analyzer session properly
             self.engine = nil
             throw error
         }
