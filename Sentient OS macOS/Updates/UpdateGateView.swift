@@ -7,7 +7,10 @@
 //     One action: Update. (Plus Quit, so a modal never traps the user.) No "skip" / "remind me".
 //   • info — a small dismissible card for a user-initiated check: "Checking…", "You're up to date",
 //     or "Couldn't check". Never shown for a silent background check.
-//  Rendered as an overlay by RootView; draws nothing when surface == .none.
+//  Rendered as an overlay by BOTH the home (RootView) and the Settings window, each passing its
+//  `host`: the info card draws only in the window the check came from (so Settings' Check Now
+//  shows over Settings, not buried under it), while the gate takes over every hosting window.
+//  Draws nothing when surface == .none.
 //
 //  Design bar: true-black, bold display titles, mono-caps whispers, the spinning AI-spectrum
 //  logo as the living mark, the glow CTA. Reuses Theme / GlowButton / SpinningLogo.
@@ -17,6 +20,9 @@ import SwiftUI
 import AppKit
 
 struct UpdateGateView: View {
+    /// The window this instance overlays — the info card renders only in the check's origin window.
+    let host: UpdateModel.CheckOrigin
+
     @Environment(AppState.self) private var appState
     private var model: UpdateModel { appState.update.model }
 
@@ -28,7 +34,11 @@ struct UpdateGateView: View {
             case .gate:
                 gate.transition(.opacity)
             case .info:
-                infoCard.transition(.opacity)
+                if model.checkOrigin == host {
+                    infoCard.transition(.opacity)
+                } else {
+                    Color.clear.allowsHitTesting(false)
+                }
             }
         }
         .animation(.easeInOut(duration: 0.3), value: model.surface)
@@ -122,7 +132,7 @@ struct UpdateGateView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 GlowButton(title: "Try Again", systemImage: "arrow.clockwise") {
                     model.dismissInfo()                 // acknowledge the error, reset
-                    appState.update.checkForUpdatesNow()
+                    appState.update.checkForUpdatesNow(from: host)
                 }
                 .frame(maxWidth: 320)
                 quitButton

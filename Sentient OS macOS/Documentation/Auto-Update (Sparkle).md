@@ -50,13 +50,15 @@ requires first shipping a build that carries a new public key.
 
 | File | Job |
 |---|---|
-| `UpdateController.swift` | Owns the `SPUUpdater` (targets the main bundle), the driver, and the model. `AppState` holds one and calls `start()` on launch — **GUI path only**, never the root wake-helper. `start()` also fires one background check so a fresh launch discovers updates immediately. Implements the **silent-relaunch hook** (`willInstallUpdateOnQuit` → idle-gated `installIfSafe` → self-relaunch) and the `SPUUpdaterDelegate`. Exposes `checkForUpdatesNow()` + version/last-checked for the menu and Settings. |
+| `UpdateController.swift` | Owns the `SPUUpdater` (targets the main bundle), the driver, and the model. `AppState` holds one and calls `start()` on launch — **GUI path only**, never the root wake-helper. `start()` also fires one background check so a fresh launch discovers updates immediately. Implements the **silent-relaunch hook** (`willInstallUpdateOnQuit` → idle-gated `installIfSafe` → self-relaunch) and the `SPUUpdaterDelegate`. Exposes `checkForUpdatesNow(from:)` (tagging the originating window — see `CheckOrigin`) + version/last-checked for the menu and Settings. |
 | `SentientUpdateDriver.swift` | Our custom `SPUUserDriver`. Translates Sparkle's callbacks into `UpdateModel` state and stashes the reply closures. **Mandatory:** `showUpdateFound…` only ever replies `.install`; `showReady(toInstallAndRelaunch:)` auto-installs. ⚠️ The method labels must match Sparkle's imported Swift signatures exactly (Swift matches these witnesses by signature, not `@objc` selector). |
-| `UpdateModel.swift` | `@Observable` bridge between the driver and the UI. A `Phase` state machine (idle → checking → found → downloading → extracting → installing / failed) and a `Surface` (`none` / `gate` / `info`). |
-| `UpdateGateView.swift` | The OLED UI. Two faces: the full-screen **gate** (mandatory — Update / Quit, no skip/remind) and a small dismissible **info card** (user-initiated "Checking…" / "You're up to date" / "Couldn't check"). Presented as an overlay by `RootView`; draws nothing at rest. |
+| `UpdateModel.swift` | `@Observable` bridge between the driver and the UI. A `Phase` state machine (idle → checking → found → downloading → extracting → installing / failed), a `Surface` (`none` / `gate` / `info`), and `CheckOrigin` (`home` / `settings`) — which window a user-initiated check came from. |
+| `UpdateGateView.swift` | The OLED UI. Two faces: the full-screen **gate** (mandatory — Update / Quit, no skip/remind) and a small dismissible **info card** (user-initiated "Checking…" / "You're up to date" / "Couldn't check"). Mounted as an overlay by BOTH the home (`RootView`) and the Settings window, each passing its `host`: the **info card renders only in the check's origin window** (Settings' Check Now shows over Settings, never buried under it), while the **gate takes over every hosting window**. Draws nothing at rest. |
 
-**Wiring:** `App/AppState.swift` (owns + `start()`s) · `Views/RootView.swift` (`.overlay { UpdateGateView() }`)
-· `Views/MenuBarView.swift` ("Check for Updates…") · `Views/Settings/SystemPane.swift` (Updates group).
+**Wiring:** `App/AppState.swift` (owns + `start()`s) · `Views/RootView.swift` (`.overlay { UpdateGateView(host: .home) }`)
+· `Views/Settings/SettingsView.swift` (`.overlay { UpdateGateView(host: .settings) }`)
+· `Views/MenuBarView.swift` ("Check for Updates…" — opens/focuses the home window first, since that's
+where its card appears) · `Views/Settings/SystemPane.swift` (Updates group, checks `from: .settings`).
 
 ## The update model — silent self-relaunch, gate as fallback
 
@@ -79,11 +81,13 @@ requires first shipping a build that carries a new public key.
 - **Fail-open.** If the feed is unreachable (offline, server down), Sparkle surfaces nothing — nobody
   is locked out of their own local AI.
 - **Info card** shows only for *user-initiated* checks: "Checking…" / "You're up to date" / "Couldn't
-  check". A silent background check that finds nothing shows nothing.
+  check" — and only in the window the check came from (`CheckOrigin`): Settings' Check Now over the
+  Settings window, the menu bar's over the home (the menu item opens/focuses the home first so the
+  card always has a visible stage). A silent background check that finds nothing shows nothing.
 
-⚠️ **Known limitation:** the gate overlays the **main window**; a user focused on a secondary window
-(Settings/Knowledge) could keep using it during a found-update gate. `NSApplication.activate` mitigates
-it; a true all-window blocker is possible future hardening.
+⚠️ **Known limitation:** the gate overlays the **home and Settings** windows; a user focused on
+another window (Knowledge/Connect AIs) could keep using it during a found-update gate.
+`NSApplication.activate` mitigates it; a true all-window blocker is possible future hardening.
 
 ## Config — `Info.plist`
 

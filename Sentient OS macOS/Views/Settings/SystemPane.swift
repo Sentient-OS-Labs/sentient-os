@@ -104,7 +104,7 @@ struct SystemPane: View {
                     }
                 }
                 SettingsPillButton(title: "Check for Updates Now") {
-                    appState.update.checkForUpdatesNow()
+                    appState.update.checkForUpdatesNow(from: .settings)
                 }
             }
         }
