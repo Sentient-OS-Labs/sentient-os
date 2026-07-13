@@ -58,6 +58,7 @@ final class VoiceCapture {
         do {
             try await engine.start()
         } catch {
+            engine.cancel()   // a failed/bailed start still closes its analyzer session properly
             self.engine = nil
             throw error
         }

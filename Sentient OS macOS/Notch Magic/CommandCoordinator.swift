@@ -232,12 +232,13 @@ final class CommandCoordinator {
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(15))
             guard let self, self.phaseToken == token, self.phase == .transcribing else { return }
-            Log("✗ transcription timed out — cancelling the capture (speech model likely still downloading)")
+            let downloading = VoiceCapture.isModelDownloading
+            Log("✗ transcription timed out — cancelling the capture (\(downloading ? "model still downloading" : "capture stalled"))")
             self.listening = false
             self.voiceStartTask?.cancel(); self.voiceStartTask = nil
             self.voice.cancel()
-            self.voice.prewarm()   // best-effort: resume/continue the model install in the background
-            self.flash("voice isn’t ready yet, try again in a moment")
+            self.voice.prewarm()   // best-effort: keep a genuine model install moving (no-op when ready)
+            self.flash(downloading ? "voice isn’t ready yet, try again in a moment" : "voice got stuck — try again")
         }
 
         Task { [weak self] in

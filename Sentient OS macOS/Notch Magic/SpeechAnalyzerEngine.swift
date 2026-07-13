@@ -42,8 +42,15 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     // MARK: Capture
 
     func start() async throws {
+        let clock = ContinuousClock(); let started = clock.now
         try await Self.ensureModelReady()
         try Task.checkCancellation()   // a bailed start (watchdog / tap / Esc) must never open the mic late
+
+        // Let a just-cancelled session finish closing first — a fresh analyzer otherwise queues
+        // behind the zombie session inside the speech daemon (field-proven: an Esc mid-capture
+        // parked the very next press for 15s).
+        await Self.closingSession?.value
+        try Task.checkCancellation()
 
         let transcriber = SpeechTranscriber(locale: await Self.resolvedLocale(), preset: .transcription)
         guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
@@ -65,6 +72,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         let (stream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         self.inputContinuation = continuation
         try await analyzer.start(inputSequence: stream)
+        try Task.checkCancellation()   // cancelled during the session handoff → never touch the mic
 
         // Mic → convert to the analyzer's format → stream in. The tap runs on an audio thread and
         // touches only these locals (never the MainActor self), so there's no isolation violation.
@@ -80,9 +88,11 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         tapInstalled = true
         audioEngine.prepare()
         try audioEngine.start()
+        Log("voice: capture started (\(Self.msLabel(clock.now - started))ms)")
     }
 
     func stopAndTranscribe() async throws -> String {
+        let clock = ContinuousClock(); let started = clock.now
         stopAudio()
         inputContinuation?.finish()
         inputContinuation = nil
@@ -94,6 +104,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
             transcript = ""
         }
         teardown()
+        Log("voice: finalized (\(Self.msLabel(clock.now - started))ms)")
         return transcript.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
@@ -102,8 +113,23 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         inputContinuation?.finish()
         inputContinuation = nil
         resultsTask?.cancel()
+        // Close the analyzer session FOR REAL. Dropping the object leaves a zombie session in the
+        // speech daemon that the next capture queues behind; cancelAndFinishNow is the documented
+        // immediate stop. Chained on the previous close so rapid bursts stay ordered; start() awaits
+        // the latest one.
+        if let analyzer {
+            let previous = Self.closingSession
+            Self.closingSession = Task {
+                await previous?.value
+                await analyzer.cancelAndFinishNow()
+            }
+        }
         teardown()
     }
+
+    /// The in-flight teardown of the most recently cancelled session (completed tasks linger —
+    /// awaiting one is then free). See cancel().
+    private static var closingSession: Task<Void, Never>?
 
     // MARK: Internals
 
@@ -180,6 +206,11 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         Log("voice: speech model ready (\(locale.identifier))")
         // Pin the asset so macOS keeps it for us (best-effort; 5 reservation slots per app, we use 1).
         Task { try? await AssetInventory.reserve(locale: locale) }
+    }
+
+    /// Whole milliseconds, for the terse capture-timing logs.
+    nonisolated private static func msLabel(_ duration: Duration) -> Int {
+        Int(duration.components.seconds) * 1000 + Int(duration.components.attoseconds / 1_000_000_000_000_000)
     }
 
     /// Convert one mic buffer to the analyzer's format (sample-rate + layout). Pure → safe off-main.
