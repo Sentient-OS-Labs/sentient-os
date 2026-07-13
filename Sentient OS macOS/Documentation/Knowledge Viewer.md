@@ -14,7 +14,8 @@ on-disk vault (`~/Sentient OS - Knowledge Base/`, resolved via `VaultGenerator.v
   markdown.
 
 Native **SkyDoor** toolbar buttons (plain `Label`s, same font and glass as their Edit / Reveal
-in Finder neighbours) swap between them — sky: top-center "Reader View" · reader: top-left
+in Finder neighbours, each wearing the muted moving `SkyDoorRim` so the other mode is
+discoverable) swap between them — sky: top-center "Reader View" · reader: top-left
 "Constellation View" · **⌘⇧G** either way · **Esc** leaves the sky. Clicking a star opens that
 note in the reader; **Back** walks the wikilink trail and, when the trip began with a star
 click, one more Back returns to the sky with that star glowing for a beat (`cameFromSky`). Mode switches funnel through the same unsaved-edits guard as every other
@@ -58,10 +59,12 @@ Tools via `Views/Dev/SummariesView.swift`.)*
     pans · pinch / mouse-wheel / ⌘-scroll zoom at cursor · star drag reheats the springs ·
     hover · still-click opens · Esc exits), the `SpinningLogo` sun overlay, the hover card
     (frame shared with the renderer via `hoverCardRect`), HUD whispers + "Private by design."
-    footer, and `SkyDoor` — a plain native toolbar button (`Label` + `.titleAndIcon`), so it
-    matches the reader's Edit / Reveal in Finder buttons exactly. *(The old glowing custom
-    capsule with the amber edge-flow was removed June 2026 — it read as decoration where the
-    toolbar wanted chrome.)*
+    footer, and `SkyDoor` + `SkyDoorRim` — the native toolbar button (`Label` + `.titleAndIcon`,
+    matching the reader's Edit / Reveal in Finder buttons) wearing a slow gradient rim:
+    `Theme.magicGlow` muted to a whisper (`.saturation(0.65)`, 80% edge / 45% bloom), one lap
+    every 8s, hit-testing off. *(History: the June 2026 amber edge-flow capsule was removed as
+    decoration; the rim returned July 2026 on field evidence — users never found Reader View
+    behind plain glass. Muted and riding the native button this time — jewelry, not chrome.)*
 
 **Editing:** Edit opens the RAW file (frontmatter included) in a `TextEditor`; Save writes
 atomically and refreshes the render. Navigating away with unsaved edits raises Save / Discard /
