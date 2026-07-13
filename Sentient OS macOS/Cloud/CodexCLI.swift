@@ -14,7 +14,7 @@
 //   - CodexCLI.locateBinary()  → cached absolute-path discovery (known paths + zsh -lc which)
 //   - install(onLine:)         → run OpenAI's standalone installer (the codex-setup onboarding step)
 //   - startLogin / loginStatus → step 2: interactive `codex login` (browser) + the status check
-//   - validate(force:)         → Availability via ping (cached per launch)
+//   - validate(force:)         → Availability via ping (only a good verdict is cached)
 //   - run(_:)                  → Envelope (blocking JSONL mode)
 //
 //  Doc: Documentation/CodexCLI (codex exec Compute Spine).md
@@ -270,12 +270,15 @@ actor CodexCLI {
 
     private var cachedAvailability: Availability?
 
-    /// Is `codex exec` actually usable (installed AND logged in)? Cached per app launch —
-    /// pass `force: true` to re-probe (e.g. right after the installer flow).
+    /// Is `codex exec` actually usable (installed AND logged in)? Only a GOOD verdict is cached —
+    /// a failed probe re-checks on every call, so codex fixed mid-session (re-login, reinstall) is
+    /// seen by the very next retry (a cached failure once made the processing screen's Retry
+    /// unwinnable until relaunch — field-found 2026-07-12). `force: true` re-probes past a good
+    /// cache too (e.g. right after the installer flow).
     func validate(force: Bool = false) async -> Availability {
         if !force, let cachedAvailability { return cachedAvailability }
         let result = await Self.ping()
-        cachedAvailability = result
+        if case .available = result { cachedAvailability = result } else { cachedAvailability = nil }
         return result
     }
 

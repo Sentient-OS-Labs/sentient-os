@@ -52,8 +52,9 @@ The main window's content (rendered by `RootView`). Layers, bottom-to-top:
     session (lower rungs still surface). Suppressed entirely in knowledge-base-only mode (nothing
     nightly runs there) and on demo decks (no red capsules mid-pitch).
   - **The morning-after caution (amber):** when last night's UNATTENDED 3am run failed for one of
-    the three knowable reasons (codex signed out · no internet · usage limit — recorded by
-    `Scheduling/OvernightCaution` at `ProactiveCycle`'s catch sites, scheduled runs only): amber
+    the three knowable reasons (codex signed out · no internet · usage limit — classified by
+    `OvernightCaution.classify` at `ProactiveCycle`'s catch sites, persisted on scheduled runs
+    only; a watched run shows the same kind live on the takeover's failed screen instead): amber
     `HealthDot`, the first-person message, ✕ (clears the record), *Open Settings* on the
     logged-out one. The next fully successful cycle clears it on its own; the foreground refresh
     also re-reads it. Amber on purpose: a caution, never an alarm — only the overnight magic was
@@ -72,7 +73,14 @@ under a "THINKING" whisper (`ProcessingView.liveThought`, fed by `ProactiveCycle
 shell `$ ` lines filtered as noise, thoughts promoted at a 1.4s cadence, cleared per phase), and the
 footer sets expectations in three lines: the ~15-minute estimate (with the 10-minute warm flip), the
 keep-Sentient-open/lid-up instruction, and the reassurance that 3am runs wake a lid-shut, plugged-in
-Mac on their own. `RootView` also owns
+Mac on their own. **The failed screen speaks the classified failure** (2026-07-12): `ProactiveCycle`
+returns a `CycleFailure` (message + `OvernightCaution.Kind?`), and `ProcessingView.failedView`
+renders the kind — "Codex isn't logged in" gets a prominent **Log in to Codex** button (the shared
+`CodexSetup.startLogin` browser flow; a 1.5s `codex login status` poll auto-notices the finished
+sign-in and auto-retries the cycle, same pattern as Settings → Health), usage-limit and no-internet
+get honest progress-is-saved one-liners, and unclassified failures show the step's raw message with
+plain Back/Retry. Retry is honest in every case: `CodexCLI.validate` never caches a failed probe
+(see the CodexCLI doc), so a fixed codex is seen on the very next attempt. `RootView` also owns
 **the onboarding finale**: when the first analysis finishes, onboarding dissolves into the home and
 the Knowledge window (the Constellation) opens ON TOP a beat later — every user's first sight of
 their knowledge base, whatever their plan. ProcessingView's "Analysis complete" screen
