@@ -129,22 +129,41 @@ and *then* turn the scheduler on. The very first automatic overnight run has som
 
 **[DECIDED 2026-07-04] The admin-password installer IS the production install path** —
 `WakeHelperInstaller` (`Scheduling/WakeHelperInstaller.swift`): one native "enter your password"
-dialog (osascript admin) that writes the LaunchDaemon plist (pointing at THIS binary) into
-`/Library/LaunchDaemons`, chowns/chmods it, and `launchctl bootstrap`s it. It's measured-and-working
-on real hardware, self-heals when the binary path goes stale (`isInstalledAndCurrent()` checks the
-plist points at the running executable), and — the UX line we hold — never sends the user into
-System Settings. **Settings → Permissions & Health's "Overnight wake" fix button runs exactly this**
-(except the `disabled` verdict, whose only fix is the Login Items switch — the button becomes
-"Turn On…" and deep-links there). The SMAppService.daemon migration (a Login Items approval toggle)
-was considered and rejected.
+dialog (osascript admin) that writes the LaunchDaemon plist into `/Library/LaunchDaemons`,
+chowns/chmods it, and `launchctl bootstrap`s it. It's measured-and-working on real hardware,
+self-heals when the binary path or signature goes stale (`isInstalledAndCurrent()`), and — the UX
+line we hold — never sends the user into System Settings. **Settings → Permissions & Health's
+"Overnight wake" fix button runs exactly this** (except the `disabled` verdict, whose only fix is
+the Login Items switch — the button becomes "Turn On…" and deep-links there). The SMAppService.daemon
+migration (a Login Items approval toggle) was considered and rejected.
+
+- 🔒 **Verified launch (guards against a local root LPE).** The plist does NOT point
+  `ProgramArguments` straight at the app binary — a drag-installed app lives in a *user-writable*
+  bundle, so that would let any same-user process overwrite the binary and get their code run as
+  root at the next wake/boot. Instead the daemon runs, as root:
+  `/bin/sh -c "codesign --verify -R='<app DR>' '<app>' && exec '<binary>' --wake-helper"`. `codesign`
+  (a root-owned system tool) verifies the bundle is genuine + untampered *before* `exec`; any tamper
+  or foreign signature exits non-zero and `&&` blocks it — nothing runs as root. `exec` replaces the
+  shell with the app binary, so the running daemon IS our app and the "signed like me" XPC gate above
+  is unchanged. The requirement is the app's OWN designated requirement, captured at install via the
+  shared `WakeHelper.selfDesignatedRequirement()` (signer-agnostic, exactly like the XPC gate) — it
+  survives same-team Sparkle updates but rejects any other signer. Nested-framework tampering is
+  separately blocked by Hardened-Runtime library validation, so only the main binary needed a gate.
+- 🔒 **No install-time TOCTOU.** Root decodes the plist **directly** into `/Library/LaunchDaemons`
+  from an in-memory base64 blob in the privileged command — there is no user-writable temp file a
+  same-user process could swap between our write and root's read (which would otherwise install a
+  plist *without* the codesign gate and defeat the fix). The plist itself is built with
+  `PropertyListSerialization`, so the quote/bracket-heavy launch script is escaped correctly.
 
 Two plist facts (both 2026-07-11):
 - The plist carries **`AssociatedBundleIdentifiers`**, so the System Settings background item
   displays as **"Sentient OS"** — without it, a bare LaunchDaemon shows under the signing
   identity's human name (the "Jesai Tarun" jumpscare, field-seen).
-- That key is part of `isInstalledAndCurrent()`'s currency check, so an old-format plist reads
-  stale and refreshes on the next setup pass. ⚠️ And remember its limit: `isInstalledAndCurrent()`
-  answers "are the files right", never "is it alive" — liveness questions go through
+- That key is part of `isInstalledAndCurrent()`'s currency check (alongside the verified-launch
+  format, the binary path, and the current designated requirement), so an old plain-binary plist —
+  or a moved / re-signed build — reads stale and refreshes on the next setup pass. ⚠️ And remember
+  its limit: `isInstalledAndCurrent()` answers "are the files right", never "is it alive" — liveness
+  questions go through
   `WakeHelperClient.isReachable()` / `healthProbe()` (see the privilege-model section).
 
 **SMAppService plumbing survives for the dev cockpit only:**
