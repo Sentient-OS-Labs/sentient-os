@@ -182,8 +182,12 @@ a STOP button, and the notch glows alongside. (Doc: `Notch Magic/Notch Magic.md`
   Settings: five live panes. Doc: `Settings.md`.
 - **`Views/Knowledge/KnowledgeView.swift`** (`windowID "knowledge"`) — the real Obsidian-style
   reader/editor/manager over the vault. Doc: `Knowledge Viewer.md`.
-- **`Views/ConnectAIsView.swift`** (`windowID "connect-ais"`) — the REAL two-step guided setup
-  (copy the masked MCP link → copy the system prompt → "ask it: what do you know about me?").
+- **`Views/ConnectAIsView.swift`** (`windowID "connect-ais"`) — the guided setup: per-AI tabs
+  (ChatGPT's three video steps · Claude's two · a text-only Other AIs) with bundled looping
+  tutorial clips, deep-link pills into each AI's own settings screens, the masked MCP link +
+  the system prompt to copy, and the sharing lifecycle itself (glow connect CTA when off; a
+  quiet MCP ON/OFF pill behind the confirm when on) — closing with "ask it: what do you know
+  about me?". Doc: the window section in `MCP Mirror Client.md`.
 - **`Views/Dev/ProactiveExecuteView.swift`** + **`Views/Dev/OvernightDevView.swift`** — dev windows
   (PART 3 fire bench · the overnight cockpit), opened from DEV TOOLS.
 

@@ -101,10 +101,15 @@ is never marked clean.
 
 The user-facing opt-in is **Settings → Give AIs Knowledge** (`Views/Settings/ShareKnowledgePane.swift`,
 renamed 2026-07-13 from "Connect AIs to Knowledge"/`YourAIsPane`)
-and the guided **`ConnectAIsView`** window: the value/privacy story, the share toggle (ON =
-`enable()` + a first push; OFF = a confirm dialog, then `disable()`), the per-AI setup (masked link
-+ Copy · Copy-the-system-prompt · the "what do you know about me?" closer), and live `stats()`
-activity. The masked link (`MirrorClient.maskedURL`) shows the public userID but masks the password
+and the guided **`ConnectAIsView`** window (opened by the pane's CTA and the home popover's door).
+The pane: the value/privacy story, the share toggle (ON = `enable()` + a first push; OFF = a
+confirm dialog, then `disable()`), and live `stats()` activity. The window (rebuilt 2026-07-13):
+per-AI video tabs (ChatGPT's three steps: developer mode → New Plugin + link → instructions;
+Claude's two; a text-only Other AIs), deep-link pills straight into each AI's settings screens,
+the masked link + Copy, Copy-the-instructions (`MirrorClient.systemPrompt` — rewritten 2026-07-13
+to the softer get_structure/get_files coaching), the "what do you know about me?" closer — plus
+the same sharing lifecycle (a glowing connect CTA when off; an MCP ON/OFF pill behind the confirm
+when on). The masked link (`MirrorClient.maskedURL`) shows the public userID but masks the password
 to its first 4 chars. **Regenerate is backend-only** (`regenerateToken()` stays as the support
 remediation if a link leaks; there's no UI button — it bricks every connector the user set up).
 

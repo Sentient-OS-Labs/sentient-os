@@ -101,10 +101,15 @@ PII-stripped summaries only, E2E-encrypted, no accounts, the 30-day
 self-delete in plain words, open-source backend). Then the share toggle (OFF = confirm dialog →
 `disable()`, which deletes the cloud copy but keeps the token), and the pane's HERO: the glowing
 **Set up in 2 minutes** capsule (`ConnectCTA` — same label as the home popover's CTA) →
-**`ConnectAIsView`, the REAL guided setup**: step 1 =
-the masked link (`MirrorClient.maskedURL`) + Copy, step 2 = Copy the system prompt, closing with
-the magic line ("ask it: what do you know about me?"); a sharing-off state points back at
-Settings. Live `stats()` activity below; local-only story when sharing is off.
+**`ConnectAIsView`, the guided setup** (rebuilt 2026-07-13): per-AI tabs — ChatGPT's three video
+steps (developer mode → paste the link as a New Plugin → paste the instructions) · Claude's two ·
+a text-only Other AIs — each card a bundled looping clip (`Media/connect-<ai>-<n>.mp4`, per-AI
+aspect so fill never crops) with a deep-link pill above it, the masked link
+(`MirrorClient.maskedURL`) + Copy and Copy-the-instructions riding the cards, closing with the
+magic line ("ask it: what do you know about me?"). The window owns the sharing lifecycle too:
+off = one glowing connect CTA (enable + first push, the guide assembles in place); on = a quiet
+MCP ON/OFF pill behind the same confirm-and-delete as the pane's toggle.
+Live `stats()` activity below; local-only story when sharing is off.
 **Regenerate was removed from the UI** (a footgun that bricks every connector the user set up) —
 `MirrorClient.regenerateToken()` remains as a backend/support remediation.
 ⚠️ `maskedURL` must search "/mcp" BACKWARDS: the host `https://mcp.sentient-os.ai` itself
