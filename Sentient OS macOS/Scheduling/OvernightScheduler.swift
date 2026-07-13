@@ -42,14 +42,24 @@ final class OvernightScheduler {
     static let enabledKey = "dbg.scheduler.enabled"        // DEV toggle
     static let prodEnabledKey = "scheduler.enabled"         // PRODUCTION flag (auto-enable / Settings)
     static let minutesKey = "dbg.scheduler.minutes"        // minutes since midnight
+    #if DEBUG
     static let defaultMinutes = 3 * 60                     // 3:00 AM — the production overnight time (the dev
                                                           // UI can override `minutesKey` for testing)
+    #else
+    // ⚠️ TEMP TESTING VALUE — Release runs the "overnight" cycle at 7:00 PM. Restore 3 * 60 before shipping.
+    static let defaultMinutes = 19 * 60
+    #endif
 
     // 18h auto-enable state (all UserDefaults; survive restarts).
     static let firstCycleAtKey = "scheduler.firstCycleCompletedAt"   // Double epoch — set ONCE
     static let autoEnableFiredKey = "scheduler.autoEnableFired"      // latch — flip prod ON at most once
     static let autoEnableDelayKey = "scheduler.autoEnableDelaySeconds"  // dev override of the 18h wait
+    #if DEBUG
     static let defaultAutoEnableDelay: TimeInterval = 18 * 3600      // 18 hours after initial finishes
+    #else
+    // ⚠️ TEMP TESTING VALUE — Release auto-enables 60s after the first cycle. Restore 18 * 3600 before shipping.
+    static let defaultAutoEnableDelay: TimeInterval = 60
+    #endif
 
     /// The configured time-of-day in minutes since midnight (shared default so the UI and the loop agree).
     nonisolated static var configuredMinutes: Int { (UserDefaults.standard.object(forKey: minutesKey) as? Int) ?? defaultMinutes }
