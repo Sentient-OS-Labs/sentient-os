@@ -44,7 +44,10 @@ A connector is dumb: it lists keyed work-items per bucket and loads one. *All* p
   the rest up, all in one pass. (Home → `.auto`; the dev INITIAL/ITERATIVE buttons → `.initial`/
   `.iterative`; explicit `.initial` first clears the bucket = a full reset.) Reuses `Engine` + `Triage` +
   the GPU-wedge resilience (preemptive reload every ~40 items + reactive reload after a burst of
-  failures). Survivors → `CycleNote`; junk/sensitive store nothing.
+  failures). Survivors → `CycleNote`; junk/sensitive store nothing. A deterministic **PII backstop**
+(`Engine/PIIScan.swift`) runs on every would-be survivor's summary + title — a US SSN, a Luhn-valid
+credit-card number, or a passport number drops the whole item as `.sensitive` (zero trace), so a
+small on-device model slipping a raw identifier past the prompt can never send it to the cloud.
 
 ## The cycle (summaries are disposable)
 *on-device summarize → cloud (make/update KB) → cloud (proactive judge) → next cycle.*
