@@ -7,6 +7,11 @@
 //  Live mic buffers are converted to the analyzer's format and streamed in; on stop we finalize and
 //  return the single best transcript. No partials.
 //
+//  Model readiness is memoized + single-flight: SpeechTranscriber.installedLocales is the ONLY honest
+//  installed check (assetInstallationRequest hands back a request even when the model is fully
+//  installed — field-proven), and the one shared install task is shielded from caller cancellation
+//  (downloadAndInstall ignores cancellation, so a "cancelled" install keeps running in the daemon).
+//
 //  Key methods: prewarm() (install the model ahead of first use) · start() · stopAndTranscribe() · cancel().
 //
 
@@ -28,8 +33,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
 
     static func prewarm() async {
         do {
-            let transcriber = SpeechTranscriber(locale: await resolvedLocale(), preset: .transcription)
-            try await ensureModelInstalled(for: transcriber)
+            try await ensureModelReady()
         } catch {
             Log("voice: prewarm skipped — \(error.localizedDescription)")
         }
@@ -38,9 +42,10 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     // MARK: Capture
 
     func start() async throws {
-        let transcriber = SpeechTranscriber(locale: await Self.resolvedLocale(), preset: .transcription)
-        try await Self.ensureModelInstalled(for: transcriber)
+        try await Self.ensureModelReady()
+        try Task.checkCancellation()   // a bailed start (watchdog / tap / Esc) must never open the mic late
 
+        let transcriber = SpeechTranscriber(locale: await Self.resolvedLocale(), preset: .transcription)
         guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
             throw VoiceError.modelUnavailable
         }
@@ -121,12 +126,60 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         return Locale(identifier: "en-US")
     }
 
-    /// Install the on-device model for the transcriber's locale if it isn't already (a no-op when present).
-    private static func ensureModelInstalled(for transcriber: SpeechTranscriber) async throws {
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            Log("voice: downloading on-device speech model…")
-            try await request.downloadAndInstall()
+    // MARK: Model readiness (memoized · single-flight · shielded from caller cancellation)
+
+    /// Session memo — once the model is verified installed, start() never touches the asset daemon again.
+    private static var modelReady = false
+
+    /// The ONE in-flight install. Unstructured on purpose: downloadAndInstall() ignores cooperative
+    /// cancellation, so a bailing caller (the 15s watchdog, a tap-to-type, Esc) must never cancel or
+    /// duplicate it — "cancelled" installs keep running in the daemon and stack up into the very
+    /// contention that parks the next attempt. Clears itself when it finishes, so a failure retries fresh.
+    private static var installTask: Task<Void, Error>?
+
+    /// True only while a genuine model download is in flight — the coordinator answers a voice hold
+    /// with an honest "still downloading" notice instead of listening into a model that isn't there.
+    static var isModelDownloading: Bool { installTask != nil && !modelReady }
+
+    /// Make sure the on-device model is installed. The installed-locales check is the ONLY honest one:
+    /// assetInstallationRequest returns a request even when the model is fully installed, so gating on
+    /// it (the old code) meant an asset-daemon round-trip on EVERY capture — usually a ~0.1s no-op,
+    /// occasionally a 15s+ park, and the park is what wedged Sidekick when the key lifted early.
+    private static func ensureModelReady() async throws {
+        if modelReady { return }
+        let locale = await resolvedLocale()
+        if await installed(locale) {
+            markReady(locale)
+            return
         }
+        let task = installTask ?? launchInstall(locale: locale)
+        installTask = task
+        try await task.value
+    }
+
+    private static func installed(_ locale: Locale) async -> Bool {
+        await SpeechTranscriber.installedLocales.contains { $0.identifier(.bcp47) == locale.identifier(.bcp47) }
+    }
+
+    /// The single shared install (a genuine first-run download, or a re-download after an OS purge).
+    private static func launchInstall(locale: Locale) -> Task<Void, Error> {
+        Task {
+            defer { installTask = nil }   // finished either way; markReady records a success
+            let transcriber = SpeechTranscriber(locale: locale, preset: .transcription)
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+                Log("voice: downloading the on-device speech model…")
+                try await request.downloadAndInstall()
+            }
+            markReady(locale)
+        }
+    }
+
+    private static func markReady(_ locale: Locale) {
+        guard !modelReady else { return }
+        modelReady = true
+        Log("voice: speech model ready (\(locale.identifier))")
+        // Pin the asset so macOS keeps it for us (best-effort; 5 reservation slots per app, we use 1).
+        Task { try? await AssetInventory.reserve(locale: locale) }
     }
 
     /// Convert one mic buffer to the analyzer's format (sample-rate + layout). Pure → safe off-main.
