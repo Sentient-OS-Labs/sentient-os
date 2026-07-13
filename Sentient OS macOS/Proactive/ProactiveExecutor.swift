@@ -52,17 +52,21 @@ actor ProactiveExecutor {
     func fire(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         let recipe = action.executionRecipe.trimmingCharacters(in: .whitespacesAndNewlines)
         let content = action.preparedContent     // the VERBATIM, possibly user-edited artifact to send
+        // The routing the message channels act on: the (possibly user-EDITED) "To:" recipient first,
+        // as the authoritative destination, then the model's recipe for the how. So correcting the
+        // card's To: actually re-targets the send. Empty recipient (calendar / form-fill) ⇒ bare recipe.
+        let routing = Self.authoritativeRouting(recipient: action.recipient, recipe: recipe)
         let t0 = Date()
         let r: FireResult
         switch action.method {
         case .gmail:
-            r = hasRecipe(recipe) ? await fireGmail(routing: recipe, content: content, progress: progress)
+            r = hasRecipe(recipe) ? await fireGmail(routing: routing, content: content, progress: progress)
                                   : .notFireable("No email recipe to fire.")
         case .calendar:
             r = hasRecipe(recipe) ? await fireCalendar(routing: recipe, content: content, progress: progress)
                                   : .notFireable("No calendar recipe to fire.")
         case .computer:
-            r = hasRecipe(recipe) ? await fireComputer(routing: recipe, content: content, progress: progress)
+            r = hasRecipe(recipe) ? await fireComputer(routing: routing, content: content, progress: progress)
                                   : .notFireable("No computer-use recipe to fire.")
         case .research:
             r = .notFireable("This is a briefing to read; there's nothing to fire.")
@@ -94,6 +98,17 @@ actor ProactiveExecutor {
 
     private func hasRecipe(_ recipe: String) -> Bool {
         !recipe.isEmpty && recipe.lowercased() != "none"
+    }
+
+    /// The routing a message channel acts on. When the card carries a `recipient` (the user-visible,
+    /// user-editable "To:"), it goes FIRST as the authoritative destination — so an edit to the To:
+    /// re-targets the send and beats any address the model left in the recipe. No recipient ⇒ the bare
+    /// recipe (calendar events, form-fill tasks). The value rides in the wrapper's ROUTING data block.
+    private static func authoritativeRouting(recipient: String, recipe: String) -> String {
+        let to = recipient.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !to.isEmpty else { return recipe }
+        return "Send to EXACTLY this recipient, confirmed by the user (if the routing below names a "
+            + "different address/person, THIS one wins): \(to)\n\(recipe)"
     }
 
     /// Internal fire result — the public `Outcome` for the UI PLUS the finer scoreboard fields.
