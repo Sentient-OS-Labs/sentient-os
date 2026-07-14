@@ -4,10 +4,13 @@
 //
 //  The "Connect your AIs" window — the guided setup, opened by the glow CTAs in Settings →
 //  Your AIs and the home's Your AIs popover. Owns the whole story:
-//   · sharing OFF → the single glowing "Connect your AIs" CTA (enables the mirror + first push,
-//     then the guide assembles in place); a quiet MCP ON/OFF pill top-right mirrors the state
-//     and flips it off behind the same confirm-and-delete alert Settings uses.
-//   · sharing ON → per-AI tabs (ChatGPT · Claude · Other AIs). ChatGPT/Claude show their
+//   · sharing OFF → the guide itself opens first (a 2-second crisp peek, inert), then blurs
+//     under a transparent veil carrying the glowing "Connect your AIs" CTA; pressing it enables
+//     the mirror + first push and the blur releases in place. No MCP pill while off.
+//   · sharing ON → per-AI tabs (ChatGPT · Claude · Other AIs), plus a quiet MCP ON pill
+//     top-right (carrying the last synced time) that flips sharing off behind the same
+//     confirm-and-delete alert Settings uses; turning off brings the veil straight back.
+//     ChatGPT/Claude show their
 //     GuideSpec's portrait video steps side by side (ChatGPT three: developer mode → paste the
 //     private MCP link → paste the system prompt; Claude two: link → prompt), each with a
 //     take-me-there deep link above the card. The masked link + Copy and the coached
@@ -34,6 +37,7 @@ struct ConnectAIsView: View {
 
     @State private var tab: AITab = .chatgpt
     @State private var enabled = false
+    @State private var veiled = false   // sharing off: the blur + CTA overlay (after the 2s peek)
     @State private var shareURL: String?
     @State private var loaded = false
     @State private var busy = false
@@ -47,15 +51,17 @@ struct ConnectAIsView: View {
             Theme.bg.ignoresSafeArea()
             VStack(spacing: 0) {
                 header
-                if loaded {
-                    if enabled { guide } else { connectPitch }
-                }
+                if loaded { guide }
             }
             .padding(.horizontal, 40).padding(.vertical, 36)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .blur(radius: veiled ? 34 : 0)
+            .saturation(veiled ? 0.7 : 1)   // mute the blurred cards so the veil reads calm
+            .allowsHitTesting(enabled)   // the peek is a teaser, not a playground
+            if veiled { connectVeil.transition(.opacity) }
         }
         .overlay(alignment: .topTrailing) {
-            if loaded { sharingPill.padding(16) }
+            if loaded && enabled { sharingPill.padding(16) }
         }
         .frame(minWidth: 1100, minHeight: 880)
         .task { await refresh() }
@@ -82,25 +88,34 @@ struct ConnectAIsView: View {
         }
     }
 
-    // MARK: - Sharing off: the one glowing object in the window
+    // MARK: - Sharing off: the veil — a translucent scrim over the blurred guide, carrying the
+    // one glowing object in the window. Connect releases the blur in place.
 
-    private var connectPitch: some View {
-        VStack(spacing: 0) {
-            GlowButton(title: busy ? "Connecting…" : "Connect your AIs",
-                       systemImage: "link", glowIntensity: 0.5) { connect() }
-                .frame(width: 280)
-                .padding(.top, 40)
-            MonoCaps("Private · no account · delete anytime",
-                     size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
-                .padding(.top, 22)
-            if let errorLine {
-                Text(errorLine)
-                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 380)
-                    .padding(.top, 14)
+    private var connectVeil: some View {
+        ZStack {
+            // Deep enough that the inks (tuned for OLED black) sit right; the blurred guide
+            // survives as a faint glow, not a bright wall the grays melt into.
+            Color.black.opacity(0.82).ignoresSafeArea()
+            VStack(spacing: 0) {
+                header
+                GlowButton(title: busy ? "Connecting…" : "Connect your AIs",
+                           systemImage: "link", glowIntensity: 0.5) { connect() }
+                    .frame(width: 280)
+                    .padding(.top, 40)
+                MonoCaps("Private · no account · delete anytime",
+                         size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+                    .padding(.top, 22)
+                if let errorLine {
+                    Text(errorLine)
+                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 380)
+                        .padding(.top, 14)
+                }
             }
+            .padding(.horizontal, 40)
         }
+        .contentShape(Rectangle())   // swallow clicks so the blurred guide stays inert
     }
 
     // MARK: - Sharing on: the per-AI guide
@@ -318,25 +333,31 @@ struct ConnectAIsView: View {
             .strokeBorder(.white.opacity(0.06), lineWidth: 1))
     }
 
-    // MARK: - The sharing pill (top-right): state at a glance, off behind the confirm
+    // MARK: - The sharing pill (top-right, sharing ON only): synced state at a glance, off
+    // behind the confirm. While sharing is off the window shows no pill — the veil IS the state.
 
     private var sharingPill: some View {
-        Button {
-            if enabled { confirmOff = true } else { connect() }
-        } label: {
+        Button { confirmOff = true } label: {
             HStack(spacing: 5) {
                 if busy { ProgressView().controlSize(.mini) }
-                else { Circle().fill(enabled ? Theme.Ink.green : Theme.Ink.deepMuted).frame(width: 6, height: 6) }
-                Text(enabled ? "MCP ON" : "MCP OFF")
+                else { Circle().fill(Theme.Ink.green).frame(width: 6, height: 6) }
+                Text(pillLabel)
             }
             .font(.system(size: 8.5, weight: .semibold, design: .monospaced)).tracking(1.4)
-            .foregroundStyle(enabled ? Theme.Ink.green : Theme.Ink.label)
+            .foregroundStyle(Theme.Ink.green)
             .padding(.horizontal, 9).padding(.vertical, 4)
-            .overlay(Capsule().strokeBorder((enabled ? Theme.Ink.green : Theme.Ink.label).opacity(0.3), lineWidth: 1))
+            .overlay(Capsule().strokeBorder(Theme.Ink.green.opacity(0.3), lineWidth: 1))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .disabled(busy)
+    }
+
+    /// The synced stamp (the last successful push) answers "is my AIs' copy current?" at a
+    /// glance; no stamp = enabled but not yet pushed.
+    private var pillLabel: String {
+        guard let pushed = MirrorClient.lastPush else { return "MCP ON" }
+        return "MCP ON · SYNCED \(pushed.glanceStamp.uppercased())"
     }
 
     // MARK: - MirrorClient plumbing (the SAME path Settings + the popover drive)
@@ -345,6 +366,12 @@ struct ConnectAIsView: View {
         enabled = await MirrorClient.shared.isEnabled
         shareURL = await MirrorClient.shared.shareURL
         loaded = true
+        // Sharing off: let the guide land crisp for 2 seconds (the teaser), then draw the veil.
+        if !enabled {
+            try? await Task.sleep(for: .seconds(2))
+            guard !enabled, !veiled else { return }
+            withAnimation(.easeInOut(duration: 0.7)) { veiled = true }
+        }
     }
 
     private func connect() {
@@ -358,7 +385,7 @@ struct ConnectAIsView: View {
                 do { try await MirrorClient.shared.push(); VaultActivity.shared.vaultDirty = false }
                 catch {}
                 shareURL = await MirrorClient.shared.shareURL
-                withAnimation(.easeOut(duration: 0.35)) { enabled = true }
+                withAnimation(.easeOut(duration: 0.5)) { enabled = true; veiled = false }
             } catch {
                 errorLine = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             }
@@ -371,7 +398,8 @@ struct ConnectAIsView: View {
         busy = true; errorLine = nil
         Task { @MainActor in
             await MirrorClient.shared.disable()
-            withAnimation(.easeOut(duration: 0.3)) { enabled = false }
+            // The veil returns immediately — no peek; the CTA is the off state's only exit.
+            withAnimation(.easeOut(duration: 0.4)) { enabled = false; veiled = true }
             busy = false
         }
     }

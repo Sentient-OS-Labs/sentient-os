@@ -4,13 +4,13 @@
 //
 //  The two glanceable dropdowns hung off the home's top-bar nav (HomeView). They keep status
 //  OFF the home itself — you open them only when curious:
-//   · AnalysisPopover — the work glance: things understood, vault size, the synced stamp, an
-//     Analyze Now control, and the source chips (sources are the INPUTS to analysis, so they
-//     live under "Analysis").
+//   · AnalysisPopover — the work glance: things understood, vault size, an Analyze Now control
+//     with the last/next-run footer, and the source chips (sources are the INPUTS to analysis,
+//     so they live under "Analysis").
 //   · ShareKnowledgePopover — the pitch + the glowing "Set up in 2 minutes" CTA that opens the guided
 //     setup window (ConnectAIsView owns sharing on/off, the link, and the prompt).
-//  Pure presentation; harvested from the retired Constellation home. Demo strings (synced
-//  stamp, access log) stand in until the real polls land; the vault counts ARE real (disk).
+//  Pure presentation; harvested from the retired Constellation home. The vault counts ARE real
+//  (disk); the demo deck substitutes its showcase last-run stamp.
 //
 
 import SwiftUI
@@ -31,8 +31,7 @@ struct AnalysisPopover: View {
     let thingsUnderstood: Int
     let sources: HomeSources               // for whatsappAvailable (hide the chip when WhatsApp isn't installed)
     let modelMissing: Bool
-    let syncedLabel: String
-    let pending: Int
+    let lastRun: String                    // last full cycle, pre-formatted by HomeView (deck-aware)
     var onAnalyze: () -> Void
     var onPickWhatsApp: () -> Void = {}    // tapping WhatsApp / iMessage opens the chat picker (in HomeView)
     var onPickIMessage: () -> Void = {}
@@ -64,13 +63,7 @@ struct AnalysisPopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                MonoCaps("Analysis", size: 10, tracking: 2.4, color: Theme.Ink.label)
-                Spacer()
-                MonoCaps(syncedLabel, size: 8.5, tracking: 1.4, color: Theme.Ink.green)
-                    .padding(.horizontal, 9).padding(.vertical, 4)
-                    .overlay(Capsule().strokeBorder(Theme.Ink.green.opacity(0.3), lineWidth: 1))
-            }
+            MonoCaps("Analysis", size: 10, tracking: 2.4, color: Theme.Ink.label)
 
             Text(understoodLine)
                 .display(21).foregroundStyle(.white)
@@ -79,8 +72,7 @@ struct AnalysisPopover: View {
                 .padding(.top, 7)
 
             analyzeButton.padding(.top, 16)
-            MonoCaps(runHint, size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-                .padding(.top, 11)
+            runFooter.padding(.top, 11)
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1).padding(.vertical, 16)
 
@@ -131,9 +123,27 @@ struct AnalysisPopover: View {
         guard let v = vault, v.notes > 0 else { return "No vault yet · your first analysis builds it" }
         return "\(v.notes) notes · \(v.domains) domains in your knowledge"
     }
-    private var runHint: String {
-        if modelMissing { return "The on-device model is missing; see Dev Tools" }
-        return armed ? "\(pending) pending · runs when your Mac rests" : "No sources armed"
+    /// Under the button: last run + when the next one comes, or the reason nothing can run.
+    @ViewBuilder private var runFooter: some View {
+        if modelMissing {
+            MonoCaps("The on-device model is missing; see Dev Tools", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+        } else if !armed {
+            MonoCaps("No sources armed", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+        } else {
+            VStack(alignment: .leading, spacing: 5) {
+                MonoCaps("Last run: \(lastRun)", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+                MonoCaps("Next run: \(Self.overnightTime) if your Mac is plugged in", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+            }
+        }
+    }
+
+    /// The scheduler's configured time-of-day ("3 AM"; "3:15 AM" off the hour) — live, so a dev
+    /// override of the overnight time shows the truth.
+    private static var overnightTime: String {
+        let minutes = OvernightScheduler.configuredMinutes
+        var comps = DateComponents(); comps.hour = minutes / 60; comps.minute = minutes % 60
+        let f = DateFormatter(); f.dateFormat = minutes % 60 == 0 ? "h a" : "h:mm a"
+        return f.string(from: Calendar.current.date(from: comps) ?? Date())
     }
 
     private var analyzeButton: some View {
@@ -257,8 +267,7 @@ enum HomeStats {
 #Preview("Analysis") {
     ZStack { Theme.bg
         AnalysisPopover(thingsUnderstood: 3339, sources: .init(files: true, whatsapp: true, imessage: true, notes: true),
-                        modelMissing: false, syncedLabel: "Synced · 3:41 AM",
-                        pending: 214, onAnalyze: {})
+                        modelMissing: false, lastRun: "3:41 AM", onAnalyze: {})
     }.frame(width: 380, height: 460).preferredColorScheme(.dark)
 }
 
