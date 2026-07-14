@@ -117,7 +117,8 @@ to the jesai deck — those devs were pitching), `.jesai` / `.launch` are the ha
 - **Real mode (the default):** `beginVisit` builds the deck from the persisted proactive results —
   one card per `PreparedAction` in `ProactiveResearch.latest()`
   (`Briefing(from:)` — method accent + `METHOD · TARGET` kicker, the `card_summary` body, the
-  LLM-written fire button), with the welcome **`GiftLetter`** envelope riding LAST (the
+  LLM-written fire button; the `variant` = the card's order among its method-mates, driving the
+  accent-family shade below), with the welcome **`GiftLetter`** envelope riding LAST (the
   bottom-right scatter perch; sealed, wax-stamped, addressed "For \<macFirstName\>" from
   the macOS account — "For you" when nameless; generated once from the user's own
   knowledge base, and retired when the NEXT full cycle replaces the deck — its letter footer carries
@@ -126,9 +127,11 @@ to the jesai deck — those devs were pitching), `.jesai` / `.launch` are the ha
   `ProactiveExecutor.fire`, streams codex's live play-by-play into the card (`liveLines`, with a
   per-card **STOP** that terminates the codex process), flies the card away on success and removes it
   from the persisted set; a failure returns it to the offer state for edit + retry. **Drafts are
-  editable:** the letter view's draft block is a `TextEditor` for real cards — Save persists the edit
-  into `preparedContent` (both in-memory and in `ProactiveResearch.latest()`), so what the user edited
-  is verbatim what fires.
+  editable, auto-saved:** every edit in the letter view's draft block (body, To:, Subject) commits on
+  a 300ms debounce into `preparedContent`/`recipient` (both in-memory and in
+  `ProactiveResearch.latest()`), so what the user edited is verbatim what fires — no Save button.
+  The block's corner status walks the edit story: **✎ Editable** (fresh card — the affordance) →
+  **Saving…** (typing) → **✓ Saved** (green, only after a real edit, so the word means something).
 - **Demo modes (pitch / launch-video):** the hard-coded decks — `Briefing.jesaiDemo` (the investor
   showcase: Charles/EWOR · Anthos · AIM · SSN prep · Supabase · the welcome letter) and
   `Briefing.launchDemo` (the audience-safe launch-video set) — playing the scripted `workLog`
@@ -158,15 +161,50 @@ Status lives here, never cluttering the home:
 ## The cards — `Briefing.swift` · `BriefingCard.swift`
 
 `Briefing` = the suggestion-card model (kicker / serif title / preview body / full `letter` /
-`draft` + `draftLabel` / `detailLabel` / the `offer` verb / `workLog` theater / done state / accent).
-Built three ways: `init(from: PreparedAction)` (real cards — method-signature accents: gmail ember ·
-calendar cobalt · computer teal · research mint), `init(fromGiftMarkdown:)` (the welcome letter — its
-`# Title` promoted to the card title), or the hard-coded demo set (kind accents; the welcome card
-alone wears the full gradient — jewelry rule). The card lives four lives: `sealed` (the envelope) →
+`draft` + `draftLabel` / `detailLabel` / the `offer` verb / `workLog` theater / done state / accent /
+`isPlan`). Built three ways: `init(from: PreparedAction, variant:)` (real cards),
+`init(fromGiftMarkdown:)` (the welcome letter — its `# Title` promoted to the card title), or the
+hard-coded demo set (kind accents; the welcome card alone wears the full gradient — jewelry rule).
+
+**Accents are color FAMILIES, not single colors (2026-07-14).** Real decks often cluster on one
+method (five computer-use cards is a normal morning), and one shade repeated five times reads
+bland. `Briefing.accentColor(for:variant:)` keeps one family per method and cycles its shades by
+the card's order among method-mates (`variant`, counted in `beginVisit`) — neighbors always differ,
+the family still names the method at a glance: **computer** = five greens (teal · leaf · seafoam ·
+emerald · pistachio — a full deck of 5 gets five different greens) · **gmail** = three reds (ember
+· coral · raspberry) · **research** = three blues (sky · periwinkle — the Knowledge window's
+Starlight kin · azure) · **calendar** = lone cobalt (the rare card). Kickers: gmail reads
+**GMAIL MCP** (2026-07-14).
+
+The card lives four lives: `sealed` (the envelope) →
 `offer` → `working(n)` (scripted theater, or the real `liveLines` stream + STOP) → `done`.
 In the **offer** phase the WHOLE face is the tap target for the letter (not just "read more") — the
 fire CTA and "read more" buttons sit above the ancestor tap in hit-testing, so they keep their own
 actions; working/done faces don't tap-expand (a stray click mid-run shouldn't cover the STOP).
+
+### The expanded letter — `LetterView` (in `HomeView.swift`) · `LetterBody.swift`
+
+Every card expands into the typeset reading view. `LetterBody` (shared with the gift's share PNG)
+renders the letters' **light Markdown** line-by-line: `## ` mono-caps section whispers · `### `
+serif subheads · bullets (`✦ `/`- `/`* `/`• `) · `1.` numbered items · `---` hairline rules ·
+`**bold**` inline · a `--` sign-off line. Research notes render it `neutral` (the house `•` bullet
++ dim headings — accent-colored reading text was unpleasant over a whole brief); the gift keeps the
+✦ accent dress. PART 2's prompt teaches the model this subset for research briefings only.
+
+**A research note dresses as letter paper** (`Views/LetterPaper.swift`): the page's top-right
+corner is dog-eared — an insettable cut-corner page shape (so the accent `strokeBorder` traces the
+crease) plus the lit fold flap lying on the page — with an accent letterhead hairline under the
+title (the ✕ nudges left, clear of the fold). Other cards keep the plain rounded card.
+
+**The draft block is a real composer.** An editable **To:** row (the executor sends to exactly it) ·
+a **Subject** row for drafts that open with a `Subject:` line (split out for display; edits
+recombine into the one verbatim string, so the artifact that fires never forks) · the body — plain
+prose for messages/emails, or **`Views/PlanEditor.swift`** for computer-use plans (`isPlan` =
+computer + no recipient): an NSTextView bridge with the real system mono, step numbers restyled in
+quiet grey on every keystroke, airy leading, and smart quote/dash substitution OFF so codex gets
+literal text. ⚠️ SwiftUI's `TextEditor` can't style ranges and silently falls back to **Courier**
+for `.system(design: .monospaced)` — that's why the bridge exists. Chat sends keep the composer
+(label "Draft message"); plans are labeled "What I'll do".
 
 ## The command bar — "Let me DO stuff for you"
 

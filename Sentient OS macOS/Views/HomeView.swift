@@ -658,8 +658,14 @@ final class ForYouModel {
         runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         switch deck {
         case .real:
-            var built: [Entry] = (ProactiveResearch.latest()?.ready ?? [])
-                .map { Entry(b: Briefing(from: $0), action: $0, phase: .offer) }
+            // Each card's accent is a shade from its method's color family, cycled by the card's
+            // order among its method-mates — a deck of three computer-use cards gets three greens.
+            var methodCounts: [PreparedAction.Method: Int] = [:]
+            var built: [Entry] = (ProactiveResearch.latest()?.ready ?? []).map { action in
+                let variant = methodCounts[action.method, default: 0]
+                methodCounts[action.method] = variant + 1
+                return Entry(b: Briefing(from: action, variant: variant), action: action, phase: .offer)
+            }
             // The day-one welcome "gift" rides LAST as a sealed envelope (generated from the user's
             // own knowledge base by the proactive cycle; absent until that's run once) — last in
             // the deck = the bottom-right scatter slot, the envelope's fixed perch in every mode.
@@ -891,10 +897,21 @@ private struct LetterView: View {
     @State private var editedRecipient = ""    // the live "To:" text
     @State private var savedRecipient = ""     // the last COMMITTED "To:"
     @State private var saveTask: Task<Void, Never>?   // in-flight debounced auto-save
+    @State private var everEdited = false      // the user has edited THIS opening — flips "✎ Editable" to the save status
     @State private var giftSaved = false       // the welcome letter's keepsake PNG landed on the Desktop
 
     /// This card sends a message to someone, so it shows an editable "To:" (the model filled a recipient).
     private var hasRecipient: Bool { !liveRecipient.isEmpty }
+
+    /// A research briefing (it reads as a letter, not a working draft) — the only expanded note that
+    /// gets the letter-paper dress. The gift keeps its own; drafts stay working documents.
+    private var isResearchNote: Bool { briefing.kind != .welcome && briefing.letter != nil }
+
+    /// The card's page: dog-eared letter paper for a research note, the plain rounded card otherwise.
+    private var pageShape: AnyShape {
+        isResearchNote ? AnyShape(LetterPaper())
+                       : AnyShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
 
     /// Auto-save is pending (unsaved edits still settling). Drives the ambient "Saving…" status.
     private var isDirty: Bool { editable && (editedDraft != savedDraft || editedRecipient != savedRecipient) }
@@ -907,11 +924,11 @@ private struct LetterView: View {
         savedRecipient = editedRecipient
     }
 
-    /// Debounced auto-save: commit ~0.6s after the user stops typing.
+    /// Debounced auto-save: commit ~0.3s after the user stops typing (live, without write-spam).
     private func scheduleAutoSave() {
         saveTask?.cancel()
         saveTask = Task {
-            try? await Task.sleep(for: .milliseconds(600))
+            try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             commitEdit()
         }
@@ -931,10 +948,17 @@ private struct LetterView: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.cancelAction)   // Esc closes
+                .padding(.trailing, isResearchNote ? 24 : 0)   // clear of the paper's folded corner
             }
             Text(briefing.title)
                 .font(.system(size: 30, design: .serif)).foregroundStyle(.white)
                 .padding(.top, 8)
+            if isResearchNote {   // the letterhead rule: a hairline of the card's accent, fading out
+                LinearGradient(colors: [briefing.accent.opacity(0.5), .clear],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(height: 1)
+                    .padding(.top, 14)
+            }
 
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
@@ -955,12 +979,21 @@ private struct LetterView: View {
             if briefing.kind == .welcome { giftFooter.padding(.top, 16) }
         }
         .padding(28)
-        .background(Theme.Ink.cardBG, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
-            .strokeBorder(briefing.kind == .welcome ? BriefingCard.welcomeGradient
-                          : LinearGradient(colors: [briefing.accent.opacity(0.45), .white.opacity(0.06)],
-                                           startPoint: .topLeading, endPoint: .bottomTrailing),
-                          lineWidth: 1))
+        // A research note is a piece of letter paper: the page's top-right corner is dog-eared
+        // (LetterPaper cuts it, LetterPaperFold lies on the page). Every other card keeps the
+        // plain rounded card.
+        .background(Theme.Ink.cardBG, in: pageShape)
+        .overlay(alignment: .topTrailing) { if isResearchNote { LetterPaperFold() } }
+        .overlay {
+            let border = briefing.kind == .welcome ? BriefingCard.welcomeGradient
+                : LinearGradient(colors: [briefing.accent.opacity(0.45), .white.opacity(0.06)],
+                                 startPoint: .topLeading, endPoint: .bottomTrailing)
+            if isResearchNote {
+                LetterPaper().strokeBorder(border, lineWidth: 1)
+            } else {
+                RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(border, lineWidth: 1)
+            }
+        }
         .shadow(color: .black.opacity(0.6), radius: 40, y: 18)
         // Seed the editor from THIS card's live content — on first appear AND every time a different
         // briefing opens. The letter layer is always-mounted and REUSED across cards (stable identity),
@@ -972,18 +1005,19 @@ private struct LetterView: View {
         .onChange(of: briefing.id) { _, _ in
             saveTask?.cancel(); editedDraft = liveDraft; savedDraft = liveDraft
             editedRecipient = liveRecipient; savedRecipient = liveRecipient; copied = false
-            giftSaved = false
+            giftSaved = false; everEdited = false
         }
         // Every keystroke (draft OR recipient) reschedules the debounced commit, so edits persist without a Save click.
-        .onChange(of: editedDraft) { _, _ in if isDirty { scheduleAutoSave() } }
-        .onChange(of: editedRecipient) { _, _ in if isDirty { scheduleAutoSave() } }
+        .onChange(of: editedDraft) { _, _ in if isDirty { everEdited = true; scheduleAutoSave() } }
+        .onChange(of: editedRecipient) { _, _ in if isDirty { everEdited = true; scheduleAutoSave() } }
         .onDisappear { saveTask?.cancel() }
     }
 
     /// The letter body — the shared editorial-Markdown renderer (LetterBody), so the expanded letter
     /// and the saved share image draw the exact same thing.
     private var paragraphs: some View {
-        LetterBody(text: briefing.letter ?? briefing.body, accent: briefing.accent)
+        LetterBody(text: briefing.letter ?? briefing.body, accent: briefing.accent,
+                   neutral: isResearchNote)
     }
 
     /// The welcome letter's keepsake row: "Save to Desktop" (a poster PNG of the gift, revealed in
@@ -1018,6 +1052,37 @@ private struct LetterView: View {
         }
     }
 
+    /// "Subject: X" opening line + the body after it; nil when the draft doesn't open with one.
+    /// The draft STRING stays the single verbatim artifact — this only splits it for display.
+    private static func splitSubject(_ draft: String) -> (subject: String, body: String)? {
+        let lines = draft.components(separatedBy: "\n")
+        guard let first = lines.first?.trimmingCharacters(in: .whitespaces),
+              first.lowercased().hasPrefix("subject:") else { return nil }
+        let subject = String(first.dropFirst("subject:".count)).trimmingCharacters(in: .whitespaces)
+        var rest = Array(lines.dropFirst())
+        while rest.first?.trimmingCharacters(in: .whitespaces).isEmpty == true { rest.removeFirst() }
+        return (subject, rest.joined(separator: "\n"))
+    }
+
+    /// The Subject field, derived from `editedDraft` — edits recombine into the one draft string,
+    /// so auto-save, Copy, and what fires all keep seeing the complete artifact.
+    private var draftSubject: Binding<String> {
+        Binding(get: { Self.splitSubject(editedDraft)?.subject ?? "" },
+                set: { editedDraft = "Subject: \($0)\n\n\(Self.splitSubject(editedDraft)?.body ?? "")" })
+    }
+
+    /// The body editor's text — the part after the Subject line when one exists, the whole draft otherwise.
+    private var draftBody: Binding<String> {
+        Binding(get: { Self.splitSubject(editedDraft)?.body ?? editedDraft },
+                set: { newBody in
+                    if let subject = Self.splitSubject(editedDraft)?.subject {
+                        editedDraft = "Subject: \(subject)\n\n\(newBody)"
+                    } else {
+                        editedDraft = newBody
+                    }
+                })
+    }
+
     private func draftBlock(_ draft: String) -> some View {
         HStack(alignment: .top, spacing: 0) {
             RoundedRectangle(cornerRadius: 1)
@@ -1027,19 +1092,27 @@ private struct LetterView: View {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 14) {
                     MonoCaps(briefing.draftLabel ?? "Draft", size: 9, tracking: 2.0, color: Theme.Ink.label)
-                    if editable {
-                        Image(systemName: "pencil").font(.system(size: 8.5)).foregroundStyle(briefing.accent.opacity(0.9))
-                    }
                     Spacer()
-                    // Auto-save status (not a button) — edits persist on their own. "Saving…" (muted)
-                    // while a debounced commit is pending; "Saved" (mint) once it's in sync + is what fires.
+                    // The edit affordance + auto-save status, in one quiet slot. Fresh card:
+                    // "✎ Editable" (an invitation — "Saved" before any edit means nothing to a
+                    // user). Typing: "Saving…" (muted). Edit landed: "✓ Saved" (green — YOUR
+                    // change is what fires). Edits persist on their own; this is never a button.
                     if editable {
                         HStack(spacing: 5) {
-                            Image(systemName: isDirty ? "arrow.triangle.2.circlepath" : "checkmark").font(.system(size: 9.5))
-                            Text(isDirty ? "Saving…" : "Saved").font(.system(size: 11))
+                            if isDirty {
+                                Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 9.5))
+                                Text("Saving…").font(.system(size: 11))
+                            } else if everEdited {
+                                Image(systemName: "checkmark").font(.system(size: 9.5))
+                                Text("Saved").font(.system(size: 11))
+                            } else {
+                                Image(systemName: "pencil").font(.system(size: 9.5))
+                                Text("Editable").font(.system(size: 11))
+                            }
                         }
-                        .foregroundStyle(isDirty ? Theme.Ink.label : Theme.Ink.green)
+                        .foregroundStyle(!isDirty && everEdited ? Theme.Ink.green : Theme.Ink.label)
                         .animation(.easeInOut(duration: 0.2), value: isDirty)
+                        .animation(.easeInOut(duration: 0.2), value: everEdited)
                     }
                     Button {
                         NSPasteboard.general.clearContents()
@@ -1074,15 +1147,49 @@ private struct LetterView: View {
                     }
                     Rectangle().fill(.white.opacity(0.07)).frame(height: 1)   // hairline between "who" and "what"
                 }
+                // "Subject:" — an email draft opens with a Subject line; it composes like a real
+                // email (its own field row) while the draft string that FIRES stays one verbatim
+                // artifact (subject edits recombine into it). Drafts without one are untouched.
+                let split = Self.splitSubject(editable ? editedDraft : draft)
+                if let split {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        MonoCaps("Subject", size: 9, tracking: 2.0, color: Theme.Ink.label)
+                        if editable {
+                            TextField("", text: draftSubject)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 13)).foregroundStyle(.white.opacity(0.92))
+                                .tint(briefing.accent)
+                        } else {
+                            Text(split.subject)
+                                .font(.system(size: 13)).foregroundStyle(.white.opacity(0.92))
+                                .textSelection(.enabled)
+                        }
+                    }
+                    Rectangle().fill(.white.opacity(0.07)).frame(height: 1)
+                }
+                // A computer-use PLAN speaks in the machine's voice: mono step lines, airy leading,
+                // step numbers in quiet grey — PlanEditor (an NSTextView bridge; SwiftUI's TextEditor
+                // can't style ranges and falls back to Courier for mono besides). Messages, emails,
+                // and events keep the composer prose. Both ride the same draftBody binding.
                 if editable {
-                    TextEditor(text: $editedDraft)
-                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.92)).lineSpacing(4)
-                        .tint(briefing.accent)
-                        .scrollContentBackground(.hidden)
-                        .frame(minHeight: 90, maxHeight: 300)
+                    if briefing.isPlan {
+                        PlanEditor(text: draftBody, accent: briefing.accent)
+                    } else {
+                        TextEditor(text: draftBody)
+                            .font(.system(size: 13))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .lineSpacing(4)
+                            .tint(briefing.accent)
+                            .scrollContentBackground(.hidden)
+                            .scrollIndicators(.never)   // the legacy always-on scroller is clutter; the wheel still scrolls
+                            .frame(minHeight: 56, maxHeight: 300)   // a short message shouldn't float in empty box
+                    }
                 } else {
-                    Text(draft)
-                        .font(.system(size: 13)).foregroundStyle(.white.opacity(0.88)).lineSpacing(4)
+                    Text(split?.body ?? draft)
+                        .font(briefing.isPlan ? Font(NSFont.monospacedSystemFont(ofSize: 12, weight: .regular))
+                                              : .system(size: 13))
+                        .foregroundStyle(.white.opacity(0.88))
+                        .lineSpacing(briefing.isPlan ? 9 : 4)
                         .textSelection(.enabled)
                 }
             }
@@ -1134,6 +1241,67 @@ private enum Demo {
              previewKBOnly: true,
              previewUpgraded: true)
         .frame(width: 1180, height: 880)
+}
+
+#Preview("Research letter") {
+    let sample = """
+    ## Who she is
+    **Priya Iyer, Partner at Northbeam Capital**; leads early-stage consumer AI. Ex-product at Dropbox. Writes $500K to $1.5M first checks.
+
+    ## Lead with
+    - Traction: **2,500 waitlist signups in 24 hours** from one Reddit post, zero marketing spend.
+    - Moat: the full on-device pipeline runs on real data today; cloud clones burn roughly $200 per user just to read a life in.
+    - Momentum: YC S26 and a16z Speedrun interviews, and a live term conversation with Premise.vc.
+
+    ## Likely questions
+    1. Why won't Apple do this? Walled garden: Apple Intelligence can't read WhatsApp or act across apps; **Sentient does both**.
+    2. Business model? Free consumer wedge; AGPL dual-licensing for enterprise later.
+    3. Round status? Use the Premise interest as gentle heat, not a hammer.
+
+    ## Decide before the call
+    Whether you'd take a $500K check on the terms Premise floated, or hold for a priced round after launch.
+    """
+    let action = PreparedAction(
+        title: "Prep notes for tomorrow's call with Priya",
+        method: .research, target: "", urgency: .medium,
+        dueDate: "Tuesday, July 14, 10:30 AM", status: .confirmed,
+        verification: "", cardSummary: "", preparedContent: sample,
+        executionRecipe: "none", buttonText: "", detailLabel: "read the brief",
+        sources: [], reviewNote: "")
+    return ZStack { Color.black.ignoresSafeArea()
+        LetterView(briefing: Briefing(from: action), phase: .offer,
+                   onOffer: {}, onClose: {})
+            .frame(width: 560)
+            .padding(40)
+    }
+}
+
+#Preview("Computer plan letter") {
+    let steps = """
+    1. Open the browser to canva.com/settings/billing-and-teams (already logged in).
+    2. Under Canva Pro, click Cancel trial.
+    3. If asked for a reason, pick 'I don't use it enough'.
+    4. Decline any pause, discount, or free-month offers.
+    5. Confirm the cancellation.
+    6. Verify the page shows Pro ending July 15 with no renewal.
+    """
+    let action = PreparedAction(
+        title: "Cancel Canva Pro before Wednesday's charge",
+        method: .computer, target: "Canva", urgency: .high,
+        dueDate: "Wednesday, July 15", status: .updated,
+        verification: "",
+        cardSummary: "Your Canva Pro trial converts to $15/month on Wednesday; this cancels it from your logged-in account before the charge.",
+        preparedContent: steps,
+        executionRecipe: "Start in the user's default browser at canva.com/settings/billing-and-teams.",
+        buttonText: "Cancel it before the charge?", detailLabel: "read the plan",
+        sources: [], reviewNote: "")
+    return ZStack { Color.black.ignoresSafeArea()
+        LetterView(briefing: Briefing(from: action), phase: .offer,
+                   editable: true, liveDraft: steps,
+                   onOffer: {}, onClose: {})
+            .frame(width: 560)
+            .padding(40)
+    }
 }
 
 #Preview("Gift letter") {
