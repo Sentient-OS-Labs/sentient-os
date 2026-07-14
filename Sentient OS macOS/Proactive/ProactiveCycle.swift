@@ -44,12 +44,13 @@ actor ProactiveCycle {
 
     static let shared = ProactiveCycle()
 
-    /// When the last full cycle finished (UserDefaults) — drives the home's real "Synced · …" stamp.
+    /// When the last full cycle finished (UserDefaults) — drives the Analysis popover's real
+    /// "Last run: …" stamp.
     static let lastCycleKey = "proactive.lastCycleAt"
 
     /// Wipe every persisted trace of the proactive layer — the decide-stage decisions, the prepared
-    /// cards, the welcome "gift", and the "Synced · …" stamp — so the home's "For You" deck comes back
-    /// empty. Used by the dev "Reset everything", alongside the cycle-store + knowledge-base wipe.
+    /// cards, the welcome "gift", and the "Last run: …" stamp — so the home's "For You" deck comes
+    /// back empty. Used by the dev "Reset everything", alongside the cycle-store + knowledge-base wipe.
     static func resetAll() {
         Proactive.clear()
         ProactiveResearch.clear()

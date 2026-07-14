@@ -103,6 +103,19 @@ struct MonoCaps: View {
     }
 }
 
+extension Date {
+    /// The whisper voice's glanceable time stamp — today → "3:18 AM" · yesterday →
+    /// "yesterday 3:18 AM" · older → "Jul 12". Rides the home's "Last run:" line and the
+    /// Connect-AIs pill's synced time (MonoCaps uppercases it in place).
+    var glanceStamp: String {
+        let f = DateFormatter()
+        if Calendar.current.isDateInToday(self) { f.dateFormat = "h:mm a"; return f.string(from: self) }
+        if Calendar.current.isDateInYesterday(self) { f.dateFormat = "h:mm a"; return "yesterday \(f.string(from: self))" }
+        f.dateFormat = "MMM d"
+        return f.string(from: self)
+    }
+}
+
 /// Subtle scale-on-press for custom (non-bordered) buttons across the app.
 struct PressScaleStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {

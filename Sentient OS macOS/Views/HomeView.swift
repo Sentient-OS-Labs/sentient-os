@@ -270,7 +270,7 @@ struct HomeView: View {
     private var analysisPopover: some View {
         AnalysisPopover(thingsUnderstood: thingsUnderstood, sources: sources,
                         modelMissing: modelMissing,
-                        syncedLabel: syncedLabel, pending: deck == .real ? 0 : Demo.pending,
+                        lastRun: lastRunLabel,
                         onAnalyze: { showAnalysis = false; onAnalyze() },
                         onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
                         onPickIMessage: { showAnalysis = false; showIMessagePicker = true },
@@ -280,14 +280,14 @@ struct HomeView: View {
             .preferredColorScheme(.dark)
     }
 
-    /// Real mode: the actual last-cycle stamp; demo mode: the showcase string.
-    private var syncedLabel: String {
-        guard deck == .real else { return Demo.synced }
+    /// The Analysis popover's "Last run:" value — the real last-cycle stamp (day spelled out once
+    /// it's no longer today's); demo mode: the showcase string.
+    private var lastRunLabel: String {
+        guard deck == .real else { return Demo.lastRun }
         guard let d = UserDefaults.standard.object(forKey: ProactiveCycle.lastCycleKey) as? Date else {
-            return "Not yet analyzed"
+            return "not yet"
         }
-        let f = DateFormatter(); f.dateFormat = "h:mm a"
-        return "Synced · \(f.string(from: d))"
+        return d.glanceStamp
     }
 
     private var shareKnowledgePopover: some View {
@@ -1204,8 +1204,7 @@ private struct LetterView: View {
 // MARK: - Demo data (the home's own showcase strings — cards live in Briefing.jesaiDemo/.launchDemo)
 
 private enum Demo {
-    static let synced = "Synced · 3:41 AM"
-    static let pending = 214
+    static let lastRun = "3:41 AM"
 }
 
 #Preview("Home — the suggestions") {

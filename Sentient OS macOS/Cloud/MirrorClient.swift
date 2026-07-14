@@ -200,7 +200,14 @@ actor MirrorClient {
         req.timeoutInterval = 120
         let (data, resp) = try await URLSession.shared.upload(for: req, from: blob)
         try Self.check(resp, data)
+        UserDefaults.standard.set(Date(), forKey: Self.lastPushKey)
         Analytics.signal("Mirror.pushed")
+    }
+
+    /// When the mirror last synced (the last successful push) — the Connect-AIs pill's stamp.
+    /// nil if never pushed, or since deleted.
+    nonisolated static var lastPush: Date? {
+        UserDefaults.standard.object(forKey: lastPushKey) as? Date
     }
 
     /// The one-click delete — removes the cloud copy (and its access log). The local vault
@@ -211,6 +218,7 @@ actor MirrorClient {
         req.httpMethod = "DELETE"
         let (data, resp) = try await URLSession.shared.data(for: req)
         try Self.check(resp, data)
+        UserDefaults.standard.removeObject(forKey: Self.lastPushKey)   // no cloud copy → no synced stamp
     }
 
     /// Opt out: flip mirroring OFF and delete the cloud copy, but KEEP the token so re-enabling
@@ -275,6 +283,7 @@ actor MirrorClient {
     private static let passwordKey = "mcp.mirror.password"  // Keychain: the root secret (persists)
     private static let legacyTokenKey = "mcp.mirror.token"  // pre-encryption single token — swept on enable
     private static let enabledKey = "mcp.mirror.enabled"    // UserDefaults: the on/off the toggle flips
+    private static let lastPushKey = "mcp.mirror.lastPush"  // UserDefaults: last successful push (Date)
 
     /// 18 random bytes → base64url (24 chars, no padding) — inside the server's [16,64] window
     /// and URL-safe, so it drops straight into the path. 144 bits: infeasible to brute-force,
