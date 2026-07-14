@@ -224,8 +224,8 @@ struct DevToolsView: View {
         .sheet(isPresented: $showPermissions) { PermissionsView() }
         .sheet(isPresented: $showHotkeyLab) { HotkeyLabView() }
         .sheet(isPresented: $showCodexSetup) { CodexSetupView() }
-        .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
-        .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
+        .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
+        .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
         .sheet(item: $deviceJob) { job in
             // Same takeover + same engine as the home "Analyze Now" — dev just gets the prompt pane.
             ProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors,

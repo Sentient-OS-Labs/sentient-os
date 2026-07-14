@@ -7,7 +7,7 @@
 //  connector (account-level `codex_apps/gmail.*`, visible to `codex exec` even under
 //  `--ignore-user-config` — measured live June 15, no CodexCLI change needed).
 //
-//  Connection: the user links Google on OpenAI's connector page (opened from the dev popup); we
+//  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
 //  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "gmail"; the existing "tell cloud"
@@ -32,8 +32,8 @@ enum GmailConnect {
     /// The single iterative-store bucket for Gmail. Its pointer is the high-water mark (run start).
     static let bucketKey = "gmail"
 
-    /// OpenAI's hosted Gmail connector page — opened from the dev popup's "Connect Gmail".
-    static let connectorURL = URL(string: "https://chatgpt.com/apps/gmail/connector_2128aebfecb84f64a069897515042a44")!
+    /// OpenAI's hosted Gmail connector page — opened from CloudConnectSheet's "Connect Gmail".
+    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
 
     /// Newest-N threads per read (the connector-limits doc's cap; a heavy week exceeds it).
     private static let threadCap = 300
@@ -82,7 +82,7 @@ enum GmailConnect {
         var inv = CodexCLI.Invocation(prompt: probePrompt)
         inv.feature = "gmail"
         inv.model = .gpt56luna               // light model for the connect-check
-        inv.effort = .medium                 // gpt-5.6-luna → medium
+        inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
         inv.sandbox = .readOnly
         inv.timeout = 120
         do {

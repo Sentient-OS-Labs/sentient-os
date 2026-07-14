@@ -6,17 +6,16 @@ Calendar connector** — OpenAI's account-level `codex_apps/google_calendar.*` t
 `search_events`, `read_event`, and the write tools `create_event` / `delete_event`), reached by
 `codex exec`. No on-device model touches the calendar.
 
-Code: `Sources/CalendarConnect.swift` · UI: `Views/CalendarConnectSheet.swift` + the Calendar chip in
-`Views/Dev/DevToolsView.swift`. The add-event **write** path is separate — `ProactiveExecutor.fireCalendar`.
+Code: `Sources/CalendarConnect.swift` · UI: `Views/CloudConnectSheet.swift` (ONE sheet shared with
+Gmail). The add-event **write** path is separate — `ProactiveExecutor.fireCalendar`.
 
-## How a user connects
-1. **Calendar chip** in the dev SOURCES grid → opens the connect popup.
-2. **Connect Calendar** → opens OpenAI's hosted connector page
-   (`chatgpt.com/apps/google-calendar/connector_…`); the user links Google there. The connection lands
-   in their OpenAI account, so `codex exec` picks it up automatically.
-3. **I'm done** → 3 s settle, then `probeConnected()` — a `codex exec` that must reply exactly
-   `YES`/`NO`. YES lights up **Finish**; NO prompts a reconnect.
-4. **Finish** → marks Calendar connected + selected. The chip now behaves like any other source.
+## How a user connects (the 2026-07-13 redesign)
+Identical to Gmail's flow (the shared `CloudConnectSheet(.calendar)` — see `Gmail Connector
+(Codex).md` §How a user connects for the full anatomy): **Connect Calendar** opens OpenAI's hosted
+connector page (`chatgpt.com/plugins/plugin_connector_1p_…?q=calendar`), **Done** runs the 1 s
+settle + `probeConnected()` YES/NO under the green fill sweep, YES persists connected + selected
+and auto-dismisses, and the whisper **"Stop reading Google Calendar"** link fully disconnects (no
+half-connected state).
 
 ## How reads work (rides the existing iterative stack)
 Calendar flows through the **same INITIAL / ITERATIVE buttons** as every other connector — it's just a
@@ -77,13 +76,14 @@ succeed under the bypass flag. So the write path needed **no change**; all of `C
 are read-only and need no bypass.
 
 ## Models & effort (the light cloud tier, like Gmail)
-`gpt-5.6-luna` / `.medium` carries every Calendar **read** (connect-check, monthly/iterative summaries,
-the proactive fetch) — calendar data is small and structured. The **write** (executor) uses the default
-`gpt-5.6-sol` / `.high`. Set via `CodexCLI.Invocation.model` + `.effort`.
+`gpt-5.6-luna` carries every Calendar **read** — `.medium` for the summaries and the proactive fetch,
+`.low` for the connect-check (a tool-availability YES/NO; speed is the UX) — calendar data is small
+and structured. The **write** (executor) uses the default `gpt-5.6-sol` / `.high`. Set via
+`CodexCLI.Invocation.model` + `.effort`.
 
 | Call | Model | Effort | Sandbox |
 |---|---|---|---|
-| Connect-check (`probeConnected`) | `gpt-5.6-luna` | `medium` | read-only |
+| Connect-check (`probeConnected`) | `gpt-5.6-luna` | `low` | read-only |
 | Reads (`runInitial`/`runIterative`) | `gpt-5.6-luna` | `medium` | read-only |
 | Proactive fetch (`fetchProactiveContext`) | `gpt-5.6-luna` | `medium` | read-only |
 | Add-event (`ProactiveExecutor.fireCalendar`) | `gpt-5.6-sol` | `high` | **bypassApprovals** |

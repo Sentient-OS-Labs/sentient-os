@@ -7,7 +7,7 @@
 //  (account-level `codex_apps/google_calendar.*` — get_profile / search_events / read_event, visible
 //  to `codex exec` whether or not `--ignore-user-config` is passed; verified live June 21).
 //
-//  Connection: the user links Google on OpenAI's connector page (opened from the dev popup); we
+//  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
 //  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "calendar"; the existing "tell cloud"
@@ -37,8 +37,8 @@ enum CalendarConnect {
     /// The single iterative-store bucket for Calendar. Its pointer is the high-water mark (run start).
     static let bucketKey = "calendar"
 
-    /// OpenAI's hosted Google Calendar connector page — opened from the dev popup's "Connect Calendar".
-    static let connectorURL = URL(string: "https://chatgpt.com/apps/google-calendar/connector_947e0d954944416db111db556030eea6")!
+    /// OpenAI's hosted Google Calendar connector page — opened from CloudConnectSheet's "Connect Calendar".
+    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
 
     /// Newest-N events per read window (a busy month rarely exceeds this; a guard against a runaway list).
     private static let eventCap = 200
@@ -71,7 +71,7 @@ enum CalendarConnect {
         var inv = CodexCLI.Invocation(prompt: probePrompt)
         inv.feature = "calendar"
         inv.model = .gpt56luna               // light model for the connect-check
-        inv.effort = .medium                 // gpt-5.6-luna → medium
+        inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
         inv.sandbox = .readOnly
         inv.webSearch = false
         inv.timeout = 120

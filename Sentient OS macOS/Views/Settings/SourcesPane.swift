@@ -76,8 +76,8 @@ struct SourcesPane: View {
                 imessageCSV = sel.sorted().joined(separator: ","); runIMessage = !sel.isEmpty
             }
         }
-        .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
-        .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
+        .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
+        .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
     }
 
     // MARK: - Full Disk Access fix-it (only when missing)

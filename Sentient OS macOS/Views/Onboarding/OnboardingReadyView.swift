@@ -129,8 +129,8 @@ struct OnboardingReadyView: View {
                 imessageCSV = sel.sorted().joined(separator: ","); runIMessage = !sel.isEmpty
             }
         }
-        .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
-        .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
+        .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
+        .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
     }
 
     private func addFolder() {

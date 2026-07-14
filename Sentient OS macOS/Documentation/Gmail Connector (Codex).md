@@ -5,17 +5,22 @@ Gmail is the **first cloud source** (Google Calendar is the second — see `Cale
 summarize** it through the user's own **Codex Gmail connector** — OpenAI's account-level
 `codex_apps/gmail.*` tools, reached by `codex exec`. No on-device model touches Gmail.
 
-Code: `Sources/GmailConnect.swift` · UI: `Views/GmailConnectSheet.swift` + the Gmail chip in
-`Views/Dev/DevToolsView.swift`.
+Code: `Sources/GmailConnect.swift` · UI: `Views/CloudConnectSheet.swift` (ONE sheet shared with
+Calendar — real brand marks from the asset catalog, `GmailMark`/`GoogleCalendarMark` SVGs).
 
-## How a user connects
-1. **Gmail chip** in the dev SOURCES grid → opens the connect popup.
-2. **Connect Gmail** → opens OpenAI's hosted connector page
-   (`chatgpt.com/apps/gmail/connector_…`); the user links Google there. The connection lands in
-   their OpenAI account, so `codex exec` picks it up automatically.
-3. **I'm done** → 3 s settle, then `probeConnected()` — a `codex exec` that must reply exactly
-   `YES`/`NO`. YES lights up **Finish**; NO prompts a reconnect.
-4. **Finish** → marks Gmail connected + selected. The chip now behaves like any other source.
+## How a user connects (the 2026-07-13 redesign)
+1. **Gmail chip** (Settings → Knowledge Sources, the home's Analysis popover, onboarding's ready
+   screen, or Dev Tools) → opens `CloudConnectSheet(.gmail)`.
+2. **Connect Gmail** (white capsule) → opens OpenAI's hosted connector page
+   (`chatgpt.com/plugins/plugin_connector_1p_…?q=gmail`); the user links Google there. The
+   connection lands in their OpenAI account, so `codex exec` picks it up automatically.
+3. **Done** → 1 s settle, then `probeConnected()` — a `codex exec` that must reply exactly
+   `YES`/`NO`. While it runs, a green fill sweeps the button on a decelerating curve (~95% by 17 s,
+   the observed probe time; the answer snaps it full). YES → connected + selected persist, a green
+   beat, auto-dismiss. NO → a quiet amber retry line. ✕ (top-left) closes without saving.
+4. Connected + selected → a whisper **"Stop reading Gmail"** link **fully disconnects** (both flags
+   cleared — deliberately no half-connected state); turning it back on is the whole flow again,
+   probe included.
 
 ## How reads work (rides the existing iterative stack)
 Gmail flows through the **same INITIAL / ITERATIVE buttons** as every other connector — it's just a
@@ -50,7 +55,7 @@ The light model carries the Gmail tier; gpt-5.6-sol carries the knowledge base. 
 
 | Call | Model | Effort |
 |---|---|---|
-| Connect-check (`probeConnected`) | `gpt-5.6-luna` | `medium` |
+| Connect-check (`probeConnected`) | `gpt-5.6-luna` | `low` (a tool-availability YES/NO — speed is the UX) |
 | Gmail reads (`runInitial`/`runIterative`) | `gpt-5.6-luna` | `medium` |
 | Vault build/update + proactive + everything else | `gpt-5.6-sol` | `high` |
 
@@ -78,6 +83,6 @@ overrides upward since 2026-07-10 — the initial vault build's `.xhigh` overtho
   what makes the blobs mineable. (`reminderFlagged` rides along as a hint, not the mechanism.)
 - **Connection detection** is a `codex exec` YES/NO probe (the user's chosen UX). A cheaper
   `codex plugin list` poll exists but is unused by design.
-- The connect sheet is reachable from THREE places now — the Dev Tools chip, the home's Analysis
-  popover chip, and Settings → Knowledge Sources — all the same `GmailConnectSheet` + `dbg.*` keys.
-  The dedicated onboarding moment is still to build.
+- The connect sheet is reachable from FOUR places — Settings → Knowledge Sources, the home's
+  Analysis popover chip, onboarding's ready screen, and Dev Tools — all the same
+  `CloudConnectSheet(.gmail)` + `dbg.*` keys.

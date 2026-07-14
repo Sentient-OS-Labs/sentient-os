@@ -145,8 +145,8 @@ struct HomeView: View {
             }
         }
         // Gmail / Calendar connect sheets — the SAME sheets Dev Tools opens (connect / select / remove).
-        .sheet(isPresented: $showGmailConnect) { GmailConnectSheet() }
-        .sheet(isPresented: $showCalendarConnect) { CalendarConnectSheet() }
+        .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
+        .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
     }
 
     // MARK: Chrome — the top-bar nav + the editorial greeting
