@@ -78,6 +78,13 @@ struct ProcessingView: View {
         self.onDone = onDone
     }
 
+    /// Dev Tools → "Resizable analysis window (demo)". While ON, the home's takeover loses its
+    /// window min size (RootView reads this same key) and this footer's Stop control, so a website
+    /// screen recording can frame just the analysis content. Home runs only — onboarding keeps
+    /// Pause, dev prompt-pane runs keep Stop.
+    static let resizableDemoKey = "dev.processing.resizableDemo"
+    @AppStorage(ProcessingView.resizableDemoKey) private var resizableDemo = false
+
     private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(CycleFailure) }
     @State private var state: UIState = .loadingModel
     /// The failed screen's inline codex login (the "Codex isn't logged in" fix) — same shared
@@ -517,18 +524,21 @@ struct ProcessingView: View {
 
     private var footer: some View {
         VStack(spacing: 18) {
-            VStack(spacing: 6) {
-                Button(action: pausable ? (paused ? resume : pause) : stop) {
-                    Text(pausable ? (paused ? "Resume Analysis" : "Pause Analysis") : "Stop Analysis")
-                        .font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.9))
-                        .padding(.horizontal, 24).padding(.vertical, 10)
-                        .background(Capsule().fill(.white.opacity(0.08)))
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
+            // Demo mode drops the Stop control (home runs only) — the recording wants a clean frame.
+            if !(resizableDemo && !pausable && !showPrompt) {
+                VStack(spacing: 6) {
+                    Button(action: pausable ? (paused ? resume : pause) : stop) {
+                        Text(pausable ? (paused ? "Resume Analysis" : "Pause Analysis") : "Stop Analysis")
+                            .font(.subheadline.weight(.medium)).foregroundStyle(.white.opacity(0.9))
+                            .padding(.horizontal, 24).padding(.vertical, 10)
+                            .background(Capsule().fill(.white.opacity(0.08)))
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.18)))
+                    }
+                    .buttonStyle(.plain)
+                    Text(pausable ? (paused ? "Paused. It picks up exactly where it stopped." : "Pausing keeps your progress.")
+                                  : "Analysis can always resume later.")
+                        .font(.caption).foregroundStyle(.white.opacity(0.4))
                 }
-                .buttonStyle(.plain)
-                Text(pausable ? (paused ? "Paused. It picks up exactly where it stopped." : "Pausing keeps your progress.")
-                              : "Analysis can always resume later.")
-                    .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
             if showPrompt {
                 // Dev: the current item being processed (replaces the trust footer).

@@ -92,6 +92,9 @@ struct DevToolsView: View {
     // The 3-way card mode (which deck the home deals) — see BriefingDeck (Briefing.swift).
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
 
+    // Demo: free-resize the home's analysis takeover (ProcessingView owns the key).
+    @AppStorage(ProcessingView.resizableDemoKey) private var resizableAnalysisDemo = false
+
 
     // MCP mirror (the hosted Render copy). Local mirrors of MirrorClient's actor state, refreshed
     // when "More" opens and after each action.
@@ -151,6 +154,26 @@ struct DevToolsView: View {
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// Demo: while ON, the home's analysis takeover drops its window min size AND the Stop
+    /// Analysis footer, so the website's screen recording can frame just the analysis content.
+    /// Onboarding's Pause and the dev prompt-pane runs are untouched.
+    private var resizableAnalysisSection: some View {
+        Toggle(isOn: $resizableAnalysisDemo) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Resizable analysis window for demo")
+                    .font(.callout.weight(.medium)).foregroundStyle(.white)
+                Text("Home → Analyze Now resizes freely (no min size) and hides the Stop Analysis footer — for the website's screen rec.")
+                    .font(.caption2).foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     /// One deck segment — lit when it's the active mode.
     private func deckButton(_ mode: BriefingDeck, _ label: String) -> some View {
         let selected = (BriefingDeck(rawValue: deckRaw) ?? .real) == mode
@@ -203,6 +226,7 @@ struct DevToolsView: View {
                     }
                     executeButton
                     proactiveCardsSection
+                    resizableAnalysisSection
                     HStack(spacing: 10) {
                         viewSummariesButton
                         viewActionItemsButton

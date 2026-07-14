@@ -40,6 +40,11 @@ struct RootView: View {
     /// Observed for the global "setting up computer use" whisper (the overlay below).
     @State private var codex = CodexSetup.shared
 
+    // Dev Tools → "Resizable analysis window (demo)": while the analysis takeover is up, the
+    // window's min frame drops away entirely, so the website screen rec can shrink it to just
+    // the analysis content. The home keeps its full canvas either way.
+    @AppStorage(ProcessingView.resizableDemoKey) private var resizableAnalysisDemo = false
+
     /// The sources Analyze Now will process — the shared selection (folders + DB sources).
     private var selectedSources: [RunSource] {
         SourceSelection.current(fdaGranted: fdaGranted)
@@ -83,7 +88,8 @@ struct RootView: View {
                 home.transition(.opacity)
             }
         }
-        .frame(minWidth: 1040, minHeight: 800)
+        .frame(minWidth: resizableAnalysisDemo && isProcessing ? nil : 1040,
+               minHeight: resizableAnalysisDemo && isProcessing ? nil : 800)
         // Core tier: the home window came up (fires once per window instantiation — launch opens it
         // automatically; anything later is a deliberate menu-bar/Dock reopen, hence the trigger
         // param). Sidekick-only users who never look at home are exactly who this measures.
