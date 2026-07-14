@@ -72,12 +72,14 @@ struct Briefing: Identifiable {
     let codexPrompt: String?    // what real execution hands to CodexCLI (see THE CODEX SEAM above)
     let accent: Color           // the card's one accent (jewelry rule). Demo: kind.accent; real: per method.
     let envelopeName: String?   // welcome only: the envelope's recipient ("You" on demo decks); nil = the Mac account's first name
+    var isPlan = false          // a computer-use PLAN (no recipient): the draft block renders as the
+                                // machine's mono step list, not a message composer
 
     init(id: String, kind: Kind, kicker: String, title: String, body: String,
          letter: String? = nil, draft: String? = nil, draftLabel: String? = nil,
          detailLabel: String? = nil, offer: String? = nil, workLog: [String] = [],
          doneTitle: String = "", doneBody: String = "", codexPrompt: String? = nil,
-         accent: Color? = nil, envelopeName: String? = nil) {
+         accent: Color? = nil, envelopeName: String? = nil, isPlan: Bool = false) {
         self.id = id
         self.kind = kind
         self.kicker = kicker
@@ -94,14 +96,16 @@ struct Briefing: Identifiable {
         self.codexPrompt = codexPrompt
         self.accent = accent ?? kind.accent
         self.envelopeName = envelopeName
+        self.isPlan = isPlan
     }
 
     // MARK: Real cards — built from a prepared proactive action (the toggle's real mode)
 
     /// Map a verified, ready-to-fire `PreparedAction` onto a card. The kicker is the clean
-    /// `METHOD · TARGET` whisper; the accent is the method's signature color (jewelry). Fireable
-    /// methods carry the editable draft + the LLM-written button; research is a read-only briefing.
-    init(from a: PreparedAction) {
+    /// `METHOD · TARGET` whisper; the accent is a shade from the method's color family (`variant`
+    /// = this card's order among its method-mates in the deck). Fireable methods carry the
+    /// editable draft + the LLM-written button; research is a read-only briefing.
+    init(from a: PreparedAction, variant: Int = 0) {
         let isResearch = a.method == .research
         let content = a.preparedContent.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasContent = !content.isEmpty
@@ -113,14 +117,15 @@ struct Briefing: Identifiable {
             body: a.cardSummary,
             letter: isResearch && hasContent ? content : nil,             // research: the briefing IS the letter
             draft: !isResearch && hasContent ? content : nil,             // actions: the editable draft block
-            draftLabel: Self.draftLabelText(for: a.method),
+            draftLabel: Self.draftLabelText(for: a.method, messageSend: !a.recipient.isEmpty),
             detailLabel: hasContent ? (a.detailLabel.isEmpty ? "read the draft" : a.detailLabel) : nil,
             offer: (isResearch || a.buttonText.isEmpty) ? nil : a.buttonText,
             workLog: [],
             doneTitle: "Done.",
             doneBody: "",
             codexPrompt: nil,
-            accent: Self.accentColor(for: a.method))
+            accent: Self.accentColor(for: a.method, variant: variant),
+            isPlan: a.method == .computer && a.recipient.isEmpty)
     }
 
     /// The welcome "gift" card — built straight from the generated Markdown letter (`GiftLetter` writes
@@ -154,29 +159,50 @@ struct Briefing: Identifiable {
     static func kickerLine(method: PreparedAction.Method, target: String) -> String {
         let t = target.trimmingCharacters(in: .whitespaces).uppercased()
         switch method {
-        case .gmail:    return "GMAIL"
+        case .gmail:    return "GMAIL MCP"
         case .calendar: return "CALENDAR"
         case .computer: return t.isEmpty ? "COMPUTER USE" : "COMPUTER USE · \(t)"
         case .research: return "RESEARCHED"
         }
     }
 
-    /// The method's signature accent (jewelry: one quiet color per card).
-    static func accentColor(for method: PreparedAction.Method) -> Color {
+    /// The method's accent — a color FAMILY per method (greens = computer, reds = gmail, blues =
+    /// research, cobalt = calendar), with `variant` cycling the family's shades by the card's
+    /// order among its method-mates. Real decks often cluster on ONE method; shade siblings keep
+    /// such a deck alive while the family still names the method at a glance (jewelry rule:
+    /// one quiet color per card).
+    static func accentColor(for method: PreparedAction.Method, variant: Int = 0) -> Color {
+        let family: [Color]
         switch method {
-        case .gmail:    return Color(red: 1.00, green: 0.42, blue: 0.45)   // ember
-        case .calendar: return Color(red: 0.36, green: 0.55, blue: 1.00)   // cobalt
-        case .computer: return Color(red: 0.30, green: 0.82, blue: 0.78)   // teal
-        case .research: return Theme.Ink.green                              // mint
+        case .gmail:
+            family = [Color(red: 1.00, green: 0.42, blue: 0.45),   // ember
+                      Color(red: 1.00, green: 0.58, blue: 0.42),   // coral
+                      Color(red: 0.96, green: 0.38, blue: 0.57)]   // raspberry
+        case .calendar:
+            family = [Color(red: 0.36, green: 0.55, blue: 1.00)]   // cobalt
+        case .computer:
+            // Five shades — a whole deck can be computer use (maxReady = 5), so a full house
+            // still gets five different greens. Order = cycle order; neighbors contrast.
+            family = [Color(red: 0.30, green: 0.82, blue: 0.78),   // teal
+                      Color(red: 0.29, green: 0.87, blue: 0.50),   // leaf
+                      Color(red: 0.60, green: 0.92, blue: 0.70),   // seafoam
+                      Color(red: 0.20, green: 0.79, blue: 0.53),   // emerald
+                      Color(red: 0.75, green: 0.88, blue: 0.42)]   // pistachio
+        case .research:
+            family = [Color(red: 0.44, green: 0.71, blue: 1.00),   // sky
+                      Color(red: 0.56, green: 0.65, blue: 1.00),   // periwinkle (Knowledge's Starlight kin)
+                      Color(red: 0.36, green: 0.80, blue: 1.00)]   // azure
         }
+        return family[variant % family.count]
     }
 
-    /// The draft-block tag in the expanded letter.
-    static func draftLabelText(for method: PreparedAction.Method) -> String {
+    /// The draft-block tag in the expanded letter. A computer action WITH a recipient is a chat
+    /// send (WhatsApp/iMessage) — its block is a message being composed, not a task plan.
+    static func draftLabelText(for method: PreparedAction.Method, messageSend: Bool = false) -> String {
         switch method {
         case .gmail:    return "Draft email"
         case .calendar: return "Event"
-        case .computer: return "What I'll do"
+        case .computer: return messageSend ? "Draft message" : "What I'll do"
         case .research: return "Briefing"
         }
     }

@@ -408,13 +408,25 @@ actor ProactiveResearch {
         - **computer** — drives the user's Mac directly (their own computer use): act in a native \
         desktop app (e.g. Notion), SEND a WhatsApp / iMessage (via the Messages app), OR do a task on a \
         WEBSITE the user is already logged into by driving their real browser (register, RSVP, fill an \
-        application, buy, post on X/LinkedIn/Reddit/Amazon/GitHub). `prepared_content` = the exact \
-        text/values the user reviews; `execution_recipe` = which app or URL + which chat/where + ordered \
-        steps (and which field takes which value for a web form). (The fire step NEVER uses \
-        AppleScript/Terminal — only computer use.)
+        application, buy, post on X/LinkedIn/Reddit/Amazon/GitHub). For a chat MESSAGE: \
+        `prepared_content` = the exact message text, plain and verbatim. For an app/website TASK: \
+        `prepared_content` = THE PLAN — a numbered list of precise, concrete, executable steps, one \
+        action per line, each with the exact value it needs ("1. Open the browser to \
+        canva.com/settings/billing" / "2. Click Cancel trial under Canva Pro" / "3. Decline any pause \
+        or discount offers" / ...), ending with a verification step ("Confirm the page shows the plan \
+        ending July 15"). The user reviews and can EDIT these steps, and the fire step follows them \
+        as written — so every step must be unambiguous and doable with clicks and typing. \
+        `execution_recipe` = routing ONLY (which app or URL to start in; which chat for a message) — \
+        never restate the steps or the message there. (The fire step NEVER uses AppleScript/Terminal — \
+        only computer use.)
         - **research** — informational only: write the briefing the user wanted (a trip plan, a \
         comparison, prepped notes for a call). Nothing fires — `execution_recipe` = "none", \
-        `button_text` = "".
+        `button_text` = "". Typeset the briefing in the letter's light Markdown so it renders \
+        beautifully: `## Heading` for each section, `- ` bullets (or `1.` numbered items) for \
+        skimmable points, `**bold**` on the load-bearing facts, short plain paragraphs otherwise. \
+        Never a `# ` H1 (the card's title is the headline); no tables, code blocks, or nested \
+        lists. This light Markdown is for research briefings ONLY — every other method's \
+        `prepared_content` fires verbatim, so it stays plain text.
 
         **Which method:** email → **gmail**; calendar events → **calendar**; everything Sentient ACTS \
         on for the user — a native Mac app, a chat message (WhatsApp/iMessage via Messages), or a \
@@ -447,13 +459,14 @@ actor ProactiveResearch {
         will do ("Send this reply to Dana confirming Thursday").
         - **prepared_content** — the EXACT artifact that will be sent/used, in the user's own voice. \
         This is what the user reviews AND CAN EDIT, and this is what fires VERBATIM — so make it \
-        complete and final: the full email subject+body, the full message text, the event details, or \
-        the briefing write-up. (Edits the user makes here are exactly what gets sent.)
+        complete and final: the full email subject+body, the full message text, the numbered \
+        step-by-step plan for a computer task, the event details, or the briefing write-up (in the \
+        research method's light Markdown). (Edits the user makes here are exactly what fires.)
         - **execution_recipe** — ROUTING ONLY: where the action goes, not its words. Recipient(s) + the \
-        exact thread for **gmail**; the structured event fields for **calendar**; for **computer**, the \
-        app or URL + which chat/where + ordered steps (and which field takes which value for a web \
-        form). Do NOT restate the message body here — it lives in `prepared_content` and is sent from \
-        there. "none" for research.
+        exact thread for **gmail**; the structured event fields for **calendar**; for **computer**, \
+        the app or URL to start in + which chat/where for a message send. Do NOT restate the message \
+        body or the plan's steps here — they live in `prepared_content` and fire from there. "none" \
+        for research.
         - **button_text** — the one-tap fire button's label, specific to THIS action and in the user's \
         framing ("Should I send it for you?", "Reply & add it to your calendar?", "Register me?"). \
         Leave "" for research (it has no fire button).

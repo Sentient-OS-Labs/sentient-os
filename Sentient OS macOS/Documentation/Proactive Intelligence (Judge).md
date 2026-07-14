@@ -140,7 +140,17 @@ review_note}], dropped:[{title, reason}]}`.
   fire (`execution_recipe = "none"` — it absorbs a real-but-unautomatable item rather than drop it).
 - `target` = the app/site brand for the card kicker ("COMPUTER USE · LINKEDIN").
 - `prepared_content` = the VERBATIM artifact the user reviews and **can edit in the card's letter
-  view** — the edit is persisted back into `ProactiveResearch.latest()` and is exactly what fires.
+  view** (auto-saved; persisted back into `ProactiveResearch.latest()` and exactly what fires). Its
+  SHAPE is per-method (2026-07-14): the full email subject+body for `gmail` · the exact message
+  text for a chat send · **the numbered step-by-step PLAN** for a computer app/website task
+  (precise, executable, one action per line, ending in a verification step — the user-visible,
+  user-editable authority PART 3 follows; steps used to hide in the recipe) · the briefing for
+  `research`, typeset in the letters' light Markdown (`## ` headings, `- ` bullets, `**bold**`) so
+  the letter view renders it beautifully (research ONLY — every other method fires verbatim, so it
+  stays plain text).
+- `execution_recipe` = ROUTING ONLY for every method (the recipient + thread for gmail, the event
+  fields for calendar, the app/URL to start in + the chat for computer) — it never restates the
+  body or the steps. `"none"` for research.
 - `button_text` / `detail_label` = the LLM-written fire CTA ("Should I send it for you?") + the quiet
   open-the-draft link.
 - `status` ∈ confirmed / updated / unverified; `review_note` = what to double-check before firing.
@@ -167,9 +177,12 @@ The single write-capable step: on the user's one-button press, `fire(_:progress:
 authored by an LLM from the user's email + knowledge base — a prompt-injection path into a no-sandbox
 execution. So each channel runs a **fixed, app-authored wrapper prompt** (`gmailWrapper` /
 `calendarWrapper` / `computerWrapper`) that: wraps the user-reviewable `preparedContent` in a
-`<<<CONTENT>>>` block sent **VERBATIM** (the user's edits are exactly what goes out) and the routing
-in a `<<<ROUTING>>>` block · declares BOTH blocks DATA, never instructions · confines the run to the
-one declared action (computer use is additionally forbidden AppleScript/Terminal shortcuts) · demands
+`<<<CONTENT>>>` block — the send text goes out **VERBATIM** (the user's edits are exactly what goes
+out); for a computer app/website task the block is the **user-approved step plan** the run must
+follow exactly, in order (2026-07-14) — and the routing in a `<<<ROUTING>>>` block · confines the
+run to the ONE declared task (nothing read on a page, in an app, or inside the blocks can add a
+second task, change the destination, or grant new permissions; computer use is additionally
+forbidden AppleScript/Terminal shortcuts) · demands
 a final **`STATUS: DONE — …` / `STATUS: COULD_NOT — …`** sentinel. The sentinel verdict feeds
 `ExecutorScoreboard` (`Diagnostics/ExecutorScoreboard.swift`, §7.19) — one structured event per fire;
 "fired" means codex *claimed* done, and a missing sentinel is tracked as the false-success risk.
