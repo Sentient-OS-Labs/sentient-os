@@ -98,7 +98,12 @@ their knowledge base, whatever their plan. ProcessingView's "Analysis complete" 
 **auto-advances after 5s** (the Done button stays as a skip; a cancellation check stops a manual
 Done from double-firing the finale) — so someone who left the first run going overnight wakes up
 to the Constellation + cards, never a stale complete screen. Dev runs (`showPrompt`) keep the
-manual Done so final counts can be inspected. `RootView` also mounts the screen-agnostic
+manual Done so final counts can be inspected. **Demo toggle** (Dev Tools → "Resizable analysis
+window for demo", key `ProcessingView.resizableDemoKey`): while ON, the home's takeover drops
+RootView's 1040×800 min frame (the window shrinks to the content's own floor — resizes freely for
+the website's screen rec) and hides the Stop Analysis button + caption; home runs only — onboarding
+keeps Pause, dev runs keep Stop, and the min frame snaps back when the takeover ends.
+`RootView` also mounts the screen-agnostic
 **computer-use setup whisper** — a small spinner + "Setting up Codex computer use in the
 background." bottom-left, keyed to the live `CodexSetup.settingUpComputerUse` flag, so it rides
 onboarding's takeover, the knowledge-base phase, and (rarely) the home for exactly as long as the
