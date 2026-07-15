@@ -331,7 +331,7 @@ struct NotchContent: View {
     private var typingField: some View {
         ZStack(alignment: .leading) {
             if draft.isEmpty {
-                Text("what can I take over for you?")
+                Text("What can I take over for you?")
                     .font(.system(size: 13, design: .serif)).italic()
                     .foregroundStyle(.white.opacity(0.4))
                     .allowsHitTesting(false)
