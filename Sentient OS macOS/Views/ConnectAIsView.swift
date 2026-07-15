@@ -4,9 +4,11 @@
 //
 //  The "Connect your AIs" window — the guided setup, opened by the glow CTAs in Settings →
 //  Your AIs and the home's Your AIs popover. Owns the whole story:
-//   · sharing OFF → the guide itself opens first (a 2-second crisp peek, inert), then blurs
-//     under a transparent veil carrying the glowing "Connect your AIs" CTA; pressing it enables
-//     the mirror + first push and the blur releases in place. No MCP pill while off.
+//   · sharing OFF → the guide itself opens first (a 1-second crisp peek, inert), then blurs
+//     under a transparent veil carrying the consent ask: "Connect your AIs?", the trust pillars
+//     (E2E encryption, open-source server, delete anytime), a glowing "Yes, connect my AIs"
+//     (enables the mirror + first push, blur releases in place) and a "Not now" that closes the
+//     window. No MCP pill while off.
 //   · sharing ON → per-AI tabs (ChatGPT · Claude · Other AIs), plus a quiet MCP ON pill
 //     top-right (carrying the last synced time) that flips sharing off behind the same
 //     confirm-and-delete alert Settings uses; turning off brings the veil straight back.
@@ -29,15 +31,17 @@ struct ConnectAIsView: View {
     static let windowID = "connect-ais"
 
     private enum AITab: String, CaseIterable, Identifiable {
-        case chatgpt = "ChatGPT"
         case claude = "Claude"
+        case chatgpt = "ChatGPT"
         case other = "Other AIs"
         var id: String { rawValue }
     }
 
-    @State private var tab: AITab = .chatgpt
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var tab: AITab = .claude
     @State private var enabled = false
-    @State private var veiled = false   // sharing off: the blur + CTA overlay (after the 2s peek)
+    @State private var veiled = false   // sharing off: the blur + consent overlay (after the 1s peek)
     @State private var shareURL: String?
     @State private var loaded = false
     @State private var busy = false
@@ -89,7 +93,9 @@ struct ConnectAIsView: View {
     }
 
     // MARK: - Sharing off: the veil — a translucent scrim over the blurred guide, carrying the
-    // one glowing object in the window. Connect releases the blur in place.
+    // consent ask. Not a pitch that assumes yes: the question, where the data actually goes
+    // (trust pillars, same story Settings tells), an explicit yes, and a real "Not now".
+    // Connect releases the blur in place; Not now closes the window.
 
     private var connectVeil: some View {
         ZStack {
@@ -97,14 +103,39 @@ struct ConnectAIsView: View {
             // survives as a faint glow, not a bright wall the grays melt into.
             Color.black.opacity(0.82).ignoresSafeArea()
             VStack(spacing: 0) {
-                header
-                GlowButton(title: busy ? "Connecting…" : "Connect your AIs",
+                OrbMark(size: 38)
+                Text("Connect your AIs?")
+                    .display(25)
+                    .foregroundStyle(Theme.Ink.statusInk)
+                    .padding(.top, 20)
+                Text("Sentient built your knowledge base right here on this Mac. Want to offer it to ChatGPT, Claude, and every AI you use?")
+                    .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).lineSpacing(3.5)
+                    .frame(maxWidth: 440)
+                    .padding(.top, 20)
+                VStack(alignment: .leading, spacing: 10) {
+                    veilPillar("lock.fill", "End-to-end encrypted: sealed on this Mac with a key only your private link holds. On our server it's unreadable ciphertext; we can never read it.")
+                    veilPillar("chevron.left.forwardslash.chevron.right", "The server in between is open source. Everything's verifiable.")
+                    veilPillar("key.fill", "No account. Turn it off anytime and the cloud copy is deleted on the spot.")
+                }
+                .frame(width: 440)
+                .padding(.top, 28)
+                GlowButton(title: busy ? "Connecting…" : "Yes, connect my AIs",
                            systemImage: "link", glowIntensity: 0.5) { connect() }
                     .frame(width: 280)
-                    .padding(.top, 40)
-                MonoCaps("Private · no account · delete anytime",
-                         size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
-                    .padding(.top, 22)
+                    .padding(.top, 36)
+                Button {
+                    dismiss()
+                } label: {
+                    Text("Not now")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(Theme.Ink.label)
+                        .padding(.horizontal, 14).padding(.vertical, 6)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(PressScaleStyle())
+                .disabled(busy)
+                .padding(.top, 16)
                 if let errorLine {
                     Text(errorLine)
                         .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
@@ -116,6 +147,21 @@ struct ConnectAIsView: View {
             .padding(.horizontal, 40)
         }
         .contentShape(Rectangle())   // swallow clicks so the blurred guide stays inert
+    }
+
+    /// One trust pillar on the veil (the same shape as Settings → Give AIs Knowledge's pillars,
+    /// so the story reads identically wherever the user meets it).
+    private func veilPillar(_ icon: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 9) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundStyle(Theme.Ink.green.opacity(0.8))
+                .frame(width: 15)
+            Text(text)
+                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
+                .lineSpacing(2.5)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: - Sharing on: the per-AI guide
@@ -366,10 +412,13 @@ struct ConnectAIsView: View {
         enabled = await MirrorClient.shared.isEnabled
         shareURL = await MirrorClient.shared.shareURL
         loaded = true
-        // Sharing off: let the guide land crisp for 2 seconds (the teaser), then draw the veil.
+        // Sharing off: EVERY open gets the ritual — land crisp for a second, then draw the veil.
+        // The window's state survives close/reopen, so the veil is reset by hand (instantly,
+        // no animation) before the peek; otherwise a second open would start already veiled.
         if !enabled {
-            try? await Task.sleep(for: .seconds(2))
-            guard !enabled, !veiled else { return }
+            veiled = false
+            try? await Task.sleep(for: .seconds(1))
+            guard !enabled else { return }
             withAnimation(.easeInOut(duration: 0.7)) { veiled = true }
         }
     }
