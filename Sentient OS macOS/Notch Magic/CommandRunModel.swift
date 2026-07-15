@@ -10,7 +10,7 @@
 //  lets the coordinator move the notch from running → finishing. Everything also tees to Log()
 //  (tail /tmp/sentient-dev.log). Doc: Documentation/Notch Magic/.
 //
-//  Key methods: start(_:mode:) · stop() · commandPrompt(task:mode:hasScreenshot:spoken:).
+//  Key methods: start(_:mode:) · stop() · commandPrompt(task:mode:screenshots:spoken:).
 //
 
 import Foundation
@@ -54,20 +54,21 @@ final class CommandRunModel {
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
         let started = Date()
         task = Task { [weak self] in
-            // Snap the screen NOW so computer use sees exactly what the user is looking at (nil if the
-            // Screen Recording grant is missing → runs text-only). Deleted the moment codex is done.
-            let shot = await ScreenCapture.grab()
-            defer { ScreenCapture.discard(shot) }
-            let prompt = Self.commandPrompt(task: task0, mode: mode, hasScreenshot: shot != nil,
+            // Snap every display NOW so computer use sees exactly what the user is looking at, on
+            // whichever screen (empty if the Screen Recording grant is missing → runs text-only).
+            // Deleted the moment codex is done.
+            let shots = await ScreenCapture.grab()
+            defer { ScreenCapture.discard(shots) }
+            let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
                                             spoken: source == "voice")
-            Log("CMD: launching codex exec (gpt-5.6-sol · \(mode.promptPhrase) · bypass sandbox · screenshot: \(shot != nil))…")
+            Log("CMD: launching codex exec (gpt-5.6-sol · \(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
             #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
                         // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
             Log("CMD: prompt ↓\n\(prompt)")
             #endif
             Log("──────────────── live codex output ↓ ────────────────")
             do {
-                let out = try await CodexCLI.shared.runAgentCommand(prompt, imagePath: shot?.path) { line in
+                let out = try await CodexCLI.shared.runAgentCommand(prompt, imagePaths: shots.map(\.path)) { line in
                     Task { @MainActor in
                         #if DEBUG
                         Log("CMD │ \(line)")
@@ -216,19 +217,27 @@ final class CommandRunModel {
     /// Build the command prompt: `mode.promptPhrase` ("computer use") leads and the typed/spoken task fills
     /// the rest. The agent is told to do the TASK via computer use (not AppleScript GUI-scripting), and to
     /// read the knowledge base (path resolved from `~`) with its shell/file tools — NOT by opening it in a
-    /// GUI app like Obsidian. When `hasScreenshot`, a frame of the user's live screen is attached (via
-    /// `codex exec -i`), so the prompt tells the agent to ground "this"/"here" in what it can see.
+    /// GUI app like Obsidian. `screenshots` is how many display frames are attached (via `codex exec -i`,
+    /// main display first — ScreenCapture's guarantee): the prompt tells the agent to ground "this"/"here"
+    /// in what it can see, and with several displays, that it's seeing all of them.
     /// When `spoken` (Sidekick's hold-to-talk), the agent is told the task is a speech-to-text transcript,
     /// so it reads through mis-transcriptions instead of taking them literally — but doesn't gamble on an
     /// uncertain reading when the outcome would be non-trivial.
-    nonisolated static func commandPrompt(task: String, mode: AgentMode, hasScreenshot: Bool,
+    nonisolated static func commandPrompt(task: String, mode: AgentMode, screenshots: Int,
                                           spoken: Bool = false) -> String {
         let voiceLine = spoken
             ? "\nThe task above was spoken by me and transcribed with speech-to-text. Use common sense for anything that may have been mis-transcribed; but if picking the wrong reading could have a non-trivial outcome, don't act on a guess.\n"
             : ""
-        let screenLine = hasScreenshot
-            ? "\nAttached is a screenshot of my screen exactly as it looks right now. Use it to see what I'm currently looking at — resolve any \"this\", \"here\", \"that form\", etc. against what's on screen before you act.\n"
-            : ""
+        let screenLine: String
+        switch screenshots {
+        case 0:
+            screenLine = ""
+        case 1:
+            screenLine = "\nAttached is a screenshot of my screen exactly as it looks right now. Use it to see what I'm currently looking at — resolve any \"this\", \"here\", \"that form\", etc. against what's on screen before you act.\n"
+        default:
+            let count = screenshots == 2 ? "both" : "all \(screenshots)"
+            screenLine = "\nAttached are screenshots of \(count) of my displays exactly as they look right now — the first one is my main display. Use them to see what I'm currently looking at — resolve any \"this\", \"here\", \"that form\", etc. against what's on my screens before you act.\n"
+        }
         // The user's standing Sidekick context (Settings → Proactive & Sidekick) — preferred apps,
         // browser, norms. Empty string when they've set none, so the prompt is unchanged by default.
         let context = CustomInstructions.sidekick
@@ -239,7 +248,7 @@ final class CommandRunModel {
         \(voiceLine)\(screenLine)
         Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate). Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
 
-        You will not be able to ask me follow-up questions to clarify: in this harness, the moment you stop responding I see the task attempt as completed. So don't stop to ask trivial follow-up questions. Either do the task, or if it's genuinely too ambiguous to act on, just don't — say what was unclear instead. No follow-up questions.
+        You will not be able to ask me follow-up questions to clarify: in this harness, the moment you stop responding I see the task attempt as completed. So don't stop to ask trivial follow-up questions. Either do the task, or if it's genuinely way too ambiguous to act on (like in case of critical TTS fumble), just stop. No follow-up questions are possible.
         \(contextLine)
         For context about me, my knowledge base is a folder of markdown files at '\(VaultGenerator.vaultRoot.path)'. When you need it, read it directly with your shell/file tools — `ls`, `cat`, and `grep` the .md files. Do NOT open it in Obsidian or any GUI app to read it.
         """

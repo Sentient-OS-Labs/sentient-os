@@ -34,6 +34,14 @@ enum NotchPhase: Equatable {
 /// analytics can see Sidekick-only users who never open the home window.
 enum TriggerSource: String { case promptBar, notchTyped, voice }
 
+/// Which display the notch overlay lives on, chosen at each interaction's front door. The hotkey and
+/// the home command bar keep everything on the MAIN (menu-bar) display. A click on the physical notch
+/// anchors the whole session — typing, the running status, the finishing flourish, even the kb-only
+/// aside — to the built-in display's real cutout, so the button works when an external display is
+/// primary. Sticky through .hidden, so the dismiss retract merges into the same bezel the session
+/// opened on. Read by NotchWindowController for placement.
+enum NotchAnchor { case mainDisplay, builtInNotch }
+
 @MainActor @Observable
 final class CommandCoordinator {
     /// The single shared run — the home command bar AND the hotkey both drive this exact instance.
@@ -51,6 +59,10 @@ final class CommandCoordinator {
     /// the cursor geometry; read by NotchView for the grow + drop shadow. Idle-only by construction:
     /// the controller clears it the instant the notch opens for real.
     private(set) var notchHovering = false
+
+    /// The current interaction's display anchor (see NotchAnchor) — set at every front door, sticky
+    /// until the next interaction starts.
+    private(set) var notchAnchor: NotchAnchor = .mainDisplay
 
     private let hotkey = SidekickHotkeyMonitor()
     private let voice = VoiceCapture()
@@ -93,6 +105,11 @@ final class CommandCoordinator {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard !run.isRunning else { Log("submit ignored — a task is already running"); return }
+
+        // The home command bar starts a fresh main-display interaction. Voice and notchTyped submits
+        // arrive MID-session (the anchor was set at their press/click) and must not move a
+        // notch-anchored one to the main display the moment ⏎ lands.
+        if source == .promptBar { notchAnchor = .mainDisplay }
 
         // Knowledge-base-only backstop (the hotkey path already flashed at press) — covers the
         // home command bar, which submits without a press. The run must never fire on free/go.
@@ -161,6 +178,7 @@ final class CommandCoordinator {
             return
         }
         guard !run.isRunning, !isInteracting else { Log("hotkey ignored — busy"); return }
+        notchAnchor = .mainDisplay        // the hotkey always lives on the main display (incl. the asides below)
         // Knowledge-base-only plan (free/go): the notch answers the press INSTANTLY with the
         // Plus aside — same immediate beat as the mic-perms notice — and never opens for
         // listening or typing. Checked live per press, so it can never go stale.
@@ -333,6 +351,7 @@ final class CommandCoordinator {
     /// field. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
         guard phase == .hidden, !run.isRunning else { return }
+        notchAnchor = .builtInNotch       // the whole session lives on the bezel that was clicked
         if CodexAuth.knowledgeBaseOnly {
             flash(Self.needsPlusNotice, for: 2.0)
             Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
