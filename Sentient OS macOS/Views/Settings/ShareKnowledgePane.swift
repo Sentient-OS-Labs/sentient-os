@@ -2,12 +2,11 @@
 //  ShareKnowledgePane.swift
 //  Sentient OS macOS
 //
-//  Settings → Give AIs Knowledge: the value + privacy story up top, the share toggle (off =
-//  confirm, then the cloud copy is deleted; the token is kept so the link survives re-enabling),
-//  and the HERO: the glowing "Set up in 2 minutes" button → the real guided setup (ConnectAIsView),
-//  which owns the secret link + system prompt. Live activity from /stats below. Regenerate lives
-//  in MirrorClient only (a support/dev remediation; a UI button was a footgun that bricks every
-//  connector).
+//  Settings → Give AIs Knowledge: the value + privacy story up top, then the HERO: the glowing
+//  "Set up in 2 minutes" button → the real guided setup (ConnectAIsView), always visible — the
+//  window owns sharing on AND off (its consent veil / MCP pill), so this pane carries no toggle.
+//  Live activity from /stats below when sharing is on. Regenerate lives in MirrorClient only
+//  (a support/dev remediation; a UI button was a footgun that bricks every connector).
 //
 
 import SwiftUI
@@ -19,9 +18,6 @@ struct ShareKnowledgePane: View {
     @State private var enabled = false
     @State private var stats: MirrorClient.Stats?
     @State private var loaded = false
-    @State private var busy = false                // a network call is in flight — freeze the toggle
-    @State private var confirmOff = false
-    @State private var errorLine: String?
 
     var body: some View {
         SettingsPane(title: "ChatGPT & Claude",
@@ -31,21 +27,19 @@ struct ShareKnowledgePane: View {
                 cloudSyncGroup
                     .padding(.top, 10)    // same breath as before Activity — the blurb block stands alone
                 if enabled && loaded {
-                    heroButton
-                        .padding(.top, -14)   // belongs to the Cloud Sync group, not floating between groups
                     activityGroup
                         .padding(.top, 10)    // extra breath after the hero
                 } else if loaded {
                     localOnlyProse
                 }
-                if let errorLine {
-                    Text(errorLine)
-                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
             }
         }
         .task { await refresh() }
+        // Sharing flips inside the ConnectAIsView window now — re-probe when the user clicks
+        // back into Settings so Activity vs. local-only never shows a stale answer.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            Task { await refresh() }
+        }
     }
 
     // MARK: - The story (value first, then four scannable privacy pillars — never a wall of text)
@@ -78,61 +72,21 @@ struct ShareKnowledgePane: View {
         }
     }
 
-    // MARK: - The share toggle
+    // MARK: - Cloud Sync (no toggle — ConnectAIsView owns sharing on/off; the hero is the door)
 
     private var cloudSyncGroup: some View {
         SettingsGroup(label: "Cloud Sync") {
-            // A custom binding, NOT $enabled + onChange: the setter fires only when the USER flips
-            // the control, so programmatic `enabled =` writes can't re-trigger the confirm flow.
-            // (The old onChange guard checked `busy`, but turnOff() cleared `busy` in the same
-            // transaction as `enabled = false` — onChange then read busy == false, mistook the
-            // write for a user flip, and re-showed the dialog forever.)
-            SettingToggleLine(title: "Offer your knowledge base to your AIs",
-                              sub: "ChatGPT and Claude read it over MCP. No account, just a private link that only you hold.",
-                              isOn: Binding(
-                                  get: { enabled },
-                                  set: { requested in
-                                      if requested { turnOn() } else { confirmOff = true }
-                                  }))
-                .disabled(busy || !loaded)
-        }
-        .alert("Stop sharing your knowledge base?", isPresented: $confirmOff) {
-            Button("Keep Sharing", role: .cancel) {}       // switch never changed — stays on
-            Button("Stop & Delete Cloud Copy", role: .destructive) { turnOff() }
-        } message: {
-            Text("The cloud copy is deleted immediately and your AIs lose access. Your knowledge base stays safe on this Mac, and turning sharing back on restores the same link.")
-        }
-    }
-
-    private func turnOn() {
-        enabled = true                                     // optimistic — the switch answers instantly
-        busy = true; errorLine = nil
-        Task {
-            do {
-                _ = try await MirrorClient.shared.enable()
-                try? await MirrorClient.shared.push()      // best-effort first fill (no vault yet is fine)
-            } catch {
-                enabled = false
-                errorLine = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Offer your knowledge base to your AIs")
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                    Text("ChatGPT and Claude read it over MCP. No account, just a private link that only you hold.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ConnectCTA { openWindow(id: ConnectAIsView.windowID) }
             }
-            busy = false
         }
-    }
-
-    private func turnOff() {
-        busy = true; errorLine = nil
-        Task {
-            await MirrorClient.shared.disable()
-            enabled = false
-            stats = nil
-            busy = false
-        }
-    }
-
-    // MARK: - The hero: the guided setup (settings-scale glow — a gradient ring, not the home's sun)
-
-    private var heroButton: some View {
-        ConnectCTA { openWindow(id: ConnectAIsView.windowID) }
     }
 
     // MARK: - Activity
