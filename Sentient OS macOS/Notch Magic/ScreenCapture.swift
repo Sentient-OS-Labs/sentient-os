@@ -2,47 +2,59 @@
 //  ScreenCapture.swift
 //  Sentient OS macOS
 //
-//  Grabs a still of the user's screen at the moment they invoke a command, so computer use SEES
+//  Grabs a still of EVERY display at the moment the user invokes a command, so computer use SEES
 //  exactly what they're looking at — "finish this form", "reply to this", "complete this" all resolve
-//  against the real pixels. The frame is attached to the codex prompt (`codex exec -i <file>`).
+//  against the real pixels, on whichever screen they're on. The frames are attached to the codex
+//  prompt (`codex exec -i <file>...` — the flag is variadic).
 //
-//  Uses `/usr/sbin/screencapture` (main display, no shutter sound, JPEG) — it rides Sentient's own
-//  Screen Recording grant. No grant → returns nil and the command runs text-only (never prompts here).
-//  The file is a short-lived temp: the caller passes its path to codex, then calls `discard`. Note: the
-//  screen goes to the user's OWN codex/OpenAI (the same trust boundary computer use already crosses).
+//  Uses `/usr/sbin/screencapture` (no shutter sound, JPEG), one invocation per display so the order is
+//  guaranteed by its own contract (`-D 1` IS the main display) — the prompt tells codex the first frame
+//  is the main screen. Rides Sentient's own Screen Recording grant (one grant covers all displays); no
+//  grant → returns [] and the command runs text-only (never prompts here). The files are short-lived
+//  temps: the caller passes their paths to codex, then calls `discard`. Note: the screens go to the
+//  user's OWN codex/OpenAI (the same trust boundary computer use already crosses).
 //  Doc: Documentation/Notch Magic/.
 //
-//  Key methods: grab() -> URL? · discard(_:).
+//  Key methods: grab() -> [URL] · discard(_:).
 //
 
-import Foundation
+import AppKit
 
 enum ScreenCapture {
-    /// Capture the main display to a temp JPEG for computer-use context. nil = no Screen Recording grant
-    /// or the capture failed (the command then runs without a screenshot). Never prompts.
-    static func grab() async -> URL? {
+    /// Capture every display to temp JPEGs for computer-use context — the MAIN display always first
+    /// (`screencapture -D 1` is the main display by its own contract; a per-display failure just drops
+    /// that frame). Empty = no Screen Recording grant or nothing captured (the command then runs
+    /// without screenshots). Never prompts.
+    static func grab() async -> [URL] {
         guard Permissions.hasScreenRecording() else {
             Log("📸 screenshot skipped — no Screen Recording grant")
-            return nil
+            return []
         }
-        let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sentient-shot-\(UUID().uuidString).jpg")
-        //  -x : silent (no camera sound)   -t jpg : compact vs a multi-MB Retina PNG
-        let ok = await runCapture(["-x", "-t", "jpg", url.path])
-        guard ok, FileManager.default.fileExists(atPath: url.path) else {
+        let tag = UUID().uuidString
+        var shots: [URL] = []
+        for display in 1...max(NSScreen.screens.count, 1) {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("sentient-shot-\(tag)-\(display).jpg")
+            //  -x : silent (no camera sound)   -t jpg : compact vs a multi-MB Retina PNG
+            let ok = await runCapture(["-x", "-t", "jpg", "-D", "\(display)", url.path])
+            if ok, FileManager.default.fileExists(atPath: url.path) {
+                shots.append(url)
+            } else {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        guard !shots.isEmpty else {
             Log("📸 screenshot capture failed")
-            try? FileManager.default.removeItem(at: url)
-            return nil
+            return []
         }
-        let kb = ((try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0) / 1024
-        Log("📸 screenshot captured (\(kb) KB)")   // size only — never the pixels
-        return url
+        let kb = shots.reduce(0) { $0 + (((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? Int) ?? 0) / 1024) }
+        Log("📸 \(shots.count) display screenshot\(shots.count == 1 ? "" : "s") captured (\(kb) KB)")   // sizes only — never the pixels
+        return shots
     }
 
-    /// Delete the temp frame once codex has consumed it (safe on nil).
-    static func discard(_ url: URL?) {
-        guard let url else { return }
-        try? FileManager.default.removeItem(at: url)
+    /// Delete the temp frames once codex has consumed them (safe on empty).
+    static func discard(_ urls: [URL]) {
+        for url in urls { try? FileManager.default.removeItem(at: url) }
     }
 
     /// Run `screencapture` off the main actor; true iff it exited cleanly. A 5s watchdog kills a

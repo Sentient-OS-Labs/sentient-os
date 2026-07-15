@@ -362,11 +362,12 @@ actor CodexCLI {
     /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
     /// --ignore-user-config). Returns the full output.
     ///
-    /// `imagePath` (optional): a screenshot of the user's screen, attached with `codex exec -i <file>`
-    /// so the agent SEES what they're looking at (the notch/command-bar path passes one; the proactive
-    /// executor doesn't). It's placed right before `--skip-git-repo-check` so the flag terminates
-    /// `-i`'s variadic `<FILE>...` and the prompt is never mistaken for a second image.
-    func runAgentCommand(_ prompt: String, imagePath: String? = nil, timeout: TimeInterval = 1_800,
+    /// `imagePaths` (optional): screenshots of the user's displays (main first), attached with
+    /// `codex exec -i <file>...` so the agent SEES what they're looking at (the notch/command-bar
+    /// path passes one per display; the proactive executor passes none). They're placed right before
+    /// `--skip-git-repo-check` so the flag terminates `-i`'s variadic `<FILE>...` and the prompt is
+    /// never mistaken for another image.
+    func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
@@ -381,7 +382,7 @@ actor CodexCLI {
             var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
                         "-m", Model.gpt56sol.rawValue,
                         "-c", "model_reasoning_effort=\"\(effort.rawValue)\""]
-            if let imagePath { args += ["-i", imagePath] }   // followed by a flag → variadic stops at one file
+            if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
             args += ["--skip-git-repo-check", prompt]
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
             guard out.status == 0 else {
