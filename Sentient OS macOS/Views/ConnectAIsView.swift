@@ -6,12 +6,12 @@
 //  Your AIs and the home's Your AIs popover. Owns the whole story:
 //   · sharing OFF → the guide itself opens first (a 1-second crisp peek, inert), then blurs
 //     under a transparent veil carrying the consent ask: "Connect your AIs?", the trust pillars
-//     (E2E encryption, open-source server, delete anytime), a glowing "Yes, connect my AIs"
+//     (E2E encryption, open-source server, delete anytime), a glowing "Yes, use the cloud MCP"
 //     (enables the mirror + first push, blur releases in place) and a "Not now" that closes the
 //     window. No MCP pill while off.
-//   · sharing ON → per-AI tabs (ChatGPT · Claude · Other AIs), plus a quiet MCP ON pill
-//     top-right (carrying the last synced time) that flips sharing off behind the same
-//     confirm-and-delete alert Settings uses; turning off brings the veil straight back.
+//   · sharing ON → per-AI tabs (ChatGPT · Claude · Other AIs), plus a quiet MCP ON toggle
+//     top-right (carrying the last synced time) that flips sharing off behind the
+//     confirm-and-delete alert; turning off brings the veil straight back.
 //     ChatGPT/Claude show their
 //     GuideSpec's portrait video steps side by side (ChatGPT three: developer mode → paste the
 //     private MCP link → paste the system prompt; Claude two: link → prompt), each with a
@@ -114,13 +114,13 @@ struct ConnectAIsView: View {
                     .frame(maxWidth: 440)
                     .padding(.top, 20)
                 VStack(alignment: .leading, spacing: 10) {
-                    veilPillar("lock.fill", "End-to-end encrypted: sealed on this Mac with a key only your private link holds. On our server it's unreadable ciphertext; we can never read it.")
+                    veilPillar("lock.fill", "An end-to-end encrypted cloud MCP: sealed on this Mac with a key only your private link holds. On our server it's unreadable ciphertext; we can never read it.")
                     veilPillar("chevron.left.forwardslash.chevron.right", "The server in between is open source. Everything's verifiable.")
                     veilPillar("key.fill", "No account. Turn it off anytime and the cloud copy is deleted on the spot.")
                 }
                 .frame(width: 440)
                 .padding(.top, 28)
-                GlowButton(title: busy ? "Connecting…" : "Yes, connect my AIs",
+                GlowButton(title: busy ? "Connecting…" : "Yes, use the cloud MCP",
                            systemImage: "link", glowIntensity: 0.5) { connect() }
                     .frame(width: 280)
                     .padding(.top, 36)
@@ -379,24 +379,27 @@ struct ConnectAIsView: View {
             .strokeBorder(.white.opacity(0.06), lineWidth: 1))
     }
 
-    // MARK: - The sharing pill (top-right, sharing ON only): synced state at a glance, off
-    // behind the confirm. While sharing is off the window shows no pill — the veil IS the state.
+    // MARK: - The sharing toggle (top-right, sharing ON only): synced state at a glance, with a
+    // real switch — off goes through the confirm. While sharing is off the window shows no
+    // toggle — the veil IS the state.
 
     private var sharingPill: some View {
-        Button { confirmOff = true } label: {
-            HStack(spacing: 5) {
-                if busy { ProgressView().controlSize(.mini) }
-                else { Circle().fill(Theme.Ink.green).frame(width: 6, height: 6) }
-                Text(pillLabel)
-            }
-            .font(.system(size: 8.5, weight: .semibold, design: .monospaced)).tracking(1.4)
-            .foregroundStyle(Theme.Ink.green)
-            .padding(.horizontal, 9).padding(.vertical, 4)
-            .overlay(Capsule().strokeBorder(Theme.Ink.green.opacity(0.3), lineWidth: 1))
-            .contentShape(Capsule())
+        HStack(spacing: 8) {
+            if busy { ProgressView().controlSize(.mini) }
+            Text(pillLabel)
+                .font(.system(size: 8.5, weight: .semibold, design: .monospaced)).tracking(1.4)
+                .foregroundStyle(Theme.Ink.green)
+            // The setter never writes `enabled` itself — flipping off only raises the confirm,
+            // so "Keep Sharing" leaves the switch on; disconnect() is what actually turns it off.
+            Toggle("", isOn: Binding(
+                get: { enabled },
+                set: { requested in if !requested { confirmOff = true } }))
+                .labelsHidden().toggleStyle(.switch).controlSize(.mini)
+                .tint(Theme.Ink.green)
+                .disabled(busy)
         }
-        .buttonStyle(.plain)
-        .disabled(busy)
+        .padding(.horizontal, 9).padding(.vertical, 4)
+        .overlay(Capsule().strokeBorder(Theme.Ink.green.opacity(0.3), lineWidth: 1))
     }
 
     /// The synced stamp (the last successful push) answers "is my AIs' copy current?" at a
