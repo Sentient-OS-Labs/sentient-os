@@ -485,13 +485,29 @@ final class NotchWindowController {
             self.reveal(makeKey: self.coordinator.phase == .typing)
         }
         // Clicked away while the type field was open → close it (ignore the transient resign during setup).
+        // ⚠️ A REAL click-away can also land INSIDE the setup grace (clicking away mid-morph, before the
+        // field ever shows its cursor). Swallowing it outright bricked the field (field-found 2026-07-14):
+        // the non-activating panel never re-keys on its own, a non-key window can never fire another
+        // resign, so no later click-away could ever dismiss. So a resign inside the grace schedules ONE
+        // re-check just past it — still .typing and STILL not key means that resign was a real click-away
+        // (the setup transient re-keys itself right after) → dismiss. The typingKeyAt re-read keeps a
+        // freshly reopened field (its own grace running) out of reach.
         if let panel {
             observers.append(nc.addObserver(forName: NSWindow.didResignKeyNotification,
                                             object: panel, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self, self.coordinator.phase == .typing,
-                          Date().timeIntervalSince(self.typingKeyAt) > 0.4 else { return }
-                    self.coordinator.dismissTyping()
+                    guard let self, self.coordinator.phase == .typing else { return }
+                    if Date().timeIntervalSince(self.typingKeyAt) > 0.4 {
+                        self.coordinator.dismissTyping()
+                    } else {
+                        Task { @MainActor [weak self] in
+                            try? await Task.sleep(for: .seconds(0.5))
+                            guard let self, self.coordinator.phase == .typing,
+                                  self.panel?.isKeyWindow == false,
+                                  Date().timeIntervalSince(self.typingKeyAt) > 0.4 else { return }
+                            self.coordinator.dismissTyping()
+                        }
+                    }
                 }
             })
         }
