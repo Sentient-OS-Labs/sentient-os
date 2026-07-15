@@ -65,6 +65,7 @@ final class CommandRunModel {
             #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
                         // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
             Log("CMD: prompt ↓\n\(prompt)")
+            Self.dumpRunArtifacts(prompt: prompt, shots: shots)
             #endif
             Log("──────────────── live codex output ↓ ────────────────")
             do {
@@ -213,6 +214,25 @@ final class CommandRunModel {
     private static func short(_ error: Error) -> String {
         String(((error as? LocalizedError)?.errorDescription ?? "\(error)").prefix(160))
     }
+
+    #if DEBUG
+    /// TEMP (2026-07-14) — multi-display verification scaffolding, DELETE after the 2-display pass
+    /// is confirmed. Preserves the EXACT run inputs to /tmp/sentient-sidekick-dump/ (wiped per run):
+    /// `prompt.txt` is the string codex receives verbatim, and each attached frame is copied as
+    /// `display-N[-main].jpg` in attachment order (the originals are temp files discarded at run end,
+    /// so without this copy there's nothing left to inspect after a test).
+    private static func dumpRunArtifacts(prompt: String, shots: [URL]) {
+        let fm = FileManager.default
+        let dir = URL(fileURLWithPath: "/tmp/sentient-sidekick-dump")
+        try? fm.removeItem(at: dir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? prompt.write(to: dir.appendingPathComponent("prompt.txt"), atomically: true, encoding: .utf8)
+        for (i, shot) in shots.enumerated() {
+            try? fm.copyItem(at: shot, to: dir.appendingPathComponent("display-\(i + 1)\(i == 0 ? "-main" : "").jpg"))
+        }
+        Log("CMD: run artifacts dumped → \(dir.path) (prompt + \(shots.count) frame\(shots.count == 1 ? "" : "s"))")
+    }
+    #endif
 
     /// Build the command prompt: `mode.promptPhrase` ("computer use") leads and the typed/spoken task fills
     /// the rest. The agent is told to do the TASK via computer use (not AppleScript GUI-scripting), and to
