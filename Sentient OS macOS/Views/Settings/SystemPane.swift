@@ -5,8 +5,9 @@
 //  Settings → System: how Sentient lives on this Mac. The overnight-intelligence story (prose,
 //  not a control — 3 AM is our taste, not a dial), the launch-at-login toggle (LoginItem.swift)
 //  with its keep-Sentient-alive confirm, the privacy pledge with the two anonymous-reporting
-//  switches (crash reports → CrashReporting/Sentry · analytics → Analytics/TelemetryDeck), and
-//  the danger-zone Reset (the shared FactoryReset wipe — a system-level act, so it lives here),
+//  switches (crash reports → CrashReporting/Sentry · analytics → Analytics/TelemetryDeck), the
+//  how-we-protect-your-data line with its Read More door to the PrivacyPolicyView sheet, the
+//  danger-zone Reset (the shared FactoryReset wipe — a system-level act, so it lives here),
 //  and the Uninstall group (the farewell sheet → the full System/Uninstall teardown).
 //  The updates group lands here once Sparkle ships.
 //
@@ -28,6 +29,7 @@ struct SystemPane: View {
     @State private var confirmReset = false
     @State private var resetting = false
     @State private var showUninstall = false
+    @State private var showPrivacyPolicy = false
     @State private var activity = PipelineActivity.shared   // Reset + Uninstall lock while a run is active
 
     var body: some View {
@@ -41,6 +43,7 @@ struct SystemPane: View {
                 SettingsHairline(opacity: 0.12)
                     .padding(.vertical, -8)
                 privacyGroup
+                protectionGroup
                 SettingsHairline(color: Theme.Ink.red, opacity: 0.25)
                     .padding(.vertical, -8)
                 dangerGroup
@@ -145,6 +148,19 @@ struct SystemPane: View {
         }
         .onChange(of: crashReportsEnabled) { _, _ in CrashReporting.applyEnabledChange() }
         .onChange(of: analyticsEnabled) { _, _ in Analytics.applyEnabledChange() }
+    }
+
+    // MARK: - How we protect your data (the door to the full policy)
+
+    private var protectionGroup: some View {
+        SettingsGroup(label: "How We Protect Your Data") {
+            HStack(spacing: 14) {
+                Text("We never collect your personal info.")
+                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                SettingsPillButton(title: "Read More") { showPrivacyPolicy = true }
+            }
+        }
+        .sheet(isPresented: $showPrivacyPolicy) { PrivacyPolicyView() }
     }
 
     // MARK: - Danger zone (the shared FactoryReset wipe)
