@@ -3,7 +3,10 @@
 //  Sentient OS macOS
 //
 //  Hosts the notch overlay in a borderless, non-activating NSPanel that floats above the menu bar and
-//  over fullscreen apps on the menu-bar display.
+//  over fullscreen apps. The overlay lives on the display the interaction chose (coordinator.notchAnchor):
+//  the hotkey and the home command bar anchor to the MAIN (menu-bar) display; hovering/clicking the
+//  physical notch anchors to the built-in display's real cutout — so the notch stays a button even when
+//  an external display is primary.
 //
 //  ‼️ Fixed-canvas overlay (DynamicNotch's approach): a stable window, larger than the biggest notch
 //  state, pinned with its top flush at the screen's edge. It NEVER resizes during a morph — the notch
@@ -29,6 +32,10 @@ final class NotchWindowController {
     private var panel: NotchPanel?
     private var host: NotchHostingView?
     private var metrics = NotchMetrics(hardwareNotch: nil)
+    /// Which display the current `metrics` were derived from — the anchor can move the overlay between
+    /// displays (a notch-click session vs the hotkey's main-display session), and landing on a new
+    /// screen must re-derive the metrics for its bezel (real cutout vs the notch-less fallback pill).
+    private var metricsDisplayID: CGDirectDisplayID = 0
     private var observers: [NSObjectProtocol] = []
     private var sizeToken = 0
     /// When the panel last became KEY for the type field — used to ignore the transient resign during focus setup.
@@ -100,7 +107,8 @@ final class NotchWindowController {
     private func build() {
         guard panel == nil, let screen = Self.menuBarScreen() else { return }
         metrics = Self.metrics(for: screen)
-        refreshHoverEntryRect(for: screen)
+        metricsDisplayID = screen.displayID
+        refreshHoverEntryRect()
         let frame = windowFrame(for: canvasSize, on: screen)
         let panel = NotchPanel(contentRect: frame,
                                styleMask: [.borderless, .nonactivatingPanel],
@@ -210,13 +218,24 @@ final class NotchWindowController {
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
-    /// Size + center the fixed canvas over the menu-bar display's notch (no-op if already there).
+    /// Size + center the fixed canvas at the ACTIVE display's notch position (no-op if already there).
+    /// Landing on a different display than the metrics were derived for re-derives them first — so a
+    /// notch-click session gets the built-in bezel's real cutout (retract-merge, true radii) while a
+    /// hotkey session on a notch-less primary keeps the fallback pill.
     private func placeCanvas() {
-        guard let panel, let screen = Self.menuBarScreen() else { return }
+        guard let panel, let screen = activeScreen() else { return }
+        if screen.displayID != metricsDisplayID { applyMetrics(for: screen) }
         let frame = windowFrame(for: canvasSize, on: screen)
         guard panel.frame != frame else { return }
         panel.setFrame(frame, display: true, animate: false)
         host?.frame = NSRect(origin: .zero, size: frame.size)
+    }
+
+    /// Re-derive the metrics for a screen and re-render the host with them.
+    private func applyMetrics(for screen: NSScreen) {
+        metrics = Self.metrics(for: screen)
+        metricsDisplayID = screen.displayID
+        host?.update(metrics: metrics)
     }
 
     // MARK: Click-through (silhouette-only, by cursor position)
@@ -295,7 +314,7 @@ final class NotchWindowController {
     /// guesswork): a bounding-box early-out, then the exact `NotchShape` path test. During a hover the
     /// live silhouette is the swollen hover shape, not the phase's.
     private func cursorOverSilhouette() -> Bool {
-        guard let screen = Self.menuBarScreen() else { return false }
+        guard let screen = activeScreen() else { return false }
         let hoverIdle = hovering && coordinator.phase == .hidden
         let s = hoverIdle ? metrics.hoverSize
                           : metrics.size(for: coordinator.phase, readBack: coordinator.readBack,
@@ -374,11 +393,16 @@ final class NotchWindowController {
         beginHover()
     }
 
-    /// Cache the hover ENTRY zone — the hardware notch cutout in screen coords. Notch-less displays
-    /// get `.null` (matches nothing): the affordance only exists on a real bezel. The rect extends
-    /// 2pt past the screen's top edge so a cursor pinned at the very top still counts.
-    private func refreshHoverEntryRect(for screen: NSScreen) {
-        guard let notch = screen.notchSize else { hoverEntryRect = .null; return }
+    /// Cache the hover ENTRY zone — the hardware notch cutout in screen coords, on the BUILT-IN
+    /// display (deliberately NOT the menu-bar screen: the affordance must stay armed on the physical
+    /// bezel even when an external display is primary). No notched screen — clamshell mode, or a
+    /// notch-less Mac — gets `.null` (matches nothing). The rect extends 2pt past the screen's top
+    /// edge so a cursor pinned at the very top still counts.
+    private func refreshHoverEntryRect() {
+        guard let screen = Self.builtInNotchScreen(), let notch = screen.notchSize else {
+            hoverEntryRect = .null
+            return
+        }
         hoverEntryRect = NSRect(x: screen.frame.midX - notch.width / 2,
                                 y: screen.frame.maxY - notch.height,
                                 width: notch.width, height: notch.height + 2)
@@ -388,7 +412,7 @@ final class NotchWindowController {
     /// Entry is the tighter hardware cutout, exit is the grown box — that hysteresis keeps the swollen
     /// lip from flickering enter/exit under a cursor resting right on the hardware boundary.
     private func cursorStillHovering() -> Bool {
-        guard let screen = Self.menuBarScreen() else { return false }
+        guard let screen = activeScreen() else { return false }
         let s = metrics.hoverSize
         let m: CGFloat = 4
         let rect = NSRect(x: screen.frame.midX - s.width / 2 - m,
@@ -474,11 +498,11 @@ final class NotchWindowController {
     }
 
     private func reposition() {
-        guard panel != nil, let screen = Self.menuBarScreen() else { panel?.orderOut(nil); return }
+        guard panel != nil else { return }
         if hovering { endHover() }                      // the display changed under the cursor — re-detect fresh
-        metrics = Self.metrics(for: screen)
-        refreshHoverEntryRect(for: screen)
-        host?.update(metrics: metrics)
+        refreshHoverEntryRect()
+        guard let screen = activeScreen() else { panel?.orderOut(nil); return }
+        applyMetrics(for: screen)                       // same display can still mean a new notch geometry
         placeCanvas()                                   // re-size/re-center the canvas for the new display
         if coordinator.phase != .hidden { reveal(makeKey: coordinator.phase == .typing) }
     }
@@ -494,6 +518,21 @@ final class NotchWindowController {
     static func menuBarScreen() -> NSScreen? {
         let id = CGMainDisplayID()
         return NSScreen.screens.first { $0.displayID == id } ?? NSScreen.screens.first
+    }
+
+    /// The built-in display — the only screen a physical notch can exist on. nil in clamshell mode
+    /// or on a notch-less Mac.
+    static func builtInNotchScreen() -> NSScreen? {
+        NSScreen.screens.first { $0.notchSize != nil }
+    }
+
+    /// The screen the overlay lives on RIGHT NOW: an idle hover and a notch-click session anchor to
+    /// the physical notch's own display; everything else — the hotkey, the home command bar — anchors
+    /// to the main (menu-bar) display, which may be an external screen with no notch. Falls back to
+    /// the menu-bar screen if the built-in display vanished mid-session (lid shut).
+    private func activeScreen() -> NSScreen? {
+        let onNotch = (hovering && coordinator.phase == .hidden) || coordinator.notchAnchor == .builtInNotch
+        return onNotch ? (Self.builtInNotchScreen() ?? Self.menuBarScreen()) : Self.menuBarScreen()
     }
 
     static func metrics(for screen: NSScreen) -> NotchMetrics {
