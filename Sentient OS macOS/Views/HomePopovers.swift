@@ -7,8 +7,9 @@
 //   · AnalysisPopover — the work glance: things understood, vault size, an Analyze Now control
 //     with the last/next-run footer, and the source chips (sources are the INPUTS to analysis,
 //     so they live under "Analysis").
-//   · ShareKnowledgePopover — the pitch + the glowing "Set up in 2 minutes" CTA that opens the guided
-//     setup window (ConnectAIsView owns sharing on/off, the link, and the prompt).
+//   · ShareKnowledgePopover — the pitch + the glowing CTA ("Set up in 2 minutes"; "Configure"
+//     once sharing is on) that opens the guided setup window (ConnectAIsView owns sharing
+//     on/off, the link, and the prompt).
 //  Pure presentation; harvested from the retired Constellation home. The vault counts ARE real
 //  (disk); the demo deck substitutes its showcase last-run stamp.
 //
@@ -107,7 +108,7 @@ struct AnalysisPopover: View {
             .padding(.top, 11)
         }
         .padding(20)
-        .frame(width: 328)
+        .frame(width: 360)
         .background(Theme.Ink.cardBG)
         .task { vault = HomeStats.countVault() }
     }
@@ -130,13 +131,29 @@ struct AnalysisPopover: View {
         } else if !armed {
             MonoCaps("No sources armed", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
         } else {
-            VStack(spacing: 5) {
-                MonoCaps("Last run: \(lastRun)", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-                MonoCaps("Next run: \(Self.overnightTime) if your Mac is plugged in", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-                MonoCaps("& Sentient is open in the menu bar", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+            // Labels whisper, values speak: tiny mono-caps labels, sentence-case sans values.
+            // The Grid gives wrapped value lines a hanging indent under the value column for free.
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+                GridRow {
+                    MonoCaps("Last run", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+                    footerValue(String(lastRun.prefix(1)).uppercased() + lastRun.dropFirst())
+                }
+                GridRow {
+                    MonoCaps("Next run", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+                    footerValue("Tonight at \(Self.overnightTime), if your Mac's plugged in & Sentient's open in the menu bar")
+                }
             }
-            .frame(maxWidth: .infinity)   // the whole footer block reads centered in the popover
         }
+    }
+
+    /// The footer's value voice — quiet plain sans next to the mono-caps labels. The infinity
+    /// frame makes the Grid's value column claim the full width right of the labels.
+    private func footerValue(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
+            .lineSpacing(2.5)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The scheduler's configured time-of-day ("3 AM"; "3:15 AM" off the hour) — live, so a dev
@@ -169,11 +186,13 @@ struct AnalysisPopover: View {
 
 // MARK: - Give AIs Knowledge
 
-/// The MCP door. One job: the glowing "Set up in 2 minutes" CTA, always shown, opening the guided
-/// setup window — ConnectAIsView owns sharing on/off, the private link, and the system prompt,
-/// so the popover carries no state and no controls of its own.
+/// The MCP door. One job: the glowing CTA ("Set up in 2 minutes"; "Configure" once sharing is
+/// on), always shown, opening the guided setup window — ConnectAIsView owns sharing on/off, the
+/// private link, and the system prompt, so the popover carries no controls of its own.
 struct ShareKnowledgePopover: View {
     @Environment(\.openWindow) private var openWindow
+
+    @State private var enabled = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -183,7 +202,8 @@ struct ShareKnowledgePopover: View {
                 .display(20).foregroundStyle(.white)
                 .padding(.top, 11)
 
-            GlowButton(title: "Set up in 2 minutes", systemImage: "link", glowIntensity: 0.28) {
+            GlowButton(title: enabled ? "Configure" : "Set up in 2 minutes",
+                       systemImage: "link", glowIntensity: 0.28) {
                 openWindow(id: ConnectAIsView.windowID)
             }
             .padding(.top, 18)
@@ -195,6 +215,7 @@ struct ShareKnowledgePopover: View {
         .padding(20)
         .frame(width: 300)
         .background(Theme.Ink.cardBG)
+        .task { enabled = await MirrorClient.shared.isEnabled }
     }
 }
 

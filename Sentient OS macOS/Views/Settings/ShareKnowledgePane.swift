@@ -84,7 +84,9 @@ struct ShareKnowledgePane: View {
                         .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                ConnectCTA { openWindow(id: ConnectAIsView.windowID) }
+                ConnectCTA(title: enabled ? "Configure" : "Set up in 2 minutes") {
+                    openWindow(id: ConnectAIsView.windowID)
+                }
             }
         }
     }
@@ -131,6 +133,7 @@ struct ShareKnowledgePane: View {
 /// The pane's compact glow CTA: a dark capsule with the AI-gradient as a thin ring + a soft
 /// halo behind it. Jewelry at settings scale — deliberately NOT the home's big white GlowButton.
 private struct ConnectCTA: View {
+    let title: String
     let action: () -> Void
 
     private var gradient: AngularGradient {
@@ -141,7 +144,7 @@ private struct ConnectCTA: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Image(systemName: "sparkles").font(.system(size: 12, weight: .semibold))
-                Text("Set up in 2 minutes").font(.system(size: 13, weight: .semibold))
+                Text(title).font(.system(size: 13, weight: .semibold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 22).padding(.vertical, 10)
