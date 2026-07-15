@@ -130,12 +130,12 @@ struct AnalysisPopover: View {
         } else if !armed {
             MonoCaps("No sources armed", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
         } else {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(spacing: 5) {
                 MonoCaps("Last run: \(lastRun)", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
                 MonoCaps("Next run: \(Self.overnightTime) if your Mac is plugged in", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
                 MonoCaps("& Sentient is open in the menu bar", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-                    .frame(maxWidth: .infinity)   // this one line sits centered under the pair
             }
+            .frame(maxWidth: .infinity)   // the whole footer block reads centered in the popover
         }
     }
 
