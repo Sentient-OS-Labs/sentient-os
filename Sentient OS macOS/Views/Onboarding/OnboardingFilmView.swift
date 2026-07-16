@@ -20,10 +20,17 @@ import WebKit
 struct OnboardingFilmView: View {
     let onContinue: () -> Void
 
-    /// The step's phases: black until the page loads → the ride → parked (Continue up).
-    /// `unavailable` is the offline fallback slide.
+    /// The step's phases: black until the film is really rendering → the ride → parked
+    /// (Continue up). `unavailable` is the offline fallback slide. The loading → playing
+    /// fade keys on the page's "ready" message (posted post-hydration, as the entrance
+    /// starts) — WKWebView's didFinish fires long before first paint, so fading on it pops
+    /// content into an already-visible view; didFinish survives only as a grace-period
+    /// fallback for a page that never posts.
     private enum Phase { case loading, playing, parked, unavailable }
     @State private var phase: Phase = .loading
+
+    /// didFinish fired — arms the fallback fade for a "ready"-less page (older deploy).
+    @State private var finishedLoad = false
 
     /// The production cut: the film to the morning-home rest — p 0.42 (pNight 0.76: home
     /// settled, wake line up, before the zoom at 0.477 and the turn/dive after it). The turn
@@ -50,7 +57,8 @@ struct OnboardingFilmView: View {
                 fallbackSlide.transition(.opacity)
             } else {
                 FilmWebView(url: Self.filmURL,
-                            onLoaded: { setPhase(.playing) },
+                            onLoaded: { finishedLoad = true },
+                            onReady: { fadeIn() },
                             onParked: { setPhase(.parked) },
                             onFailed: { if phase != .parked { setPhase(.unavailable) } })
                     .ignoresSafeArea()
@@ -81,6 +89,12 @@ struct OnboardingFilmView: View {
             try? await Task.sleep(for: .seconds(12))
             if phase == .loading { setPhase(.unavailable) }
         }
+        // The "ready"-less fallback: didFinish + a grace beat, for a page that never posts.
+        .task(id: finishedLoad) {
+            guard finishedLoad else { return }
+            try? await Task.sleep(for: .seconds(1.2))
+            fadeIn()
+        }
         // Park watchdog: the ride to p 0.54 takes ~15s after load; if the park signal never
         // arrives (old deploy without ?end, JS hiccup), Continue blooms anyway.
         .task(id: phase == .playing) {
@@ -92,6 +106,13 @@ struct OnboardingFilmView: View {
 
     private func setPhase(_ new: Phase) {
         withAnimation(.easeInOut(duration: 0.45)) { phase = new }
+    }
+
+    /// The webview's entrance — a long, gentle rise from black (the film's entrance is
+    /// already playing underneath it). Idempotent: ready + the didFinish fallback can race.
+    private func fadeIn() {
+        guard phase == .loading else { return }
+        withAnimation(.easeInOut(duration: 1.2)) { phase = .playing }
     }
 
     /// The no-internet stand-in: the promise in one line, and onboarding moves on.
@@ -146,6 +167,7 @@ private final class PassiveWebView: WKWebView {
 private struct FilmWebView: NSViewRepresentable {
     let url: URL
     let onLoaded: () -> Void
+    let onReady: () -> Void
     let onParked: () -> Void
     let onFailed: () -> Void
 
@@ -190,8 +212,11 @@ private struct FilmWebView: NSViewRepresentable {
 
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
-            if message.name == "autopilot", message.body as? String == "parked" {
-                parent.onParked()
+            guard message.name == "autopilot" else { return }
+            switch message.body as? String {
+            case "ready":  parent.onReady()
+            case "parked": parent.onParked()
+            default: break
             }
         }
 
