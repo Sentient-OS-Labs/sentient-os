@@ -66,11 +66,14 @@ struct OnboardingFilmView: View {
                     .allowsHitTesting(false)
 
                 // Continue blooms in the moment the film parks on the morning home.
+                // Hugs the window bottom — at the parked frame the Mac's chassis reaches
+                // low, and the button must sit in the black band BELOW the laptop, never
+                // on its base.
                 if phase == .parked {
                     VStack {
                         Spacer()
                         OnboardingNextButton(title: "Continue", action: onContinue)
-                            .padding(.bottom, 42)
+                            .padding(.bottom, 14)
                     }
                     .transition(.opacity)
                 }
