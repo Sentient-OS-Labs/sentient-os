@@ -25,11 +25,14 @@ struct OnboardingFilmView: View {
     private enum Phase { case loading, playing, parked, unavailable }
     @State private var phase: Phase = .loading
 
-    /// The production cut: the film to the morning-home rest. p 0.50 = cards dealt (done
-    /// 0.426), camera settled (0.493), morning line up (0.347), with a full 0.08p of margin
-    /// before Scene III's turn text at 0.58 — the turn must never be seen in onboarding.
-    /// Pace rides the page's own defaults.
-    private static let productionURL = URL(string: "https://sentient-os.ai/onboarding?end=0.50")!
+    /// The production cut: the film to the morning-home rest — p 0.42 (pNight 0.76: home
+    /// settled, wake line up, before the zoom at 0.477 and the turn/dive after it). The turn
+    /// ("One more thing. Meet Sidekick.") must never be seen in onboarding.
+    /// ⚠️ Parked beats are ADDRESSES into the film's scroll timeline: whenever the website
+    /// re-budgets FilmHero's per-scene _VH constants, this value must be re-derived in
+    /// lockstep (the contract lives in the site's Autopilot.tsx header; p = beat vh /
+    /// SCROLL_VH — 0.42 = the 2026-07-16 pacing). Pace rides the page's own defaults.
+    private static let productionURL = URL(string: "https://sentient-os.ai/onboarding?end=0.42")!
 
     private static var filmURL: URL {
         #if DEBUG
