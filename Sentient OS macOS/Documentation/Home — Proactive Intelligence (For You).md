@@ -84,6 +84,17 @@ newest brightest at the bottom, cleared per phase), and the footer sets expectat
 voices: a mono-caps whisper with the ~15-minute estimate (the 10-minute flip lives there), the
 keep-Sentient-open/lid-up instruction with a MacBook glyph in the display voice, and the quiet
 "Just this once" reassurance that 3am runs wake a lid-shut, plugged-in Mac on their own.
+
+**The screen-recording kit (Dev Tools, shot the website hero 2026-07-16):** two takeover demo
+knobs, both display-only, both keyed by `ProcessingView`. **Resizable analysis window**
+(`dev.processing.resizableDemo`) drops the home takeover's window min-size AND the Stop footer so
+a recording frames just the analysis content (home runs only — onboarding keeps Pause, dev
+prompt-pane runs keep Stop). **Demo bar baseline** (`dev.processing.demoBase{Done,Total}`, two
+fields in Dev Tools) renders the bar/percent/kept·junk tags as if `baseDone of baseTotal` were
+already done — the takeover OPENS at, say, "290 of 416 · 70%" and real items count up from there,
+with kept/junk seeded proportionally so the tags never contradict the bar. Display-only by
+construction: the pipeline, high-water marks, and LifetimeStats are untouched; total 0 (the
+default) = off.
 **The failed screen speaks the classified failure** (2026-07-12): `ProactiveCycle`
 returns a `CycleFailure` (message + `OvernightCaution.Kind?`), and `ProcessingView.failedView`
 renders the kind — "Codex isn't logged in" gets a prominent **Log in to Codex** button (the shared
