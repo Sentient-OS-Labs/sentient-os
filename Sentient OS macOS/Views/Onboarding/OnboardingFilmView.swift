@@ -25,9 +25,11 @@ struct OnboardingFilmView: View {
     private enum Phase { case loading, playing, parked, unavailable }
     @State private var phase: Phase = .loading
 
-    /// The production cut: the film to the morning-home rest (film p 0.54, just before
-    /// Scene III's turn). Pace rides the page's own defaults.
-    private static let productionURL = URL(string: "https://sentient-os.ai/onboarding?end=0.54")!
+    /// The production cut: the film to the morning-home rest. p 0.50 = cards dealt (done
+    /// 0.426), camera settled (0.493), morning line up (0.347), with a full 0.08p of margin
+    /// before Scene III's turn text at 0.58 — the turn must never be seen in onboarding.
+    /// Pace rides the page's own defaults.
+    private static let productionURL = URL(string: "https://sentient-os.ai/onboarding?end=0.50")!
 
     private static var filmURL: URL {
         #if DEBUG
@@ -151,6 +153,17 @@ private struct FilmWebView: NSViewRepresentable {
         // Onboarding runs once — no cookies or cache worth keeping.
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(context.coordinator, name: "autopilot")
+
+        // No scrollbar over the film — it's a movie, not a page. Injected at document
+        // start so the thumb never flashes even on the first scrolled frame.
+        let hideScrollbars = WKUserScript(
+            source: """
+            const style = document.createElement('style');
+            style.textContent = '::-webkit-scrollbar{display:none!important} html{scrollbar-width:none}';
+            document.documentElement.appendChild(style);
+            """,
+            injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        config.userContentController.addUserScript(hideScrollbars)
 
         let webView = PassiveWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
