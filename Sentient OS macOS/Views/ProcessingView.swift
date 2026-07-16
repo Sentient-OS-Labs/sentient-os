@@ -85,6 +85,22 @@ struct ProcessingView: View {
     static let resizableDemoKey = "dev.processing.resizableDemo"
     @AppStorage(ProcessingView.resizableDemoKey) private var resizableDemo = false
 
+    /// Dev Tools → "Demo bar baseline". While `total` > 0, the bar RENDERS as if a big run were
+    /// already mid-flight — `baseDone + real done` of `baseTotal`, with the kept/junk tags seeded
+    /// proportionally so a 70% bar never sits over "0 kept · 0 junk" — letting a website screen
+    /// recording open at "290 of 416" instead of 0. Display-only: the pipeline, marks, and
+    /// lifetime counters are untouched.
+    static let demoBaseDoneKey = "dev.processing.demoBaseDone"
+    static let demoBaseTotalKey = "dev.processing.demoBaseTotal"
+    @AppStorage(ProcessingView.demoBaseDoneKey) private var demoBaseDone = 0
+    @AppStorage(ProcessingView.demoBaseTotalKey) private var demoBaseTotal = 0
+
+    /// What the bar and count tags SHOW — real progress plus the demo baseline (when set).
+    private var shownDone: Int { progress.done + (demoBaseTotal > 0 ? demoBaseDone : 0) }
+    private var shownTotal: Int { demoBaseTotal > 0 ? demoBaseTotal : progress.total }
+    private var shownSurvivors: Int { progress.survivors + (demoBaseTotal > 0 ? demoBaseDone * 58 / 100 : 0) }
+    private var shownJunk: Int { progress.junk + (demoBaseTotal > 0 ? demoBaseDone * 36 / 100 : 0) }
+
     private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(CycleFailure) }
     @State private var state: UIState = .loadingModel
     /// The failed screen's inline codex login (the "Codex isn't logged in" fix) — same shared
@@ -197,9 +213,9 @@ struct ProcessingView: View {
             AnalyzingTitle()
 
             VStack(spacing: 10) {
-                GlowProgressBar(value: progress.total > 0 ? Double(progress.done) / Double(progress.total) : 0)
+                GlowProgressBar(value: shownTotal > 0 ? Double(shownDone) / Double(shownTotal) : 0)
                 HStack {
-                    Text("\(progress.done) of \(progress.total)").fontWeight(.bold).monospacedDigit()
+                    Text("\(shownDone) of \(shownTotal)").fontWeight(.bold).monospacedDigit()
                     Spacer()
                     Text("\(percent)%").monospacedDigit()
                 }
@@ -243,8 +259,8 @@ struct ProcessingView: View {
 
     private var countsLine: some View {
         HStack(spacing: 16) {
-            countTag(progress.survivors, "kept", Theme.verdictColor(.survivor))
-            countTag(progress.junk, "junk", Theme.verdictColor(.junk))
+            countTag(shownSurvivors, "kept", Theme.verdictColor(.survivor))
+            countTag(shownJunk, "junk", Theme.verdictColor(.junk))
             if let last = progress.lastSeconds {
                 Text("· \(String(format: "%.1f", last))s/file")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
@@ -616,7 +632,7 @@ struct ProcessingView: View {
     }
 
     private var percent: Int {
-        progress.total > 0 ? Int(Double(progress.done) / Double(progress.total) * 100) : 0
+        shownTotal > 0 ? Int(Double(shownDone) / Double(shownTotal) * 100) : 0
     }
 
     // MARK: Run
