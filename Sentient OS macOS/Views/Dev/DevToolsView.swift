@@ -95,6 +95,10 @@ struct DevToolsView: View {
     // Demo: free-resize the home's analysis takeover (ProcessingView owns the key).
     @AppStorage(ProcessingView.resizableDemoKey) private var resizableAnalysisDemo = false
 
+    // Demo: start the analysis bar mid-run (ProcessingView owns the keys; total 0 = off).
+    @AppStorage(ProcessingView.demoBaseDoneKey) private var demoBaseDone = 0
+    @AppStorage(ProcessingView.demoBaseTotalKey) private var demoBaseTotal = 0
+
 
     // MCP mirror (the hosted Render copy). Local mirrors of MirrorClient's actor state, refreshed
     // when "More" opens and after each action.
@@ -174,6 +178,29 @@ struct DevToolsView: View {
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
     }
 
+    /// Demo: the analysis bar opens as if this much were already done — "baseDone + real of
+    /// baseTotal", kept/junk tags seeded proportionally. Display-only; total 0 = off.
+    private var demoBarBaselineSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Demo bar baseline")
+                .font(.callout.weight(.medium)).foregroundStyle(.white)
+            HStack(spacing: 8) {
+                TextField("done", value: $demoBaseDone, format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 72)
+                Text("of").font(.caption).foregroundStyle(Theme.faint)
+                TextField("total", value: $demoBaseTotal, format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 72)
+                Spacer()
+            }
+            Text("Analysis opens as if this much were already done (290 of 416 ≈ 70%) and real items count up from there; kept/junk seed proportionally. Display-only — pipeline and stats untouched. Total 0 = off. For the website's screen rec.")
+                .font(.caption2).foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     /// One deck segment — lit when it's the active mode.
     private func deckButton(_ mode: BriefingDeck, _ label: String) -> some View {
         let selected = (BriefingDeck(rawValue: deckRaw) ?? .real) == mode
@@ -227,6 +254,7 @@ struct DevToolsView: View {
                     executeButton
                     proactiveCardsSection
                     resizableAnalysisSection
+                    demoBarBaselineSection
                     HStack(spacing: 10) {
                         viewSummariesButton
                         viewActionItemsButton
