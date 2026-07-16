@@ -195,6 +195,7 @@ private struct FilmWebView: NSViewRepresentable {
         webView.underPageBackgroundColor = .black   // never a white flash behind the film
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
+        Log("Onboarding film: loading \(url.absoluteString)")
         webView.load(URLRequest(url: url))
         return webView
     }
@@ -213,6 +214,7 @@ private struct FilmWebView: NSViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController,
                                    didReceive message: WKScriptMessage) {
             guard message.name == "autopilot" else { return }
+            Log("Onboarding film: page says '\(message.body as? String ?? "?")'")
             switch message.body as? String {
             case "ready":  parent.onReady()
             case "parked": parent.onParked()
@@ -221,6 +223,7 @@ private struct FilmWebView: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            Log("Onboarding film: didFinish")
             parent.onLoaded()
         }
 
