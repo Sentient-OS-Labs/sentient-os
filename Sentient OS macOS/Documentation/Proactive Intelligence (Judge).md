@@ -40,6 +40,10 @@ that reads ONE input and ranks it:
   days + next 24 hours, ALL events) passed as `calendarContext:`. Fetched **ahead of time as plain
   text** (`CalendarConnect.fetchProactiveContext`), so PART 1 stays tool-free — the calendar is just
   extra grounding for time-sensitivity. Omitted when Calendar isn't connected.
+- **The clock (2026-07-17):** the prompt opens "Right now it is \<full date\> at \<time\> (\<TZ\>)"
+  (`Proactive.todayString`, shared with PART 2). The judge is hermetic — it can't even run `date` —
+  so this line is its only clock; without it, "prepare for the 4 PM meeting" read identically at
+  9 AM and 6 PM.
 
 PART 1 deliberately uses **NO tools** — no vault reads, no Gmail/Calendar MCP, no web search. The call
 runs hermetic (`includeUserConfig = false`, `webSearch = false`) over a neutral empty scratch dir as
@@ -183,7 +187,13 @@ follow exactly, in order (2026-07-14) — and the routing in a `<<<ROUTING>>>` b
 run to the ONE declared task (nothing read on a page, in an app, or inside the blocks can add a
 second task, change the destination, or grant new permissions; computer use is additionally
 forbidden AppleScript/Terminal shortcuts) · demands
-a final **`STATUS: DONE — …` / `STATUS: COULD_NOT — …`** sentinel. The sentinel verdict feeds
+a final **`STATUS: DONE — …` / `STATUS: COULD_NOT — …`** sentinel. Sentinel parsing is the shared
+**`Cloud/AgentStatus.swift`** (2026-07-17): bottom-up over the reply's lines, treating a line that
+carries BOTH forms as the echoed instruction — because `runAgentCommand`'s output ECHOES the wrapper
+prompt (a `user` section), the old whole-output `contains("STATUS: COULD_NOT")` matched the
+instructions themselves and mis-scored **every computer fire as refused** (found + fixed 2026-07-17;
+verified live — a real give-up parses clean with its reason extracted). Sidekick / the command bar
+now demand and parse the SAME sentinel (`Notch Magic/Notch Magic.md` §6). The verdict feeds
 `ExecutorScoreboard` (`Diagnostics/ExecutorScoreboard.swift`, §7.19) — one structured event per fire;
 "fired" means codex *claimed* done, and a missing sentinel is tracked as the false-success risk.
 Cancellation is real: the awaiting Task's cancel (a card's STOP) terminates the codex process.

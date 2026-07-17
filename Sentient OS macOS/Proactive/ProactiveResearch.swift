@@ -261,7 +261,7 @@ actor ProactiveResearch {
     // MARK: The prompt — verify THEN prepare, accuracy-obsessed, never fires
 
     private static func prompt(items: [ActionItem], recent: [CloudNote], now: Date, calendarContext: String?) -> String {
-        let today = todayString(now)
+        let today = Proactive.todayString(now)   // date + clock time + tz (shared with PART 1)
         var lines: [String] = []
         lines.reserveCapacity(items.count)
         for (i, it) in items.enumerated() {
@@ -322,7 +322,7 @@ actor ProactiveResearch {
         write the exact recipe — so that in PART 3 the user taps ONE button and it executes with \
         nothing left to decide or look up.
 
-        Today is \(today).
+        Right now it is \(today).
         \(Proactive.instructionsBlock)
         ## THREE INVIOLABLE RULES
         **1 — Total accuracy, ZERO fabrication.** The user will ACT on what you produce, so a confident \
@@ -497,7 +497,4 @@ actor ProactiveResearch {
         """
     }
 
-    private static func todayString(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .none; return f.string(from: d)
-    }
 }

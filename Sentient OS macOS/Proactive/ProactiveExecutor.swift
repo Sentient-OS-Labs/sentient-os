@@ -123,21 +123,11 @@ actor ProactiveExecutor {
         }
     }
 
-    /// Read the required `STATUS: DONE` / `STATUS: COULD_NOT` sentinel from a channel reply (falls back
-    /// to the legacy `COULD NOT` prefix). Absent sentinel ⇒ optimistic "fired" but flagged — that rate
-    /// is the false-success risk the scoreboard exists to measure.
-    private enum Verdict { case done, refused(String), noSentinel }
-    private func verdict(of reply: String) -> Verdict {
-        let upper = reply.uppercased()
-        if upper.contains("STATUS: COULD_NOT") || upper.contains("STATUS:COULD_NOT") || upper.hasPrefix("COULD NOT") {
-            // Best-effort reason after the marker (kept short for the UI).
-            let reason = reply.components(separatedBy: "COULD_NOT").last?
-                .trimmingCharacters(in: CharacterSet(charactersIn: " —:-\n")) ?? reply
-            return .refused(String(reason.prefix(300)))
-        }
-        if upper.contains("STATUS: DONE") || upper.contains("STATUS:DONE") { return .done }
-        return .noSentinel
-    }
+    // Sentinel parsing lives in the shared `AgentStatus` (Cloud/AgentStatus.swift) — bottom-up +
+    // echo-guarded, because `runAgentCommand`'s output echoes the wrapper prompt (which contains
+    // both sentinel forms); the old whole-output `contains` scan misread every computer fire as
+    // refused (field-found 2026-07-17). Absent sentinel ⇒ optimistic "fired" but flagged — that
+    // rate is the false-success risk the scoreboard exists to measure.
 
     // MARK: Gmail channel
 
@@ -176,10 +166,12 @@ actor ProactiveExecutor {
         do {
             let env = try await CodexCLI.shared.run(inv) { progress($0) }   // live play-by-play
             Log("ProactiveExecutor/\(channel): ✓ (\(env.result.count) chars)")   // B7: length, not content
-            switch verdict(of: env.result) {
-            case .refused(let reason): return FireResult(outcome: .failed(reason), board: .refused, statusPresent: true, errorClass: "refused")
-            case .done:                return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: true, errorClass: nil)
-            case .noSentinel:          return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: false, errorClass: nil)
+            switch AgentStatus.parse(env.result) {
+            case .couldNot(let reason):
+                return FireResult(outcome: .failed(reason.isEmpty ? "The agent reported it couldn't complete this." : reason),
+                                  board: .refused, statusPresent: true, errorClass: "refused")
+            case .done: return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: true, errorClass: nil)
+            case .none: return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: false, errorClass: nil)
             }
         } catch {
             Log("ProactiveExecutor/\(channel): ✗ \(ErrorLabel(error))")
@@ -201,10 +193,12 @@ actor ProactiveExecutor {
             let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let final = lines.last ?? "Done on your Mac."
             Log("ProactiveExecutor/computer: ✓ (\(final.count) chars)")   // B7: length, not content
-            switch verdict(of: out) {   // scan the whole output for the sentinel, not just the last line
-            case .refused(let reason): return FireResult(outcome: .failed(reason), board: .refused, statusPresent: true, errorClass: "refused")
-            case .done:                return FireResult(outcome: .fired(String(final.prefix(300))), board: .fired, statusPresent: true, errorClass: nil)
-            case .noSentinel:          return FireResult(outcome: .fired(String(final.prefix(300))), board: .fired, statusPresent: false, errorClass: nil)
+            switch AgentStatus.parse(out) {   // bottom-up + echo-guarded — `out` contains the echoed wrapper
+            case .couldNot(let reason):
+                return FireResult(outcome: .failed(reason.isEmpty ? "The agent reported it couldn't complete this." : reason),
+                                  board: .refused, statusPresent: true, errorClass: "refused")
+            case .done: return FireResult(outcome: .fired(String(final.prefix(300))), board: .fired, statusPresent: true, errorClass: nil)
+            case .none: return FireResult(outcome: .fired(String(final.prefix(300))), board: .fired, statusPresent: false, errorClass: nil)
             }
         } catch {
             Log("ProactiveExecutor/computer: ✗ \(ErrorLabel(error))")

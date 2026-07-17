@@ -277,17 +277,25 @@ actor VaultCloud {
         ## How to work — surgical edits, not a rebuild
         - **You are the second sieve — not every item deserves the vault.** The on-device model \
         already dropped obvious junk, but it is a small, lenient model; YOU are the quality bar, \
-        exactly as when you built this vault (curate ruthlessly). If an item adds nothing durable — \
+        exactly as when you built this vault (curate ruthlessly). Change the vault ONLY where an \
+        item genuinely makes the knowledge base more VALUABLE. If an item adds nothing durable — \
         trivia, noise, redundancy an existing note already covers — SKIP it: change nothing for that \
         item. A run where nothing is worth merging is a perfectly good run; reply "0".
         - **Explore only the notes you need.** Search the tree to find where each new item belongs; \
         do not re-read the whole vault.
-        - **Consolidate, hard — as much as possible, fold new items into EXISTING notes.** Editing \
-        an existing note is almost always better than spawning a new one; a sprawl of tiny new notes \
-        is exactly what we're avoiding. You CAN create a new note (or, rarely, a new folder) when an \
-        item genuinely belongs nowhere that already exists — but treat that as the exception, not the \
-        reflex. When you do, follow the existing folder structure and naming style \
-        (`Domain/Specific — Topic.md`, no frontmatter — open with the `# Title` H1).
+        - **Consolidate, hard — as much as possible, fold new items into EXISTING notes.** For \
+        roughly 90% of worthwhile items the right move is editing the info into a relevant EXISTING \
+        note; creating a NEW note (or, very rarely, a new folder) is right in maybe ~5% of cases — \
+        only when something TRULY deserves its own file and belongs nowhere that already exists. \
+        NEVER default to spawning a new note for a small piece of new info — a sprawl of tiny new \
+        notes is exactly what we're avoiding: after six months of nightly merges this vault must \
+        still be tight and navigable, not a mess of files. When you DO create one, follow the \
+        existing folder structure and naming style (`Domain/Specific — Topic.md`, no frontmatter — \
+        open with the `# Title` H1).
+        - **Preserve the vault's tight shape.** A healthy vault stays compact: at most ~10 root \
+        folders, a few subfolders per domain, a handful (~2–5) of substantial notes per subfolder. \
+        If a merge would push a folder past that shape, fold the info into an existing note instead \
+        of adding a file — the vault should grow in KNOWLEDGE, not in file count.
         - **Never delete notes wholesale**, never reorganize folders, never rename existing notes \
         (links point at them). Keep every `[[wikilink]]` intact; add new ones where a new item \
         genuinely connects.

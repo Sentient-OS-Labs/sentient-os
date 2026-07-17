@@ -79,7 +79,8 @@ struct NotchMetrics: Equatable {
             return CGSize(width: max(baseWidth + 240, 480), height: baseHeight + fieldRowHeight + bottomPad + 4)
         case .running, .finishing:
             let caption: CGFloat
-            if remembering != nil { caption = captionHeight }                          // single "Remembering …" line
+            if case .finishing(.failed) = phase { caption = captionHeight * 2 }        // room for the 2-line ✗ reason
+            else if remembering != nil { caption = captionHeight }                     // single "Remembering …" line
             else if readBack?.isEmpty == false { caption = readBackCaptionHeight(readBack!) }
             else { caption = captionHeight }
             return CGSize(width: runningWidth, height: runningHeight(caption: caption))
@@ -387,11 +388,13 @@ struct NotchContent: View {
             .animation(.spring(duration: 0.7, bounce: 0.35), value: runningCaptionKey)
             .animation(.easeInOut(duration: 0.35), value: statusLine)
             .allowsHitTesting(false)
-        case .finishing:
+        case .finishing(let outcome):
+            // Failures get a second line: the ✗ statusLine carries the give-up reason (the sentinel's
+            // COULD_NOT text or the error), and one truncated line usually eats it.
             Text(statusLine)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
-                .lineLimit(1).truncationMode(.tail)
+                .lineLimit(outcome == .failed ? 2 : 1).truncationMode(.tail)
                 .allowsHitTesting(false)
         case .notice(let message):
             Text(message)
@@ -615,6 +618,11 @@ private struct NotchPreviewStage<Content: View>: View {
 }
 #Preview("finishing") {
     NotchPreviewStage { NotchContent(phase: .finishing(.success), readBack: nil, statusLine: "✓ done", metrics: .preview) }
+}
+#Preview("finishing · failed (reason)") {
+    NotchPreviewStage { NotchContent(phase: .finishing(.failed), readBack: nil,
+                                     statusLine: "✗ the Canva billing page needs a re-login before the trial can be cancelled",
+                                     metrics: .preview) }
 }
 #Preview("notice") {
     NotchPreviewStage { NotchContent(phase: .notice("didn’t catch that"), readBack: nil, statusLine: "", metrics: .preview) }

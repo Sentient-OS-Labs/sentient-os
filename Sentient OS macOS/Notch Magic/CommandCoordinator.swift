@@ -536,7 +536,9 @@ final class CommandCoordinator {
         // Only flourish if the notch is actually up (a stop/dismiss may have already hidden it).
         guard phase == .running else { setPhase(.hidden); return }
         setPhase(.finishing(outcome))
-        scheduleHide(after: 1.5)         // a quick ✓/stopped/✗ flourish, then retract
+        // ✓/stopped are a quick flourish; a failure holds longer — its caption carries the ✗ REASON
+        // (the sentinel's give-up explanation or the error), and that has to be readable.
+        scheduleHide(after: outcome == .failed ? 5.0 : 1.5)
     }
 
     // MARK: Phase + read-back plumbing (generation-guarded so a delayed change never clobbers a newer one)

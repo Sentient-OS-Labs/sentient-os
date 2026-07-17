@@ -75,8 +75,17 @@ Two channels, both optional:
 ## The prompt
 
 `vaultPromptCore` (the eval-validated wisdom: source-trust tiers, truth & attribution,
-ruthless synthesis, README-first portrait, structure rules, 100–150-note density) +
+ruthless synthesis, README-first portrait, structure rules, 80–120-note density) +
 `agenticOutputInstructions`. User-agnostic — no hardcoded per-user facts.
+
+**2026-07-17 tightening (founder pass, both build AND update prompts):** density target lowered to
+**80–120 notes** with hard shape caps — **at most ~10 root folders; a subfolder holds ~2–5
+substantial notes** (overflow = consolidate, never another file) — plus a **never-assume rule**
+("less knowledge is WAYYY better than wrong knowledge; if you're not sure, DON'T INCLUDE IT"). The
+UPDATE prompt now quantifies consolidation (**~90% of merges edit an existing note; a new file is
+~5%, only when truly deserved**), gates every merge on "genuinely makes the knowledge base more
+VALUABLE", and carries the same shape targets — so six months of nightly merges can't sprawl the
+vault into a scatter of tiny files.
 ⚠️ Known small-corpus finding (June 11, 83-summary eval): the fixed density target pulls
 toward one-note-per-summary when the corpus is smaller than the target; revisit after the
 full-scale (1,704-summary) gate run.

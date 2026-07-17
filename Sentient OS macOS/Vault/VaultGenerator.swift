@@ -355,6 +355,7 @@ This vault will be read by AIs that **state these facts back to people as truth.
 - **Saved screenshots are mostly about other people/products/topics, NOT the user.** A screenshot of someone's LinkedIn is **not** the user's résumé; a saved article is **not** their opinion; a product screenshot is **not** their product.
 - **Only assert a biographical fact about the user** when the evidence clearly shows it is *theirs* (strongest signal: their own authored notes). When ambiguous, **omit it** or phrase it literally ("saved a screenshot of X", "researched X") rather than "is/did X".
 - **Never fabricate or stitch together** a job history, credential, or claim from saved profiles/ads/articles. **Accuracy beats completeness.**
+- **If you don't have enough info about something, DON'T assume. Less knowledge is WAYYY better than wrong knowledge.** In other words: if you're not sure of something, DON'T INCLUDE IT.
 
 ## Your hardest, most important jobs
 1. **Synthesize and de-duplicate, hard.** The corpus is full of repetition — the same screenshot saved many times, hundreds of exam-prep images of one subject, overlapping notes on the same project. **Collapse it.** One note = one real concept / theme / person / project / event, **aggregating every related item.** Do NOT emit one note per summary.
@@ -362,14 +363,15 @@ This vault will be read by AIs that **state these facts back to people as truth.
 3. **Discover the real shape of THIS person's life** from the content — projects, work, studies, relationships, places, interests, money, logistics, history — and build intuitive top-level domains. Capture the *narrative*.
 
 ## Scope & density target
-Aim for a **focused, high-signal vault — roughly 100–150 notes.** Synthesize aggressively; concise but dense (every sentence earns its place). Cover every meaningful theme; skip the noise. "Comprehensive" means *coverage of what matters*, not transcribing every screenshot.
+Aim for a **focused, high-signal vault — roughly 80–120 notes.** Synthesize aggressively; concise but dense (every sentence earns its place). Cover every meaningful theme; skip the noise. "Comprehensive" means *coverage of what matters*, not transcribing every screenshot.
 
 **Do NOT create a dump of too many individual `.md` files.** Under a significant topic, a few (~3) substantial notes are *way* better than ten tiny ones. **Consolidation is key** — the knowledge base must not start out messy, and **every note must deserve to be there.** Before you write a single note, **brainstorm the *perfect* filesystem structure FIRST.**
 
 ## Structure rules (hard constraints)
-- **Root folders are top-level life domains**, derived from THIS user's data. Roots contain **only subfolders**, never notes directly.
+- **Root folders are top-level life domains**, derived from THIS user's data — **at most ~10 of them.** Roots contain **only subfolders**, never notes directly.
 - **Every content note lives at depth ≥ 2.** The single exception is the root `README.md`.
 - **No stub folders** — merge a 1–2-note domain into a broader sibling.
+- **Keep every folder tight.** A domain holds a **few subfolders**, and a subfolder holds a **handful (~2–5) of substantial notes.** If a subfolder is growing past that, that's a consolidation problem, not a new-note problem — merge. MORE folders and files is NOT a better vault; a scatter of tiny notes and near-empty folders is the #1 failure mode.
 - **Connect the graph with `[[wikilinks]]`.** Link by exact title; keep titles **unique**; **only link to notes you are actually creating** (no dangling links). Link people, projects, places, and recurring themes across domains.
 - Optionally add a short **index / Map-of-Content note** at the top of a large domain.
 

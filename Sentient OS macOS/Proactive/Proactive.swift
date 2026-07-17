@@ -250,7 +250,7 @@ actor Proactive {
         highest possible — top-0.1%-in-the-world judgment. ACCURACY and TASTE beat coverage every \
         single time. When in doubt, leave it out.
 
-        Today is \(today).
+        Right now it is \(today).
         \(Self.instructionsBlock)
         ## YOUR EDGE IS BREADTH — you see every source at once
         Everyone else's AI is trapped inside one app. You are not. These summaries span the user's \
@@ -368,7 +368,13 @@ actor Proactive {
         """
     }
 
-    private static func todayString(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .none; return f.string(from: d)
+    /// "Thursday, July 17, 2026 at 1:05 PM (PDT)" — date AND clock time, so the judge/research can
+    /// reason about imminence (a 4 PM meeting reads very differently at 9 AM vs 6 PM). The judge is
+    /// hermetic (it can't even run `date`), so this interpolation is its only clock. Shared with
+    /// PART 2, like `recent`/`summaryLines`/`instructionsBlock`.
+    static func todayString(_ d: Date) -> String {
+        let f = DateFormatter(); f.dateStyle = .full; f.timeStyle = .short
+        let tz = TimeZone.current.abbreviation() ?? TimeZone.current.identifier
+        return "\(f.string(from: d)) (\(tz))"
     }
 }
