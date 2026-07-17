@@ -2,8 +2,9 @@
 //  OnboardingView.swift
 //  Sentient OS macOS
 //
-//  First-launch onboarding: three intro slides (placeholder boxes for now — real design comes
-//  later), then permissions (OnboardingPermissionsView), then codex login (OnboardingCodexSteps),
+//  First-launch onboarding: the film slide (OnboardingFilmView — the website's self-scrolling
+//  film in a webview, parking on the morning home) plus two placeholder slides (real design
+//  comes later), then permissions (OnboardingPermissionsView), then codex login (OnboardingCodexSteps),
 //  then the plan crossroads (OnboardingPlanView — free/go accounts only; full plans skip it),
 //  then the ready-to-process screen (OnboardingReadyView) whose Start Analysis presents the REAL
 //  ProcessingView takeover (pausable) — and only a finished run calls `onFinished` and reveals
@@ -68,6 +69,10 @@ struct OnboardingView: View {
             Theme.bg.ignoresSafeArea()
 
             switch step {
+            case 0:
+                // Slide 1 is the website's film in a webview — it plays to the morning-home
+                // rest and blooms its own Continue (OnboardingFilmView owns the choreography).
+                OnboardingFilmView(onContinue: advance).transition(.opacity)
             case ..<Self.slideCount:
                 slides.transition(.opacity)
             case Self.slideCount:
