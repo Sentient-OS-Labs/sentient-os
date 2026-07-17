@@ -73,7 +73,11 @@ Cancel (all sidebar clicks, wikilinks, Back, AND sky-mode switches funnel throug
 
 **Create / delete:** three creation affordances — the header "+", a hover "+" on folder rows,
 and right-click menus. New notes are seeded `# Title` and open straight into edit mode; names
-are sanitized + uniqued. Delete = **move to macOS Trash** (recoverable, no confirm) for notes
+are sanitized + uniqued. ⚠️ The name prompt is a system `.alert` whose initial key view lands on
+the BUTTON row, not its TextField (macOS 26) — `claimCreateFieldFocus()` claims the field a beat
+after presentation: a FocusState claim plus an AppKit first-responder walk matched by the field's
+placeholder (SwiftUI can strip `.focused` inside alert content; the placeholder match keeps it
+off the sidebar's search box). Delete = **move to macOS Trash** (recoverable, no confirm) for notes
 AND folders — the toolbar trash icon (reading mode; hidden for the README/Overview, which can't
 be deleted) or right-click. Trashing the folder that contained the open note lands back on
 Overview.

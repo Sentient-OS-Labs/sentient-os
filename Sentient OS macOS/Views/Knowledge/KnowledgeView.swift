@@ -50,6 +50,7 @@ struct KnowledgeView: View {
     @State private var showDiscardPrompt = false
     @FocusState private var editorFocused: Bool
     @FocusState private var searchFocused: Bool
+    @FocusState private var createFieldFocused: Bool
 
     // The new-note / new-folder name prompt (raised by the right-click menus).
     @State private var showCreatePrompt = false
@@ -92,8 +93,12 @@ struct KnowledgeView: View {
         }
         .alert(createIsFolder ? "New folder" : "New note", isPresented: $showCreatePrompt) {
             TextField(createIsFolder ? "Folder name" : "Note name", text: $createName)
+                .focused($createFieldFocused)
             Button("Create") { performCreate() }
             Button("Cancel", role: .cancel) {}
+        }
+        .onChange(of: showCreatePrompt) { _, shown in
+            if shown { claimCreateFieldFocus() }
         }
     }
 
@@ -304,6 +309,40 @@ struct KnowledgeView: View {
     /// Raise the name prompt for a new note/folder inside `parent` (nil = the vault root).
     private func promptCreate(folder: Bool, in parent: URL?) {
         createIsFolder = folder; createParent = parent; createName = ""; showCreatePrompt = true
+    }
+
+    /// The create alert opens with its initial key view on the button row, not the TextField —
+    /// so typing lands nowhere until the user clicks the field. Claim it a beat after
+    /// presentation (same delayed-claim pattern as PromptBar's launch focus): the FocusState
+    /// claim for when SwiftUI honors `.focused` inside alert content, and an AppKit
+    /// first-responder walk as the backstop — matched by the field's placeholder, so it can
+    /// never grab the sidebar's search box or any other field.
+    private func claimCreateFieldFocus() {
+        let placeholder = createIsFolder ? "Folder name" : "Note name"
+        for delay: TimeInterval in [0.1, 0.35] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                guard showCreatePrompt else { return }
+                createFieldFocused = true
+                for window in NSApp.windows where window.isVisible {
+                    guard let field = Self.editableField(in: window.contentView,
+                                                         placeholder: placeholder) else { continue }
+                    if field.currentEditor() == nil { window.makeFirstResponder(field) }
+                    return
+                }
+            }
+        }
+    }
+
+    /// Depth-first hunt for an editable NSTextField identified by its placeholder.
+    private static func editableField(in view: NSView?, placeholder: String) -> NSTextField? {
+        guard let view else { return nil }
+        if let field = view as? NSTextField, field.isEditable, field.placeholderString == placeholder {
+            return field
+        }
+        for sub in view.subviews {
+            if let field = editableField(in: sub, placeholder: placeholder) { return field }
+        }
+        return nil
     }
 
     private func performCreate() {
