@@ -158,13 +158,20 @@ struct OnboardingFilmView: View {
                     // exhibit's bottom chrome leaves only slack there on height-bound
                     // windows, so a centered button always rode the bottom clamp.
                     // Fallback = the old bottom-hug until the page answers.
+                    // The telemetry pill shares the Continue's row, bottom-left.
                     GeometryReader { geo in
-                        OnboardingNextButton(title: "Continue", action: advanceFromPark)
-                            .position(x: geo.size.width / 2,
-                                      y: min(hoodBandCenter ?? (geo.size.height - 68),
-                                             geo.size.height - 40))
-                            .onAppear { measureHoodBand() }
-                            .onChange(of: geo.size) { measureHoodBand() }
+                        let continueY = min(hoodBandCenter ?? (geo.size.height - 68),
+                                            geo.size.height - 40)
+                        ZStack {
+                            OnboardingTelemetryConsent(rowCenterY: continueY)
+                            // The exhibit's Continue wears the AI-gradient halo — a beat
+                            // brighter than the Analyze Now popover's 0.28.
+                            OnboardingNextButton(title: "Continue", glow: 0.4,
+                                                 action: advanceFromPark)
+                                .position(x: geo.size.width / 2, y: continueY)
+                        }
+                        .onAppear { measureHoodBand() }
+                        .onChange(of: geo.size) { measureHoodBand() }
                     }
                     .ignoresSafeArea()
                     .transition(.opacity)
@@ -342,7 +349,6 @@ struct OnboardingFilmView: View {
     private var fallbackSlide: some View {
         VStack(spacing: 40) {
             Spacer()
-            OnboardingWhisper("STEP 1 OF 3")
             Text("An AI that knows your life, and acts on it.")
                 .display(30)
             OnboardingNextButton(title: "Continue", action: exitStep)
@@ -467,6 +473,12 @@ private final class PassiveWebView: WKWebView {
         if popupOpen { super.scrollWheel(with: event) }
     }
     override var acceptsFirstResponder: Bool { false }
+
+    /// No browser context menu, ever — right-click/ctrl-click "Reload Page" would restart
+    /// the film and shatter the native-screen illusion. Emptying the menu shows nothing.
+    override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
+        menu.removeAllItems()
+    }
 
     private func syncWheelGate() {
         if interactive, wheelGate == nil {
