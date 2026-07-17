@@ -199,12 +199,13 @@ final class FilmDriver {
     weak var webView: WKWebView?
 
     /// Resume the parked ride to a new film-p address (leg 2: the Sidekick scene).
-    /// delay = the breath before motion; pace = full-film-pace seconds for this leg
-    /// (lower = faster; the Sidekick leg rides brisker than the site default).
-    func continueTo(_ end: Double, delay: Double = 0.1, pace: Double = 20) {
-        Log("Onboarding film: continueTo(\(end), delay: \(delay), pace: \(pace))")
+    /// delay = the breath before motion. Pace stays the site's: the film's own beat
+    /// profile makes the turn + dive transition brisk while the Sidekick scene rides
+    /// base speed — the app doesn't second-guess the film's timing.
+    func continueTo(_ end: Double, delay: Double = 0.1) {
+        Log("Onboarding film: continueTo(\(end), delay: \(delay))")
         webView?.evaluateJavaScript(
-            "window.__sentientAutopilot?.continueTo(\(end), \(delay), \(pace))")
+            "window.__sentientAutopilot?.continueTo(\(end), \(delay))")
     }
 }
 
