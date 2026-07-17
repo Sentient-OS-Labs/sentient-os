@@ -55,10 +55,12 @@ struct OnboardingFilmView: View {
     /// The bridge for driving the page's autopilot (leg 2's continueTo).
     @State private var driver = FilmDriver()
 
-    /// The morning park Continue's page-measured center Y — the middle of the black
-    /// band the film reports via driver.morningBand. nil until the page answers (or
-    /// an older deploy never does); the fraction fallback holds until then.
+    /// The parks' page-measured Continue centers — the middle of the free zone the
+    /// film reports (driver.morningBand / driver.hoodBand). nil until the page
+    /// answers (or an older deploy never does); each park's fallback holds until
+    /// then.
     @State private var morningBandCenter: CGFloat?
+    @State private var hoodBandCenter: CGFloat?
 
     /// Leg 1: the film to the morning-home rest — p 0.42 (pNight 0.76: home settled, wake
     /// line up, before the zoom at 0.477 and the turn/dive after it). The turn ("One more
@@ -139,15 +141,29 @@ struct OnboardingFilmView: View {
                     }
                     .ignoresSafeArea()
                     .transition(.opacity)
-                } else if phase == .sidekickDone || phase == .hoodParked {
-                    // Lifted off the very edge — both full-viewport stages have breathing
-                    // room below their content (the Sidekick windows; the exhibit's
-                    // caption band), and a bottom-hugging button read awkward.
+                } else if phase == .sidekickDone {
+                    // Lifted off the very edge — the full-viewport stage has breathing
+                    // room below the windows, and a bottom-hugging button read awkward.
                     VStack {
                         Spacer()
                         OnboardingNextButton(title: "Continue", action: advanceFromPark)
                             .padding(.bottom, 44)
                     }
+                    .transition(.opacity)
+                } else if phase == .hoodParked {
+                    // The hood park: page-placed like the morning's — centered in the
+                    // zone the exhibit reports below its caption band (driver.hoodBand),
+                    // re-asked on every resize, clamped on-screen for short windows.
+                    // Fallback = the old bottom-hug until the page answers.
+                    GeometryReader { geo in
+                        OnboardingNextButton(title: "Continue", action: advanceFromPark)
+                            .position(x: geo.size.width / 2,
+                                      y: min(hoodBandCenter ?? (geo.size.height - 68),
+                                             geo.size.height - 34))
+                            .onAppear { measureHoodBand() }
+                            .onChange(of: geo.size) { measureHoodBand() }
+                    }
+                    .ignoresSafeArea()
                     .transition(.opacity)
                 }
             }
@@ -276,9 +292,32 @@ struct OnboardingFilmView: View {
     /// 1100×700): the button then sits just below the narration, over the lid's dark
     /// top edge. Covering the bezel reads fine; covering text never does.
     private func measureMorningBand() {
-        driver.morningBand { band in
-            guard let band else { return }
-            morningBandCenter = max((band.top + band.bottom) / 2, band.top + 30)
+        withTrailingRead {
+            driver.morningBand { band in
+                guard let band else { return }
+                morningBandCenter = max((band.top + band.bottom) / 2, band.top + 30)
+            }
+        }
+    }
+
+    /// Same for the hood park: center in the zone below the exhibit's caption band.
+    private func measureHoodBand() {
+        withTrailingRead {
+            driver.hoodBand { band in
+                guard let band else { return }
+                hoodBandCenter = (band.top + band.bottom) / 2
+            }
+        }
+    }
+
+    /// Run a band read now AND once more after a beat. The page re-parks its scroll
+    /// on a rAF after a resize (Autopilot's onResize); a read racing that reflow
+    /// measures the drifted frame — the trailing read lands on the settled one.
+    private func withTrailingRead(_ read: @escaping () -> Void) {
+        read()
+        Task {
+            try? await Task.sleep(for: .milliseconds(250))
+            read()
         }
     }
 
@@ -346,24 +385,36 @@ final class FilmDriver {
         (webView as? PassiveWebView)?.interactive = on
     }
 
-    /// The morning park's free band, measured by the PAGE: [narration bottom, lid top]
-    /// in viewport px, which map 1:1 to view points. The film lays itself out
-    /// responsively, so a fixed native coordinate for the Continue button goes stale on
-    /// every window resize — the page is the only honest source for where the black
-    /// band actually is. An INVERTED band (bottom above top) is meaningful, not junk:
-    /// at short windows the film stacks the lid up past the narration, and the caller's
-    /// floor rule places the button accordingly. nil = no answer (older deploy,
-    /// mid-load); callers keep their fraction fallback.
-    func morningBand(completion: @escaping ((top: CGFloat, bottom: CGFloat)?) -> Void) {
+    /// A park's free zone, measured by the PAGE, in viewport px (1:1 with view
+    /// points). The film lays itself out responsively, so a fixed native coordinate
+    /// for the Continue button goes stale on every window resize — the page is the
+    /// only honest source for where the free space actually is. An INVERTED band
+    /// (bottom above top) is meaningful, not junk: at short windows the film's own
+    /// layout can leave no gap, and the caller's clamp rules place the button
+    /// accordingly. nil = no answer (older deploy, mid-load); callers keep their
+    /// fallback.
+    private func band(_ fn: String,
+                      completion: @escaping ((top: CGFloat, bottom: CGFloat)?) -> Void) {
         guard let webView else { completion(nil); return }
         webView.evaluateJavaScript(
-            "window.__sentientAutopilot?.morningBand?.() ?? null") { result, _ in
+            "window.__sentientAutopilot?.\(fn)?.() ?? null") { result, _ in
             guard let band = result as? [Double], band.count == 2 else {
                 completion(nil)
                 return
             }
             completion((CGFloat(band[0]), CGFloat(band[1])))
         }
+    }
+
+    /// The morning park: [narration bottom, lid top].
+    func morningBand(completion: @escaping ((top: CGFloat, bottom: CGFloat)?) -> Void) {
+        band("morningBand", completion: completion)
+    }
+
+    /// The hood park: [under the caption band (tall hover state reserved), viewport
+    /// bottom].
+    func hoodBand(completion: @escaping ((top: CGFloat, bottom: CGFloat)?) -> Void) {
+        band("hoodBand", completion: completion)
     }
 }
 
