@@ -330,12 +330,17 @@ final class FilmDriver {
 /// and refusing first-responder keeps keyboard scrolling (space, arrows) out too.
 ///
 /// One sanctioned exception: the hood park (`interactive`), where the exhibit's hover
-/// captions and Read More popup come alive. Even then the WHEEL stays swallowed — hit
-/// testing routes wheel straight to WebKit's own subviews (bypassing the stub above),
-/// and one scroll would drag the parked film toward the footer — via a local event
-/// monitor. The one wheel that passes is while the page reports its popup open
-/// (`popupOpen`): the popup's internal scroller needs it, and the page locks its own
-/// scroll then (Lenis stop), so the film can't move underneath.
+/// captions and Read More popup come alive. Even then the WHEEL stays swallowed — one
+/// scroll would drag the parked film toward the footer — via a local event monitor. The
+/// one wheel that passes is while the page reports its popup open (`popupOpen`): the
+/// popup's internal scroller needs it, and the page locks its own scroll then (Lenis
+/// stop), so the film can't move underneath.
+///
+/// ⚠️ Both halves must yield together. The monitor gates AppKit's dispatch, but a
+/// WKWebView usually hitTests to ITSELF, so the passed event lands right back on this
+/// override — an unconditional no-op here would eat the popup's wheel even after the
+/// monitor let it by (field-found 2026-07-17: the popup wouldn't scroll). So the
+/// override forwards to super under exactly the same `popupOpen` condition.
 private final class PassiveWebView: WKWebView {
     var interactive = false { didSet { syncWheelGate() } }
     /// Mirrors the page's popup state ("popup-open"/"popup-closed" bridge messages).
@@ -346,7 +351,9 @@ private final class PassiveWebView: WKWebView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         interactive ? super.hitTest(point) : nil
     }
-    override func scrollWheel(with event: NSEvent) {}
+    override func scrollWheel(with event: NSEvent) {
+        if popupOpen { super.scrollWheel(with: event) }
+    }
     override var acceptsFirstResponder: Bool { false }
 
     private func syncWheelGate() {
