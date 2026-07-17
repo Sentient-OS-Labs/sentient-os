@@ -130,43 +130,20 @@ struct OnboardingFilmView: View {
                         .padding(.top, geo.size.height * 0.185)
                     }
                     .transition(.opacity)
-                } else if phase == .sidekickDone {
-                    // Lifted off the very edge — the full-viewport stage has breathing
-                    // room below the windows, and a bottom-hugging button read awkward.
+                } else if phase == .sidekickDone || phase == .hoodParked {
+                    // Lifted off the very edge — both full-viewport stages have breathing
+                    // room below their content (the Sidekick windows; the exhibit's
+                    // caption band), and a bottom-hugging button read awkward.
                     VStack {
                         Spacer()
                         OnboardingNextButton(title: "Continue", action: advanceFromPark)
                             .padding(.bottom, 44)
                     }
                     .transition(.opacity)
-                } else if phase == .hoodParked {
-                    // The hood park: the exhibit's caption band owns the bottom center
-                    // ("hover anywhere to learn more"), so Continue keeps to the corner —
-                    // SKIP's idiom, opposite side — and never covers a hover zone.
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            OnboardingNextButton(title: "Continue", action: advanceFromPark)
-                                .padding(.trailing, 40).padding(.bottom, 36)
-                        }
-                    }
-                    .transition(.opacity)
                 }
             }
         }
-        // A quiet skip for the impatient, gone whenever Continue is up. (Also the only exit
-        // from .awaitingNotch besides clicking the bezel — the park is a calm rest state.)
-        .overlay(alignment: .bottomLeading) {
-            if phase == .loading || phase == .playing || phase == .ridingToInvitation
-                || phase == .awaitingNotch || phase == .ridingSidekick
-                || phase == .ridingToHood {
-                FilmSkipButton(action: exitStep)
-                    .padding(.leading, 22).padding(.bottom, 13)
-                    .transition(.opacity)
-            }
-        }
-        // The film step leaving (SKIP, Continue, back) must never strand an armed demo — the
+        // The film step leaving (Continue, back) must never strand an armed demo — the
         // notch goes back to its real behavior the moment onboarding moves on.
         .onDisappear { appState.commandCoordinator.disarmOnboardingNotchDemo() }
         // Load watchdog: a first launch with no internet lands on the fallback, never a void.
@@ -197,6 +174,18 @@ struct OnboardingFilmView: View {
             guard phase == .ridingToHood else { return }
             try? await Task.sleep(for: .seconds(15))
             if phase == .ridingToHood { setPhase(.hoodParked) }
+        }
+        // The notch invitation was the one wait without a watchdog — the corner SKIP
+        // used to be its manual exit (removed 2026-07-17). If the bezel never gets
+        // clicked, the film rides on by itself, exactly as answering it would.
+        .task(id: phase == .awaitingNotch) {
+            guard phase == .awaitingNotch else { return }
+            try? await Task.sleep(for: .seconds(60))
+            if phase == .awaitingNotch {
+                appState.commandCoordinator.disarmOnboardingNotchDemo()
+                setPhase(.ridingSidekick)
+                driver.continueTo(Self.sidekickEndP)
+            }
         }
         .task(id: phase == .ridingToInvitation) {
             guard phase == .ridingToInvitation else { return }
@@ -250,7 +239,7 @@ struct OnboardingFilmView: View {
         }
     }
 
-    /// Leaving the film step (Continue, SKIP, the fallback slide): the notch beat is behind the
+    /// Leaving the film step (Continue, the fallback slide): the notch beat is behind the
     /// user now — from here to the home screen, a notch/hotkey press answers with the
     /// "finish onboarding" aside instead of pre-beat silence (the coordinator's policy).
     private func exitStep() {
@@ -261,7 +250,7 @@ struct OnboardingFilmView: View {
     /// Parked on "Click the notch": arm the coordinator's one-shot demo. The user's real bezel
     /// click opens the real type field, the task types itself, and the moment the demo fires,
     /// the film rides on — the webview's windows play the shopping run while the hardware notch
-    /// narrates. Disarmed on SKIP/step-exit via onDisappear.
+    /// narrates. Disarmed on step-exit via onDisappear.
     private func armNotchBeat() {
         setPhase(.awaitingNotch)
         appState.commandCoordinator.armOnboardingNotchDemo { [self] in
@@ -289,28 +278,6 @@ struct OnboardingFilmView: View {
             OnboardingTrustFooter()
         }
         .padding(40)
-    }
-}
-
-/// The corner skip — a mono whisper, quiet until hovered.
-private struct FilmSkipButton: View {
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            Text("SKIP")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .tracking(1.6)
-                .foregroundStyle(hovering ? Theme.secondary : Theme.Ink.deepMuted)
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .overlay(Capsule().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        .opacity(0.6)
-        .onHover { hovering = $0 }
-        .animation(.easeInOut(duration: 0.15), value: hovering)
     }
 }
 
