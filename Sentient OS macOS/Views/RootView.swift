@@ -40,6 +40,9 @@ struct RootView: View {
     /// Observed for the global "setting up computer use" whisper (the overlay below).
     @State private var codex = CodexSetup.shared
 
+    /// Observed for the bottom-left model-download whisper (same overlay slot).
+    @State private var download = ModelDownload.shared
+
     // Dev Tools → "Resizable analysis window (demo)": while the analysis takeover is up, the
     // window's min frame drops away entirely, so the website screen rec can shrink it to just
     // the analysis content. The home keeps its full canvas either way.
@@ -100,24 +103,32 @@ struct RootView: View {
             Analytics.signal("Home.opened",
                              parameters: ["trigger": sinceBoot < 5 ? "launch" : "reopen"], tier: .core)
         }
-        // The computer-use setup whisper — screen-agnostic on purpose: the bootstrap is an
-        // unstructured background task that outlives onboarding's processing takeover (knowledge
-        // base creation, even the home in rare cases), so as long as it's actually running, this
-        // quiet line rides the bottom of WHATEVER screen is up. Keyed to the live shared engine
-        // state, so dev/Settings-triggered setups surface it too.
+        // The bottom-left whispers — screen-agnostic on purpose, both keyed to live shared engine
+        // state so they ride the bottom of WHATEVER screen is up:
+        // · the model-download card (ModelDownloadWhisper) — the on-device model landing in the
+        //   background while the user is elsewhere (it hides itself when onboarding's full-screen
+        //   downloading view shows the same bar big);
+        // · the computer-use setup line — the bootstrap is an unstructured background task that
+        //   outlives onboarding's processing takeover (knowledge base creation, even the home in
+        //   rare cases), so as long as it's actually running, this quiet line shows.
         .overlay(alignment: .bottomLeading) {
-            if codex.settingUpComputerUse {
-                HStack(spacing: 7) {
-                    ProgressView().controlSize(.small).scaleEffect(0.6)
-                    Text("Setting up Codex computer use in the background.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Theme.faint)
+            VStack(alignment: .leading, spacing: 10) {
+                ModelDownloadWhisper(download: download)
+                if codex.settingUpComputerUse {
+                    HStack(spacing: 7) {
+                        ProgressView().controlSize(.small).scaleEffect(0.6)
+                        Text("Setting up Codex computer use in the background.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.faint)
+                    }
+                    .transition(.opacity)
                 }
-                .padding(.leading, 22).padding(.bottom, 12)
-                .transition(.opacity)
             }
+            .padding(.leading, 22).padding(.bottom, 12)
         }
         .animation(.easeInOut(duration: 0.35), value: codex.settingUpComputerUse)
+        .animation(.easeInOut(duration: 0.35), value: download.phase)
+        .animation(.easeInOut(duration: 0.35), value: download.fullScreenVisible)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a
         // required update is found it takes over; otherwise it draws nothing. (Updates/)
         .overlay { UpdateGateView(host: .home) }
