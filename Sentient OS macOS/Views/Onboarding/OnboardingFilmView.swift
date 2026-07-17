@@ -104,11 +104,22 @@ struct OnboardingFilmView: View {
                     .opacity(phase == .loading ? 0 : 1)
                     .allowsHitTesting(false)
 
-                // Continue blooms in whenever a leg parks. Hugs the window bottom — at
-                // the parked frames the Mac's chassis reaches low, and the button must
-                // sit in the black band BELOW the laptop, never on its base. The first
-                // Continue rides on into the Sidekick leg; the second leaves the film.
-                if phase == .parked || phase == .sidekickDone {
+                // Continue blooms in whenever a leg parks. On the MORNING park the laptop
+                // fills the window's lower half, so the button sits ABOVE it — in the black
+                // band between the "9:00 AM" whisper and the lid's top edge (~18.5% down;
+                // the film's frame scales with the window, so the gap does too). The film's
+                // FINAL park is a full-viewport stage, so that Continue hugs the bottom.
+                if phase == .parked {
+                    GeometryReader { geo in
+                        VStack {
+                            OnboardingNextButton(title: "Continue", action: advanceFromPark)
+                            Spacer()
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, geo.size.height * 0.185)
+                    }
+                    .transition(.opacity)
+                } else if phase == .sidekickDone {
                     VStack {
                         Spacer()
                         OnboardingNextButton(title: "Continue", action: advanceFromPark)
