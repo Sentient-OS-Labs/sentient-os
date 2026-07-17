@@ -23,10 +23,10 @@ struct VaultNode: Identifiable, Hashable {
 
     var id: URL { url }
 
-    // Identity is the URL alone — cheap hashing, and the recursive `children` never matter for
-    // equality (a node's URL fully determines it).
-    static func == (l: VaultNode, r: VaultNode) -> Bool { l.url == r.url }
-    func hash(into h: inout Hasher) { h.combine(url) }
+    // Equality is the synthesized full-value one — `children` included. SwiftUI decides whether to
+    // re-render by comparing old vs new values with ==, so a URL-only equality here made the sidebar
+    // ignore a reloaded tree whose top-level URLs hadn't changed (a note deleted inside a folder
+    // stayed visible until relaunch). The tree is tiny; recursive comparison is nothing.
 }
 
 /// A loaded snapshot of the vault: the tree (README pulled out and offered as the pinned
