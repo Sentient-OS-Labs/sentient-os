@@ -125,6 +125,10 @@ final class CommandCoordinator {
         // notch-anchored one to the main display the moment ⏎ lands.
         if source == .promptBar { notchAnchor = .mainDisplay }
 
+        // The onboarding backstop: no run — and therefore no permission gate — can EVER fire
+        // before the home screen (the press doors are already guarded; this covers everything).
+        if interceptForOnboarding() { return }
+
         // Knowledge-base-only backstop (the hotkey path already flashed at press) — covers the
         // home command bar, which submits without a press. The run must never fire on free/go.
         if CodexAuth.knowledgeBaseOnly {
@@ -177,6 +181,45 @@ final class CommandCoordinator {
     /// notice: [do X] to [get Y], in the living-machine voice ("wake", not "unlock").
     private static let needsPlusNotice = "get ChatGPT Plus to wake Sidekick"
 
+    // MARK: Sidekick before the home screen (the onboarding policy)
+
+    /// Sidekick is HOME-ONLY. Until onboarding completes, a press can never open the notch, fire
+    /// a run, or raise the first-use permission gate — before the film's notch beat a press does
+    /// NOTHING (silence; the hover swell is off too, via notchButtonAvailable); after the beat it
+    /// answers with the honest aside. Live-checked per press so it can never go stale.
+    private static var hasCompletedOnboarding: Bool {
+        UserDefaults.standard.bool(forKey: AppState.onboardingKey)
+    }
+
+    /// Flipped the moment the film's notch beat is behind the user (the demo fired, or the film
+    /// step was skipped/advanced) — from here presses get the aside instead of silence.
+    /// FactoryReset wipes it with the rest of the defaults (the onboarding rewind).
+    static let notchDemoPlayedKey = "onboarding.notchDemoPlayed"
+
+    private static let finishOnboardingNotice = "finish onboarding to use Sidekick"
+
+    /// The window controller's gate for the hover affordance: no swell for a button that would
+    /// do nothing (pre-beat silence); during the beat and after it, the swell is honest.
+    var notchButtonAvailable: Bool {
+        Self.hasCompletedOnboarding || onboardingDemoArmed
+            || UserDefaults.standard.bool(forKey: Self.notchDemoPlayedKey)
+    }
+
+    /// True = the press was consumed by the onboarding policy (silence, or the aside). The
+    /// armed demo exempts only the notch CLICK — the film says "click the notch", so a hotkey
+    /// press stays quiet even during the beat.
+    private func interceptForOnboarding(demoEligible: Bool = false) -> Bool {
+        guard !Self.hasCompletedOnboarding else { return false }
+        if demoEligible, onboardingDemoArmed { return false }
+        if UserDefaults.standard.bool(forKey: Self.notchDemoPlayedKey) {
+            flash(Self.finishOnboardingNotice, for: 2.0)
+            Log("sidekick press during onboarding — the finish-onboarding aside")
+        } else {
+            Log("sidekick press during onboarding — silent (pre notch beat)")
+        }
+        return true
+    }
+
     private func voicePressBegan() {
         guard VoiceCapture.isAvailable else { return }
         // A hotkey tap while the type field is open toggles it closed (no action) — a quick way to back out.
@@ -193,6 +236,9 @@ final class CommandCoordinator {
         }
         guard !run.isRunning, !isInteracting else { Log("hotkey ignored — busy"); return }
         notchAnchor = .mainDisplay        // the hotkey always lives on the main display (incl. the asides below)
+        // Before the home screen, Sidekick doesn't exist yet (the onboarding policy above) —
+        // and the permission gate below can therefore never rise during onboarding.
+        if interceptForOnboarding() { return }
         // Knowledge-base-only plan (free/go): the notch answers the press INSTANTLY with the
         // Plus aside — same immediate beat as the mic-perms notice — and never opens for
         // listening or typing. Checked live per press, so it can never go stale.
@@ -370,6 +416,8 @@ final class CommandCoordinator {
         guard phase == .hidden, !run.isRunning else { return }
         notchAnchor = .builtInNotch       // the whole session lives on the bezel that was clicked
         if onboardingDemoArmed { beginNotchDemo(); return }
+        // Before home: silence pre-beat (the swell is off then anyway), the aside after.
+        if interceptForOnboarding(demoEligible: true) { return }
         if CodexAuth.knowledgeBaseOnly {
             flash(Self.needsPlusNotice, for: 2.0)
             Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
@@ -425,6 +473,7 @@ final class CommandCoordinator {
                 guard let self, self.phase == .typing else { self?.demoDraft = nil; return }
                 self.demoDraft = nil
                 self.onboardingDemoArmed = false                  // consumed — later clicks are real
+                UserDefaults.standard.set(true, forKey: Self.notchDemoPlayedKey)   // beat done → presses get the aside
                 let fired = self.onboardingDemoFired
                 self.onboardingDemoFired = nil
                 self.demoTask = nil

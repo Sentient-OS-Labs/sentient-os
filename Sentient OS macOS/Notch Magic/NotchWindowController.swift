@@ -389,7 +389,10 @@ final class NotchWindowController {
         if mouseTimerInterval == Self.pollFar, nearZone.contains(location) {
             retuneMouseTimer()
         }
-        guard !hovering, coordinator.phase == .hidden, hoverEntryRect.contains(location) else { return }
+        // notchButtonAvailable: during onboarding, before the film's notch beat, a click would do
+        // NOTHING — so the swell stays off too (a button must never tease a dead click).
+        guard !hovering, coordinator.phase == .hidden, coordinator.notchButtonAvailable,
+              hoverEntryRect.contains(location) else { return }
         beginHover()
     }
 

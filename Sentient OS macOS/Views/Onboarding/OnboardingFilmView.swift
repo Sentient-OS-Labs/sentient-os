@@ -123,7 +123,7 @@ struct OnboardingFilmView: View {
         .overlay(alignment: .bottomLeading) {
             if phase == .loading || phase == .playing || phase == .ridingToInvitation
                 || phase == .awaitingNotch || phase == .ridingSidekick {
-                FilmSkipButton(action: onContinue)
+                FilmSkipButton(action: exitStep)
                     .padding(.leading, 22).padding(.bottom, 13)
                     .transition(.opacity)
             }
@@ -187,8 +187,16 @@ struct OnboardingFilmView: View {
             setPhase(.ridingSidekick)
             driver.continueTo(Self.sidekickEndP)
         default:
-            onContinue()
+            exitStep()
         }
+    }
+
+    /// Leaving the film step (Continue, SKIP, the fallback slide): the notch beat is behind the
+    /// user now — from here to the home screen, a notch/hotkey press answers with the
+    /// "finish onboarding" aside instead of pre-beat silence (the coordinator's policy).
+    private func exitStep() {
+        UserDefaults.standard.set(true, forKey: CommandCoordinator.notchDemoPlayedKey)
+        onContinue()
     }
 
     /// Parked on "Click the notch": arm the coordinator's one-shot demo. The user's real bezel
@@ -217,7 +225,7 @@ struct OnboardingFilmView: View {
             OnboardingWhisper("STEP 1 OF 3")
             Text("An AI that knows your life, and acts on it.")
                 .display(30)
-            OnboardingNextButton(title: "Continue", action: onContinue)
+            OnboardingNextButton(title: "Continue", action: exitStep)
             Spacer()
             OnboardingTrustFooter()
         }
