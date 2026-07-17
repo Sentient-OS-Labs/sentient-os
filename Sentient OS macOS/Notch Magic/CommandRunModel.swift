@@ -31,6 +31,10 @@ final class CommandRunModel {
     /// alone doesn't need it.
     var onFinished: ((Outcome) -> Void)?
 
+    /// True while the onboarding notch demo is performing — the notch hides STOP (scripted
+    /// theater has nothing to stop). Cleared the moment a REAL run starts.
+    private(set) var isDemo = false
+
     private var recent: [String] = []
     private var section = ""                      // codex's current output section (user/codex/exec/…) — for filtering the bar
     private var task: Task<Void, Never>?
@@ -45,6 +49,7 @@ final class CommandRunModel {
         self.mode = mode
         self.source = source
         self.runStarted = Date()
+        isDemo = false
         isRunning = true
         recent = []
         section = ""
@@ -114,6 +119,7 @@ final class CommandRunModel {
     func startOnboardingDemo() {
         guard !isRunning else { return }
         mode = .computer
+        isDemo = true
         isRunning = true
         recent = []; section = ""
         remembering = nil; rememberClear?.cancel()

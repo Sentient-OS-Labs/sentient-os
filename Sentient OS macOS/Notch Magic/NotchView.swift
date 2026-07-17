@@ -165,6 +165,7 @@ struct NotchView: View {
                      remembering: coordinator.run.remembering,
                      hovering: coordinator.notchHovering,
                      demoText: coordinator.demoDraft,
+                     showStop: !coordinator.run.isDemo,
                      metrics: metrics,
                      onStop: { coordinator.stop() },
                      onSubmitText: { coordinator.submitTyped($0) },
@@ -186,6 +187,8 @@ struct NotchContent: View {
     /// The onboarding demo's auto-typing: when set, the type field's draft mirrors it (the show
     /// runs through the REAL TextField). nil = the user owns the field.
     var demoText: String? = nil
+    /// False during the onboarding demo run — scripted theater has nothing to STOP.
+    var showStop: Bool = true
     let metrics: NotchMetrics
     var onStop: () -> Void = {}
     var onSubmitText: (String) -> Void = { _ in }
@@ -325,7 +328,8 @@ struct NotchContent: View {
                 .foregroundStyle(.white.opacity(draft.isEmpty ? 0.3 : 0.7))
                 .allowsHitTesting(false)
         case .running:
-            NotchStopButton(action: onStop)
+            // The onboarding demo is theater — nothing real to stop, so no STOP.
+            if showStop { NotchStopButton(action: onStop) } else { Color.clear.frame(width: 1, height: 18) }
         case .finishing(let outcome):
             Image(systemName: Self.outcomeSymbol(outcome))
                 .font(.system(size: 11, weight: .bold))
