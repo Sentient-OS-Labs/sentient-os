@@ -151,15 +151,18 @@ struct OnboardingFilmView: View {
                     }
                     .transition(.opacity)
                 } else if phase == .hoodParked {
-                    // The hood park: page-placed like the morning's — centered in the
-                    // zone the exhibit reports below its caption band (driver.hoodBand),
-                    // re-asked on every resize, clamped on-screen for short windows.
+                    // The hood park: page-placed like the morning's — pinned just under
+                    // the zone top the exhibit reports (its caption band, tall hover
+                    // state reserved; driver.hoodBand), re-asked on every resize and
+                    // clamped on-screen. NOT centered in the remaining zone: the
+                    // exhibit's bottom chrome leaves only slack there on height-bound
+                    // windows, so a centered button always rode the bottom clamp.
                     // Fallback = the old bottom-hug until the page answers.
                     GeometryReader { geo in
                         OnboardingNextButton(title: "Continue", action: advanceFromPark)
                             .position(x: geo.size.width / 2,
                                       y: min(hoodBandCenter ?? (geo.size.height - 68),
-                                             geo.size.height - 34))
+                                             geo.size.height - 40))
                             .onAppear { measureHoodBand() }
                             .onChange(of: geo.size) { measureHoodBand() }
                     }
@@ -300,12 +303,16 @@ struct OnboardingFilmView: View {
         }
     }
 
-    /// Same for the hood park: center in the zone below the exhibit's caption band.
+    /// The hood park: pin the button's center a fixed beat below the reported zone
+    /// top (the caption band's reserved bottom edge). Centering in the zone itself
+    /// glued the button to the bottom of the window — the exhibit's own chrome
+    /// leaves the zone ~30px tall on height-bound windows, and on width-bound ones
+    /// the pooled slack put the center far below where the eye wants the button.
     private func measureHoodBand() {
         withTrailingRead {
             driver.hoodBand { band in
                 guard let band else { return }
-                hoodBandCenter = (band.top + band.bottom) / 2
+                hoodBandCenter = band.top + 30
             }
         }
     }
