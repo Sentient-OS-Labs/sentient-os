@@ -55,6 +55,11 @@ struct OnboardingFilmView: View {
     /// The bridge for driving the page's autopilot (leg 2's continueTo).
     @State private var driver = FilmDriver()
 
+    /// The morning park Continue's page-measured center Y — the middle of the black
+    /// band the film reports via driver.morningBand. nil until the page answers (or
+    /// an older deploy never does); the fraction fallback holds until then.
+    @State private var morningBandCenter: CGFloat?
+
     /// Leg 1: the film to the morning-home rest — p 0.42 (pNight 0.76: home settled, wake
     /// line up, before the zoom at 0.477 and the turn/dive after it). The turn ("One more
     /// thing. Meet Sidekick.") belongs to LEG 2, which rides from the park to the film's
@@ -116,19 +121,23 @@ struct OnboardingFilmView: View {
                     .allowsHitTesting(phase == .hoodParked)
 
                 // Continue blooms in whenever a leg parks. On the MORNING park the laptop
-                // fills the window's lower half, so the button sits ABOVE it — in the black
-                // band between the "9:00 AM" whisper and the lid's top edge (~18.5% down;
-                // the film's frame scales with the window, so the gap does too). The film's
-                // FINAL park is a full-viewport stage, so that Continue hugs the bottom.
+                // fills the window's lower half, so the button sits ABOVE it — centered in
+                // the black band between the "9:00 AM" whisper and the lid's top edge.
+                // The band's position is PAGE-MEASURED (driver.morningBand: the film lays
+                // itself out responsively, so any fixed native coordinate drifts onto the
+                // whisper or the lid the moment the window resizes), re-asked on every
+                // size change; the fraction is only the pre-answer/old-deploy fallback.
+                // The film's FINAL park is a full-viewport stage, so that Continue hugs
+                // the bottom.
                 if phase == .parked {
                     GeometryReader { geo in
-                        VStack {
-                            OnboardingNextButton(title: "Continue", action: advanceFromPark)
-                            Spacer()
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, geo.size.height * 0.185)
+                        OnboardingNextButton(title: "Continue", action: advanceFromPark)
+                            .position(x: geo.size.width / 2,
+                                      y: morningBandCenter ?? geo.size.height * 0.185)
+                            .onAppear { measureMorningBand() }
+                            .onChange(of: geo.size) { measureMorningBand() }
                     }
+                    .ignoresSafeArea()
                     .transition(.opacity)
                 } else if phase == .sidekickDone || phase == .hoodParked {
                     // Lifted off the very edge — both full-viewport stages have breathing
@@ -259,6 +268,20 @@ struct OnboardingFilmView: View {
         }
     }
 
+    /// Ask the page where the morning band is (whisper bottom → lid top) and center
+    /// the Continue in it. Fired when the morning park appears and again on every
+    /// window resize; a nil answer keeps whatever we had (fallback or last good).
+    /// The floor handles the short-window case where the film's own layout leaves NO
+    /// gap (the lid rises past the narration, the band inverts — field-measured at
+    /// 1100×700): the button then sits just below the narration, over the lid's dark
+    /// top edge. Covering the bezel reads fine; covering text never does.
+    private func measureMorningBand() {
+        driver.morningBand { band in
+            guard let band else { return }
+            morningBandCenter = max((band.top + band.bottom) / 2, band.top + 30)
+        }
+    }
+
     /// The webview's entrance — a long, gentle rise from black (the film's entrance is
     /// already playing underneath it). Idempotent: ready + the didFinish fallback can race.
     private func fadeIn() {
@@ -321,6 +344,26 @@ final class FilmDriver {
     /// hit-testing (hover captions + the Read More popup) and its wheel gate.
     func setInteractive(_ on: Bool) {
         (webView as? PassiveWebView)?.interactive = on
+    }
+
+    /// The morning park's free band, measured by the PAGE: [narration bottom, lid top]
+    /// in viewport px, which map 1:1 to view points. The film lays itself out
+    /// responsively, so a fixed native coordinate for the Continue button goes stale on
+    /// every window resize — the page is the only honest source for where the black
+    /// band actually is. An INVERTED band (bottom above top) is meaningful, not junk:
+    /// at short windows the film stacks the lid up past the narration, and the caller's
+    /// floor rule places the button accordingly. nil = no answer (older deploy,
+    /// mid-load); callers keep their fraction fallback.
+    func morningBand(completion: @escaping ((top: CGFloat, bottom: CGFloat)?) -> Void) {
+        guard let webView else { completion(nil); return }
+        webView.evaluateJavaScript(
+            "window.__sentientAutopilot?.morningBand?.() ?? null") { result, _ in
+            guard let band = result as? [Double], band.count == 2 else {
+                completion(nil)
+                return
+            }
+            completion((CGFloat(band[0]), CGFloat(band[1])))
+        }
     }
 }
 
