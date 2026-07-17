@@ -20,26 +20,35 @@ import WebKit
 struct OnboardingFilmView: View {
     let onContinue: () -> Void
 
-    /// The step's phases: black until the film is really rendering → the ride → parked
-    /// (Continue up). `unavailable` is the offline fallback slide. The loading → playing
-    /// fade keys on the page's "ready" message (posted post-hydration, as the entrance
-    /// starts) — WKWebView's didFinish fires long before first paint, so fading on it pops
-    /// content into an already-visible view; didFinish survives only as a grace-period
-    /// fallback for a page that never posts.
-    private enum Phase { case loading, playing, parked, unavailable }
+    /// The step's phases, two film legs in one webview: black until the film is really
+    /// rendering → leg 1 (night → the morning park; Continue up) → on Continue, leg 2
+    /// (the turn, "One more thing. Meet Sidekick.", the dive, the whole Sidekick scene;
+    /// same page instance, `continueTo` over evaluateJavaScript) → parked again → the
+    /// final Continue advances onboarding. `unavailable` is the offline fallback slide.
+    /// The loading → playing fade keys on the page's "ready" message (posted
+    /// post-hydration, as the entrance starts) — WKWebView's didFinish fires long before
+    /// first paint, so fading on it pops content into an already-visible view; didFinish
+    /// survives only as a grace-period fallback for a page that never posts.
+    private enum Phase { case loading, playing, parked, ridingSidekick, sidekickDone, unavailable }
     @State private var phase: Phase = .loading
 
     /// didFinish fired — arms the fallback fade for a "ready"-less page (older deploy).
     @State private var finishedLoad = false
 
-    /// The production cut: the film to the morning-home rest — p 0.42 (pNight 0.76: home
-    /// settled, wake line up, before the zoom at 0.477 and the turn/dive after it). The turn
-    /// ("One more thing. Meet Sidekick.") must never be seen in onboarding.
+    /// The bridge for driving the page's autopilot (leg 2's continueTo).
+    @State private var driver = FilmDriver()
+
+    /// Leg 1: the film to the morning-home rest — p 0.42 (pNight 0.76: home settled, wake
+    /// line up, before the zoom at 0.477 and the turn/dive after it). The turn ("One more
+    /// thing. Meet Sidekick.") belongs to LEG 2, which rides from the park to the film's
+    /// final frame (0.999 — never 1.0: p ≥ 1 means the page bottom, and the site's tail +
+    /// footer must never scroll into the webview).
     /// ⚠️ Parked beats are ADDRESSES into the film's scroll timeline: whenever the website
-    /// re-budgets FilmHero's per-scene _VH constants, this value must be re-derived in
-    /// lockstep (the contract lives in the site's Autopilot.tsx header; p = beat vh /
-    /// SCROLL_VH — 0.42 = the 2026-07-16 pacing). Pace rides the page's own defaults.
+    /// re-budgets FilmHero's per-scene _VH constants, these must be re-derived in lockstep
+    /// (the contract lives in the site's Autopilot.tsx header; p = beat vh / SCROLL_VH —
+    /// 0.42 = the 2026-07-16 pacing). Pace rides the page's own defaults.
     private static let productionURL = URL(string: "https://sentient-os.ai/onboarding?end=0.42")!
+    private static let sidekickEndP = 0.999
 
     private static var filmURL: URL {
         #if DEBUG
@@ -57,31 +66,32 @@ struct OnboardingFilmView: View {
                 fallbackSlide.transition(.opacity)
             } else {
                 FilmWebView(url: Self.filmURL,
+                            driver: driver,
                             onLoaded: { finishedLoad = true },
                             onReady: { fadeIn() },
-                            onParked: { setPhase(.parked) },
-                            onFailed: { if phase != .parked { setPhase(.unavailable) } })
+                            onParked: { legParked() },
+                            onFailed: { if phase == .loading { setPhase(.unavailable) } })
                     .ignoresSafeArea()
                     .opacity(phase == .loading ? 0 : 1)
                     .allowsHitTesting(false)
 
-                // Continue blooms in the moment the film parks on the morning home.
-                // Hugs the window bottom — at the parked frame the Mac's chassis reaches
-                // low, and the button must sit in the black band BELOW the laptop, never
-                // on its base.
-                if phase == .parked {
+                // Continue blooms in whenever a leg parks. Hugs the window bottom — at
+                // the parked frames the Mac's chassis reaches low, and the button must
+                // sit in the black band BELOW the laptop, never on its base. The first
+                // Continue rides on into the Sidekick leg; the second leaves the film.
+                if phase == .parked || phase == .sidekickDone {
                     VStack {
                         Spacer()
-                        OnboardingNextButton(title: "Continue", action: onContinue)
+                        OnboardingNextButton(title: "Continue", action: advanceFromPark)
                             .padding(.bottom, 14)
                     }
                     .transition(.opacity)
                 }
             }
         }
-        // A quiet skip for the impatient, gone once Continue is up.
+        // A quiet skip for the impatient, gone whenever Continue is up.
         .overlay(alignment: .bottomLeading) {
-            if phase == .loading || phase == .playing {
+            if phase == .loading || phase == .playing || phase == .ridingSidekick {
                 FilmSkipButton(action: onContinue)
                     .padding(.leading, 22).padding(.bottom, 13)
                     .transition(.opacity)
@@ -98,17 +108,43 @@ struct OnboardingFilmView: View {
             try? await Task.sleep(for: .seconds(1.2))
             fadeIn()
         }
-        // Park watchdog: the ride to p 0.54 takes ~15s after load; if the park signal never
-        // arrives (old deploy without ?end, JS hiccup), Continue blooms anyway.
+        // Park watchdogs, one per leg: if the park signal never arrives (older deploy,
+        // JS hiccup), Continue blooms anyway. Leg 1 rides ~15s, leg 2 ~17s — both bounded.
         .task(id: phase == .playing) {
             guard phase == .playing else { return }
             try? await Task.sleep(for: .seconds(40))
             if phase == .playing { setPhase(.parked) }
         }
+        .task(id: phase == .ridingSidekick) {
+            guard phase == .ridingSidekick else { return }
+            try? await Task.sleep(for: .seconds(45))
+            if phase == .ridingSidekick { setPhase(.sidekickDone) }
+        }
     }
 
     private func setPhase(_ new: Phase) {
         withAnimation(.easeInOut(duration: 0.45)) { phase = new }
+    }
+
+    /// A leg landed — route the page's "parked" by which leg was riding.
+    private func legParked() {
+        switch phase {
+        case .loading, .playing:  setPhase(.parked)
+        case .ridingSidekick:     setPhase(.sidekickDone)
+        default: break
+        }
+    }
+
+    /// The parked Continue: first park rides on into the Sidekick leg (same page, no
+    /// reload); the Sidekick park hands onboarding to the next step.
+    private func advanceFromPark() {
+        switch phase {
+        case .parked:
+            setPhase(.ridingSidekick)
+            driver.continueTo(Self.sidekickEndP)
+        default:
+            onContinue()
+        }
     }
 
     /// The webview's entrance — a long, gentle rise from black (the film's entrance is
@@ -157,6 +193,18 @@ private struct FilmSkipButton: View {
 
 // MARK: - The webview
 
+/// The native → page bridge: holds the webview so the step can drive the page's
+/// autopilot (window.__sentientAutopilot, installed by the site on mount).
+final class FilmDriver {
+    weak var webView: WKWebView?
+
+    /// Resume the parked ride to a new film-p address (leg 2: the Sidekick scene).
+    func continueTo(_ end: Double) {
+        Log("Onboarding film: continueTo(\(end))")
+        webView?.evaluateJavaScript("window.__sentientAutopilot?.continueTo(\(end))")
+    }
+}
+
 /// A WKWebView that can never be interacted with, so the film can't be scrolled off its
 /// autopilot or clicked away: hitTest nil keeps the whole subtree out of event routing,
 /// the scrollWheel stub swallows anything that arrives some other way (responder chain),
@@ -169,6 +217,7 @@ private final class PassiveWebView: WKWebView {
 
 private struct FilmWebView: NSViewRepresentable {
     let url: URL
+    let driver: FilmDriver
     let onLoaded: () -> Void
     let onReady: () -> Void
     let onParked: () -> Void
@@ -198,6 +247,7 @@ private struct FilmWebView: NSViewRepresentable {
         webView.underPageBackgroundColor = .black   // never a white flash behind the film
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
+        driver.webView = webView
         Log("Onboarding film: loading \(url.absoluteString)")
         webView.load(URLRequest(url: url))
         return webView
