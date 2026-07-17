@@ -164,6 +164,7 @@ struct NotchView: View {
                      statusLine: coordinator.run.statusLine,
                      remembering: coordinator.run.remembering,
                      hovering: coordinator.notchHovering,
+                     demoText: coordinator.demoDraft,
                      metrics: metrics,
                      onStop: { coordinator.stop() },
                      onSubmitText: { coordinator.submitTyped($0) },
@@ -182,6 +183,9 @@ struct NotchContent: View {
     /// drop shadow — no glow, no content — and a click opens the type field. Honored only while
     /// `.hidden`; any real phase owns the shape.
     var hovering: Bool = false
+    /// The onboarding demo's auto-typing: when set, the type field's draft mirrors it (the show
+    /// runs through the REAL TextField). nil = the user owns the field.
+    var demoText: String? = nil
     let metrics: NotchMetrics
     var onStop: () -> Void = {}
     var onSubmitText: (String) -> Void = { _ in }
@@ -247,6 +251,11 @@ struct NotchContent: View {
             } else {
                 fieldFocused = false
             }
+        }
+        // The onboarding demo types through the real field: the draft mirrors the scripted text
+        // while it's set (the field renders + measures exactly as if the user typed it).
+        .onChange(of: demoText) { _, text in
+            if let text { draft = text }
         }
     }
 

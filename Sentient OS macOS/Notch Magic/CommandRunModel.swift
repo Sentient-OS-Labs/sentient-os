@@ -103,6 +103,66 @@ final class CommandRunModel {
         task?.cancel()
     }
 
+    // MARK: The onboarding notch demo
+
+    /// The film step's scripted run — the notch performs the film's shopping story on the user's
+    /// real bezel with NOTHING real underneath: no codex, no screenshots, and deliberately no
+    /// scoreboard or analytics (a demo is not a health signal, so complete() is bypassed). The
+    /// lines are codex-SHAPED and replay through the real push() cleaner, so the status bar and
+    /// the "Remembering" bloom render exactly as a live run does. Same finishing contract
+    /// (onFinished → the coordinator's ✓ flourish + retract); stop() cancels it like any run.
+    func startOnboardingDemo() {
+        guard !isRunning else { return }
+        mode = .computer
+        isRunning = true
+        recent = []; section = ""
+        remembering = nil; rememberClear?.cancel()
+        statusLine = "Starting computer use…"
+        Log("──────── 🤖 NOTCH DEMO (onboarding, scripted) ────────")
+        let vault = VaultGenerator.vaultRoot.path
+        // (pause-before-line, line) — paced to the film's background beat (~9s to ✓).
+        let script: [(Double, String)] = [
+            (0.8, "codex"),
+            (0.0, "Thinking through your task"),
+            (1.6, "exec"),
+            (0.0, "cat '\(vault)/Kitchen/Pantry & Fridge.md'"),
+            (2.1, "codex"),
+            (0.0, "You already have arborio rice, butter, and lemons"),
+            (2.2, "Opening amazing in a background window"),
+            (1.9, "Adding the missing ingredients to the cart"),
+        ]
+        task = Task { [weak self] in
+            do {
+                for (pause, line) in script {
+                    try await Task.sleep(for: .seconds(pause))
+                    guard let self, self.isRunning else { return }
+                    self.push(line)
+                }
+                try await Task.sleep(for: .seconds(1.7))
+                guard let self, self.isRunning else { return }
+                Log("──────── 🤖 ✓ NOTCH DEMO done ────────")
+                self.demoFinish(.success, line: "✓ done")
+            } catch {   // cancelled — a STOP mid-demo gets the honest beat, same as a real run
+                guard let self, self.isRunning else { return }
+                Log("──────── 🤖 ■ NOTCH DEMO stopped ────────")
+                self.demoFinish(.stopped, line: "■ stopped")
+            }
+        }
+    }
+
+    /// The demo's exit — complete() minus the scoreboard + analytics a fake run must never feed.
+    private func demoFinish(_ outcome: Outcome, line: String) {
+        clearRemembering()
+        statusLine = line
+        isRunning = false
+        task = nil
+        onFinished?(outcome)
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(outcome == .success ? 2.5 : 4.5))
+            if let self, !self.isRunning { self.statusLine = "" }
+        }
+    }
+
     private func push(_ line: String) {
         guard isRunning else { return }
 

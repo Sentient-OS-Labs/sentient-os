@@ -64,6 +64,20 @@ final class CommandCoordinator {
     /// until the next interaction starts.
     private(set) var notchAnchor: NotchAnchor = .mainDisplay
 
+    /// Onboarding's film step arms this while the film is parked on "Click the notch": the next
+    /// notch click plays the scripted Sidekick demo on the user's real bezel — the real type field,
+    /// the task typing itself, the run model's scripted story — with the two real-world doors (the
+    /// Plus aside, the first-use permission gate) deliberately bypassed: nothing real can fire, so
+    /// there is nothing to gate. One-shot: consumed at fire, restored by a dismissed field,
+    /// disarmed when the film step leaves.
+    private(set) var onboardingDemoArmed = false
+    private var onboardingDemoFired: (() -> Void)?
+    private var demoTask: Task<Void, Never>?
+
+    /// What the demo is currently "typing" — NotchContent mirrors it into the field's draft, so
+    /// the show runs through the REAL TextField. nil = the user owns the field.
+    private(set) var demoDraft: String?
+
     private let hotkey = SidekickHotkeyMonitor()
     private let voice = VoiceCapture()
     private var hotkeyChangeObserver: NSObjectProtocol?
@@ -324,6 +338,9 @@ final class CommandCoordinator {
     /// ⏎ from the notch field — fire it as a computer-use task (empty just closes).
     func submitTyped(_ text: String) {
         guard phase == .typing else { return }
+        // While the onboarding demo owns the field, a stray user ⏎ must never reach the real
+        // submit path (the script fires the demo itself).
+        guard !onboardingDemoArmed else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { dismissTyping(); return }
         submit(trimmed, mode: .computer, source: .notchTyped)   // typed → no read-back
@@ -352,6 +369,7 @@ final class CommandCoordinator {
     func notchClicked() {
         guard phase == .hidden, !run.isRunning else { return }
         notchAnchor = .builtInNotch       // the whole session lives on the bezel that was clicked
+        if onboardingDemoArmed { beginNotchDemo(); return }
         if CodexAuth.knowledgeBaseOnly {
             flash(Self.needsPlusNotice, for: 2.0)
             Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
@@ -363,6 +381,61 @@ final class CommandCoordinator {
         }
         setPhase(.typing)
         Log("notch clicked → typing")
+    }
+
+    // MARK: The onboarding notch demo (the film step's "click the notch" beat)
+
+    /// Arm the one-shot demo. `onFired` is the film step's cue to resume the webview ride the
+    /// moment the demo "presses ⏎" — the film's browser windows play the shopping run while the
+    /// real notch narrates.
+    func armOnboardingNotchDemo(onFired: @escaping () -> Void) {
+        onboardingDemoArmed = true
+        onboardingDemoFired = onFired
+        Log("onboarding notch demo ARMED")
+    }
+
+    /// Disarm + cancel any in-flight typing script (the film step left, or SKIP). A demo RUN
+    /// already in flight is left to finish on its own — it's pure theater and self-retracts.
+    func disarmOnboardingNotchDemo() {
+        guard onboardingDemoArmed || demoTask != nil else { return }
+        onboardingDemoArmed = false
+        onboardingDemoFired = nil
+        demoTask?.cancel(); demoTask = nil
+        demoDraft = nil
+        Log("onboarding notch demo disarmed")
+    }
+
+    /// The demo click: the REAL type field opens (no Plus aside, no permission gate — nothing real
+    /// can fire), the film's task types itself, then the run model performs the scripted story.
+    /// A dismissed field (Esc / click-away / hotkey tap) bails the script and re-arms for another
+    /// click; the arm is consumed only when the demo actually fires.
+    private func beginNotchDemo() {
+        setPhase(.typing)
+        Log("notch clicked → onboarding demo (typing)")
+        demoTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(0.7))          // the field's bloom + focus settle
+                let task = "order this stuff"
+                for i in 1...task.count {
+                    guard let self, self.phase == .typing else { self?.demoDraft = nil; return }
+                    self.demoDraft = String(task.prefix(i))
+                    try await Task.sleep(for: .seconds(0.07))
+                }
+                try await Task.sleep(for: .seconds(0.4))          // the beat before ⏎
+                guard let self, self.phase == .typing else { self?.demoDraft = nil; return }
+                self.demoDraft = nil
+                self.onboardingDemoArmed = false                  // consumed — later clicks are real
+                let fired = self.onboardingDemoFired
+                self.onboardingDemoFired = nil
+                self.demoTask = nil
+                self.run.startOnboardingDemo()
+                self.setPhase(.running)
+                Log("▶︎ onboarding notch demo fired")
+                fired?()
+            } catch {
+                self?.demoDraft = nil                             // cancelled by disarm — nothing to restore
+            }
+        }
     }
 
     /// Cancel — back out of whatever the notch is doing, mirroring the obvious one-tap action for each state:
