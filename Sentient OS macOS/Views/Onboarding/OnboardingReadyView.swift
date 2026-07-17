@@ -114,7 +114,11 @@ struct OnboardingReadyView: View {
 
             Spacer()
 
-            OnboardingTrustFooter()
+            // This screen trades the trust footer for the one thing worth knowing before firing.
+            Text("This initial analysis can take a few hours. We recommend you run this overnight.")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.faint)
+                .padding(.bottom, 28)
         }
         .padding(40)
         .sheet(isPresented: $showWhatsAppPicker) {
