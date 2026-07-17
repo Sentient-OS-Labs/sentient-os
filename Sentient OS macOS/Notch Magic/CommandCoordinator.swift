@@ -64,8 +64,9 @@ final class CommandCoordinator {
     /// until the next interaction starts.
     private(set) var notchAnchor: NotchAnchor = .mainDisplay
 
-    /// Onboarding's film step arms this while the film is parked on "Click the notch": the next
-    /// notch click plays the scripted Sidekick demo on the user's real bezel — the real type field,
+    /// Onboarding's film step arms this while the film is parked on its invitation: the next
+    /// notch click OR hotkey press plays the scripted Sidekick demo on the user's real notch
+    /// (the hardware bezel, or the main display's software overlay) — the real type field,
     /// the task typing itself, the run model's scripted story — with the two real-world doors (the
     /// Plus aside, the first-use permission gate) deliberately bypassed: nothing real can fire, so
     /// there is nothing to gate. One-shot: consumed at fire, restored by a dismissed field,
@@ -206,11 +207,10 @@ final class CommandCoordinator {
     }
 
     /// True = the press was consumed by the onboarding policy (silence, or the aside). The
-    /// armed demo exempts only the notch CLICK — the film says "click the notch", so a hotkey
-    /// press stays quiet even during the beat.
-    private func interceptForOnboarding(demoEligible: Bool = false) -> Bool {
+    /// armed demo never reaches here — both its doors (the notch click, the hotkey press)
+    /// answer before their intercept.
+    private func interceptForOnboarding() -> Bool {
         guard !Self.hasCompletedOnboarding else { return false }
-        if demoEligible, onboardingDemoArmed { return false }
         if UserDefaults.standard.bool(forKey: Self.notchDemoPlayedKey) {
             flash(Self.finishOnboardingNotice, for: 2.0)
             Log("sidekick press during onboarding — the finish-onboarding aside")
@@ -221,6 +221,16 @@ final class CommandCoordinator {
     }
 
     private func voicePressBegan() {
+        // The armed onboarding beat answers the hotkey too — the key variant's NAMED door
+        // ("press the right ⌘ key" on iMacs / external displays / clamshell), and a forgiving
+        // one during the click beat. Ahead of the voice guard on purpose (the demo is typing
+        // theater, no mic involved), and fired on press-DOWN so a user who holds, expecting
+        // hold-to-talk, still gets the show — the release lands on .typing and does nothing.
+        if onboardingDemoArmed, phase == .hidden, !run.isRunning {
+            notchAnchor = .mainDisplay    // hardware notch when it's main; software notch otherwise
+            beginNotchDemo(door: "hotkey press")
+            return
+        }
         guard VoiceCapture.isAvailable else { return }
         // A hotkey tap while the type field is open toggles it closed (no action) — a quick way to back out.
         if phase == .typing { dismissTyping(); return }
@@ -415,9 +425,9 @@ final class CommandCoordinator {
     func notchClicked() {
         guard phase == .hidden, !run.isRunning else { return }
         notchAnchor = .builtInNotch       // the whole session lives on the bezel that was clicked
-        if onboardingDemoArmed { beginNotchDemo(); return }
+        if onboardingDemoArmed { beginNotchDemo(door: "notch click"); return }
         // Before home: silence pre-beat (the swell is off then anyway), the aside after.
-        if interceptForOnboarding(demoEligible: true) { return }
+        if interceptForOnboarding() { return }
         if CodexAuth.knowledgeBaseOnly {
             flash(Self.needsPlusNotice, for: 2.0)
             Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
@@ -431,7 +441,7 @@ final class CommandCoordinator {
         Log("notch clicked → typing")
     }
 
-    // MARK: The onboarding notch demo (the film step's "click the notch" beat)
+    // MARK: The onboarding notch demo (the film step's invitation beat — click or hotkey)
 
     /// Arm the one-shot demo. `onFired` is the film step's cue to resume the webview ride the
     /// moment the demo "presses ⏎" — the film's browser windows play the shopping run while the
@@ -453,13 +463,14 @@ final class CommandCoordinator {
         Log("onboarding notch demo disarmed")
     }
 
-    /// The demo click: the REAL type field opens (no Plus aside, no permission gate — nothing real
-    /// can fire), the film's task types itself, then the run model performs the scripted story.
-    /// A dismissed field (Esc / click-away / hotkey tap) bails the script and re-arms for another
-    /// click; the arm is consumed only when the demo actually fires.
-    private func beginNotchDemo() {
+    /// The demo (a notch click or a hotkey press — `door` labels the log): the REAL type field
+    /// opens (no Plus aside, no permission gate — nothing real can fire), the film's task types
+    /// itself, then the run model performs the scripted story. A dismissed field (Esc /
+    /// click-away / hotkey tap) bails the script and re-arms for another answer; the arm is
+    /// consumed only when the demo actually fires.
+    private func beginNotchDemo(door: String) {
         setPhase(.typing)
-        Log("notch clicked → onboarding demo (typing)")
+        Log("\(door) → onboarding demo (typing)")
         demoTask = Task { [weak self] in
             do {
                 try await Task.sleep(for: .seconds(0.7))          // the field's bloom + focus settle

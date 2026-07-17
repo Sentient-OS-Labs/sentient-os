@@ -17,6 +17,7 @@
 //  server (e.g. http://localhost:3100/onboarding?end=0.42).
 //
 
+import AppKit
 import SwiftUI
 import WebKit
 
@@ -24,7 +25,7 @@ struct OnboardingFilmView: View {
     let onContinue: () -> Void
 
     /// For the notch demo: the film step arms the coordinator's one-shot scripted Sidekick
-    /// performance while the film is parked on "Click the notch".
+    /// performance while the film is parked on the invitation (click the notch / press right ⌘).
     @Environment(AppState.self) private var appState
 
     /// The step's phases, three film legs in one webview: black until the film is really
@@ -39,10 +40,11 @@ struct OnboardingFilmView: View {
     /// post-hydration, as the entrance starts) — WKWebView's didFinish fires long before
     /// first paint, so fading on it pops content into an already-visible view; didFinish
     /// survives only as a grace-period fallback for a page that never posts.
-    /// With a real notch, the Sidekick leg splits around the hardware beat: ride to the
-    /// "Click the notch" whisper (.ridingToInvitation) → wait for the user's REAL bezel click
-    /// (.awaitingNotch — the coordinator's armed demo answers it) → the demo fires and the film
-    /// rides on (.ridingSidekick). Notch-less Macs skip straight from .parked to .ridingSidekick.
+    /// The Sidekick leg splits around the hardware beat on EVERY Mac: ride to the invitation
+    /// whisper (.ridingToInvitation — "Click the notch" on a lone notch display, "Press the
+    /// right ⌘ key" otherwise) → wait for the user's real answer (.awaitingNotch — the
+    /// coordinator's armed demo takes a bezel click or a hotkey press alike) → the demo fires
+    /// and the film rides on (.ridingSidekick).
     private enum Phase {
         case loading, playing, parked, ridingToInvitation, awaitingNotch,
              ridingSidekick, sidekickDone, ridingToHood, hoodParked, unavailable
@@ -77,14 +79,22 @@ struct OnboardingFilmView: View {
     private static let productionURL = URL(string: "https://sentient-os.ai/onboarding?end=0.42")!
     private static let sidekickEndP = 0.999
 
-    /// The "Click the notch" park — pDay 0.44 (the invitation whisper holds 0.42–0.47), in
-    /// master p: 0.4773 + 0.44 × 0.5227. Only used when a real notch exists.
+    /// The invitation park — pDay 0.44 (the invitation whisper holds 0.42–0.47), in
+    /// master p: 0.4773 + 0.44 × 0.5227. Every Mac rides here.
     private static let invitationEndP = 0.707
 
-    /// A Mac with a real notch gets the hardware beat: the film hides its DOM notch
-    /// (?notch=real) and the user's own bezel performs the Sidekick show.
-    private static var realNotchAvailable: Bool {
-        NotchWindowController.builtInNotchScreen() != nil
+    /// Which door the film's invitation names (the ?notch= query value). "real" = a lone
+    /// built-in notch display — "Click the notch", the bezel moment. "key" = everything else
+    /// (external display connected, iMac, clamshell, a notch-less MacBook) — "Press the
+    /// right ⌘ key": the press drops the overlay on the main display, a software notch when
+    /// there's no cutout (the hotkey path's shipped rendering). Either way the film hides its
+    /// DOM notch and the user's own notch performs the Sidekick show. During the beat BOTH
+    /// doors answer (the coordinator arms click and hotkey alike), so the variant only picks
+    /// the whisper — baked once at film load; a mid-film display change just means the
+    /// whisper names the other door, which still works.
+    private static var notchBeat: String {
+        NotchWindowController.builtInNotchScreen() != nil && NSScreen.screens.count == 1
+            ? "real" : "key"
     }
 
     private static var filmURL: URL {
@@ -93,11 +103,10 @@ struct OnboardingFilmView: View {
         if let raw = UserDefaults.standard.string(forKey: "dev.film.url"),
            let url = URL(string: raw) { base = url }
         #endif
-        guard realNotchAvailable,
-              var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
+        guard var comps = URLComponents(url: base, resolvingAgainstBaseURL: false) else { return base }
         var items = comps.queryItems ?? []
         if !items.contains(where: { $0.name == "notch" }) {
-            items.append(URLQueryItem(name: "notch", value: "real"))
+            items.append(URLQueryItem(name: "notch", value: notchBeat))
             comps.queryItems = items
         }
         return comps.url ?? base
@@ -211,8 +220,8 @@ struct OnboardingFilmView: View {
             if phase == .ridingToHood { setPhase(.hoodParked) }
         }
         // The notch invitation was the one wait without a watchdog — the corner SKIP
-        // used to be its manual exit (removed 2026-07-17). If the bezel never gets
-        // clicked, the film rides on by itself, exactly as answering it would.
+        // used to be its manual exit (removed 2026-07-17). If the invitation is never
+        // answered, the film rides on by itself, exactly as answering it would.
         .task(id: phase == .awaitingNotch) {
             guard phase == .awaitingNotch else { return }
             try? await Task.sleep(for: .seconds(60))
@@ -247,18 +256,14 @@ struct OnboardingFilmView: View {
         }
     }
 
-    /// The parked Continue: the first park rides on — to the hardware notch beat when the Mac
-    /// has one, else straight through the whole Sidekick scene. The Sidekick park's Continue
-    /// rides leg 3 down to the Under-the-hood exhibit; the hood park's Continue hands
+    /// The parked Continue: the first park rides on to the invitation beat. The Sidekick park's
+    /// Continue rides leg 3 down to the Under-the-hood exhibit; the hood park's Continue hands
     /// onboarding to the next step.
     private func advanceFromPark() {
         switch phase {
-        case .parked where Self.realNotchAvailable:
+        case .parked:
             setPhase(.ridingToInvitation)
             driver.continueTo(Self.invitationEndP)
-        case .parked:
-            setPhase(.ridingSidekick)
-            driver.continueTo(Self.sidekickEndP)
         case .sidekickDone:
             setPhase(.ridingToHood)
             // A deploy without the hood anchor (older site) reports unsupported —
@@ -282,10 +287,10 @@ struct OnboardingFilmView: View {
         onContinue()
     }
 
-    /// Parked on "Click the notch": arm the coordinator's one-shot demo. The user's real bezel
-    /// click opens the real type field, the task types itself, and the moment the demo fires,
-    /// the film rides on — the webview's windows play the shopping run while the hardware notch
-    /// narrates. Disarmed on step-exit via onDisappear.
+    /// Parked on the invitation: arm the coordinator's one-shot demo. The user's answer — a
+    /// bezel click or a hotkey press — opens the real type field, the task types itself, and
+    /// the moment the demo fires, the film rides on — the webview's windows play the shopping
+    /// run while the real notch narrates. Disarmed on step-exit via onDisappear.
     private func armNotchBeat() {
         setPhase(.awaitingNotch)
         appState.commandCoordinator.armOnboardingNotchDemo { [self] in
