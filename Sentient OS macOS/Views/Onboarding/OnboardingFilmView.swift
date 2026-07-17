@@ -120,10 +120,12 @@ struct OnboardingFilmView: View {
                     }
                     .transition(.opacity)
                 } else if phase == .sidekickDone {
+                    // Lifted off the very edge — the full-viewport stage has breathing
+                    // room below the windows, and a bottom-hugging button read awkward.
                     VStack {
                         Spacer()
                         OnboardingNextButton(title: "Continue", action: advanceFromPark)
-                            .padding(.bottom, 14)
+                            .padding(.bottom, 44)
                     }
                     .transition(.opacity)
                 }
