@@ -77,7 +77,13 @@ struct OnboardingModelDownloadView: View {
         .animation(.easeInOut(duration: 0.3), value: download.phase)
         // The safety net: normally the post-FDA launch kick started this minutes ago, but if that
         // was missed (FDA granted without the relaunch), Start Analysis still gets a download.
-        .onAppear { download.kickIfNeeded() }
+        // fullScreenVisible hands the bar off from the corner whisper (ModelDownloadWhisper) —
+        // one signature bar on screen, never two.
+        .onAppear {
+            download.kickIfNeeded()
+            download.fullScreenVisible = true
+        }
+        .onDisappear { download.fullScreenVisible = false }
     }
 }
 

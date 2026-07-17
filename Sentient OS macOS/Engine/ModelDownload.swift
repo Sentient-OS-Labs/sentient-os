@@ -68,6 +68,10 @@ final class ModelDownload {
     private(set) var bytesDone: Int64 = 0
     let bytesTotal = ModelDownloadJob.production.bytes
 
+    /// True while onboarding's full-screen downloading view is up — the corner whisper
+    /// (ModelDownloadWhisper) yields so the signature bar never shows twice on one screen.
+    var fullScreenVisible = false
+
     private init() {}
 
     /// Start (or resume) the model download if this Mac actually needs one. Safe to call from
