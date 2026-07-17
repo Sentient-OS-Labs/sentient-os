@@ -196,7 +196,12 @@ verified live — a real give-up parses clean with its reason extracted). Sideki
 now demand and parse the SAME sentinel (`Notch Magic/Notch Magic.md` §6). The verdict feeds
 `ExecutorScoreboard` (`Diagnostics/ExecutorScoreboard.swift`, §7.19) — one structured event per fire;
 "fired" means codex *claimed* done, and a missing sentinel is tracked as the false-success risk.
-Cancellation is real: the awaiting Task's cancel (a card's STOP) terminates the codex process.
+Cancellation is real: the awaiting Task's cancel terminates the codex process — reachable from the
+card's STOP and, since a computer-use fire ADOPTS the shared `CommandRunModel` (2026-07-17, one task
+at a time app-wide — `Notch Magic/Notch Magic.md` §6), from the notch's STOP, the bar's, and a fresh
+Sidekick press too. A stopped fire records NO scoreboard row (a user cancel is not a health outcome)
+and its `Proactive.actionFired` analytics outcome says "stopped" — the same exit semantics as
+`CommandRunModel`, so the shared dashboards stay comparable.
 
 ## Where it surfaces
 
@@ -204,7 +209,9 @@ Cancellation is real: the awaiting Task's cancel (a card's STOP) terminates the 
   `ProactiveResearch.latest()` (`dev.proactive.realCards`, ON by default) — the
   welcome `GiftLetter` envelope first, then one card per `PreparedAction` (method accent + kicker,
   editable draft, the LLM-written fire button). Firing streams codex's live play-by-play into the
-  card with a per-card STOP; success flies the card away and removes it from the persisted set.
+  card with a per-card STOP — and a computer-use fire lights the notch with the same stream (the
+  adopted run, one task at a time; gmail/calendar fires stay quiet); success flies the card away
+  and removes it from the persisted set.
   The dev toggle OFF = the hard-coded investor demo deck (pitch mode; scrubbed pre-launch). See
   `Home — Proactive Intelligence (For You).md`.
 - **The dev cockpit:** DEV TOOLS → "proactive system" (PART 1) → "proactive RESEARCH + PREPARE"

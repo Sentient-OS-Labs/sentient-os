@@ -110,6 +110,7 @@ struct HomeView: View {
         .onAppear {                        // every appearance starts fresh: sealed envelope, full deal
             letter = nil
             letterShown = false
+            model.coordinator = appState.commandCoordinator
             if !appState.isUninstalling { model.beginVisit(deck: deck) }
             planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
             caution = OvernightCaution.latest()
@@ -309,6 +310,8 @@ struct HomeView: View {
                     entry: item.element,
                     slot: slots[min(item.offset, slots.count - 1)],
                     dealFrom: CGPoint(x: geo.size.width / 2, y: -160),
+                    fireDimmed: appState.commandCoordinator.run.isRunning
+                        && item.element.action?.method == .computer,
                     onOffer: { model.run(item.element.id) },
                     onDetail: { openLetter(item.element.b) },
                     onOpenEnvelope: {
@@ -503,6 +506,8 @@ struct HomeView: View {
                            // per briefing so a reused letter view never shows the previous card's draft.
                            liveDraft: model.entry(b.id)?.action?.preparedContent ?? b.draft ?? "",
                            liveRecipient: model.entry(b.id)?.action?.recipient ?? "",
+                           fireDimmed: appState.commandCoordinator.run.isRunning
+                               && model.entry(b.id)?.action?.method == .computer,
                            onCommitEdit: { model.applyEdit(b.id, content: $0, recipient: $1) },
                            onOffer: {
                                closeLetter()
@@ -636,6 +641,10 @@ final class ForYouModel {
     }
 
     var entries: [Entry] = []
+    /// The app-lifetime command coordinator (HomeView sets it on appear) — the notch and the
+    /// app-wide one-task lock. A computer-use card fire ADOPTS its run (lighting the notch and
+    /// locking out Sidekick/the bar/other cards); gmail/calendar/research fires ignore it.
+    weak var coordinator: CommandCoordinator?
     /// Bumped per appearance — in-flight Tasks from a previous visit check it and bail,
     /// so a re-deal can never be mutated by stale theater/dismiss timers.
     private var visit = 0
@@ -707,6 +716,14 @@ final class ForYouModel {
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
         if let action = e.action {   // real card → fire for real (behind the first-use permission gate)
+            // The app-wide one-task lock (computer use only): while ANY task owns the run — a
+            // Sidekick/command-bar run or another card — a new fire can't start (the CTA is
+            // dimmed; this is the backstop for a click that lands anyway). Gmail/Calendar
+            // connector writes and research are exempt: quiet card-only, concurrent is fine.
+            if action.method == .computer, coordinator?.run.isRunning == true {
+                Log("card fire blocked — a task is already running (one at a time)")
+                return
+            }
             if ComputerUseGate.shared.intercept({ [weak self] in self?.runReal(id, action) }) { return }
             runReal(id, action)
             return
@@ -734,20 +751,40 @@ final class ForYouModel {
     /// card (replacing the demo theater), and on success fly it away + drop it from the persisted set
     /// so a re-deal won't show it again. `ProactiveExecutor.fire` reads `action.preparedContent`, so a
     /// draft the user edited in the letter is exactly what gets sent.
+    ///
+    /// A computer-use fire is also ADOPTED by the notch (`beginExternalRun`): the shared run lights
+    /// up (the one-task lock engages), the card's lines tee into it, and every exit — success,
+    /// failure, ANY stop — completes the adoption exactly once, here, when `fire` unwinds (it
+    /// always returns, even cancelled). `beginExternalRun`'s refusal doubles as the re-check for a
+    /// fire the permission gate held while another task started.
     private func runReal(_ id: String, _ action: PreparedAction) {
         let v = visit
+        let external = action.method == .computer
+        if external {
+            guard let coordinator,
+                  coordinator.beginExternalRun(
+                      caption: entry(id)?.b.title ?? "Working on your Mac…",
+                      onStopRequest: { [weak self] in self?.stopRun(id) })
+            else { Log("card fire blocked at launch — a task already owns the run"); return }
+        }
         update(id) { $0.phase = .working(0); $0.liveLines = [] }
         let task = Task {
             let progress: @Sendable (String) -> Void = { line in
                 Task { @MainActor in
                     guard self.visit == v else { return }
-                    self.appendLine(id, line)
+                    self.appendLine(id, line)                                  // the card (raw)
+                    if external { self.coordinator?.run.externalPush(line) }   // the notch (cleaned)
                 }
             }
             let outcome = await ProactiveExecutor.shared.fire(action, progress: progress)
-            guard self.visit == v, !Task.isCancelled else { return }
+            let adopted = external ? self.coordinator?.run : nil
+            guard self.visit == v, !Task.isCancelled else {
+                adopted?.completeExternal(.stopped, line: "■ stopped")   // any stop/re-deal lands here
+                return
+            }
             switch outcome {
             case .fired:
+                adopted?.completeExternal(.success, line: "✓ done")
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { self.update(id) { $0.phase = .done } }
                 self.removeFromLatest(id)
                 try? await Task.sleep(for: .seconds(2.6))
@@ -755,6 +792,7 @@ final class ForYouModel {
                 self.dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
                                                 height: -CGFloat.random(in: 350...560)))
             case .notFireable(let m), .failed(let m):
+                adopted?.completeExternal(.failed, line: "✗ \(String(m.prefix(160)))")
                 self.appendLine(id, "✗ \(m)")
                 try? await Task.sleep(for: .seconds(1.4))
                 guard self.visit == v else { return }
@@ -766,8 +804,12 @@ final class ForYouModel {
     }
 
     /// STOP a live real-card run: cancel the codex process (CodexCLI honors it) and return to offer.
+    /// Reached from the card's STOP directly and, for an adopted run, from the notch/bar/hotkey via
+    /// `onStopRequest` — the guard makes a second arrival a no-op (one cancel is enough; the
+    /// adoption completes from the fire's unwind in runReal, never here).
     func stopRun(_ id: String) {
-        runTasks[id]?.cancel(); runTasks[id] = nil
+        guard let task = runTasks[id] else { return }
+        task.cancel(); runTasks[id] = nil
         withAnimation { update(id) { $0.liveLines.append("■ stopped"); $0.phase = .offer } }
     }
 
@@ -835,6 +877,7 @@ private struct DealtCard: View {
     let entry: ForYouModel.Entry
     let slot: CGPoint
     let dealFrom: CGPoint
+    var fireDimmed: Bool = false       // one task at a time: another task is running → the CTA waits
     var onOffer: () -> Void
     var onDetail: () -> Void
     var onOpenEnvelope: () -> Void
@@ -847,7 +890,8 @@ private struct DealtCard: View {
         let j = Self.jitter(entry.id)
         BriefingCard(briefing: entry.b, phase: entry.phase,
                      onOffer: onOffer, onDetail: onDetail, onOpenEnvelope: onOpenEnvelope,
-                     liveLines: entry.liveLines, onStop: entry.action != nil ? onStop : nil)
+                     liveLines: entry.liveLines, onStop: entry.action != nil ? onStop : nil,
+                     fireDimmed: fireDimmed)
             .rotationEffect(.degrees(j.rot + drag.width / 24))
             .scaleEffect(entry.dealt ? 1 : 0.7)
             .position(entry.dealt ? CGPoint(x: slot.x + j.dx, y: slot.y + j.dy) : dealFrom)
@@ -887,6 +931,7 @@ private struct LetterView: View {
     var editable: Bool = false                       // real card with a draft → the draft is editable
     var liveDraft: String = ""                       // THIS card's current content (seeds the editor)
     var liveRecipient: String = ""                   // THIS card's "To:" (seeds the recipient field); "" = no recipient
+    var fireDimmed: Bool = false                     // one task at a time: another task is running → the CTA waits
     var onCommitEdit: (String, String) -> Void = { _, _ in }   // persist (edited draft, edited recipient) → what fires
     var onOffer: () -> Void
     var onClose: () -> Void
@@ -974,6 +1019,9 @@ private struct LetterView: View {
                     if editable { commitEdit() }   // fire what's shown — commit any unsaved edit first
                     onOffer()
                 })
+                    .disabled(fireDimmed)
+                    .opacity(fireDimmed ? 0.45 : 1)
+                    .animation(.easeInOut(duration: 0.25), value: fireDimmed)
                     .padding(.top, 16)
             }
             if briefing.kind == .welcome { giftFooter.padding(.top, 16) }

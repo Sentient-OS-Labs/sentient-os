@@ -11,8 +11,10 @@
 //
 //  Hotkey path: press → notch OPENS + mic (if already authorized) · still-held @250ms → committed
 //  listening · release(hold) → transcribe → submit(.voice) · release(tap) → a focused TYPE field →
-//  submit. Prompt-bar path: submit(.promptBar). Every command is computer use, which raises the notch.
-//  Doc: Documentation/Notch Magic/.
+//  submit. Prompt-bar path: submit(.promptBar). Card-fire path: beginExternalRun (a proactive card's
+//  computer-use fire adopts the same run — ONE task at a time, app-wide, and the notch shows it).
+//  Every command is computer use, which raises the notch. A hotkey press during any real run is the
+//  universal STOP. Doc: Documentation/Notch Magic/.
 //
 
 import Foundation
@@ -165,10 +167,30 @@ final class CommandCoordinator {
 
     /// Cancel the running task. A STOP (or Esc) WHILE THE TRANSCRIPT IS SHOWN means "you misheard me — redo":
     /// dismiss INSTANTLY with no "Stopped" flourish (hiding first makes `runFinished` skip it). Once computer
-    /// use is actually working, STOP halts it with the honest "Stopped" beat. Either way the run is cancelled.
+    /// use is actually working, STOP halts it with the honest "Stopped" beat. Either way the run is cancelled
+    /// (an adopted card fire included — run.stop() routes to the card's own cancel).
     func stop() {
         if phase == .running, readBack != nil, run.remembering == nil { setPhase(.hidden) }
         run.stop()
+    }
+
+    // MARK: Adopted external runs (a proactive card's computer-use fire)
+
+    /// A proactive card's computer-use fire adopting the notch: the run model lights up — locking
+    /// out every other entry point — and the notch rises in `.running`, exactly like a command-bar
+    /// launch. Returns false when a task already owns the run (the ONE-task-at-a-time lock): the
+    /// caller must not fire. Doubles as the gate-held re-check — a fire the permission gate held
+    /// for minutes re-answers the lock here. Completion needs no coordinator API: the card's
+    /// completeExternal rides onFinished → runFinished → the normal finishing flourish.
+    @discardableResult
+    func beginExternalRun(caption: String, onStopRequest: @escaping @MainActor () -> Void) -> Bool {
+        guard !run.isRunning else { return false }
+        clearReadBack()
+        notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
+        run.adoptExternal(caption: caption, onStopRequest: onStopRequest)
+        setPhase(.running)
+        Log("▶︎ external run adopted (proactive card)")
+        return true
     }
 
     // MARK: Voice + tap-to-type (hotkey) path
@@ -221,6 +243,17 @@ final class CommandCoordinator {
     }
 
     private func voicePressBegan() {
+        // One task, one notch, one key: a press while ANY real task is running STOPS it —
+        // hotkey-, command-bar-, or card-launched alike (decided 2026-07-17). Hoisted above the
+        // voice gate so a Mac with no speech model still gets the cancel. stop() keeps the
+        // transcript beat's instant no-flourish dismiss ("you misheard me"); every other running
+        // moment gets the honest "Stopped" beat. The onboarding demo is exempt (scripted
+        // theater — the film narrates through it; those presses fall to the guards below).
+        if run.isRunning, !run.isDemo {
+            stop()
+            Log("hotkey → STOP (universal cancel, \(hotkey.key.label))")
+            return
+        }
         // The armed onboarding beat answers the hotkey too — the key variant's NAMED door
         // ("press the right ⌘ key" on iMacs / external displays / clamshell), and a forgiving
         // one during the click beat. Ahead of the voice guard on purpose (the demo is typing
@@ -234,16 +267,9 @@ final class CommandCoordinator {
         guard VoiceCapture.isAvailable else { return }
         // A hotkey tap while the type field is open toggles it closed (no action) — a quick way to back out.
         if phase == .typing { dismissTyping(); return }
-        // The hotkey doubles as the GLOBAL cancel (there is no global Esc — keyDown taps are what
-        // Input Monitoring gates): a press while a stuck finalize is spinning, or while the
-        // just-fired transcript is still shown ("you misheard me"), backs out — the beats the
-        // global Esc used to cover.
+        // The press also bails a stuck finalize (there is no global Esc — keyDown taps are what
+        // Input Monitoring gates).
         if phase == .transcribing { cancelCurrent(); return }
-        if phase == .running, readBack != nil, run.remembering == nil {
-            stop()                        // transcript shown → instant dismiss, run cancelled
-            Log("notch transcript cancelled (\(hotkey.key.label))")
-            return
-        }
         guard !run.isRunning, !isInteracting else { Log("hotkey ignored — busy"); return }
         notchAnchor = .mainDisplay        // the hotkey always lives on the main display (incl. the asides below)
         // Before the home screen, Sidekick doesn't exist yet (the onboarding policy above) —

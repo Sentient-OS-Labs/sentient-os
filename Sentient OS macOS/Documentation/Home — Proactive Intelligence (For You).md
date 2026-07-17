@@ -142,7 +142,18 @@ to the jesai deck — those devs were pitching), `.jesai` / `.launch` are the ha
   `Proactive Intelligence (Judge).md` §The welcome gift). **Firing is real:** `runReal` routes through
   `ProactiveExecutor.fire`, streams codex's live play-by-play into the card (`liveLines`, with a
   per-card **STOP** that terminates the codex process), flies the card away on success and removes it
-  from the persisted set; a failure returns it to the offer state for edit + retry. **Drafts are
+  from the persisted set; a failure returns it to the offer state for edit + retry. **A computer-use
+  fire also ADOPTS the notch (2026-07-17):** `runReal` opens with
+  `CommandCoordinator.beginExternalRun` — the shared `CommandRunModel` lights up with the card's
+  title, the raw lines tee into its cleaned `statusLine` (`externalPush`), and the ✓/■/✗ finishing
+  flourish plays on the bezel. `run.isRunning` is thereby the app-wide **one-task-at-a-time lock**:
+  while ANY task runs (Sidekick, the bar, a card), other computer cards' fire CTAs dim
+  (`fireDimmed`, card + letter) and `ForYouModel.run` refuses, with `beginExternalRun`'s refusal
+  doubling as the re-check for a gate-held fire; every STOP surface — the card's, the notch's, the
+  bar's, a fresh Sidekick press — cancels the one Task, and the adoption completes exactly once at
+  the fire's unwind (a stopped fire records NO scoreboard row and "stopped" analytics).
+  Gmail/Calendar and research fires are exempt by decision: quiet card-only, no notch, no lock,
+  concurrent is fine. (Doc: `Notch Magic/Notch Magic.md` §6.) **Drafts are
   editable, auto-saved:** every edit in the letter view's draft block (body, To:, Subject) commits on
   a 300ms debounce into `preparedContent`/`recipient` (both in-memory and in
   `ProactiveResearch.latest()`), so what the user edited is verbatim what fires — no Save button.
@@ -227,7 +238,8 @@ for `.system(design: .monospaced)` — that's why the bridge exists. Chat sends 
 `PromptBar` has a single mode — **Computer use**. `onSend` routes through
 `appState.commandCoordinator.submit(_:mode:source: .promptBar)` — the SAME shared run
 (`CommandRunModel` → `CodexCLI.runAgentCommand`) the right-⌘ Sidekick hotkey drives, so the bar and
-the notch are two views of one run: while running, the bar shows the cleaned codex `statusLine` with
+the notch are two views of one run — and a firing card makes it three (a computer-use card fire
+adopts the same run, above): while running, the bar shows the cleaned codex `statusLine` with
 a STOP button, and the notch glows alongside. (Doc: `Notch Magic/Notch Magic.md`.)
 
 ## The other windows
