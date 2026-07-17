@@ -133,10 +133,11 @@ struct OnboardingView: View {
         // DEV-ONLY: skip straight to the home (testing relaunches land back in onboarding until
         // a full first analysis flips the flag). Quietly marks onboarding complete — deliberately
         // NOT onFinished, so the Constellation finale stays reserved for the real finish.
-        // Compile-gated out of Release entirely.
+        // Compile-gated out of Release entirely. Hidden on step 0 (the film webview) — the film
+        // is meant to read as a native screen, not a page with dev chrome floating over it.
         #if DEBUG
         .overlay(alignment: .bottomTrailing) {
-            if !analyzing {
+            if !analyzing && step > 0 {
                 Button {
                     withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
                 } label: {
