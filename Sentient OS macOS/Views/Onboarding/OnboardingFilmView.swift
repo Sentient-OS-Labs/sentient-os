@@ -296,6 +296,7 @@ struct OnboardingFilmView: View {
     /// top edge. Covering the bezel reads fine; covering text never does.
     private func measureMorningBand() {
         withTrailingRead {
+            driver.repark()
             driver.morningBand { band in
                 guard let band else { return }
                 morningBandCenter = max((band.top + band.bottom) / 2, band.top + 30)
@@ -310,6 +311,7 @@ struct OnboardingFilmView: View {
     /// the pooled slack put the center far below where the eye wants the button.
     private func measureHoodBand() {
         withTrailingRead {
+            driver.repark()
             driver.hoodBand { band in
                 guard let band else { return }
                 hoodBandCenter = band.top + 30
@@ -317,9 +319,10 @@ struct OnboardingFilmView: View {
         }
     }
 
-    /// Run a band read now AND once more after a beat. The page re-parks its scroll
-    /// on a rAF after a resize (Autopilot's onResize); a read racing that reflow
-    /// measures the drifted frame — the trailing read lands on the settled one.
+    /// Run a park re-assert + band read now AND once more after a beat. The page
+    /// re-parks itself through a resize (its enforcement burst), but the trailing
+    /// pass catches WebKit's late post-resize scroll anchoring — and its band read
+    /// lands on the settled frame, not the drifting one.
     private func withTrailingRead(_ read: @escaping () -> Void) {
         read()
         Task {
@@ -390,6 +393,14 @@ final class FilmDriver {
     /// hit-testing (hover captions + the Read More popup) and its wheel gate.
     func setInteractive(_ on: Bool) {
         (webView as? PassiveWebView)?.interactive = on
+    }
+
+    /// Re-assert the page's park. The page re-snaps itself through a resize (its own
+    /// enforcement burst), but some WKWebView resize pipelines reflow without a timely
+    /// page-side resize event — so the app also asserts from its side whenever ITS
+    /// geometry changes at a park. No-op mid-ride or after user input (the page guards).
+    func repark() {
+        webView?.evaluateJavaScript("window.__sentientAutopilot?.repark?.()")
     }
 
     /// A park's free zone, measured by the PAGE, in viewport px (1:1 with view
