@@ -3,8 +3,8 @@
 //  Sentient OS macOS
 //
 //  First-launch onboarding: the film slide (OnboardingFilmView — the website's self-scrolling
-//  film in a webview, parking on the morning home) plus two placeholder slides (real design
-//  comes later), then permissions (OnboardingPermissionsView), then codex login (OnboardingCodexSteps),
+//  film in a webview, parking on the morning home),
+//  then permissions (OnboardingPermissionsView), then codex login (OnboardingCodexSteps),
 //  then the plan crossroads (OnboardingPlanView — free/go accounts only; full plans skip it),
 //  then the ready-to-process screen (OnboardingReadyView) whose Start Analysis presents the REAL
 //  ProcessingView takeover (pausable) — and only a finished run calls `onFinished` and reveals
@@ -13,8 +13,8 @@
 //  first and the analysis takes over by itself the moment the model verifies. The current step
 //  persists (UserDefaults "onboarding.step") so a quit-and-relaunch mid-onboarding — which
 //  granting Full Disk Access requires — resumes exactly where the user left. The background
-//  codex install is NOT here: AppState kicks it off 1s after launch while the user reads the
-//  slides. Computer use (codex step 3) IS here: the analysis takeover appearing arms a silent
+//  codex install is NOT here: AppState kicks it off 1s after launch while the film plays.
+//  Computer use (codex step 3) IS here: the analysis takeover appearing arms a silent
 //  one-shot that bootstraps it 2 minutes in (armComputerUseSetup) — armed at analysis start,
 //  not at Start Analysis, so its ~535 MB DMG never competes with the model download's tail.
 //
@@ -29,7 +29,6 @@ struct OnboardingView: View {
 
     /// Persisted so a relaunch mid-onboarding (the FDA grant needs one) resumes at the same step.
     @AppStorage("onboarding.step") private var step = 0
-    private static let slideCount = 3
 
     /// Start Analysis pressed — the ProcessingView takeover is up. Not persisted: a quit
     /// mid-run relaunches to the ready screen, and the durable marks resume the analysis.
@@ -70,16 +69,14 @@ struct OnboardingView: View {
 
             switch step {
             case 0:
-                // Slide 1 is the website's film in a webview — it plays to the morning-home
+                // Step 1 is the website's film in a webview — it plays to the morning-home
                 // rest and blooms its own Continue (OnboardingFilmView owns the choreography).
                 OnboardingFilmView(onContinue: advance).transition(.opacity)
-            case ..<Self.slideCount:
-                slides.transition(.opacity)
-            case Self.slideCount:
+            case 1:
                 OnboardingPermissionsView(onContinue: advance).transition(.opacity)
-            case Self.slideCount + 1:
+            case 2:
                 OnboardingCodexLoginView(onContinue: advance).transition(.opacity)
-            case Self.slideCount + 2:
+            case 3:
                 // The plan crossroads — free/go accounts decide here; full plans skip it
                 // before it renders (OnboardingPlanView auto-advances).
                 OnboardingPlanView(onContinue: advance).transition(.opacity)
@@ -120,6 +117,10 @@ struct OnboardingView: View {
         // onboarding the two overlap harmlessly — independent tokens.)
         .onAppear { awake.begin(reason: "Onboarding — keeping the screen on") }
         .onDisappear { awake.end() }
+        // No right-clicks anywhere in onboarding — the film's webview would offer a browser
+        // context menu (Reload…), and no onboarding surface has a legitimate right-click.
+        // Window-scoped, gone with this view.
+        .background(RightClickBlocker())
         // A quiet back door on every screen but the first (and never over the analysis takeover,
         // which owns its own pause/exit). One shared code path, so every step gets it for free.
         .overlay(alignment: .topLeading) {
@@ -186,43 +187,19 @@ struct OnboardingView: View {
         var target = step - 1
         // The crossroads only exists for free/go accounts — never strand a full plan on an
         // auto-advancing screen (back would visibly bounce forward again).
-        if target == Self.slideCount + 2 && !CodexAuth.isLimited() { target -= 1 }
+        if target == 3 && !CodexAuth.isLimited() { target -= 1 }
         withAnimation(.easeInOut(duration: 0.25)) { step = max(0, target) }
     }
 
-    // MARK: The three intro slides (placeholders)
-
-    private var slides: some View {
-        VStack(spacing: 40) {
-            Spacer()
-
-            OnboardingWhisper("STEP \(step + 1) OF \(Self.slideCount)")
-
-            // Placeholder for the real slide design.
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Theme.panel)
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Theme.stroke, lineWidth: 1))
-                .overlay(
-                    Text("Intro slide \(step + 1)")
-                        .font(.system(size: 15))
-                        .foregroundStyle(Theme.secondary))
-                .frame(maxWidth: 560, maxHeight: 360)
-
-            OnboardingNextButton(title: "Next", action: advance)
-
-            Spacer()
-
-            OnboardingTrustFooter()
-        }
-        .padding(40)
-    }
 }
 
-/// The onboarding CTA — a quiet white capsule, shared by the slides and the permissions screen.
+/// The onboarding CTA — a quiet white capsule, shared across the onboarding screens.
+/// `glow` adds the rotating AI-gradient halo (GlowHalo intensity) — off by default, reserved
+/// for the one deliberate jewelry moment (the film's hood-park Continue).
 struct OnboardingNextButton: View {
     let title: String
     var enabled: Bool = true
+    var glow: Double = 0
     let action: () -> Void
 
     var body: some View {
@@ -236,6 +213,7 @@ struct OnboardingNextButton: View {
                     .fill(enabled ? Color.white : Color.white.opacity(0.08)))
         }
         .buttonStyle(.plain)
+        .background { if glow > 0 { GlowHalo(active: enabled, intensity: glow) } }
         .disabled(!enabled)
         .animation(.easeInOut(duration: 0.3), value: enabled)
     }
@@ -266,6 +244,36 @@ struct OnboardingBackButton: View {
     }
 }
 
+/// Swallows right-clicks in the window hosting onboarding, for onboarding's whole lifetime.
+/// The film's webview serves WebKit's context menu (Reload Page restarts the film), and no
+/// onboarding screen has a legitimate right-click — so the event is eaten at the door.
+/// Window-scoped on purpose: other windows (dev tools, the notch) keep theirs. The local
+/// monitor installs on view-did-move-to-window (post-launch — never during app init, the
+/// notch lesson) and dies with the view. Ctrl-click menus are covered separately by
+/// PassiveWebView's willOpenMenu override.
+private struct RightClickBlocker: NSViewRepresentable {
+    func makeNSView(context: Context) -> Blocker { Blocker() }
+    func updateNSView(_ view: Blocker, context: Context) {}
+
+    final class Blocker: NSView {
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.rightMouseDown, .rightMouseUp]) { [weak self] event in
+                event.window === self?.window ? nil : event
+            }
+        }
+
+        deinit {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+    }
+}
+
 /// The trust footer — on every onboarding surface, like everywhere else in the app.
 struct OnboardingTrustFooter: View {
     var body: some View {
@@ -276,7 +284,7 @@ struct OnboardingTrustFooter: View {
     }
 }
 
-#Preview("Onboarding — intro slides") {
+#Preview("Onboarding") {
     OnboardingView(onFinished: {})
         .frame(width: 1180, height: 880)
         .preferredColorScheme(.dark)
