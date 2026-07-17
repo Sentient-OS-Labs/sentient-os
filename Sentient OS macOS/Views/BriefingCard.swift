@@ -26,6 +26,7 @@ struct BriefingCard: View {
     var onOpenEnvelope: () -> Void
     var liveLines: [String] = []       // real cards: codex's live play-by-play (empty → demo theater)
     var onStop: (() -> Void)? = nil    // real cards: the per-card STOP
+    var fireDimmed = false             // one task at a time: another task is running → the CTA waits
 
     @State private var hovering = false
 
@@ -83,6 +84,9 @@ struct BriefingCard: View {
             HStack(spacing: 12) {
                 if let offer = briefing.offer {
                     OfferButton(label: offer, accent: briefing.accent, action: onOffer)
+                        .disabled(fireDimmed)
+                        .opacity(fireDimmed ? 0.45 : 1)
+                        .animation(.easeInOut(duration: 0.25), value: fireDimmed)
                 }
                 if let detail = briefing.detailLabel {
                     Button(action: onDetail) {

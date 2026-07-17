@@ -5,12 +5,15 @@
 //  Runs ONE "do this for me" task through the user's codex (computer use), streaming codex's latest
 //  output line(s) into `statusLine`. `stop()` cancels the run (CodexCLI terminates codex). One run at a time.
 //
-//  Both ways to start a task — the home command bar AND the right-⌘ hotkey — drive the SAME instance
-//  (owned by CommandCoordinator), so the prompt bar and the notch are two views of one run. `onFinished`
-//  lets the coordinator move the notch from running → finishing. Everything also tees to Log()
+//  Every way to start a task — the home command bar, the right-⌘ hotkey, AND a proactive card's
+//  computer-use fire (which ADOPTS this run via adoptExternal/externalPush/completeExternal) — drives
+//  the SAME instance (owned by CommandCoordinator), so the prompt bar, the notch, and the card are all
+//  views of one run, and `isRunning` is the app-wide one-task-at-a-time lock. `onFinished` lets the
+//  coordinator move the notch from running → finishing. Everything also tees to Log()
 //  (tail /tmp/sentient-dev.log). Doc: Documentation/Notch Magic/.
 //
-//  Key methods: start(_:mode:) · stop() · commandPrompt(task:mode:screenshots:spoken:).
+//  Key methods: start(_:mode:) · stop() · adoptExternal(caption:onStopRequest:) ·
+//  commandPrompt(task:mode:screenshots:spoken:).
 //
 
 import Foundation
@@ -35,6 +38,14 @@ final class CommandRunModel {
     /// theater has nothing to stop). Cleared the moment a REAL run starts.
     private(set) var isDemo = false
 
+    /// True while this run is an ADOPTED external one — a proactive card's computer-use fire.
+    /// The work lives in ForYouModel's Task (not `task`), so stop() delegates to `externalStop`
+    /// (which cancels that Task) and completion arrives via completeExternal, exactly once, when
+    /// the fire unwinds. External ends never touch the scoreboard/analytics — ProactiveExecutor
+    /// records every card fire itself.
+    private(set) var isExternal = false
+    private var externalStop: (@MainActor () -> Void)?
+
     private var recent: [String] = []
     private var section = ""                      // codex's current output section (user/codex/exec/…) — for filtering the bar
     private var task: Task<Void, Never>?
@@ -50,6 +61,8 @@ final class CommandRunModel {
         self.source = source
         self.runStarted = Date()
         isDemo = false
+        isExternal = false
+        externalStop = nil
         isRunning = true
         recent = []
         section = ""
@@ -122,7 +135,46 @@ final class CommandRunModel {
         guard isRunning else { return }
         clearRemembering()
         statusLine = "Stopping…"
-        task?.cancel()
+        // An adopted run's Task lives in ForYouModel — ask IT to cancel (which kills codex the
+        // same way); completion still arrives once, from the fire's unwind. Never both paths.
+        if let externalStop { externalStop() } else { task?.cancel() }
+    }
+
+    // MARK: Adopted external runs (a proactive card's computer-use fire)
+
+    /// Adopt a proactive card's fire as THE one run: `isRunning` + `statusLine` light the notch
+    /// and the prompt bar, and every other entry point — hotkey, submits, other cards — is locked
+    /// out until it ends. The work itself stays in the caller's Task; `onStopRequest` is how any
+    /// STOP surface (notch, bar, hotkey) reaches it. Silently refuses while a run is live — the
+    /// caller checks the coordinator's `beginExternalRun` return.
+    func adoptExternal(caption: String, onStopRequest: @escaping @MainActor () -> Void) {
+        guard !isRunning else { return }
+        mode = .computer
+        source = "proactive_card"        // log/analytics honesty only — external ends never reach complete()
+        runStarted = Date()
+        isDemo = false
+        isExternal = true
+        externalStop = onStopRequest
+        isRunning = true
+        recent = []
+        section = ""
+        remembering = nil
+        rememberClear?.cancel()
+        statusLine = caption
+    }
+
+    /// One raw codex line from the adopted run, through the same cleaning a native run gets
+    /// (stderr strip, section tracking, the "Remembering" bloom, the bar filter).
+    func externalPush(_ line: String) {
+        guard isExternal else { return }
+        push(line)
+    }
+
+    /// End the adopted run — no scoreboard, no analytics (ProactiveExecutor already recorded the
+    /// fire); just the shared epilogue. Idempotent: a late second arrival no-ops.
+    func completeExternal(_ outcome: Outcome, line: String) {
+        guard isRunning, isExternal else { return }
+        finish(outcome, line: line)
     }
 
     // MARK: The onboarding notch demo
@@ -164,24 +216,30 @@ final class CommandRunModel {
                 try await Task.sleep(for: .seconds(1.7))
                 guard let self, self.isRunning else { return }
                 Log("──────── 🤖 ✓ NOTCH DEMO done ────────")
-                self.demoFinish(.success, line: "✓ done")
+                self.finish(.success, line: "✓ done")
             } catch {   // cancelled — a STOP mid-demo gets the honest beat, same as a real run
                 guard let self, self.isRunning else { return }
                 Log("──────── 🤖 ■ NOTCH DEMO stopped ────────")
-                self.demoFinish(.stopped, line: "■ stopped")
+                self.finish(.stopped, line: "■ stopped")
             }
         }
     }
 
-    /// The demo's exit — complete() minus the scoreboard + analytics a fake run must never feed.
-    private func demoFinish(_ outcome: Outcome, line: String) {
+    /// The shared run epilogue — every ending funnels here: complete() (native runs, after their
+    /// scoreboard + analytics), the demo's theater exit, and completeExternal. Sets the final
+    /// status line, releases the run, tells the coordinator, and lets the line linger.
+    private func finish(_ outcome: Outcome, line: String) {
         clearRemembering()
         statusLine = line
         isRunning = false
+        isExternal = false
+        externalStop = nil
         task = nil
         onFinished?(outcome)
-        Task { [weak self] in
-            try? await Task.sleep(for: .seconds(outcome == .success ? 2.5 : 4.5))
+        Task { [weak self] in            // let the final status linger a moment, then clear the bar
+            // Failures hold longest — the ✗ line carries the give-up REASON and must be readable.
+            let linger: Double = outcome == .success ? 2.5 : (outcome == .failed ? 6.0 : 4.5)
+            try? await Task.sleep(for: .seconds(linger))
             if let self, !self.isRunning { self.statusLine = "" }
         }
     }
@@ -291,17 +349,7 @@ final class CommandRunModel {
         Analytics.signal("ComputerUse.finished",
                          parameters: ["source": source, "method": mode.rawValue, "outcome": outcomeTag],
                          floatValue: Date().timeIntervalSince(runStarted), tier: .core)
-        clearRemembering()
-        statusLine = line
-        isRunning = false
-        task = nil
-        onFinished?(outcome)
-        Task { [weak self] in            // let the final status linger a moment, then clear the bar
-            // Failures hold longest — the ✗ line carries the give-up REASON and must be readable.
-            let linger: Double = outcome == .success ? 2.5 : (outcome == .failed ? 6.0 : 4.5)
-            try? await Task.sleep(for: .seconds(linger))
-            if let self, !self.isRunning { self.statusLine = "" }
-        }
+        finish(outcome, line: line)
     }
 
     private static func short(_ error: Error) -> String {

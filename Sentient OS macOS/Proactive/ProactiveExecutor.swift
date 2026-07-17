@@ -73,17 +73,27 @@ actor ProactiveExecutor {
             r = .notFireable("This is a briefing to read; there's nothing to fire.")
         }
         // §7.19: one scoreboard record per fire (source is always a proactive card here; the command
-        // bar / voice records separately from CommandRunModel).
-        ExecutorScoreboard.record(method: action.method.rawValue, source: "proactive_card",
-            outcome: r.board, durationS: Date().timeIntervalSince(t0),
-            statusPresent: r.statusPresent, errorClass: r.errorClass)
+        // bar / voice records separately from CommandRunModel). A user STOP — the awaiting Task was
+        // cancelled by the card's STOP, the notch's, or the hotkey — is a cancel, not a health
+        // outcome: no scoreboard row, and the analytics say "stopped" (CommandRunModel's exact exit
+        // semantics, so the shared dashboards stay comparable).
+        let stopped = Task.isCancelled
+        if !stopped {
+            ExecutorScoreboard.record(method: action.method.rawValue, source: "proactive_card",
+                outcome: r.board, durationS: Date().timeIntervalSince(t0),
+                statusPresent: r.statusPresent, errorClass: r.errorClass)
+        }
         // The single most important number: a user fired a real action — which channel, did it land.
         // Core tier — the proactive-click count is always-on telemetry (disclosed in Settings).
         let landed: String
-        switch r.outcome {
-        case .fired:       landed = "fired"
-        case .notFireable: landed = "not_fireable"
-        case .failed:      landed = "failed"
+        if stopped {
+            landed = "stopped"
+        } else {
+            switch r.outcome {
+            case .fired:       landed = "fired"
+            case .notFireable: landed = "not_fireable"
+            case .failed:      landed = "failed"
+            }
         }
         Analytics.signal("Proactive.actionFired", parameters: ["method": action.method.rawValue, "outcome": landed], tier: .core)
         // Core tier: agent working time for this fire, but only when a channel actually ran (the
