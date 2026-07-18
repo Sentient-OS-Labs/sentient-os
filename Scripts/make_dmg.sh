@@ -53,8 +53,12 @@ echo "────────────────────────�
 echo " Sentient OS DMG  ·  $APP_NAME  ·  version $SHORT ($BUILD)"
 echo "──────────────────────────────────────────────────────────────────"
 
-# ── 1. Sanity-check the input .app (catch every problem BEFORE the notary wait) ──────────────────
+# ── 1. Scrub + sanity-check the input .app (catch every problem BEFORE the notary wait) ──────────
 echo "→ [1/5] Sanity-checking the app…"
+# An iCloud-synced Desktop/Documents sprinkles xattrs (FinderInfo, fileprovider) onto files inside
+# the bundle, which --strict rejects as "detritus". Xattrs are never part of the signature seal,
+# so stripping them is always safe. Field-found on the 1.0 release, 2026-07-18.
+xattr -cr "$APP" 2>/dev/null || true
 codesign --verify --deep --strict "$APP" || { echo "❌ Code signature is broken. Aborting."; exit 1; }
 
 if ! ASSESS="$(spctl -a -t exec -vv "$APP" 2>&1)"; then
