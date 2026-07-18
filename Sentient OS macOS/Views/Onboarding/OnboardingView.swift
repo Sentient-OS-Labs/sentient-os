@@ -131,6 +131,19 @@ struct OnboardingView: View {
                     .transition(.opacity)
             }
         }
+        // The GitHub mark in the window's absolute top-right corner — the open-source receipt on
+        // every onboarding screen, the film included; only the takeover is kept clean. The
+        // flexible frame + ignoresSafeArea pins it past the title-bar inset to the true corner.
+        .overlay(alignment: .topTrailing) {
+            if !analyzing {
+                OnboardingGitHubButton()
+                    .padding(.top, 12)
+                    .padding(.trailing, 12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+            }
+        }
         // DEV-ONLY: skip straight to the home (testing relaunches land back in onboarding until
         // a full first analysis flips the flag). Quietly marks onboarding complete — deliberately
         // NOT onFinished, so the Constellation finale stays reserved for the real finish.
@@ -241,6 +254,29 @@ struct OnboardingBackButton: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.15), value: hovering)
+    }
+}
+
+/// The onboarding GitHub mark — top-right on every screen the back button lives on, opening the
+/// public repo. Quiet by default, brightening on hover, so it reads as chrome, never a CTA.
+struct OnboardingGitHubButton: View {
+    @State private var hovering = false
+
+    var body: some View {
+        Button {
+            NSWorkspace.shared.open(URL(string: "https://github.com/Sentient-OS-Labs/sentient-os")!)
+        } label: {
+            Image("GitHubMark")
+                .resizable().scaledToFit()
+                .frame(width: 22, height: 22)
+                .foregroundStyle(hovering ? Theme.secondary : Theme.faint)
+                .padding(6)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScaleStyle())
+        .onHover { hovering = $0 }
+        .animation(.easeInOut(duration: 0.15), value: hovering)
+        .help("Sentient OS on GitHub")
     }
 }
 
