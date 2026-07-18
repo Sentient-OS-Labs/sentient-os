@@ -10,6 +10,11 @@ install genuinely can't happen.
 > silently self-updated to **v1.1** — discovered on a background check, downloaded, EdDSA-verified,
 > idle-gated install, and **relaunched itself into v1.1 with zero user interaction**. The `release.sh`
 > publish pipeline was exercised in the same run.
+>
+> **The first real public release — 1.0 (build 1) — shipped through the full pipeline 2026-07-18:**
+> Xcode notarized export → `make_dmg.sh` → `release.sh` → GitHub Release + Homebrew tap + live
+> appcast, each leg verified live (Gatekeeper "Notarized Developer ID", cask install on real
+> hardware, feed serving the correct EdDSA-signed enclosure).
 
 ---
 
@@ -41,10 +46,8 @@ The real production key was minted 2026-07-07 on Jesai's Mac; the public key is 
 or the installed fleet rejects it. Losing it strands every user with no upgrade path. Rotating it
 requires first shipping a build that carries a new public key.
 
-> **⚠️ TODO (pre-launch, Jesai): back the seed up off-machine.** As of 2026-07-12 the login-Keychain
-> copy on Jesai's Mac is believed to be the ONLY copy (no 1Password backup verified). Export with
-> `generate_keys -x <file>` → store in a 1Password vault shared with Aditya → delete the export file
-> → then update this note and the matching comment in `Scripts/release.sh`.
+> **✅ Seed backed up off-machine (2026-07-18, alongside the 1.0 release):** exported and stored in
+> the shared 1Password vault. The login-Keychain copy on Jesai's Mac is no longer the only one.
 
 ## Code — `Updates/`
 
@@ -111,37 +114,63 @@ Sparkle compares `CFBundleVersion` (= `CURRENT_PROJECT_VERSION`). **Every releas
 monotonically increasing build number); bump `MARKETING_VERSION` for the human-facing version. The
 appcast's `sparkle:version` must exceed the installed build for an update to be offered.
 
-## Releasing — `Scripts/release.sh`
+## Releasing — `Scripts/make_dmg.sh` → `Scripts/release.sh`
 
-**You build + sign + notarize the DMG yourself in Xcode** (Archive → Distribute App → Direct
-Distribution → notarize → a `.dmg` of the notarized `.app`). `release.sh` then takes that finished DMG
-and does the rest — no notary credentials needed in the script:
+Two scripts, one relay — exercised end-to-end on the real 1.0 release (2026-07-18). **You produce
+the notarized `.app` in Xcode** (bump versions → Product → Archive → Distribute App → Direct
+Distribution → wait for "Ready to distribute" → Export Notarized App); the scripts do everything
+else:
 
 ```
-./release.sh path/to/SentientOS-<version>.dmg
+./Scripts/make_dmg.sh "path/to/Sentient OS.app"
+./Scripts/release.sh  build/dmg/SentientOS-<version>.dmg
 ```
 
-1. **Validates** the DMG is genuinely signed + notarized + stapled (mounts it, `spctl` + `stapler`),
-   and refuses a placeholder-key build — a broken DMG can't reach users.
-2. **Ensures the build's crash symbols are on Sentry** (added 2026-07-12): reads the app binary's
-   UUIDs from the mounted DMG, finds the matching dSYMs in `~/Library/Developer/Xcode/Archives`, and
-   idempotently uploads them (`--include-sources`). No matching archive or a failed upload **aborts
-   the release** — the Xcode upload build phase fails silently by design, and a build shipped without
-   its dSYM has unreadable crashes forever (the beta-wave lesson; see `Crash Reporting (Sentry).md`).
-   `SKIP_SENTRY=1` skips knowingly; `DSYM_SEARCH=<dir>` overrides the search root. *(Match + upload +
-   abort paths verified against the live org; first full-release run still pending.)*
+**`make_dmg.sh`** — the exported app → the finished, blessed release DMG:
+
+1. **Scrubs Finder/iCloud xattr detritus** off the bundle first (an iCloud-synced Desktop tags
+   files *inside* the `.app` and `codesign --strict` then rejects it as "detritus" —
+   field-found on 1.0), then sanity-checks: signature → notarized → stapled → real EdDSA key →
+   **Sparkle's Autoupdate helper carries our team** (the old first-release manual check, now
+   automated every release; verified `YJ8AZR3G5Q` on 1.0).
+2. Builds the styled DMG with **`appdmg`** (`npm install -g appdmg`): the branded background
+   (Retina 1x+2x, vendored at `Scripts/dmg/`), icon slots + window geometry per the design
+   contract in the website repo — `sentient-os-website/DOCUMENTATION/07 - DMG Background
+   (Compositor & Builder Handoff).md`. The numbers live there and in the script **together**.
+3. **Signs the DMG** (Developer ID), **notarizes + staples the DMG itself** (`notarytool`,
+   Keychain profile `sentient-notary`, `SKIP_NOTARIZE=1` escape hatch), and finishes with a
+   Gatekeeper assessment — 1.0 assessed "accepted · source=Notarized Developer ID".
+
+⚠️ Two one-time Mac setups it depends on (both done on Jesai's Mac, 2026-07-18):
+- A **local Developer ID Application certificate.** Xcode's Direct Distribution uses *cloud
+  signing* — the Developer ID cert never lands in the Keychain, so CLI `codesign` can't see it.
+  Mint a local one via Xcode Settings → Apple Accounts → Manage Certificates → **+** →
+  Developer ID Application. First scripted use pops a Keychain dialog → **Always Allow**.
+- The **notarytool credential**: an app-specific password (account.apple.com) stored via
+  `xcrun notarytool store-credentials sentient-notary --apple-id <id> --team-id YJ8AZR3G5Q`.
+
+**`release.sh`** — takes the finished DMG and publishes it:
+
+1. **Validates** the DMG is genuinely signed + notarized + stapled (mounts it, `spctl` +
+   `stapler`), and refuses a placeholder-key build — a broken DMG can't reach users.
+2. **Ensures the build's crash symbols are on Sentry**: reads the app binary's UUIDs from the
+   mounted DMG, finds the matching dSYMs in `~/Library/Developer/Xcode/Archives`, and
+   idempotently uploads them (`--include-sources`). No matching archive or a failed upload
+   **aborts the release** — a build shipped without its dSYM has unreadable crashes forever (the
+   beta-wave lesson; see `Crash Reporting (Sentry).md`). `SKIP_SENTRY=1` skips knowingly;
+   `DSYM_SEARCH=<dir>` overrides the search root.
 3. Reads the version from the DMG, **EdDSA-signs** it, runs `generate_appcast`.
-4. Cuts a **GitHub Release** (uploads the DMG the appcast points at) and bumps the **Homebrew cask**.
-5. Prints the final manual step: publish the emitted `appcast.xml` to the `SUFeedURL`. The feed lives
-   in the `sentient-os-website` repo at `public/appcast.xml` (Vercel deploys it).
+4. Cuts a **GitHub Release** (uploads the DMG the appcast points at) and bumps the **Homebrew
+   cask** in our tap — users install via the fully-qualified
+   `brew install --cask sentient-os-labs/tap/sentient-os` (which also implicitly satisfies
+   Homebrew's tap-trust gate; the official homebrew/cask post-stars dissolves it entirely).
+5. Prints the final manual step: publish the emitted `appcast.xml` to the `SUFeedURL`. The feed
+   lives in the `sentient-os-website` repo at `public/appcast.xml` (Vercel deploys it).
 
-`./release.sh keys` is the one-time key generator. Sparkle's CLI tools resolve automatically from the
-SwiftPM checkout in DerivedData (or set `SPARKLE_BIN`).
-
-⚠️ **Pre-launch caveat:** `release.sh` points enclosure URLs at the `sentient-os` repo's Releases, but
-that repo is **private until launch**, so those assets aren't publicly downloadable yet. For pre-launch
-tests, `GH_REPO` (host the DMG on the public tap) and `SKIP_CASK` env overrides exist. Once the repo is
-public at launch, run `release.sh` with its defaults.
+`./release.sh keys` is the one-time key generator. Sparkle's CLI tools resolve automatically from
+the SwiftPM checkout in DerivedData (or set `SPARKLE_BIN`). The `sentient-os` repo is public, so
+the GitHub Release enclosure URLs are publicly downloadable — `release.sh`'s defaults are the
+production path (`GH_REPO`/`SKIP_CASK` overrides remain for dry runs).
 
 ## Testing
 
@@ -172,9 +201,9 @@ installed bundle's `CFBundleVersion` flips + the process relaunches with a new P
 - **Apple code signing ≠ Sparkle EdDSA signing.** Two independent mechanisms; Sparkle needs its own key.
 - **Atomic swap needs same-team nested helpers.** In a plain Debug build the embedded
   `Sparkle.framework/…/Autoupdate` is ad-hoc signed, so Sparkle logs "Skipping atomic rename/swap …"
-  and does a (still-working) non-atomic install. A proper Developer-ID Release (Embed & Sign via
-  `release.sh`'s inputs) re-signs the nested helpers with the app's identity, restoring the atomic swap.
-  Verify on the first real Release build: `codesign -dv Autoupdate` should show Team `YJ8AZR3G5Q`.
+  and does a (still-working) non-atomic install. A proper Developer-ID Release (Embed & Sign) re-signs
+  the nested helpers with the app's identity, restoring the atomic swap. `make_dmg.sh` verifies the
+  helper's team automatically on every release (confirmed `YJ8AZR3G5Q` on 1.0).
 - **Silent path needs a user-writable install dir** (e.g. a user-owned `/Applications`) to avoid an
   admin prompt. Root-owned → Sparkle falls back to the OLED gate (admin path) — intended graceful
   degradation, not a bug.
