@@ -2,8 +2,9 @@
 #
 # release.sh — publish an already signed + notarized Sentient OS DMG for Sparkle auto-update.
 #
-# YOU build the DMG yourself (Xcode → Archive → Distribute App → Direct Distribution → notarize →
-# a .dmg containing the notarized .app). This script takes that finished DMG and does the rest:
+# The DMG comes from make_dmg.sh (you export the notarized .app in Xcode; it builds, signs,
+# notarizes + staples the DMG — see its header). This script takes that finished DMG and does
+# the rest:
 #
 #   validate it's really notarized → verify its dSYMs are on Sentry → EdDSA-sign → generate
 #   appcast → GitHub Release → Homebrew cask
@@ -15,16 +16,14 @@
 # ── ONE-TIME SETUP (done) ─────────────────────────────────────────────────────────────────────
 #   EdDSA key:  ./release.sh keys   → prints SUPublicEDKey (already baked into ../Info.plist).
 #               Minted 2026-07-07; private seed stays in the Keychain, NEVER in the repo.
-#               ⚠️ TODO (pre-launch): back the seed up — `generate_keys -x <file>` → 1Password
-#               (shared with Aditya). NOT verified done as of 2026-07-12; the Keychain copy on
-#               Jesai's Mac may be the only one.
+#               ✅ Seed backed up off-machine 2026-07-18 (shared 1Password vault).
 #   Sparkle CLI tools resolve automatically from the SwiftPM checkout in DerivedData (or set
 #   SPARKLE_BIN, or `brew install --cask sparkle`).
 #
 # ── EACH RELEASE ──────────────────────────────────────────────────────────────────────────────
 #   1. Bump MARKETING_VERSION + CURRENT_PROJECT_VERSION (the build number MUST increase — Sparkle
-#      compares CFBundleVersion). Archive → Distribute (Developer ID) → notarize → make the DMG.
-#   2. ./release.sh path/to/SentientOS-<version>.dmg
+#      compares CFBundleVersion). Archive → Distribute (Direct Distribution) → Export Notarized App.
+#   2. ./make_dmg.sh "path/to/Sentient OS.app"   →   ./release.sh build/dmg/SentientOS-<version>.dmg
 #   3. Publish the emitted appcast.xml to https://sentient-os.ai/appcast.xml (the script prints how).
 #
 # Doc: Sentient OS macOS/Documentation/Auto-Update (Sparkle).md
@@ -35,7 +34,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"          # the app git repo root (has the .xcodeproj)
 APP_NAME="Sentient OS"
 BUILD_DIR="$REPO_ROOT/build/release"
-GH_REPO="${GH_REPO:-Sentient-OS-Labs/sentient-os}"     # override pre-launch (the main repo is private, so its release assets aren't publicly downloadable yet)
+GH_REPO="${GH_REPO:-Sentient-OS-Labs/sentient-os}"     # public repo — the production default (override for dry runs)
 WEB_REPO="Sentient-OS-Labs/sentient-os-website"         # serves public/appcast.xml via Vercel
 TAP_REPO="${TAP_REPO:-Sentient-OS-Labs/homebrew-tap}"   # the Homebrew cask lives here (Casks/sentient-os.rb)
 KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-ed25519}"        # Sparkle EdDSA Keychain account
