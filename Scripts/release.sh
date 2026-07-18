@@ -51,7 +51,7 @@ find_sparkle_bin() {
     [[ -x "$c/sign_update" ]] && { echo "$c"; return; }
   done
   local found
-  found="$(find "$HOME/Library/Developer/Xcode/DerivedData" -type f -name sign_update -path '*Sparkle*' 2>/dev/null | head -1)"
+  found="$(find "$HOME/Library/Developer/Xcode/DerivedData" -type f -name sign_update -path '*Sparkle*' ! -path '*old_dsa_scripts*' 2>/dev/null | head -1)"
   [[ -n "$found" ]] && { dirname "$found"; return; }
   echo ""
 }
