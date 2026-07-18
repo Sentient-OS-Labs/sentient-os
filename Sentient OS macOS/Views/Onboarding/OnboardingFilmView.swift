@@ -97,6 +97,14 @@ struct OnboardingFilmView: View {
             ? "real" : "key"
     }
 
+    /// The Sidekick ride's pinned duration, in seconds. The native notch's scripted
+    /// story (CommandRunModel.startOnboardingDemo) reaches its ✓ at ~10.3s of wall
+    /// clock, and the film's ✓-beat (stage 9, pDay 0.97) sits ~90% into this leg —
+    /// 11.5s lands the two together. Absolute on purpose: the site's pace-share math
+    /// shortens every leg as the page's tail grows (field-found 2026-07-17: the new
+    /// Close scenes silently sped this leg up and desynced the notch narration).
+    private static let sidekickRideSeconds = 11.5
+
     private static var filmURL: URL {
         var base = productionURL
         #if DEBUG
@@ -228,7 +236,7 @@ struct OnboardingFilmView: View {
             if phase == .awaitingNotch {
                 appState.commandCoordinator.disarmOnboardingNotchDemo()
                 setPhase(.ridingSidekick)
-                driver.continueTo(Self.sidekickEndP)
+                driver.continueTo(Self.sidekickEndP, seconds: Self.sidekickRideSeconds)
             }
         }
         .task(id: phase == .ridingToInvitation) {
@@ -294,7 +302,7 @@ struct OnboardingFilmView: View {
     private func armNotchBeat() {
         setPhase(.awaitingNotch)
         appState.commandCoordinator.armOnboardingNotchDemo { [self] in
-            driver.continueTo(Self.sidekickEndP)
+            driver.continueTo(Self.sidekickEndP, seconds: Self.sidekickRideSeconds)
             setPhase(.ridingSidekick)
         }
     }
@@ -374,11 +382,15 @@ final class FilmDriver {
     /// Resume the parked ride to a new film-p address (leg 2: the Sidekick scene).
     /// delay = the breath before motion. Pace stays the site's: the film's own beat
     /// profile makes the turn + dive transition brisk while the Sidekick scene rides
-    /// base speed — the app doesn't second-guess the film's timing.
-    func continueTo(_ end: Double, delay: Double = 0.1) {
-        Log("Onboarding film: continueTo(\(end), delay: \(delay))")
+    /// base speed — the app doesn't second-guess the film's timing. The one exception
+    /// is `seconds`, an absolute leg duration: the Sidekick ride pins itself to the
+    /// notch story's wall clock (an older deploy ignores the extra argument and keeps
+    /// the site's pace).
+    func continueTo(_ end: Double, delay: Double = 0.1, seconds: Double? = nil) {
+        Log("Onboarding film: continueTo(\(end), delay: \(delay), seconds: \(seconds.map { "\($0)" } ?? "site pace"))")
+        let secondsArg = seconds.map { "\($0)" } ?? "undefined"
         webView?.evaluateJavaScript(
-            "window.__sentientAutopilot?.continueTo(\(end), \(delay))")
+            "window.__sentientAutopilot?.continueTo(\(end), \(delay), undefined, \(secondsArg))")
     }
 
     /// Leg 3: ride to the Under-the-hood exhibit's element anchor. Guarded on the
