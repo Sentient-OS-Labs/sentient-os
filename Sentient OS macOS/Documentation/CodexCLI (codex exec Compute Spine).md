@@ -59,8 +59,20 @@ there) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` · `addDi
 (extra writable roots) · `webSearch` (**default `true`** — web search is available to every call)
 · `includeUserConfig` (**default `true`** — loads `~/.codex` + the user's MCP servers, e.g. their
 Gmail MCP, on every call; set `false` for a hermetic run) · `bypassApprovals` (default `false`;
-`true` → `--dangerously-bypass-approvals-and-sandbox`, the only way a hosted-connector WRITE tool
-like Gmail `send_email` fires headless — TRUSTED prompts only, no sandbox) · `outputSchema`
+`true` → `--dangerously-bypass-approvals-and-sandbox` — **computer use only**, see the flags table;
+TRUSTED prompts only, no sandbox) · `configOverrides` (raw per-run `-c key=value` TOML overrides,
+appended to the one invocation and never persisted into the user's `config.toml`; ships two curated
+presets, both [MEASURED 2026-07-18]: **`approveConnectorWrites`** —
+`apps._default.default_tools_approval_mode="approve"` pre-approves hosted-connector WRITE tools
+while the Seatbelt sandbox stays ON (verified with a real Gmail send under `-s read-only`; id-free,
+so it can't break across users or connector-catalog changes) — and **`stripConnectorActionTools`**
+— per-app `open_world_enabled=false` + `destructive_enabled=false` remove the sending/destructive
+connector tools from the run's tool surface entirely while reads keep working (a stripped tool
+fails as "is not a function" — genuinely absent, not merely refused). ⚠️ Strip keys MUST be the
+LONG global connector catalog ids (`connector_…`, identical for every user — see
+`~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`): friendly slugs (`gmail`)
+are silent no-ops, and the `apps._default` variant over-strips — it removes READ tools too, since
+an absent `open_world_hint` counts as open-world) · `outputSchema`
 (JSON-Schema string → temp file → `--output-schema`) · `resumeSessionID` · `timeout` (default 1 h).
 
 `Envelope`: `result` (final agent message) · `sessionID` (thread id — the resume handle) ·
@@ -76,8 +88,9 @@ like Gmail `send_email` fires headless — TRUSTED prompts only, no sandbox) · 
 | `--ignore-user-config` | **Default OFF (we DON'T pass it):** `Invocation.includeUserConfig` defaults `true`, so every call loads the user's `~/.codex` config + MCP servers (their Gmail MCP, etc.). We pass `--ignore-user-config` ONLY for an explicitly hermetic run (`includeUserConfig = false`). |
 | `-c tools.web_search=true` | added whenever `Invocation.webSearch` is true — now the **default**, so web search is an available tool on every call |
 | `-m <model>` + `-c model_reasoning_effort=…` | the per-call `Invocation.model` (`gpt-5.6-sol` for KB work / `gpt-5.6-luna` for Gmail) and `Invocation.effort` — explicit beats the binary's drifting default |
-| `-c approval_policy="never"` (default path) | headless `exec` can't ask a human, so without it codex would stall on shell/file approvals. `never` = don't prompt; the Seatbelt sandbox (`-s`) stays the real guardrail. **Caveat:** for hosted-connector WRITE tools this resolves to auto-CANCEL, not auto-allow (`gmail.send_email` → "user cancelled MCP tool call") — that needs `bypassApprovals` instead |
-| `--dangerously-bypass-approvals-and-sandbox` (`bypassApprovals`) | the ONLY lever that makes an approval-gated connector write (Gmail `send_email`) fire headless. Removes BOTH approvals AND the sandbox, so it's mutually exclusive with `-s`/`approval_policy`. Used for the For You "send it" action. **TRUSTED, app-authored prompts only** — there's no sandbox left |
+| `-c approval_policy="never"` (default path) | headless `exec` can't ask a human, so without it codex would stall on shell/file approvals. `never` = don't prompt; the Seatbelt sandbox (`-s`) stays the real guardrail. **Caveat:** for hosted-connector WRITE tools this resolves to auto-CANCEL, not auto-allow (`gmail.send_email` → "user cancelled MCP tool call") — a caller that must fire one adds `approveConnectorWrites` to `configOverrides` (per-run pre-approval, sandbox intact) |
+| `-c <configOverrides>` | the invocation's raw per-run overrides (the two curated presets above), appended after the sandbox/approval flags — scoped to the one run, never persisted into the user's `~/.codex/config.toml` |
+| `--dangerously-bypass-approvals-and-sandbox` (`bypassApprovals`) | **computer use ONLY.** The computer-use plugin's per-app "allow app X?" elicitations auto-accept only under the full-access profile — under any Seatbelt profile a headless run auto-DENIES them and every action fails ("Computer Use approval denied via MCP elicitation", [MEASURED 2026-07-18]); per-tool approve config does not propagate to elicitations, so this flag is genuinely the only lever there. Removes BOTH approvals AND the sandbox (mutually exclusive with `-s`/`approval_policy`). Connector writes (the For You gmail/calendar fires) do NOT use it — they ride the sandboxed `approveConnectorWrites` path, with a one-shot fallback to bypass if the approve config ever stops taking (detected deterministically: agent `COULD_NOT` + the verbatim cancel marker in the raw JSONL; `codex.fire_fallback` reports it). **TRUSTED, app-authored prompts only** — there's no sandbox left |
 | `-s <sandbox>` | OS-level Seatbelt confinement — stronger than a tool allowlist; even model-run shell commands can't escape cwd + addDirs |
 
 Web search = `-c tools.web_search=true` (`--search` exists only on the interactive CLI, not

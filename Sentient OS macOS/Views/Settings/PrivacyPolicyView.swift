@@ -3,9 +3,10 @@
 //  Sentient OS macOS
 //
 //  The Privacy Policy sheet (Settings → System → How We Protect Your Data → Read More).
-//  The whole policy is one screen: the one-line pledge, the two optional features that touch
-//  the cloud (the opt-in E2E MCP mirror, the opt-out crash reports & analytics), and the
-//  Codex CLI note. Static app-voice copy; Done or Esc closes it.
+//  The whole policy is one screen: the one-line pledge, the one opt-in cloud feature (the
+//  zero-access-encrypted MCP mirror), the two opt-out anonymous diagnostics (crash reports · Sentry,
+//  analytics · TelemetryDeck, with the analytics on/off breakdown), and the Codex CLI note.
+//  Static app-voice copy; Done or Esc closes it.
 //
 
 import SwiftUI
@@ -24,12 +25,17 @@ struct PrivacyPolicyView: View {
                 .font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
                 .padding(.top, 8)
 
-            prose("Sentient has two optional features that let you get more out of it without compromising your privacy:")
+            prose("Sentient has an optional feature that can let you get more out of it without compromising your privacy:")
                 .padding(.top, 16)
-            bullet("An optional, **opt-in**, end-to-end encrypted cloud MCP, if you want your ChatGPT and Claude to be able to access your knowledge base. Our E2E cloud MCP is open source, too!")
+            bullet("An optional, **opt-in** cloud MCP so your ChatGPT and Claude can read your knowledge base. It uses **zero-access encryption**: the key is held only by your Mac and your private link, never on our servers, which hold nothing but ciphertext they have no key to unlock. Hack them and there's nothing to read. And the whole cloud backend is open source, so you never have to take our word for it.")
                 .padding(.top, 12)
-            bullet("Privacy-preserving crash logs and analytics, using open-source, privacy-focused libraries (Sentry and TelemetryDeck). You can opt out of crash logs completely, and opt out of analytics (except basic anonymous usage pings). Your personal summaries, knowledge base, and files never leave your device as part of these systems.")
-                .padding(.top, 10)
+
+            prose("Sentient also runs two anonymous diagnostics, which you can turn off anytime. Neither ever carries your content:")
+                .padding(.top, 16)
+            bullet("**Privacy-preserving crash logs (open-source Sentry):** structure-only reports, like counts, error types, and stack traces, that help us fix your bugs. Switch them off and they stop completely.")
+                .padding(.top, 12)
+            bullet("**Privacy-preserving analytics (open-source TelemetryDeck):** anonymous usage signals, never anything personal.\n**Off:** only five usage counts still send, so we can see Sentient is being used at all: how many people use it, Sidekick fires, proactive cards (made and fired), overnight runs, and home opens; counts only.\n**On:** those five, plus a fuller anonymous picture: onboarding progress, how long features run, and sync and health signals. Always just counts and categories, and nothing can be traced back to you.")
+                .padding(.top, 12)
 
             prose("When you use features that depend on your Codex CLI, OpenAI's privacy policy will apply.")
                 .padding(.top, 16)
@@ -39,7 +45,7 @@ struct PrivacyPolicyView: View {
                 .padding(.top, 22)
         }
         .padding(.horizontal, 34).padding(.top, 30).padding(.bottom, 24)
-        .frame(width: 470)
+        .frame(width: 600)
         .background(Theme.bg)
         .preferredColorScheme(.dark)
     }

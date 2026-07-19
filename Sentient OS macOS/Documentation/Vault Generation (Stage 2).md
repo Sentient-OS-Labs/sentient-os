@@ -8,8 +8,8 @@ long; `.high` is also all a free/go plan's tiny monthly quota affords, see
 `Plan Gate (CodexAuth & Knowledge-Base-Only).md`),
 `workspace-write` sandbox, cwd = a staging dir; the model writes the `.md` files itself with its
 file tools. Without a working codex the run throws `CodexCLI`'s `.notAvailable` (no fallback — a ChatGPT
-subscription is a hard requirement; the old direct-Anthropic-API route and its
-`Secrets.swift` dev key were deleted June 11 and live in git history).
+subscription is a hard requirement; the old direct-Anthropic-API route was removed June 11 — its
+key lived only in a gitignored `Secrets.swift` that was never committed, so no key is in history).
 
 This is the first build. `Vault/VaultCloud.swift` is the iterative system's wrapper around it:
 `VaultCloud.create()` reuses this generator; `VaultCloud.update()` merges each cycle's new notes.

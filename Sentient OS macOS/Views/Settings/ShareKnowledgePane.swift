@@ -52,7 +52,7 @@ struct ShareKnowledgePane: View {
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 9) {
                 pillar("lock.shield", "Your real files never leave this Mac. Your AIs only see short summaries, personal details stripped.")
-                pillar("lock.fill", "Encrypted with a key only your private link holds. On our servers your knowledge base is unreadable ciphertext.")
+                pillar("lock.fill", "Zero-access encryption: the key is held only by your Mac and your private link, never on our servers. Hack them and all you'd find is ciphertext with no key to unlock it.")
                 pillar("key.fill", "No account. One secret link only you hold; leave Sentient and the cloud copy deletes itself in 30 days.")
                 pillar("chevron.left.forwardslash.chevron.right", "Even the cloud backend is open source. Everything's verifiable.")
             }

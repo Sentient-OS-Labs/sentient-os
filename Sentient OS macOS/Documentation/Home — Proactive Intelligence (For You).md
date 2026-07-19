@@ -259,6 +259,5 @@ a STOP button, and the notch glows alongside. (Doc: `Notch Magic/Notch Magic.md`
 
 ## Still demo / future
 
-Scrubbing the demo deck before the repo goes public (it carries real investor names) · the demo
-access-log/pending strings in the popovers when demo mode is on · the Analysis dot pulsing during a live morning run · the
+The demo access-log/pending strings in the popovers when demo mode is on · the Analysis dot pulsing during a live morning run · the
 home ⟷ takeover morph (today a cross-fade) · the richer menu bar.

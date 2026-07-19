@@ -44,9 +44,13 @@ with no row to flip. The drag panel works on every macOS.
 - The window is AppKit-owned (floating `NSWindow`, black, hidden title) so it can appear over
   OTHER apps — Sidekick fires from anywhere, and a SwiftUI `Window` scene can't be raised from the
   coordinator.
-- Presenting the gate also runs `Permissions.selfHealComputerUseAutomation` — the Apple Events
-  grant (Sentient → the helper) is user-invisible and FDA-writable, so it's healed before the
-  first fire ever needs it.
+- Presenting the gate also runs `Permissions.selfHealComputerUseAutomation`, writing the Apple
+  Events grant (Sentient → the helper) so it's in place before the first fire ever needs it.
+  **Why this is safe:** it's Sentient authorizing *its own* computer-use helper, one row written
+  into the *user's own* TCC.db (never the SIP-protected system DB) using the Full Disk Access the
+  user already granted by hand — not a broad or hidden capability, just the single entitlement the
+  toolchain needs, and the only alternative is a mid-fire Apple Events consent dialog that a
+  headless run has no one to answer.
 - **The self-heal has FOUR triggers**, all idempotent and fully guarded (no-op without FDA, or if
   the helper's not on disk, or if it's already granted): the gate above, Settings → Health on open,
   the Dev Tools button, and — earliest — **right after a successful computer-use install**

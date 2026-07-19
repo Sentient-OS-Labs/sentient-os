@@ -9,14 +9,15 @@
 //       real usage numbers. Verify the pipeline from a Release build (same rule as Sentry).
 //    2. A TIERED consent switch — `analyticsEnabled` (default ON), the "Share anonymous analytics"
 //       toggle in Settings → System, gates the EXTENDED tier: the rich funnel + health signals
-//       (onboarding, processing stats, scheduler, mirror, gates). A tiny CORE tier keeps sending
-//       even when the switch is off: the handful of feature-use counts that tell us Sentient is
-//       alive and used (Sidekick/command runs, proactive fires, suggestions prepared, computer-use
-//       seconds, home opens) plus the SDK's automatic launch/session signals — so the SDK now boots
-//       unconditionally in Release. The core tier is disclosed in the switch's own off-state
-//       caption (SystemPane), so the toggle is never a lie: off = "share the richer picture: no",
-//       not "invisible". Crash reports keep their separate switch (CrashReporting's
-//       `diagnosticsEnabled`), so a user can keep crash reports on while opting out (or vice versa).
+//       (onboarding, processing stats, durations, scheduler internals, mirror, plan gates).
+//       A tiny always-on tier (the `.core` case) keeps sending even when the switch is off — just
+//       five extremely anonymized USAGE-COUNT pings: how many people use Sentient (install + SDK
+//       sessions), Sidekick fires, proactive cards (made and fired), overnight runs, and home opens. Counts only —
+//       no content, no account, no IP — so the SDK boots unconditionally in Release. Disclosed in
+//       the switch's own off-state caption (SystemPane), so the toggle is never a lie: off = "share
+//       the richer picture: no", not "invisible". Crash reports keep their separate switch
+//       (CrashReporting's `diagnosticsEnabled`), so a user can keep crash reports on while opting
+//       out (or vice versa).
 //  Identity is the same anonymous per-install UUID (`CrashReporting.installID`); TelemetryDeck hashes
 //  it again on-device and once more on their server, and stores no PII and no IP address by design —
 //  so this upholds the Privacy Constitution (no accounts, nothing personal leaves the Mac). Signals
@@ -59,8 +60,13 @@ enum Analytics {
     // MARK: - The consent tiers
 
     /// Which consent a signal rides. `.extended` (the default) is the rich picture, gated by the
-    /// "Share anonymous analytics" switch; `.core` is the bare-minimum telemetry that always sends
-    /// (Release-only) — the feature-use counts disclosed in the switch's off-state caption.
+    /// "Share anonymous analytics" switch; `.core` is the tiny set of always-on, extremely
+    /// anonymized USAGE-COUNT pings (Release-only), disclosed in the switch's off-state caption.
+    /// The complete `.core` set is exactly five buckets: how many people use Sentient (the install
+    /// ping + SDK sessions), Sidekick fires (`Command.submitted`), proactive cards made AND fired
+    /// (`Proactive.prepared` + `Proactive.actionFired`), overnight runs (`Scheduler.overnightCompleted`),
+    /// and home opens (`Home.opened`). Nothing else is `.core` — durations, funnels, and health all
+    /// ride `.extended`.
     enum Tier { case core, extended }
 
     private static let analyticsKey = "analyticsEnabled"

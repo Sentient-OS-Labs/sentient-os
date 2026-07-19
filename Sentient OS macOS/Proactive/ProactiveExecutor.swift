@@ -4,19 +4,25 @@
 //
 //  Proactive Intelligence — PART 3 of 3: THE EXECUTOR. On the user's one-button press it actually
 //  FIRES a `PreparedAction` that PART 2 staged. Real channels, picked by `method`:
-//    • gmail    → the user's Gmail connector (MCP) via codex, `bypassApprovals`. Email always goes
-//      through the connector (Google device-binds web sessions), never a browser.
-//    • calendar → the user's calendar tool/MCP via codex (real if one is configured; honest if not).
-//    • computer → the user's Mac directly via codex computer use. This also covers logged-in WEBSITE
-//      tasks (register / RSVP / buy / fill a form) by driving the user's real browser.
+//    • gmail    → the user's Gmail connector (MCP) via codex — SANDBOXED (`read-only` Seatbelt),
+//      with the connector write tools pre-approved for the one run (`approveConnectorWrites`);
+//      no bypass. Email always goes through the connector (Google device-binds web sessions),
+//      never a browser.
+//    • calendar → the user's calendar tool/MCP via codex, same sandboxed pre-approval (real if one
+//      is configured; honest if not).
+//    • computer → the user's Mac directly via codex computer use (bypass-sandbox — required: the
+//      computer-use plugin's per-app elicitations auto-deny headless under any Seatbelt profile).
+//      This also covers logged-in WEBSITE tasks (register / RSVP / buy / fill a form) by driving
+//      the user's real browser.
 //    • research → a briefing to read → surfaced honestly (not fired).
 //  The user-editable artifact (`preparedContent`) rides in a <CONTENT> block: the verbatim text for
 //  sends, the step-by-step PLAN for computer tasks; `executionRecipe` is routing only — so the
 //  user's edits are exactly what fires.
 //
-//  `bypassApprovals` removes the OS sandbox, so the wrapper PROMPT is the only safety layer: it is
-//  app-authored + fixed, treats the recipe AND page content as DATA (injection guard), and fires
-//  exactly the one declared action. Mirrors the actor shape of Proactive / ProactiveResearch.
+//  The computer channel is the one bypass-sandbox run, so there the wrapper PROMPT is the only
+//  safety layer — every wrapper is app-authored + fixed, treats the recipe AND page content as
+//  DATA (injection guard), and fires exactly the one declared action. Mirrors the actor shape of
+//  Proactive / ProactiveResearch.
 //
 //  Key methods:
 //   - fire(_:progress:)  → Outcome   (routes on kind, runs the real channel, cleans up)
@@ -96,13 +102,13 @@ actor ProactiveExecutor {
             }
         }
         Analytics.signal("Proactive.actionFired", parameters: ["method": action.method.rawValue, "outcome": landed], tier: .core)
-        // Core tier: agent working time for this fire, but only when a channel actually ran (the
+        // Extended tier: agent working time for this fire, but only when a channel actually ran (the
         // notFireable early-outs burn no agent time). Same signal CommandRunModel emits, so ONE
         // dashboard Sum over ComputerUse.finished's floatValue = total agent-seconds everywhere.
         if action.method != .research, hasRecipe(recipe) {
             Analytics.signal("ComputerUse.finished",
                 parameters: ["source": "proactiveCard", "method": action.method.rawValue, "outcome": landed],
-                floatValue: Date().timeIntervalSince(t0), tier: .core)
+                floatValue: Date().timeIntervalSince(t0))
         }
         return r.outcome
     }
@@ -146,11 +152,15 @@ actor ProactiveExecutor {
         var inv = CodexCLI.Invocation(prompt: Self.gmailWrapper(routing: routing, content: content))
         inv.feature = "gmail-write"
         inv.effort = .high                   // gpt-5.6-sol → high
-        inv.bypassApprovals = true           // hosted Gmail send_email is approval-gated → bypass to fire
+        inv.sandbox = .readOnly              // Seatbelt ON — the send needs no shell/file writes
+        inv.configOverrides = CodexCLI.Invocation.approveConnectorWrites
+                                             // hosted send_email is approval-gated headless →
+                                             // pre-approve it for THIS run, sandbox intact
+                                             // (replaced bypassApprovals, 2026-07-18)
         inv.includeUserConfig = true         // load the user's Gmail MCP
         inv.webSearch = false
         inv.timeout = 300
-        Log("ProactiveExecutor/gmail: firing one email via Gmail MCP (bypassApprovals)…")
+        Log("ProactiveExecutor/gmail: firing one email via Gmail MCP (sandboxed, writes pre-approved)…")
         return await runConnector(inv, channel: "gmail", progress: progress)
     }
 
@@ -161,11 +171,12 @@ actor ProactiveExecutor {
         var inv = CodexCLI.Invocation(prompt: Self.calendarWrapper(routing: routing, content: content))
         inv.feature = "calendar-write"
         inv.effort = .high                   // gpt-5.6-sol → high
-        inv.bypassApprovals = true
-        inv.includeUserConfig = true
+        inv.sandbox = .readOnly              // Seatbelt ON — the event create needs no shell/file writes
+        inv.configOverrides = CodexCLI.Invocation.approveConnectorWrites   // same sandboxed
+        inv.includeUserConfig = true                                       // pre-approval as gmail
         inv.webSearch = false
         inv.timeout = 300
-        Log("ProactiveExecutor/calendar: firing one event via the user's calendar tool (bypassApprovals)…")
+        Log("ProactiveExecutor/calendar: firing one event via the user's calendar tool (sandboxed, writes pre-approved)…")
         return await runConnector(inv, channel: "calendar", progress: progress)
     }
 
@@ -178,6 +189,22 @@ actor ProactiveExecutor {
             Log("ProactiveExecutor/\(channel): ✓ (\(env.result.count) chars)")   // B7: length, not content
             switch AgentStatus.parse(env.result) {
             case .couldNot(let reason):
+                // Self-healing fallback: agent-reported failure + the deterministic auto-cancel
+                // marker in the JSONL = the sandboxed `approveConnectorWrites` config didn't take
+                // (a codex update changed the apps config surface / an old CLI). ONE retry on the
+                // legacy bypass path — same fixed app-authored wrapper — so the sandbox hardening
+                // can never cost a user their fire; the event tells us the field regressed.
+                if !inv.bypassApprovals, env.raw.contains("cancelled MCP tool call") {
+                    Log("ProactiveExecutor/\(channel): sandboxed write auto-cancelled — one retry on the bypass path")
+                    CrashReporting.captureEvent("codex.fire_fallback", level: .warning,
+                        tags: ["channel": channel], extra: [:],
+                        fingerprint: ["codex", "fire_fallback", channel])
+                    var retry = inv
+                    retry.bypassApprovals = true
+                    retry.configOverrides = []
+                    progress("Retrying…")
+                    return await runConnector(retry, channel: channel, progress: progress)
+                }
                 return FireResult(outcome: .failed(reason.isEmpty ? "The agent reported it couldn't complete this." : reason),
                                   board: .refused, statusPresent: true, errorClass: "refused")
             case .done: return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: true, errorClass: nil)

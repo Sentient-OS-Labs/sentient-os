@@ -472,8 +472,8 @@ struct KnowledgeView: View {
     /// The line under the count: "Saved locally on this Mac" (mirror off) or the live cloud-MCP sync
     /// state — a calm white status dot (a spinner while pushing; deliberately NEVER colored — an
     /// orange "will sync" read as a warning) then the state with an inline, single-color
-    /// "(🔒 E2E Encrypted)". @Observable → re-renders live. (E2E Encrypted is surfaced now,
-    /// implemented later.)
+    /// "(🔒 Encrypted)". @Observable → re-renders live. (Real zero-access AES-256-GCM: the vault
+    /// is sealed on this Mac before upload; the server only ever stores ciphertext.)
     @ViewBuilder
     private var statusLine: some View {
         if mirrorEnabled {

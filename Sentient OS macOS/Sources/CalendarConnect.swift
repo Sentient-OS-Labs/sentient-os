@@ -22,10 +22,10 @@
 //  block. That block is injected into BOTH proactive stages (Proactive.findActionItems and
 //  ProactiveResearch.researchAndPrepare) so the engine knows what's actually on the user's calendar.
 //
-//  Writes (add an event) are NOT here — that's ProactiveExecutor.fireCalendar, which already uses
-//  `bypassApprovals` (the calendar write tools are approval-gated and auto-cancel headless under a
-//  read-only sandbox, exactly like Gmail's send_email; verified live June 21). All reads here are
-//  read-only and need no bypass.
+//  Writes (add an event) are NOT here — that's ProactiveExecutor.fireCalendar, which runs
+//  sandboxed with the write tools pre-approved per run (`approveConnectorWrites`; the calendar
+//  write tools are approval-gated and auto-cancel headless otherwise, exactly like Gmail's
+//  send_email — verified live June 21). All reads here are read-only and need no special config.
 //
 //  Doc: Documentation/Calendar Connector (Codex).md
 //

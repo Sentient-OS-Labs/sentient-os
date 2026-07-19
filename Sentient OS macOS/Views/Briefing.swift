@@ -313,10 +313,8 @@ struct Briefing: Identifiable {
             Your Social Security Administration appointment is tomorrow at 1:10 PM. This is a read-only prep; nothing gets sent or scheduled.
 
             Bring (originals, not photocopies)
-            - Passport and your current F-1 visa
-            - Most recent I-94 (print it from the CBP site)
-            - I-20, with the employment-authorization page signed
-            - Your on-campus job offer / authorization letter
+            - Your passport or another government photo ID
+            - The supporting documents your appointment letter lists
             - A completed SS-5 application (download from ssa.gov)
 
             Arrival plan

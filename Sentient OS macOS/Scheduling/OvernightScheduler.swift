@@ -322,7 +322,7 @@ final class OvernightScheduler {
         heart.cancel()
         let ended = await WakeHelperClient.shared.endAwake()
         log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
-        Analytics.signal("Scheduler.overnightCompleted")   // the nightly run finished cleanly
+        Analytics.signal("Scheduler.overnightCompleted", tier: .core)   // always-on usage ping: an overnight run finished cleanly
     }
 
     private func cloudLeg(_ name: String, log: SchedulerLog, _ body: () async throws -> Void) async {
