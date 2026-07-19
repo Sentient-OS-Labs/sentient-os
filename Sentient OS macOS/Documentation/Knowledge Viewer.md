@@ -88,8 +88,8 @@ after the last change** — a spree coalesces into a single push. The timer live
 `VaultActivity` singleton, so it survives closing the window; a quit mid-debounce is caught by
 the on-launch `pushIfDirty()`. The sidebar header shows the state (mirror on): a calm white dot
 — **deliberately never colored**, an amber "will sync" read as a warning — + "Synced to Cloud
-MCP / Will sync soon / Syncing…" with the inline "🔒 E2E Encrypted" tag; mirror off → "Saved
-locally on this Mac". *(E2E Encrypted is surfaced now, implemented later.)* The
+MCP / Will sync soon / Syncing…" with the inline "🔒 Encrypted" tag; mirror off → "Saved
+locally on this Mac". *(Real zero-access AES-256-GCM at rest — sealed on this Mac before upload.)* The
 concurrent-writer seam is handled by VaultCloud's swap-time freshness check (B11, PR #96).
 
 **Design notes — the "Starlight" scheme** *(replaced the warm/amber identity June 2026; amber on

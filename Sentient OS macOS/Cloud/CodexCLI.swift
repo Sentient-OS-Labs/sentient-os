@@ -70,11 +70,17 @@ actor CodexCLI {
                                                // their Gmail MCP) for EVERY call. Set false for a
                                                // hermetic run (then we pass --ignore-user-config).
         var bypassApprovals = false            // --dangerously-bypass-approvals-and-sandbox: NO
-                                               // approval prompts AND NO sandbox. Needed for hosted
-                                               // connector WRITE tools (Gmail `send_email`), which
-                                               // are approval-gated and return "user cancelled MCP
-                                               // tool call" headless even under approval_policy=never.
+                                               // approval prompts AND NO sandbox. COMPUTER USE ONLY:
+                                               // the computer-use plugin's per-app "allow app X?"
+                                               // elicitations auto-accept only under the full-access
+                                               // profile — under any Seatbelt profile a headless run
+                                               // auto-denies them (measured 2026-07-18). Hosted
+                                               // connector WRITES no longer ride this — they use
+                                               // `approveConnectorWrites` (sandbox stays ON).
                                                // TRUSTED, app-authored prompts ONLY (no sandbox!).
+        var configOverrides: [String] = []     // extra raw `-c key=value` TOML overrides, scoped to
+                                               // THIS run only (never persisted into the user's
+                                               // config.toml). Use the curated presets below.
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
         var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
@@ -83,6 +89,35 @@ actor CodexCLI {
                                                // tag ONLY; never affects the run.
 
         init(prompt: String) { self.prompt = prompt }
+
+        /// Pre-approves hosted-connector WRITE tools (Gmail `send_email`, Calendar create) for one
+        /// run while the Seatbelt sandbox stays ON — the sandboxed replacement for `bypassApprovals`
+        /// on the executor's connector channels. `apps._default` is the catch-all codex's approval
+        /// chain falls to for ANY connector, so this is portable across users and connector-catalog
+        /// ids (verified live with a real Gmail send under `-s read-only`, 2026-07-18). Reserve it
+        /// for fixed, app-authored prompts that fire exactly one declared action.
+        static let approveConnectorWrites = [
+            #"apps._default.default_tools_approval_mode="approve""#,
+        ]
+
+        /// Removes the connector tools that transmit externally (`open_world_hint` — e.g. Gmail
+        /// send) or destroy data (`destructive_hint` — trash/delete) from the run's tool surface
+        /// entirely; read tools are untouched. For read-only phases (proactive research): "never
+        /// fire" becomes the tools not existing — on top of the prompt rule and the headless
+        /// auto-cancel of unapproved writes. Verified live 2026-07-18: Gmail search completes
+        /// while a send attempt fails with "is not a function" — the tool is genuinely absent.
+        /// The keys MUST be the LONG global catalog connector ids: friendly slugs ("gmail") are
+        /// silent no-ops for hosted connectors, and the app-wide `apps._default` variant strips
+        /// the READ tools too (both measured, codexperms self-test). The ids are global marketplace
+        /// constants (same for every user — see OpenAI's public `openai/plugins` repo, or
+        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). If one ever
+        /// rotated, this strip degrades to a harmless no-op and the other two layers still hold.
+        static let stripConnectorActionTools = [
+            "apps.connector_2128aebfecb84f64a069897515042a44.open_world_enabled=false",    // gmail
+            "apps.connector_2128aebfecb84f64a069897515042a44.destructive_enabled=false",   // gmail
+            "apps.connector_947e0d954944416db111db556030eea6.open_world_enabled=false",    // google-calendar
+            "apps.connector_947e0d954944416db111db556030eea6.destructive_enabled=false",   // google-calendar
+        ]
     }
 
     /// The `--json` JSONL stream, reduced to an envelope.
@@ -356,7 +391,11 @@ actor CodexCLI {
     /// passed as ARGV and the exact flag set verified to make Codex's computer use work via the CLI:
     /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -c model_reasoning_effort=<the
     /// user's ComputerUseSpeed slider; default low> --skip-git-repo-check`, NO `--json`
-    /// (human-readable output, not JSONL). Each output LINE is
+    /// (human-readable output, not JSONL). The bypass flag is REQUIRED here — the computer-use
+    /// plugin's per-app "allow app X?" elicitations auto-accept only under the full-access profile;
+    /// under any Seatbelt profile a headless run auto-denies them and every action fails (measured
+    /// 2026-07-18). Safety rides the layers that fit a GUI agent: the fixed app-authored wrapper
+    /// (content = DATA), one-declared-task, user-fired only, live streaming + universal STOP. Each output LINE is
     /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
     /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
     /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
@@ -391,9 +430,10 @@ actor CodexCLI {
             }
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
-            // §7.9: computer-use runs are the highest-risk executions (bypass-sandbox). Case name
-            // only — and never on a cancelled Task (the user's STOP kills codex → non-zero exit,
-            // which is not a failure; field-found polluting Sentry 2026-07-12).
+            // §7.9: computer-use is the full-capability path (bypass-sandbox, user-fired), so a
+            // genuine failure is worth a structured event. Case name only — and never on a cancelled
+            // Task (the user's STOP kills codex → non-zero exit, which is not a failure; field-found
+            // polluting Sentry 2026-07-12).
             if !Task.isCancelled {
                 Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
                                       model: .gpt56sol, effort: effort, resumed: false,
@@ -442,11 +482,12 @@ actor CodexCLI {
 
         // Approvals + sandbox. `codex exec` is headless and can't answer an approval prompt:
         //  · default → `approval_policy=never` (don't stall) + the Seatbelt sandbox (`-s`) as the
-        //    real guardrail for shell/file ops.
+        //    real guardrail for shell/file ops. Hosted-connector WRITE tools are approval-gated
+        //    ("user cancelled MCP tool call" headless) — a caller that must fire one keeps this
+        //    sandboxed path and adds `approveConnectorWrites` to `configOverrides` instead.
         //  · bypassApprovals → `--dangerously-bypass-approvals-and-sandbox` (NO approvals, NO
-        //    sandbox). Required for hosted-connector WRITE tools (Gmail `send_email`), which are
-        //    approval-gated and return "user cancelled MCP tool call" headless even under
-        //    approval_policy=never. Mutually exclusive — codex rejects `-s`/approval_policy with it.
+        //    sandbox) — computer use only (its per-app elicitations auto-deny headless under any
+        //    Seatbelt profile). Mutually exclusive — codex rejects `-s`/approval_policy with it.
         if inv.bypassApprovals {
             args += ["--dangerously-bypass-approvals-and-sandbox"]
             if inv.resumeSessionID == nil, let cwd = inv.cwd { args += ["--cd", cwd] }
@@ -460,6 +501,7 @@ actor CodexCLI {
                 args += ["-c", "sandbox_mode=\"\(inv.sandbox.rawValue)\""]
             }
         }
+        for override in inv.configOverrides { args += ["-c", override] }
         if inv.webSearch { args += ["-c", "tools.web_search=true"] }
         if let schemaFile { args += ["--output-schema", schemaFile] }
         args.append("-")                       // the prompt arrives on stdin

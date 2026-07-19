@@ -39,9 +39,10 @@ crash is told apart from a UI crash in the dashboard.
   none) — deleted as dead weight.
 - **⚠️ `enableNetworkBreadcrumbs = false` and `enableCaptureFailedRequests = false` — a LEAK
   GUARD, never re-enable.** Both SDK defaults record full request URLs, and the MCP mirror URL
-  carries the user's mirror password in its path (§8's "request paths must NEVER be logged").
-  Found leaking a real password into stored events on 2026-07-12; the events were deleted and
-  both flags forced off. The `beforeBreadcrumb` scrub of `crumb.data` is the backstop only.
+  carries the user's mirror password in its path (§8's "request paths must NEVER be logged") —
+  so both flags are forced off, locked down in the 2026-07-12 pre-launch hardening pass
+  (frontier-model audits + manual review by both devs). The `beforeBreadcrumb` scrub of
+  `crumb.data` is the backstop only.
 
 It's idempotent (guarded by `started`), a no-op if the DSN is blank, and — the two hard gates — a
 no-op in DEBUG and whenever the `diagnosticsEnabled` opt-out is off (the full gate story:
@@ -76,9 +77,9 @@ content-free:
 - Content-bearing logs (prompts, transcripts, codex output, proactive dumps) are `#if DEBUG`.
 - Error paths use **`ErrorLabel(error)`** (Log.swift), never `\(error)` or
   `error.localizedDescription`: in Release it renders the enum case / type name only
-  ("CLIError.exitFailure"), in DEBUG the full description. Raw interpolation leaked codex stderr
-  (which embeds Gmail/calendar/screen content) and note titles through ~22 error logs until the
-  2026-07-12 sweep — don't reintroduce.
+  ("CLIError.exitFailure"), in DEBUG the full description. Raw interpolation would carry codex
+  stderr (which embeds Gmail/calendar/screen content) and note titles — the 2026-07-12 hardening
+  pass locked all ~22 error logs down to labels; don't reintroduce.
 
 ## Verifying the pipeline
 

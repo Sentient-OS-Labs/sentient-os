@@ -73,8 +73,11 @@ final class CommandRunModel {
         let started = Date()
         task = Task { [weak self] in
             // Snap every display NOW so computer use sees exactly what the user is looking at, on
-            // whichever screen (empty if the Screen Recording grant is missing → runs text-only).
-            // Deleted the moment codex is done.
+            // whichever screen. OPTIONAL + grant-gated: empty if the Screen Recording grant is
+            // missing → the run goes text-only (the grant is asked once, behind an info panel that
+            // states exactly what is captured and why). The frames go to the user's OWN codex /
+            // OpenAI (the same trust boundary as their ChatGPT) — NEVER a Sentient server — and the
+            // local temp files are deleted the moment codex is done (the defer below).
             let shots = await ScreenCapture.grab()
             defer { ScreenCapture.discard(shots) }
             let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
@@ -342,13 +345,13 @@ final class CommandRunModel {
                                       statusPresent: statusPresent,
                                       errorClass: resolved == .refused ? "refused" : nil)
         }
-        // Core tier: how long the agent worked this run — EVERY outcome (a stopped run still had
+        // Extended tier: how long the agent worked this run — EVERY outcome (a stopped run still had
         // the notch lit that long). floatValue sums server-side into total agent-seconds, the
         // "Sidekick saved users N hours" headline.
         let outcomeTag = outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed")
         Analytics.signal("ComputerUse.finished",
                          parameters: ["source": source, "method": mode.rawValue, "outcome": outcomeTag],
-                         floatValue: Date().timeIntervalSince(runStarted), tier: .core)
+                         floatValue: Date().timeIntervalSince(runStarted))
         finish(outcome, line: line)
     }
 

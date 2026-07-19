@@ -126,7 +126,7 @@ enum CrashReporting {
             // ⚠️ The SDK's URL-capturing defaults are a LEAK VECTOR and must stay OFF: network
             // breadcrumbs and failed-request capture both record full request URLs — and the MCP
             // mirror's URL carries the user's mirror password in its path (the §8 invariant:
-            // request paths must NEVER be logged; found leaking via these defaults 2026-07-12).
+            // request paths must NEVER be logged; locked down in the 2026-07-12 hardening pass).
             // The beforeBreadcrumb data scrub below is the backstop, not the defense.
             options.enableNetworkBreadcrumbs = false
             options.enableCaptureFailedRequests = false
@@ -139,8 +139,8 @@ enum CrashReporting {
             options.beforeBreadcrumb = { crumb in
                 crumb.message = crumb.message.map(scrub(text:))
                 // SDK-authored crumbs carry their payload in `data`, not `message` (URLs live
-                // here) — it never met the scrubber before, which is how the mirror password
-                // leaked. Scrub every string value as the backstop.
+                // here) — a message-only scrub would never see it, so scrub every string value
+                // as the backstop.
                 if let data = crumb.data {
                     crumb.data = data.mapValues { ($0 as? String).map(scrub(text:)) ?? $0 }
                 }

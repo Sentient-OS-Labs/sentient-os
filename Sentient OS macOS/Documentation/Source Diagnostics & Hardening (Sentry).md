@@ -145,7 +145,7 @@ Set `options.beforeSend` inside the existing `SentrySDK.start { options in … }
 - Home-dir paths (`/Users/<name>/…` → `/Users/<redacted>/…`).
 - Email addresses, phone numbers, long tokens/base64 blobs (regex).
 - Over-length free-text fields.
-Also set `options.beforeBreadcrumb` (same rules) since `Log()` breadcrumbs could carry the existing leaks until B7 is fixed. Runs on the SDK thread — capture nothing MainActor-isolated.
+Also set `options.beforeBreadcrumb` (same rules) since `Log()` breadcrumbs could carry free-form content until B7 is fixed. Runs on the SDK thread — capture nothing MainActor-isolated.
 
 ### 4.7 The version / schema fingerprint stamp (the ID stamp)
 On **every** diagnostics event, attach as tags:
@@ -240,7 +240,7 @@ These are real bugs the audit found; some are data-loss/security. Fix + verify b
 Arch §9 gates the overnight run on AC power, `!isLowPowerModeEnabled`, and thermal state.
 **Built:** `PowerState.swift` (`onACPower` via IOKit.ps, `lowPowerMode`, `thermalState`/`thermalLabel`, and `overnightBlockReason()`). `OvernightScheduler.runProcessing` checks it **before `beginAwake`**: on battery / Low Power / thermally critical it logs `power: …`, emits `overnight.gated {reason}`, and skips the run (the loop already re-armed tomorrow's wake, so it just retries next night). Thermal is a START condition only. Also: **production time is now 3:00 AM** (`defaultMinutes = 3*60`; the dev UI can still override for testing).
 
-### B7 — Existing PII leak into breadcrumbs — ✅ FIXED (2026-07-02, unmerged)
+### B7 — Content-bearing breadcrumbs (PII hardening) — ✅ FIXED (2026-07-02, unmerged)
 `Log()` breadcrumbs everything, and these logged **free-form content the scrubber can't catch** (it only redacts paths/emails/phones/tokens, NOT drafts/actions/transcripts): `Proactive.swift:119` (action title/importance), `ProactiveResearch.swift:147/150` (`preparedContent` = the draft in the user's voice, recipes, titles), `ProactiveExecutor:110/133` (`env.result`/computer-use output), `CommandRunModel:53/60/66` (the full prompt, live codex output, final), `CommandCoordinator:87/163` (the typed command + the raw voice transcript), DevToolsView reset (vault home path).
 **Fix applied:** the content-bearing lines are now **`#if DEBUG`** (Sentry is Release-only, so `#if DEBUG` = it can never reach a breadcrumb) — the verbose per-item proactive dumps and the command prompt/output/transcript. The success confirmations that we DO want as Release breadcrumbs were reduced to **structure** (`env.result.count` chars, `trimmed.count` chars, `text.count` chars) instead of content. The DevToolsView reset log now uses `lastPathComponent` not the home path. Verified: Release build clean, no new unused-variable warnings. (`IterativeRun:154` was already `#if DEBUG`; the scrubber §4.6 remains the backstop for structured PII.)
 

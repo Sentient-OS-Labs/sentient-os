@@ -178,9 +178,9 @@ launch); this section records the contract + hosting so app-side work doesn't ne
 - **⚠️ SECURITY INVARIANT — the password rides in the URL, so request paths must NEVER be logged.**
   The uvicorn access log writes full paths; it is disabled **at import time** in `server.py`
   (`logging.getLogger("uvicorn.access").disabled = True`), guarded by a regression test. This is
-  load-bearing: the encryption protects the disk, not a logged URL. (History: the disable once lived
-  only in the `__main__` block, which Render's `uvicorn server:app` launch never runs, so production
-  logged every password until 2026-07-11. Belt-and-suspenders: the Render start command also carries
+  load-bearing: the encryption protects the disk, not a logged URL. (⚠️ At *import*, not in
+  `__main__` — Render's `uvicorn server:app` launch never executes a `__main__` block, a gap the
+  2026-07-11 hardening pass closed. Belt-and-suspenders: the Render start command also carries
   `--no-access-log`.)
 - **Field lessons (real ChatGPT/Claude sessions):** clients lazy-load connector tools behind a
   search gate — naming the connector in the prompt ("check my Sentient knowledge — …") reliably
@@ -196,5 +196,5 @@ launch); this section records the contract + hosting so app-side work doesn't ne
 
 The onboarding MCP opt-in moment (the no-account/password/30-day-lease pitch after the first
 knowledge base exists) and post-launch proper OAuth. The Settings pane's "unreadable ciphertext"
-promise is now backed by real AES-256-GCM at rest — the pre-launch "mcp encryption" backlog item
-has shipped.
+promise is backed by real AES-256-GCM at rest (zero-access: the server stores only ciphertext and
+holds no key of its own).

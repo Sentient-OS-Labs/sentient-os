@@ -1,5 +1,12 @@
 # Computer-Use Skill Patch (Confirmation Policy)
 
+> **Why this is safe (read first):** this relaxes only the agent's *self-confirmation prompts* — the
+> ones that would freeze a headless run waiting on an answer it can never receive. It does not touch
+> the real safety boundary, which sits one level up and is entirely human: nothing runs unless you
+> dictate the task and fire it, you watch it live in the notch and can STOP instantly, it acts only
+> in your own logged-in sessions on your own Mac, and the genuinely high-stakes actions (deleting
+> data, payments, password changes, system settings) still hard-confirm.
+
 Codex's bundled **`computer-use`** plugin ships a `SKILL.md` whose stock confirmation policy makes the
 agent **stop and ask before sending messages/emails/forms, solving CAPTCHAs, etc.** — even when the user
 already pre-approved it. That's wrong for Sentient OS: the human is always in the loop at the app level

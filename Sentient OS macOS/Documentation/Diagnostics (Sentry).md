@@ -15,8 +15,8 @@ symbolicated) and an app-hang.
 
 **Curated 2026-07-12 (the first beta wave):** Sentry now reports **defects only**. Telemetry-shaped
 events moved to TelemetryDeck, user STOPs and usage limits no longer report, app-hangs report at
-10s (not 2s), uncaught-NSException reporting is on, and the SDK's URL-capturing defaults are OFF
-after they were caught leaking a mirror password (§2.5). Sections below reflect the curated state.
+10s (not 2s), uncaught-NSException reporting is on, and the SDK's URL-capturing defaults are
+forced OFF as a privacy invariant (§2.5). Sections below reflect the curated state.
 
 ---
 
@@ -60,9 +60,10 @@ Two defenses:
   scrubbed in B7: the verbose ones are `#if DEBUG` (Sentry is Release-only, so DEBUG-only can never
   breadcrumb), and success logs were reduced to lengths. **Error paths use `ErrorLabel(error)`
   (Log.swift), never `\(error)` / `localizedDescription`** — in Release it renders the enum case /
-  type name only. Raw interpolation shipped codex stderr (`CLIError`'s description embeds up to
+  type name only. Raw interpolation would carry codex stderr (`CLIError`'s description embeds up to
   300 chars of it — Gmail/calendar/screen content), note titles (Cocoa file errors carry the path),
-  and the mirror server's response body through ~22 error logs until the 2026-07-12 sweep. A second
+  and the mirror server's response body — the 2026-07-12 hardening pass (frontier-model audits over
+  every capture site + manual review by both devs) locked all ~22 error logs down to labels. A second
   sweep (2026-07-12) closed the last identifier-bearing sources: the on-device pipeline's error logs
   logged only a bucketKey's **scheme prefix** (`CycleStore.scheme` — `whatsapp`/`file`/`notes`), never
   the raw key (a chat's phone-number JID or a user file path); and the vault-swap failure became a
@@ -84,19 +85,20 @@ Two defenses:
 
 ---
 
-## 2.5 The SDK's own defaults are part of the firewall (war story)
+## 2.5 The SDK's own defaults are part of the firewall
 
 The sentry-cocoa SDK ships with **URL-capturing features ON by default**: network breadcrumbs
 (every URLSession request → a crumb with the full `url` + `http.query` in `crumb.data`) and
 failed-request capture (any HTTP 5xx from ANY URL → its own event with request details). The MCP
-mirror's URL carries the user's **mirror password in its path** — the §8 invariant ("request paths
-must NEVER be logged") that was already enforced server-side (uvicorn access log) was silently
-re-broken client-side by these defaults: on 2026-07-12 a real, complete mirror password was found
-in stored Sentry breadcrumbs (a `/u_…/p_…/vault` push URL). The poisoned events were deleted, and
-`boot()` now forces **`enableNetworkBreadcrumbs = false`** and
-**`enableCaptureFailedRequests = false`** — never re-enable either. The `crumb.data` scrub (§2) is
-the backstop, not the defense. Lesson: **when the SDK updates, re-check what its new defaults
-capture.**
+mirror's URL carries the user's **mirror password in its path** — so the §8 invariant ("request
+paths must NEVER be logged"), already enforced server-side (uvicorn access log), has to hold
+client-side too: a captured push URL (`/u_…/p_…/vault`) is exactly such a path. `boot()` therefore
+forces **`enableNetworkBreadcrumbs = false`** and **`enableCaptureFailedRequests = false`** —
+never re-enable either. Locked down 2026-07-12 in the week-long pre-launch security hardening
+program (the repo's `SECURITY.md`): the whole telemetry surface extensively evaluated with
+frontier models (Claude Mythos/Fable 5, GPT-5.6 Sol) plus manual review by both devs, stored
+events swept end-to-end. The `crumb.data` scrub (§2) is the backstop, not the defense. Lesson: **when the SDK
+updates, re-check what its new defaults capture.**
 
 ---
 
@@ -139,6 +141,7 @@ TelemetryDeck since 2026-07-12):
 | `gmail.parse.shape_mismatch` / `calendar.parse.shape_mismatch` | `GmailConnect` / `CalendarConnect` | the cloud reply's JSON won't parse or the required `notable` key is absent (vs a genuine quiet week) | `source`, `missing` | warning |
 | `codex.failure` | `CodexCLI.run` | a codex call fails for a REAL reason — a cancelled Task (the user's STOP; its SIGTERM exit used to masquerade as `exitFailure`) and `usageLimit` (expected; the amber caution owns it) never report | `feature`, `error` (CLIError case), `model`, `effort`, `duration_ms`, `resumed` | error |
 | `codex.agent_command` | `CodexCLI.runAgentCommand` | a computer-use codex run fails (same cancel/usage-limit exclusions) | `feature: computer`, `error` | error |
+| `codex.fire_fallback` | `ProactiveExecutor.runConnector` | a sandboxed connector fire's write auto-cancelled (agent `COULD_NOT` + the verbatim "cancelled MCP tool call" in the raw JSONL) and the executor retried once on the legacy bypass path — the signal that codex's apps-approve config surface changed under us | `channel` (gmail/calendar) | warning |
 | `codex_auth.refresh_failed` | `CodexAuth` | the on-demand codex token re-mint gets a non-OK HTTP status | `status` | warning |
 | `engine.load_failed` | `IterativeRun` | the on-device model won't load (→ a 0-item run) | `error`, `model_present` | error |
 | `model.download.failed` | `ModelDownload` | the onboarding model download exhausted its retries / aborted | `reason` | error |

@@ -9,9 +9,10 @@ base). Three parts, each its own prompt:
   knowledge base) AND stages every survivor **ready to fire** (draft + execution recipe), in one
   read-only pass. `Proactive/ProactiveResearch.swift`.
 - **PART 3 — Fire (the executor)**: the single write-capable step — on the user's one-button press it
-  runs a `PreparedAction`'s recipe with `bypassApprovals`. `Proactive/ProactiveExecutor.swift`.
+  runs a `PreparedAction`'s recipe (connector channels sandboxed with per-run write pre-approval;
+  computer use on `bypassApprovals`). `Proactive/ProactiveExecutor.swift`.
 
-**The whole read-only/safe world is Parts 1–2; the one dangerous, write-capable step is PART 3** — the
+**Parts 1–2 are the read-only, no-side-effects world; the one write-capable step is PART 3** — the
 pipeline lines up exactly on the permission boundary.
 
 **The trigger is `ProactiveCycle`** (`Proactive/ProactiveCycle.swift`) — the shared post-read tail
@@ -116,8 +117,11 @@ Three inviolable rules, enforced in the prompt AND the invocation:
 - **Accuracy / anti-hallucination** — receipts-only (state a live fact only if a tool returned it this
   run), mandatory identity-match for any external fact, "couldn't confirm" → `status: unverified` as a
   valid outcome. Verify-only on discovery (never invents a new item — that's PART 1).
-- **Never fires** — it stages but never sends/submits/pays/RSVPs. `bypassApprovals = false` + sandbox
-  means a connector WRITE (e.g. Gmail `send_email`) would auto-cancel headless anyway.
+- **Never fires** — it stages but never sends/submits/pays/RSVPs. Three independent layers
+  (2026-07-18): the prompt rule · `bypassApprovals = false` + sandbox (a connector WRITE like Gmail
+  `send_email` auto-cancels headless) · `stripConnectorActionTools` (the sending/destructive
+  connector tools are absent from the run's tool surface entirely — a stripped tool fails as
+  "is not a function", so an injected instruction has nothing to call; reads keep working).
 - **Never computer use** — verification never drives the Mac, its apps, or its browser; Gmail MCP +
   web + vault are the ONLY surfaces. Needed because `includeUserConfig = true` (for the Gmail MCP)
   also rides the computer-use skill along from `~/.codex` — the sandbox stops writes, but nothing else
@@ -134,8 +138,8 @@ mark `unverified` if absent), **web search** (external facts, identity-matched),
 shape staging (a channel to prefer, a draft tone, a thing to skip) hold through the prune-to-5.
 
 `CodexCLI.Invocation`: `effort .high`, `sandbox .readOnly`, `cwd = vault`, `webSearch = true`,
-`includeUserConfig = true`, `bypassApprovals = false`, `outputSchema`, `timeout 1800s`, `feature
-"proactive-research"`. Output: `{ready:[{title, method, target, urgency, due_date, status,
+`includeUserConfig = true`, `bypassApprovals = false`, `configOverrides =
+stripConnectorActionTools`, `outputSchema`, `timeout 1800s`, `feature "proactive-research"`. Output: `{ready:[{title, method, target, urgency, due_date, status,
 verification, card_summary, prepared_content, execution_recipe, button_text, detail_label, sources,
 review_note}], dropped:[{title, reason}]}`.
 
@@ -166,9 +170,15 @@ Errors typed (`ResError`): `noItems` / `noVault` / `usageLimit` / `failed`. Pers
 
 The single write-capable step: on the user's one-button press, `fire(_:progress:)` performs a
 `PreparedAction` for real, routed by `method`:
-- **gmail** → the user's Gmail MCP via codex (**`bypassApprovals = true`** — the only thing that lets
-  an approval-gated connector write fire headless).
-- **calendar** → the user's calendar MCP via codex (same bypass; an honest "couldn't" if none exists).
+- **gmail** → the user's Gmail MCP via codex — **sandboxed** (`-s read-only`) with the connector
+  write tools pre-approved for the one run (`configOverrides = approveConnectorWrites`; a real
+  `send_email` verified under the intact Seatbelt, 2026-07-18). **Drift-proof fallback:** if the
+  approve config ever stops taking (a future codex changing the apps config surface), the executor
+  detects it deterministically — agent `COULD_NOT` + the verbatim "cancelled MCP tool call" marker
+  in the raw JSONL, never the model's paraphrase — and retries ONCE with `bypassApprovals` (the
+  same fixed wrapper), emitting `codex.fire_fallback` so the regression is visible in the field.
+- **calendar** → the user's calendar MCP via codex (same sandboxed pre-approval + fallback; an
+  honest "couldn't" if none exists).
 - **computer** → **computer use via the Codex CLI** (`CodexCLI.runAgentCommand` — the SAME spine the
   home command bar and Sidekick use): native apps, chat sends (WhatsApp/iMessage via Messages), and
   logged-in website tasks in the user's real browser. This works on the plain CLI —
@@ -177,9 +187,11 @@ The single write-capable step: on the user's one-button press, `fire(_:progress:
   Settings health board.
 - **research** → `notFireable` (a briefing to read; nothing fires).
 
-**The security wrapper is built.** `bypassApprovals` removes the whole sandbox, and the recipe was
-authored by an LLM from the user's email + knowledge base — a prompt-injection path into a no-sandbox
-execution. So each channel runs a **fixed, app-authored wrapper prompt** (`gmailWrapper` /
+**The security wrapper is built.** The recipe was authored by an LLM from the user's email +
+knowledge base — a prompt-injection path into a write-capable execution (and the computer channel
+runs bypass-sandbox, since the computer-use plugin's per-app elicitations auto-deny headless under
+any Seatbelt profile — measured 2026-07-18; the connector channels keep the sandbox, so their blast
+radius is only the connector tools left enabled in the run). So each channel runs a **fixed, app-authored wrapper prompt** (`gmailWrapper` /
 `calendarWrapper` / `computerWrapper`) that: wraps the user-reviewable `preparedContent` in a
 `<<<CONTENT>>>` block — the send text goes out **VERBATIM** (the user's edits are exactly what goes
 out); for a computer app/website task the block is the **user-approved step plan** the run must
@@ -212,8 +224,8 @@ and its `Proactive.actionFired` analytics outcome says "stopped" — the same ex
   card with a per-card STOP — and a computer-use fire lights the notch with the same stream (the
   adopted run, one task at a time; gmail/calendar fires stay quiet); success flies the card away
   and removes it from the persisted set.
-  The dev toggle OFF = the hard-coded investor demo deck (pitch mode; scrubbed pre-launch). See
-  `Home — Proactive Intelligence (For You).md`.
+  The dev toggle OFF = the hard-coded investor demo deck (dev-tools-only pitch mode; contact
+  details scrubbed, investor first names kept by choice). See `Home — Proactive Intelligence (For You).md`.
 - **The dev cockpit:** DEV TOOLS → "proactive system" (PART 1) → "proactive RESEARCH + PREPARE"
   (PART 2) → the "PROACTIVE · EXECUTE" window (PART 3, real FIRE buttons) — plus "VIEW ACTION ITEMS"
   for the last judge run. Full detail tees to the console (`tail -f /tmp/sentient-dev.log`).
@@ -250,8 +262,8 @@ faithful carrier of both.
 
 ## Not wired yet (next steps)
 
-- **Retiring the demo deck** — real cards are the default now; deleting the hard-coded demo cards
-  (they carry real investor names) is a pre-launch checklist item.
+- **The demo decks** — real cards ship as the default; the hard-coded `jesaiDemo`/`launchDemo`
+  decks remain as dev-tools-only pitch mode (contact details scrubbed; investor first names kept by choice).
 - **Tier 1 reminders** — a scheduled macOS notification from a `reminder`/dated action
   (`System/Notify.swift` is the dormant hook).
 - **The ≤1/day taste cap** in code (today the cycle runs whenever triggered).

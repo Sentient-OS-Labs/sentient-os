@@ -15,8 +15,10 @@
 //
 //  THE TWO INVARIANTS (both enforced in the prompt AND the invocation):
 //    • Accuracy: receipts-only, never fabricate; "couldn't confirm" → `unverified` is a valid outcome.
-//    • Never fire: it stages but NEVER sends/submits/pays/RSVPs. `bypassApprovals = false` + sandbox
-//      means a connector WRITE would auto-cancel headless anyway (codex/Gmail permissioning findings).
+//    • Never fire: it stages but NEVER sends/submits/pays/RSVPs. Three independent layers: the
+//      prompt rule · `bypassApprovals = false` + sandbox (a connector WRITE auto-cancels headless) ·
+//      `stripConnectorActionTools` (the sending/destructive connector tools are absent from the
+//      run's tool surface entirely — an injected instruction has nothing to call).
 //
 //  Output: ready-to-fire `PreparedAction`s (carrying the verify verdict + the prepared draft + a
 //  deterministic `execution_recipe` — the routing contract PART 3's executor runs)
@@ -51,7 +53,7 @@ struct PreparedAction: Sendable, Identifiable, Codable {
                                    // takes which content. References preparedContent, never duplicates
                                    // the body. "none" for research.
     var recipient: String = ""     // WHO a message-send goes to — display name + handle/email
-                                   // ("Serena Saxena · serena@anthos.com"). Shown + EDITABLE as the
+                                   // ("Serena Saxena · serena@example.com"). Shown + EDITABLE as the
                                    // card's "To:"; "" for cards that send to nobody (calendar / a
                                    // form-fill task / research). Authoritative: the executor routes to
                                    // exactly this, so a user edit re-targets the actual send. `var`
@@ -140,6 +142,9 @@ actor ProactiveResearch {
         inv.webSearch = true                // ground external facts (on-sale/event dates, deadlines, form fields)
         inv.includeUserConfig = true        // load the user's MCP servers — the Gmail MCP (read-only)
         inv.bypassApprovals = false         // ⚠️ load-bearing: NO fire — a connector write auto-cancels
+        inv.configOverrides = CodexCLI.Invocation.stripConnectorActionTools
+                                            // ⚠️ and the send/destroy connector tools don't even
+                                            // exist in this run — reads untouched
         inv.outputSchema = Self.schema
         inv.timeout = 1_800                 // agentic verify + prepare (Gmail + web + vault) over ≤5 items runs long
 

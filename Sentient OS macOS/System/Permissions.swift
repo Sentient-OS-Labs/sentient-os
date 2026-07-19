@@ -90,7 +90,13 @@ enum Permissions {
         defer { sqlite3_close(db) }
 
         // Only the stable core columns; everything else takes its schema default (incl.
-        // boot_uuid='UNUSED' → nothing device-specific). auth_value 2 = allowed, auth_reason 2 = user consent.
+        // boot_uuid='UNUSED' → nothing device-specific). auth_value 2 = allowed; auth_reason 2 =
+        // user consent — an honest label, not a spoof: the user installed Sentient (whose whole
+        // stated purpose is acting on their Mac via their OWN Codex) and granted Full Disk Access to
+        // enable it, and macOS exposes NO Automation prompt for this specific Apple Events target
+        // (procNotFound — see the header note), so writing the row is the only path. This grant
+        // authorizes ONLY "Sentient → its own bundled computer-use helper", nothing broader;
+        // uninstalling Sentient clears it.
         let sql = """
         INSERT OR REPLACE INTO access
           (service, client, client_type, auth_value, auth_reason, auth_version,

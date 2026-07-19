@@ -52,24 +52,29 @@ Every signal carries counts / enums / on-off / which-feature. **Never** a filena
 email, or anything the user wrote. `Command.submitted` records only source+mode, right next to the
 existing B7 "length, not the command text" log — same discipline.
 
-| Signal | Emitted from | Meaning |
-| --- | --- | --- |
-| `Onboarding.completed` | `AppState.swift` | Setup finished (once, false→true) |
-| `Processing.completed` | `Ingestion/IterativeRun.swift` | On-device read ended — mode + survivors/junk/sensitive/failed/total |
-| `Engine.reloaded` | `Ingestion/IterativeRun.swift` | GPU-wedge self-heal fired (`reason`: preemptive/reactive) |
-| `Scheduler.overnightStarted` / `.overnightCompleted` | `Scheduling/OvernightScheduler.swift` | 3am run began / finished |
-| `Scheduler.gated` | `Scheduling/OvernightScheduler.swift` | Nightly run skipped (`reason`: battery/lowPower/thermal) |
-| `Scheduler.caution` | `Scheduling/OvernightCaution.swift` | An unattended run failed for a knowable reason (`kind`: usageLimit/loggedOut/noInternet) — was Sentry's `overnight.caution` until the 2026-07-12 curation |
-| `Scheduler.autoEnabled` | `Scheduling/OvernightScheduler.swift` | The 14h auto-enable flipped the scheduler on |
-| `KnowledgeBase.built` / `.updated` / `.failed` | `Proactive/ProactiveCycle.swift` | First build / incremental update / error |
-| `KnowledgeBase.staleSwapAverted` | `Vault/VaultCloud.swift` | The freshness check aborted a swap over a mid-run editor save (working as designed — was Sentry's `vault.update.stale_swap_averted`) |
-| `Proactive.decided` | `Proactive/ProactiveCycle.swift` | # things-worth-doing found |
-| `Proactive.prepared` | `Proactive/ProactiveCycle.swift` | # survived research (+ # dropped) |
-| `Proactive.actionFired` | `Proactive/ProactiveExecutor.swift` | A user fired an action — `method` + `outcome` (the headline number) |
-| `Mirror.enabled` / `.pushed` / `.disabled` / `.regenerated` | `Cloud/MirrorClient.swift` | MCP mirror lifecycle |
-| `Command.submitted` | `Notch Magic/CommandCoordinator.swift` | "Do stuff for me" bar used (`source` + `mode`) |
-| `Source.connected` | `Views/{Gmail,Calendar}ConnectSheet.swift` | A source hooked up (`source`) |
-| `Notify.notAuthorized` | `System/Notify.swift` | A reminder was suppressed by a declined notification permission (`status`) — user choice, not a defect (was Sentry's `notify.not_authorized`) |
+**Tier column:** 🟢 = the always-on **core** tier (survives opt-out — the five anonymized usage counts, plus the SDK's launch/session signals and the install ping in the next section). Everything else is **extended**, gated by the analytics opt-out. The core set is exactly these five signals — nothing more rides always-on.
+
+| Signal | Tier | Emitted from | Meaning |
+| --- | --- | --- | --- |
+| `Onboarding.completed` | extended | `AppState.swift` | Setup finished (once, false→true) |
+| `Processing.completed` | extended | `Ingestion/IterativeRun.swift` | On-device read ended — mode + survivors/junk/sensitive/failed/total |
+| `Engine.reloaded` | extended | `Ingestion/IterativeRun.swift` | GPU-wedge self-heal fired (`reason`: preemptive/reactive) |
+| `Scheduler.overnightStarted` | extended | `Scheduling/OvernightScheduler.swift` | 3am run began |
+| `Scheduler.overnightCompleted` | 🟢 core | `Scheduling/OvernightScheduler.swift` | 3am run finished cleanly — the always-on "overnight runs" count |
+| `Scheduler.gated` | extended | `Scheduling/OvernightScheduler.swift` | Nightly run skipped (`reason`: battery/lowPower/thermal) |
+| `Scheduler.caution` | extended | `Scheduling/OvernightCaution.swift` | An unattended run failed for a knowable reason (`kind`: usageLimit/loggedOut/noInternet) — was Sentry's `overnight.caution` until the 2026-07-12 curation |
+| `Scheduler.autoEnabled` | extended | `Scheduling/OvernightScheduler.swift` | The 14h auto-enable flipped the scheduler on |
+| `KnowledgeBase.built` / `.updated` / `.failed` | extended | `Proactive/ProactiveCycle.swift` | First build / incremental update / error |
+| `KnowledgeBase.staleSwapAverted` | extended | `Vault/VaultCloud.swift` | The freshness check aborted a swap over a mid-run editor save (working as designed — was Sentry's `vault.update.stale_swap_averted`) |
+| `Proactive.decided` | extended | `Proactive/ProactiveCycle.swift` | # things-worth-doing found |
+| `Proactive.prepared` | 🟢 core | `Proactive/ProactiveCycle.swift` | # cards that survived research (+ # dropped) — the always-on "proactive cards made" count |
+| `Proactive.actionFired` | 🟢 core | `Proactive/ProactiveExecutor.swift` | A user fired a card (`method` + `outcome`) — the always-on "proactive cards fired" count |
+| `ComputerUse.finished` | extended | `Notch Magic/CommandRunModel.swift` + `Proactive/ProactiveExecutor.swift` | Agent working seconds (`floatValue`, summed into total agent-time) — a DURATION, so gated |
+| `Mirror.enabled` / `.pushed` / `.disabled` / `.regenerated` | extended | `Cloud/MirrorClient.swift` | MCP mirror lifecycle |
+| `Command.submitted` | 🟢 core | `Notch Magic/CommandCoordinator.swift` | Sidekick / "do stuff for me" bar used (`source` + `mode`) — the always-on "Sidekick fires" count |
+| `Home.opened` | 🟢 core | `Views/RootView.swift` | Home screen opened (`trigger`: launch/reopen) — the always-on "home opens" count |
+| `Source.connected` | extended | `Views/{Gmail,Calendar}ConnectSheet.swift` | A source hooked up (`source`) |
+| `Notify.notAuthorized` | extended | `System/Notify.swift` | A reminder was suppressed by a declined notification permission (`status`) — user choice, not a defect (was Sentry's `notify.not_authorized`) |
 
 Plus what the SDK sends automatically: app launches, sessions, new-install, and device/OS/version.
 
@@ -103,8 +108,11 @@ switched off).
   number that's complete across everyone.
 
 Called once from `main.swift` (the `.app` branch), right after `Analytics.start()`. Opting out of
-analytics therefore silences *all* rich product signals and any correlatable identity; the only thing
-that still leaves the Mac is this one anonymous, uncountable-to-you tally.
+analytics silences the whole EXTENDED tier (the rich funnel + health signals) and any correlatable
+identity — but the tiny CORE tier keeps sending: the five always-on usage counts marked 🟢 in the
+table above (`Command.submitted`, `Home.opened`, `Proactive.prepared`, `Proactive.actionFired`,
+`Scheduler.overnightCompleted`), the SDK's launch/session signals, and this anonymous install tally.
+Counts only, no correlatable identity — disclosed verbatim in the switch's off-state caption.
 
 The knowledge-base and proactive-stage signals live centrally in `ProactiveCycle.run()` — the one
 place with all the counts and the create-vs-update decision — rather than scattered into

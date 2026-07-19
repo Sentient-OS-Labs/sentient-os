@@ -75,13 +75,13 @@ group.
 ## Naming
 
 - **Unnamed groups** roll up from their *current active* members (`ZWAGROUPMEMBER` where
-  `ZISACTIVE = 1`, so a shrunk group is named after who's actually in it) — "Aditya, Ondrej & 2
+  `ZISACTIVE = 1`, so a shrunk group is named after who's actually in it) — "Priya, Marco & 2
   others", the way WhatsApp itself does it. [MEASURED] the saved contact name (`ZCONTACTNAME`) is
   usually an empty *string*, not NULL, so the reliable source is the self-set profile push-name
   (`ZWAPROFILEPUSHNAME`, by member JID) — which is what WhatsApp's own chat list shows.
 - **LID-blob guard:** WhatsApp stores an opaque base64-ish LID token as the "name" for some
   privacy-mode members — that must never reach a summary. A name with a space is always real (slashes
-  and all — "Amrit Sanju Uncle T34/1803" is a real saved contact); a single long or slashed token
+  and all — a saved contact like "Ravi Uncle 12/3B"); a single long or slashed token
   (`> 24` chars or containing `/`) is rejected as a blob. A chat we can't name shows a clean generic.
 
 ## WhatsApp Business

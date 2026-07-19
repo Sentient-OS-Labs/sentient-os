@@ -13,7 +13,7 @@ files story is the message), not every pane. Opened from the home's top-bar gear
 ## ⚠️ NOT wired up yet (read this first)
 
 *(Two former items are DONE and gone from this list: the mirror's encryption at rest shipped —
-AES-256-GCM before upload, see `MCP Mirror Client.md` — so the pane's E2E copy is now true; and
+AES-256-GCM before upload, see `MCP Mirror Client.md` — which is what the pane's zero-access-encryption copy describes; and
 the System pane's Updates group is live with Sparkle, see `Auto-Update (Sparkle).md`.)*
 
 1. **The morning notification** — the Notifications permission row is real, and the permission ask
@@ -97,7 +97,7 @@ now `ShareKnowledge*`: the pane, the home's `ShareKnowledgePopover`, `Pane.share
 guided `ConnectAIsView` window keeps its name — in there "connect" is the literal action.)*
 The story leads: a value blurb (your ChatGPT/Claude, phone apps included, read the knowledge
 base and choose what's relevant) then the plain-language privacy explainer (local-first,
-PII-stripped summaries only, E2E-encrypted, no accounts, the 30-day
+PII-stripped summaries only, zero-access-encrypted, no accounts, the 30-day
 self-delete in plain words, open-source backend). Then the share toggle (OFF = confirm dialog →
 `disable()`, which deletes the cloud copy but keeps the token), and the pane's HERO: the glowing
 **Set up in 2 minutes** capsule (`ConnectCTA` — same label as the home popover's CTA) →
@@ -205,10 +205,12 @@ opens a popover to the right; `TipWarmth` makes sibling tips open instantly):
   ("Codex is all good. · Details"); expanding is a one-way door per visit. Anything unhealthy
   keeps the full board open.
 - **Automation has NO row:** ~0.5s after the pane opens, `Permissions.selfHealComputerUseAutomation`
-  probes the user-db grant and silently re-runs `grantComputerUseAutomation()` if missing
-  (idempotent, logged). The user has no job there, so the UI gives them none. (The same extracted
-  self-heal also runs when the first-use `ComputerUseGate` window presents — before the first fire
-  ever needs it.)
+  probes the user-db grant and re-runs `grantComputerUseAutomation()` if missing (idempotent,
+  logged). This writes one row into the user's OWN TCC.db authorizing Sentient to drive its own
+  computer-use helper — nothing broader, via the Full Disk Access the user already granted (full
+  rationale in `Permission Guide (First-Use Grants).md`). The user has no job there, so the UI gives
+  them none. (The same extracted self-heal also runs when the first-use `ComputerUseGate` window
+  presents — before the first fire ever needs it.)
 - Red = a core capability is broken · yellow = optional, fixable-later, or working on it.
   Statuses re-probe on every app foreground. The home's live health banner
   (`System/HealthCaution.swift`, see the Home doc) is this board's herald: it watches the same

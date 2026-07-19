@@ -135,10 +135,10 @@ struct SystemPane: View {
                                   isOn: $analyticsEnabled)
                 if !analyticsEnabled {
                     // The core-tier disclosure — keeps the switch honest (Analytics.swift, Tier.core):
-                    // a bare minimum of anonymous feature-use counts always sends.
-                    Text("Even with this off, Sentient keeps a bare minimum of anonymous telemetry: simple counts of app opens and feature use that are core to building Sentient. Never your content, never anything personal.")
+                    // the five always-on, extremely anonymized usage-count pings.
+                    Text("Even with this off, Sentient still sends a handful of extremely anonymized usage-count pings: how many people use Sentient, and how often core features fire (Sidekick, proactive cards, overnight runs, home opens). Counts only, through a privacy-first, open-source tool, so a two-person team can see our work is being used. Never your content, never anything personal.")
                         .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.Ink.deepMuted)
+                        .foregroundStyle(Theme.Ink.body)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 1)
                         .transition(.opacity)
