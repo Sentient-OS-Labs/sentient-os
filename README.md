@@ -10,13 +10,15 @@
 
 <br/>
 
-Every AI you use today has two problems: it knows nothing about you (nobody can paste their entire life into a chat box), and it only helps when summoned. Fixing both means reading your entire life, every single day. In the cloud, that much inference is a fortune and a privacy nightmare. On your own chip, it's free, and nobody else's business.
+Every AI you use today has two problems: it knows nothing about you (nobody can paste their entire life into a chat box), and it only helps when summoned. Fixing both means reading your entire life, every day. In the cloud, that much inference is a fortune and a privacy nightmare. On your own chip, it's free, and nobody else's business.
 
 So every night, Sentient's on-device LLM reads what's new (your files, screenshots, WhatsApp, iMessage, Notes, email) and distills it into a clean markdown knowledge base: the deepest memory of you any AI has ever had. The last 10% of compute taps a frontier model through your own ChatGPT subscription; nothing ever touches a Sentient API key, because there isn't any.
 
-By morning, a few things worth doing are already done and waiting for one tap: the reply you forgot, drafted; the train you kept putting off, ready to book. And anywhere on your Mac, click the notch and tell Sidekick what to do; it uses your apps like you would, even in the background while you carry on.
+By morning, Sentient offers your grunt work done in one click: that reply you forgot, drafted from your own rich personal context. The subscription you meant to cancel, caught the night before it renews.
 
-No accounts. Raw data never leaves this Mac. Free, forever. And every word of that is verifiable right here in this codebase :)
+And anywhere on your Mac, click the notch and tell Sidekick: "Finish this for me". It uses your apps like you would, even in the background while you carry on.
+
+No accounts, and your raw personal data never leaves your Mac. Free, forever. And every word of this is verifiable right here in this codebase :)
 
 <br/>
 
@@ -24,7 +26,7 @@ No accounts. Raw data never leaves this Mac. Free, forever. And every word of th
 
 <sub><samp>3:00 AM · ON THIS MAC · NOTHING LEAVES</samp></sub>
 
-At 3 AM every night, Sentient quietly wakes your Mac (lid closed is fine; it falls back asleep after) and reads what's new: files and screenshots, WhatsApp, iMessage, and Apple Notes, decoded straight out of the databases already sitting on your disk. Gmail and Google Calendar ride in through your own connectors.
+At 3 AM every night, Sentient quietly wakes your Mac (lid closed is fine; it falls back asleep after) and reads what's new: files and screenshots, WhatsApp, iMessage, and Apple Notes, decoded straight out of the databases already sitting on your disk. Gmail and Google Calendar ride in through your own OpenAI connectors.
 
 Every single item passes an on-device bouncer. Gemma 4 E4B, running locally, reads it and rules: keep, junk, or sensitive. Junk gets dropped. Sensitive gets dropped harder: no summary, no log, no tombstone, zero trace it ever existed. Only clean, PII-stripped summaries of the keepers survive.
 
@@ -40,9 +42,9 @@ Then the finale: your own codex's frontier model takes those thousands of PII-st
 
 <div align="center"><img src=".github/readme/morning.jpg" alt="The morning cards: replies drafted, plans researched, one tap from done" width="780" /></div>
 
-Overnight, a frontier model reads the night's findings against everything it knows about your life and prepares the few things really worth doing. Not a to-do list. The work itself: the reply you forgot is drafted in your words, the train you still haven't booked is researched and priced, the expense report is filled out and staged.
+Overnight, a frontier model reads the night's findings against everything it knows about your life and prepares the few things really worth doing. The reply you forgot, drafted from your own rich personal context. The subscription you meant to cancel, caught the night before it renews.
 
-You get a small handful of cards in the morning. Read the draft, edit it if you like, tap once. That tap is the only thing that ever fires an action. Sentient suggests, you fire, always in that order.
+You get a small handful of cards drafted in the morning, which you can read, edit it if you like, and click once to fire. That click is the only thing that ever fires an action.
 
 <br/>
 
@@ -52,9 +54,9 @@ You get a small handful of cards in the morning. Read the draft, edit it if you 
 
 <div align="center"><img src=".github/readme/sidekick.gif" alt="Sidekick: the notch drops open and does the task in your own apps" width="780" /></div>
 
-Anywhere on your Mac, hold the right ⌘ key and talk: "finish this for me", "reply with the update from Sarah", "put these ingredients in my cart". The notch drops open glowing, transcribes you on-device, and computer use takes it from there, in your own apps and your own logged-in browser, with progress streaming live in the notch. Tap the key instead to type. Press it again to stop, and stop means stop: it kills the process, not just the animation.
+Anywhere on your Mac, click your notch (or use right ⌘: hold to speak, tap to type) and say: "finish this for me", "reply with the update from Sarah", "put these ingredients in my cart". The notch drops open glowing, transcribes you on-device, and computer use takes it from there, in your own apps and your own logged-in browser, with progress streaming live in the notch.
 
-Because every task is grounded in your knowledge base, Sidekick knows who Sarah is, what "the usual" means, and what you promised whom. That's the difference between an agent, and a proactive agent that knows you.
+Because every task is grounded in your knowledge base, Sidekick knows who the people in your life are, what "the usual" means, and what you promised whom. That's the difference between an agent, and a proactive agent that knows you.
 
 <br/>
 
@@ -106,10 +108,8 @@ That third column is our favorite thing we've ever shipped, and it's empty on pu
 - **Privacy engineering.** <samp>zero-trace triage · fail-closed parsing · a pii regex backstop · aes-256-gcm before anything leaves · a 30-day dead-man lease</samp>
 - **The 3 AM machine.** <samp>a codesign-verified root helper · a deadman timer · ac + thermal gates · crash-safe resume</samp>
 - **The cloud brain.** <samp>computer use on the plain Codex CLI · frontier compute on your subscription · marginal cost ~$0 · no sentient servers</samp>
-- **The supply chain.** <samp>developer-id signed + notarized · hash-pinned model & dependencies · eddsa-signed auto-updates · the root helper verifies the app's signature before it runs</samp>
 
-And about that cloud brain. Sentient's frontier model is your own Codex CLI, signed into your own ChatGPT account. That includes computer use: OpenAI only ships it inside their desktop app, but the "enable" switch turned out to be a local file copy. So Sentient downloads the payload straight from OpenAI's own installer and patches it into your Codex CLI, on your machine. We don't host it, we don't proxy it, we never touch it. Your codex, your login, and your subscription. We just found the switch.
-
+And about that cloud brain. Sentient's frontier model is your own Codex CLI, signed into your own ChatGPT account. That includes computer use: OpenAI only ships it inside their desktop app, but the "enable" switch turned out to be a local file copy. So Sentient downloads Codex Computer Use straight from OpenAI and gives it to your Codex CLI, on your machine, and we never host or proxy it.
 <br/>
 
 ## The privacy flex.
@@ -132,13 +132,9 @@ Here's the machinery that makes that true whether we behave or not:
 Only two optional features ever touch a server at all, and neither bends the line above:
 
 - **The cloud MCP mirror is opt-in, and off by default.** It exists only if you turn it on to give your ChatGPT and Claude your knowledge base. Your Mac seals everything with AES-256-GCM before anything uploads, the key lives only on your Mac and in your private link, and the relay stores only ciphertext with no key to unlock it. The relay's code is open source too.
-- **Anonymous diagnostics, and nothing else.** Crash reports (Sentry) and usage analytics (TelemetryDeck), both privacy-focused, open-source frameworks, both structure-only by construction: counts, enums, stack traces, never your content. Your files, summaries, and knowledge base never leave your Mac as part of either. Each has its own off switch in Settings; crash reports turn off completely, and analytics keeps only a handful of extremely anonymized usage-count pings (how many people use Sentient, and how often Sidekick, proactive cards, overnight runs, and the home screen are used), tied to nothing and no one, disclosed right under the toggle so the switch is never a lie.
+- **Anonymous diagnostics, and nothing else.** Crash reports (Sentry) and usage analytics (TelemetryDeck), both privacy-focused, open-source frameworks, both structure-only by construction: counts, enums, stack traces, never your content. Your files, summaries, and knowledge base never leave your Mac as part of either. Each has its own off switch in Settings; crash reports turn off completely, and analytics keeps only a handful of extremely anonymized usage-count pings (how many people use Sentient, and how often Sidekick, proactive cards, overnight runs, and the home screen are used), tied to nothing and no one, disclosed right under the toggle.
 
 And one line most companies would bury: features that run through your own Codex CLI are governed by OpenAI's privacy policy, the same one your ChatGPT account already lives under. Your existing relationship with OpenAI, not a new one with us. What's more, even OpenAI never sees your raw life: only the PII-stripped summaries, scrubbed on-device by the model and again by dedicated PII-stripping passes, before anything leaves the Mac.
-
-**And when it acts, you're in control.** Sentient never acts on its own; every action fires only when you tap a card or ask Sidekick yourself. When it drives your Mac, the notch blooms into a glowing panel with live status and a one-press STOP that kills the run instantly, not just the animation. And the actions that touch your accounts, like sending an email or adding an event, run sandboxed with every tool but that one write stripped out, so a malicious email has nothing to hijack. The scariest thing about an AI that acts is that it acts, so we built the guardrails first.
-
-None of this is credible because we wrote it in a README. It's credible because the repository you're reading is the implementation. Don't trust us. Read the code. You're already here.
 
 <br/>
 
