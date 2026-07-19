@@ -1,10 +1,8 @@
 <div align="center">
 
-<img src=".github/readme/hero.jpg" alt="Your Mac, sentient. An on-device LLM understands your entire life, then proactively offers to get your work done through computer use." width="820" />
+<a href="https://sentient-os.ai"><img src=".github/readme/hero.jpg" alt="Your Mac, sentient. An on-device LLM understands your entire life, then proactively offers to get your work done through computer use. Visit sentient-os.ai." width="820" /></a>
 
-<br/>
-
-<samp><a href="https://sentient-os.ai"><b>website</b></a> · open source · optimized for Apple silicon</samp>
+<samp>open source · free · optimized for Apple silicon</samp>
 
 </div>
 
