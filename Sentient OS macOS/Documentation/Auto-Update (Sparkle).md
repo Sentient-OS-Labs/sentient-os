@@ -164,8 +164,10 @@ else:
    cask** in our tap — users install via the fully-qualified
    `brew install --cask sentient-os-labs/tap/sentient-os` (which also implicitly satisfies
    Homebrew's tap-trust gate; the official homebrew/cask post-stars dissolves it entirely).
-5. Prints the final manual step: publish the emitted `appcast.xml` to the `SUFeedURL`. The feed
-   lives in the `sentient-os-website` repo at `public/appcast.xml` (Vercel deploys it).
+5. Prints the final manual step, done in one website-repo clone: publish the emitted `appcast.xml`
+   to the `SUFeedURL` (the feed lives at `public/appcast.xml`; Vercel deploys it) AND bump the
+   site's **version-pinned direct-DMG Download URL** (`DOWNLOAD_URL` in
+   `components/close/DownloadScene.tsx`) — the script prints both commands.
 
 `./release.sh keys` is the one-time key generator. Sparkle's CLI tools resolve automatically from
 the SwiftPM checkout in DerivedData (or set `SPARKLE_BIN`). The `sentient-os` repo is public, so
