@@ -59,17 +59,25 @@ private final class FoundationServiceChildProcess: ServiceChildProcess, @uncheck
 }
 
 actor ServiceProcessTransport: ServiceTransport {
+    private static let maximumResponseLineSize = 1 * 1024 * 1024
+    private static let responseReadChunkSize = 64 * 1024
+    private static let responsePollMilliseconds: Int32 = 50
+
     private let process: any ServiceChildProcess
     private let requestInput: FileHandle
     private let responseOutput: FileHandle
     private let shutdownTimeouts: ChildShutdownTimeouts
+    private let responseTimeout: TimeInterval
     private var responseBuffer = Data()
     private var isShutDown = false
+    private var isBroken = false
+    private var isCallInProgress = false
 
     init(
         executableURL: URL,
         arguments: [String] = [],
-        shutdownTimeouts: ChildShutdownTimeouts = .default
+        shutdownTimeouts: ChildShutdownTimeouts = .default,
+        responseTimeout: TimeInterval = 30
     ) throws {
         signal(SIGPIPE, SIG_IGN)
         let inputPipe = Pipe()
@@ -85,6 +93,7 @@ actor ServiceProcessTransport: ServiceTransport {
         requestInput = inputPipe.fileHandleForWriting
         responseOutput = outputPipe.fileHandleForReading
         self.shutdownTimeouts = shutdownTimeouts
+        self.responseTimeout = responseTimeout
 
         do {
             try process.start()
@@ -107,13 +116,15 @@ actor ServiceProcessTransport: ServiceTransport {
         process: any ServiceChildProcess,
         requestInput: FileHandle,
         responseOutput: FileHandle,
-        shutdownTimeouts: ChildShutdownTimeouts = .default
+        shutdownTimeouts: ChildShutdownTimeouts = .default,
+        responseTimeout: TimeInterval = 30
     ) throws {
         signal(SIGPIPE, SIG_IGN)
         self.process = process
         self.requestInput = requestInput
         self.responseOutput = responseOutput
         self.shutdownTimeouts = shutdownTimeouts
+        self.responseTimeout = responseTimeout
         do {
             try process.start()
         } catch {
@@ -126,7 +137,12 @@ actor ServiceProcessTransport: ServiceTransport {
     var childProcessIdentifier: Int32 { process.processIdentifier }
 
     func call(operation: ServiceOperation, arguments: [String: JSONValue]) async throws -> JSONValue {
-        guard !isShutDown, process.isRunning else { throw childExitedError }
+        guard !isShutDown, !isBroken, process.isRunning else { throw childExitedError }
+        guard !isCallInProgress else {
+            throw ServiceError(code: .internalError, message: "Concurrent service calls are unsupported")
+        }
+        isCallInProgress = true
+        defer { isCallInProgress = false }
 
         let id = UUID().uuidString
         var request = try JSONEncoder().encode(ServiceRequest(id: id, operation: operation, arguments: arguments))
@@ -137,7 +153,15 @@ actor ServiceProcessTransport: ServiceTransport {
             throw childExitedError
         }
 
-        let line = try readResponseLine()
+        let line: Data
+        do {
+            line = try await readResponseLine()
+        } catch {
+            isBroken = true
+            try? responseOutput.close()
+            throw error
+        }
+        guard !isShutDown else { throw childExitedError }
         let response: ServiceResponse
         do {
             response = try JSONDecoder().decode(ServiceResponse.self, from: line)
@@ -160,65 +184,98 @@ actor ServiceProcessTransport: ServiceTransport {
         guard !isShutDown else { return }
         isShutDown = true
         try? requestInput.close()
+        // Closing the read side interrupts an in-flight silent call before the bounded process
+        // escalation below. `readResponseLine` yields between short poll intervals so shutdown can
+        // enter this actor even while a response is pending.
+        try? responseOutput.close()
 
         // EOF gives the service a bounded chance to clean up. Each escalation also has a hard
         // bound: adapter shutdown never performs an unbounded process wait.
         if process.waitForExit(timeout: shutdownTimeouts.graceful) {
-            try? responseOutput.close()
             return
         }
         if process.isRunning {
             process.terminate()
         }
         if process.waitForExit(timeout: shutdownTimeouts.terminate) {
-            try? responseOutput.close()
             return
         }
         if process.isRunning {
             process.kill()
         }
         _ = process.waitForExit(timeout: shutdownTimeouts.kill)
-        try? responseOutput.close()
     }
 
-    private func readResponseLine() throws -> Data {
+    private func readResponseLine() async throws -> Data {
+        let deadline = Date().addingTimeInterval(responseTimeout)
         while true {
             if let newline = responseBuffer.firstIndex(of: 0x0A) {
+                guard newline <= Self.maximumResponseLineSize else { throw oversizedResponseError }
                 let line = Data(responseBuffer[..<newline])
                 responseBuffer.removeSubrange(...newline)
                 return line
             }
+            guard responseBuffer.count <= Self.maximumResponseLineSize else {
+                throw oversizedResponseError
+            }
+            guard !Task.isCancelled, !isShutDown else { throw childExitedError }
 
-            let chunk: Data
-            do {
-                let read = responseOutput.availableData
-                guard !read.isEmpty else {
-                    throw childExitedError
-                }
-                chunk = read
-            } catch let error as ServiceError {
-                throw error
-            } catch {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw responseTimeoutError }
+            let remainingMilliseconds = Int32(max(1, min(
+                Double(Self.responsePollMilliseconds),
+                remaining * 1_000
+            )))
+            var descriptor = pollfd(
+                fd: responseOutput.fileDescriptor,
+                events: Int16(POLLIN | POLLHUP | POLLERR),
+                revents: 0
+            )
+            let pollResult = Darwin.poll(&descriptor, 1, remainingMilliseconds)
+            if pollResult < 0 {
+                if errno == EINTR { continue }
                 throw childExitedError
             }
-            responseBuffer.append(chunk)
+            if pollResult == 0 {
+                await Task.yield()
+                continue
+            }
+
+            var bytes = [UInt8](repeating: 0, count: Self.responseReadChunkSize)
+            let count = bytes.withUnsafeMutableBytes { buffer in
+                Darwin.read(responseOutput.fileDescriptor, buffer.baseAddress, buffer.count)
+            }
+            guard count > 0 else { throw childExitedError }
+            responseBuffer.append(contentsOf: bytes.prefix(count))
+            await Task.yield()
         }
     }
 
     private var childExitedError: ServiceError {
         ServiceError(code: .internalError, message: "SentientComputerUseService exited")
     }
+
+    private var responseTimeoutError: ServiceError {
+        ServiceError(code: .internalError, message: "SentientComputerUseService response timed out")
+    }
+
+    private var oversizedResponseError: ServiceError {
+        ServiceError(code: .internalError, message: "SentientComputerUseService response exceeds maximum size")
+    }
 }
 
 private final class TerminationSignals: @unchecked Sendable {
     private let sources: [DispatchSourceSignal]
 
-    init(input: FileHandle) {
+    init(input: FileHandle, onTermination: @escaping @Sendable () -> Void) {
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
         sources = [SIGINT, SIGTERM].map { signalNumber in
             let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
-            source.setEventHandler { try? input.close() }
+            source.setEventHandler {
+                try? input.close()
+                onTermination()
+            }
             source.resume()
             return source
         }
@@ -236,7 +293,9 @@ private func siblingServiceURL() -> URL {
 do {
     signal(SIGPIPE, SIG_IGN)
     let transport = try ServiceProcessTransport(executableURL: siblingServiceURL())
-    let terminationSignals = TerminationSignals(input: .standardInput)
+    let terminationSignals = TerminationSignals(input: .standardInput) {
+        Task { await transport.shutdown() }
+    }
     _ = terminationSignals
     await MCPStdio.run(
         input: .standardInput,

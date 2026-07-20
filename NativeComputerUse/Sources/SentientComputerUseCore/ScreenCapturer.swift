@@ -1,4 +1,5 @@
 @preconcurrency import CoreGraphics
+import Darwin
 import Foundation
 import ImageIO
 import ScreenCaptureKit
@@ -47,6 +48,7 @@ enum ScreenCaptureDisplaySelection {
 public final class ScreenCapturer: ScreenCapturing {
     private let backend: any ScreenCaptureBacking
     private let temporaryDirectory: URL
+    private let processIdentifier: Int32
     private var captureURLs: Set<URL> = []
 
     public convenience init() {
@@ -55,10 +57,13 @@ public final class ScreenCapturer: ScreenCapturing {
 
     init(
         backend: any ScreenCaptureBacking,
-        temporaryDirectory: URL = FileManager.default.temporaryDirectory
+        temporaryDirectory: URL = FileManager.default.temporaryDirectory,
+        processIdentifier: Int32 = getpid()
     ) {
         self.backend = backend
         self.temporaryDirectory = temporaryDirectory
+        self.processIdentifier = processIdentifier
+        sweepStaleCaptures()
     }
 
     public func captureMainDisplay() async throws -> CaptureResult {
@@ -66,7 +71,7 @@ public final class ScreenCapturer: ScreenCapturing {
         let captured = try await backend.captureMainDisplay()
         let directory = temporaryDirectory.appendingPathComponent("SentientComputerUse", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let path = directory.appendingPathComponent("\(UUID().uuidString).png")
+        let path = directory.appendingPathComponent("\(processIdentifier)-\(UUID().uuidString).png")
         try Self.writePNG(captured.image, to: path)
         captureURLs.insert(path)
         return CaptureResult(
@@ -90,6 +95,32 @@ public final class ScreenCapturer: ScreenCapturing {
 
     deinit {
         cleanup()
+    }
+
+    private func sweepStaleCaptures() {
+        let directory = temporaryDirectory.appendingPathComponent("SentientComputerUse", isDirectory: true)
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else { return }
+
+        for file in files where file.pathExtension.lowercased() == "png" {
+            let owner = file.deletingPathExtension().lastPathComponent
+                .split(separator: "-", maxSplits: 1)
+                .first
+                .flatMap { Int32($0) }
+            if let owner, owner != processIdentifier, Self.isProcessAlive(owner) {
+                continue
+            }
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
+
+    private static func isProcessAlive(_ processIdentifier: Int32) -> Bool {
+        guard processIdentifier > 0 else { return false }
+        if Darwin.kill(processIdentifier, 0) == 0 { return true }
+        return errno == EPERM
     }
 
     private static func writePNG(_ image: CGImage, to url: URL) throws {

@@ -73,6 +73,26 @@ final class ScreenCapturerTests: XCTestCase {
             XCTAssertEqual($0 as? ServiceError, ServiceError(code: .captureFailed, message: "Main display is unavailable"))
         }
     }
+
+    func testInitializationSweepsStaleCapturePNGs() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentientComputerUseTests-\(UUID().uuidString)", isDirectory: true)
+        let captureDirectory = directory.appendingPathComponent("SentientComputerUse", isDirectory: true)
+        try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+        let stalePNG = captureDirectory.appendingPathComponent("orphan.png")
+        let unrelated = captureDirectory.appendingPathComponent("keep.txt")
+        try Data("stale".utf8).write(to: stalePNG)
+        try Data("keep".utf8).write(to: unrelated)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        _ = ScreenCapturer(
+            backend: FakeScreenCaptureBackend(image: try makeImage()),
+            temporaryDirectory: directory
+        )
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stalePNG.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelated.path))
+    }
 }
 
 private final class FakeScreenCaptureBackend: ScreenCaptureBacking {

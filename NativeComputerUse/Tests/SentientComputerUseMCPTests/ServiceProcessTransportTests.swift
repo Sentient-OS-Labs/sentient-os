@@ -85,6 +85,84 @@ final class ServiceProcessTransportTests: XCTestCase {
         await fixtures.transport.shutdown()
     }
 
+    func testSilentChildCallTimesOutAndCanBeReaped() async throws {
+        let transport = try ServiceProcessTransport(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "read line; sleep 30"],
+            shutdownTimeouts: .fastTests,
+            responseTimeout: 0.05
+        )
+        let pid = await transport.childProcessIdentifier
+        let started = Date()
+
+        do {
+            _ = try await transport.call(operation: .listApps, arguments: [:])
+            XCTFail("Expected response timeout")
+        } catch let error as ServiceError {
+            XCTAssertEqual(error, ServiceError(
+                code: .internalError,
+                message: "SentientComputerUseService response timed out"
+            ))
+        } catch {
+            XCTFail("Expected ServiceError, got \(error)")
+        }
+
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        await transport.shutdown()
+        XCTAssertEqual(Darwin.kill(pid, 0), -1)
+        XCTAssertEqual(errno, ESRCH)
+    }
+
+    func testShutdownInterruptsSilentCallAndLeavesNoChild() async throws {
+        let transport = try ServiceProcessTransport(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "read line; sleep 30"],
+            shutdownTimeouts: .fastTests,
+            responseTimeout: 30
+        )
+        let pid = await transport.childProcessIdentifier
+        let call = Task { () -> ServiceError? in
+            do {
+                _ = try await transport.call(operation: .listApps, arguments: [:])
+                return nil
+            } catch let error as ServiceError {
+                return error
+            } catch {
+                return ServiceError(code: .internalError, message: "Unexpected error")
+            }
+        }
+        try await Task.sleep(for: .milliseconds(30))
+
+        await transport.shutdown()
+        let callError = await call.value
+
+        XCTAssertEqual(callError?.code, .internalError)
+        XCTAssertEqual(Darwin.kill(pid, 0), -1)
+        XCTAssertEqual(errno, ESRCH)
+    }
+
+    func testOversizedChildResponseFailsBeforeUnboundedAccumulation() async throws {
+        let transport = try ServiceProcessTransport(
+            executableURL: URL(fileURLWithPath: "/usr/bin/perl"),
+            arguments: ["-e", "scalar <STDIN>; print \"x\" x (1024 * 1024 + 1); sleep 1"],
+            shutdownTimeouts: .fastTests,
+            responseTimeout: 2
+        )
+
+        do {
+            _ = try await transport.call(operation: .listApps, arguments: [:])
+            XCTFail("Expected oversized response failure")
+        } catch let error as ServiceError {
+            XCTAssertEqual(error, ServiceError(
+                code: .internalError,
+                message: "SentientComputerUseService response exceeds maximum size"
+            ))
+        } catch {
+            XCTFail("Expected ServiceError, got \(error)")
+        }
+        await transport.shutdown()
+    }
+
     private func assertInternalError(
         from transport: ServiceProcessTransport,
         file: StaticString = #filePath,

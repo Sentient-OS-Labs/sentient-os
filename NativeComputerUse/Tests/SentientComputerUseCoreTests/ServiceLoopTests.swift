@@ -1,4 +1,5 @@
 import CoreGraphics
+import Darwin
 import Dispatch
 import Foundation
 import XCTest
@@ -224,6 +225,52 @@ final class ServiceLoopTests: XCTestCase {
             ServiceError(code: .internalError, message: "Response exceeds maximum size")
         ))
     }
+
+    func testServiceSIGINTAndSIGTERMExitThroughNormalCleanup() async throws {
+        let serviceURL = try builtServiceURL()
+
+        for signalNumber in [SIGINT, SIGTERM] {
+            let process = Process()
+            let input = Pipe()
+            let output = Pipe()
+            process.executableURL = serviceURL
+            process.standardInput = input
+            process.standardOutput = output
+            process.standardError = output
+            let terminated = expectation(description: "service exits for signal \(signalNumber)")
+            process.terminationHandler = { _ in terminated.fulfill() }
+            try process.run()
+            try await Task.sleep(for: .milliseconds(50))
+
+            XCTAssertEqual(Darwin.kill(process.processIdentifier, signalNumber), 0)
+            await fulfillment(of: [terminated], timeout: 2)
+
+            XCTAssertEqual(process.terminationReason, .exit)
+            XCTAssertEqual(process.terminationStatus, 0)
+            try? input.fileHandleForWriting.close()
+            try? input.fileHandleForReading.close()
+            try? output.fileHandleForWriting.close()
+            try? output.fileHandleForReading.close()
+        }
+    }
+}
+
+private func builtServiceURL() throws -> URL {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let candidates = [
+        packageRoot.appendingPathComponent(".build/debug/SentientComputerUseService"),
+        packageRoot.appendingPathComponent(".build/x86_64-apple-macosx/debug/SentientComputerUseService"),
+        packageRoot.appendingPathComponent(".build/arm64-apple-macosx/debug/SentientComputerUseService")
+    ]
+    guard let executable = candidates.first(where: {
+        FileManager.default.isExecutableFile(atPath: $0.path)
+    }) else {
+        throw XCTSkip("SentientComputerUseService test product is unavailable")
+    }
+    return executable
 }
 
 private final class EOFBarrierInput: ServiceInputReading, @unchecked Sendable {

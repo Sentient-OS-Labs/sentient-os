@@ -169,5 +169,24 @@ private actor NDJSONCodec {
     }
 }
 
+private final class ServiceTerminationSignals: @unchecked Sendable {
+    private let sources: [DispatchSourceSignal]
+
+    init(input: FileHandle) {
+        signal(SIGPIPE, SIG_IGN)
+        signal(SIGINT, SIG_IGN)
+        signal(SIGTERM, SIG_IGN)
+        sources = [SIGINT, SIGTERM].map { signalNumber in
+            let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
+            source.setEventHandler { try? input.close() }
+            source.resume()
+            return source
+        }
+    }
+}
+
+signal(SIGPIPE, SIG_IGN)
 let dispatcher = ServiceDispatcher()
+private let terminationSignals = ServiceTerminationSignals(input: .standardInput)
 await ServiceLoop.run(input: .standardInput, output: .standardOutput, dispatcher: dispatcher)
+withExtendedLifetime(terminationSignals) {}
