@@ -12,6 +12,18 @@ public enum ServiceLoop {
     ) async {
         defer { dispatcher.cleanup() }
 
+        await withTaskCancellationHandler(operation: {
+            await runLoop(input: input, output: output, dispatcher: dispatcher)
+        }, onCancel: {
+            try? input.close()
+        })
+    }
+
+    private static func runLoop(
+        input: FileHandle,
+        output: FileHandle,
+        dispatcher: ServiceDispatcher
+    ) async {
         let codec = NDJSONCodec()
         var line = Data()
         var discardingOversizedLine = false
@@ -30,12 +42,13 @@ public enum ServiceLoop {
             }
 
             for byte in chunk {
+                guard !Task.isCancelled else { return }
                 if byte == 0x0A {
                     if discardingOversizedLine {
-                        await writeInvalidRequest(output: output, codec: codec)
+                        guard await writeInvalidRequest(output: output, codec: codec) else { return }
                         discardingOversizedLine = false
                     } else {
-                        await process(line: line, output: output, dispatcher: dispatcher, codec: codec)
+                        guard await process(line: line, output: output, dispatcher: dispatcher, codec: codec) else { return }
                         line.removeAll(keepingCapacity: true)
                     }
                     continue
@@ -53,9 +66,9 @@ public enum ServiceLoop {
 
         if reachedEOF {
             if discardingOversizedLine {
-                await writeInvalidRequest(output: output, codec: codec)
+                _ = await writeInvalidRequest(output: output, codec: codec)
             } else if !line.isEmpty {
-                await process(line: line, output: output, dispatcher: dispatcher, codec: codec)
+                _ = await process(line: line, output: output, dispatcher: dispatcher, codec: codec)
             }
         }
     }
@@ -65,29 +78,34 @@ public enum ServiceLoop {
         output: FileHandle,
         dispatcher: ServiceDispatcher,
         codec: NDJSONCodec
-    ) async {
+    ) async -> Bool {
         let response: ServiceResponse
         if let request = await codec.decodeRequest(line) {
             response = await dispatcher.handle(request)
         } else {
             response = invalidRequestResponse
         }
-        await write(response, output: output, codec: codec)
+        return await write(response, output: output, codec: codec)
     }
 
-    private static func writeInvalidRequest(output: FileHandle, codec: NDJSONCodec) async {
+    private static func writeInvalidRequest(output: FileHandle, codec: NDJSONCodec) async -> Bool {
         await write(invalidRequestResponse, output: output, codec: codec)
     }
 
-    private static func write(_ response: ServiceResponse, output: FileHandle, codec: NDJSONCodec) async {
+    private static func write(_ response: ServiceResponse, output: FileHandle, codec: NDJSONCodec) async -> Bool {
         var data = await codec.encodeResponse(response)
         data.append(0x0A)
         do {
             try output.write(contentsOf: data)
+        } catch {
+            return false
+        }
+        do {
             try output.synchronize()
         } catch {
-            // The caller owns the output handle. A write failure ends this response only.
+            // Synchronization is unsupported by pipes even after a successful write.
         }
+        return true
     }
 
     private static var invalidRequestResponse: ServiceResponse {
