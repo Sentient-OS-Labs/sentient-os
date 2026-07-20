@@ -33,6 +33,74 @@ final class MCPServerTests: XCTestCase {
         ]))
     }
 
+    func testInitializeFallsBackToSupportedProtocolVersion() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+
+        let response = await server.handle(initializeRequest(id: .int(2), protocolVersion: "2099-01-01"))
+
+        guard case let .object(envelope)? = response,
+              case let .object(result)? = envelope["result"] else {
+            return XCTFail("Expected initialize result")
+        }
+        XCTAssertEqual(result["protocolVersion"], .string("2025-03-26"))
+    }
+
+    func testInitializeRejectsMissingRequiredClientFields() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        let cases: [JSONValue] = [
+            .object(["protocolVersion": .string("2025-03-26"), "clientInfo": Self.validClientInfo]),
+            .object(["protocolVersion": .string("2025-03-26"), "capabilities": .object([:])]),
+            .object([
+                "protocolVersion": .string("2025-03-26"),
+                "capabilities": .object([:]),
+                "clientInfo": .object(["name": .string("tests")])
+            ]),
+            .object([
+                "protocolVersion": .string("2025-03-26"),
+                "capabilities": .object([:]),
+                "clientInfo": .object(["version": .string("1")])
+            ])
+        ]
+
+        for (index, params) in cases.enumerated() {
+            let id = JSONValue.int(20 + index)
+            let response = await server.handle(request(id: id, method: "initialize", params: params))
+            XCTAssertEqual(response, jsonRPCError(id: id, code: -32602, message: "Invalid params"))
+        }
+    }
+
+    func testInitializeRejectsWrongTypedClientFields() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        let cases: [JSONValue] = [
+            .object([
+                "protocolVersion": .int(1),
+                "capabilities": .object([:]),
+                "clientInfo": Self.validClientInfo
+            ]),
+            .object([
+                "protocolVersion": .string("2025-03-26"),
+                "capabilities": .array([]),
+                "clientInfo": Self.validClientInfo
+            ]),
+            .object([
+                "protocolVersion": .string("2025-03-26"),
+                "capabilities": .object([:]),
+                "clientInfo": .object(["name": .bool(true), "version": .string("1")])
+            ]),
+            .object([
+                "protocolVersion": .string("2025-03-26"),
+                "capabilities": .object([:]),
+                "clientInfo": .object(["name": .string("tests"), "version": .int(1)])
+            ])
+        ]
+
+        for (index, params) in cases.enumerated() {
+            let id = JSONValue.int(30 + index)
+            let response = await server.handle(request(id: id, method: "initialize", params: params))
+            XCTAssertEqual(response, jsonRPCError(id: id, code: -32602, message: "Invalid params"))
+        }
+    }
+
     func testListsExactlyTheSixApprovedSkyCompatibleTools() async throws {
         let server = MCPServer(transport: RecordingTransport())
 
@@ -42,6 +110,31 @@ final class MCPServerTests: XCTestCase {
             "jsonrpc": .string("2.0"),
             "id": .string("tools"),
             "result": .object(["tools": .array(Self.expectedTools)])
+        ]))
+    }
+
+    func testScrollPagesSchemaMatchesIntegralServiceBounds() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+
+        let response = await server.handle(request(id: .int(4), method: "tools/list", params: .object([:])))
+
+        guard case let .object(envelope)? = response,
+              case let .object(result)? = envelope["result"],
+              case let .array(tools)? = result["tools"],
+              let scroll = tools.first(where: {
+                  guard case let .object(tool) = $0 else { return false }
+                  return tool["name"] == .string("scroll")
+              }),
+              case let .object(scrollObject) = scroll,
+              case let .object(schema)? = scrollObject["inputSchema"],
+              case let .object(properties)? = schema["properties"] else {
+            return XCTFail("Expected scroll input schema")
+        }
+        XCTAssertEqual(properties["pages"], .object([
+            "type": .string("integer"),
+            "description": .string("Number of pages to scroll. Defaults to 1"),
+            "minimum": .int(1),
+            "maximum": .int(10)
         ]))
     }
 
@@ -141,6 +234,124 @@ final class MCPServerTests: XCTestCase {
         XCTAssertNil(unknown)
     }
 
+    func testRejectsInvalidJSONRPCIdentifierTypesWithNullErrorID() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        let invalidIDs: [JSONValue] = [.bool(true), .array([]), .object([:])]
+
+        for id in invalidIDs {
+            let response = await server.handle(request(id: id, method: "resources/list", params: .object([:])))
+            XCTAssertEqual(response, jsonRPCError(id: .null, code: -32600, message: "Invalid Request"))
+        }
+    }
+
+    func testAcceptsStringNumberAndNullJSONRPCIdentifiers() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        let validIDs: [JSONValue] = [.string("request"), .int(7), .double(7.5), .null]
+
+        for id in validIDs {
+            let response = await server.handle(request(id: id, method: "resources/list", params: .object([:])))
+            XCTAssertEqual(response, jsonRPCError(id: id, code: -32601, message: "Method not found"))
+        }
+    }
+
+    func testBatchAfterInitializationReturnsOnlyRequestResponses() async throws {
+        let transport = RecordingTransport(result: .array([]))
+        let server = MCPServer(transport: transport)
+        await completeInitialization(server, id: 40)
+
+        let response = await server.handle(.array([
+            request(id: .int(41), method: "resources/list", params: .object([:])),
+            .object([
+                "jsonrpc": .string("2.0"),
+                "method": .string("notifications/unknown")
+            ]),
+            request(
+                id: .string("apps"),
+                method: "tools/call",
+                params: .object(["name": .string("list_apps"), "arguments": .object([:])])
+            )
+        ]))
+
+        guard case let .array(responses)? = response else {
+            return XCTFail("Expected a JSON-RPC batch response")
+        }
+        XCTAssertEqual(responses.count, 2)
+        XCTAssertEqual(responses[0], jsonRPCError(id: .int(41), code: -32601, message: "Method not found"))
+        guard case let .object(toolEnvelope) = responses[1] else {
+            return XCTFail("Expected tool response")
+        }
+        XCTAssertEqual(toolEnvelope["id"], .string("apps"))
+    }
+
+    func testAllNotificationBatchProducesNoResponse() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 50)
+
+        let response = await server.handle(.array([
+            .object(["jsonrpc": .string("2.0"), "method": .string("notifications/initialized")]),
+            .object(["jsonrpc": .string("2.0"), "method": .string("notifications/unknown")])
+        ]))
+
+        XCTAssertNil(response)
+    }
+
+    func testEmptyBatchReturnsInvalidRequest() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 60)
+
+        let response = await server.handle(.array([]))
+
+        XCTAssertEqual(response, jsonRPCError(id: .null, code: -32600, message: "Invalid Request"))
+    }
+
+    func testInvalidBatchEntriesAreNotMistakenForNotifications() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 65)
+
+        let response = await server.handle(.array([
+            .bool(true),
+            .object(["jsonrpc": .string("2.0")])
+        ]))
+
+        let invalid = jsonRPCError(id: .null, code: -32600, message: "Invalid Request")
+        XCTAssertEqual(response, .array([invalid, invalid]))
+    }
+
+    func testInitializeInsideBatchIsRejectedAndNotProcessed() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 70)
+
+        let response = await server.handle(.array([
+            initializeRequest(id: .int(71), protocolVersion: "2099-01-01")
+        ]))
+
+        XCTAssertEqual(response, .array([
+            jsonRPCError(id: .int(71), code: -32600, message: "Invalid Request")
+        ]))
+    }
+
+    func testBatchWaitsForInitializedNotification() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        _ = await server.handle(initializeRequest(id: .int(80)))
+        let batch: JSONValue = .array([
+            request(id: .int(81), method: "resources/list", params: .object([:]))
+        ])
+
+        let beforeNotification = await server.handle(batch)
+        _ = await server.handle(.object([
+            "jsonrpc": .string("2.0"),
+            "method": .string("notifications/initialized")
+        ]))
+        let afterNotification = await server.handle(batch)
+
+        XCTAssertEqual(beforeNotification, .array([
+            jsonRPCError(id: .int(81), code: -32600, message: "Invalid Request")
+        ]))
+        XCTAssertEqual(afterNotification, .array([
+            jsonRPCError(id: .int(81), code: -32601, message: "Method not found")
+        ]))
+    }
+
     private func request(id: JSONValue, method: String, params: JSONValue) -> JSONValue {
         .object([
             "jsonrpc": .string("2.0"),
@@ -148,6 +359,26 @@ final class MCPServerTests: XCTestCase {
             "method": .string(method),
             "params": params
         ])
+    }
+
+    private func initializeRequest(id: JSONValue, protocolVersion: String = "2025-03-26") -> JSONValue {
+        request(
+            id: id,
+            method: "initialize",
+            params: .object([
+                "protocolVersion": .string(protocolVersion),
+                "capabilities": .object([:]),
+                "clientInfo": Self.validClientInfo
+            ])
+        )
+    }
+
+    private func completeInitialization(_ server: MCPServer, id: Int) async {
+        _ = await server.handle(initializeRequest(id: .int(id)))
+        _ = await server.handle(.object([
+            "jsonrpc": .string("2.0"),
+            "method": .string("notifications/initialized")
+        ]))
     }
 
     private func jsonRPCError(id: JSONValue, code: Int, message: String) -> JSONValue {
@@ -234,11 +465,21 @@ final class MCPServerTests: XCTestCase {
                     "description": .string("Scroll direction: up, down, left, or right"),
                     "enum": .array([.string("up"), .string("down"), .string("left"), .string("right")])
                 ]),
-                "pages": numberProperty("Number of pages to scroll. Fractional values are supported. Defaults to 1")
+                "pages": .object([
+                    "type": .string("integer"),
+                    "description": .string("Number of pages to scroll. Defaults to 1"),
+                    "minimum": .int(1),
+                    "maximum": .int(10)
+                ])
             ],
             required: ["app", "direction"]
         )
     ]
+
+    private static let validClientInfo: JSONValue = .object([
+        "name": .string("tests"),
+        "version": .string("1")
+    ])
 
     private static func tool(
         name: String,

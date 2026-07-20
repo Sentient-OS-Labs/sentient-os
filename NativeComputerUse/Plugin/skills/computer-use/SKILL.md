@@ -16,7 +16,7 @@ Only these six tools are available:
 - `click(app, element_index?, x?, y?, mouse_button?, click_count?)` clicks a fresh accessibility element index or an explicit screenshot coordinate.
 - `type_text(app, text)` types literal text into the focused control.
 - `press_key(app, key)` presses a key or shortcut such as `Return`, `Tab`, `Escape`, an arrow key, or `super+c`.
-- `scroll(app, element_index?, direction, pages?)` scrolls up, down, left, or right.
+- `scroll(app, element_index?, direction, pages?)` scrolls up, down, left, or right by 1 to 10 whole pages.
 
 Prefer fresh `element_index` values from the latest `get_app_state` result. If accessibility state is incomplete, use the display capture and coordinate clicks. The `app` parameter can be a display name, full app path, or bundle identifier. If a display name fails, use the bundle identifier returned by `list_apps`.
 

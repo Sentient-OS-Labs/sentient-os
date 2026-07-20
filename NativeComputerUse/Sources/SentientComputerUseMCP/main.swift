@@ -2,26 +2,97 @@
 import Darwin
 import SentientComputerUseCore
 
-actor ServiceProcessTransport: ServiceTransport {
+struct ChildShutdownTimeouts: Sendable, Equatable {
+    let graceful: TimeInterval
+    let terminate: TimeInterval
+    let kill: TimeInterval
+
+    static let `default` = ChildShutdownTimeouts(graceful: 1, terminate: 1, kill: 1)
+}
+
+protocol ServiceChildProcess: AnyObject, Sendable {
+    var isRunning: Bool { get }
+    var processIdentifier: Int32 { get }
+    func start() throws
+    func waitForExit(timeout: TimeInterval) -> Bool
+    func terminate()
+    func kill()
+}
+
+private final class FoundationServiceChildProcess: ServiceChildProcess, @unchecked Sendable {
     private let process: Process
+    private let exitSignal = DispatchSemaphore(value: 0)
+
+    init(executableURL: URL, arguments: [String], input: Pipe, output: Pipe) {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.standardError
+        self.process = process
+        process.terminationHandler = { [exitSignal] _ in exitSignal.signal() }
+    }
+
+    var isRunning: Bool { process.isRunning }
+    var processIdentifier: Int32 { process.processIdentifier }
+
+    func start() throws {
+        try process.run()
+    }
+
+    func waitForExit(timeout: TimeInterval) -> Bool {
+        guard process.isRunning else { return true }
+        let result = exitSignal.wait(timeout: .now() + timeout)
+        return result == .success || !process.isRunning
+    }
+
+    func terminate() {
+        guard process.isRunning else { return }
+        process.terminate()
+    }
+
+    func kill() {
+        guard process.isRunning else { return }
+        _ = Darwin.kill(process.processIdentifier, SIGKILL)
+    }
+}
+
+actor ServiceProcessTransport: ServiceTransport {
+    private let process: any ServiceChildProcess
     private let requestInput: FileHandle
     private let responseOutput: FileHandle
+    private let shutdownTimeouts: ChildShutdownTimeouts
     private var responseBuffer = Data()
     private var isShutDown = false
 
-    init(executableURL: URL) throws {
-        let process = Process()
+    init(
+        executableURL: URL,
+        arguments: [String] = [],
+        shutdownTimeouts: ChildShutdownTimeouts = .default
+    ) throws {
+        signal(SIGPIPE, SIG_IGN)
         let inputPipe = Pipe()
         let outputPipe = Pipe()
+        let process = FoundationServiceChildProcess(
+            executableURL: executableURL,
+            arguments: arguments,
+            input: inputPipe,
+            output: outputPipe
+        )
 
-        process.executableURL = executableURL
-        process.standardInput = inputPipe
-        process.standardOutput = outputPipe
-        process.standardError = FileHandle.standardError
+        self.process = process
+        requestInput = inputPipe.fileHandleForWriting
+        responseOutput = outputPipe.fileHandleForReading
+        self.shutdownTimeouts = shutdownTimeouts
 
         do {
-            try process.run()
+            try process.start()
         } catch {
+            try? requestInput.close()
+            try? responseOutput.close()
+            try? inputPipe.fileHandleForReading.close()
+            try? outputPipe.fileHandleForWriting.close()
             throw ServiceError(
                 code: .internalError,
                 message: "Unable to launch SentientComputerUseService"
@@ -30,10 +101,29 @@ actor ServiceProcessTransport: ServiceTransport {
 
         try? inputPipe.fileHandleForReading.close()
         try? outputPipe.fileHandleForWriting.close()
-        self.process = process
-        requestInput = inputPipe.fileHandleForWriting
-        responseOutput = outputPipe.fileHandleForReading
     }
+
+    init(
+        process: any ServiceChildProcess,
+        requestInput: FileHandle,
+        responseOutput: FileHandle,
+        shutdownTimeouts: ChildShutdownTimeouts = .default
+    ) throws {
+        signal(SIGPIPE, SIG_IGN)
+        self.process = process
+        self.requestInput = requestInput
+        self.responseOutput = responseOutput
+        self.shutdownTimeouts = shutdownTimeouts
+        do {
+            try process.start()
+        } catch {
+            try? requestInput.close()
+            try? responseOutput.close()
+            throw ServiceError(code: .internalError, message: "Unable to launch SentientComputerUseService")
+        }
+    }
+
+    var childProcessIdentifier: Int32 { process.processIdentifier }
 
     func call(operation: ServiceOperation, arguments: [String: JSONValue]) async throws -> JSONValue {
         guard !isShutDown, process.isRunning else { throw childExitedError }
@@ -71,16 +161,23 @@ actor ServiceProcessTransport: ServiceTransport {
         isShutDown = true
         try? requestInput.close()
 
-        // EOF lets the service leave its loop and run capture cleanup. Bound the graceful wait,
-        // then terminate so adapter shutdown can never leave an orphan process.
-        let gracefulDeadline = Date().addingTimeInterval(1)
-        while process.isRunning, Date() < gracefulDeadline {
-            Thread.sleep(forTimeInterval: 0.01)
+        // EOF gives the service a bounded chance to clean up. Each escalation also has a hard
+        // bound: adapter shutdown never performs an unbounded process wait.
+        if process.waitForExit(timeout: shutdownTimeouts.graceful) {
+            try? responseOutput.close()
+            return
         }
         if process.isRunning {
             process.terminate()
         }
-        process.waitUntilExit()
+        if process.waitForExit(timeout: shutdownTimeouts.terminate) {
+            try? responseOutput.close()
+            return
+        }
+        if process.isRunning {
+            process.kill()
+        }
+        _ = process.waitForExit(timeout: shutdownTimeouts.kill)
         try? responseOutput.close()
     }
 

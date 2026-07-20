@@ -5,33 +5,83 @@ public protocol ServiceTransport: Sendable {
     func call(operation: ServiceOperation, arguments: [String: JSONValue]) async throws -> JSONValue
 }
 
-public struct MCPServer: Sendable {
+public actor MCPServer {
+    public static let supportedProtocolVersion = "2025-03-26"
+
     private let transport: any ServiceTransport
+    private var hasNegotiatedInitialization = false
+    private var isInitialized = false
 
     public init(transport: any ServiceTransport) {
         self.transport = transport
     }
 
     public func handle(_ request: JSONValue) async -> JSONValue? {
+        if case let .array(entries) = request {
+            return await handleBatch(entries)
+        }
+        return await handleSingle(request, permitsInitialize: true)
+    }
+
+    private func handleBatch(_ entries: [JSONValue]) async -> JSONValue? {
+        guard !entries.isEmpty else {
+            return Self.error(id: .null, code: -32600, message: "Invalid Request")
+        }
+
+        let batchIsAllowed = isInitialized
+        var responses: [JSONValue] = []
+        for entry in entries {
+            let id = Self.validID(in: entry)
+            guard !Self.isNotification(entry) else { continue }
+
+            if Self.method(in: entry) == "initialize" || !batchIsAllowed {
+                responses.append(Self.error(id: id ?? .null, code: -32600, message: "Invalid Request"))
+                continue
+            }
+            if let response = await handleSingle(entry, permitsInitialize: false) {
+                responses.append(response)
+            }
+        }
+        return responses.isEmpty ? nil : .array(responses)
+    }
+
+    private func handleSingle(_ request: JSONValue, permitsInitialize: Bool) async -> JSONValue? {
         guard case let .object(envelope) = request,
               envelope["jsonrpc"] == .string("2.0"),
               case let .string(method)? = envelope["method"] else {
-            return Self.error(id: Self.requestID(from: request), code: -32600, message: "Invalid Request")
+            return Self.error(id: .null, code: -32600, message: "Invalid Request")
         }
 
         guard let id = envelope["id"] else {
+            if method == "notifications/initialized", hasNegotiatedInitialization {
+                isInitialized = true
+            }
             // JSON-RPC notifications never receive a response, including unknown notifications.
             return nil
+        }
+        guard Self.isValidID(id) else {
+            return Self.error(id: .null, code: -32600, message: "Invalid Request")
         }
 
         switch method {
         case "initialize":
+            guard permitsInitialize, !hasNegotiatedInitialization else {
+                return Self.error(id: id, code: -32600, message: "Invalid Request")
+            }
             guard case let .object(params)? = envelope["params"],
-                  case let .string(protocolVersion)? = params["protocolVersion"] else {
+                  case let .string(requestedProtocolVersion)? = params["protocolVersion"],
+                  case .object? = params["capabilities"],
+                  case let .object(clientInfo)? = params["clientInfo"],
+                  case .string? = clientInfo["name"],
+                  case .string? = clientInfo["version"] else {
                 return Self.error(id: id, code: -32602, message: "Invalid params")
             }
+            let negotiatedProtocolVersion = requestedProtocolVersion == Self.supportedProtocolVersion
+                ? requestedProtocolVersion
+                : Self.supportedProtocolVersion
+            hasNegotiatedInitialization = true
             return Self.success(id: id, result: .object([
-                "protocolVersion": .string(protocolVersion),
+                "protocolVersion": .string(negotiatedProtocolVersion),
                 "capabilities": .object([
                     "tools": .object(["listChanged": .bool(false)])
                 ]),
@@ -110,9 +160,34 @@ public struct MCPServer: Sendable {
         encode(error(id: .null, code: -32700, message: "Parse error")) ?? Data()
     }
 
-    private static func requestID(from request: JSONValue) -> JSONValue {
-        guard case let .object(envelope) = request else { return .null }
-        return envelope["id"] ?? .null
+    private static func method(in request: JSONValue) -> String? {
+        guard case let .object(envelope) = request,
+              case let .string(method)? = envelope["method"] else { return nil }
+        return method
+    }
+
+    private static func isNotification(_ request: JSONValue) -> Bool {
+        guard case let .object(envelope) = request,
+              envelope["id"] == nil,
+              envelope["jsonrpc"] == .string("2.0"),
+              case .string? = envelope["method"] else { return false }
+        return true
+    }
+
+    private static func validID(in request: JSONValue) -> JSONValue? {
+        guard case let .object(envelope) = request,
+              let id = envelope["id"],
+              isValidID(id) else { return nil }
+        return id
+    }
+
+    private static func isValidID(_ id: JSONValue) -> Bool {
+        switch id {
+        case .string, .int, .double, .null:
+            return true
+        case .bool, .array, .object:
+            return false
+        }
     }
 
     private static func success(id: JSONValue, result: JSONValue) -> JSONValue {
@@ -221,7 +296,12 @@ public struct MCPServer: Sendable {
                     "description": .string("Scroll direction: up, down, left, or right"),
                     "enum": .array([.string("up"), .string("down"), .string("left"), .string("right")])
                 ]),
-                "pages": numberProperty("Number of pages to scroll. Fractional values are supported. Defaults to 1")
+                "pages": .object([
+                    "type": .string("integer"),
+                    "description": .string("Number of pages to scroll. Defaults to 1"),
+                    "minimum": .int(1),
+                    "maximum": .int(10)
+                ])
             ],
             required: ["app", "direction"]
         )
