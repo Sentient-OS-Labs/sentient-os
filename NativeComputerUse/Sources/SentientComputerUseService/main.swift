@@ -1,4 +1,5 @@
 @preconcurrency import Foundation
+import Darwin
 import SentientComputerUseCore
 
 protocol ServiceInputReading: Sendable {
@@ -8,13 +9,19 @@ protocol ServiceInputReading: Sendable {
 
 private final class FileHandleInput: ServiceInputReading, @unchecked Sendable {
     private let handle: FileHandle
+    private let descriptor: Int32
 
     init(handle: FileHandle) {
         self.handle = handle
+        descriptor = handle.fileDescriptor
     }
 
     func read(upToCount count: Int) throws -> Data? {
-        try handle.read(upToCount: count)
+        let data = handle.availableData
+        if data.isEmpty, fcntl(descriptor, F_GETFD) == -1, errno == EBADF {
+            throw CocoaError(.fileReadUnknown)
+        }
+        return data
     }
 
     func close() {

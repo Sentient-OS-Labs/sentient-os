@@ -1,0 +1,11 @@
+{
+  "name": "computer-use",
+  "version": "1.0.0",
+  "description": "Control desktop apps on Intel Macs through Sentient's native Computer Use service.",
+  "author": {
+    "name": "Sentient OS Labs"
+  },
+  "license": "AGPL-3.0-only",
+  "mcpServers": "./.mcp.json",
+  "skills": "./skills/"
+}

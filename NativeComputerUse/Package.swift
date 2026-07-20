@@ -7,7 +7,8 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(name: "SentientComputerUseCore", targets: ["SentientComputerUseCore"]),
-        .executable(name: "SentientComputerUseService", targets: ["SentientComputerUseService"])
+        .executable(name: "SentientComputerUseService", targets: ["SentientComputerUseService"]),
+        .executable(name: "SentientComputerUseMCP", targets: ["SentientComputerUseMCP"])
     ],
     targets: [
         .target(name: "SentientComputerUseCore"),
@@ -15,9 +16,17 @@ let package = Package(
             name: "SentientComputerUseService",
             dependencies: ["SentientComputerUseCore"]
         ),
+        .executableTarget(
+            name: "SentientComputerUseMCP",
+            dependencies: ["SentientComputerUseCore"]
+        ),
         .testTarget(
             name: "SentientComputerUseCoreTests",
             dependencies: ["SentientComputerUseCore", "SentientComputerUseService"]
+        ),
+        .testTarget(
+            name: "SentientComputerUseMCPTests",
+            dependencies: ["SentientComputerUseCore", "SentientComputerUseMCP"]
         )
     ]
 )

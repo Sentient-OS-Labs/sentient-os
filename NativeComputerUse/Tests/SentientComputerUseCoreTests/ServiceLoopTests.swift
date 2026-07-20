@@ -6,6 +6,44 @@ import XCTest
 @testable import SentientComputerUseService
 
 final class ServiceLoopTests: XCTestCase {
+    func testProcessesCompleteLineBeforeInputEOF() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let outputURL = directory.appendingPathComponent("output.ndjson")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        let output = try FileHandle(forWritingTo: outputURL)
+        let input = Pipe()
+        let fixtures = LoopFixtures()
+
+        let task = Task {
+            await ServiceLoop.run(
+                input: input.fileHandleForReading,
+                output: output,
+                dispatcher: fixtures.dispatcher
+            )
+        }
+        try input.fileHandleForWriting.write(contentsOf: Data(
+            "{\"id\":\"live\",\"operation\":\"list_apps\",\"arguments\":{}}\n".utf8
+        ))
+
+        var respondedBeforeEOF = false
+        for _ in 0..<20 {
+            if !(try Data(contentsOf: outputURL)).isEmpty {
+                respondedBeforeEOF = true
+                break
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        try input.fileHandleForWriting.close()
+        await task.value
+        try output.close()
+        XCTAssertTrue(respondedBeforeEOF, "The persistent service must answer without waiting for stdin EOF")
+    }
+
     func testContinuesAfterMalformedLine() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
