@@ -1,8 +1,9 @@
 import CoreGraphics
+import Dispatch
 import Foundation
-import SentientComputerUseService
 import XCTest
 @testable import SentientComputerUseCore
+@testable import SentientComputerUseService
 
 final class ServiceLoopTests: XCTestCase {
     func testContinuesAfterMalformedLine() async throws {
@@ -110,6 +111,73 @@ final class ServiceLoopTests: XCTestCase {
 
         XCTAssertEqual(fixtures.catalog.applicationsCount, 1)
         XCTAssertEqual(fixtures.capturer.cleanupCount, 1)
+    }
+
+    func testCancellationRacingEOFDiscardsBufferedValidLine() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let outputURL = directory.appendingPathComponent("output.ndjson")
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        let output = try FileHandle(forWritingTo: outputURL)
+        let request = "{\"id\":\"partial\",\"operation\":\"list_apps\",\"arguments\":{}}"
+        let input = EOFBarrierInput(line: Data(request.utf8))
+        let fixtures = LoopFixtures()
+        let finished = expectation(description: "service loop exits after EOF cancellation race")
+        defer {
+            input.close()
+            try? output.close()
+        }
+
+        let task = Task {
+            await ServiceLoop.run(
+                input: input,
+                output: output,
+                dispatcher: fixtures.dispatcher
+            )
+            finished.fulfill()
+        }
+        XCTAssertEqual(input.eofReadStarted.wait(timeout: .now() + 1), .success)
+        task.cancel()
+        input.releaseEOF()
+
+        await fulfillment(of: [finished], timeout: 1)
+        XCTAssertEqual(fixtures.catalog.applicationsCount, 0)
+        XCTAssertEqual(fixtures.capturer.cleanupCount, 1)
+    }
+}
+
+private final class EOFBarrierInput: ServiceInputReading, @unchecked Sendable {
+    let eofReadStarted = DispatchSemaphore(value: 0)
+    private let line: Data
+    private var didReturnLine = false
+    private let lock = NSLock()
+    private let eofGate = DispatchSemaphore(value: 0)
+
+    init(line: Data) {
+        self.line = line
+    }
+
+    func read(upToCount count: Int) throws -> Data? {
+        lock.lock()
+        if !didReturnLine {
+            didReturnLine = true
+            lock.unlock()
+            return line
+        }
+        lock.unlock()
+
+        eofReadStarted.signal()
+        eofGate.wait()
+        return Data()
+    }
+
+    func close() {}
+
+    func releaseEOF() {
+        eofGate.signal()
     }
 }
 

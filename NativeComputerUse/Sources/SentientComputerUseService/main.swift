@@ -1,6 +1,27 @@
 @preconcurrency import Foundation
 import SentientComputerUseCore
 
+protocol ServiceInputReading: Sendable {
+    func read(upToCount count: Int) throws -> Data?
+    func close()
+}
+
+private final class FileHandleInput: ServiceInputReading, @unchecked Sendable {
+    private let handle: FileHandle
+
+    init(handle: FileHandle) {
+        self.handle = handle
+    }
+
+    func read(upToCount count: Int) throws -> Data? {
+        try handle.read(upToCount: count)
+    }
+
+    func close() {
+        try? handle.close()
+    }
+}
+
 public enum ServiceLoop {
     private static let readChunkSize = 64 * 1024
     private static let maximumLineSize = 1 * 1024 * 1024
@@ -10,17 +31,25 @@ public enum ServiceLoop {
         output: FileHandle,
         dispatcher: ServiceDispatcher
     ) async {
+        await run(input: FileHandleInput(handle: input), output: output, dispatcher: dispatcher)
+    }
+
+    static func run(
+        input: any ServiceInputReading,
+        output: FileHandle,
+        dispatcher: ServiceDispatcher
+    ) async {
         defer { dispatcher.cleanup() }
 
         await withTaskCancellationHandler(operation: {
             await runLoop(input: input, output: output, dispatcher: dispatcher)
         }, onCancel: {
-            try? input.close()
+            input.close()
         })
     }
 
     private static func runLoop(
-        input: FileHandle,
+        input: any ServiceInputReading,
         output: FileHandle,
         dispatcher: ServiceDispatcher
     ) async {
@@ -64,7 +93,7 @@ public enum ServiceLoop {
             }
         }
 
-        if reachedEOF {
+        if reachedEOF, !Task.isCancelled {
             if discardingOversizedLine {
                 _ = await writeInvalidRequest(output: output, codec: codec)
             } else if !line.isEmpty {
