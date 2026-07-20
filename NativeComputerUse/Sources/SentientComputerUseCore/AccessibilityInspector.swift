@@ -113,6 +113,10 @@ public protocol AccessibilityInspecting {
     func element(snapshotToken: UUID, index: Int) throws -> SnapshotElement
 }
 
+struct SnapshotElementReference: Sendable, Equatable {
+    let axReference: AXElementReference
+}
+
 public final class AccessibilityInspector: AccessibilityInspecting {
     public static let defaultMaxDepth = 12
     public static let defaultMaxElements = 500
@@ -177,13 +181,22 @@ public final class AccessibilityInspector: AccessibilityInspecting {
     }
 
     public func element(snapshotToken: UUID, index: Int) throws -> SnapshotElement {
-        guard let snapshot = snapshotsByProcess.values.first(where: { $0.token == snapshotToken }) else {
+        try cachedSnapshot(for: snapshotToken, index: index).elements[index]
+    }
+
+    func resolveElementReference(snapshotToken: UUID, index: Int) throws -> SnapshotElementReference {
+        let snapshot = try cachedSnapshot(for: snapshotToken, index: index)
+        return SnapshotElementReference(axReference: snapshot.references[index])
+    }
+
+    private func cachedSnapshot(for token: UUID, index: Int) throws -> CachedSnapshot {
+        guard let snapshot = snapshotsByProcess.values.first(where: { $0.token == token }) else {
             throw ServiceError(code: .staleSnapshot, message: "Snapshot expired")
         }
         guard snapshot.elements.indices.contains(index) else {
             throw ServiceError(code: .elementNotFound, message: "Element not found")
         }
-        return snapshot.elements[index]
+        return snapshot
     }
 
     private static func normalized(_ value: String?) -> String? {
@@ -234,11 +247,15 @@ public final class SystemAXProvider: AXProviding {
 
     private func frameAttribute(for element: AXUIElement) -> SnapshotFrame? {
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, "AXFrame" as CFString, &value) == .success,
-              let value else {
+        guard AXUIElementCopyAttributeValue(element, "AXFrame" as CFString, &value) == .success else {
             return nil
         }
-        let axValue = unsafeDowncast(value, to: AXValue.self)
+        return Self.frame(from: value)
+    }
+
+    static func frame(from value: CFTypeRef?) -> SnapshotFrame? {
+        guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        let axValue = value as! AXValue
         guard AXValueGetType(axValue) == .cgRect else { return nil }
         var rect = CGRect.zero
         guard AXValueGetValue(axValue, .cgRect, &rect) else { return nil }
