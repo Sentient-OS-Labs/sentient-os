@@ -22,8 +22,38 @@ final class ServiceDispatcherTests: XCTestCase {
 
         XCTAssertEqual(response, .failure(id: "capture", ServiceError(code: .captureFailed, message: "Unable to capture the display")))
         XCTAssertEqual(fixtures.catalog.resolveCount, 1)
-        XCTAssertEqual(fixtures.inspector.snapshotCount, 1)
+        XCTAssertEqual(fixtures.inspector.snapshotCount, 0)
         XCTAssertEqual(fixtures.capturer.captureCount, 1)
+    }
+
+    func testCaptureFailureKeepsPreviouslyVisibleElementSnapshot() async {
+        let fixtures = DispatcherFixtures()
+        let firstState = await fixtures.dispatcher.handle(.init(
+            id: "first-state",
+            operation: .getAppState,
+            arguments: ["app": .string("Notes")]
+        ))
+        XCTAssertEqual(firstState.id, "first-state")
+        let previousReference = fixtures.inspector.latestReference
+
+        fixtures.capturer.error = FixtureError.failed
+        let failedState = await fixtures.dispatcher.handle(.init(
+            id: "failed-state",
+            operation: .getAppState,
+            arguments: ["app": .string("Notes")]
+        ))
+        _ = await fixtures.dispatcher.handle(.init(
+            id: "click-old",
+            operation: .click,
+            arguments: ["app": .string("Notes"), "element_index": .int(0)]
+        ))
+
+        XCTAssertEqual(failedState, .failure(
+            id: "failed-state",
+            ServiceError(code: .captureFailed, message: "Unable to capture the display")
+        ))
+        XCTAssertEqual(fixtures.inspector.latestReference, previousReference)
+        XCTAssertEqual(fixtures.input.clickedElements, [previousReference])
     }
 
     func testGetAppStateDeniesScreenRecordingBeforeTouchingCaptureCatalogOrAX() async {
@@ -291,9 +321,13 @@ private final class FakeInspector: AccessibilityInspecting, SnapshotElementRefer
     private(set) var resolveReferenceCount = 0
     private(set) var latestElementCount = 0
     private(set) var resolvedReferences: [SnapshotElementReference] = []
+    private(set) var latestReference: SnapshotElementReference = .fixture
 
     func snapshot(app: ApplicationDescriptor, maxDepth: Int, maxElements: Int) throws -> AccessibilitySnapshot {
         snapshotCount += 1
+        latestReference = SnapshotElementReference(
+            axReference: AXElementReference(identifier: "snapshot-\(snapshotCount)")
+        )
         return snapshot
     }
 
@@ -308,7 +342,9 @@ private final class FakeInspector: AccessibilityInspecting, SnapshotElementRefer
     }
 
     func resolveLatestElementReference(app: ApplicationDescriptor, index: Int) throws -> SnapshotElementReference {
-        try resolveElementReference(snapshotToken: snapshot.token, index: index)
+        resolveReferenceCount += 1
+        resolvedReferences.append(latestReference)
+        return latestReference
     }
 
     func latestElement(app: ApplicationDescriptor, index: Int) throws -> SnapshotElement {
@@ -369,7 +405,7 @@ private final class FakePermissionChecker: PermissionChecking {
 }
 
 private final class FakeCapturer: ScreenCapturing {
-    let error: Error?
+    var error: Error?
     private(set) var captureCount = 0
 
     init(error: Error? = nil) { self.error = error }

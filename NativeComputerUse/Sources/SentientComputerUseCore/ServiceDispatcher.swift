@@ -95,21 +95,24 @@ public final class ServiceDispatcher {
             try requireAccessibility()
             try requireScreenRecording()
             let application = try catalog.resolve(app)
+            let capture: CaptureResult
+            do {
+                capture = try await screenCapturer.captureMainDisplay()
+            } catch {
+                throw ServiceError(code: .captureFailed, message: "Unable to capture the display")
+            }
+            // Build and commit the AX snapshot only after capture succeeds. A failed capture must
+            // leave the latest visible element indexes usable by a subsequent action.
             let snapshot = try inspector.snapshot(
                 app: application,
                 maxDepth: AccessibilityInspector.defaultMaxDepth,
                 maxElements: AccessibilityInspector.defaultMaxElements
             )
-            do {
-                let capture = try await screenCapturer.captureMainDisplay()
-                return .object([
-                    "app": try jsonValue(application),
-                    "snapshot": try jsonValue(snapshot),
-                    "capture": try jsonValue(capture)
-                ])
-            } catch {
-                throw ServiceError(code: .captureFailed, message: "Unable to capture the display")
-            }
+            return .object([
+                "app": try jsonValue(application),
+                "snapshot": try jsonValue(snapshot),
+                "capture": try jsonValue(capture)
+            ])
         case .click:
             let parsed = try parseClick(request.arguments)
             if let coordinate = parsed.coordinate {
