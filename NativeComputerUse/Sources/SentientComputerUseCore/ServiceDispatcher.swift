@@ -77,8 +77,8 @@ public final class ServiceDispatcher {
             try validate(arguments: request.arguments, allowed: [])
             return .array(try catalog.applications().map(jsonValue))
         case .getAppState:
-            let app = try appArgument(request.arguments, allowed: ["app", "disable_diff"])
-            _ = try optionalBool("disable_diff", in: request.arguments)
+            let app = try appArgument(request.arguments, allowed: ["app", "disableDiff"])
+            _ = try optionalBool("disableDiff", in: request.arguments)
             try requireAccessibility()
             try requireScreenRecording()
             let application = try catalog.resolve(app)
@@ -100,7 +100,13 @@ public final class ServiceDispatcher {
         case .click:
             let parsed = try parseClick(request.arguments)
             try requireAccessibility()
-            let element = try parsed.snapshot.map { try elementResolver.resolveElementReference(snapshotToken: $0, index: parsed.elementIndex!) }
+            let element: SnapshotElementReference?
+            if let index = parsed.elementIndex {
+                let application = try catalog.resolve(parsed.app)
+                element = try elementResolver.resolveLatestElementReference(app: application, index: index)
+            } else {
+                element = nil
+            }
             try input.click(element: element, coordinate: parsed.coordinate, button: parsed.button, count: parsed.count)
             return successResult
         case .typeText:
@@ -114,40 +120,53 @@ public final class ServiceDispatcher {
             let app = try appArgument(request.arguments, allowed: ["app", "key"])
             _ = app
             let key = try requiredString("key", in: request.arguments)
+            try validateKey(key)
             try requireAccessibility()
             try input.pressKey(key)
             return successResult
         case .scroll:
             let parsed = try parseScroll(request.arguments)
             try requireAccessibility()
-            try input.scroll(direction: parsed.direction, pages: parsed.pages, anchor: parsed.anchor)
+            let anchor: CGPoint?
+            if let index = parsed.elementIndex {
+                let application = try catalog.resolve(parsed.app)
+                let element = try elementResolver.latestElement(app: application, index: index)
+                guard let frame = element.frame else {
+                    throw ServiceError(code: .elementNotFound, message: "Element has no frame")
+                }
+                anchor = CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+            } else {
+                anchor = nil
+            }
+            try input.scroll(direction: parsed.direction, pages: parsed.pages, anchor: anchor)
             return successResult
         }
     }
 
     private var successResult: JSONValue { .object(["ok": .bool(true)]) }
 
-    private func parseClick(_ arguments: [String: JSONValue]) throws -> (snapshot: UUID?, elementIndex: Int?, coordinate: CGPoint?, button: MouseButton, count: Int) {
-        try validate(arguments: arguments, allowed: ["app", "snapshot_token", "element_index", "x", "y", "mouse_button", "click_count"])
-        _ = try requiredString("app", in: arguments)
-        let snapshot = try optionalUUID("snapshot_token", in: arguments)
+    private func parseClick(_ arguments: [String: JSONValue]) throws -> (app: String, elementIndex: Int?, coordinate: CGPoint?, button: MouseButton, count: Int) {
+        try validate(arguments: arguments, allowed: ["app", "element_index", "x", "y", "mouse_button", "click_count"])
+        let app = try requiredString("app", in: arguments)
         let elementIndex = try optionalInt("element_index", in: arguments)
         let x = try optionalNumber("x", in: arguments)
         let y = try optionalNumber("y", in: arguments)
         let coordinate = try coordinate(x: x, y: y)
-        guard (snapshot == nil) == (elementIndex == nil), snapshot != nil || coordinate != nil else { throw invalidRequest }
-        let button = try mouseButton(arguments["mouse_button"])
+        guard elementIndex != nil || coordinate != nil else { throw invalidRequest }
+        let button = try InputRequestValidator.mouseButton(try optionalString("mouse_button", in: arguments))
         let count = try optionalInt("click_count", in: arguments) ?? 1
-        return (snapshot, elementIndex, coordinate, button, count)
+        try InputRequestValidator.clickCount(count)
+        return (app, elementIndex, coordinate, button, count)
     }
 
-    private func parseScroll(_ arguments: [String: JSONValue]) throws -> (direction: ScrollDirection, pages: Int, anchor: CGPoint?) {
-        try validate(arguments: arguments, allowed: ["app", "direction", "pages", "x", "y"])
-        _ = try requiredString("app", in: arguments)
-        let direction = try scrollDirection(arguments["direction"])
+    private func parseScroll(_ arguments: [String: JSONValue]) throws -> (app: String, elementIndex: Int?, direction: ScrollDirection, pages: Int) {
+        try validate(arguments: arguments, allowed: ["app", "element_index", "direction", "pages"])
+        let app = try requiredString("app", in: arguments)
+        let elementIndex = try optionalInt("element_index", in: arguments)
+        let direction = try InputRequestValidator.scrollDirection(try optionalString("direction", in: arguments))
         let pages = try optionalInt("pages", in: arguments) ?? 1
-        let anchor = try coordinate(x: optionalNumber("x", in: arguments), y: optionalNumber("y", in: arguments))
-        return (direction, pages, anchor)
+        try InputRequestValidator.scrollPages(pages)
+        return (app, elementIndex, direction, pages)
     }
 
     private func requireAccessibility() throws {
@@ -182,12 +201,6 @@ public final class ServiceDispatcher {
         return bool
     }
 
-    private func optionalUUID(_ name: String, in arguments: [String: JSONValue]) throws -> UUID? {
-        guard let value = arguments[name] else { return nil }
-        guard case let .string(string) = value, let uuid = UUID(uuidString: string) else { throw invalidRequest }
-        return uuid
-    }
-
     private func optionalInt(_ name: String, in arguments: [String: JSONValue]) throws -> Int? {
         guard let value = arguments[name] else { return nil }
         guard case let .int(integer) = value else { throw invalidRequest }
@@ -206,31 +219,23 @@ public final class ServiceDispatcher {
         return CGFloat(number)
     }
 
+    private func optionalString(_ name: String, in arguments: [String: JSONValue]) throws -> String? {
+        guard let value = arguments[name] else { return nil }
+        guard case let .string(string) = value else { throw invalidRequest }
+        return string
+    }
+
     private func coordinate(x: CGFloat?, y: CGFloat?) throws -> CGPoint? {
         guard x != nil || y != nil else { return nil }
         guard let x, let y else { throw invalidRequest }
         return CGPoint(x: x, y: y)
     }
 
-    private func mouseButton(_ value: JSONValue?) throws -> MouseButton {
-        guard let value else { return .left }
-        guard case let .string(button) = value else { throw invalidRequest }
-        switch button {
-        case "left": return .left
-        case "right": return .right
-        case "middle": return .middle
-        default: throw invalidRequest
-        }
-    }
-
-    private func scrollDirection(_ value: JSONValue?) throws -> ScrollDirection {
-        guard case let .string(direction)? = value else { throw invalidRequest }
-        switch direction {
-        case "up": return .up
-        case "down": return .down
-        case "left": return .left
-        case "right": return .right
-        default: throw invalidRequest
+    private func validateKey(_ key: String) throws {
+        do {
+            _ = try InputRequestValidator.key(key)
+        } catch {
+            throw invalidRequest
         }
     }
 

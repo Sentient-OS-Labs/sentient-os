@@ -35,6 +35,80 @@ enum ScrollDirection: Sendable {
     case right
 }
 
+enum InputRequestValidator {
+    static func clickCount(_ count: Int) throws {
+        guard (1...3).contains(count) else {
+            throw ServiceError(code: .invalidRequest, message: "Click count must be between 1 and 3")
+        }
+    }
+
+    static func scrollPages(_ pages: Int) throws {
+        guard (1...10).contains(pages) else {
+            throw ServiceError(code: .invalidRequest, message: "Scroll pages must be between 1 and 10")
+        }
+    }
+
+    static func key(_ rawKey: String) throws -> (modifiers: [Modifier], keyCode: CGKeyCode) {
+        let parts = rawKey.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
+        guard !parts.isEmpty, !parts.contains(where: { $0.isEmpty }) else { throw unsupportedKey(rawKey) }
+        let modifierParts = parts.dropLast()
+        guard let keyCode = keyCode(for: parts.last!) else { throw unsupportedKey(rawKey) }
+
+        var modifiers: [Modifier] = []
+        for part in modifierParts {
+            guard let modifier = Modifier(name: part), !modifiers.contains(modifier) else { throw unsupportedKey(rawKey) }
+            modifiers.append(modifier)
+        }
+        return (modifiers, keyCode)
+    }
+
+    static func mouseButton(_ value: String?) throws -> MouseButton {
+        switch value {
+        case nil, "left": return .left
+        case "right": return .right
+        case "middle": return .middle
+        default: throw ServiceError(code: .invalidRequest, message: "Invalid mouse button")
+        }
+    }
+
+    static func scrollDirection(_ value: String?) throws -> ScrollDirection {
+        switch value {
+        case "up": return .up
+        case "down": return .down
+        case "left": return .left
+        case "right": return .right
+        default: throw ServiceError(code: .invalidRequest, message: "Invalid scroll direction")
+        }
+    }
+
+    static func isFinite(_ coordinate: CGPoint) -> Bool {
+        coordinate.x.isFinite && coordinate.y.isFinite
+    }
+
+    private static func keyCode(for key: String) -> CGKeyCode? {
+        let normalized = key.lowercased()
+        let namedKeys: [String: CGKeyCode] = [
+            "return": 36, "enter": 36, "tab": 48, "escape": 53, "esc": 53,
+            "arrowup": 126, "up": 126, "arrowdown": 125, "down": 125,
+            "arrowleft": 123, "left": 123, "arrowright": 124, "right": 124,
+            "space": 49, "delete": 51, "backspace": 51
+        ]
+        if let keyCode = namedKeys[normalized] { return keyCode }
+
+        let printable: [String: CGKeyCode] = [
+            "a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5, "h": 4, "i": 34,
+            "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35, "q": 12, "r": 15,
+            "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
+            "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25
+        ]
+        return printable[normalized]
+    }
+
+    private static func unsupportedKey(_ key: String) -> ServiceError {
+        ServiceError(code: .unsupportedAction, message: "Unsupported key: \(key)")
+    }
+}
+
 final class InputController: InputControlling {
     static let scrollLinesPerPage: Int32 = 10
 
@@ -53,9 +127,7 @@ final class InputController: InputControlling {
     }
 
     func click(element: SnapshotElementReference?, coordinate: CGPoint?, button: MouseButton, count: Int) throws {
-        guard (1...3).contains(count) else {
-            throw ServiceError(code: .invalidRequest, message: "Click count must be between 1 and 3")
-        }
+        try InputRequestValidator.clickCount(count)
         guard element != nil || coordinate != nil else {
             throw ServiceError(code: .invalidRequest, message: "Click requires an element or coordinate")
         }
@@ -99,7 +171,7 @@ final class InputController: InputControlling {
     }
 
     func pressKey(_ key: String) throws {
-        let parsed = try parseKey(key)
+        let parsed = try InputRequestValidator.key(key)
 
         var heldFlags: CGEventFlags = []
         for modifier in parsed.modifiers {
@@ -115,9 +187,7 @@ final class InputController: InputControlling {
     }
 
     func scroll(direction: ScrollDirection, pages: Int, anchor: CGPoint?) throws {
-        guard (1...10).contains(pages) else {
-            throw ServiceError(code: .invalidRequest, message: "Scroll pages must be between 1 and 10")
-        }
+        try InputRequestValidator.scrollPages(pages)
         if let anchor {
             try validateOnScreen(anchor)
         }
@@ -147,8 +217,7 @@ final class InputController: InputControlling {
     }
 
     private func validateOnScreen(_ coordinate: CGPoint) throws {
-        guard coordinate.x.isFinite,
-              coordinate.y.isFinite,
+        guard InputRequestValidator.isFinite(coordinate),
               screens.displayBounds.contains(where: { $0.contains(coordinate) }) else {
             throw ServiceError(code: .invalidRequest, message: "Coordinate must be finite and on screen")
         }
@@ -180,45 +249,9 @@ final class InputController: InputControlling {
         }
     }
 
-    private func parseKey(_ rawKey: String) throws -> (modifiers: [Modifier], keyCode: CGKeyCode) {
-        let parts = rawKey.split(separator: "+", omittingEmptySubsequences: false).map(String.init)
-        guard !parts.isEmpty, !parts.contains(where: { $0.isEmpty }) else { throw unsupportedKey(rawKey) }
-        let modifierParts = parts.dropLast()
-        guard let keyCode = keyCode(for: parts.last!) else { throw unsupportedKey(rawKey) }
-
-        var modifiers: [Modifier] = []
-        for part in modifierParts {
-            guard let modifier = Modifier(name: part), !modifiers.contains(modifier) else { throw unsupportedKey(rawKey) }
-            modifiers.append(modifier)
-        }
-        return (modifiers, keyCode)
-    }
-
-    private func keyCode(for key: String) -> CGKeyCode? {
-        let normalized = key.lowercased()
-        let namedKeys: [String: CGKeyCode] = [
-            "return": 36, "enter": 36, "tab": 48, "escape": 53, "esc": 53,
-            "arrowup": 126, "up": 126, "arrowdown": 125, "down": 125,
-            "arrowleft": 123, "left": 123, "arrowright": 124, "right": 124,
-            "space": 49, "delete": 51, "backspace": 51
-        ]
-        if let keyCode = namedKeys[normalized] { return keyCode }
-
-        let printable: [String: CGKeyCode] = [
-            "a": 0, "b": 11, "c": 8, "d": 2, "e": 14, "f": 3, "g": 5, "h": 4, "i": 34,
-            "j": 38, "k": 40, "l": 37, "m": 46, "n": 45, "o": 31, "p": 35, "q": 12, "r": 15,
-            "s": 1, "t": 17, "u": 32, "v": 9, "w": 13, "x": 7, "y": 16, "z": 6,
-            "0": 29, "1": 18, "2": 19, "3": 20, "4": 21, "5": 23, "6": 22, "7": 26, "8": 28, "9": 25
-        ]
-        return printable[normalized]
-    }
-
-    private func unsupportedKey(_ key: String) -> ServiceError {
-        ServiceError(code: .unsupportedAction, message: "Unsupported key: \(key)")
-    }
 }
 
-private struct Modifier: Equatable {
+struct Modifier: Equatable {
     let keyCode: CGKeyCode
     let flag: CGEventFlags
 

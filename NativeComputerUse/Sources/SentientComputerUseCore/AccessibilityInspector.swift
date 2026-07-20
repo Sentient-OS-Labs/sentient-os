@@ -120,6 +120,8 @@ struct SnapshotElementReference: Sendable, Equatable {
 /// Keeps AX references out of all service wire types while allowing semantic input.
 protocol SnapshotElementReferenceResolving {
     func resolveElementReference(snapshotToken: UUID, index: Int) throws -> SnapshotElementReference
+    func resolveLatestElementReference(app: ApplicationDescriptor, index: Int) throws -> SnapshotElementReference
+    func latestElement(app: ApplicationDescriptor, index: Int) throws -> SnapshotElement
 }
 
 public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElementReferenceResolving {
@@ -194,10 +196,30 @@ public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElem
         return SnapshotElementReference(axReference: snapshot.references[index])
     }
 
+    func resolveLatestElementReference(app: ApplicationDescriptor, index: Int) throws -> SnapshotElementReference {
+        let snapshot = try latestSnapshot(for: app, index: index)
+        return SnapshotElementReference(axReference: snapshot.references[index])
+    }
+
+    func latestElement(app: ApplicationDescriptor, index: Int) throws -> SnapshotElement {
+        try latestSnapshot(for: app, index: index).elements[index]
+    }
+
     private func cachedSnapshot(for token: UUID, index: Int) throws -> CachedSnapshot {
         guard let snapshot = snapshotsByProcess.values.first(where: { $0.token == token }) else {
             throw ServiceError(code: .staleSnapshot, message: "Snapshot expired")
         }
+        return try validate(snapshot: snapshot, index: index)
+    }
+
+    private func latestSnapshot(for app: ApplicationDescriptor, index: Int) throws -> CachedSnapshot {
+        guard let snapshot = snapshotsByProcess[app.processIdentifier] else {
+            throw ServiceError(code: .staleSnapshot, message: "Snapshot expired")
+        }
+        return try validate(snapshot: snapshot, index: index)
+    }
+
+    private func validate(snapshot: CachedSnapshot, index: Int) throws -> CachedSnapshot {
         guard snapshot.elements.indices.contains(index) else {
             throw ServiceError(code: .elementNotFound, message: "Element not found")
         }

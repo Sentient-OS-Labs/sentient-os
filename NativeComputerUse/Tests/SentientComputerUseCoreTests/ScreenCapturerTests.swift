@@ -4,6 +4,16 @@ import XCTest
 @testable import SentientComputerUseCore
 
 final class ScreenCapturerTests: XCTestCase {
+    func testPackageDeclaresMacOS15Floor() throws {
+        let package = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Package.swift")
+
+        XCTAssertTrue(try String(contentsOf: package, encoding: .utf8).contains("platforms: [.macOS(.v15)]"))
+    }
+
     func testCaptureWritesOnePNGToTheServiceTemporaryDirectory() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("SentientComputerUseTests-\(UUID().uuidString)", isDirectory: true)
@@ -22,6 +32,24 @@ final class ScreenCapturerTests: XCTestCase {
         XCTAssertTrue(result.path.hasPrefix(directory.path + "/"))
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: result.path)).prefix(8), Data([137, 80, 78, 71, 13, 10, 26, 10]))
         XCTAssertEqual(backend.captureCount, 1)
+    }
+
+    func testCleanupDeletesAllCreatedCapturesAndIsIdempotent() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentientComputerUseTests-\(UUID().uuidString)", isDirectory: true)
+        let capturer = ScreenCapturer(
+            backend: FakeScreenCaptureBackend(image: try makeImage()),
+            temporaryDirectory: directory
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let first = try await capturer.captureMainDisplay()
+        let second = try await capturer.captureMainDisplay()
+        capturer.cleanup()
+        capturer.cleanup()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
     }
 }
 

@@ -19,6 +19,11 @@ public struct CaptureResult: Codable, Sendable, Equatable {
 
 public protocol ScreenCapturing {
     func captureMainDisplay() async throws -> CaptureResult
+    func cleanup()
+}
+
+public extension ScreenCapturing {
+    func cleanup() {}
 }
 
 struct CapturedScreenImage {
@@ -33,6 +38,7 @@ protocol ScreenCaptureBacking {
 public final class ScreenCapturer: ScreenCapturing {
     private let backend: any ScreenCaptureBacking
     private let temporaryDirectory: URL
+    private var captureURLs: Set<URL> = []
 
     public convenience init() {
         self.init(backend: SystemScreenCaptureBackend())
@@ -52,12 +58,28 @@ public final class ScreenCapturer: ScreenCapturing {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let path = directory.appendingPathComponent("\(UUID().uuidString).png")
         try Self.writePNG(captured.image, to: path)
+        captureURLs.insert(path)
         return CaptureResult(
             path: path.path,
             displayID: captured.displayID,
             width: captured.image.width,
             height: captured.image.height
         )
+    }
+
+    public func cleanup() {
+        captureURLs = Set(captureURLs.filter { url in
+            do {
+                try FileManager.default.removeItem(at: url)
+                return false
+            } catch {
+                return true
+            }
+        })
+    }
+
+    deinit {
+        cleanup()
     }
 
     private static func writePNG(_ image: CGImage, to url: URL) throws {
@@ -73,9 +95,6 @@ public final class ScreenCapturer: ScreenCapturing {
 
 private struct SystemScreenCaptureBackend: ScreenCaptureBacking {
     func captureMainDisplay() async throws -> CapturedScreenImage {
-        guard #available(macOS 14.0, *) else {
-            throw ServiceError(code: .captureFailed, message: "Screen capture is unavailable on this macOS version")
-        }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let mainDisplayID = CGMainDisplayID()
         guard let display = content.displays.first(where: { $0.displayID == mainDisplayID }) ?? content.displays.first else {
