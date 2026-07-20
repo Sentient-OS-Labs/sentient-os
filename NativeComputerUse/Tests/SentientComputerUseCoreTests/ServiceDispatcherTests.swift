@@ -147,8 +147,7 @@ final class ServiceDispatcherTests: XCTestCase {
         let fixtures = DispatcherFixtures(accessibilityGranted: false)
         let requests: [ServiceRequest] = [
             .init(id: "count", operation: .click, arguments: ["app": .string("Notes"), "x": .int(1), "y": .int(1), "click_count": .int(4)]),
-            .init(id: "pages", operation: .scroll, arguments: ["app": .string("Notes"), "direction": .string("down"), "pages": .int(11)]),
-            .init(id: "key", operation: .pressKey, arguments: ["app": .string("Notes"), "key": .string("super+not-a-key")])
+            .init(id: "pages", operation: .scroll, arguments: ["app": .string("Notes"), "direction": .string("down"), "pages": .int(11)])
         ]
 
         for request in requests {
@@ -159,6 +158,22 @@ final class ServiceDispatcherTests: XCTestCase {
             XCTAssertEqual(id, request.id)
             XCTAssertEqual(error.code, .invalidRequest)
         }
+        XCTAssertEqual(fixtures.permissions.accessibilityChecks, 0)
+    }
+
+    func testUnsupportedKeyPreservesUnsupportedActionCodeBeforePermissions() async {
+        let fixtures = DispatcherFixtures(accessibilityGranted: false)
+
+        let response = await fixtures.dispatcher.handle(.init(
+            id: "key",
+            operation: .pressKey,
+            arguments: ["app": .string("Notes"), "key": .string("super+not-a-key")]
+        ))
+
+        XCTAssertEqual(response, .failure(
+            id: "key",
+            ServiceError(code: .unsupportedAction, message: "Unsupported key: super+not-a-key")
+        ))
         XCTAssertEqual(fixtures.permissions.accessibilityChecks, 0)
     }
 

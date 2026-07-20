@@ -32,6 +32,7 @@ private final class FileHandleInput: ServiceInputReading, @unchecked Sendable {
 public enum ServiceLoop {
     private static let readChunkSize = 64 * 1024
     private static let maximumLineSize = 1 * 1024 * 1024
+    private static let maximumResponseLineSize = 1 * 1024 * 1024
 
     public static func run(
         input: FileHandle,
@@ -130,6 +131,12 @@ public enum ServiceLoop {
 
     private static func write(_ response: ServiceResponse, output: FileHandle, codec: NDJSONCodec) async -> Bool {
         var data = await codec.encodeResponse(response)
+        if data.count + 1 > maximumResponseLineSize {
+            data = await codec.encodeResponse(.failure(
+                id: response.id,
+                ServiceError(code: .internalError, message: "Response exceeds maximum size")
+            ))
+        }
         data.append(0x0A)
         do {
             try output.write(contentsOf: data)

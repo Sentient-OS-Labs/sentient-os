@@ -185,6 +185,45 @@ final class ServiceLoopTests: XCTestCase {
         XCTAssertEqual(fixtures.catalog.applicationsCount, 0)
         XCTAssertEqual(fixtures.capturer.cleanupCount, 1)
     }
+
+    func testOversizedServiceResponseIsReplacedWithBoundedErrorLine() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let inputURL = directory.appendingPathComponent("input.ndjson")
+        let outputURL = directory.appendingPathComponent("output.ndjson")
+        try Data("{\"id\":\"large\",\"operation\":\"list_apps\",\"arguments\":{}}\n".utf8)
+            .write(to: inputURL)
+        FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+        let input = try FileHandle(forReadingFrom: inputURL)
+        let output = try FileHandle(forWritingTo: outputURL)
+        let hugeName = String(repeating: "x", count: 2_048)
+        let applications = (0..<1_000).map { index in
+            ApplicationDescriptor(
+                name: "\(index)-\(hugeName)",
+                bundleIdentifier: "com.example.\(index)",
+                path: "/Applications/\(index).app",
+                processIdentifier: Int32(index)
+            )
+        }
+
+        await ServiceLoop.run(
+            input: input,
+            output: output,
+            dispatcher: LoopFixtures(applications: applications).dispatcher
+        )
+        try input.close()
+        try output.close()
+
+        let line = try Data(contentsOf: outputURL)
+        XCTAssertLessThanOrEqual(line.count, 1 * 1_024 * 1_024)
+        let response = try JSONDecoder().decode(ServiceResponse.self, from: line.dropLast())
+        XCTAssertEqual(response, .failure(
+            id: "large",
+            ServiceError(code: .internalError, message: "Response exceeds maximum size")
+        ))
+    }
 }
 
 private final class EOFBarrierInput: ServiceInputReading, @unchecked Sendable {
@@ -220,11 +259,12 @@ private final class EOFBarrierInput: ServiceInputReading, @unchecked Sendable {
 }
 
 private final class LoopFixtures: @unchecked Sendable {
-    let catalog = LoopCatalog()
+    let catalog: LoopCatalog
     let capturer = CleanupCountingCapturer()
     let dispatcher: ServiceDispatcher
 
-    init() {
+    init(applications: [ApplicationDescriptor] = []) {
+        catalog = LoopCatalog(applications: applications)
         let inspector = LoopInspector()
         dispatcher = ServiceDispatcher(
             catalog: catalog,
@@ -243,11 +283,16 @@ private struct LoopApplicationActivator: ApplicationActivating {
 }
 
 private final class LoopCatalog: ApplicationCataloging, @unchecked Sendable {
+    private let values: [ApplicationDescriptor]
     private(set) var applicationsCount = 0
+
+    init(applications: [ApplicationDescriptor]) {
+        values = applications
+    }
 
     func applications() -> [ApplicationDescriptor] {
         applicationsCount += 1
-        return []
+        return values
     }
 
     func resolve(_ query: String) throws -> ApplicationDescriptor {

@@ -47,6 +47,35 @@ final class AccessibilityInspectorTests: XCTestCase {
 
         XCTAssertNil(SystemAXProvider.frame(from: nonFrame))
     }
+
+    func testSnapshotCapsEveryAXStringAttributeByUTF8BytesWithVisibleMarker() throws {
+        let oversized = String(repeating: "é", count: 4_000)
+        let inspector = AccessibilityInspector(provider: FakeAXProvider(
+            tree: .chain(length: 1, attributeText: oversized)
+        ))
+
+        let snapshot = try inspector.snapshot(app: .fixture, maxDepth: 1, maxElements: 1)
+        let element = try XCTUnwrap(snapshot.elements.first)
+        let strings = [element.role, element.title, element.value] + element.actions.map(Optional.some)
+
+        for string in strings.compactMap({ $0 }) {
+            XCTAssertLessThanOrEqual(string.utf8.count, 4_096)
+            XCTAssertTrue(string.hasSuffix("…[truncated]"))
+        }
+    }
+
+    func testSnapshotCapsTotalEncodedUTF8OutputWithVisibleMarker() throws {
+        let oversized = String(repeating: "x", count: 20_000)
+        let inspector = AccessibilityInspector(provider: FakeAXProvider(
+            tree: .chain(length: 100, attributeText: oversized)
+        ))
+
+        let snapshot = try inspector.snapshot(app: .fixture, maxDepth: 100, maxElements: 100)
+        let encoded = try JSONEncoder().encode(snapshot)
+
+        XCTAssertLessThanOrEqual(encoded.count, 512 * 1_024)
+        XCTAssertTrue(snapshot.text.hasSuffix("…[snapshot truncated]"))
+    }
 }
 
 private final class FakeAXProvider: AXProviding {
@@ -78,10 +107,16 @@ private struct Tree {
     let nodes: [AXElementReference: AXElementAttributes]
     let childrenByNode: [AXElementReference: [AXElementReference]]
 
-    static func chain(length: Int) -> Tree {
+    static func chain(length: Int, attributeText: String? = nil) -> Tree {
         let references = (0..<length).map { AXElementReference(identifier: "node-\($0)") }
         let nodes = Dictionary(uniqueKeysWithValues: references.map {
-            ($0, AXElementAttributes(role: "AXButton", title: "Node \($0.identifier)", value: nil, frame: nil, actions: ["AXPress"]))
+            ($0, AXElementAttributes(
+                role: attributeText ?? "AXButton",
+                title: attributeText ?? "Node \($0.identifier)",
+                value: attributeText,
+                frame: nil,
+                actions: [attributeText ?? "AXPress"]
+            ))
         })
         let children = Dictionary(uniqueKeysWithValues: zip(references, references.dropFirst()).map { ($0, [$1]) })
         return Tree(root: references[0], nodes: nodes, childrenByNode: children)

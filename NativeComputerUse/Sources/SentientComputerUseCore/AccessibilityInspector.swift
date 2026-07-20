@@ -127,6 +127,11 @@ protocol SnapshotElementReferenceResolving {
 public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElementReferenceResolving {
     public static let defaultMaxDepth = 12
     public static let defaultMaxElements = 500
+    public static let maximumAttributeUTF8Bytes = 4 * 1024
+    public static let maximumSnapshotUTF8Bytes = 512 * 1024
+
+    private static let attributeTruncationMarker = "…[truncated]"
+    private static let snapshotTruncationMarker = "…[snapshot truncated]"
 
     private struct CachedSnapshot {
         let token: UUID
@@ -163,11 +168,11 @@ public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElem
             let attributes = try provider.attributes(for: item.element)
             let element = SnapshotElement(
                 index: elements.count,
-                role: Self.normalized(attributes.role),
-                title: Self.normalized(attributes.title),
-                value: Self.normalized(attributes.value),
+                role: Self.boundedNormalized(attributes.role),
+                title: Self.boundedNormalized(attributes.title),
+                value: Self.boundedNormalized(attributes.value),
                 frame: attributes.frame,
-                actions: attributes.actions.compactMap(Self.normalized)
+                actions: attributes.actions.compactMap(Self.boundedNormalized)
             )
             elements.append(element)
             references.append(item.element)
@@ -178,13 +183,18 @@ public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElem
         }
 
         let token = UUID()
-        snapshotsByProcess[app.processIdentifier] = CachedSnapshot(token: token, elements: elements, references: references)
-        return AccessibilitySnapshot(
+        let bounded = Self.boundedSnapshot(
             token: token,
             app: app,
-            text: elements.compactMap { [$0.title, $0.value].compactMap { $0 }.joined(separator: " ") }.filter { !$0.isEmpty }.joined(separator: "\n"),
-            elements: elements
+            elements: elements,
+            references: references
         )
+        snapshotsByProcess[app.processIdentifier] = CachedSnapshot(
+            token: token,
+            elements: bounded.snapshot.elements,
+            references: bounded.references
+        )
+        return bounded.snapshot
     }
 
     public func element(snapshotToken: UUID, index: Int) throws -> SnapshotElement {
@@ -230,6 +240,84 @@ public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElem
         guard let value else { return nil }
         let normalized = value.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
         return normalized.isEmpty ? nil : normalized
+    }
+
+    private static func boundedNormalized(_ value: String?) -> String? {
+        guard let normalized = normalized(value) else { return nil }
+        return boundedUTF8(
+            normalized,
+            maximumBytes: maximumAttributeUTF8Bytes,
+            marker: attributeTruncationMarker
+        )
+    }
+
+    private static func boundedSnapshot(
+        token: UUID,
+        app: ApplicationDescriptor,
+        elements: [SnapshotElement],
+        references: [AXElementReference]
+    ) -> (snapshot: AccessibilitySnapshot, references: [AXElementReference]) {
+        let full = makeSnapshot(token: token, app: app, elements: elements, truncated: false)
+        if encodedSize(of: full) <= maximumSnapshotUTF8Bytes {
+            return (full, references)
+        }
+
+        var lowerBound = 0
+        var upperBound = elements.count
+        while lowerBound < upperBound {
+            let candidate = (lowerBound + upperBound + 1) / 2
+            let snapshot = makeSnapshot(
+                token: token,
+                app: app,
+                elements: Array(elements.prefix(candidate)),
+                truncated: true
+            )
+            if encodedSize(of: snapshot) <= maximumSnapshotUTF8Bytes {
+                lowerBound = candidate
+            } else {
+                upperBound = candidate - 1
+            }
+        }
+
+        let keptElements = Array(elements.prefix(lowerBound))
+        return (
+            makeSnapshot(token: token, app: app, elements: keptElements, truncated: true),
+            Array(references.prefix(lowerBound))
+        )
+    }
+
+    private static func makeSnapshot(
+        token: UUID,
+        app: ApplicationDescriptor,
+        elements: [SnapshotElement],
+        truncated: Bool
+    ) -> AccessibilitySnapshot {
+        var text = elements.compactMap {
+            [$0.title, $0.value].compactMap { $0 }.joined(separator: " ")
+        }.filter { !$0.isEmpty }.joined(separator: "\n")
+        if truncated {
+            if !text.isEmpty { text.append("\n") }
+            text.append(snapshotTruncationMarker)
+        }
+        return AccessibilitySnapshot(token: token, app: app, text: text, elements: elements)
+    }
+
+    private static func encodedSize(of snapshot: AccessibilitySnapshot) -> Int {
+        (try? JSONEncoder().encode(snapshot).count) ?? .max
+    }
+
+    private static func boundedUTF8(_ value: String, maximumBytes: Int, marker: String) -> String {
+        guard value.utf8.count > maximumBytes else { return value }
+        let contentLimit = max(0, maximumBytes - marker.utf8.count)
+        var result = ""
+        var byteCount = 0
+        for character in value {
+            let characterBytes = String(character).utf8.count
+            guard byteCount + characterBytes <= contentLimit else { break }
+            result.append(character)
+            byteCount += characterBytes
+        }
+        return result + marker
     }
 }
 

@@ -199,6 +199,42 @@ final class MCPServerTests: XCTestCase {
         XCTAssertEqual(try decodedTextContent(result), .object(["error": expectedError]))
     }
 
+    func testArrayToolResultWrapsStructuredContentInAnObject() async throws {
+        let apps: JSONValue = .array([.object(["name": .string("Notes")])])
+        let server = MCPServer(transport: RecordingTransport(result: apps))
+        await completeInitialization(server, id: 90)
+
+        let response = await server.handle(request(
+            id: .int(91),
+            method: "tools/call",
+            params: .object(["name": .string("list_apps"), "arguments": .object([:])])
+        ))
+
+        guard case let .object(envelope)? = response,
+              case let .object(result)? = envelope["result"] else {
+            return XCTFail("Expected an MCP tool result")
+        }
+        XCTAssertEqual(result["structuredContent"], .object(["result": apps]))
+        XCTAssertEqual(try decodedTextContent(result), apps)
+    }
+
+    func testToolDescriptionsAdvertiseOnlyImplementedIntelBehavior() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 92)
+
+        let response = await server.handle(request(id: .int(93), method: "tools/list", params: .object([:])))
+        guard case let .object(envelope)? = response,
+              case let .object(result)? = envelope["result"],
+              case let .array(tools)? = result["tools"] else {
+            return XCTFail("Expected tools")
+        }
+        let encoded = try XCTUnwrap(String(data: JSONEncoder().encode(tools), encoding: .utf8))
+        XCTAssertFalse(encoded.contains("last 14 days"))
+        XCTAssertFalse(encoded.contains("instead of a diff"))
+        XCTAssertTrue(encoded.contains("currently running"))
+        XCTAssertTrue(encoded.contains("always returns a bounded full snapshot"))
+    }
+
     func testUnknownMethodReturnsMethodNotFound() async throws {
         let server = MCPServer(transport: RecordingTransport())
         await completeInitialization(server, id: 9)
@@ -448,7 +484,7 @@ final class MCPServerTests: XCTestCase {
     private static let expectedTools: [JSONValue] = [
         tool(
             name: "list_apps",
-            description: "List the apps on this computer. Returns the set of apps that are currently running, as well as any that have been used in the last 14 days, including details on usage frequency",
+            description: "List the GUI applications that are currently running on this computer",
             properties: [:],
             required: []
         ),
@@ -457,7 +493,7 @@ final class MCPServerTests: XCTestCase {
             description: "Start an app use session if needed, then get the state of the app's key window and return a screenshot and accessibility tree. This must be called once per assistant turn before interacting with the app",
             properties: [
                 "app": stringProperty("App name, full app path, or unambiguous bundle identifier"),
-                "disableDiff": .object(["type": .string("boolean"), "description": .string("Return a full accessibility tree instead of a diff")])
+                "disableDiff": .object(["type": .string("boolean"), "description": .string("Compatibility flag; Intel always returns a bounded full snapshot")])
             ],
             required: ["app"]
         ),

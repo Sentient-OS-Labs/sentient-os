@@ -219,11 +219,17 @@ public actor MCPServer {
         } else {
             text = "{}"
         }
+        let structuredContent: JSONValue
+        if case .object = value {
+            structuredContent = value
+        } else {
+            structuredContent = .object(["result": value])
+        }
         return .object([
             "content": .array([
                 .object(["type": .string("text"), "text": .string(text)])
             ]),
-            "structuredContent": value,
+            "structuredContent": structuredContent,
             "isError": .bool(isError)
         ])
     }
@@ -237,7 +243,7 @@ public actor MCPServer {
     private static let tools: [JSONValue] = [
         tool(
             name: "list_apps",
-            description: "List the apps on this computer. Returns the set of apps that are currently running, as well as any that have been used in the last 14 days, including details on usage frequency",
+            description: "List the GUI applications that are currently running on this computer",
             properties: [:],
             required: []
         ),
@@ -248,7 +254,7 @@ public actor MCPServer {
                 "app": stringProperty("App name, full app path, or unambiguous bundle identifier"),
                 "disableDiff": .object([
                     "type": .string("boolean"),
-                    "description": .string("Return a full accessibility tree instead of a diff")
+                    "description": .string("Compatibility flag; Intel always returns a bounded full snapshot")
                 ])
             ],
             required: ["app"]

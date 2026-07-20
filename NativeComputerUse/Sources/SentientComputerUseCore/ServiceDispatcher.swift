@@ -267,11 +267,7 @@ public final class ServiceDispatcher {
     }
 
     private func validateKey(_ key: String) throws {
-        do {
-            _ = try InputRequestValidator.key(key)
-        } catch {
-            throw invalidRequest
-        }
+        _ = try InputRequestValidator.key(key)
     }
 
     private func jsonValue<T: Encodable>(_ value: T) throws -> JSONValue {
