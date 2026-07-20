@@ -40,7 +40,10 @@ struct SentientOSApp: App {
         .defaultSize(width: 1180, height: 880)   // the proactive home's canvas
         // Always present the home at launch: after a quit with only Settings open, state
         // restoration would otherwise bring back JUST the Settings window — an app with no home.
-        .defaultLaunchBehavior(.presented)
+        // The ONE exception: the relaunch after a SILENT auto-update (UpdateNotice's consumed
+        // flag) stays windowless — a background update must never shove the home at a user who
+        // was living with Sentient in the menu bar.
+        .defaultLaunchBehavior(UpdateNotice.suppressHomeThisLaunch ? .suppressed : .presented)
 
         // Every auxiliary window below carries .restorationBehavior(.disabled): the home is the
         // app's ONLY launch surface, so macOS window restoration must never reopen a stray

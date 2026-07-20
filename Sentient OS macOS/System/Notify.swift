@@ -2,12 +2,11 @@
 //  Notify.swift
 //  Sentient OS macOS
 //
-//  One small wrapper over UNUserNotificationCenter. Notify.now() (the morning "your suggestions
-//  are ready" note and scheduled reminders) is still DORMANT — it ships with the
-//  proactive/reminder wiring (git 67d8078 has an old schedule/cancel implementation to mine).
-//  The permission ask, though, is live: onboarding's permissions screen fires Notify.ask() the
-//  moment it appears, so the native prompt happens once, with no extra UI; now() also asks
-//  lazily as a backstop.
+//  One small wrapper over UNUserNotificationCenter. Notify.now() is LIVE for the "Sentient just
+//  updated." note (UpdateNotice.checkAtLaunch); the proactive-reminder tier still to come rides
+//  the same call (git 67d8078 has an old schedule/cancel implementation to mine). The permission
+//  ask is live too: onboarding's permissions screen fires Notify.ask() the moment it appears, so
+//  the native prompt happens once, with no extra UI; now() also asks lazily as a backstop.
 //
 
 import Foundation
