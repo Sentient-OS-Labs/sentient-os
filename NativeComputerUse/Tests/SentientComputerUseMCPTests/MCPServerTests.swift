@@ -103,6 +103,7 @@ final class MCPServerTests: XCTestCase {
 
     func testListsExactlyTheSixApprovedSkyCompatibleTools() async throws {
         let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 3)
 
         let response = await server.handle(request(id: .string("tools"), method: "tools/list", params: .object([:])))
 
@@ -115,6 +116,7 @@ final class MCPServerTests: XCTestCase {
 
     func testScrollPagesSchemaMatchesIntegralServiceBounds() async throws {
         let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 3)
 
         let response = await server.handle(request(id: .int(4), method: "tools/list", params: .object([:])))
 
@@ -141,6 +143,7 @@ final class MCPServerTests: XCTestCase {
     func testToolCallForwardsOperationAndArgumentsWithoutRewriting() async throws {
         let transport = RecordingTransport(result: .object(["ok": .bool(true)]))
         let server = MCPServer(transport: transport)
+        await completeInitialization(server, id: 7)
         let arguments: [String: JSONValue] = [
             "app": .string("Notes"),
             "element_index": .int(7),
@@ -172,6 +175,7 @@ final class MCPServerTests: XCTestCase {
     func testToolCallPreservesStructuredServiceError() async throws {
         let serviceError = ServiceError(code: .permissionDeniedAccessibility, message: "Accessibility permission is required")
         let server = MCPServer(transport: RecordingTransport(error: serviceError))
+        await completeInitialization(server, id: 8)
 
         let response = await server.handle(request(
             id: .int(9),
@@ -197,6 +201,7 @@ final class MCPServerTests: XCTestCase {
 
     func testUnknownMethodReturnsMethodNotFound() async throws {
         let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 9)
 
         let response = await server.handle(request(id: .int(10), method: "resources/list", params: .object([:])))
 
@@ -205,6 +210,7 @@ final class MCPServerTests: XCTestCase {
 
     func testMalformedToolCallReturnsInvalidParams() async throws {
         let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 10)
 
         let response = await server.handle(request(
             id: .int(11),
@@ -246,12 +252,48 @@ final class MCPServerTests: XCTestCase {
 
     func testAcceptsStringNumberAndNullJSONRPCIdentifiers() async throws {
         let server = MCPServer(transport: RecordingTransport())
+        await completeInitialization(server, id: 6)
         let validIDs: [JSONValue] = [.string("request"), .int(7), .double(7.5), .null]
 
         for id in validIDs {
             let response = await server.handle(request(id: id, method: "resources/list", params: .object([:])))
             XCTAssertEqual(response, jsonRPCError(id: id, code: -32601, message: "Method not found"))
         }
+    }
+
+    func testFreshServerRejectsToolRequestsWithoutCallingTransport() async throws {
+        let transport = RecordingTransport(result: .array([]))
+        let server = MCPServer(transport: transport)
+
+        let listResponse = await server.handle(request(id: .int(35), method: "tools/list", params: .object([:])))
+        let callResponse = await server.handle(request(
+            id: .int(36),
+            method: "tools/call",
+            params: .object(["name": .string("list_apps"), "arguments": .object([:])])
+        ))
+        let calls = await transport.calls
+
+        XCTAssertEqual(listResponse, jsonRPCError(id: .int(35), code: -32600, message: "Invalid Request"))
+        XCTAssertEqual(callResponse, jsonRPCError(id: .int(36), code: -32600, message: "Invalid Request"))
+        XCTAssertEqual(calls, [])
+    }
+
+    func testNegotiatedServerRejectsToolsUntilInitializedNotificationWithoutCallingTransport() async throws {
+        let transport = RecordingTransport(result: .array([]))
+        let server = MCPServer(transport: transport)
+        _ = await server.handle(initializeRequest(id: .int(37)))
+
+        let listResponse = await server.handle(request(id: .int(38), method: "tools/list", params: .object([:])))
+        let callResponse = await server.handle(request(
+            id: .int(39),
+            method: "tools/call",
+            params: .object(["name": .string("list_apps"), "arguments": .object([:])])
+        ))
+        let calls = await transport.calls
+
+        XCTAssertEqual(listResponse, jsonRPCError(id: .int(38), code: -32600, message: "Invalid Request"))
+        XCTAssertEqual(callResponse, jsonRPCError(id: .int(39), code: -32600, message: "Invalid Request"))
+        XCTAssertEqual(calls, [])
     }
 
     func testBatchAfterInitializationReturnsOnlyRequestResponses() async throws {

@@ -62,6 +62,9 @@ public actor MCPServer {
         guard Self.isValidID(id) else {
             return Self.error(id: .null, code: -32600, message: "Invalid Request")
         }
+        guard method == "initialize" || isInitialized else {
+            return Self.error(id: id, code: -32600, message: "Invalid Request")
+        }
 
         switch method {
         case "initialize":
