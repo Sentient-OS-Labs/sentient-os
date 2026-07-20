@@ -24,6 +24,7 @@ public final class ServiceDispatcher {
     private let input: any InputControlling
     private let permissions: any PermissionChecking
     private let screenCapturer: any ScreenCapturing
+    private var didCleanup = false
 
     public convenience init() {
         let provider = SystemAXProvider()
@@ -71,6 +72,14 @@ public final class ServiceDispatcher {
         }
     }
 
+    /// Task 5's service-loop owner calls this once when the NDJSON loop exits.
+    /// Repeated calls are intentionally harmless and do not duplicate capture cleanup.
+    public func cleanup() {
+        guard !didCleanup else { return }
+        didCleanup = true
+        screenCapturer.cleanup()
+    }
+
     private func dispatch(_ request: ServiceRequest) async throws -> JSONValue {
         switch request.operation {
         case .listApps:
@@ -99,6 +108,9 @@ public final class ServiceDispatcher {
             }
         case .click:
             let parsed = try parseClick(request.arguments)
+            if let coordinate = parsed.coordinate {
+                try input.validate(coordinate: coordinate)
+            }
             try requireAccessibility()
             let element: SnapshotElementReference?
             if let index = parsed.elementIndex {
@@ -126,18 +138,11 @@ public final class ServiceDispatcher {
             return successResult
         case .scroll:
             let parsed = try parseScroll(request.arguments)
-            try requireAccessibility()
-            let anchor: CGPoint?
-            if let index = parsed.elementIndex {
-                let application = try catalog.resolve(parsed.app)
-                let element = try elementResolver.latestElement(app: application, index: index)
-                guard let frame = element.frame else {
-                    throw ServiceError(code: .elementNotFound, message: "Element has no frame")
-                }
-                anchor = CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
-            } else {
-                anchor = nil
+            let anchor = try scrollAnchor(for: parsed)
+            if let anchor {
+                try input.validate(coordinate: anchor)
             }
+            try requireAccessibility()
             try input.scroll(direction: parsed.direction, pages: parsed.pages, anchor: anchor)
             return successResult
         }
@@ -167,6 +172,16 @@ public final class ServiceDispatcher {
         let pages = try optionalInt("pages", in: arguments) ?? 1
         try InputRequestValidator.scrollPages(pages)
         return (app, elementIndex, direction, pages)
+    }
+
+    private func scrollAnchor(for parsed: (app: String, elementIndex: Int?, direction: ScrollDirection, pages: Int)) throws -> CGPoint? {
+        guard let index = parsed.elementIndex else { return nil }
+        let application = try catalog.resolve(parsed.app)
+        let element = try elementResolver.latestElement(app: application, index: index)
+        guard let frame = element.frame else {
+            throw ServiceError(code: .elementNotFound, message: "Element has no frame")
+        }
+        return CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
     }
 
     private func requireAccessibility() throws {

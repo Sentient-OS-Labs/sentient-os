@@ -51,6 +51,28 @@ final class ScreenCapturerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: second.path))
     }
+
+    func testNewCaptureDeletesPriorTrackedCapture() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentientComputerUseTests-\(UUID().uuidString)", isDirectory: true)
+        let capturer = ScreenCapturer(
+            backend: FakeScreenCaptureBackend(image: try makeImage()),
+            temporaryDirectory: directory
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let first = try await capturer.captureMainDisplay()
+        let second = try await capturer.captureMainDisplay()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: first.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.path))
+    }
+
+    func testMainDisplaySelectionRejectsUnavailableMainDisplay() {
+        XCTAssertThrowsError(try ScreenCaptureDisplaySelection.mainDisplayIndex(in: [2, 3], mainDisplayID: 1)) {
+            XCTAssertEqual($0 as? ServiceError, ServiceError(code: .captureFailed, message: "Main display is unavailable"))
+        }
+    }
 }
 
 private final class FakeScreenCaptureBackend: ScreenCaptureBacking {

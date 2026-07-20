@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 
 protocol InputControlling {
+    func validate(coordinate: CGPoint) throws
     func click(element: SnapshotElementReference?, coordinate: CGPoint?, button: MouseButton, count: Int) throws
     func typeText(_ text: String) throws
     func pressKey(_ key: String) throws
@@ -160,6 +161,10 @@ final class InputController: InputControlling {
         up.setIntegerValueField(.mouseEventClickState, value: Int64(count))
         events.post(down)
         events.post(up)
+    }
+
+    func validate(coordinate: CGPoint) throws {
+        try validateOnScreen(coordinate)
     }
 
     func typeText(_ text: String) throws {

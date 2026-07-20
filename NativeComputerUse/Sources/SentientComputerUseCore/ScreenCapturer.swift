@@ -35,6 +35,15 @@ protocol ScreenCaptureBacking {
     func captureMainDisplay() async throws -> CapturedScreenImage
 }
 
+enum ScreenCaptureDisplaySelection {
+    static func mainDisplayIndex(in displayIDs: [UInt32], mainDisplayID: UInt32) throws -> Int {
+        guard let index = displayIDs.firstIndex(of: mainDisplayID) else {
+            throw ServiceError(code: .captureFailed, message: "Main display is unavailable")
+        }
+        return index
+    }
+}
+
 public final class ScreenCapturer: ScreenCapturing {
     private let backend: any ScreenCaptureBacking
     private let temporaryDirectory: URL
@@ -53,6 +62,7 @@ public final class ScreenCapturer: ScreenCapturing {
     }
 
     public func captureMainDisplay() async throws -> CaptureResult {
+        cleanup()
         let captured = try await backend.captureMainDisplay()
         let directory = temporaryDirectory.appendingPathComponent("SentientComputerUse", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -97,9 +107,11 @@ private struct SystemScreenCaptureBackend: ScreenCaptureBacking {
     func captureMainDisplay() async throws -> CapturedScreenImage {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let mainDisplayID = CGMainDisplayID()
-        guard let display = content.displays.first(where: { $0.displayID == mainDisplayID }) ?? content.displays.first else {
-            throw ServiceError(code: .captureFailed, message: "Main display is unavailable")
-        }
+        let mainDisplayIndex = try ScreenCaptureDisplaySelection.mainDisplayIndex(
+            in: content.displays.map(\.displayID),
+            mainDisplayID: mainDisplayID
+        )
+        let display = content.displays[mainDisplayIndex]
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let configuration = SCStreamConfiguration()

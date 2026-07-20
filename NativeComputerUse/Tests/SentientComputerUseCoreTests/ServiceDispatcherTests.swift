@@ -131,6 +131,36 @@ final class ServiceDispatcherTests: XCTestCase {
         }
         XCTAssertEqual(fixtures.permissions.accessibilityChecks, 0)
     }
+
+    func testOffscreenCoordinatesAreRejectedBeforeAccessibilityPermission() async {
+        let fixtures = DispatcherFixtures(accessibilityGranted: false)
+        let request = ServiceRequest(
+            id: "offscreen",
+            operation: .click,
+            arguments: ["app": .string("Notes"), "x": .int(500), "y": .int(500)]
+        )
+
+        let response = await fixtures.dispatcher.handle(request)
+
+        XCTAssertEqual(response, .failure(id: "offscreen", ServiceError(code: .invalidRequest, message: "Coordinate must be finite and on screen")))
+        XCTAssertEqual(fixtures.permissions.accessibilityChecks, 0)
+        XCTAssertEqual(fixtures.input.coordinateValidationCount, 1)
+        XCTAssertEqual(fixtures.input.clickCount, 0)
+    }
+
+    func testDispatcherCleanupForwardsOnceAndDeletesCurrentCapture() async throws {
+        let capturer = CleanupCapturer()
+        let fixtures = DispatcherFixtures(screenCapturer: capturer)
+        let response = await fixtures.dispatcher.handle(.init(id: "capture", operation: .getAppState, arguments: ["app": .string("Notes")]))
+        XCTAssertEqual(response.id, "capture")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: capturer.path.path))
+
+        fixtures.dispatcher.cleanup()
+        fixtures.dispatcher.cleanup()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: capturer.path.path))
+        XCTAssertEqual(capturer.cleanupCount, 1)
+    }
 }
 
 private final class DispatcherFixtures {
@@ -141,7 +171,7 @@ private final class DispatcherFixtures {
     let capturer: FakeCapturer
     let dispatcher: ServiceDispatcher
 
-    init(accessibilityGranted: Bool = true, screenRecordingGranted: Bool = true, captureError: Error? = nil) {
+    init(accessibilityGranted: Bool = true, screenRecordingGranted: Bool = true, captureError: Error? = nil, screenCapturer: (any ScreenCapturing)? = nil) {
         permissions = FakePermissionChecker(accessibilityGranted: accessibilityGranted, screenRecordingGranted: screenRecordingGranted)
         capturer = FakeCapturer(error: captureError)
         dispatcher = ServiceDispatcher(
@@ -150,7 +180,7 @@ private final class DispatcherFixtures {
             elementResolver: inspector,
             input: input,
             permissions: permissions,
-            screenCapturer: capturer
+            screenCapturer: screenCapturer ?? capturer
         )
     }
 }
@@ -210,6 +240,14 @@ private final class FakeInputController: InputControlling {
     private(set) var pressKeyCount = 0
     private(set) var scrollCount = 0
     private(set) var scrollAnchors: [CGPoint?] = []
+    private(set) var coordinateValidationCount = 0
+
+    func validate(coordinate: CGPoint) throws {
+        coordinateValidationCount += 1
+        guard coordinate.x >= 0, coordinate.y >= 0, coordinate.x < 100, coordinate.y < 100 else {
+            throw ServiceError(code: .invalidRequest, message: "Coordinate must be finite and on screen")
+        }
+    }
     private(set) var clickedElements: [SnapshotElementReference?] = []
 
     func click(element: SnapshotElementReference?, coordinate: CGPoint?, button: MouseButton, count: Int) throws {
@@ -257,6 +295,25 @@ private final class FakeCapturer: ScreenCapturing {
         captureCount += 1
         if let error { throw error }
         return CaptureResult(path: "/tmp/capture.png", displayID: 1, width: 100, height: 50)
+    }
+}
+
+private final class CleanupCapturer: ScreenCapturing {
+    let path = FileManager.default.temporaryDirectory.appendingPathComponent("SentientComputerUseCleanup-\(UUID().uuidString).png")
+    private(set) var cleanupCount = 0
+
+    func captureMainDisplay() async throws -> CaptureResult {
+        try Data().write(to: path)
+        return CaptureResult(path: path.path, displayID: 1, width: 1, height: 1)
+    }
+
+    func cleanup() {
+        cleanupCount += 1
+        try? FileManager.default.removeItem(at: path)
+    }
+
+    deinit {
+        try? FileManager.default.removeItem(at: path)
     }
 }
 
