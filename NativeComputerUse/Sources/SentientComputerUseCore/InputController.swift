@@ -1,4 +1,3 @@
-import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
@@ -19,8 +18,8 @@ protocol AccessibilityActionPerforming {
     func perform(_ action: String, on element: SnapshotElementReference) throws
 }
 
-protocol ScreenProviding {
-    var frames: [CGRect] { get }
+protocol DisplayBoundsProviding {
+    var displayBounds: [CGRect] { get }
 }
 
 enum MouseButton: Sendable {
@@ -41,12 +40,12 @@ final class InputController: InputControlling {
 
     private let events: any EventPosting
     private let actions: any AccessibilityActionPerforming
-    private let screens: any ScreenProviding
+    private let screens: any DisplayBoundsProviding
 
     init(
         events: any EventPosting,
         actions: any AccessibilityActionPerforming,
-        screens: any ScreenProviding = SystemScreenProvider()
+        screens: any DisplayBoundsProviding = CoreGraphicsDisplayBoundsProvider()
     ) {
         self.events = events
         self.actions = actions
@@ -102,13 +101,16 @@ final class InputController: InputControlling {
     func pressKey(_ key: String) throws {
         let parsed = try parseKey(key)
 
+        var heldFlags: CGEventFlags = []
         for modifier in parsed.modifiers {
-            try postKey(code: modifier.keyCode, keyDown: true, flags: modifier.flag)
+            heldFlags.insert(modifier.flag)
+            try postKey(code: modifier.keyCode, keyDown: true, flags: heldFlags)
         }
-        try postKey(code: parsed.keyCode, keyDown: true, flags: parsed.modifiers.flags)
-        try postKey(code: parsed.keyCode, keyDown: false, flags: parsed.modifiers.flags)
+        try postKey(code: parsed.keyCode, keyDown: true, flags: heldFlags)
+        try postKey(code: parsed.keyCode, keyDown: false, flags: heldFlags)
         for modifier in parsed.modifiers.reversed() {
-            try postKey(code: modifier.keyCode, keyDown: false, flags: [])
+            heldFlags.remove(modifier.flag)
+            try postKey(code: modifier.keyCode, keyDown: false, flags: heldFlags)
         }
     }
 
@@ -147,7 +149,7 @@ final class InputController: InputControlling {
     private func validateOnScreen(_ coordinate: CGPoint) throws {
         guard coordinate.x.isFinite,
               coordinate.y.isFinite,
-              screens.frames.contains(where: { $0.contains(coordinate) }) else {
+              screens.displayBounds.contains(where: { $0.contains(coordinate) }) else {
             throw ServiceError(code: .invalidRequest, message: "Coordinate must be finite and on screen")
         }
     }
@@ -242,9 +244,18 @@ private extension Array where Element == Modifier {
     }
 }
 
-private struct SystemScreenProvider: ScreenProviding {
-    var frames: [CGRect] {
-        NSScreen.screens.map(\.frame)
+private struct CoreGraphicsDisplayBoundsProvider: DisplayBoundsProviding {
+    var displayBounds: [CGRect] {
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+
+        var displayIDs = Array(repeating: CGDirectDisplayID(), count: Int(count))
+        var activeCount = count
+        let result = displayIDs.withUnsafeMutableBufferPointer {
+            CGGetActiveDisplayList(count, $0.baseAddress, &activeCount)
+        }
+        guard result == .success else { return [] }
+        return displayIDs.prefix(Int(activeCount)).map(CGDisplayBounds)
     }
 }
 

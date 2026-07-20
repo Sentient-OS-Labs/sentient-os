@@ -15,6 +15,17 @@ final class InputControllerTests: XCTestCase {
         XCTAssertTrue(events.events.isEmpty)
     }
 
+    func testUnsupportedSemanticPressFallsBackToValidatedCoordinateClick() throws {
+        let events = RecordingEventPoster()
+        let actions = RecordingAXActionPerformer()
+        let controller = InputController(events: events, actions: actions, screens: FixtureScreenProvider())
+
+        try controller.click(element: .fixture, coordinate: CGPoint(x: 20, y: 30), button: .left, count: 1)
+
+        XCTAssertTrue(actions.performed.isEmpty)
+        XCTAssertEqual(events.events.map(\.type), [.leftMouseDown, .leftMouseUp])
+    }
+
     func testClickRequiresAnElementOrCoordinate() {
         let controller = InputController(events: RecordingEventPoster(), actions: RecordingAXActionPerformer(), screens: FixtureScreenProvider())
 
@@ -52,6 +63,20 @@ final class InputControllerTests: XCTestCase {
         XCTAssertEqual(events.events[4].getIntegerValueField(.mouseEventButtonNumber), 2)
     }
 
+    func testCoordinateOnVerticallyArrangedSecondDisplayIsAccepted() throws {
+        let events = RecordingEventPoster()
+        let controller = InputController(
+            events: events,
+            actions: RecordingAXActionPerformer(),
+            screens: VerticallyArrangedDisplayProvider()
+        )
+
+        try controller.click(element: nil, coordinate: CGPoint(x: 50, y: -50), button: .left, count: 1)
+
+        XCTAssertEqual(events.events.map(\.type), [.leftMouseDown, .leftMouseUp])
+        XCTAssertEqual(events.events.map(\.location), [CGPoint(x: 50, y: -50), CGPoint(x: 50, y: -50)])
+    }
+
     func testTypeTextPostsUnicodeKeyDownAndUp() throws {
         let events = RecordingEventPoster()
         let controller = InputController(events: events, actions: RecordingAXActionPerformer(), screens: FixtureScreenProvider())
@@ -70,6 +95,17 @@ final class InputControllerTests: XCTestCase {
 
         XCTAssertEqual(events.events.map(\.type), [.flagsChanged, .keyDown, .keyUp, .flagsChanged])
         XCTAssertEqual(events.events.map { $0.getIntegerValueField(.keyboardEventKeycode) }, [55, 8, 8, 55])
+    }
+
+    func testPressKeyCarriesCumulativeModifierFlagsThroughMultiModifierChord() throws {
+        let events = RecordingEventPoster()
+        let controller = InputController(events: events, actions: RecordingAXActionPerformer(), screens: FixtureScreenProvider())
+
+        try controller.pressKey("super+shift+c")
+
+        XCTAssertEqual(events.events.map(\.type), [.flagsChanged, .flagsChanged, .keyDown, .keyUp, .flagsChanged, .flagsChanged])
+        XCTAssertEqual(events.events.map { $0.getIntegerValueField(.keyboardEventKeycode) }, [55, 56, 8, 8, 56, 55])
+        XCTAssertEqual(events.events.map(\.flags), [.maskCommand, [.maskCommand, .maskShift], [.maskCommand, .maskShift], [.maskCommand, .maskShift], .maskCommand, []])
     }
 
     func testPressKeySupportsNamedKeys() throws {
@@ -139,8 +175,15 @@ private final class RecordingAXActionPerformer: AccessibilityActionPerforming {
     }
 }
 
-private struct FixtureScreenProvider: ScreenProviding {
-    let frames = [CGRect(x: 0, y: 0, width: 100, height: 100)]
+private struct FixtureScreenProvider: DisplayBoundsProviding {
+    let displayBounds = [CGRect(x: 0, y: 0, width: 100, height: 100)]
+}
+
+private struct VerticallyArrangedDisplayProvider: DisplayBoundsProviding {
+    let displayBounds = [
+        CGRect(x: 0, y: 0, width: 100, height: 100),
+        CGRect(x: 0, y: -100, width: 100, height: 100)
+    ]
 }
 
 private func unicodeText(from event: CGEvent) -> String {
