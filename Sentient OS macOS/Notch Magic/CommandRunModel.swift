@@ -6,7 +6,7 @@
 //  output line(s) into `statusLine`. `stop()` cancels the run (CodexCLI terminates codex). One run at a time.
 //
 //  Every way to start a task — the home command bar, the right-⌘ hotkey, AND a proactive card's
-//  computer-use fire (which ADOPTS this run via adoptExternal/externalPush/completeExternal) — drives
+//  fire, any channel (which ADOPTS this run via adoptExternal/externalPush/completeExternal) — drives
 //  the SAME instance (owned by CommandCoordinator), so the prompt bar, the notch, and the card are all
 //  views of one run, and `isRunning` is the app-wide one-task-at-a-time lock. `onFinished` lets the
 //  coordinator move the notch from running → finishing. Everything also tees to Log()
@@ -143,7 +143,7 @@ final class CommandRunModel {
         if let externalStop { externalStop() } else { task?.cancel() }
     }
 
-    // MARK: Adopted external runs (a proactive card's computer-use fire)
+    // MARK: Adopted external runs (a proactive card's fire — any channel)
 
     /// Adopt a proactive card's fire as THE one run: `isRunning` + `statusLine` light the notch
     /// and the prompt bar, and every other entry point — hotkey, submits, other cards — is locked
