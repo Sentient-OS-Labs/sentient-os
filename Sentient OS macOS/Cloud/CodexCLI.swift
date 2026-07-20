@@ -87,6 +87,11 @@ actor CodexCLI {
         var feature: String = "unknown"        // §7.9: which caller — so a codex.failure is attributable
                                                // (gmail / calendar / vault / proactive / …). Diagnostics
                                                // tag ONLY; never affects the run.
+        var diag: [String: String] = [:]       // caller-supplied structured diagnostics merged into a
+                                               // codex.failure's extra (e.g. the vault's corpus_chars /
+                                               // slices / slice_index). Ints and enums rendered as
+                                               // strings ONLY — never paths, UUIDs, or free text (the
+                                               // Sentry scrubber [Filtered]s those into uselessness).
 
         init(prompt: String) { self.prompt = prompt }
 
@@ -147,6 +152,10 @@ actor CodexCLI {
         /// Subscription window exhausted. `sessionID` (when present) lets the caller resume the
         /// same agentic session later instead of starting over.
         case usageLimit(message: String, sessionID: String?)
+        /// The prompt exceeds codex's server-side 1,048,576-char turn-input cap (rejected at
+        /// turn/start before the model runs). Thrown by the pre-spawn guard in both spines;
+        /// with corpus slicing in place this is a canary that should never fire.
+        case inputTooLarge(chars: Int)
 
         var description: String {
             switch self {
@@ -156,6 +165,7 @@ actor CodexCLI {
             case .exitFailure(let code, let m):   return "codex exited \(code): \(m.prefix(300))"
             case .badEnvelope(let m):             return "Unparseable codex output: \(m.prefix(300))"
             case .usageLimit(let m, _):           return "Codex usage limit: \(m.prefix(200))"
+            case .inputTooLarge(let c):           return "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
             }
         }
     }
@@ -349,14 +359,25 @@ actor CodexCLI {
                 Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
                                       model: invocation.model, effort: invocation.effort,
                                       resumed: invocation.resumeSessionID != nil,
-                                      durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+                                      durationMS: Int(Date().timeIntervalSince(t0) * 1000),
+                                      diag: invocation.diag)
             }
             throw error
         }
     }
 
+    /// Pre-spawn guard: codex rejects any turn input over 1,048,576 characters server-side
+    /// (`input_too_large`, no flag raises it — measured 2026-07-19). 950 KB leaves margin for
+    /// the char-vs-byte counting gap. Every prompt path is byte-budgeted below this (the vault's
+    /// CorpusSlicer, Proactive's window trim), so a throw here means a NEW unbudgeted prompt
+    /// path slipped in — a named canary instead of a mystery exitFailure.
+    static let promptByteCap = 950_000
+
     private func runInner(_ invocation: Invocation,
                           onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
+        if invocation.prompt.utf8.count > Self.promptByteCap {
+            throw CLIError.inputTooLarge(chars: invocation.prompt.utf8.count)
+        }
         let availability = await validate()
         guard case .available(let bin) = availability else {
             throw CLIError.notAvailable(availability)
@@ -413,6 +434,11 @@ actor CodexCLI {
         // per run, so a change applies to the very next fire with no restart.
         let effort = ComputerUseSpeed.current.effort
         do {
+            // Same pre-spawn guard as `run` — this spine passes the prompt as ARGV, where an
+            // oversized prompt dies even earlier (ARG_MAX) with an unhelpful spawn error.
+            if prompt.utf8.count > Self.promptByteCap {
+                throw CLIError.inputTooLarge(chars: prompt.utf8.count)
+            }
             guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
             // Self-heal the relaxed confirmation policy: a plugin update (desktop app or a
             // re-bootstrap) lays a fresh STOCK SKILL.md, whose policy stalls headless runs on
@@ -444,23 +470,35 @@ actor CodexCLI {
     }
 
     /// Emit a structured codex failure — the CLIError CASE NAME only (never `.message`/stderr/prompt,
-    /// which embed user content). One seam for the whole cloud spine; `feature` makes it attributable.
+    /// which embed user content). One seam for the whole cloud spine; `feature` makes it attributable;
+    /// `diag` is the caller's structured extras (Invocation.diag — ints/enums only, pre-vetted).
     private static func emitCodexFailure(event: String, _ error: Error, feature: String,
-                                         model: Model, effort: Effort, resumed: Bool, durationMS: Int) {
+                                         model: Model, effort: Effort, resumed: Bool, durationMS: Int,
+                                         diag: [String: String] = [:]) {
         let caseName: String
         let level: CrashReporting.DiagLevel
+        var extra = diag
         switch error {
         case CLIError.usageLimit:   return   // expected, not a defect — the amber caution + resume own it
         case CLIError.notAvailable: (caseName, level) = ("notAvailable", .warning)
         case CLIError.timedOut:     (caseName, level) = ("timedOut", .warning)
         case CLIError.launchFailed: (caseName, level) = ("launchFailed", .error)
-        case CLIError.exitFailure:  (caseName, level) = ("exitFailure", .error)
+        case CLIError.exitFailure(let code, _):
+            (caseName, level) = ("exitFailure", .error)
+            extra["exit_code"] = String(code)
         case CLIError.badEnvelope:  (caseName, level) = ("badEnvelope", .error)
+        case CLIError.inputTooLarge(let chars):
+            // The canary: every prompt path is byte-budgeted, so this should stay at zero.
+            (caseName, level) = ("inputTooLarge", .error)
+            extra["prompt_chars"] = String(chars)
         default:                    (caseName, level) = (String(describing: type(of: error)), .error)
         }
+        extra["effort"] = effort.rawValue
+        extra["resumed"] = String(resumed)
+        extra["duration_ms"] = String(durationMS)
         CrashReporting.captureEvent(event, level: level,
             tags: ["feature": feature, "error": caseName, "model": model.rawValue],
-            extra: ["effort": effort.rawValue, "resumed": String(resumed), "duration_ms": String(durationMS)],
+            extra: extra,
             fingerprint: ["codex", feature, caseName])
     }
 
@@ -555,6 +593,15 @@ actor CodexCLI {
             let detail = errors.isEmpty ? (out.stderr.isEmpty ? out.stdout : out.stderr)
                                         : errors.joined(separator: " · ")
             let lowered = detail.lowercased()
+            // Belt-and-suspenders behind the pre-spawn guard: if a prompt still reached the
+            // server and bounced off the turn-input cap (config drift, a changed cap), name it
+            // instead of letting it fall through as a mystery exitFailure. Checked FIRST — the
+            // wording could drift toward the usage-limit markers.
+            if lowered.contains("input_too_large") || lowered.contains("exceeds the maximum length") {
+                let chars = detail.range(of: #""actual_chars":(\d+)"#, options: .regularExpression)
+                    .flatMap { Int(detail[$0].drop(while: { !$0.isNumber })) } ?? 0
+                throw CLIError.inputTooLarge(chars: chars)
+            }
             if usageLimitMarkers.contains(where: { lowered.contains($0) }) {
                 throw CLIError.usageLimit(message: String(detail.prefix(600)), sessionID: sessionID)
             }
