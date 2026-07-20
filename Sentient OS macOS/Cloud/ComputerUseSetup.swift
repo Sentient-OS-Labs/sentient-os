@@ -105,6 +105,8 @@ enum ComputerUseSetup {
         guard hasValidIntelPlugin(at: root) else { return false }
 
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
+        guard !ComputerUsePluginConfig.hasUnsupportedDottedEnabledKey(.sentientIntel, in: config),
+              !ComputerUsePluginConfig.hasUnsupportedDottedEnabledKey(.sky, in: config) else { return false }
         return ComputerUsePluginConfig.isEnabled(.sentientIntel, in: config) == true
             && ComputerUsePluginConfig.isEnabled(.sky, in: config) != true
     }

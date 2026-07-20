@@ -57,6 +57,13 @@ enum ComputerUsePluginConfig {
         return values.count == 1 ? values[0] : nil
     }
 
+    /// Dotted aliases are unsupported because appending/editing a table-form key beside one can
+    /// produce duplicate TOML semantics. Readiness callers use this to distinguish "plugin absent"
+    /// from "plugin state is ambiguous and must be repaired explicitly".
+    static func hasUnsupportedDottedEnabledKey(_ plugin: Plugin, in text: String) -> Bool {
+        containsDottedEnabledKey(plugin, in: text.components(separatedBy: "\n"))
+    }
+
     static func settingEnabled(_ enabled: Bool, for plugin: Plugin, in text: String,
                                createIfMissing: Bool) throws -> String {
         var lines = text.components(separatedBy: "\n")
@@ -100,20 +107,53 @@ enum ComputerUsePluginConfig {
     }
 
     private static func containsDottedEnabledKey(_ plugin: Plugin, in lines: [String]) -> Bool {
+        var insidePluginsTable = false
+        for line in lines {
+            if isAnyTable(line) {
+                insidePluginsTable = isPluginsRootTable(line)
+                continue
+            }
+            if isFullDottedEnabledAssignment(line, for: plugin)
+                || (insidePluginsTable && isRelativeDottedEnabledAssignment(line, for: plugin)) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isFullDottedEnabledAssignment(_ line: String, for plugin: Plugin) -> Bool {
         let acceptedRoots = ["plugins", #""plugins""#, "'plugins'"]
         let acceptedEnabled = ["enabled", #""enabled""#, "'enabled'"]
-        return lines.contains { line in
-            let parts = uncommented(line).split(separator: "=", maxSplits: 1,
-                                                  omittingEmptySubsequences: false)
-            guard parts.count == 2 else { return false }
-            let lhs = parts[0].filter { !$0.isWhitespace }
-            for root in acceptedRoots {
-                for key in acceptedEnabled where
-                    lhs == #"\#(root)."\#(plugin.identifier)".\#(key)"#
-                        || lhs == "\(root).'\(plugin.identifier)'.\(key)" { return true }
-            }
-            return false
+        guard let lhs = assignmentLHS(line) else { return false }
+        for root in acceptedRoots {
+            for key in acceptedEnabled where
+                lhs == #"\#(root)."\#(plugin.identifier)".\#(key)"#
+                    || lhs == "\(root).'\(plugin.identifier)'.\(key)" { return true }
         }
+        return false
+    }
+
+    private static func isRelativeDottedEnabledAssignment(_ line: String, for plugin: Plugin) -> Bool {
+        let acceptedEnabled = ["enabled", #""enabled""#, "'enabled'"]
+        guard let lhs = assignmentLHS(line) else { return false }
+        for key in acceptedEnabled where
+            lhs == #""\#(plugin.identifier)".\#(key)"#
+                || lhs == "'\(plugin.identifier)'.\(key)" { return true }
+        return false
+    }
+
+    private static func assignmentLHS(_ line: String) -> String? {
+        let parts = uncommented(line).split(separator: "=", maxSplits: 1,
+                                              omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+        return String(parts[0].filter { !$0.isWhitespace })
+    }
+
+    private static func isPluginsRootTable(_ line: String) -> Bool {
+        let value = uncommented(line).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("["), value.hasSuffix("]") else { return false }
+        let inner = value.dropFirst().dropLast().filter { !$0.isWhitespace }
+        return inner == "plugins" || inner == #""plugins""# || inner == "'plugins'"
     }
 
     private static func endOfTable(startingAt tableIndex: Int, in lines: [String]) -> Int {

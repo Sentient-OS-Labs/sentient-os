@@ -6,6 +6,7 @@ struct ComputerUsePluginConfigTests {
         try testIntelDisableThenSkyRepair()
         try testAlternateQuoteTableIsUpdatedWithoutDuplicate()
         try testDottedKeysAreRejectedWithoutChangingInput()
+        try testRelativeDottedKeysUnderPluginsAreRejectedAtomically()
         try testPatchIsIdempotent()
         print("ComputerUsePluginConfig fixtures passed")
     }
@@ -69,6 +70,45 @@ struct ComputerUsePluginConfigTests {
         let twice = try ComputerUsePluginConfig.settingEnabled(
             true, for: .sentientIntel, in: once, createIfMissing: true)
         expect(once == twice, "same patch must be byte-idempotent")
+    }
+
+    private static func testRelativeDottedKeysUnderPluginsAreRejectedAtomically() throws {
+        let fixtures: [(ComputerUsePluginConfig.Plugin, String)] = [
+            (.sky, """
+            [plugins]
+            "computer-use@openai-bundled".enabled = true
+            """),
+            (.sentientIntel, """
+            [plugins]
+            'computer-use@sentient'.enabled = true
+            """)
+        ]
+
+        for (plugin, original) in fixtures {
+            let before = Data(original.utf8)
+            expect(ComputerUsePluginConfig.hasUnsupportedDottedEnabledKey(plugin, in: original),
+                   "relative dotted alias must be visible to readiness for \(plugin.identifier)")
+            do {
+                _ = try ComputerUsePluginConfig.settingEnabled(
+                    true, for: plugin, in: original, createIfMissing: true)
+                fail("relative dotted key under [plugins] must be rejected")
+            } catch let error as ComputerUsePluginConfig.PatchError {
+                expect(error == .dottedKey(plugin.identifier),
+                       "unexpected relative dotted-key error: \(error)")
+            }
+            expect(Data(original.utf8) == before,
+                   "rejected relative dotted fixture must remain byte-for-byte unchanged")
+        }
+
+        let ambiguousIntelReadiness = """
+        [plugins."computer-use@sentient"]
+        enabled = true
+
+        [plugins]
+        "computer-use@openai-bundled".enabled = true
+        """
+        expect(ComputerUsePluginConfig.hasUnsupportedDottedEnabledKey(.sky, in: ambiguousIntelReadiness),
+               "active relative Sky alias must block Intel readiness")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
