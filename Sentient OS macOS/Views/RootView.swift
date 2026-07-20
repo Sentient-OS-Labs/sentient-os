@@ -74,6 +74,13 @@ struct RootView: View {
                     }
                 }
                 .transition(.opacity)
+                // The just-updated notice, overlaid on ONBOARDING only (the home renders it in
+                // its own banner slot): a mid-onboarding user may have closed a broken window,
+                // and the post-update relaunch that brings it back should say why it's back.
+                .overlay(alignment: .topTrailing) {
+                    UpdateNoticeCapsule()
+                        .padding(.trailing, 24).padding(.top, 24)
+                }
             } else if isProcessing, let modelPath {
                 // Same engine + UI as the dev "start on device" buttons; .auto = backfill new
                 // buckets, catch up the rest. (Gmail is a dev-tools leg; the home button is on-device.)

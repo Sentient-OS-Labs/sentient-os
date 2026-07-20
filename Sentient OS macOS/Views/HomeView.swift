@@ -195,13 +195,15 @@ struct HomeView: View {
     // OvernightCaution recorded it at ProactiveCycle's choke point; the next fully successful
     // cycle clears it on its own). Both roads lead to Settings → Permissions & Health. Live
     // issues re-probe on foreground and melt away when fixed; ✕ mutes a live issue's kind for
-    // the session (a lower rung may then surface), while the amber ✕ clears the record.
+    // the session (a lower rung may then surface), while the amber ✕ clears the record. Below
+    // both: the green just-updated notice (UpdateNotice) with its changelog link — good news
+    // never outranks something broken.
 
     private var cautionBanner: some View {
         Group {
             if let issue = liveIssue {
-                CautionCapsule(message: issue.message, accent: Theme.Ink.red, showsSettings: true,
-                               onOpenSettings: openHealthSettings,
+                CautionCapsule(message: issue.message, accent: Theme.Ink.red,
+                               actionTitle: "Open Settings", onAction: openHealthSettings,
                                onDismiss: {
                                    HealthCaution.dismiss(issue)
                                    withAnimation(.easeInOut(duration: 0.25)) { liveIssue = nil }
@@ -210,13 +212,17 @@ struct HomeView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
                 CautionCapsule(message: caution.kind.message,
-                               showsSettings: caution.kind == .loggedOut,
-                               onOpenSettings: openHealthSettings,
+                               actionTitle: caution.kind == .loggedOut ? "Open Settings" : nil,
+                               onAction: openHealthSettings,
                                onDismiss: {
                                    OvernightCaution.clear()
                                    withAnimation(.easeInOut(duration: 0.25)) { self.caution = nil }
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
+            } else {
+                // The lowest rung — the green just-updated notice. Self-contained: draws
+                // nothing unless UpdateNotice armed one at launch.
+                UpdateNoticeCapsule()
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
@@ -531,73 +537,6 @@ struct HomeView: View {
     private func closeLetter() {
         withAnimation(.easeInOut(duration: 0.26)) { letterShown = false }
     }
-}
-
-// MARK: - The caution capsule (rendered by cautionBanner — amber for the morning-after event,
-// red for a live HealthCaution issue)
-
-private struct CautionCapsule: View {
-    let message: String
-    var accent: Color = Theme.Ink.amber
-    var showsSettings = false
-    let onOpenSettings: () -> Void
-    let onDismiss: () -> Void
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            HealthDot(color: accent)
-            Text(message)
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.Ink.statusInk)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-            if showsSettings {
-                SettingsPillButton(title: "Open Settings", action: onOpenSettings)
-            }
-            Button(action: onDismiss) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(Theme.Ink.label)
-                    .padding(4)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16).padding(.vertical, 11)
-        .frame(maxWidth: 480, alignment: .leading)
-        .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .strokeBorder(accent.opacity(0.28), lineWidth: 1))
-    }
-}
-
-#Preview("Caution capsules") {
-    ZStack {
-        Color.black.ignoresSafeArea()
-        VStack(alignment: .trailing, spacing: 14) {
-            CautionCapsule(message: OvernightCaution.Kind.loggedOut.message, showsSettings: true,
-                           onOpenSettings: {}, onDismiss: {})
-            CautionCapsule(message: OvernightCaution.Kind.noInternet.message,
-                           onOpenSettings: {}, onDismiss: {})
-            CautionCapsule(message: OvernightCaution.Kind.usageLimit.message,
-                           onOpenSettings: {}, onDismiss: {})
-            CautionCapsule(message: HealthCaution.Issue.permissions([.fullDiskAccess]).message,
-                           accent: Theme.Ink.red, showsSettings: true,
-                           onOpenSettings: {}, onDismiss: {})
-            CautionCapsule(message: HealthCaution.Issue.permissions([.fullDiskAccess, .launchAtLogin]).message,
-                           accent: Theme.Ink.red, showsSettings: true,
-                           onOpenSettings: {}, onDismiss: {})
-            CautionCapsule(message: HealthCaution.Issue.codexSignedOut.message,
-                           accent: Theme.Ink.red, showsSettings: true,
-                           onOpenSettings: {}, onDismiss: {})
-            CautionCapsule(message: HealthCaution.Issue.computerUseBroken(payloadGone: true).message,
-                           accent: Theme.Ink.red, showsSettings: true,
-                           onOpenSettings: {}, onDismiss: {})
-        }
-        .padding(40)
-    }
-    .frame(width: 620, height: 560)
-    .preferredColorScheme(.dark)
 }
 
 // MARK: - Top-bar nav item

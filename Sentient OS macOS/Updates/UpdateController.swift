@@ -132,6 +132,9 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
         idleTimer?.invalidate()
         idleTimer = nil
         Log("Sparkle: idle-safe — installing staged update and relaunching silently")
+        // The user wasn't in the app — the new version must come back windowless (UpdateNotice's
+        // flag suppresses the home WindowGroup at the relaunch). Gate installs never stamp this.
+        UpdateNotice.recordSilentRelaunch()
         install()   // Sparkle terminates, installs, and relaunches us — zero UI.
     }
 

@@ -76,6 +76,13 @@ final class AppState {
         notch.start()                // raise the notch overlay window
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
+        UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
+        // A silent auto-update relaunch opens no window, so DockPolicy's open/close notifications
+        // never fire — evaluate once (next runloop tick, after launch settles) so the Dock icon
+        // drops to match the windowless launch instead of lingering with nothing behind it.
+        if UpdateNotice.suppressHomeThisLaunch {
+            Task { dockPolicy.reevaluate() }
+        }
 
         // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
         // grants quiet Notification Center delivery and lists us in Settings → Notifications (the
