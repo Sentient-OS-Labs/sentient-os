@@ -1,8 +1,7 @@
 import Foundation
 
+/// JSON decoding normalizes integral numbers to `.int`. Equality treats a finite, exactly integral `.double` as equal to its `.int` equivalent.
 public enum JSONValue: Codable, Sendable, Equatable {
-    private static let integralDoubleKey = "$sentient_computer_use_integral_double"
-
     case string(String)
     case int(Int)
     case double(Double)
@@ -27,12 +26,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
         } else if let value = try? container.decode([JSONValue].self) {
             self = .array(value)
         } else if let value = try? container.decode([String: JSONValue].self) {
-            if value.count == 1,
-               case .int(let integer)? = value[Self.integralDoubleKey] {
-                self = .double(Double(integer))
-            } else {
-                self = .object(value)
-            }
+            self = .object(value)
         } else {
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported JSON value")
         }
@@ -47,12 +41,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
         case .int(let value):
             try container.encode(value)
         case .double(let value):
-            if let integer = Int(exactly: value) {
-                // JSONDecoder cannot distinguish the literals 7 and 7.0. Tag integral doubles so their case survives a round-trip.
-                try container.encode([Self.integralDoubleKey: integer])
-            } else {
-                try container.encode(value)
-            }
+            try container.encode(value)
         case .bool(let value):
             try container.encode(value)
         case .array(let value):
@@ -61,6 +50,29 @@ public enum JSONValue: Codable, Sendable, Equatable {
             try container.encode(value)
         case .null:
             try container.encodeNil()
+        }
+    }
+
+    public static func == (lhs: JSONValue, rhs: JSONValue) -> Bool {
+        switch (lhs, rhs) {
+        case let (.string(lhs), .string(rhs)):
+            return lhs == rhs
+        case let (.int(lhs), .int(rhs)):
+            return lhs == rhs
+        case let (.double(lhs), .double(rhs)):
+            return lhs == rhs
+        case let (.bool(lhs), .bool(rhs)):
+            return lhs == rhs
+        case let (.array(lhs), .array(rhs)):
+            return lhs == rhs
+        case let (.object(lhs), .object(rhs)):
+            return lhs == rhs
+        case (.null, .null):
+            return true
+        case let (.int(integer), .double(double)), let (.double(double), .int(integer)):
+            return double.isFinite && Int(exactly: double) == integer
+        default:
+            return false
         }
     }
 }

@@ -17,8 +17,16 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(ServiceResponse.self, from: data), response)
     }
 
-    func testIntegralDoubleRoundTripsAsDouble() throws {
+    func testIntegralDoubleRoundTripNormalizesToIntAndRemainsSemanticallyEqual() throws {
         let value = JSONValue.double(7.0)
+        let data = try JSONEncoder().encode(value)
+        let decoded = try JSONDecoder().decode(JSONValue.self, from: data)
+        XCTAssertEqual(decoded, .int(7))
+        XCTAssertEqual(decoded, value)
+    }
+
+    func testObjectUsingFormerIntegralDoubleKeyRoundTripsAsObject() throws {
+        let value = JSONValue.object(["$sentient_computer_use_integral_double": .int(7)])
         let data = try JSONEncoder().encode(value)
         XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: data), value)
     }
