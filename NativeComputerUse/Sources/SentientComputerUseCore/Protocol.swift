@@ -1,6 +1,8 @@
 import Foundation
 
 public enum JSONValue: Codable, Sendable, Equatable {
+    private static let integralDoubleKey = "$sentient_computer_use_integral_double"
+
     case string(String)
     case int(Int)
     case double(Double)
@@ -25,7 +27,12 @@ public enum JSONValue: Codable, Sendable, Equatable {
         } else if let value = try? container.decode([JSONValue].self) {
             self = .array(value)
         } else if let value = try? container.decode([String: JSONValue].self) {
-            self = .object(value)
+            if value.count == 1,
+               case .int(let integer)? = value[Self.integralDoubleKey] {
+                self = .double(Double(integer))
+            } else {
+                self = .object(value)
+            }
         } else {
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported JSON value")
         }
@@ -40,7 +47,12 @@ public enum JSONValue: Codable, Sendable, Equatable {
         case .int(let value):
             try container.encode(value)
         case .double(let value):
-            try container.encode(value)
+            if let integer = Int(exactly: value) {
+                // JSONDecoder cannot distinguish the literals 7 and 7.0. Tag integral doubles so their case survives a round-trip.
+                try container.encode([Self.integralDoubleKey: integer])
+            } else {
+                try container.encode(value)
+            }
         case .bool(let value):
             try container.encode(value)
         case .array(let value):
