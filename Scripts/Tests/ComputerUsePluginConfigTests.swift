@@ -8,6 +8,8 @@ struct ComputerUsePluginConfigTests {
         try testDottedKeysAreRejectedWithoutChangingInput()
         try testRelativeDottedKeysUnderPluginsAreRejectedAtomically()
         try testPatchIsIdempotent()
+        testExplicitPluginStatesDoNotConflateAbsentAndInvalid()
+        try testBothArchitectureMigrationsRemainStrictlyExclusive()
         print("ComputerUsePluginConfig fixtures passed")
     }
 
@@ -109,6 +111,48 @@ struct ComputerUsePluginConfigTests {
         """
         expect(ComputerUsePluginConfig.hasUnsupportedDottedEnabledKey(.sky, in: ambiguousIntelReadiness),
                "active relative Sky alias must block Intel readiness")
+    }
+
+    private static func testExplicitPluginStatesDoNotConflateAbsentAndInvalid() {
+        let fixtures: [(String, ComputerUsePluginConfig.State)] = [
+            ("", .absent),
+            ("[plugins.\"computer-use@sentient\"]\nenabled = true\n", .enabled),
+            ("[plugins.\"computer-use@sentient\"]\nenabled = false\n", .disabled),
+            ("[plugins.\"computer-use@sentient\"]\n", .invalid),
+            ("[plugins.\"computer-use@sentient\"]\nenabled = \"true\"\n", .invalid),
+            ("[plugins.\"computer-use@sentient\"]\nenabled = true\nenabled = false\n", .invalid),
+            ("[plugins.\"computer-use@sentient\"]\nenabled = true\n\n[plugins.'computer-use@sentient']\nenabled = false\n", .invalid),
+            ("plugins.\"computer-use@sentient\".enabled = true\n", .invalid)
+        ]
+
+        for (fixture, expected) in fixtures {
+            expect(ComputerUsePluginConfig.state(.sentientIntel, in: fixture) == expected,
+                   "expected explicit state \(expected) for fixture: \(fixture)")
+        }
+    }
+
+    private static func testBothArchitectureMigrationsRemainStrictlyExclusive() throws {
+        let initial = "[plugins.\"computer-use@openai-bundled\"]\nenabled = true\n"
+        var intel = try ComputerUsePluginConfig.settingEnabled(
+            true, for: .sentientIntel, in: initial, createIfMissing: true)
+        intel = try ComputerUsePluginConfig.settingEnabled(
+            false, for: .sky, in: intel, createIfMissing: true)
+        expect(ComputerUsePluginConfig.hasExclusiveBackend(
+            active: .sentientIntel, inactive: .sky, in: intel),
+            "Intel migration must explicitly enable Sentient and disable Sky")
+
+        var sky = try ComputerUsePluginConfig.settingEnabled(
+            true, for: .sky, in: intel, createIfMissing: true)
+        sky = try ComputerUsePluginConfig.settingEnabled(
+            false, for: .sentientIntel, in: sky, createIfMissing: true)
+        expect(ComputerUsePluginConfig.hasExclusiveBackend(
+            active: .sky, inactive: .sentientIntel, in: sky),
+            "Sky migration must explicitly enable Sky and disable Sentient")
+
+        let invalidInactive = sky + "\nplugins.\"computer-use@sentient\".enabled = false\n"
+        expect(!ComputerUsePluginConfig.hasExclusiveBackend(
+            active: .sky, inactive: .sentientIntel, in: invalidInactive),
+            "ambiguous inactive state must block readiness")
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

@@ -97,7 +97,8 @@ enum ComputerUseSetup {
         guard hasPlugin else { return false }
         // 3) config.toml actually enables the plugin
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
-        return ComputerUsePluginConfig.isEnabled(.sky, in: config) == true
+        return ComputerUsePluginConfig.hasExclusiveBackend(
+            active: .sky, inactive: .sentientIntel, in: config)
     }
 
     private static var isIntelInstalled: Bool {
@@ -105,10 +106,8 @@ enum ComputerUseSetup {
         guard hasValidIntelPlugin(at: root) else { return false }
 
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
-        guard !ComputerUsePluginConfig.hasUnsupportedDottedEnabledKey(.sentientIntel, in: config),
-              !ComputerUsePluginConfig.hasUnsupportedDottedEnabledKey(.sky, in: config) else { return false }
-        return ComputerUsePluginConfig.isEnabled(.sentientIntel, in: config) == true
-            && ComputerUsePluginConfig.isEnabled(.sky, in: config) != true
+        return ComputerUsePluginConfig.hasExclusiveBackend(
+            active: .sentientIntel, inactive: .sky, in: config)
     }
 
     // MARK: The bootstrap
@@ -310,7 +309,7 @@ enum ComputerUseSetup {
         }
     }
 
-    /// Enable Sentient's Intel plugin in-place and disable OpenAI's plugin if its table already
+    /// Enable Sentient's Intel plugin in-place and explicitly disable OpenAI's plugin.
     /// exists. Existing tables are edited; duplicate tables/keys are rejected instead of emitting
     /// invalid TOML. Re-running this function produces byte-identical output.
     private static func patchIntelConfig() throws {
@@ -327,7 +326,7 @@ enum ComputerUseSetup {
             let withIntel = try ComputerUsePluginConfig.settingEnabled(
                 true, for: .sentientIntel, in: original, createIfMissing: true)
             updated = try ComputerUsePluginConfig.settingEnabled(
-                false, for: .sky, in: withIntel, createIfMissing: false)
+                false, for: .sky, in: withIntel, createIfMissing: true)
         } catch {
             throw SetupError.config((error as? LocalizedError)?.errorDescription ?? "\(error)")
         }
@@ -369,6 +368,8 @@ enum ComputerUseSetup {
         do {
             text = try ComputerUsePluginConfig.settingEnabled(
                 true, for: .sky, in: text, createIfMissing: true)
+            text = try ComputerUsePluginConfig.settingEnabled(
+                false, for: .sentientIntel, in: text, createIfMissing: true)
         } catch {
             throw SetupError.config((error as? LocalizedError)?.errorDescription ?? "\(error)")
         }

@@ -10,6 +10,13 @@
 import Foundation
 
 enum ComputerUsePluginConfig {
+    enum State: Sendable, Equatable {
+        case absent
+        case enabled
+        case disabled
+        case invalid
+    }
+
     enum Plugin: Sendable {
         case sky
         case sentientIntel
@@ -41,20 +48,34 @@ enum ComputerUsePluginConfig {
         }
     }
 
-    static func isEnabled(_ plugin: Plugin, in text: String) -> Bool? {
+    static func state(_ plugin: Plugin, in text: String) -> State {
         let lines = text.components(separatedBy: "\n")
-        guard !containsDottedEnabledKey(plugin, in: lines) else { return nil }
+        guard !containsDottedEnabledKey(plugin, in: lines) else { return .invalid }
         let tableIndexes = lines.indices.filter { isTable(lines[$0], for: plugin) }
-        guard tableIndexes.count == 1, let tableIndex = tableIndexes.first else { return nil }
+        guard tableIndexes.count <= 1 else { return .invalid }
+        guard let tableIndex = tableIndexes.first else { return .absent }
 
         let endIndex = endOfTable(startingAt: tableIndex, in: lines)
         var values: [Bool] = []
         for index in (tableIndex + 1)..<endIndex {
             guard isEnabledAssignment(lines[index]) else { continue }
-            guard let value = boolValue(of: lines[index]) else { return nil }
+            guard let value = boolValue(of: lines[index]) else { return .invalid }
             values.append(value)
         }
-        return values.count == 1 ? values[0] : nil
+        guard values.count == 1 else { return .invalid }
+        return values[0] ? .enabled : .disabled
+    }
+
+    static func isEnabled(_ plugin: Plugin, in text: String) -> Bool? {
+        switch state(plugin, in: text) {
+        case .enabled: true
+        case .disabled: false
+        case .absent, .invalid: nil
+        }
+    }
+
+    static func hasExclusiveBackend(active: Plugin, inactive: Plugin, in text: String) -> Bool {
+        state(active, in: text) == .enabled && state(inactive, in: text) == .disabled
     }
 
     /// Dotted aliases are unsupported because appending/editing a table-form key beside one can
