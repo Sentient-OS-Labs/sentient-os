@@ -84,9 +84,17 @@ actor ProactiveCycle {
         let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
         progress(.knowledgeBase(exists ? "Updating your knowledge…"
                                        : "Creating your perfect knowledge base from everything we've analyzed…"))
+        // A sliced corpus (too big for one codex prompt) reports each part as it's fed — the
+        // takeover's phase line follows along; single-slice runs emit nothing and keep the line above.
+        let phase: @Sendable (VaultGenerator.Progress) -> Void = { p in
+            if case .folding(let part, let of) = p {
+                progress(.knowledgeBase(exists ? "Updating your knowledge… part \(part) of \(of)"
+                                               : "Creating your knowledge base… part \(part) of \(of)"))
+            }
+        }
         do {
-            if exists { _ = try await VaultCloud.shared.update(notes: notes, onLine: onLine) }
-            else      { _ = try await VaultCloud.shared.create(notes: notes, onLine: onLine) }
+            if exists { _ = try await VaultCloud.shared.update(notes: notes, onProgress: phase, onLine: onLine) }
+            else      { _ = try await VaultCloud.shared.create(notes: notes, onProgress: phase, onLine: onLine) }
             Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
                              parameters: ["newSummaries": "\(notes.count)"])
         } catch {

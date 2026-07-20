@@ -485,6 +485,7 @@ struct DevToolsView: View {
             let r = try await VaultCloud.shared.create(notes: notes) { p in
                 switch p {
                 case .calling:              progress("… thinking")
+                case .folding(let i, let n): progress("… part \(i) of \(n)")
                 case .writing(let n):       progress("… writing \(n) notes")
                 case .materializing(let n): progress("… finishing \(n)")
                 case .gathering:            break

@@ -19,7 +19,8 @@ import Foundation
 
 /// A Sendable, store-agnostic description of one summary handed to a Codex call. Decouples the
 /// cloud prompts from any particular store. Built from a CycleNoteItem (the iterative system).
-struct CloudNote: Sendable {
+/// Codable for CorpusSlicer's staging snapshot (multi-slice resume determinism).
+struct CloudNote: Sendable, Codable {
     let kind: SourceKind
     let sourceID: String       // "file:<abs path>" / "notes:<uuid>" — VaultGenerator.locSrc keys on it
     let folder: String
@@ -59,11 +60,13 @@ actor VaultCloud {
     }
 
     /// Load a persisted resume token, discarding it (and its stale key) if it can't actually resume:
-    /// no session id to reopen, or the staging dir is gone (deleted / disk cleaned).
+    /// nothing durable to continue (no session to reopen AND no completed slices in staging), or
+    /// the staging dir is gone (deleted / disk cleaned).
     private static func loadResume(_ key: String) -> VaultGenerator.ResumeToken? {
         guard let data = UserDefaults.standard.data(forKey: key),
               let t = try? JSONDecoder().decode(VaultGenerator.ResumeToken.self, from: data),
-              t.sessionID != nil, FileManager.default.fileExists(atPath: t.stagingPath) else {
+              t.sessionID != nil || (t.sliceIndex ?? 0) > 0,
+              FileManager.default.fileExists(atPath: t.stagingPath) else {
             UserDefaults.standard.removeObject(forKey: key)
             return nil
         }
@@ -73,9 +76,10 @@ actor VaultCloud {
     private func setCreateResume(_ t: VaultGenerator.ResumeToken?) { createResume = t; Self.persistResume(t, Self.createResumeKey) }
     private func setUpdateResume(_ t: VaultGenerator.ResumeToken?) { updateResume = t; Self.persistResume(t, Self.updateResumeKey) }
 
-    /// Persist (only a resumable token — one with a session id) or clear the handle on disk.
+    /// Persist (only a resumable token — a session id to reopen, or completed slices whose fold
+    /// lives in staging) or clear the handle on disk.
     private static func persistResume(_ t: VaultGenerator.ResumeToken?, _ key: String) {
-        if let t, t.sessionID != nil, let data = try? JSONEncoder().encode(t) {
+        if let t, t.sessionID != nil || (t.sliceIndex ?? 0) > 0, let data = try? JSONEncoder().encode(t) {
             UserDefaults.standard.set(data, forKey: key)
         } else {
             UserDefaults.standard.removeObject(forKey: key)
@@ -124,7 +128,9 @@ actor VaultCloud {
     /// corrupt the real vault — worst case the staging copy is discarded (or kept for a durable
     /// resume). This replaced the old in-place edit + `.bak` restore (B1), which is now obsolete.
     @discardableResult
-    func update(notes: [CloudNote], onLine: (@Sendable (String) -> Void)? = nil) async throws -> Int {
+    func update(notes: [CloudNote],
+                onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void = { _ in },
+                onLine: (@Sendable (String) -> Void)? = nil) async throws -> Int {
         guard !notes.isEmpty else { return 0 }
         let fm = FileManager.default
         let vault = VaultGenerator.vaultRoot
@@ -138,38 +144,99 @@ actor VaultCloud {
             return 0
         }
 
-        // Reuse the resume's staging dir (loadResume already verified it exists + has a session), else
-        // seed a fresh staging dir with a COPY of the live vault so codex has the notes to edit.
+        // Reuse the resume's staging dir (loadResume already verified it's usable), else seed a
+        // fresh staging dir with a COPY of the live vault so codex has the notes to edit.
         // `baseline` is the live vault's fingerprint at seed time — the freshness check compares
         // against it at swap; carried in the resume token so it survives a usage-limit resume.
+        // The cycle's notes are sliced under codex's 1 MiB turn-input cap (a vacation backlog
+        // crosses it) — each slice is one sequential merge run over the SAME staging; the
+        // freshness check + atomic swap happen ONCE, after the last slice.
         let staging: URL
         let baseline: String
-        let inv: CodexCLI.Invocation
+        let slices: [[CloudNote]]
+        var next: Int                                   // the next unfed slice
+        let inFlight: String?                           // a session to resume first
         if let token = updateResume {
             staging = URL(fileURLWithPath: token.stagingPath, isDirectory: true)
             baseline = token.vaultFingerprint ?? VaultGenerator.vaultFingerprint(vault)
-            var i = CodexCLI.Invocation(prompt: """
-                Continue merging the new items into the vault exactly where you left off — the edits \
-                you already made are still in the working directory. When everything is merged, reply \
-                with one line: the number of notes you created or edited.
-                """)
-            i.resumeSessionID = token.sessionID
-            inv = i
+            inFlight = token.sessionID
+            if let idx = token.sliceIndex {
+                guard let corpus = CorpusSlicer.loadCorpus(from: staging) else {
+                    // Snapshot gone — the fold can't be continued safely; restart the merge fresh.
+                    Log("VaultCloud.update: ⚠️ resume snapshot missing — restarting the merge fresh")
+                    setUpdateResume(nil)
+                    try? fm.removeItem(at: staging)
+                    return try await update(notes: notes, onProgress: onProgress, onLine: onLine)
+                }
+                slices = CorpusSlicer.slice(corpus)
+                next = min(idx, slices.count)
+            } else {
+                slices = []                             // pre-slicing / single-slice token: session-resume only
+                next = 0
+            }
         } else {
             staging = try VaultGenerator.newStagingDir(seedFrom: vault)
             baseline = VaultGenerator.vaultFingerprint(vault)       // captured at seed (vault == staging)
-            inv = CodexCLI.Invocation(prompt: Self.updatePrompt(skeleton: Self.skeleton(of: staging), notes: notes))
+            slices = CorpusSlicer.slice(notes)
+            next = 0
+            if slices.count > 1 {
+                try CorpusSlicer.saveCorpus(notes, in: staging)
+                Log("VaultCloud.update: cycle sliced into \(slices.count) parts (budget \(CorpusSlicer.budget) bytes)")
+            }
+            inFlight = nil
         }
-        var invocation = inv
-        invocation.feature = "vault"
-        invocation.effort = .high                                    // incremental KB update (gpt-5.6-sol → high)
-        invocation.sandbox = .workspaceWrite                        // edits confined to the staging dir
-        invocation.cwd = staging.path
-        invocation.timeout = 1_800
+
+        /// The shared per-run configuration every merge invocation gets.
+        func configure(_ prompt: String) -> CodexCLI.Invocation {
+            var i = CodexCLI.Invocation(prompt: prompt)
+            i.feature = "vault"
+            i.effort = .high                                    // incremental KB update (gpt-5.6-sol → high)
+            i.sandbox = .workspaceWrite                        // edits confined to the staging dir
+            i.cwd = staging.path
+            i.timeout = 1_800
+            return i
+        }
 
         Log("VaultCloud.update: merging \(notes.count) notes in staging (\(updateResume == nil ? "fresh" : "resume"))…")
         do {
-            let envelope = try await VaultGenerator().runCodexInStaging(invocation, staging: staging, onLine: onLine)
+            // Finish the in-flight slice's session first (or, for a pre-slicing token, the whole run).
+            if let sid = inFlight {
+                var invocation = configure("""
+                    Continue merging the new items into the vault exactly where you left off — the edits \
+                    you already made are still in the working directory. When everything is merged, reply \
+                    with one line: the number of notes you created or edited.
+                    """)
+                invocation.resumeSessionID = sid
+                invocation.diag = ["slices": "\(max(slices.count, 1))", "slice_index": "\(max(next - 1, 0))"]
+                do {
+                    _ = try await VaultGenerator().runCodexInStaging(invocation, staging: staging, onLine: onLine)
+                } catch let VaultGenerator.VaultError.usageLimit(message, token) {
+                    var t = token; t.sliceIndex = updateResume?.sliceIndex   // unchanged — still the same slice
+                    throw VaultGenerator.VaultError.usageLimit(message: message, resume: t)
+                }
+            }
+
+            // Feed the remaining slices, one fresh merge session each, over the same staging.
+            while next < slices.count {
+                try Task.checkCancellation()                     // the user's STOP, between slices
+                if slices.count > 1 { onProgress(.folding(part: next + 1, of: slices.count)) }
+                var invocation = configure(Self.updatePrompt(skeleton: Self.skeleton(of: staging), notes: slices[next]))
+                invocation.diag = ["corpus_chars": "\(invocation.prompt.utf8.count)",
+                                   "slices": "\(slices.count)", "slice_index": "\(next)"]
+                if slices.count > 1 {
+                    Log("VaultCloud.update: feeding slice \(next + 1)/\(slices.count) — \(slices[next].count) summaries")
+                }
+                do {
+                    _ = try await VaultGenerator().runCodexInStaging(invocation, staging: staging, onLine: onLine)
+                } catch let VaultGenerator.VaultError.usageLimit(message, token) {
+                    guard slices.count > 1 else { throw VaultGenerator.VaultError.usageLimit(message: message, resume: token) }
+                    // A session that never started can't be resumed — its slice stays the next unfed.
+                    var t = token; t.sliceIndex = (token.sessionID != nil) ? next + 1 : next
+                    throw VaultGenerator.VaultError.usageLimit(message: message, resume: t)
+                }
+                next += 1
+            }
+
             // Freshness check (B11): did the live vault change under us — i.e. did the user save a note
             // in the Knowledge editor during the run? If so, our staging snapshot is stale and swapping
             // would CLOBBER their edit. Discard staging instead; the notes stay in CycleStore and the
@@ -183,24 +250,25 @@ actor VaultCloud {
                 try? fm.removeItem(at: staging)
                 return 0
             }
-            try VaultGenerator.swapStagingIntoVault(staging)        // atomic; live vault untouched until here
+            CorpusSlicer.deleteCorpus(in: staging)              // the snapshot must never enter the vault
+            try VaultGenerator.swapStagingIntoVault(staging)    // atomic; live vault untouched until here
             setUpdateResume(nil)
             await markDirty()
-            Log("VaultCloud.update: ✅ \(notes.count) notes (turns \(envelope.numTurns ?? -1), \(envelope.result.count) char report)")
+            Log("VaultCloud.update: ✅ \(notes.count) notes merged")
             return notes.count
         } catch let VaultGenerator.VaultError.usageLimit(message, resume) {
             // Staging is kept; the live vault was never touched. Carry the seed baseline forward so a
             // resume's swap still detects a concurrent editor edit. Durable resume continues next run.
-            setUpdateResume(VaultGenerator.ResumeToken(sessionID: resume.sessionID,
-                                                       stagingPath: resume.stagingPath,
-                                                       vaultFingerprint: baseline))
+            var t = resume; t.vaultFingerprint = baseline
+            setUpdateResume(t)
             throw CloudError.usageLimit(message)
         } catch {
             // Any other failure: discard the staging copy; the live vault was NEVER modified — no
-            // restore dance needed (the whole point of stage-then-swap).
+            // restore dance needed (the whole point of stage-then-swap). Rethrow the TYPED error —
+            // wrapping it in a string used to blind OvernightCaution.classify to the actual kind.
             setUpdateResume(nil)
             try? fm.removeItem(at: staging)
-            throw CloudError.failed("\(error)")
+            throw error
         }
     }
 
@@ -251,17 +319,12 @@ actor VaultCloud {
     }
 
     /// The editing-flavored Stage-2 prompt — lifted verbatim from the old VaultUpdater
-    /// (eval-validated), fed CloudNotes. Surgical edits, not a rebuild.
-    private static func updatePrompt(skeleton: String, notes: [CloudNote]) -> String {
-        var lines: [String] = []
-        lines.reserveCapacity(notes.count)
-        let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
-        for (i, n) in notes.enumerated() {
-            let (loc, src) = VaultGenerator.locSrc(kind: n.kind, folder: n.folder, sourceID: n.sourceID)
-            let title = (n.title?.isEmpty == false) ? n.title! : "(untitled)"
-            let when = n.itemDate.map { " · \(df.string(from: $0))" } ?? ""
-            lines.append("#\(i + 1) · [\(src)] \(loc)\(when)\n\(title) — \(n.text)")
-        }
+    /// (eval-validated), fed CloudNotes. Surgical edits, not a rebuild. Internal (not private):
+    /// a sliced first build reuses it verbatim for slices 1+ — folding a batch into the staged
+    /// vault is the same job as folding a night into the live one.
+    static func updatePrompt(skeleton: String, notes: [CloudNote]) -> String {
+        let df = CorpusSlicer.dateFormatter()
+        let lines = notes.enumerated().map { i, n in CorpusSlicer.render(n, index: i, df: df) }
 
         return """
         You are the **Sentient OS Knowledge Base Architect** — the cloud brain of a privacy-first \

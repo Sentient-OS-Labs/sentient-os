@@ -63,10 +63,23 @@ actor Proactive {
 
     /// The last-`lookbackDays` summaries, newest first — the exact window the judge reasons over, and
     /// the same background PART 2 now gets. Defined once here so the windowing can never drift.
+    /// Byte-budgeted (CorpusSlicer's shared budget, drop oldest first) so a heavy week can never
+    /// push either stage's prompt over codex's 1 MiB turn-input cap — the judge never needed a
+    /// megabyte; scarcity is the product.
     static func recent(from notes: [CloudNote], now: Date = Date()) -> [CloudNote] {
         let cutoff = now.addingTimeInterval(-Double(lookbackDays) * 86_400)
         func itemDate(_ n: CloudNote) -> Date { n.itemDate ?? .distantPast }
-        return notes.filter { itemDate($0) >= cutoff }.sorted { itemDate($0) > itemDate($1) }
+        let windowed = notes.filter { itemDate($0) >= cutoff }.sorted { itemDate($0) > itemDate($1) }
+        let df = CorpusSlicer.dateFormatter()
+        var bytes = 0
+        for (i, n) in windowed.enumerated() {
+            bytes += CorpusSlicer.render(n, index: i, df: df).utf8.count + 2
+            if bytes > CorpusSlicer.budget {
+                Log("Proactive.recent: window trimmed to the newest \(i)/\(windowed.count) summaries (byte budget)")
+                return Array(windowed.prefix(i))
+            }
+        }
+        return windowed
     }
 
     /// The user's OWN standing proactive instructions (Settings → Proactive & Sidekick), rendered as a

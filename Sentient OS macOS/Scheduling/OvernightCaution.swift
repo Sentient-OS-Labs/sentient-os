@@ -22,9 +22,11 @@ import os
 enum OvernightCaution {
 
     enum Kind: String, Codable {
-        case loggedOut    // codex had no working login when the night's cloud work started
-        case noInternet   // the Mac was offline, so the cloud legs couldn't run
-        case usageLimit   // the ChatGPT plan's window was exhausted mid-run
+        case loggedOut      // codex had no working login when the night's cloud work started
+        case noInternet     // the Mac was offline, so the cloud legs couldn't run
+        case usageLimit     // the ChatGPT plan's window was exhausted mid-run
+        case inputTooLarge  // a prompt exceeded codex's turn-input cap (a canary — corpus
+                            // slicing budgets every prompt path, so this should never fire)
 
         /// The banner line — quiet, first-person, honest about what happens next.
         var message: String {
@@ -32,6 +34,7 @@ enum OvernightCaution {
             case .loggedOut:  return "I couldn't work last night. Codex was signed out; log back in and I'll catch up tonight."
             case .noInternet: return "No internet last night, so I couldn't do my overnight work. I'll try again tonight."
             case .usageLimit: return "We hit ChatGPT's usage limit last night. I'll pick it up again tomorrow."
+            case .inputTooLarge: return "Last night's batch was more than ChatGPT accepts at once. Your analysis is saved; I'll try again tonight."
             }
         }
     }
@@ -58,8 +61,21 @@ enum OvernightCaution {
     /// the UI only ever states what was verified). Shared by the 3am run (record + banner) and
     /// the watched takeover's failed screen.
     static func classify(_ error: Error) async -> Kind? {
-        if case CodexCLI.CLIError.usageLimit = error {
-            return .usageLimit                       // typed — certain, no probing needed
+        // Typed errors first — certain, no probing needed. The cycle's stage wrappers each re-wrap
+        // the spine's usage limit in their own enum (create/update/judge/research), so match them
+        // all: a stringly wrap here once left the amber banner blind to a vault-leg usage limit.
+        switch error {
+        case CodexCLI.CLIError.usageLimit,
+             VaultGenerator.VaultError.usageLimit,
+             VaultCloud.CloudError.usageLimit,
+             Proactive.ProError.usageLimit,
+             ProactiveResearch.ResError.usageLimit,
+             GiftLetter.GiftError.usageLimit:
+            return .usageLimit
+        case CodexCLI.CLIError.inputTooLarge:
+            return .inputTooLarge                    // the canary — see Kind
+        default:
+            break
         }
         // A 401 in codex's own output means the token died SERVER-side — auth.json still looks
         // logged-in to the local probe below, so codex's stderr is the only tell (the exact

@@ -36,6 +36,7 @@ actor VaultGenerator {
     enum Progress: Sendable {
         case gathering(Int)
         case calling
+        case folding(part: Int, of: Int)   // multi-slice corpus: feeding part N of M
         case writing(notes: Int)        // .md files appearing in staging
         case materializing(notes: Int)
     }
@@ -51,6 +52,12 @@ actor VaultGenerator {
         /// seeded, carried across a usage-limit resume so the swap can still detect a concurrent
         /// editor edit made during the (possibly multi-attempt) run. nil for a build.
         var vaultFingerprint: String? = nil
+        /// Corpus slicing (1.0.1): the next UNFED slice of the staging dir's corpus snapshot.
+        /// nil = a pre-slicing or single-slice token — session-resume only, nothing left to feed.
+        /// With a value, slices 0..<sliceIndex are already folded into staging (so the token is
+        /// worth keeping even without a session id), and `sessionID` (when present) belongs to
+        /// slice sliceIndex - 1, still in flight.
+        var sliceIndex: Int? = nil
     }
 
     enum VaultError: LocalizedError {
@@ -202,42 +209,127 @@ actor VaultGenerator {
             staging = try Self.newStagingDir()
         }
 
-        let prompt: String
-        if let resume, resume.sessionID != nil {
-            prompt = """
-            Continue building the vault exactly where you left off. The notes you already \
-            wrote are still in the working directory — don't rewrite them. Finish the \
-            remaining notes, then reply with one line: the total number of notes in the vault.
-            """
+        // The corpus, sliced under codex's 1 MiB turn-input cap. Slice 0 rides the build prompt;
+        // slices 1+ each fold into staging with the nightly updater's merge prompt, one fresh
+        // session per slice — codex's memory of earlier slices IS the staging dir it already
+        // wrote. A mid-sequence resume re-slices the staging SNAPSHOT, never a fresh CycleStore
+        // fetch (newest-first ordering would shift every boundary; see CorpusSlicer.saveCorpus).
+        let slices: [[CloudNote]]
+        var next: Int                               // the next unfed slice
+        if let resume {
+            if let idx = resume.sliceIndex {
+                guard let corpus = CorpusSlicer.loadCorpus(from: staging) else {
+                    // Snapshot gone (disk cleaning?) — the fold can't be continued safely; start over.
+                    Log("VaultGenerator: ⚠️ resume snapshot missing — restarting the build fresh")
+                    try? fm.removeItem(at: staging)
+                    return try await generate(notes: notes, resume: nil, onProgress: onProgress, onLine: onLine)
+                }
+                slices = CorpusSlicer.slice(corpus)
+                next = min(idx, slices.count)
+            } else {
+                slices = []                         // pre-slicing / single-slice token: session-resume only
+                next = 0
+            }
         } else {
-            prompt = vaultPromptCore + "\n\n" + agenticOutputInstructions + "\n\n"
-                + Self.corpusMessage(notes, closing: "Synthesize them into the vault exactly as specified — write the files now.")
+            slices = CorpusSlicer.slice(notes)
+            next = 0
+            if slices.count > 1 {
+                try CorpusSlicer.saveCorpus(notes, in: staging)
+                Log("VaultGenerator: corpus sliced into \(slices.count) parts (budget \(CorpusSlicer.budget) bytes)")
+            }
         }
-
-        var invocation = CodexCLI.Invocation(prompt: prompt)
-        invocation.feature = "vault"
-        // Effort stays at the .high default — .xhigh thinks far too long on gpt-5.6-sol for the
-        // initial build (downgraded 2026-07-10), and .high is also what a free/go plan's tiny
-        // monthly quota can afford (~70% of it).
-        invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir
-        invocation.cwd = staging.path
-        invocation.resumeSessionID = resume?.sessionID
-        invocation.timeout = 3_600
 
         Log("VaultGenerator: \(resume == nil ? "starting" : "RESUMING") initial generation — \(notes.count) summaries → \(staging.lastPathComponent)")
 
-        let envelope = try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine)
+        var inputTokens = 0, outputTokens = 0
+        func record(_ envelope: CodexCLI.Envelope) {
+            inputTokens += envelope.inputTokens ?? 0
+            outputTokens += envelope.outputTokens ?? 0
+        }
 
-        let (notes, folders) = Self.census(of: staging)
-        Log("VaultGenerator: codex finished (turns \(envelope.numTurns ?? -1), \(envelope.durationMS ?? -1)ms) — \(notes) notes / \(folders) folders in staging")
-        guard notes > 0 else {
+        // Finish the in-flight slice's session first (or, for a pre-slicing token, the whole run).
+        if let resume, let sid = resume.sessionID {
+            let buildFlavored = (resume.sliceIndex ?? 1) <= 1        // slice 0 (or legacy) = the build prompt
+            var invocation = CodexCLI.Invocation(prompt: buildFlavored
+                ? """
+                Continue building the vault exactly where you left off. The notes you already \
+                wrote are still in the working directory — don't rewrite them. Finish the \
+                remaining notes, then reply with one line: the total number of notes in the vault.
+                """
+                : """
+                Continue merging the new items into the vault exactly where you left off — the edits \
+                you already made are still in the working directory. When everything is merged, reply \
+                with one line: the number of notes you created or edited.
+                """)
+            invocation.feature = "vault"
+            invocation.sandbox = .workspaceWrite
+            invocation.cwd = staging.path
+            invocation.resumeSessionID = sid
+            invocation.timeout = 3_600
+            invocation.diag = ["slices": "\(max(slices.count, 1))", "slice_index": "\(max(next - 1, 0))"]
+            do {
+                record(try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine))
+            } catch let VaultError.usageLimit(message, token) {
+                var t = token; t.sliceIndex = resume.sliceIndex      // unchanged — still the same slice
+                throw VaultError.usageLimit(message: message, resume: t)
+            }
+        }
+
+        // Feed the remaining slices, one fresh codex session each.
+        while next < slices.count {
+            try Task.checkCancellation()                             // the user's STOP, between slices
+            if slices.count > 1 { onProgress(.folding(part: next + 1, of: slices.count)) }
+            let prompt: String
+            if next == 0 {
+                prompt = vaultPromptCore + "\n\n" + agenticOutputInstructions + "\n\n"
+                    + Self.corpusMessage(slices[0], partial: slices.count > 1,
+                                         closing: "Synthesize them into the vault exactly as specified — write the files now.")
+            } else {
+                prompt = VaultCloud.updatePrompt(skeleton: VaultCloud.skeleton(of: staging), notes: slices[next])
+            }
+
+            var invocation = CodexCLI.Invocation(prompt: prompt)
+            invocation.feature = "vault"
+            // Effort stays at the .high default — .xhigh thinks far too long on gpt-5.6-sol for the
+            // initial build (downgraded 2026-07-10), and .high is also what a free/go plan's tiny
+            // monthly quota can afford (~70% of it).
+            invocation.sandbox = .workspaceWrite                 // writes confined to the staging dir
+            invocation.cwd = staging.path
+            invocation.timeout = 3_600
+            invocation.diag = ["corpus_chars": "\(prompt.utf8.count)",
+                               "slices": "\(slices.count)", "slice_index": "\(next)"]
+
+            if slices.count > 1 {
+                Log("VaultGenerator: feeding slice \(next + 1)/\(slices.count) — \(slices[next].count) summaries, \(prompt.utf8.count) bytes")
+            }
+            do {
+                record(try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine))
+            } catch let VaultError.usageLimit(message, token) {
+                guard slices.count > 1 else { throw VaultError.usageLimit(message: message, resume: token) }
+                // A session that never started can't be resumed — its slice stays the next unfed.
+                var t = token; t.sliceIndex = (token.sessionID != nil) ? next + 1 : next
+                throw VaultError.usageLimit(message: message, resume: t)
+            }
+            if next == 0, Self.census(of: staging).notes == 0 {
+                // Slice 0 produced nothing — the merges would fold into thin air; fail now, not
+                // after burning the whole sequence's quota.
+                try? fm.removeItem(at: staging)
+                throw VaultError.empty
+            }
+            next += 1
+        }
+
+        let (written, folders) = Self.census(of: staging)
+        Log("VaultGenerator: codex finished — \(written) notes / \(folders) folders in staging")
+        guard written > 0 else {
             try? fm.removeItem(at: staging)
             throw VaultError.empty
         }
 
         // Success → atomically swap staging into the real vault (the only moment the old vault is
         // touched); on any throw the vault is left intact (B11 swapStagingIntoVault).
-        onProgress(.materializing(notes: notes))
+        onProgress(.materializing(notes: written))
+        CorpusSlicer.deleteCorpus(in: staging)               // the snapshot must never enter the vault
         do {
             try Self.swapStagingIntoVault(staging)
         } catch {
@@ -247,11 +339,11 @@ actor VaultGenerator {
             CrashReporting.captureEvent("vault_swap_failed", tags: ["error": ErrorLabel(error)])
             throw error
         }
-        Log("VaultGenerator: ✅ vault swapped into place — \(notes) notes at \(Self.vaultRoot.path)")
+        Log("VaultGenerator: ✅ vault swapped into place — \(written) notes at \(Self.vaultRoot.path)")
 
-        return Result(notes: notes, folders: folders,
-                      inputTokens: envelope.inputTokens ?? 0,
-                      outputTokens: envelope.outputTokens ?? 0,
+        return Result(notes: written, folders: folders,
+                      inputTokens: inputTokens,
+                      outputTokens: outputTokens,
                       vaultPath: Self.vaultRoot.path)
     }
 
@@ -270,18 +362,17 @@ actor VaultGenerator {
 
     // MARK: - Corpus building (the stdin corpus)
 
-    private static func corpusMessage(_ notes: [CloudNote], closing: String) -> String {
-        var lines: [String] = []
-        lines.reserveCapacity(notes.count)
-        let df = DateFormatter(); df.dateStyle = .medium; df.timeStyle = .none
-        for (i, s) in notes.enumerated() {
-            let (loc, src) = locSrc(kind: s.kind, folder: s.folder, sourceID: s.sourceID)
-            let title = (s.title?.isEmpty == false) ? s.title! : "(untitled)"
-            let when = s.itemDate.map { " · \(df.string(from: $0))" } ?? ""
-            lines.append("#\(i + 1) · [\(src)] \(loc)\(when)\n\(title) — \(s.text)")
-        }
+    private static func corpusMessage(_ notes: [CloudNote], partial: Bool = false, closing: String) -> String {
+        let df = CorpusSlicer.dateFormatter()
+        let lines = notes.enumerated().map { i, s in CorpusSlicer.render(s, index: i, df: df) }
+        // `partial` = a sliced corpus: this prompt carries the first part; the rest arrives in
+        // follow-up merge passes over the same working directory. Be honest with the model.
+        let intro = partial
+            ? "Here is the first part of the corpus of on-device summaries of the user's digital life " +
+              "(the remaining parts will be merged into your vault in follow-up passes after this one)."
+            : "Here is the full corpus of on-device summaries of the user's digital life."
         return """
-        Here is the full corpus of on-device summaries of the user's digital life. Each item is \
+        \(intro) Each item is \
         `#<index> · [source] location · item date` then `Title — summary`. \(closing)
 
         ---
