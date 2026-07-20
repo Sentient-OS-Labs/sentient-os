@@ -2,16 +2,6 @@
 
 set -eu
 
-case " ${ARCHS:-} " in
-  *" x86_64 "*) ;;
-  *)
-    if [ "${BUILD_INTEL_COMPUTER_USE:-NO}" != "YES" ]; then
-      echo "Intel Computer Use: skipping for ARCHS=${ARCHS:-unset}"
-      exit 0
-    fi
-    ;;
-esac
-
 : "${SRCROOT:?SRCROOT is required}"
 : "${TARGET_BUILD_DIR:?TARGET_BUILD_DIR is required}"
 : "${UNLOCALIZED_RESOURCES_FOLDER_PATH:?UNLOCALIZED_RESOURCES_FOLDER_PATH is required}"
@@ -21,6 +11,26 @@ STAGE="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/IntelComputerUse"
 RELEASE_BIN="$PACKAGE/.build/x86_64-apple-macosx/release"
 MCP_NAME="SentientComputerUseMCP"
 SERVICE_NAME="SentientComputerUseService"
+
+case "$STAGE" in
+  "$TARGET_BUILD_DIR"/*/IntelComputerUse) ;;
+  *) echo "error: refusing unexpected staging path: $STAGE" >&2; exit 1 ;;
+esac
+
+case " ${ARCHS:-} " in
+  *" x86_64 "*) ;;
+  *)
+    if [ "${BUILD_INTEL_COMPUTER_USE:-NO}" != "YES" ]; then
+      if [ -e "$STAGE" ]; then
+        echo "Intel Computer Use: removing stale resources for ARCHS=${ARCHS:-unset}"
+        /bin/rm -rf "$STAGE"
+      else
+        echo "Intel Computer Use: skipping for ARCHS=${ARCHS:-unset}"
+      fi
+      exit 0
+    fi
+    ;;
+esac
 
 echo "Intel Computer Use: building x86_64 release executables"
 /usr/bin/xcrun swift build --package-path "$PACKAGE" -c release --arch x86_64 --product "$MCP_NAME"
@@ -35,10 +45,6 @@ for executable in "$MCP_NAME" "$SERVICE_NAME"; do
   fi
 done
 
-case "$STAGE" in
-  "$TARGET_BUILD_DIR"/*/IntelComputerUse) ;;
-  *) echo "error: refusing to replace unexpected staging path: $STAGE" >&2; exit 1 ;;
-esac
 /bin/rm -rf "$STAGE"
 /bin/mkdir -p "$STAGE/bin"
 /usr/bin/ditto "$PACKAGE/Plugin" "$STAGE"

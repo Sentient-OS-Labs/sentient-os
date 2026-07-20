@@ -25,8 +25,6 @@ import Foundation
 enum ComputerUseSetup {
 
     private static let intelPluginVersion = "1.0.0"
-    private static let intelPluginTable = #"[plugins."computer-use@sentient"]"#
-    private static let skyPluginTable = #"[plugins."computer-use@openai-bundled"]"#
 
     /// OpenAI's official desktop-app installer (public CDN, no auth; still named Codex.dmg after
     /// the app's rename to ChatGPT). The computer-use payload lives inside the app bundle at
@@ -99,19 +97,16 @@ enum ComputerUseSetup {
         guard hasPlugin else { return false }
         // 3) config.toml actually enables the plugin
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
-        return config.contains(skyPluginTable)
+        return ComputerUsePluginConfig.isEnabled(.sky, in: config) == true
     }
 
     private static var isIntelInstalled: Bool {
         let root = intelInstallRoot
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: root.appendingPathComponent(".codex-plugin/plugin.json").path),
-              fm.fileExists(atPath: root.appendingPathComponent(".mcp.json").path),
-              hasValidIntelExecutables(in: root) else { return false }
+        guard hasValidIntelPlugin(at: root) else { return false }
 
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
-        return pluginEnabled(in: config, table: intelPluginTable) == true
-            && pluginEnabled(in: config, table: skyPluginTable) != true
+        return ComputerUsePluginConfig.isEnabled(.sentientIntel, in: config) == true
+            && ComputerUsePluginConfig.isEnabled(.sky, in: config) != true
     }
 
     // MARK: The bootstrap
@@ -278,14 +273,26 @@ enum ComputerUseSetup {
         }
     }
 
+    private static func hasValidIntelPlugin(at root: URL) -> Bool {
+        do { try validateIntelPlugin(at: root); return true }
+        catch { return false }
+    }
+
+    private static func intelMCPCommand(at root: URL) -> String? {
+        guard let data = try? Data(contentsOf: root.appendingPathComponent(".mcp.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = object["mcpServers"] as? [String: Any],
+              let computerUse = servers["computer-use"] as? [String: Any] else { return nil }
+        return computerUse["command"] as? String
+    }
+
     private static func validateIntelPlugin(at root: URL) throws {
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.appendingPathComponent(".codex-plugin/plugin.json").path),
               fm.fileExists(atPath: root.appendingPathComponent("skills/computer-use/SKILL.md").path) else {
             throw SetupError.missingSource("Intel plugin metadata")
         }
-        guard let mcp = try? String(contentsOf: root.appendingPathComponent(".mcp.json"), encoding: .utf8),
-              mcp.contains("./bin/SentientComputerUseMCP") else {
+        guard intelMCPCommand(at: root) == "./bin/SentientComputerUseMCP" else {
             throw SetupError.missingSource("Intel .mcp.json route")
         }
         guard hasValidIntelExecutables(in: root) else {
@@ -313,12 +320,15 @@ enum ComputerUseSetup {
         } else {
             original = ""
         }
-        var lines = original.components(separatedBy: "\n")
-
-        try setPluginEnabled(true, table: intelPluginTable, createIfMissing: true, lines: &lines)
-        try setPluginEnabled(false, table: skyPluginTable, createIfMissing: false, lines: &lines)
-
-        let updated = lines.joined(separator: "\n")
+        let updated: String
+        do {
+            let withIntel = try ComputerUsePluginConfig.settingEnabled(
+                true, for: .sentientIntel, in: original, createIfMissing: true)
+            updated = try ComputerUsePluginConfig.settingEnabled(
+                false, for: .sky, in: withIntel, createIfMissing: false)
+        } catch {
+            throw SetupError.config((error as? LocalizedError)?.errorDescription ?? "\(error)")
+        }
         guard updated != original else { return }
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
@@ -329,91 +339,18 @@ enum ComputerUseSetup {
         }
     }
 
-    private static func setPluginEnabled(_ enabled: Bool, table: String, createIfMissing: Bool,
-                                         lines: inout [String]) throws {
-        let tableIndexes = lines.indices.filter { tomlTable(in: lines[$0]) == table }
-        guard tableIndexes.count <= 1 else { throw SetupError.config("duplicate \(table) tables") }
-
-        guard let tableIndex = tableIndexes.first else {
-            guard createIfMissing else { return }
-            if lines.last != "" { lines.append("") }
-            lines.append(table)
-            lines.append("enabled = \(enabled)")
-            lines.append("")
-            return
-        }
-
-        var endIndex = lines.count
-        if tableIndex + 1 < lines.count {
-            for index in (tableIndex + 1)..<lines.count where isTomlTable(lines[index]) {
-                endIndex = index
-                break
-            }
-        }
-
-        let enabledIndexes = (tableIndex + 1..<endIndex).filter { tomlAssignmentName(in: lines[$0]) == "enabled" }
-        guard enabledIndexes.count <= 1 else { throw SetupError.config("duplicate enabled key in \(table)") }
-        if let enabledIndex = enabledIndexes.first {
-            lines[enabledIndex] = replacingTomlBoolLine(lines[enabledIndex], value: enabled)
-        } else {
-            lines.insert("enabled = \(enabled)", at: tableIndex + 1)
-        }
-    }
-
-    private static func pluginEnabled(in text: String, table: String) -> Bool? {
-        let lines = text.components(separatedBy: "\n")
-        let tableIndexes = lines.indices.filter { tomlTable(in: lines[$0]) == table }
-        guard tableIndexes.count == 1, let tableIndex = tableIndexes.first else { return nil }
-
-        var values: [Bool] = []
-        if tableIndex + 1 < lines.count {
-            for index in (tableIndex + 1)..<lines.count {
-                if isTomlTable(lines[index]) { break }
-                guard tomlAssignmentName(in: lines[index]) == "enabled" else { continue }
-                let assignment = lines[index].split(separator: "#", maxSplits: 1,
-                                                     omittingEmptySubsequences: false)[0]
-                    .split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-                guard assignment.count == 2 else { return nil }
-                switch assignment[1].trimmingCharacters(in: .whitespacesAndNewlines) {
-                case "true": values.append(true)
-                case "false": values.append(false)
-                default: return nil
-                }
-            }
-        }
-        return values.count == 1 ? values[0] : nil
-    }
-
-    private static func tomlTable(in line: String) -> String? {
-        let value = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return isTomlTable(value) ? value : nil
-    }
-
-    private static func isTomlTable(_ line: String) -> Bool {
-        let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.hasPrefix("[") && value.split(separator: "#", maxSplits: 1)[0]
-            .trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("]")
-    }
-
-    private static func tomlAssignmentName(in line: String) -> String? {
-        let value = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
-            .split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-        guard value.count == 2 else { return nil }
-        return value[0].trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func replacingTomlBoolLine(_ line: String, value: Bool) -> String {
-        let indentation = line.prefix { $0 == " " || $0 == "\t" }
-        let comment = line.firstIndex(of: "#").map { " " + String(line[$0...]) } ?? ""
-        return "\(indentation)enabled = \(value)\(comment)"
-    }
-
     /// Add the three config blocks the desktop toggle writes, only if absent (idempotent). The
     /// top-level `notify` key must precede any [table], so it's prepended; the tables are appended.
     private static func patchConfig() throws {
         let url = codexHome.appendingPathComponent("config.toml")
-        var text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let original: String
+        if FileManager.default.fileExists(atPath: url.path) {
+            do { original = try String(contentsOf: url, encoding: .utf8) }
+            catch { throw SetupError.config("couldn't read existing config: \(error)") }
+        } else {
+            original = ""
+        }
+        var text = original
 
         let client = codexHome.appendingPathComponent(
             "computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient").path
@@ -426,14 +363,19 @@ enum ComputerUseSetup {
         if !text.contains("[marketplaces.openai-bundled]") {
             suffix += "\n[marketplaces.openai-bundled]\nsource_type = \"local\"\nsource = \"\(tomlEscape(source))\"\n"
         }
-        if !text.contains("[plugins.\"computer-use@openai-bundled\"]") {
-            suffix += "\n[plugins.\"computer-use@openai-bundled\"]\nenabled = true\n"
-        }
-        guard !prefix.isEmpty || !suffix.isEmpty else { return }   // already wired
-
         text = prefix + text + suffix
-        do { try text.write(to: url, atomically: true, encoding: .utf8) }
-        catch { throw SetupError.config("\(error)") }
+        do {
+            text = try ComputerUsePluginConfig.settingEnabled(
+                true, for: .sky, in: text, createIfMissing: true)
+        } catch {
+            throw SetupError.config((error as? LocalizedError)?.errorDescription ?? "\(error)")
+        }
+        guard text != original else { return }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+        } catch { throw SetupError.config("\(error)") }
     }
 
     // MARK: Process helpers

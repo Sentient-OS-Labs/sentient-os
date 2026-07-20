@@ -31,8 +31,18 @@ for executable in "$MCP" "$SERVICE"; do
   fi
 done
 
-if [ ! -f "$PLUGIN_MCP" ] || ! /usr/bin/grep -q 'SentientComputerUseMCP' "$PLUGIN_MCP"; then
-  echo "error: Intel plugin .mcp.json does not reference SentientComputerUseMCP" >&2
+JQ="$(command -v jq || true)"
+if [ -z "$JQ" ]; then
+  echo "error: jq is required to verify Intel plugin metadata" >&2
+  exit 1
+fi
+if [ ! -f "$PLUGIN_MCP" ]; then
+  echo "error: Intel plugin .mcp.json is missing" >&2
+  exit 1
+fi
+MCP_COMMAND="$($JQ -er '.mcpServers["computer-use"].command | select(type == "string")' "$PLUGIN_MCP" 2>/dev/null || true)"
+if [ "$MCP_COMMAND" != "./bin/SentientComputerUseMCP" ]; then
+  echo "error: Intel plugin command must be exactly ./bin/SentientComputerUseMCP" >&2
   exit 1
 fi
 

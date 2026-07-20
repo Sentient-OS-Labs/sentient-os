@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "computer-use": {
+      "command": "./bin/SentientComputerUseMCP --unsafe",
+      "cwd": "."
+    }
+  }
+}
