@@ -42,12 +42,23 @@ actor CodexCLI {
     }
 
     /// The model id passed to `codex exec -m`. The gpt-5.6 lineup (sol = flagship · terra = mid ·
-    /// luna = light) rides ChatGPT-account auth like 5.5/5.4-mini did; terra is unused so far.
+    /// luna = light) rides ChatGPT-account auth like 5.5/5.4-mini did.
     /// (Old lesson still applies: some SKUs are API-key-only — verify a model answers through
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
-        case gpt56sol = "gpt-5.6-sol"    // knowledge-base work + everything else
+        case gpt56sol = "gpt-5.6-sol"    // knowledge-base work + everything else (paid plans)
+        case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
         case gpt56luna = "gpt-5.6-luna"  // Gmail connect-check + processing
+    }
+
+    /// Free/go ChatGPT accounts lost access to gpt-5.6-sol (it stopped answering through
+    /// `codex exec` on those plans, 2026-07-19) — so on a POSITIVE free/go plan read, any sol
+    /// call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep sol (CodexAuth's
+    /// fail-open policy), and the luna tier is untouched. Living here at the spine means every
+    /// caller — and any future one — is covered without per-call-site checks.
+    private static func planTuned(model: Model, effort: Effort) -> (Model, Effort) {
+        guard model == .gpt56sol, CodexAuth.isLimited() else { return (model, effort) }
+        return (.gpt56terra, .medium)
     }
 
     /// OS-level (Seatbelt) confinement of everything the agent does — stronger than a tool
@@ -349,6 +360,9 @@ actor CodexCLI {
     /// notably `.usageLimit` (carrying the session id) so callers can reschedule/resume.
     func run(_ invocation: Invocation,
              onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
+        var invocation = invocation
+        (invocation.model, invocation.effort) = Self.planTuned(model: invocation.model,
+                                                               effort: invocation.effort)
         let t0 = Date()   // §7.9: for the codex.failure duration on the throw path
         do {
             return try await runInner(invocation, onLine: onLine)
@@ -431,8 +445,10 @@ actor CodexCLI {
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
-        // per run, so a change applies to the very next fire with no restart.
-        let effort = ComputerUseSpeed.current.effort
+        // per run, so a change applies to the very next fire with no restart. planTuned: computer
+        // use is Plus-gated, but dev tools can still reach this on a free account — same downshift.
+        let (model, effort) = Self.planTuned(model: .gpt56sol,
+                                             effort: ComputerUseSpeed.current.effort)
         do {
             // Same pre-spawn guard as `run` — this spine passes the prompt as ARGV, where an
             // oversized prompt dies even earlier (ARG_MAX) with an unhelpful spawn error.
@@ -445,7 +461,7 @@ actor CodexCLI {
             // "shall I proceed?" questions nothing can answer. Cheap file check, idempotent.
             ComputerUseSkillPatch.ensureApplied()
             var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                        "-m", Model.gpt56sol.rawValue,
+                        "-m", model.rawValue,
                         "-c", "model_reasoning_effort=\"\(effort.rawValue)\""]
             if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
             args += ["--skip-git-repo-check", prompt]
@@ -462,7 +478,7 @@ actor CodexCLI {
             // polluting Sentry 2026-07-12).
             if !Task.isCancelled {
                 Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                      model: .gpt56sol, effort: effort, resumed: false,
+                                      model: model, effort: effort, resumed: false,
                                       durationMS: Int(Date().timeIntervalSince(t0) * 1000))
             }
             throw error
