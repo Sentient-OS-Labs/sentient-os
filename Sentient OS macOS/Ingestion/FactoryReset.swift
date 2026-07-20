@@ -30,6 +30,7 @@ enum FactoryReset {
         let d = UserDefaults.standard
         d.removeObject(forKey: "onboarding.step")
         d.removeObject(forKey: CodexAuth.kbOnlyKey)     // the crossroads re-detects the plan fresh
+        d.removeObject(forKey: CodexAuth.assertedPlusKey)   // …and asks again before trusting
         d.removeObject(forKey: AppState.onboardingKey)
         d.removeObject(forKey: ComputerUseGate.screenRecordingOfferedKey)   // re-offer Sentient's optional grants on rebuild
         d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)

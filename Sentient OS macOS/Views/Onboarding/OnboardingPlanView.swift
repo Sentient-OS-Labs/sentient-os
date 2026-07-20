@@ -6,10 +6,12 @@
 //  accounts ever see it: a full plan (plus/pro/team/…, or anything we can't read — fail open)
 //  auto-advances before a single pixel renders. Free/go users get an honest fork: upgrade to
 //  Plus (opens ChatGPT's pricing page, then this screen notices the upgrade on its own via
-//  CodexAuth.refreshPlan — the same on-demand token re-mint codex does every 8 days), or
-//  continue with just the knowledge base (sets CodexAuth.knowledgeBaseOnly, the app-wide
-//  limited-mode gate). This screen sets expectations; the real conversion surface is the home's
-//  post-reveal preview message, after they've seen the magic.
+//  CodexAuth.refreshPlan — the same on-demand token re-mint codex does every 8 days), say they
+//  ALREADY upgraded (a confirm, then we simply believe them — CodexAuth.assertedPlus; people
+//  upgrade in their own browser and arrive here before any check could prove it), or continue
+//  with just the knowledge base (sets CodexAuth.knowledgeBaseOnly, the app-wide limited-mode
+//  gate). This screen sets expectations; the real conversion surface is the home's post-reveal
+//  preview message, after they've seen the magic.
 //
 
 import SwiftUI
@@ -24,7 +26,7 @@ struct OnboardingPlanView: View {
     @State private var phase: Phase = .checking
     @State private var plan: CodexAuth.Plan?
     @State private var checkingUpgrade = false
-    @State private var statusLine: String?
+    @State private var confirmingUpgrade = false
 
     private var planName: String { plan?.displayName ?? "Free" }
 
@@ -63,10 +65,16 @@ struct OnboardingPlanView: View {
                 }
 
                 VStack(spacing: 18) {
-                    GlowButton(title: "Upgrade on ChatGPT",
-                               systemImage: "arrow.up.forward",
-                               action: openUpgrade)
-                        .frame(maxWidth: 380)
+                    // The two ways forward, side by side: go buy it, or tell us you already did.
+                    HStack(spacing: 16) {
+                        GlowButton(title: "Upgrade on ChatGPT",
+                                   systemImage: "arrow.up.forward",
+                                   action: openUpgrade)
+                        QuietPillButton(title: "I've upgraded to ChatGPT Plus", large: true) {
+                            confirmingUpgrade = true
+                        }
+                    }
+                    .frame(maxWidth: 540)
                     continueFreeButton
                 }
 
@@ -87,16 +95,11 @@ struct OnboardingPlanView: View {
                             .kerning(1.5)
                             .foregroundStyle(Theme.faint)
                     }
-                    OnboardingNextButton(title: checkingUpgrade ? "Checking…" : "I've upgraded",
-                                         enabled: !checkingUpgrade) {
-                        check(manual: true)
-                    }
-                    if let statusLine {
-                        Text(statusLine)
-                            .font(.system(.caption2, design: .monospaced))
-                            .foregroundStyle(Theme.secondary)
-                            .multilineTextAlignment(.center)
-                            .frame(maxWidth: 480)
+                    // The trust path, not a check: the account can read Free here long after a
+                    // real payment (the refreshed token re-mints from the same stale session),
+                    // so the button takes the user's word — same confirm as the crossroads'.
+                    OnboardingNextButton(title: "I've upgraded") {
+                        confirmingUpgrade = true
                     }
                     continueFreeButton
                         .padding(.top, 8)
@@ -125,9 +128,15 @@ struct OnboardingPlanView: View {
                 onContinue()
             }
         }
+        .alert("Are you on ChatGPT Plus?", isPresented: $confirmingUpgrade) {
+            Button("Yes, I'm on Plus!") { acceptSelfAttestedUpgrade() }
+            Button("Wait", role: .cancel) { }
+        } message: {
+            Text("Sentient will unlock the full experience and take your word for it.\n\nNote that the ChatGPT Go plan does not offer enough Codex use to unlock the full experience.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            // Back from the browser — quietly re-check. Silent when still free (they may just
-            // be reading the pricing page); only the manual button reports a "still free" result.
+            // Back from the browser — quietly re-check, and auto-advance if the fresh claim
+            // happens to read full. Always silent: the trust button is the real way forward.
             if phase == .waiting { check() }
         }
     }
@@ -136,33 +145,43 @@ struct OnboardingPlanView: View {
 
     private func openUpgrade() {
         NSWorkspace.shared.open(CodexAuth.upgradeURL)
-        statusLine = nil
         withAnimation(.easeInOut(duration: 0.25)) { phase = .waiting }
     }
 
-    /// The upgrade check — CodexAuth.refreshPlan re-mints the token so a just-paid upgrade shows
-    /// up immediately (the claim on disk would otherwise lag on codex's 8-day timer). Single
-    /// in-flight; focus-return calls stay quiet on failure, the manual button explains itself.
-    private func check(manual: Bool = false) {
+    /// "I've upgraded", confirmed — the trust path, and the ONLY user-driven way forward from
+    /// either phase. A real payment can read Free here indefinitely (the refresh POST re-mints
+    /// a token from the same stale session — only OpenAI's server knows the truth, and it checks
+    /// at exec time), so we take the user's word and move on immediately: full mode, same as a
+    /// verified Plus account. The refresh still fires, unawaited — if it lands, the claim on
+    /// disk becomes true too and nothing downstream has to lean on the assertion.
+    private func acceptSelfAttestedUpgrade() {
+        CodexAuth.assertedPlus = true
+        CodexAuth.knowledgeBaseOnly = false
+        Analytics.signal("PlanGate.selfAttested", parameters: ["plan": plan?.raw ?? "unknown"])
+        Task { _ = try? await CodexAuth.refreshPlan() }
+        onContinue()
+    }
+
+    /// The silent focus-return check — CodexAuth.refreshPlan re-mints the token, and IF the
+    /// fresh claim reads full the screen auto-advances. Best-effort only (the claim often stays
+    /// stale after a real payment); the user's own way forward is the trust button above, so
+    /// this never reports failure. Single in-flight.
+    private func check() {
         guard !checkingUpgrade else { return }
         checkingUpgrade = true
-        if manual { statusLine = nil }
         Task {
             defer { checkingUpgrade = false }
-            do {
-                let fresh = try await CodexAuth.refreshPlan()
-                if let fresh { plan = fresh }
-                if fresh?.tier != .limited {
-                    CodexAuth.knowledgeBaseOnly = false
-                    Analytics.signal("PlanGate.upgraded")
-                    withAnimation(.easeInOut(duration: 0.3)) { phase = .unlocked }
-                    try? await Task.sleep(for: .seconds(1.4))
-                    onContinue()
-                } else if manual {
-                    statusLine = "Still seeing \(fresh?.displayName ?? planName) on your account. It can take a minute after paying; try again shortly."
-                }
-            } catch {
-                if manual { statusLine = "Couldn't check right now; try again in a moment." }
+            let fresh: CodexAuth.Plan?
+            do { fresh = try await CodexAuth.refreshPlan() }
+            catch { return }   // network/refresh failure — stay quiet, the trust button carries
+            if let fresh { plan = fresh }
+            // Fail open like every other gate: an unreadable fresh claim counts as full.
+            if fresh?.tier != .limited {
+                CodexAuth.knowledgeBaseOnly = false
+                Analytics.signal("PlanGate.upgraded")
+                withAnimation(.easeInOut(duration: 0.3)) { phase = .unlocked }
+                try? await Task.sleep(for: .seconds(1.4))
+                onContinue()
             }
         }
     }
