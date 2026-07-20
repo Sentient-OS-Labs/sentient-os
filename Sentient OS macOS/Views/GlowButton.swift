@@ -41,16 +41,22 @@ struct GlowButton: View {
 /// The glow CTA's quiet sibling — a grey outlined capsule for the visible-but-subordinate
 /// choice beside it (the crossroads' "continue with just the knowledge base", the free home's
 /// "Reset Sentient…"). Present enough to read as a real button, never competing with the glow.
+/// `large` matches the glow button's height and fills its container — for the one case where the
+/// two sit SIDE BY SIDE as a row (the crossroads' "I've upgraded to ChatGPT Plus") rather than
+/// stacked; still no halo, so the glow stays the only jewelry on the screen.
 struct QuietPillButton: View {
     let title: String
+    var large: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 13.5, weight: .medium))
+                .font(.system(size: large ? 14.5 : 13.5, weight: .medium))
                 .foregroundStyle(Theme.Ink.bright)
-                .padding(.horizontal, 22).padding(.vertical, 12)
+                .lineLimit(1)
+                .frame(maxWidth: large ? .infinity : nil)
+                .padding(.horizontal, 22).padding(.vertical, large ? 17 : 12)
                 .background(Capsule().fill(.white.opacity(0.07)))
                 .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
                 .contentShape(Capsule())

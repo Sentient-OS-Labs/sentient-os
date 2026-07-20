@@ -15,6 +15,7 @@
 //   - currentPlan()          → decode the plan claim from auth.json (pure file read, no network)
 //   - refreshPlan()          → the on-demand refresh POST + write-back → the FRESH plan
 //   - knowledgeBaseOnly      → the persisted "free user chose to continue anyway" mode flag
+//   - assertedPlus           → the persisted "user says they upgraded, we believed them" flag
 //
 //  Fail-open policy: no file / no tokens / unknown plan string → treated as full. Worst case a
 //  limited account hits codex usage-limit errors, which every caller already survives (typed
@@ -63,6 +64,17 @@ enum CodexAuth {
         set { UserDefaults.standard.set(newValue, forKey: kbOnlyKey) }
     }
 
+    /// The user told us they upgraded, and we took their word for it (the crossroads' "I've
+    /// upgraded to ChatGPT Plus" + its confirm). Needed because a just-paid upgrade can still
+    /// read free/go on disk — the claim lags, and the refresh POST can be throttled — so the
+    /// honest check has no way to say yes yet. Sticky: if the claim never catches up, the only
+    /// cost is codex usage-limit errors, which every caller already survives. Reset clears it.
+    static let assertedPlusKey = "plan.assertedPlus"
+    static var assertedPlus: Bool {
+        get { UserDefaults.standard.bool(forKey: assertedPlusKey) }
+        set { UserDefaults.standard.set(newValue, forKey: assertedPlusKey) }
+    }
+
     /// Server-supplied refresh throttle (the POST answers `earliest_refresh_at`) — respected so
     /// focus-return re-checks can never hammer the endpoint.
     private static let earliestRefreshKey = "plan.earliestRefresh"
@@ -89,8 +101,11 @@ enum CodexAuth {
         return nil
     }
 
-    /// True only on a POSITIVE free/go read — the convenience most gates want.
-    static func isLimited() -> Bool { currentPlan()?.tier == .limited }
+    /// True only on a POSITIVE free/go read — the convenience most gates want. A user who told
+    /// us they upgraded is never limited: the whole point of trusting them is that the claim on
+    /// disk is the thing we've decided not to believe (chiefly CodexCLI.planTuned, which would
+    /// otherwise keep downshifting them off gpt-5.6-sol).
+    static func isLimited() -> Bool { !assertedPlus && currentPlan()?.tier == .limited }
 
     /// Extract `chatgpt_plan_type` from a JWT's payload segment (base64url, no signature check —
     /// we're reading our own user's token off their own disk, not authenticating anyone).
