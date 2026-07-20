@@ -9,27 +9,33 @@ onboarding (the lazy-grant policy). Two pieces, both in `Views/Permissions/`:
    System-Settings companion: opens the right privacy pane and carries a draggable `.app` card the
    user drops straight into the permission list (no "+", no file picker).
 
-Everything here was field-tested on a full fresh-install simulation (defaults + TCC + codex all
-reset) on 2026-07-09.
+The Apple Silicon flow was field-tested on a full fresh-install simulation (defaults + TCC + codex all
+reset) on 2026-07-09. The Intel automated and permission-gate status is recorded at the end of this doc.
 
-## The four grants
+## The grants and their architecture-specific owner
 
-| Row | Who holds it | Required? | How it's granted |
-|---|---|---|---|
-| Microphone & Speech | Sentient | required | native system prompts (`VoiceCapture.requestPermissions`) |
-| Screen Recording | Sentient | **optional** (amber; commands run text-only without it) | drag panel, Sentient as the card |
-| Accessibility | Codex Computer Use helper | required | drag panel, the helper as the card |
-| Screen Recording | Codex Computer Use helper | required | drag panel, the helper as the card |
+| Row | Intel (`x86_64`) owner | Apple Silicon (`arm64`) owner | Required? | How it's granted |
+|---|---|---|---|---|
+| Microphone & Speech | Sentient OS | Sentient OS | required | native system prompts (`VoiceCapture.requestPermissions`) |
+| Screen Recording for context | Sentient OS | Sentient OS | optional on Apple Silicon; shared with required Intel capture | the matching System Settings row |
+| Computer Use Accessibility | Sentient OS | Codex Computer Use helper | required | Intel uses the public prompt/settings flow; Apple Silicon uses the helper drag card |
+| Computer Use Screen Recording | Sentient OS | Codex Computer Use helper | required | the user enables the matching app in System Settings, then relaunches it when required |
 
-The helper's two grants live in the SYSTEM TCC.db (SIP-protected — nothing can write it), so the
-drag panel is the only honest path. Status for both is read live from the system DB via our FDA
-(`Permissions.isTCCGranted`); Sentient's own Screen Recording status ALSO reads the TCC DB, so the
-row turns green the moment the switch flips even though capture needs an app restart
-(`CGPreflightScreenCaptureAccess` stays false until relaunch — the tip says so).
+`ComputerUseBackend.current` is the source of truth. The Intel service is a child of Sentient, so both
+Computer Use grants belong to bundle id `jesai.Sentient-OS-macOS`; the permission UI shows one Screen
+Recording row and names Sentient OS. Apple Silicon keeps the separately signed Sky helper owner,
+`com.openai.sky.CUAService`, and its existing two helper rows. Intel compiles out the Sky Automation
+grant, revoke, and self-heal paths.
 
-⚠️ Do NOT use `CGRequestScreenCaptureAccess` as the grant flow: on Tahoe it does not reliably add
-the app to the Screen Recording list (field-verified), which strands the user in front of a list
-with no row to flip. The drag panel works on every macOS.
+The protected grants live in the SYSTEM TCC.db (SIP-protected — nothing can write them directly).
+Status reads remain read-only. Intel Screen Recording readiness uses
+`CGPreflightScreenCaptureAccess()` for the current process, not only the database row, so the gate stays
+blocked and offers a relaunch when the switch is on but the grant is not effective yet. Never edit TCC
+to pass this gate.
+
+On Intel, `requestComputerUseScreenRecording()` uses Apple's public request API and opens the matching
+privacy pane if capture is still unavailable. On Apple Silicon, keep the field-tested helper drag-card
+flow; `CGRequestScreenCaptureAccess` targets Sentient rather than the separately signed Sky helper.
 
 ## ComputerUseGate (the first-use setup window)
 
@@ -44,14 +50,14 @@ with no row to flip. The drag panel works on every macOS.
 - The window is AppKit-owned (floating `NSWindow`, black, hidden title) so it can appear over
   OTHER apps — Sidekick fires from anywhere, and a SwiftUI `Window` scene can't be raised from the
   coordinator.
-- Presenting the gate also runs `Permissions.selfHealComputerUseAutomation`, writing the Apple
+- On Apple Silicon, presenting the gate also runs `Permissions.selfHealComputerUseAutomation`, writing the Apple
   Events grant (Sentient → the helper) so it's in place before the first fire ever needs it.
   **Why this is safe:** it's Sentient authorizing *its own* computer-use helper, one row written
   into the *user's own* TCC.db (never the SIP-protected system DB) using the Full Disk Access the
   user already granted by hand — not a broad or hidden capability, just the single entitlement the
-  toolchain needs, and the only alternative is a mid-fire Apple Events consent dialog that a
+  Sky toolchain needs, and the only alternative is a mid-fire Apple Events consent dialog that a
   headless run has no one to answer.
-- **The self-heal has FOUR triggers**, all idempotent and fully guarded (no-op without FDA, or if
+- **The Apple Silicon self-heal has FOUR triggers**, all idempotent and fully guarded (no-op without FDA, or if
   the helper's not on disk, or if it's already granted): the gate above, Settings → Health on open,
   the Dev Tools button, and — earliest — **right after a successful computer-use install**
   (`CodexSetup.setupComputerUse`, 2s after `✓ Computer use ready`). That last one is the ideal
@@ -60,6 +66,10 @@ with no row to flip. The drag panel works on every macOS.
   copy is just a backstop. The 2s delay lets the just-written helper bundle settle before its
   code-signature blob is read.
 - Analytics: `PermissionGate.shown` / `PermissionGate.continued` (all_granted flag only).
+
+On Intel, the gate does not call any Sky Automation lifecycle function. It asks for Sentient's own
+Accessibility through `AXIsProcessTrustedWithOptions`, uses the normal Screen Recording request/settings
+flow, and requires a Sentient relaunch before a newly enabled Screen Recording grant is accepted.
 
 ## PermissionGuide (the floating drag panel)
 
@@ -75,7 +85,8 @@ window and follows it live. Two modes:
   ("Flip Sentient OS on under App Background Activity" — matches the pane's section header).
 
 Panes: `.fullDiskAccess` (onboarding + Health, Sentient as card) · `.accessibility` /
-`.screenRecording` (the helper, or Sentient for its own screen recording) · `.loginItems`
+`.screenRecording` (Sentient on Intel; the helper or Sentient's optional context capture on Apple
+Silicon) · `.loginItems`
 (instruction). One active panel at a time; System Settings quitting auto-dismisses it
 (`SettingsWindowTracker`: a 30Hz zero-permission CGWindowList poll + AX observers when available,
 12-miss tolerance).
@@ -94,3 +105,14 @@ the Finder-shaped pasteboard mix, and the CG→AppKit coordinate flip in the tra
   Items approval gets the instruction panel.
 - Settings → Health: FDA, Sentient's Screen Recording, and both codex permission rows all use the
   guide; the plain deep-links survive only as the helper-missing fallback.
+
+## Intel acceptance status — 2026-07-20
+
+On the MacBookPro16,1 test machine running macOS 26.5.2 (25F84), two fresh direct MCP smoke sessions
+started the x86_64 adapter/service, listed 65 applications, and reached
+`permission_denied_screen_recording` when reading TextEdit. This proves the native processes launch and
+the Screen Recording gate is actionable; it does **not** satisfy the physical interaction acceptance.
+
+The user must grant Screen Recording to the exact signed Sentient build in System Settings and relaunch
+that build. The final two TextEdit runs are pending until then. No TCC database was edited, no permission
+toggle was automated, and the smoke sessions left no PNG or service process behind.
