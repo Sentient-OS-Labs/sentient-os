@@ -7,13 +7,21 @@ MODE="${1:-all}"
 TEMP_DIR="$(/usr/bin/mktemp -d "${TMPDIR:-/tmp}/sentient-cu-scripts.XXXXXX")"
 trap 'find "$TEMP_DIR" -depth -delete' EXIT HUP INT TERM
 
-test_corrupted_command() {
-  app="$TEMP_DIR/Sentient OS.app"
+make_valid_app() {
+  app="$1"
   intel="$app/Contents/Resources/IntelComputerUse"
-  /bin/mkdir -p "$intel/bin"
+  app_binary="$app/Contents/MacOS/Sentient OS"
+  /bin/mkdir -p "$intel/bin" "$(/usr/bin/dirname "$app_binary")"
   /usr/bin/xcrun clang -arch x86_64 "$ROOT/Scripts/Tests/empty.c" -o "$intel/bin/SentientComputerUseMCP"
   /bin/cp "$intel/bin/SentientComputerUseMCP" "$intel/bin/SentientComputerUseService"
   /bin/cp "$ROOT/Scripts/Tests/valid.mcp.json" "$intel/.mcp.json"
+  /bin/cp "$intel/bin/SentientComputerUseMCP" "$app_binary"
+}
+
+test_corrupted_command() {
+  app="$TEMP_DIR/Sentient OS.app"
+  intel="$app/Contents/Resources/IntelComputerUse"
+  make_valid_app "$app"
   "$ROOT/Scripts/verify-intel-computer-use.sh" "$app"
 
   /bin/cp "$ROOT/Scripts/Tests/corrupt-command.mcp.json" "$intel/.mcp.json"
@@ -22,6 +30,88 @@ test_corrupted_command() {
     exit 1
   fi
   echo "Corrupted MCP command fixture rejected"
+}
+
+test_negated_arm64_source() {
+  app="$TEMP_DIR/negated/Sentient OS.app"
+  source_root="$TEMP_DIR/negated/source"
+  make_valid_app "$app"
+  /bin/mkdir -p "$source_root/System" \
+    "$source_root/Views/Permissions" "$source_root/Views/Settings"
+  /usr/bin/printf '%s\n' \
+    'let accessibility = "Accessibility is granted to Sentient OS"' \
+    'let screen = "Screen Recording is granted to Sentient OS and takes effect after you relaunch Sentient OS"' \
+    '#if arch(arm64)' \
+    'let owner = "arm"' \
+    '#elseif !arch(x86_64)' \
+    'let owner = "other"' \
+    '#else' \
+    '#if !arch(arm64)' \
+    'Permissions.grantComputerUseAutomation()' \
+    '#endif' \
+    '#endif' > "$source_root/NegatedArm64.swift"
+  /usr/bin/printf '%s\n' \
+    'static func hasComputerUseScreenRecording() -> Bool { CGPreflightScreenCaptureAccess() }' \
+    > "$source_root/System/Permissions.swift"
+  /usr/bin/printf '%s\n' \
+    'StatusLine(title: "Screen Recording (see the screen)")' \
+    'let helperScreenRelaunchRequired = true' \
+    'Permissions.relaunch()' \
+    > "$source_root/Views/Permissions/ComputerUseGateView.swift"
+  /usr/bin/printf '%s\n' \
+    'StatusLine(title: "Screen Recording (see the screen)")' \
+    'let helperScreenRecordingRelaunchRequired = true' \
+    'Permissions.relaunch()' \
+    > "$source_root/Views/Settings/HealthPane.swift"
+
+  if SENTIENT_INTEL_SOURCE_ROOT="$source_root" \
+      "$ROOT/Scripts/verify-intel-computer-use.sh" "$app"; then
+    echo "FAIL: verifier ignored an Intel-active call inside #if !arch(arm64)" >&2
+    exit 1
+  fi
+  echo "Negated arm64 Intel branch rejected"
+}
+
+test_binary_sky_leak() {
+  app="$TEMP_DIR/binary-leak/Sentient OS.app"
+  source_file="$TEMP_DIR/binary-leak/sky-leak.c"
+  symbol_source="$TEMP_DIR/binary-leak/sky-symbols.swift"
+  executable="$app/Contents/MacOS/Sentient OS"
+  make_valid_app "$app"
+  /bin/mkdir -p "$(/usr/bin/dirname "$executable")"
+  /usr/bin/printf '%s\n' \
+    'const char *sky = "com.openai.sky.CUAService";' \
+    'const char *grant = "grantComputerUseAutomation";' \
+    'const char *revoke = "revokeComputerUseAutomation";' \
+    'const char *heal = "selfHealComputerUseAutomation";' \
+    'int main(void) { return sky[0] + grant[0] + revoke[0] + heal[0] == 0; }' > "$source_file"
+  /usr/bin/xcrun clang -arch x86_64 "$source_file" -o "$executable"
+
+  if "$ROOT/Scripts/verify-intel-computer-use.sh" "$app"; then
+    echo "FAIL: verifier accepted an Intel app binary containing Sky permission code" >&2
+    exit 1
+  fi
+  echo "Intel binary Sky identifier rejected"
+
+  /usr/bin/printf '%s\n' \
+    'enum Permissions {' \
+    '  static func grantComputerUseAutomation() {}' \
+    '  static func revokeComputerUseAutomation() {}' \
+    '  static func selfHealComputerUseAutomation(context: String) {}' \
+    '}' \
+    '@main struct Fixture {' \
+    '  static func main() {' \
+    '    Permissions.grantComputerUseAutomation()' \
+    '    Permissions.revokeComputerUseAutomation()' \
+    '    Permissions.selfHealComputerUseAutomation(context: "fixture")' \
+    '  }' \
+    '}' > "$symbol_source"
+  /usr/bin/xcrun swiftc -parse-as-library -target x86_64-apple-macos15.0 "$symbol_source" -o "$executable"
+  if "$ROOT/Scripts/verify-intel-computer-use.sh" "$app"; then
+    echo "FAIL: verifier accepted Intel Sky Automation lifecycle symbols" >&2
+    exit 1
+  fi
+  echo "Intel binary Sky Automation symbols rejected"
 }
 
 test_stale_cleanup() {
@@ -47,7 +137,9 @@ test_stale_cleanup() {
 
 case "$MODE" in
   corrupted-command) test_corrupted_command ;;
+  negated-arm64-source) test_negated_arm64_source ;;
+  binary-sky-leak) test_binary_sky_leak ;;
   stale-cleanup) test_stale_cleanup ;;
-  all) test_corrupted_command; test_stale_cleanup ;;
-  *) echo "usage: $0 [corrupted-command|stale-cleanup|all]" >&2; exit 64 ;;
+  all) test_corrupted_command; test_negated_arm64_source; test_binary_sky_leak; test_stale_cleanup ;;
+  *) echo "usage: $0 [corrupted-command|negated-arm64-source|binary-sky-leak|stale-cleanup|all]" >&2; exit 64 ;;
 esac

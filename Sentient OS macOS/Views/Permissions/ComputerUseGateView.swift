@@ -47,6 +47,7 @@ struct ComputerUseGateView: View {
                                    fixTitle: gate.micSpeech == .notAsked ? "Allow…" : "Fix…") {
                             fixMicSpeech()
                         }
+                        #if !arch(x86_64)
                         StatusLine(title: "Screen Recording",
                                    health: gate.sentientScreen ? .ok : .warn,   // optional — amber, never blocking
                                    note: gate.sentientScreen ? "granted" : "recommended",
@@ -54,6 +55,7 @@ struct ComputerUseGateView: View {
                                    fixTitle: "Allow…") {
                             fixSentientScreen()
                         }
+                        #endif
                     }
                 }
 
@@ -67,10 +69,12 @@ struct ComputerUseGateView: View {
                             fixComputerUsePermission(.accessibility)
                         }
                         StatusLine(title: "Screen Recording (see the screen)",
-                                   health: gate.helperScreen ? .ok : (gate.helperOnDisk ? .bad : .warn),
-                                   note: helperNote(granted: gate.helperScreen),
+                                   health: gate.helperScreen ? .ok
+                                       : (gate.helperScreenRelaunchRequired ? .warn : (gate.helperOnDisk ? .bad : .warn)),
+                                   note: gate.helperScreenRelaunchRequired
+                                       ? "relaunch required" : helperNote(granted: gate.helperScreen),
                                    tip: screenRecordingTip,
-                                   fixTitle: "Grant…") {
+                                   fixTitle: gate.helperScreenRelaunchRequired ? "Relaunch" : "Grant…") {
                             fixComputerUsePermission(.screenRecording)
                         }
                     }
@@ -179,6 +183,8 @@ struct ComputerUseGateView: View {
         #if arch(x86_64)
         if pane == .accessibility {
             Permissions.requestComputerUseAccessibility()
+        } else if gate.helperScreenRelaunchRequired {
+            Permissions.relaunch()
         } else {
             Permissions.requestComputerUseScreenRecording()
         }

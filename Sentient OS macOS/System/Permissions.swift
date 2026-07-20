@@ -268,11 +268,27 @@ enum Permissions {
                      clientBundleID: computerUsePermissionOwnerBundleID)
     }
 
-    /// Screen Recording for the active computer-use owner. A newly enabled grant takes effect for
-    /// the responsible process after relaunch, which the permission UI calls out explicitly.
+    /// Screen Recording readiness for the active computer-use owner. Intel must use the running
+    /// responsible process's preflight: a live TCC row alone is not effective until relaunch.
+    #if arch(x86_64)
+    static func hasComputerUseScreenRecording() -> Bool { CGPreflightScreenCaptureAccess() }
+    #else
     static func hasComputerUseScreenRecording() -> Bool {
         isTCCGranted(service: "kTCCServiceScreenCapture",
                      clientBundleID: computerUsePermissionOwnerBundleID)
+    }
+    #endif
+
+    /// Intel-only distinction between a switch that is already on in TCC and permission that the
+    /// current process can actually use. Sky retains its existing helper behavior.
+    static func computerUseScreenRecordingRequiresRelaunch() -> Bool {
+        #if arch(x86_64)
+        !CGPreflightScreenCaptureAccess()
+            && isTCCGranted(service: "kTCCServiceScreenCapture",
+                            clientBundleID: computerUsePermissionOwnerBundleID)
+        #else
+        false
+        #endif
     }
 
     /// Intel can ask only for its own Accessibility grant through the public TCC prompt. Sky's

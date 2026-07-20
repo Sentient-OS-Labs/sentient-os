@@ -39,6 +39,7 @@ struct HealthPane: View {
     // The Codex helper's system-TCC grants (read via FDA; shown once computer use exists)
     @State private var helperAccessibility = false
     @State private var helperScreenRecording = false
+    @State private var helperScreenRecordingRelaunchRequired = false
 
     // ChatGPT plan (decoded from the user's own codex login — CodexAuth)
     @State private var plan: CodexAuth.Plan?
@@ -194,6 +195,7 @@ struct HealthPane: View {
                     fixMicSpeech()
                 }
                 .rise(3, revealed: revealed)
+                #if !arch(x86_64)
                 StatusLine(title: "Screen Recording",
                            health: screenRec ? .ok : .warn,   // optional — Sidekick runs text-only without it
                            note: screenRec ? "granted" : "optional",
@@ -202,6 +204,7 @@ struct HealthPane: View {
                     fixScreenRecording()
                 }
                 .rise(4, revealed: revealed)
+                #endif
                 StatusLine(title: "Notifications",
                            health: notifHealth,
                            note: notifNote,
@@ -439,10 +442,12 @@ struct HealthPane: View {
                     guideHelper(.accessibility)
                 }
                 StatusLine(title: "Screen Recording (see the screen)",
-                           health: helperScreenRecording ? .ok : .bad,
-                           note: helperScreenRecording ? "granted" : "not granted",
+                           health: helperScreenRecording ? .ok
+                               : (helperScreenRecordingRelaunchRequired ? .warn : .bad),
+                           note: helperScreenRecording ? "granted"
+                               : (helperScreenRecordingRelaunchRequired ? "relaunch required" : "not granted"),
                            tip: computerUseScreenRecordingTip,
-                           fixTitle: "Grant…") {
+                           fixTitle: helperScreenRecordingRelaunchRequired ? "Relaunch" : "Grant…") {
                     guideHelper(.screenRecording)
                 }
                 SettingsProse(computerUsePermissionInstructions)
@@ -491,6 +496,8 @@ struct HealthPane: View {
         #if arch(x86_64)
         if pane == .accessibility {
             Permissions.requestComputerUseAccessibility()
+        } else if helperScreenRecordingRelaunchRequired {
+            Permissions.relaunch()
         } else {
             Permissions.requestComputerUseScreenRecording()
         }
@@ -532,6 +539,7 @@ struct HealthPane: View {
         if fdaGranted {
             helperAccessibility = Permissions.hasComputerUseAccessibility()
             helperScreenRecording = Permissions.hasComputerUseScreenRecording()
+            helperScreenRecordingRelaunchRequired = Permissions.computerUseScreenRecordingRequiresRelaunch()
         }
         await codex.refreshLoginStatus()   // last — it shells out to `codex login status`
         withAnimation(.easeOut(duration: 0.2)) { checked = true }   // first probe done → reveal
