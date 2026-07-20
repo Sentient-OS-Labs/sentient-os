@@ -227,7 +227,15 @@ actor VaultGenerator {
                 slices = CorpusSlicer.slice(corpus)
                 next = min(idx, slices.count)
             } else {
-                slices = []                         // pre-slicing / single-slice token: session-resume only
+                // Pre-slicing / single-slice token: session-resume only. If that session never wrote
+                // a single note, resuming it buys nothing — restart fresh under the slicer instead
+                // (also covers any stale launch-window token whose oversized first turn never ran).
+                if Self.census(of: staging).notes == 0 {
+                    Log("VaultGenerator: ⚠️ resume session left staging empty — restarting the build fresh")
+                    try? fm.removeItem(at: staging)
+                    return try await generate(notes: notes, resume: nil, onProgress: onProgress, onLine: onLine)
+                }
+                slices = []
                 next = 0
             }
         } else {
