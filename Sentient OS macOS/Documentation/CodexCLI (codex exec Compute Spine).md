@@ -52,10 +52,11 @@ plumbing).
   terminates the codex child process via a `withTaskCancellationHandler` + process holder.
 
 `Invocation`: `prompt` (always over **stdin**, never argv) · `model` (`.gpt56sol` = `gpt-5.6-sol`, the
-default for knowledge-base work and everything else / `.gpt56luna` = `gpt-5.6-luna`, the Gmail
-tier) · `effort` (`.low` / `.medium` / `.high` / `.xhigh`; **default `.high`** — the Gmail tier
-overrides to `.medium`; nothing runs `.xhigh` since 2026-07-10, gpt-5.6-sol thinks far too long
-there) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` · `addDirs`
+default for knowledge-base work and everything else / `.gpt56terra` = `gpt-5.6-terra`, the mid model
+used as the free/go stand-in for sol, see **plan-tuned models** below / `.gpt56luna` =
+`gpt-5.6-luna`, the Gmail tier) · `effort` (`.low` / `.medium` / `.high` / `.xhigh`; **default
+`.high`** — the Gmail tier overrides to `.medium`; nothing runs `.xhigh` since 2026-07-10,
+gpt-5.6-sol thinks far too long there) · `sandbox` (`.readOnly` default / `.workspaceWrite`) · `cwd` · `addDirs`
 (extra writable roots) · `webSearch` (**default `true`** — web search is available to every call)
 · `includeUserConfig` (**default `true`** — loads `~/.codex` + the user's MCP servers, e.g. their
 Gmail MCP, on every call; set `false` for a hermetic run) · `bypassApprovals` (default `false`;
@@ -78,6 +79,28 @@ an absent `open_world_hint` counts as open-world) · `outputSchema`
 `Envelope`: `result` (final agent message) · `sessionID` (thread id — the resume handle) ·
 `numTurns` (completed items) · `durationMS` (wall clock, measured here) · `inputTokens` /
 `cachedInputTokens` / `outputTokens` · `raw` (full JSONL).
+
+## Plan-tuned models (`planTuned`)
+
+Both spines — `run()` (every `Invocation`) and `runAgentCommand` (computer use) — pass the model
+through `planTuned` right before spawning. On a **positive** free/go plan read (`CodexAuth.isLimited()`),
+any `.gpt56sol` call downshifts to **`.gpt56terra` at `.medium`**; the `.luna` Gmail tier is
+untouched, and unknown/missing plans keep sol (CodexAuth's fail-open policy, so paid plans see zero
+change). Free/go ChatGPT accounts lost `gpt-5.6-sol` access through `codex exec` (a server-side
+"model not supported" refusal), so this substitution keeps knowledge-base work answering on those
+plans. Living at the spine means every caller — and any future one — is covered without per-call-site
+checks, and the plan is re-read per run, so an upgrade to Plus puts the very next call back on sol.
+Failure telemetry reports the model that actually ran, so field events show terra for free accounts.
+
+## Input-size guard (`inputTooLarge`)
+
+`codex exec` rejects a single turn's input past ~1 MiB server-side. Both spines reject any prompt
+over **`promptByteCap` = 950 KB** *pre-spawn* with a typed `CLIError.inputTooLarge(chars:)` (plus an
+output-side sniff as belt-and-suspenders), so an oversized prompt fails cleanly and classifiably
+rather than deep inside codex. The knowledge-base path never trips it in normal use — the corpus is
+fed as byte-budgeted parts (`CorpusSlicer`, see `Vault Generation (Stage 2).md`); the guard is the
+floor beneath that batching. `OvernightCaution` classifies the typed error into honest banner /
+takeover copy.
 
 ## Flags we always pass, and why
 
@@ -123,7 +146,7 @@ ChatGPT-plan limit message is still unverified — refine the markers during dog
 | `--output-schema` | clean conforming JSON for the proactive `{time, text}` shape |
 | Resume | same thread id, full memory; workspace = process cwd (see above) |
 | Web search | `-c tools.web_search=true` → `web_search` items, correct live answer |
-| Context | Measured on gpt-5.5: 1M API context, **400k input limit through codex** — covered the 10k-summary corpus (200–400k tokens) over stdin. gpt-5.6-sol (same flagship class, adopted 2026-07-09) has run the same corpus fine; re-measure the limit if a corpus-size failure ever appears. (The Gmail tier on `gpt-5.6-luna` chunks weekly to stay well under its own cap.) |
+| Context | 1M API context, but a **~1 MiB per-turn input cap through `codex exec`** (server-side, `input_too_large`) is the real constraint for a big corpus. Handled by feeding the corpus as byte-budgeted parts (`CorpusSlicer`, 700 KB each) with the 950 KB `inputTooLarge` guard beneath — verified end-to-end on a 2.55 MB real-scale corpus. (The Gmail tier on `gpt-5.6-luna` chunks weekly to stay well under its own cap.) |
 | Overhead | ~25k input tokens per call (codex system prompt + tools), almost fully cached |
 
 ## Notes

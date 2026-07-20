@@ -20,7 +20,7 @@ Documentation for **Notch Magic** — Sentient OS's global hold-to-talk / tap-to
 
 The **Sidekick key** is the user's choice in Settings → Proactive & Sidekick: **right ⌘** (default) or **right ⌥**. Both are right-side modifiers, so either works permission-free (§4); the rest of this doc says "right ⌘" as the default, but everything applies to whichever key is chosen.
 
-Doors 1–4 funnel through **`CommandCoordinator` → `CommandRunModel` → `CodexCLI.runAgentCommand`**; a card fire keeps its own executor spine (`ProactiveExecutor` → `runAgentCommand`) but adopts the same `CommandRunModel` — so **`run.isRunning` is the app-wide ONE-task-at-a-time lock** (while anything runs, every other entry point is locked out, and a fresh hotkey press is the universal STOP; gmail/calendar connector fires are exempt — quiet, card-only). The notch is a live view of `coordinator.phase` (+ `coordinator.run`). The notch is the Mac's "face" coming alive — it descends from the bezel **glowing**, shows what it heard (or lets you type), then streams the work — *Thinking through your task*, **Remembering** the notes it reads from your knowledge base, the actions — with a STOP button, and retracts.
+Doors 1–4 funnel through **`CommandCoordinator` → `CommandRunModel` → `CodexCLI.runAgentCommand`**; a card fire keeps its own executor spine (`ProactiveExecutor` → `runAgentCommand`) but adopts the same `CommandRunModel` — so **`run.isRunning` is the app-wide ONE-task-at-a-time lock** (while anything runs, every other entry point is locked out, and a fresh hotkey press is the universal STOP). **Every fireable card adopts the run** — Gmail and Calendar fires light the notch just like computer-use fires (2026-07-20); only research cards stay quiet (nothing fires). The notch is a live view of `coordinator.phase` (+ `coordinator.run`). The notch is the Mac's "face" coming alive — it descends from the bezel **glowing**, shows what it heard (or lets you type), then streams the work — *Thinking through your task*, **Remembering** the notes it reads from your knowledge base, the actions — with a STOP button, and retracts.
 
 Every command is **computer use** (the dedicated browser-use channel was removed — see the root architecture doc §7), and the notch shows for all of them.
 
@@ -65,7 +65,7 @@ Every command is **computer use** (the dedicated browser-use channel was removed
 | **`SpinningLogo.swift`** | The 2D spectrum-ring logo (matches the app icon). |
 | **`NotchView.swift`** | `NotchView` (binder) + `NotchContent` (the pure visual: morph, phases, the depth-bed shadow, layered edge glow, the read-back / Remembering / status captions, the hover swell + its asymmetric springs) + `NotchMetrics` (per-phase + hover sizing) + `NotchStopButton` + the `.blurDissolve` transition. |
 
-Edits outside this folder: `AppState.swift` (owns/starts the two objects), `Views/HomeView.swift` (`PromptBar` drives `appState.commandCoordinator`; `ForYouModel.runReal` adopts the run for a card's computer-use fire, §6), `Cloud/CodexCLI.swift` (`runAgentCommand` gained an optional `imagePath` → `codex exec -i`, §6a), `System/Permissions.swift` (`hasScreenRecording()`, already present), and the project's `INFOPLIST_KEY_NSMicrophoneUsageDescription` + `INFOPLIST_KEY_NSSpeechRecognitionUsageDescription` build settings.
+Edits outside this folder: `AppState.swift` (owns/starts the two objects), `Views/HomeView.swift` (`PromptBar` drives `appState.commandCoordinator`; `ForYouModel.runReal` adopts the run for any fireable card's fire — computer, Gmail, Calendar, §6), `Cloud/CodexCLI.swift` (`runAgentCommand` gained an optional `imagePath` → `codex exec -i`, §6a), `System/Permissions.swift` (`hasScreenRecording()`, already present), and the project's `INFOPLIST_KEY_NSMicrophoneUsageDescription` + `INFOPLIST_KEY_NSSpeechRecognitionUsageDescription` build settings.
 
 There is still a **DEV bench** `Views/Dev/HotkeyLabView.swift` (DEV TOOLS → HOTKEY LAB) — the original proof of the permission-free hotkey (now on NSEvent monitors, same mechanism as the real thing). It's superseded by `SidekickHotkeyMonitor`; **retire it** once you're confident (see §13).
 
@@ -129,7 +129,8 @@ steps aside with `.hidden`. See `Permission Guide (First-Use Grants).md`).
 
 **Adopted external runs — a proactive card's fire lights the same notch (2026-07-17).**
 `beginExternalRun(caption:onStopRequest:)` is the card-fire door: `ForYouModel.runReal`
-(computer-method cards only) adopts THE run — `run.adoptExternal` flips `isRunning`, seeds
+(**any fireable card** — `ProactiveExecutor.isFireable`, i.e. computer, Gmail, and Calendar since
+2026-07-20; not research) adopts THE run — `run.adoptExternal` flips `isRunning`, seeds
 `statusLine` with the card's title, and the notch rises in `.running` on the main display. The work
 itself stays in the card's own Task (`ProactiveExecutor.fire`); its raw codex lines tee through
 `run.externalPush` (the same stream cleaning below, "Remembering" included), and every exit
@@ -140,10 +141,10 @@ cancel), so the notch STOP, the bar STOP, Esc, and the hotkey press all reach it
 own STOP ends the notch identically, from the fire's unwind. **`run.isRunning` is therefore the
 app-wide ONE-task-at-a-time lock:** the existing guards lock every other entry point while a card
 fires, `beginExternalRun` returns `false` while anything runs (doubling as the re-check for a fire
-the permission gate held for minutes), and the home dims other computer cards' CTAs. By decision
-(2026-07-17): **gmail/calendar connector fires and research cards are fully EXEMPT** — quiet,
-card-only, no lock, concurrent is fine. Home-side wiring:
-`Home — Proactive Intelligence (For You).md`.
+the permission gate held for minutes), and the home dims other fireable cards' CTAs. Since
+2026-07-20 Gmail and Calendar fires adopt the run too (live status in the notch, in the lock); only
+**research cards are EXEMPT** — they fire nothing, so they stay quiet, no notch, no lock. Home-side
+wiring: `Home — Proactive Intelligence (For You).md`.
 
 **The hotkey flow — press OPENS, then it branches to voice or type:**
 - `voicePressBegan()` (onPress): **first the UNIVERSAL STOP (2026-07-17) — a press while ANY real task is running (hotkey-, command-bar-, or card-launched) cancels it via `stop()`** (one task, one notch, one key; hoisted above the voice gate so a Mac with no speech model still gets the cancel; the onboarding demo is exempt — the film narrates through it). Then the transcribing bail, then — from idle only, `isInteracting` blocks a fresh press mid-interaction — **knowledge-base-only plans get answered RIGHT HERE** — a 2s `flash("get ChatGPT Plus to wake Sidekick")`, the same instant beat as the mic notice, and the notch never opens for listening or typing (live-checked per press, so it can never go stale; the run costs codex quota those plans don't have). Otherwise: `setPhase(.opening)` *immediately* (the "pull it open" feel). Start the mic **only if `VoiceCapture.isAuthorized`** — never PROMPT on a press.
@@ -310,7 +311,7 @@ All of the below is **confirmed working on Jesai's bezel** (live screenshots/rec
 - **The hotkey mechanism swap (2026-07-09):** the CGEventTap was replaced with NSEvent global+local `flagsChanged` monitors (lesson 13) with a post-launch install guard (lesson 14) — verified live on hardware: fresh TCC state (`tccutil reset`) → **no Keystroke Receiving dialog**, hold-to-talk + tap-to-type + Esc cancel all working, launch clean.
 - **The notch as a button (2026-07-13):** hover swell + haptic + depth-bed drop shadow + click-to-type (§7a), the asymmetric enter/exit springs, the two-tier proximity poll (§7b), and the top-edge Fitts fixes (lesson 15) — all verified on Jesai's bezel, including top-edge clicks across the notch's width and menu-bar click-through immediately beside it.
 - **External-primary anchoring + all-display screenshots (2026-07-14):** [VERIFIED live, external display as primary] hover → swell → click → type → run all landed on the built-in bezel (`NotchAnchor`, §7f) with the live status streaming there, while the hotkey kept the main display; and the same run attached BOTH displays' frames (log: `📸 2 display screenshots captured`), main display first, with the both-displays prompt line — confirmed by dumping the exact codex inputs (prompt + frames) via temp scaffolding, since deleted.
-- **Adopted card fires + the universal stop (2026-07-17):** [verified live on hardware] a proactive card's computer-use fire raises the notch with the card's title + the cleaned live stream + the ✓/■/✗ flourish; `run.isRunning` locks every entry point app-wide (other computer cards dim); every STOP surface — card, notch, bar, a fresh hotkey press — cancels the one task; gmail/calendar fires stay quiet + exempt (§6).
+- **Adopted card fires + the universal stop (2026-07-17):** [verified live on hardware] a proactive card's fire raises the notch with the card's title + the cleaned live stream + the ✓/■/✗ flourish; `run.isRunning` locks every entry point app-wide (other fireable cards dim); every STOP surface — card, notch, bar, a fresh hotkey press — cancels the one task. Gmail/Calendar fires adopt the run too since 2026-07-20 (live status, in the lock); only research fires stay quiet + exempt (§6).
 - **Not yet done:** §12 polish backlog; productionization (§13). Reduced-motion + VoiceOver coded but unverified. The SkyLight pin during a Spaces swipe on the *built-in-as-secondary* display is untested (best-effort with a public fallback either way).
 
 ---

@@ -17,7 +17,9 @@ pure file read, no network, safe every launch and every cycle.
   business, edu, enterprise, unknown future strings — → `.full`. **Fail open**: no file, no
   tokens (API-key auth), or an undecodable claim all read as full; only a POSITIVE free/go
   read gates anything. Worst case a limited account hits codex usage-limit errors, which every
-  caller already survives (typed `.usageLimit` + resume handles).
+  caller already survives (typed `.usageLimit` + resume handles). `CodexAuth.isLimited()` — the
+  convenience most gates read — is `!assertedPlus && currentPlan()?.tier == .limited`, so a user
+  who told us they upgraded (§3) is never treated as limited.
 - Plan **enforcement** is entirely server-side (OpenAI rate-limits by its own account state, per
   `X-Codex-Plan-Type`); the JWT claim is only how *we* read the plan. The codex client itself
   uses the claim purely for display.
@@ -65,10 +67,19 @@ for them). Free/go accounts see:
 > your AIs. · WITH CHATGPT PLUS: the three feature rows (same vocabulary as the free home)
 > · [Upgrade on ChatGPT] (glow) · (Continue with just the knowledge base) (QuietPillButton)
 
-- **Upgrade** opens `CodexAuth.upgradeURL` and enters a waiting state: auto-recheck on app
-  foreground (`refreshPlan()`) + a manual "I've upgraded" button; silent when still free on
-  focus-return (they may just be reading), explicit status line on manual checks. Unlock →
-  green done line → auto-advance.
+- **Upgrade on ChatGPT** (glow) opens `CodexAuth.upgradeURL` and enters a waiting state with
+  auto-recheck on app foreground (`refreshPlan()`).
+- **"I've upgraded to ChatGPT Plus"** — a trust path that shares the crossroads row with the glow
+  CTA (and replaces the waiting phase's old manual re-check + "still seeing Free" status line).
+  It opens one native confirm ("Are you on ChatGPT Plus?"); confirming sets **`CodexAuth.assertedPlus`**
+  (`plan.assertedPlus`), clears knowledge-base-only mode, and continues straight into the full
+  experience — proactive, Sidekick, nightly runs, connectors. A fresh Plus upgrade can take a while
+  to reflect in the local claim (codex refreshes its token on an 8-day cadence, and the refresh POST
+  can be throttled), and OpenAI's server is the real enforcement point at exec time anyway — so when
+  the user says they've upgraded, believing them is both the honest and the friendlier design. It's
+  sticky: `assertedPlus` makes `isLimited()` return false everywhere (chiefly so `CodexCLI.planTuned`
+  stops downshifting them off gpt-5.6-sol), and if the claim never catches up the only cost is codex
+  usage-limit errors, which every caller already survives. Reset clears it.
 - **Continue** sets `CodexAuth.knowledgeBaseOnly` (`plan.kbOnly`) — THE app-wide gate flag.
 - Analytics: `PlanGate.shown` (with the raw plan string) / `.upgraded` / `.continuedFree`.
 

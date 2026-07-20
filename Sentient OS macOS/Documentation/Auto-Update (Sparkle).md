@@ -15,6 +15,11 @@ install genuinely can't happen.
 > Xcode notarized export → `make_dmg.sh` → `release.sh` → GitHub Release + Homebrew tap + live
 > appcast, each leg verified live (Gatekeeper "Notarized Developer ID", cask install on real
 > hardware, feed serving the correct EdDSA-signed enclosure).
+>
+> **The first over-the-air updates — 1.1 (build 2) and 1.2 (build 3) — shipped 2026-07-20**, each
+> through the same two-script pipeline, publishing the appcast + site Download URL so the installed
+> 1.0/1.1 fleet self-updates. 1.2 is the first release to exercise the **windowless silent relaunch**
+> (below) against a real signed update.
 
 ---
 
@@ -56,6 +61,7 @@ requires first shipping a build that carries a new public key.
 | `UpdateController.swift` | Owns the `SPUUpdater` (targets the main bundle), the driver, and the model. `AppState` holds one and calls `start()` on launch — **GUI path only**, never the root wake-helper. `start()` also fires one background check so a fresh launch discovers updates immediately. Implements the **silent-relaunch hook** (`willInstallUpdateOnQuit` → idle-gated `installIfSafe` → self-relaunch) and the `SPUUpdaterDelegate`. Exposes `checkForUpdatesNow(from:)` (tagging the originating window — see `CheckOrigin`) + version/last-checked for the menu and Settings. |
 | `SentientUpdateDriver.swift` | Our custom `SPUUserDriver`. Translates Sparkle's callbacks into `UpdateModel` state and stashes the reply closures. **Mandatory:** `showUpdateFound…` only ever replies `.install`; `showReady(toInstallAndRelaunch:)` auto-installs. ⚠️ The method labels must match Sparkle's imported Swift signatures exactly (Swift matches these witnesses by signature, not `@objc` selector). |
 | `UpdateModel.swift` | `@Observable` bridge between the driver and the UI. A `Phase` state machine (idle → checking → found → downloading → extracting → installing / failed), a `Surface` (`none` / `gate` / `info`), and `CheckOrigin` (`home` / `settings`) — which window a user-initiated check came from. |
+| `UpdateNotice.swift` | The silent-relaunch/just-updated bookkeeping: records the pending silent install (old version string) right before Sparkle relaunches so the new build launches windowless once (guarded against a stale flag), and diffs the persisted last-run version each launch to fire the *"Sentient just updated."* notification + arm the changelog capsule. |
 | `UpdateGateView.swift` | The OLED UI. Two faces: the full-screen **gate** (mandatory — Update / Quit, no skip/remind) and a small dismissible **info card** (user-initiated "Checking…" / "You're up to date" / "Couldn't check"). Mounted as an overlay by BOTH the home (`RootView`) and the Settings window, each passing its `host`: the **info card renders only in the check's origin window** (Settings' Check Now shows over Settings, never buried under it), while the **gate takes over every hosting window**. Draws nothing at rest. |
 
 **Wiring:** `App/AppState.swift` (owns + `start()`s) · `Views/RootView.swift` (`.overlay { UpdateGateView(host: .home) }`)
@@ -70,6 +76,20 @@ where its card appears) · `Views/Settings/SystemPane.swift` (Updates group, che
   calls our `willInstallUpdateOnQuit` delegate hook. We take over and, the moment it's **idle-safe**,
   install + relaunch on our own — no "quit to update" wait, no UI. The user just finds themselves on
   the new version.
+- **The relaunch is windowless.** A silent, idle-gated auto-update relaunches the app **without
+  shoving the home window at the user** — `UpdateNotice` records the silent install right before
+  Sparkle relaunches, the new build consumes the flag once and launches the home WindowGroup
+  `.suppressed` (Dock icon dropped to match), so someone living with Sentient in the menu bar isn't
+  interrupted. `.suppressed` wins over macOS state restoration. A **safety guard**: the flag stores
+  the old version string; if the running build still matches it (an install that never landed), the
+  flag is ignored and destroyed, so a stale flag can never hide the window on a normal launch.
+  User-initiated (gate) updates and mid-onboarding relaunches still present the window normally.
+- **"Sentient just updated" notice.** Every launch diffs a persisted last-run version. On a change it
+  fires the *"Sentient just updated."* macOS notification (explaining the Dock bounce) and arms a
+  persistent green **`CautionCapsule`** — *Sentient just updated!* with a **Read the changelog** pill
+  linking to the latest release — in the home's banner slot (lowest rung, under the red/amber
+  cautions) and over onboarding, until dismissed. `CautionCapsule` lives in its own file, generalized
+  (`actionTitle`/`onAction`) now that two hosts render it.
 - **The idle gate** (`isSafeToRelaunch`): never relaunch out from under an in-flight processing run
   (`PipelineActivity.isRunning`), and never yank the app away from an actively-engaged user — frontmost
   with a key window counts as "in use" unless idle 5+ minutes; if the app isn't frontmost, the relaunch
