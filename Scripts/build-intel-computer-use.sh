@@ -46,10 +46,11 @@ for executable in "$MCP_NAME" "$SERVICE_NAME"; do
 done
 
 /bin/rm -rf "$STAGE"
-/bin/mkdir -p "$STAGE/bin"
-/usr/bin/ditto "$PACKAGE/Plugin" "$STAGE"
-/usr/bin/ditto "$RELEASE_BIN/$MCP_NAME" "$STAGE/bin/$MCP_NAME"
-/usr/bin/ditto "$RELEASE_BIN/$SERVICE_NAME" "$STAGE/bin/$SERVICE_NAME"
+/bin/mkdir -p "$STAGE/plugins/computer-use/bin"
+/usr/bin/ditto "$PACKAGE/Marketplace" "$STAGE"
+/usr/bin/ditto "$PACKAGE/Plugin" "$STAGE/plugins/computer-use"
+/usr/bin/ditto "$RELEASE_BIN/$MCP_NAME" "$STAGE/plugins/computer-use/bin/$MCP_NAME"
+/usr/bin/ditto "$RELEASE_BIN/$SERVICE_NAME" "$STAGE/plugins/computer-use/bin/$SERVICE_NAME"
 
 SIGN_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
 SIGN_OPTIONS=""
@@ -61,7 +62,7 @@ case "$SIGN_IDENTITY" in
 esac
 
 for executable in "$MCP_NAME" "$SERVICE_NAME"; do
-  staged_binary="$STAGE/bin/$executable"
+  staged_binary="$STAGE/plugins/computer-use/bin/$executable"
   # shellcheck disable=SC2086 -- SIGN_OPTIONS intentionally expands to separate codesign flags.
   /usr/bin/codesign --force $SIGN_OPTIONS --sign "$SIGN_IDENTITY" "$staged_binary"
   architectures="$(/usr/bin/lipo -archs "$staged_binary")"

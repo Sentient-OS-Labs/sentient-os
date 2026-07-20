@@ -67,6 +67,10 @@ enum ComputerUseSetup {
         codexHome.appendingPathComponent("plugins/cache/sentient/computer-use/\(intelPluginVersion)")
     }
 
+    private static var intelMarketplaceInstallRoot: URL {
+        codexHome.appendingPathComponent(".tmp/marketplaces/sentient")
+    }
+
     /// Already FULLY wired? All three must hold for computer use to actually work — so a half-finished
     /// copy or a config the user edited out reads as "not installed" and gets repaired on the next run
     /// (rather than a bare dir merely existing). NOT a version check: an older but working install
@@ -102,11 +106,13 @@ enum ComputerUseSetup {
     }
 
     private static var isIntelInstalled: Bool {
-        let root = intelInstallRoot
-        guard hasValidIntelPlugin(at: root) else { return false }
+        guard hasValidIntelPlugin(at: intelInstallRoot),
+              hasValidIntelMarketplace(at: intelMarketplaceInstallRoot) else { return false }
 
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
-        return ComputerUsePluginConfig.hasExclusiveBackend(
+        return ComputerUsePluginConfig.localMarketplaceSource(name: "sentient", in: config)
+                == intelMarketplaceInstallRoot.path
+            && ComputerUsePluginConfig.hasExclusiveBackend(
             active: .sentientIntel, inactive: .sky, in: config)
     }
 
@@ -190,11 +196,15 @@ enum ComputerUseSetup {
             throw SetupError.missingSource("bundled IntelComputerUse")
         }
 
+        let bundledPluginRoot = bundledRoot.appendingPathComponent("plugins/computer-use")
         onLine("Validating bundled Intel computer use…")
-        try validateIntelPlugin(at: bundledRoot)
+        try validateIntelMarketplace(at: bundledRoot)
 
-        onLine("Installing Intel computer use…")
-        try await dittoReplace(bundledRoot, intelInstallRoot)
+        onLine("Installing Intel marketplace…")
+        try await dittoReplace(bundledRoot, intelMarketplaceInstallRoot)
+        onLine("Installing Intel plugin…")
+        try await dittoReplace(bundledPluginRoot, intelInstallRoot)
+        try validateIntelMarketplace(at: intelMarketplaceInstallRoot)
         try validateIntelPlugin(at: intelInstallRoot)
 
         onLine("Patching config.toml…")
@@ -257,20 +267,13 @@ enum ComputerUseSetup {
 
     private static let intelExecutableNames = ["SentientComputerUseMCP", "SentientComputerUseService"]
 
-    /// Accept only a thin x86_64 Mach-O. A universal binary carrying arm64 is rejected too: the
-    /// Intel plugin must have no executable path that could accidentally route to another backend.
-    private static func isThinX86_64MachO(_ url: URL) -> Bool {
-        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count >= 8 else { return false }
-        let bytes = [UInt8](data.prefix(8))
-        return bytes[0...3].elementsEqual([0xcf, 0xfa, 0xed, 0xfe])
-            && bytes[4...7].elementsEqual([0x07, 0x00, 0x00, 0x01])
-    }
-
     private static func hasValidIntelExecutables(in root: URL) -> Bool {
         intelExecutableNames.allSatisfy { name in
             let executable = root.appendingPathComponent("bin/\(name)")
             return FileManager.default.isExecutableFile(atPath: executable.path)
-                && isThinX86_64MachO(executable)
+                && validationTool("/usr/bin/lipo", ["-archs", executable.path]).output
+                    .trimmingCharacters(in: .whitespacesAndNewlines) == "x86_64"
+                && validationTool("/usr/bin/codesign", ["--verify", "--strict", executable.path]).status == 0
         }
     }
 
@@ -279,21 +282,35 @@ enum ComputerUseSetup {
         catch { return false }
     }
 
-    private static func intelMCPCommand(at root: URL) -> String? {
+    private static func hasValidIntelMarketplace(at root: URL) -> Bool {
+        do { try validateIntelMarketplace(at: root); return true }
+        catch { return false }
+    }
+
+    private static func intelMCPConfiguration(at root: URL) -> [String: Any]? {
         guard let data = try? Data(contentsOf: root.appendingPathComponent(".mcp.json")),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let servers = object["mcpServers"] as? [String: Any],
               let computerUse = servers["computer-use"] as? [String: Any] else { return nil }
-        return computerUse["command"] as? String
+        return computerUse
     }
 
     private static func validateIntelPlugin(at root: URL) throws {
         let fm = FileManager.default
-        guard fm.fileExists(atPath: root.appendingPathComponent(".codex-plugin/plugin.json").path),
+        let pluginManifest = root.appendingPathComponent(".codex-plugin/plugin.json")
+        guard let manifestData = try? Data(contentsOf: pluginManifest),
+              let manifest = try? JSONSerialization.jsonObject(with: manifestData) as? [String: Any],
+              manifest["name"] as? String == "computer-use",
+              manifest["version"] as? String == intelPluginVersion,
+              manifest["mcpServers"] as? String == "./.mcp.json",
+              manifest["skills"] as? String == "./skills/",
               fm.fileExists(atPath: root.appendingPathComponent("skills/computer-use/SKILL.md").path) else {
             throw SetupError.missingSource("Intel plugin metadata")
         }
-        guard intelMCPCommand(at: root) == "./bin/SentientComputerUseMCP" else {
+        guard let mcp = intelMCPConfiguration(at: root),
+              mcp.count == 2,
+              mcp["command"] as? String == "./bin/SentientComputerUseMCP",
+              mcp["cwd"] as? String == "." else {
             throw SetupError.missingSource("Intel .mcp.json route")
         }
         guard hasValidIntelExecutables(in: root) else {
@@ -307,6 +324,38 @@ enum ComputerUseSetup {
                 throw SetupError.copy("Intel plugin references SkyComputerUseService in \(relativePath)")
             }
         }
+    }
+
+    private static func validateIntelMarketplace(at root: URL) throws {
+        let manifestURL = root.appendingPathComponent(".agents/plugins/marketplace.json")
+        guard let data = try? Data(contentsOf: manifestURL),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["name"] as? String == "sentient",
+              let plugins = object["plugins"] as? [[String: Any]], plugins.count == 1,
+              plugins[0]["name"] as? String == "computer-use",
+              let source = plugins[0]["source"] as? [String: Any], source.count == 2,
+              source["source"] as? String == "local",
+              source["path"] as? String == "./plugins/computer-use",
+              let policy = plugins[0]["policy"] as? [String: Any],
+              policy["installation"] as? String == "AVAILABLE" else {
+            throw SetupError.missingSource("Sentient marketplace manifest")
+        }
+        try validateIntelPlugin(at: root.appendingPathComponent("plugins/computer-use"))
+    }
+
+    private static func validationTool(_ launch: String, _ arguments: [String])
+        -> (status: Int32, output: String) {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: launch)
+        process.arguments = arguments
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do { try process.run() }
+        catch { return (-1, "") }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 
     /// Enable Sentient's Intel plugin in-place and explicitly disable OpenAI's plugin.
@@ -323,8 +372,10 @@ enum ComputerUseSetup {
         }
         let updated: String
         do {
+            let withMarketplace = try ComputerUsePluginConfig.settingLocalMarketplace(
+                name: "sentient", source: intelMarketplaceInstallRoot.path, in: original)
             let withIntel = try ComputerUsePluginConfig.settingEnabled(
-                true, for: .sentientIntel, in: original, createIfMissing: true)
+                true, for: .sentientIntel, in: withMarketplace, createIfMissing: true)
             updated = try ComputerUsePluginConfig.settingEnabled(
                 false, for: .sky, in: withIntel, createIfMissing: true)
         } catch {

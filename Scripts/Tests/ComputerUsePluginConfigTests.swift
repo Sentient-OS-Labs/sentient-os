@@ -10,6 +10,7 @@ struct ComputerUsePluginConfigTests {
         try testPatchIsIdempotent()
         testExplicitPluginStatesDoNotConflateAbsentAndInvalid()
         try testBothArchitectureMigrationsRemainStrictlyExclusive()
+        try testLocalMarketplaceRegistrationIsExactAndIdempotent()
         print("ComputerUsePluginConfig fixtures passed")
     }
 
@@ -153,6 +154,34 @@ struct ComputerUsePluginConfigTests {
         expect(!ComputerUsePluginConfig.hasExclusiveBackend(
             active: .sky, inactive: .sentientIntel, in: invalidInactive),
             "ambiguous inactive state must block readiness")
+    }
+
+    private static func testLocalMarketplaceRegistrationIsExactAndIdempotent() throws {
+        let original = """
+        [marketplaces.keep-me]
+        source_type = "git"
+        source = "https://example.com/keep.git"
+        """
+        let source = "/tmp/Sentient Marketplace"
+        let once = try ComputerUsePluginConfig.settingLocalMarketplace(
+            name: "sentient", source: source, in: original)
+        let twice = try ComputerUsePluginConfig.settingLocalMarketplace(
+            name: "sentient", source: source, in: once)
+        expect(once == twice, "marketplace registration must be byte-idempotent")
+        expect(once.contains("[marketplaces.keep-me]"),
+               "marketplace registration must preserve unrelated marketplaces")
+        expect(ComputerUsePluginConfig.localMarketplaceSource(name: "sentient", in: once) == source,
+               "registered marketplace must report its exact local source")
+
+        let conflicting = once.replacingOccurrences(of: source, with: "/wrong")
+        do {
+            _ = try ComputerUsePluginConfig.settingLocalMarketplace(
+                name: "sentient", source: source, in: conflicting)
+            fail("existing marketplace with a different source must be rejected")
+        } catch let error as ComputerUsePluginConfig.PatchError {
+            expect(error == .invalidMarketplace("sentient"),
+                   "unexpected marketplace conflict error: \(error)")
+        }
     }
 
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {

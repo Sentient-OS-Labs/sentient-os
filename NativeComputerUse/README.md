@@ -34,6 +34,8 @@ xcodebuild -project 'Sentient OS macOS.xcodeproj' \
 
 Scripts/verify-intel-computer-use.sh \
   'work/intel-cu-derived/Build/Products/Debug/Sentient OS.app'
+Scripts/verify-intel-computer-use-discovery.sh \
+  'work/intel-cu-derived/Build/Products/Debug/Sentient OS.app'
 
 xcodebuild -project 'Sentient OS macOS.xcodeproj' \
   -scheme 'Sentient OS macOS' -configuration Debug \
@@ -46,9 +48,11 @@ git diff --check
 ```
 
 The Intel Xcode build runs `Scripts/build-intel-computer-use.sh`. It builds both SwiftPM executables in
-Release as x86_64, stages them with `Plugin/` at `Contents/Resources/IntelComputerUse`, and signs each
-staged executable with Xcode's expanded identity or ad hoc (`-`) when there is none. The arm64 phase
-removes any stale Intel bundle instead.
+Release as x86_64, stages a complete local marketplace at `Contents/Resources/IntelComputerUse`, and
+signs each staged executable with Xcode's expanded identity or ad hoc (`-`) when there is none. The
+verifier checks the manifests, exact MCP command/cwd, architecture, signatures, and a bounded MCP
+handshake. The discovery verifier additionally proves the marketplace and installed plugin through a
+real Codex CLI with an isolated `CODEX_HOME`. The arm64 phase removes any stale Intel bundle instead.
 
 For a local ad hoc-signed app when no Apple signing identity is installed:
 
@@ -70,7 +74,8 @@ archive, notarization, and DMG workflow.
 ## Installation and selection
 
 At compile time, `ComputerUseBackend.current` selects `.sentientIntel` for x86_64 and `.sky` for
-arm64. On Intel, `ComputerUseSetup` validates and copies the signed bundle to:
+arm64. On Intel, `ComputerUseSetup` validates and copies the signed marketplace snapshot to
+`~/.codex/.tmp/marketplaces/sentient/`, then copies its plugin to:
 
 ```text
 ~/.codex/plugins/cache/sentient/computer-use/1.0.0/
@@ -81,16 +86,25 @@ arm64. On Intel, `ComputerUseSetup` validates and copies the signed bundle to:
 └── skills/computer-use/SKILL.md
 ```
 
-It then enables this canonical table in `~/.codex/config.toml`:
+It then registers the local marketplace, enables Sentient, and explicitly disables Sky in
+`~/.codex/config.toml`:
 
 ```toml
+[marketplaces.sentient]
+source_type = "local"
+source = "/Users/you/.codex/.tmp/marketplaces/sentient"
+
 [plugins."computer-use@sentient"]
 enabled = true
+
+[plugins."computer-use@openai-bundled"]
+enabled = false
 ```
 
-If the OpenAI computer-use table already exists, Intel setup sets it to `enabled = false`. It refuses
-ambiguous duplicate or dotted plugin keys rather than guessing. Intel setup never downloads, copies, or
-launches Sky. Apple Silicon continues to install `computer-use@openai-bundled` from OpenAI's DMG.
+Setup preserves unrelated marketplaces and refuses ambiguous, conflicting, duplicate, or dotted owned
+keys rather than guessing. Apple Silicon performs the exact inverse plugin selection. Intel setup never
+downloads, copies, or launches Sky. Apple Silicon continues to install
+`computer-use@openai-bundled` from OpenAI's DMG.
 
 ## Permissions
 

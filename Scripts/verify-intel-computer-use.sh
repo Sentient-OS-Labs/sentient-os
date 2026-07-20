@@ -11,9 +11,12 @@ APP="$1"
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
 SOURCE_ROOT="${SENTIENT_INTEL_SOURCE_ROOT:-$ROOT/Sentient OS macOS}"
 INTEL_ROOT="$APP/Contents/Resources/IntelComputerUse"
-MCP="$INTEL_ROOT/bin/SentientComputerUseMCP"
-SERVICE="$INTEL_ROOT/bin/SentientComputerUseService"
-PLUGIN_MCP="$INTEL_ROOT/.mcp.json"
+PLUGIN_ROOT="$INTEL_ROOT/plugins/computer-use"
+MCP="$PLUGIN_ROOT/bin/SentientComputerUseMCP"
+SERVICE="$PLUGIN_ROOT/bin/SentientComputerUseService"
+PLUGIN_MCP="$PLUGIN_ROOT/.mcp.json"
+PLUGIN_MANIFEST="$PLUGIN_ROOT/.codex-plugin/plugin.json"
+MARKETPLACE_MANIFEST="$INTEL_ROOT/.agents/plugins/marketplace.json"
 
 if [ ! -d "$INTEL_ROOT" ]; then
   echo "error: Intel computer-use bundle not found: $INTEL_ROOT" >&2
@@ -31,6 +34,10 @@ for executable in "$MCP" "$SERVICE"; do
     echo "error: expected x86_64-only executable at $executable; found: ${architectures:-not Mach-O}" >&2
     exit 1
   fi
+  if ! /usr/bin/codesign --verify --strict "$executable" 2>/dev/null; then
+    echo "error: bundled executable has no valid code signature: $executable" >&2
+    exit 1
+  fi
 done
 
 JQ="$(command -v jq || true)"
@@ -42,15 +49,65 @@ if [ ! -f "$PLUGIN_MCP" ]; then
   echo "error: Intel plugin .mcp.json is missing" >&2
   exit 1
 fi
-MCP_COMMAND="$($JQ -er '.mcpServers["computer-use"].command | select(type == "string")' "$PLUGIN_MCP" 2>/dev/null || true)"
-if [ "$MCP_COMMAND" != "./bin/SentientComputerUseMCP" ]; then
-  echo "error: Intel plugin command must be exactly ./bin/SentientComputerUseMCP" >&2
+if ! "$JQ" -e '.mcpServers["computer-use"] == {
+    "command": "./bin/SentientComputerUseMCP",
+    "cwd": "."
+  }' "$PLUGIN_MCP" >/dev/null 2>&1; then
+  echo "error: Intel plugin command/cwd contract is invalid" >&2
+  exit 1
+fi
+
+if ! "$JQ" -e '
+    .name == "computer-use"
+    and .version == "1.0.0"
+    and .mcpServers == "./.mcp.json"
+    and .skills == "./skills/"
+  ' "$PLUGIN_MANIFEST" >/dev/null 2>&1; then
+  echo "error: Intel plugin manifest fields are invalid" >&2
+  exit 1
+fi
+
+if ! "$JQ" -e '
+    .name == "sentient"
+    and (.plugins | length) == 1
+    and .plugins[0].name == "computer-use"
+    and .plugins[0].source == {"source":"local","path":"./plugins/computer-use"}
+    and .plugins[0].policy.installation == "AVAILABLE"
+  ' "$MARKETPLACE_MANIFEST" >/dev/null 2>&1; then
+  echo "error: Sentient marketplace manifest is missing or invalid" >&2
   exit 1
 fi
 
 if /usr/bin/grep -R -q 'SkyComputerUseService' "$INTEL_ROOT"; then
   echo "error: Intel plugin bundle references SkyComputerUseService" >&2
   exit 1
+fi
+
+if [ "${SENTIENT_SKIP_MCP_HANDSHAKE:-NO}" != "YES" ]; then
+  HANDSHAKE_OUTPUT="$(/usr/bin/mktemp "${TMPDIR:-/tmp}/sentient-mcp-handshake.XXXXXX")"
+  if ! /usr/bin/printf '%s\n' \
+      '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"sentient-verifier","version":"1"}}}' \
+      '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+      '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+      | /usr/bin/perl -e '$timeout=shift; $SIG{ALRM}=sub{exit 124}; alarm $timeout; exec {$ARGV[0]} @ARGV' 5 "$MCP" \
+      > "$HANDSHAKE_OUTPUT"; then
+    /bin/rm -f "$HANDSHAKE_OUTPUT"
+    echo "error: Intel MCP handshake failed or timed out" >&2
+    exit 1
+  fi
+  if ! "$JQ" -s -e '
+      length == 2
+      and .[0].id == 1
+      and .[0].result.serverInfo.name == "sentient-computer-use"
+      and .[1].id == 2
+      and ([.[1].result.tools[].name] | sort)
+        == (["click","get_app_state","list_apps","press_key","scroll","type_text"] | sort)
+    ' "$HANDSHAKE_OUTPUT" >/dev/null 2>&1; then
+    /bin/rm -f "$HANDSHAKE_OUTPUT"
+    echo "error: Intel MCP handshake returned an invalid tool contract" >&2
+    exit 1
+  fi
+  /bin/rm -f "$HANDSHAKE_OUTPUT"
 fi
 
 # Audit the compiled app, not just shared source. Debug builds put most Swift code in a dylib next
@@ -204,4 +261,4 @@ if ! /usr/bin/grep -F -q 'helperScreenRecordingRelaunchRequired' "$ACTIVE_HEALTH
   exit 1
 fi
 
-echo "Intel computer-use bundle verified: x86_64 binaries, Sentient MCP route, no Sky service reference"
+echo "Intel computer-use bundle verified: marketplace, signed x86_64 binaries, MCP handshake, no Sky service reference"

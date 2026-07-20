@@ -35,6 +35,7 @@ enum ComputerUsePluginConfig {
         case dottedKey(String)
         case duplicateTable(String)
         case duplicateEnabledKey(String)
+        case invalidMarketplace(String)
 
         var errorDescription: String? {
             switch self {
@@ -44,6 +45,8 @@ enum ComputerUsePluginConfig {
                 "Duplicate plugin tables for \(identifier)."
             case .duplicateEnabledKey(let identifier):
                 "Duplicate enabled keys for \(identifier)."
+            case .invalidMarketplace(let name):
+                "Marketplace \(name) is duplicated, ambiguous, or points somewhere else."
             }
         }
     }
@@ -116,6 +119,40 @@ enum ComputerUsePluginConfig {
         return lines.joined(separator: "\n")
     }
 
+    static func localMarketplaceSource(name: String, in text: String) -> String? {
+        let lines = text.components(separatedBy: "\n")
+        guard !containsDottedMarketplaceKey(name: name, in: lines) else { return nil }
+        let indexes = lines.indices.filter { isMarketplaceTable(lines[$0], name: name) }
+        guard indexes.count == 1, let tableIndex = indexes.first else { return nil }
+        let endIndex = endOfTable(startingAt: tableIndex, in: lines)
+        let sourceTypes = values(forKey: "source_type", from: tableIndex + 1, to: endIndex, in: lines)
+        let sources = values(forKey: "source", from: tableIndex + 1, to: endIndex, in: lines)
+        guard sourceTypes == ["local"], sources.count == 1 else { return nil }
+        return sources[0]
+    }
+
+    static func settingLocalMarketplace(name: String, source: String, in text: String) throws -> String {
+        let lines = text.components(separatedBy: "\n")
+        let indexes = lines.indices.filter { isMarketplaceTable(lines[$0], name: name) }
+        guard !containsDottedMarketplaceKey(name: name, in: lines), indexes.count <= 1 else {
+            throw PatchError.invalidMarketplace(name)
+        }
+        if !indexes.isEmpty {
+            guard localMarketplaceSource(name: name, in: text) == source else {
+                throw PatchError.invalidMarketplace(name)
+            }
+            return text
+        }
+
+        var updated = lines
+        if updated.last != "" { updated.append("") }
+        updated.append("[marketplaces.\(name)]")
+        updated.append("source_type = \"local\"")
+        updated.append("source = \"\(tomlEscaped(source))\"")
+        updated.append("")
+        return updated.joined(separator: "\n")
+    }
+
     private static func isTable(_ line: String, for plugin: Plugin) -> Bool {
         let value = uncommented(line).trimmingCharacters(in: .whitespacesAndNewlines)
         guard value.hasPrefix("["), value.hasSuffix("]") else { return false }
@@ -125,6 +162,56 @@ enum ComputerUsePluginConfig {
                 || inner == "\(root).'\(plugin.identifier)'" { return true }
         }
         return false
+    }
+
+    private static func isMarketplaceTable(_ line: String, name: String) -> Bool {
+        let value = uncommented(line).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("["), value.hasSuffix("]") else { return false }
+        let inner = value.dropFirst().dropLast().filter { !$0.isWhitespace }
+        for root in ["marketplaces", #""marketplaces""#, "'marketplaces'"] {
+            if inner == "\(root).\(name)" || inner == #"\#(root)."\#(name)""#
+                || inner == "\(root).'\(name)'" { return true }
+        }
+        return false
+    }
+
+    private static func containsDottedMarketplaceKey(name: String, in lines: [String]) -> Bool {
+        var insideMarketplaceRoot = false
+        for line in lines {
+            if isAnyTable(line) {
+                let table = uncommented(line).trimmingCharacters(in: .whitespacesAndNewlines)
+                    .filter { !$0.isWhitespace }
+                insideMarketplaceRoot = ["[marketplaces]", "[\"marketplaces\"]", "['marketplaces']"]
+                    .contains(String(table))
+                continue
+            }
+            guard let lhs = assignmentLHS(line) else { continue }
+            let normalized = lhs.replacingOccurrences(of: "\"", with: "")
+                .replacingOccurrences(of: "'", with: "")
+            if normalized.hasPrefix("marketplaces.\(name).")
+                || (insideMarketplaceRoot && normalized.hasPrefix("\(name).")) { return true }
+        }
+        return false
+    }
+
+    private static func values(forKey key: String, from start: Int, to end: Int,
+                               in lines: [String]) -> [String] {
+        (start..<end).compactMap { index in
+            let parts = uncommented(lines[index]).split(separator: "=", maxSplits: 1,
+                                                         omittingEmptySubsequences: false)
+            guard parts.count == 2,
+                  parts[0].trimmingCharacters(in: .whitespacesAndNewlines) == key else { return nil }
+            let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let data = value.data(using: .utf8),
+                  let decoded = try? JSONSerialization.jsonObject(
+                    with: data, options: [.fragmentsAllowed]) as? String else { return "" }
+            return decoded
+        }
+    }
+
+    private static func tomlEscaped(_ value: String) -> String {
+        value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     private static func containsDottedEnabledKey(_ plugin: Plugin, in lines: [String]) -> Bool {
