@@ -22,6 +22,7 @@ public final class ServiceDispatcher {
     private let inspector: any AccessibilityInspecting
     private let elementResolver: any SnapshotElementReferenceResolving
     private let input: any InputControlling
+    private let applicationActivator: any ApplicationActivating
     private let permissions: any PermissionChecking
     private let screenCapturer: any ScreenCapturing
     private var didCleanup = false
@@ -40,6 +41,7 @@ public final class ServiceDispatcher {
             inspector: inspector,
             elementResolver: inspector,
             input: input,
+            applicationActivator: SystemApplicationActivator(),
             permissions: SystemPermissionChecker(),
             screenCapturer: ScreenCapturer()
         )
@@ -50,6 +52,7 @@ public final class ServiceDispatcher {
         inspector: any AccessibilityInspecting,
         elementResolver: any SnapshotElementReferenceResolving,
         input: any InputControlling,
+        applicationActivator: any ApplicationActivating,
         permissions: any PermissionChecking,
         screenCapturer: any ScreenCapturing
     ) {
@@ -57,6 +60,7 @@ public final class ServiceDispatcher {
         self.inspector = inspector
         self.elementResolver = elementResolver
         self.input = input
+        self.applicationActivator = applicationActivator
         self.permissions = permissions
         self.screenCapturer = screenCapturer
     }
@@ -112,9 +116,10 @@ public final class ServiceDispatcher {
                 try input.validate(coordinate: coordinate)
             }
             try requireAccessibility()
+            let application = try catalog.resolve(parsed.app)
+            try activate(application)
             let element: SnapshotElementReference?
             if let index = parsed.elementIndex {
-                let application = try catalog.resolve(parsed.app)
                 element = try elementResolver.resolveLatestElementReference(app: application, index: index)
             } else {
                 element = nil
@@ -123,26 +128,30 @@ public final class ServiceDispatcher {
             return successResult
         case .typeText:
             let app = try appArgument(request.arguments, allowed: ["app", "text"])
-            _ = app
             let text = try requiredString("text", in: request.arguments)
             try requireAccessibility()
+            let application = try catalog.resolve(app)
+            try activate(application)
             try input.typeText(text)
             return successResult
         case .pressKey:
             let app = try appArgument(request.arguments, allowed: ["app", "key"])
-            _ = app
             let key = try requiredString("key", in: request.arguments)
             try validateKey(key)
             try requireAccessibility()
+            let application = try catalog.resolve(app)
+            try activate(application)
             try input.pressKey(key)
             return successResult
         case .scroll:
             let parsed = try parseScroll(request.arguments)
-            let anchor = try scrollAnchor(for: parsed)
+            try requireAccessibility()
+            let application = try catalog.resolve(parsed.app)
+            let anchor = try scrollAnchor(for: parsed, application: application)
             if let anchor {
                 try input.validate(coordinate: anchor)
             }
-            try requireAccessibility()
+            try activate(application)
             try input.scroll(direction: parsed.direction, pages: parsed.pages, anchor: anchor)
             return successResult
         }
@@ -174,14 +183,22 @@ public final class ServiceDispatcher {
         return (app, elementIndex, direction, pages)
     }
 
-    private func scrollAnchor(for parsed: (app: String, elementIndex: Int?, direction: ScrollDirection, pages: Int)) throws -> CGPoint? {
+    private func scrollAnchor(
+        for parsed: (app: String, elementIndex: Int?, direction: ScrollDirection, pages: Int),
+        application: ApplicationDescriptor
+    ) throws -> CGPoint? {
         guard let index = parsed.elementIndex else { return nil }
-        let application = try catalog.resolve(parsed.app)
         let element = try elementResolver.latestElement(app: application, index: index)
         guard let frame = element.frame else {
             throw ServiceError(code: .elementNotFound, message: "Element has no frame")
         }
         return CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+    }
+
+    private func activate(_ application: ApplicationDescriptor) throws {
+        guard applicationActivator.activateAndVerifyFrontmost(application) else {
+            throw ServiceError(code: .applicationNotFound, message: "Application could not be focused")
+        }
     }
 
     private func requireAccessibility() throws {

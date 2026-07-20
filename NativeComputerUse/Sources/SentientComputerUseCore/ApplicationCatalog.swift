@@ -55,6 +55,36 @@ protocol ApplicationCataloging {
     func resolve(_ query: String) throws -> ApplicationDescriptor
 }
 
+protocol ApplicationActivating {
+    func activateAndVerifyFrontmost(_ app: ApplicationDescriptor) -> Bool
+}
+
+struct SystemApplicationActivator: ApplicationActivating {
+    private let timeout: TimeInterval
+    private let pollInterval: TimeInterval
+
+    init(timeout: TimeInterval = 1, pollInterval: TimeInterval = 0.02) {
+        self.timeout = timeout
+        self.pollInterval = pollInterval
+    }
+
+    func activateAndVerifyFrontmost(_ app: ApplicationDescriptor) -> Bool {
+        guard let runningApplication = NSRunningApplication(
+            processIdentifier: pid_t(app.processIdentifier)
+        ) else { return false }
+
+        _ = runningApplication.activate(options: [.activateAllWindows])
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+                return true
+            }
+            Thread.sleep(forTimeInterval: pollInterval)
+        } while Date() < deadline
+        return false
+    }
+}
+
 public struct SystemWorkspaceProvider: WorkspaceProviding {
     public init() {}
 

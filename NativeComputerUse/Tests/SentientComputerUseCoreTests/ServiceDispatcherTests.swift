@@ -54,7 +54,7 @@ final class ServiceDispatcherTests: XCTestCase {
         }
 
         XCTAssertEqual(fixtures.catalog.applicationsCount, 1)
-        XCTAssertEqual(fixtures.catalog.resolveCount, 3)
+        XCTAssertEqual(fixtures.catalog.resolveCount, 5)
         XCTAssertEqual(fixtures.inspector.snapshotCount, 1)
         XCTAssertEqual(fixtures.inspector.resolveReferenceCount, 1)
         XCTAssertEqual(fixtures.inspector.latestElementCount, 1)
@@ -148,6 +148,58 @@ final class ServiceDispatcherTests: XCTestCase {
         XCTAssertEqual(fixtures.input.clickCount, 0)
     }
 
+    func testEveryMutatingActionResolvesAndActivatesItsRequestedApplication() async {
+        let fixtures = DispatcherFixtures()
+        let requests: [ServiceRequest] = [
+            .init(id: "click", operation: .click, arguments: ["app": .string("Notes"), "x": .int(10), "y": .int(10)]),
+            .init(id: "text", operation: .typeText, arguments: ["app": .string("Notes"), "text": .string("hello")]),
+            .init(id: "key", operation: .pressKey, arguments: ["app": .string("Notes"), "key": .string("Return")]),
+            .init(id: "scroll", operation: .scroll, arguments: ["app": .string("Notes"), "direction": .string("down")])
+        ]
+
+        for request in requests {
+            let response = await fixtures.dispatcher.handle(request)
+            XCTAssertEqual(response.id, request.id)
+        }
+
+        XCTAssertEqual(fixtures.catalog.resolvedQueries, ["Notes", "Notes", "Notes", "Notes"])
+        XCTAssertEqual(fixtures.activator.activatedProcessIdentifiers, [1, 1, 1, 1])
+    }
+
+    func testMissingRequestedApplicationPreventsGlobalInput() async {
+        let fixtures = DispatcherFixtures(missingApplicationQueries: ["Missing"])
+
+        let response = await fixtures.dispatcher.handle(.init(
+            id: "missing",
+            operation: .typeText,
+            arguments: ["app": .string("Missing"), "text": .string("must not escape")]
+        ))
+
+        XCTAssertEqual(response, .failure(
+            id: "missing",
+            ServiceError(code: .applicationNotFound, message: "Application not found")
+        ))
+        XCTAssertEqual(fixtures.activator.activatedProcessIdentifiers, [])
+        XCTAssertEqual(fixtures.input.typeTextCount, 0)
+    }
+
+    func testFocusVerificationFailurePreventsGlobalInput() async {
+        let fixtures = DispatcherFixtures(activationSucceeds: false)
+
+        let response = await fixtures.dispatcher.handle(.init(
+            id: "focus",
+            operation: .pressKey,
+            arguments: ["app": .string("Notes"), "key": .string("Return")]
+        ))
+
+        XCTAssertEqual(response, .failure(
+            id: "focus",
+            ServiceError(code: .applicationNotFound, message: "Application could not be focused")
+        ))
+        XCTAssertEqual(fixtures.activator.activatedProcessIdentifiers, [1])
+        XCTAssertEqual(fixtures.input.pressKeyCount, 0)
+    }
+
     func testDispatcherCleanupForwardsOnceAndDeletesCurrentCapture() async throws {
         let capturer = CleanupCapturer()
         let fixtures = DispatcherFixtures(screenCapturer: capturer)
@@ -167,11 +219,21 @@ private final class DispatcherFixtures {
     let catalog = FakeCatalog()
     let inspector = FakeInspector()
     let input = FakeInputController()
+    let activator: FakeApplicationActivator
     let permissions: FakePermissionChecker
     let capturer: FakeCapturer
     let dispatcher: ServiceDispatcher
 
-    init(accessibilityGranted: Bool = true, screenRecordingGranted: Bool = true, captureError: Error? = nil, screenCapturer: (any ScreenCapturing)? = nil) {
+    init(
+        accessibilityGranted: Bool = true,
+        screenRecordingGranted: Bool = true,
+        captureError: Error? = nil,
+        screenCapturer: (any ScreenCapturing)? = nil,
+        missingApplicationQueries: Set<String> = [],
+        activationSucceeds: Bool = true
+    ) {
+        catalog.missingQueries = missingApplicationQueries
+        activator = FakeApplicationActivator(succeeds: activationSucceeds)
         permissions = FakePermissionChecker(accessibilityGranted: accessibilityGranted, screenRecordingGranted: screenRecordingGranted)
         capturer = FakeCapturer(error: captureError)
         dispatcher = ServiceDispatcher(
@@ -179,6 +241,7 @@ private final class DispatcherFixtures {
             inspector: inspector,
             elementResolver: inspector,
             input: input,
+            applicationActivator: activator,
             permissions: permissions,
             screenCapturer: screenCapturer ?? capturer
         )
@@ -188,6 +251,8 @@ private final class DispatcherFixtures {
 private final class FakeCatalog: ApplicationCataloging {
     private(set) var applicationsCount = 0
     private(set) var resolveCount = 0
+    private(set) var resolvedQueries: [String] = []
+    var missingQueries: Set<String> = []
 
     func applications() -> [ApplicationDescriptor] {
         applicationsCount += 1
@@ -196,7 +261,25 @@ private final class FakeCatalog: ApplicationCataloging {
 
     func resolve(_ query: String) throws -> ApplicationDescriptor {
         resolveCount += 1
+        resolvedQueries.append(query)
+        if missingQueries.contains(query) {
+            throw ServiceError(code: .applicationNotFound, message: "Application not found")
+        }
         return .fixture
+    }
+}
+
+private final class FakeApplicationActivator: ApplicationActivating {
+    private let succeeds: Bool
+    private(set) var activatedProcessIdentifiers: [Int32] = []
+
+    init(succeeds: Bool) {
+        self.succeeds = succeeds
+    }
+
+    func activateAndVerifyFrontmost(_ app: ApplicationDescriptor) -> Bool {
+        activatedProcessIdentifiers.append(app.processIdentifier)
+        return succeeds
     }
 }
 

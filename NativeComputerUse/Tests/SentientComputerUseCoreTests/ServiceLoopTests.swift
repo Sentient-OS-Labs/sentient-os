@@ -231,10 +231,15 @@ private final class LoopFixtures: @unchecked Sendable {
             inspector: inspector,
             elementResolver: inspector,
             input: LoopInput(),
+            applicationActivator: LoopApplicationActivator(),
             permissions: LoopPermissions(),
             screenCapturer: capturer
         )
     }
+}
+
+private struct LoopApplicationActivator: ApplicationActivating {
+    func activateAndVerifyFrontmost(_ app: ApplicationDescriptor) -> Bool { true }
 }
 
 private final class LoopCatalog: ApplicationCataloging, @unchecked Sendable {
