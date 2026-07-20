@@ -50,6 +50,11 @@ public protocol WorkspaceProviding {
     func runningApplications() -> [WorkspaceApplication]
 }
 
+protocol ApplicationCataloging {
+    func applications() -> [ApplicationDescriptor]
+    func resolve(_ query: String) throws -> ApplicationDescriptor
+}
+
 public struct SystemWorkspaceProvider: WorkspaceProviding {
     public init() {}
 
@@ -71,7 +76,7 @@ public struct SystemWorkspaceProvider: WorkspaceProviding {
     }
 }
 
-public final class ApplicationCatalog {
+public final class ApplicationCatalog: ApplicationCataloging {
     private let workspace: any WorkspaceProviding
 
     public init(workspace: any WorkspaceProviding = SystemWorkspaceProvider()) {

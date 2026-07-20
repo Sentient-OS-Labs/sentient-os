@@ -117,7 +117,12 @@ struct SnapshotElementReference: Sendable, Equatable {
     let axReference: AXElementReference
 }
 
-public final class AccessibilityInspector: AccessibilityInspecting {
+/// Keeps AX references out of all service wire types while allowing semantic input.
+protocol SnapshotElementReferenceResolving {
+    func resolveElementReference(snapshotToken: UUID, index: Int) throws -> SnapshotElementReference
+}
+
+public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElementReferenceResolving {
     public static let defaultMaxDepth = 12
     public static let defaultMaxElements = 500
 
@@ -269,7 +274,7 @@ public final class SystemAXProvider: AXProviding {
         return actions as? [String] ?? []
     }
 
-    private func resolve(_ reference: AXElementReference) throws -> AXUIElement {
+    func resolve(_ reference: AXElementReference) throws -> AXUIElement {
         guard let element = elementsByReference[reference] else {
             throw ServiceError(code: .staleSnapshot, message: "Snapshot expired")
         }

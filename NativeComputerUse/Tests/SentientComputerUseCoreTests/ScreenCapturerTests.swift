@@ -1,0 +1,59 @@
+import CoreGraphics
+import Foundation
+import XCTest
+@testable import SentientComputerUseCore
+
+final class ScreenCapturerTests: XCTestCase {
+    func testCaptureWritesOnePNGToTheServiceTemporaryDirectory() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentientComputerUseTests-\(UUID().uuidString)", isDirectory: true)
+        let backend = FakeScreenCaptureBackend(image: try makeImage())
+        let capturer = ScreenCapturer(
+            backend: backend,
+            temporaryDirectory: directory
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let result = try await capturer.captureMainDisplay()
+
+        XCTAssertEqual(result.displayID, 42)
+        XCTAssertEqual(result.width, 1)
+        XCTAssertEqual(result.height, 1)
+        XCTAssertTrue(result.path.hasPrefix(directory.path + "/"))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: result.path)).prefix(8), Data([137, 80, 78, 71, 13, 10, 26, 10]))
+        XCTAssertEqual(backend.captureCount, 1)
+    }
+}
+
+private final class FakeScreenCaptureBackend: ScreenCaptureBacking {
+    private let image: CGImage
+    private(set) var captureCount = 0
+
+    init(image: CGImage) {
+        self.image = image
+    }
+
+    func captureMainDisplay() async throws -> CapturedScreenImage {
+        captureCount += 1
+        return CapturedScreenImage(displayID: 42, image: image)
+    }
+}
+
+private func makeImage() throws -> CGImage {
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(
+        data: nil,
+        width: 1,
+        height: 1,
+        bitsPerComponent: 8,
+        bytesPerRow: 4,
+        space: colorSpace,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+    ) else {
+        throw XCTSkip("Unable to make a fixture image")
+    }
+    context.setFillColor(CGColor(red: 1, green: 0, blue: 0, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: 1, height: 1))
+    guard let image = context.makeImage() else { throw XCTSkip("Unable to make a fixture image") }
+    return image
+}
