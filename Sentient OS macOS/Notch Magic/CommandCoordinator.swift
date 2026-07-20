@@ -12,7 +12,8 @@
 //  Hotkey path: press → notch OPENS + mic (if already authorized) · still-held @250ms → committed
 //  listening · release(hold) → transcribe → submit(.voice) · release(tap) → a focused TYPE field →
 //  submit. Prompt-bar path: submit(.promptBar). Card-fire path: beginExternalRun (a proactive card's
-//  computer-use fire adopts the same run — ONE task at a time, app-wide, and the notch shows it).
+//  fire — computer, gmail, or calendar — adopts the same run — ONE task at a time, app-wide, and the
+//  notch shows it).
 //  Every command is computer use, which raises the notch. A hotkey press during any real run is the
 //  universal STOP. Doc: Documentation/Notch Magic/.
 //
@@ -174,9 +175,9 @@ final class CommandCoordinator {
         run.stop()
     }
 
-    // MARK: Adopted external runs (a proactive card's computer-use fire)
+    // MARK: Adopted external runs (a proactive card's fire — any channel)
 
-    /// A proactive card's computer-use fire adopting the notch: the run model lights up — locking
+    /// A proactive card's fire (computer, gmail, or calendar) adopting the notch: the run model lights up — locking
     /// out every other entry point — and the notch rises in `.running`, exactly like a command-bar
     /// launch. Returns false when a task already owns the run (the ONE-task-at-a-time lock): the
     /// caller must not fire. Doubles as the gate-held re-check — a fire the permission gate held

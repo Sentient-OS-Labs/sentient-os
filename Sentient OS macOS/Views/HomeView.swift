@@ -317,7 +317,7 @@ struct HomeView: View {
                     slot: slots[min(item.offset, slots.count - 1)],
                     dealFrom: CGPoint(x: geo.size.width / 2, y: -160),
                     fireDimmed: appState.commandCoordinator.run.isRunning
-                        && item.element.action?.method == .computer,
+                        && item.element.action.map { ProactiveExecutor.isFireable($0.method) } == true,
                     onOffer: { model.run(item.element.id) },
                     onDetail: { openLetter(item.element.b) },
                     onOpenEnvelope: {
@@ -513,7 +513,7 @@ struct HomeView: View {
                            liveDraft: model.entry(b.id)?.action?.preparedContent ?? b.draft ?? "",
                            liveRecipient: model.entry(b.id)?.action?.recipient ?? "",
                            fireDimmed: appState.commandCoordinator.run.isRunning
-                               && model.entry(b.id)?.action?.method == .computer,
+                               && model.entry(b.id)?.action.map { ProactiveExecutor.isFireable($0.method) } == true,
                            onCommitEdit: { model.applyEdit(b.id, content: $0, recipient: $1) },
                            onOffer: {
                                closeLetter()
@@ -655,11 +655,11 @@ final class ForYouModel {
     func run(_ id: String) {
         guard let e = entry(id), e.phase == .offer, e.b.offer != nil else { return }
         if let action = e.action {   // real card → fire for real (behind the first-use permission gate)
-            // The app-wide one-task lock (computer use only): while ANY task owns the run — a
+            // The app-wide one-task lock (every fireable channel): while ANY task owns the run — a
             // Sidekick/command-bar run or another card — a new fire can't start (the CTA is
-            // dimmed; this is the backstop for a click that lands anyway). Gmail/Calendar
-            // connector writes and research are exempt: quiet card-only, concurrent is fine.
-            if action.method == .computer, coordinator?.run.isRunning == true {
+            // dimmed; this is the backstop for a click that lands anyway). Only research is
+            // exempt (nothing fires).
+            if ProactiveExecutor.isFireable(action.method), coordinator?.run.isRunning == true {
                 Log("card fire blocked — a task is already running (one at a time)")
                 return
             }
@@ -691,18 +691,24 @@ final class ForYouModel {
     /// so a re-deal won't show it again. `ProactiveExecutor.fire` reads `action.preparedContent`, so a
     /// draft the user edited in the letter is exactly what gets sent.
     ///
-    /// A computer-use fire is also ADOPTED by the notch (`beginExternalRun`): the shared run lights
-    /// up (the one-task lock engages), the card's lines tee into it, and every exit — success,
-    /// failure, ANY stop — completes the adoption exactly once, here, when `fire` unwinds (it
-    /// always returns, even cancelled). `beginExternalRun`'s refusal doubles as the re-check for a
-    /// fire the permission gate held while another task started.
+    /// Every fireable fire (computer, gmail, calendar) is also ADOPTED by the notch
+    /// (`beginExternalRun`): the shared run lights up (the one-task lock engages), the card's lines
+    /// tee into it, and every exit — success, failure, ANY stop — completes the adoption exactly
+    /// once, here, when `fire` unwinds (it always returns, even cancelled). `beginExternalRun`'s
+    /// refusal doubles as the re-check for a fire the permission gate held while another task
+    /// started.
     private func runReal(_ id: String, _ action: PreparedAction) {
         let v = visit
-        let external = action.method == .computer
+        let external = ProactiveExecutor.isFireable(action.method)
         if external {
+            let fallback: String = switch action.method {
+            case .gmail:    "Sending your email…"
+            case .calendar: "Updating your calendar…"
+            default:        "Working on your Mac…"
+            }
             guard let coordinator,
                   coordinator.beginExternalRun(
-                      caption: entry(id)?.b.title ?? "Working on your Mac…",
+                      caption: entry(id)?.b.title ?? fallback,
                       onStopRequest: { [weak self] in self?.stopRun(id) })
             else { Log("card fire blocked at launch — a task already owns the run"); return }
         }
