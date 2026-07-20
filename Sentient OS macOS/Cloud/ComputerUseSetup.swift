@@ -3,7 +3,8 @@
 //  Sentient OS macOS
 //
 //  Step 3 of Codex setup: make `codex` computer use work on a PLAIN Codex CLI — with NO desktop
-//  app install. OpenAI ships the entire computer-use payload (the plugin + the native
+//  app install. Intel builds install Sentient's bundled x86_64 plugin locally. Apple Silicon
+//  keeps the existing Sky path: OpenAI ships the entire computer-use payload (the plugin + native
 //  "Codex Computer Use.app" helper) bundled INSIDE their desktop app (renamed Codex.app →
 //  ChatGPT.app 2026-07, same DMG URL); the desktop "enable computer use" toggle is a local file
 //  copy PLUS a skill-variant swap (reverse-engineered + proven byte-identical). So we reproduce
@@ -14,7 +15,7 @@
 //
 //  Key entry points:
 //   - ComputerUseSetup.isInstalled            → already bootstrapped? (plugin cache + native helper)
-//   - ComputerUseSetup.install(onLine:)       → download → mount → ditto → variant swap → patch → detach
+//   - ComputerUseSetup.install(onLine:)       → route to bundled Intel or existing Sky installation
 //
 //  Doc: Documentation/Computer-Use Bootstrap (Codex Reverse-Engineering).md
 //
@@ -22,6 +23,10 @@
 import Foundation
 
 enum ComputerUseSetup {
+
+    private static let intelPluginVersion = "1.0.0"
+    private static let intelPluginTable = #"[plugins."computer-use@sentient"]"#
+    private static let skyPluginTable = #"[plugins."computer-use@openai-bundled"]"#
 
     /// OpenAI's official desktop-app installer (public CDN, no auth; still named Codex.dmg after
     /// the app's rename to ChatGPT). The computer-use payload lives inside the app bundle at
@@ -60,11 +65,22 @@ enum ComputerUseSetup {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
     }
 
+    private static var intelInstallRoot: URL {
+        codexHome.appendingPathComponent("plugins/cache/sentient/computer-use/\(intelPluginVersion)")
+    }
+
     /// Already FULLY wired? All three must hold for computer use to actually work — so a half-finished
     /// copy or a config the user edited out reads as "not installed" and gets repaired on the next run
     /// (rather than a bare dir merely existing). NOT a version check: an older but working install
     /// still counts (use `force` to replace it). Also true if the real desktop app set it up.
     static var isInstalled: Bool {
+        switch ComputerUseBackend.current {
+        case .sky: isSkyInstalled
+        case .sentientIntel: isIntelInstalled
+        }
+    }
+
+    private static var isSkyInstalled: Bool {
         let fm = FileManager.default
         // 1) the native helper's actual Mach-O (not just the .app dir → catches a half-copy)
         let helperBin = codexHome.appendingPathComponent(
@@ -83,7 +99,19 @@ enum ComputerUseSetup {
         guard hasPlugin else { return false }
         // 3) config.toml actually enables the plugin
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
-        return config.contains("[plugins.\"computer-use@openai-bundled\"]")
+        return config.contains(skyPluginTable)
+    }
+
+    private static var isIntelInstalled: Bool {
+        let root = intelInstallRoot
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.appendingPathComponent(".codex-plugin/plugin.json").path),
+              fm.fileExists(atPath: root.appendingPathComponent(".mcp.json").path),
+              hasValidIntelExecutables(in: root) else { return false }
+
+        let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
+        return pluginEnabled(in: config, table: intelPluginTable) == true
+            && pluginEnabled(in: config, table: skyPluginTable) != true
     }
 
     // MARK: The bootstrap
@@ -92,8 +120,17 @@ enum ComputerUseSetup {
     /// marketplace into ~/.codex, and patch config.toml. Idempotent (a no-op if already installed).
     /// Streams human-readable progress to `onLine` (same convention as install/login).
     static func install(force: Bool = false, onLine: @escaping @Sendable (String) -> Void) async throws {
+        switch ComputerUseBackend.current {
+        case .sky:
+            try await installSky(force: force, onLine: onLine)
+        case .sentientIntel:
+            try await installIntel(force: force, onLine: onLine)
+        }
+    }
+
+    private static func installSky(force: Bool, onLine: @escaping @Sendable (String) -> Void) async throws {
         let fm = FileManager.default
-        if !force, isInstalled { onLine("✓ Computer use already set up"); return }
+        if !force, isSkyInstalled { onLine("✓ Computer use already set up"); return }
 
         let tmp = fm.temporaryDirectory
         let dmg = tmp.appendingPathComponent("SentientCodex.dmg")
@@ -143,7 +180,31 @@ enum ComputerUseSetup {
         onLine("Patching config.toml…")
         try patchConfig()
 
-        guard isInstalled else { throw SetupError.copy("post-install check failed") }
+        guard isSkyInstalled else { throw SetupError.copy("post-install check failed") }
+        onLine("✓ Computer use ready")
+    }
+
+    /// Intel never downloads, launches, or copies Sky. Its complete plugin tree is signed inside
+    /// Sentient's app bundle, validated before and after copy, then enabled in the user's config.
+    private static func installIntel(force: Bool, onLine: @escaping @Sendable (String) -> Void) async throws {
+        if !force, isIntelInstalled { onLine("✓ Computer use already set up"); return }
+
+        guard let bundledRoot = Bundle.main.resourceURL?.appendingPathComponent("IntelComputerUse", isDirectory: true),
+              FileManager.default.fileExists(atPath: bundledRoot.path) else {
+            throw SetupError.missingSource("bundled IntelComputerUse")
+        }
+
+        onLine("Validating bundled Intel computer use…")
+        try validateIntelPlugin(at: bundledRoot)
+
+        onLine("Installing Intel computer use…")
+        try await dittoReplace(bundledRoot, intelInstallRoot)
+        try validateIntelPlugin(at: intelInstallRoot)
+
+        onLine("Patching config.toml…")
+        try patchIntelConfig()
+
+        guard isIntelInstalled else { throw SetupError.copy("Intel post-install check failed") }
         onLine("✓ Computer use ready")
     }
 
@@ -196,6 +257,156 @@ enum ComputerUseSetup {
             throw SetupError.missingSource("plugin.json version")
         }
         return v
+    }
+
+    private static let intelExecutableNames = ["SentientComputerUseMCP", "SentientComputerUseService"]
+
+    /// Accept only a thin x86_64 Mach-O. A universal binary carrying arm64 is rejected too: the
+    /// Intel plugin must have no executable path that could accidentally route to another backend.
+    private static func isThinX86_64MachO(_ url: URL) -> Bool {
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe), data.count >= 8 else { return false }
+        let bytes = [UInt8](data.prefix(8))
+        return bytes[0...3].elementsEqual([0xcf, 0xfa, 0xed, 0xfe])
+            && bytes[4...7].elementsEqual([0x07, 0x00, 0x00, 0x01])
+    }
+
+    private static func hasValidIntelExecutables(in root: URL) -> Bool {
+        intelExecutableNames.allSatisfy { name in
+            let executable = root.appendingPathComponent("bin/\(name)")
+            return FileManager.default.isExecutableFile(atPath: executable.path)
+                && isThinX86_64MachO(executable)
+        }
+    }
+
+    private static func validateIntelPlugin(at root: URL) throws {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.appendingPathComponent(".codex-plugin/plugin.json").path),
+              fm.fileExists(atPath: root.appendingPathComponent("skills/computer-use/SKILL.md").path) else {
+            throw SetupError.missingSource("Intel plugin metadata")
+        }
+        guard let mcp = try? String(contentsOf: root.appendingPathComponent(".mcp.json"), encoding: .utf8),
+              mcp.contains("./bin/SentientComputerUseMCP") else {
+            throw SetupError.missingSource("Intel .mcp.json route")
+        }
+        guard hasValidIntelExecutables(in: root) else {
+            throw SetupError.copy("Intel executables are missing, not executable, or not x86_64-only")
+        }
+
+        let metadataFiles = [".mcp.json", ".codex-plugin/plugin.json", "skills/computer-use/SKILL.md"]
+        for relativePath in metadataFiles {
+            let text = (try? String(contentsOf: root.appendingPathComponent(relativePath), encoding: .utf8)) ?? ""
+            guard !text.contains("SkyComputerUseService") else {
+                throw SetupError.copy("Intel plugin references SkyComputerUseService in \(relativePath)")
+            }
+        }
+    }
+
+    /// Enable Sentient's Intel plugin in-place and disable OpenAI's plugin if its table already
+    /// exists. Existing tables are edited; duplicate tables/keys are rejected instead of emitting
+    /// invalid TOML. Re-running this function produces byte-identical output.
+    private static func patchIntelConfig() throws {
+        let url = codexHome.appendingPathComponent("config.toml")
+        let original: String
+        if FileManager.default.fileExists(atPath: url.path) {
+            do { original = try String(contentsOf: url, encoding: .utf8) }
+            catch { throw SetupError.config("couldn't read existing config: \(error)") }
+        } else {
+            original = ""
+        }
+        var lines = original.components(separatedBy: "\n")
+
+        try setPluginEnabled(true, table: intelPluginTable, createIfMissing: true, lines: &lines)
+        try setPluginEnabled(false, table: skyPluginTable, createIfMissing: false, lines: &lines)
+
+        let updated = lines.joined(separator: "\n")
+        guard updated != original else { return }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try updated.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            throw SetupError.config("\(error)")
+        }
+    }
+
+    private static func setPluginEnabled(_ enabled: Bool, table: String, createIfMissing: Bool,
+                                         lines: inout [String]) throws {
+        let tableIndexes = lines.indices.filter { tomlTable(in: lines[$0]) == table }
+        guard tableIndexes.count <= 1 else { throw SetupError.config("duplicate \(table) tables") }
+
+        guard let tableIndex = tableIndexes.first else {
+            guard createIfMissing else { return }
+            if lines.last != "" { lines.append("") }
+            lines.append(table)
+            lines.append("enabled = \(enabled)")
+            lines.append("")
+            return
+        }
+
+        var endIndex = lines.count
+        if tableIndex + 1 < lines.count {
+            for index in (tableIndex + 1)..<lines.count where isTomlTable(lines[index]) {
+                endIndex = index
+                break
+            }
+        }
+
+        let enabledIndexes = (tableIndex + 1..<endIndex).filter { tomlAssignmentName(in: lines[$0]) == "enabled" }
+        guard enabledIndexes.count <= 1 else { throw SetupError.config("duplicate enabled key in \(table)") }
+        if let enabledIndex = enabledIndexes.first {
+            lines[enabledIndex] = replacingTomlBoolLine(lines[enabledIndex], value: enabled)
+        } else {
+            lines.insert("enabled = \(enabled)", at: tableIndex + 1)
+        }
+    }
+
+    private static func pluginEnabled(in text: String, table: String) -> Bool? {
+        let lines = text.components(separatedBy: "\n")
+        let tableIndexes = lines.indices.filter { tomlTable(in: lines[$0]) == table }
+        guard tableIndexes.count == 1, let tableIndex = tableIndexes.first else { return nil }
+
+        var values: [Bool] = []
+        if tableIndex + 1 < lines.count {
+            for index in (tableIndex + 1)..<lines.count {
+                if isTomlTable(lines[index]) { break }
+                guard tomlAssignmentName(in: lines[index]) == "enabled" else { continue }
+                let assignment = lines[index].split(separator: "#", maxSplits: 1,
+                                                     omittingEmptySubsequences: false)[0]
+                    .split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+                guard assignment.count == 2 else { return nil }
+                switch assignment[1].trimmingCharacters(in: .whitespacesAndNewlines) {
+                case "true": values.append(true)
+                case "false": values.append(false)
+                default: return nil
+                }
+            }
+        }
+        return values.count == 1 ? values[0] : nil
+    }
+
+    private static func tomlTable(in line: String) -> String? {
+        let value = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return isTomlTable(value) ? value : nil
+    }
+
+    private static func isTomlTable(_ line: String) -> Bool {
+        let value = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.hasPrefix("[") && value.split(separator: "#", maxSplits: 1)[0]
+            .trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("]")
+    }
+
+    private static func tomlAssignmentName(in line: String) -> String? {
+        let value = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false)[0]
+            .split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+        guard value.count == 2 else { return nil }
+        return value[0].trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func replacingTomlBoolLine(_ line: String, value: Bool) -> String {
+        let indentation = line.prefix { $0 == " " || $0 == "\t" }
+        let comment = line.firstIndex(of: "#").map { " " + String(line[$0...]) } ?? ""
+        return "\(indentation)enabled = \(value)\(comment)"
     }
 
     /// Add the three config blocks the desktop toggle writes, only if absent (idempotent). The

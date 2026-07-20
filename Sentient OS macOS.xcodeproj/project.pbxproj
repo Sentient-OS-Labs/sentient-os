@@ -87,6 +87,7 @@
 				5A3F390F2FD0F43300DD835E /* Resources */,
 				5A7E1D0003000000000000C1 /* Copy wake-helper daemon plist */,
 				5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */,
+				5A1C70012FD0F43300DD835E /* Bundle Intel Computer Use */,
 				5AE5710001000000000000B1 /* Upload dSYMs to Sentry */,
 			);
 			buildRules = (
@@ -158,6 +159,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		5A1C70012FD0F43300DD835E /* Bundle Intel Computer Use */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle Intel Computer Use";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/Scripts/build-intel-computer-use.sh\"\n";
+		};
 		5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
