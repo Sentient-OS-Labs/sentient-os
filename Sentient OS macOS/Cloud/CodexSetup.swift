@@ -175,12 +175,12 @@ final class CodexSetup {
             computerUseStatus = "✓ Computer use ready"
             // Sky alone needs an Apple Events grant from Sentient to its separate helper. Intel's
             // native service is Sentient's child and must never inherit any Sky setup side effect.
-            if ComputerUseBackend.current == .sky {
-                Task {
-                    try? await Task.sleep(for: .seconds(2))
-                    Permissions.selfHealComputerUseAutomation(context: "CodexSetup.computerUse")
-                }
+            #if !arch(x86_64)
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                Permissions.selfHealComputerUseAutomation(context: "CodexSetup.computerUse")
             }
+            #endif
         } catch {
             computerUseReady = ComputerUseSetup.isInstalled
             computerUseStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"

@@ -128,10 +128,8 @@ enum HealthCaution {
             if !ComputerUseSetup.isInstalled {
                 if computerUseEverReady { return .computerUseBroken(payloadGone: true) }
             } else {
-                let hands = Permissions.isTCCGranted(service: "kTCCServiceAccessibility",
-                                                     clientBundleID: Permissions.computerUseHelperBundleID)
-                let eyes = Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
-                                                    clientBundleID: Permissions.computerUseHelperBundleID)
+                let hands = Permissions.hasComputerUseAccessibility()
+                let eyes = Permissions.hasComputerUseScreenRecording()
                 if hands && eyes {
                     latchComputerUse()   // healthy — arm the latch so future drift banners
                 } else if computerUseEverReady {

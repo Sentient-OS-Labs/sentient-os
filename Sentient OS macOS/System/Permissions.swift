@@ -17,11 +17,51 @@
 
 import Foundation
 import AppKit
+import ApplicationServices
 import CoreGraphics // CGPreflight/RequestScreenCaptureAccess — Sentient's own Screen Recording grant
 import Security   // SecCode/SecStaticCode → an app's Designated Requirement (the TCC csreq blob)
 import SQLite3    // direct, parameterized write into the user's TCC.db (we already hold Full Disk Access)
 
 enum Permissions {
+
+    // MARK: - Computer-use permission ownership
+
+    /// The TCC identity macOS attributes the active computer-use backend to. Intel's bundled
+    /// service is a child of Sentient, while Sky remains a separately signed helper app.
+    static var computerUsePermissionOwnerBundleID: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel:
+            return Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"
+        case .sky:
+            #if arch(x86_64)
+            preconditionFailure("Sky is unavailable in an Intel build")
+            #else
+            return computerUseHelperBundleID
+            #endif
+        }
+    }
+
+    /// The name users see beside the active TCC owner in System Settings.
+    static var computerUsePermissionOwnerName: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel: return "Sentient OS"
+        case .sky:           return "Codex Computer Use"
+        }
+    }
+
+    /// Resolve the app bundle users grant. Intel grants belong to this app; Sky keeps its helper.
+    static func computerUsePermissionOwnerURL() -> URL? {
+        switch ComputerUseBackend.current {
+        case .sentientIntel:
+            return Bundle.main.bundleURL
+        case .sky:
+            #if arch(x86_64)
+            return nil
+            #else
+            return computerUseHelperURL()
+            #endif
+        }
+    }
 
     // MARK: - Computer use: Automation consent for Codex's helper
     //
@@ -39,6 +79,8 @@ enum Permissions {
     // probe to trigger exactly that; thereafter every run sails through. See PermissionsView.
 
     // MARK: Granting the Automation entry directly (FDA-powered, device- & signer-agnostic)
+
+    #if !arch(x86_64)
 
     /// The Codex Computer Use helper — the Apple Events TARGET we grant ourselves the right to drive.
     static let computerUseHelperBundleID = "com.openai.sky.CUAService"
@@ -176,6 +218,8 @@ enum Permissions {
         }
     }
 
+    #endif
+
     // MARK: - Codex helper: Accessibility + Screen Recording — READ-ONLY status (can't be granted by us)
     //
     // Computer use spawns `codex`, which launches Codex's bundled helper app ("Codex Computer Use.app",
@@ -217,6 +261,40 @@ enum Permissions {
         return sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_int(stmt, 0) == 2
     }
 
+    /// Accessibility for the active computer-use owner. The owner is Sentient itself on Intel and
+    /// Sky's helper on Apple Silicon; both status reads remain read-only.
+    static func hasComputerUseAccessibility() -> Bool {
+        isTCCGranted(service: "kTCCServiceAccessibility",
+                     clientBundleID: computerUsePermissionOwnerBundleID)
+    }
+
+    /// Screen Recording for the active computer-use owner. A newly enabled grant takes effect for
+    /// the responsible process after relaunch, which the permission UI calls out explicitly.
+    static func hasComputerUseScreenRecording() -> Bool {
+        isTCCGranted(service: "kTCCServiceScreenCapture",
+                     clientBundleID: computerUsePermissionOwnerBundleID)
+    }
+
+    /// Intel can ask only for its own Accessibility grant through the public TCC prompt. Sky's
+    /// helper flow remains the existing drag-to-System-Settings path in the callers.
+    @MainActor
+    static func requestComputerUseAccessibility() {
+        #if arch(x86_64)
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String
+        let options = [promptKey: true] as CFDictionary
+        if !AXIsProcessTrustedWithOptions(options) { openAccessibilitySettings() }
+        #endif
+    }
+
+    /// Intel asks for Sentient's own Screen Recording grant with Apple's public request API, then
+    /// opens the matching pane when it is still unavailable.
+    @MainActor
+    static func requestComputerUseScreenRecording() {
+        #if arch(x86_64)
+        if !requestScreenRecording() { openScreenRecordingSettings() }
+        #endif
+    }
+
     // MARK: - Sentient's own Screen Recording (Notch Magic captures the screen for computer-use context)
 
     /// True iff Sentient already holds Screen Recording. `CGPreflight…` never prompts.
@@ -240,6 +318,8 @@ enum Permissions {
             NSWorkspace.shared.open(url)
         }
     }
+
+    #if !arch(x86_64)
 
     /// Serialize the RUNNING app's Designated Requirement — exactly what TCC stores as `csreq`.
     private static func selfRequirementData() throws -> Data {
@@ -279,6 +359,8 @@ enum Permissions {
         try? p.run()
         p.waitUntilExit()
     }
+
+    #endif
 
     /// Canonical FDA-gated files. We can READ any of these *only* with Full Disk Access. We try
     /// several because any single one may be absent on a given Mac (no Messages history, no Safari
