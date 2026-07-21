@@ -95,6 +95,7 @@ public final class ServiceDispatcher {
             try requireAccessibility()
             try requireScreenRecording()
             let application = try catalog.resolve(app)
+            try activate(application)
             let capture: CaptureResult
             do {
                 capture = try await screenCapturer.captureMainDisplay()

@@ -67,6 +67,44 @@ final class ServiceDispatcherTests: XCTestCase {
         XCTAssertEqual(fixtures.capturer.captureCount, 0)
     }
 
+    func testGetAppStateFocusesRequestedBackgroundAppBeforeCaptureAndSnapshot() async {
+        let fixtures = DispatcherFixtures()
+        var events: [String] = []
+        fixtures.catalog.onResolve = { events.append("resolve") }
+        fixtures.activator.onActivate = { events.append("activate") }
+        fixtures.capturer.onCapture = { events.append("capture") }
+        fixtures.inspector.onSnapshot = { events.append("snapshot") }
+
+        let response = await fixtures.dispatcher.handle(.init(
+            id: "focused-state",
+            operation: .getAppState,
+            arguments: ["app": .string("Background Notes")]
+        ))
+
+        XCTAssertEqual(response.id, "focused-state")
+        XCTAssertEqual(fixtures.catalog.resolvedQueries, ["Background Notes"])
+        XCTAssertEqual(fixtures.activator.activatedProcessIdentifiers, [1])
+        XCTAssertEqual(events, ["resolve", "activate", "capture", "snapshot"])
+    }
+
+    func testGetAppStateFocusFailureDoesNotSnapshotOrCapture() async {
+        let fixtures = DispatcherFixtures(activationSucceeds: false)
+
+        let response = await fixtures.dispatcher.handle(.init(
+            id: "unfocused-state",
+            operation: .getAppState,
+            arguments: ["app": .string("Notes")]
+        ))
+
+        XCTAssertEqual(response, .failure(
+            id: "unfocused-state",
+            ServiceError(code: .applicationNotFound, message: "Application could not be focused")
+        ))
+        XCTAssertEqual(fixtures.activator.activatedProcessIdentifiers, [1])
+        XCTAssertEqual(fixtures.capturer.captureCount, 0)
+        XCTAssertEqual(fixtures.inspector.snapshotCount, 0)
+    }
+
     func testEveryOperationRoutesToOnlyItsRequestedDependencyAction() async {
         let fixtures = DispatcherFixtures()
         let requests: [ServiceRequest] = [
@@ -298,6 +336,7 @@ private final class FakeCatalog: ApplicationCataloging {
     private(set) var resolveCount = 0
     private(set) var resolvedQueries: [String] = []
     var missingQueries: Set<String> = []
+    var onResolve: (() -> Void)?
 
     func applications() -> [ApplicationDescriptor] {
         applicationsCount += 1
@@ -305,6 +344,7 @@ private final class FakeCatalog: ApplicationCataloging {
     }
 
     func resolve(_ query: String) throws -> ApplicationDescriptor {
+        onResolve?()
         resolveCount += 1
         resolvedQueries.append(query)
         if missingQueries.contains(query) {
@@ -317,12 +357,14 @@ private final class FakeCatalog: ApplicationCataloging {
 private final class FakeApplicationActivator: ApplicationActivating {
     private let succeeds: Bool
     private(set) var activatedProcessIdentifiers: [Int32] = []
+    var onActivate: (() -> Void)?
 
     init(succeeds: Bool) {
         self.succeeds = succeeds
     }
 
     func activateAndVerifyFrontmost(_ app: ApplicationDescriptor) -> Bool {
+        onActivate?()
         activatedProcessIdentifiers.append(app.processIdentifier)
         return succeeds
     }
@@ -337,8 +379,10 @@ private final class FakeInspector: AccessibilityInspecting, SnapshotElementRefer
     private(set) var latestElementCount = 0
     private(set) var resolvedReferences: [SnapshotElementReference] = []
     private(set) var latestReference: SnapshotElementReference = .fixture
+    var onSnapshot: (() -> Void)?
 
     func snapshot(app: ApplicationDescriptor, maxDepth: Int, maxElements: Int) throws -> AccessibilitySnapshot {
+        onSnapshot?()
         snapshotCount += 1
         latestReference = SnapshotElementReference(
             axReference: AXElementReference(identifier: "snapshot-\(snapshotCount)")
@@ -422,10 +466,12 @@ private final class FakePermissionChecker: PermissionChecking {
 private final class FakeCapturer: ScreenCapturing {
     var error: Error?
     private(set) var captureCount = 0
+    var onCapture: (() -> Void)?
 
     init(error: Error? = nil) { self.error = error }
 
     func captureMainDisplay() async throws -> CaptureResult {
+        onCapture?()
         captureCount += 1
         if let error { throw error }
         return CaptureResult(path: "/tmp/capture.png", displayID: 1, width: 100, height: 50)
