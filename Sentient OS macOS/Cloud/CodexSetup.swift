@@ -17,7 +17,7 @@
 //   - installCodex()       → step 1: run OpenAI's installer (ALWAYS runs — it doubles as the
 //                            updater over an existing install; streams progress)
 //   - startLogin/confirmLogin → step 2: interactive `codex login` (browser) + confirm
-//   - setupComputerUse()   → step 3: bootstrap computer use from OpenAI's DMG (streams progress)
+//   - setupComputerUse()   → step 3: install the architecture-selected backend (streams progress)
 //   - whatsNeeded()        → fresh check of all three; returns the pending steps (smart-flow driver)
 //
 //  Doc: Documentation/Codex Setup Handoff (Onboarding).md  ·  step 3 deep-dive:
@@ -153,9 +153,8 @@ final class CodexSetup {
     func refreshComputerUse() { computerUseReady = ComputerUseSetup.isInstalled }
 
     /// Step 3 — make computer use work on the plain Codex CLI (no desktop app). Detection-first:
-    /// a no-op if already set up. Downloads OpenAI's official installer DMG, lifts out the bundled
-    /// computer-use payload, lays it into ~/.codex, and patches config.toml — streaming progress.
-    /// Both onboarding and the dev button call THIS — no duplicated logic.
+    /// a no-op if already set up. Intel installs Sentient's bundled native plugin; Apple Silicon
+    /// keeps the official OpenAI/Sky bootstrap. Both routes stream progress through this one API.
     func setupComputerUse(force: Bool = false) async {
         guard !settingUpComputerUse else { return }
         if !force, ComputerUseSetup.isInstalled {
@@ -174,14 +173,14 @@ final class CodexSetup {
             }
             computerUseReady = true
             computerUseStatus = "✓ Computer use ready"
-            // The helper is now on disk, so pre-grant the Automation right (Sentient → the helper
-            // over Apple Events) HERE — user-invisible, FDA-writable — so the first fire never
-            // waits on it. Idempotent + fully guarded (no-op without FDA, or if already granted).
-            // A short settle first: the code-signature blob is read off the freshly-laid bundle.
+            // Sky alone needs an Apple Events grant from Sentient to its separate helper. Intel's
+            // native service is Sentient's child and must never inherit any Sky setup side effect.
+            #if !arch(x86_64)
             Task {
                 try? await Task.sleep(for: .seconds(2))
                 Permissions.selfHealComputerUseAutomation(context: "CodexSetup.computerUse")
             }
+            #endif
         } catch {
             computerUseReady = ComputerUseSetup.isInstalled
             computerUseStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"

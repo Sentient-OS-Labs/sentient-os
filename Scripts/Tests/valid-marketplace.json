@@ -1,0 +1,20 @@
+{
+  "name": "sentient",
+  "interface": {
+    "displayName": "Sentient"
+  },
+  "plugins": [
+    {
+      "name": "computer-use",
+      "source": {
+        "source": "local",
+        "path": "./plugins/computer-use"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

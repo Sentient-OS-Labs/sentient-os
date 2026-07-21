@@ -39,6 +39,7 @@ struct HealthPane: View {
     // The Codex helper's system-TCC grants (read via FDA; shown once computer use exists)
     @State private var helperAccessibility = false
     @State private var helperScreenRecording = false
+    @State private var helperScreenRecordingRelaunchRequired = false
 
     // ChatGPT plan (decoded from the user's own codex login — CodexAuth)
     @State private var plan: CodexAuth.Plan?
@@ -99,8 +100,10 @@ struct HealthPane: View {
         }
         .task {
             await refresh()
+            #if !arch(x86_64)
             try? await Task.sleep(for: .seconds(0.5))
             Permissions.selfHealComputerUseAutomation(context: "HealthPane")
+            #endif
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refresh() }   // the user may just have fixed something in System Settings
@@ -192,6 +195,7 @@ struct HealthPane: View {
                     fixMicSpeech()
                 }
                 .rise(3, revealed: revealed)
+                #if !arch(x86_64)
                 StatusLine(title: "Screen Recording",
                            health: screenRec ? .ok : .warn,   // optional — Sidekick runs text-only without it
                            note: screenRec ? "granted" : "optional",
@@ -200,6 +204,7 @@ struct HealthPane: View {
                     fixScreenRecording()
                 }
                 .rise(4, revealed: revealed)
+                #endif
                 StatusLine(title: "Notifications",
                            health: notifHealth,
                            note: notifNote,
@@ -424,34 +429,79 @@ struct HealthPane: View {
         }
     }
 
-    // MARK: - CODEX PERMISSIONS (the helper's hands and eyes — system TCC, status + deep-link only)
+    // MARK: - COMPUTER-USE PERMISSIONS (the active owner's hands and eyes)
 
     private var codexPermissionsGroup: some View {
-        SettingsGroup(label: "Codex Permissions") {
+        SettingsGroup(label: computerUsePermissionsLabel) {
             VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Accessibility (move the mouse, type)",
                            health: helperAccessibility ? .ok : .bad,
                            note: helperAccessibility ? "granted" : "not granted",
-                           tip: "Lets Codex's helper app move the mouse and type for you. Granted to OpenAI's helper, not to Sentient.",
+                           tip: computerUseAccessibilityTip,
                            fixTitle: "Grant…") {
                     guideHelper(.accessibility)
                 }
                 StatusLine(title: "Screen Recording (see the screen)",
-                           health: helperScreenRecording ? .ok : .bad,
-                           note: helperScreenRecording ? "granted" : "not granted",
-                           tip: "Lets Codex's helper app see the screen so it acts on the right thing. Granted to OpenAI's helper, not to Sentient.",
-                           fixTitle: "Grant…") {
+                           health: helperScreenRecording ? .ok
+                               : (helperScreenRecordingRelaunchRequired ? .warn : .bad),
+                           note: helperScreenRecording ? "granted"
+                               : (helperScreenRecordingRelaunchRequired ? "relaunch required" : "not granted"),
+                           tip: computerUseScreenRecordingTip,
+                           fixTitle: helperScreenRecordingRelaunchRequired ? "Relaunch" : "Grant…") {
                     guideHelper(.screenRecording)
                 }
-                SettingsProse("These belong to Codex's Computer Use helper, not Sentient. Flip its switch in each list; macOS may also prompt on the first computer-use run.")
+                SettingsProse(computerUsePermissionInstructions)
                     .padding(.top, 6)
             }
+        }
+    }
+
+    private var computerUsePermissionsLabel: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel: return "\(Permissions.computerUsePermissionOwnerName) Permissions"
+        case .sky:           return "Codex Permissions"
+        }
+    }
+
+    private var computerUseAccessibilityTip: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel:
+            return "Accessibility is granted to Sentient OS. It lets Sentient OS move the mouse and type through its on-device computer-use service."
+        case .sky:
+            return "Lets Codex's helper app move the mouse and type for you. Granted to OpenAI's helper, not to Sentient."
+        }
+    }
+
+    private var computerUseScreenRecordingTip: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel:
+            return "Screen Recording is granted to Sentient OS. It lets Sentient OS see the screen so it acts on the right thing. The grant takes effect after you relaunch Sentient OS."
+        case .sky:
+            return "Lets Codex's helper app see the screen so it acts on the right thing. Granted to OpenAI's helper, not to Sentient."
+        }
+    }
+
+    private var computerUsePermissionInstructions: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel:
+            return "These permissions belong to Sentient OS. Enable Sentient OS in each list, then relaunch after granting Screen Recording."
+        case .sky:
+            return "These belong to Codex's Computer Use helper, not Sentient. Flip its switch in each list; macOS may also prompt on the first computer-use run."
         }
     }
 
     /// The helper's system-TCC grants: the floating drag panel with the helper app as the card
     /// (drag it into the list). Helper somehow missing → the plain deep-link is the fallback.
     private func guideHelper(_ pane: PermissionGuide.Pane) {
+        #if arch(x86_64)
+        if pane == .accessibility {
+            Permissions.requestComputerUseAccessibility()
+        } else if helperScreenRecordingRelaunchRequired {
+            Permissions.relaunch()
+        } else {
+            Permissions.requestComputerUseScreenRecording()
+        }
+        #else
         if let helper = Permissions.computerUseHelperURL() {
             PermissionGuide.shared.guide(pane, dragging: helper)
         } else if pane == .accessibility {
@@ -459,6 +509,7 @@ struct HealthPane: View {
         } else {
             Permissions.openScreenRecordingSettings()
         }
+        #endif
     }
 
     /// The "Re-check" pill on a free/go row — re-mints the token (CodexAuth.refreshPlan) so an
@@ -486,12 +537,9 @@ struct HealthPane: View {
         codex.refreshComputerUse()
         plan = CodexAuth.currentPlan()   // pure file read (the JWT claim on disk)
         if fdaGranted {
-            helperAccessibility = Permissions.isTCCGranted(
-                service: "kTCCServiceAccessibility",
-                clientBundleID: Permissions.computerUseHelperBundleID)
-            helperScreenRecording = Permissions.isTCCGranted(
-                service: "kTCCServiceScreenCapture",
-                clientBundleID: Permissions.computerUseHelperBundleID)
+            helperAccessibility = Permissions.hasComputerUseAccessibility()
+            helperScreenRecording = Permissions.hasComputerUseScreenRecording()
+            helperScreenRecordingRelaunchRequired = Permissions.computerUseScreenRecordingRequiresRelaunch()
         }
         await codex.refreshLoginStatus()   // last — it shells out to `codex login status`
         withAnimation(.easeOut(duration: 0.2)) { checked = true }   // first probe done → reveal

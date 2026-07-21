@@ -29,8 +29,10 @@ struct PermissionsView: View {
     @State private var fdaGranted = false
     @State private var micGranted = false
     @State private var srGranted = false          // Sentient's Screen Recording
+    #if !arch(x86_64)
     @State private var automationGranted = false   // Sentient → Codex helper, Apple Events (user DB)
     @State private var automationStatus: String?
+    #endif
     @State private var daemonReady = false
     @State private var daemonStatus: String?
 
@@ -55,7 +57,9 @@ struct PermissionsView: View {
                     fdaPane
                     micPane
                     screenRecordingPane
+                    #if !arch(x86_64)
                     automationPane
+                    #endif
                     wakeDaemonPane
 
                     sectionHeader("CODEX COMPUTER USE").padding(.top, 8)
@@ -82,13 +86,13 @@ struct PermissionsView: View {
         fdaGranted = Permissions.hasFullDiskAccess()
         micGranted = VoiceCapture.isAuthorized
         srGranted = Permissions.hasScreenRecording()
+        #if !arch(x86_64)
         automationGranted = Permissions.isTCCGranted(service: "kTCCServiceAppleEvents",
                                                      clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS")
+        #endif
         daemonReady = WakeHelperClient.shared.isReady
-        codexAxGranted = Permissions.isTCCGranted(service: "kTCCServiceAccessibility",
-                                                  clientBundleID: Permissions.computerUseHelperBundleID)
-        codexSrGranted = Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
-                                                  clientBundleID: Permissions.computerUseHelperBundleID)
+        codexAxGranted = Permissions.hasComputerUseAccessibility()
+        codexSrGranted = Permissions.hasComputerUseScreenRecording()
     }
 
     // MARK: - Shared pane chrome
@@ -178,6 +182,7 @@ struct PermissionsView: View {
 
     /// Automation — Sentient's right to drive the Codex helper over Apple Events. This one IS ours to
     /// grant: kTCCServiceAppleEvents lives in the writable USER TCC DB, so one click writes it directly.
+    #if !arch(x86_64)
     private var automationPane: some View {
         pane(icon: "desktopcomputer", iconColor: automationGranted ? Theme.verdictColor(.survivor) : Theme.accent,
              title: "Automation — control “Codex Computer Use”", granted: automationGranted,
@@ -196,6 +201,7 @@ struct PermissionsView: View {
                 .buttonStyle(.borderless).controlSize(.small).tint(Theme.accent)
         }
     }
+    #endif
 
     private var wakeDaemonPane: some View {
         pane(icon: "moon.zzz.fill", iconColor: daemonReady ? Theme.verdictColor(.survivor) : Theme.accent,
