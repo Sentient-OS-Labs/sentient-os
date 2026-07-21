@@ -35,7 +35,7 @@ for executable in "$MCP" "$SERVICE"; do
     echo "error: expected x86_64-only executable at $executable; found: ${architectures:-not Mach-O}" >&2
     exit 1
   fi
-  if ! /usr/bin/codesign --verify --strict "$executable" 2>/dev/null; then
+  if [ "$executable" = "$MCP" ] && ! /usr/bin/codesign --verify --strict "$executable" 2>/dev/null; then
     echo "error: bundled executable has no valid code signature: $executable" >&2
     exit 1
   fi

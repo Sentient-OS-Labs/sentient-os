@@ -187,6 +187,34 @@ private final class ServiceTerminationSignals: @unchecked Sendable {
 
 signal(SIGPIPE, SIG_IGN)
 let dispatcher = ServiceDispatcher()
-private let terminationSignals = ServiceTerminationSignals(input: .standardInput)
-await ServiceLoop.run(input: .standardInput, output: .standardOutput, dispatcher: dispatcher)
-withExtendedLifetime(terminationSignals) {}
+let arguments = CommandLine.arguments
+if let requestIndex = arguments.firstIndex(of: "--request-file"),
+   let responseIndex = arguments.firstIndex(of: "--response-file"),
+   arguments.indices.contains(requestIndex + 1),
+   arguments.indices.contains(responseIndex + 1) {
+    let requestURL = URL(fileURLWithPath: arguments[requestIndex + 1]).standardizedFileURL
+    let responseURL = URL(fileURLWithPath: arguments[responseIndex + 1]).standardizedFileURL
+    let ipcRoot = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SentientComputerUseIPC", isDirectory: true)
+        .standardizedFileURL
+    let requestIsLocal = requestURL.path.hasPrefix(ipcRoot.path + "/")
+    let responseIsLocal = responseURL.path.hasPrefix(ipcRoot.path + "/")
+
+    guard requestIsLocal, responseIsLocal,
+          let requestData = try? Data(contentsOf: requestURL),
+          let request = try? JSONDecoder().decode(ServiceRequest.self, from: requestData) else {
+        exit(EXIT_FAILURE)
+    }
+    let response = await dispatcher.handle(request)
+    guard let responseData = try? JSONEncoder().encode(response) else { exit(EXIT_FAILURE) }
+    do {
+        try responseData.write(to: responseURL, options: .atomic)
+        dispatcher.cleanup()
+    } catch {
+        exit(EXIT_FAILURE)
+    }
+} else {
+    let terminationSignals = ServiceTerminationSignals(input: .standardInput)
+    await ServiceLoop.run(input: .standardInput, output: .standardOutput, dispatcher: dispatcher)
+    withExtendedLifetime(terminationSignals) {}
+}

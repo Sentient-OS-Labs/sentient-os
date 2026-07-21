@@ -264,6 +264,93 @@ actor ServiceProcessTransport: ServiceTransport {
     }
 }
 
+actor ServiceApplicationTransport: ServiceTransport {
+    private let applicationURL: URL
+    private let ipcRoot: URL
+    private let responseTimeout: TimeInterval
+    private var currentLauncher: Process?
+    private var isShutDown = false
+
+    init(applicationURL: URL, responseTimeout: TimeInterval = 30) throws {
+        self.applicationURL = applicationURL
+        self.responseTimeout = responseTimeout
+        ipcRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SentientComputerUseIPC", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: ipcRoot,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+    }
+
+    func call(operation: ServiceOperation, arguments: [String: JSONValue]) async throws -> JSONValue {
+        guard !isShutDown else { throw serviceExitedError }
+        let callDirectory = ipcRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: callDirectory,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: callDirectory) }
+
+        let id = UUID().uuidString
+        let requestURL = callDirectory.appendingPathComponent("request.json")
+        let responseURL = callDirectory.appendingPathComponent("response.json")
+        let request = ServiceRequest(id: id, operation: operation, arguments: arguments)
+        try JSONEncoder().encode(request).write(to: requestURL, options: .atomic)
+
+        let launcher = Process()
+        launcher.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        launcher.arguments = [
+            "-W", "-n", "-a", applicationURL.path, "--args",
+            "--request-file", requestURL.path,
+            "--response-file", responseURL.path
+        ]
+        launcher.standardOutput = FileHandle.nullDevice
+        launcher.standardError = FileHandle.standardError
+        currentLauncher = launcher
+        do {
+            try launcher.run()
+        } catch {
+            currentLauncher = nil
+            throw serviceExitedError
+        }
+
+        let deadline = Date().addingTimeInterval(responseTimeout)
+        while Date() < deadline, !isShutDown {
+            if let data = try? Data(contentsOf: responseURL), !data.isEmpty {
+                currentLauncher = nil
+                if launcher.isRunning { launcher.terminate() }
+                guard let response = try? JSONDecoder().decode(ServiceResponse.self, from: data),
+                      response.id == id else {
+                    throw ServiceError(code: .internalError, message: "Invalid response from SentientComputerUseService")
+                }
+                switch response {
+                case .success(_, let result): return result
+                case .failure(_, let error): throw error
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        currentLauncher = nil
+        if launcher.isRunning { launcher.terminate() }
+        throw isShutDown ? serviceExitedError : ServiceError(
+            code: .internalError,
+            message: "SentientComputerUseService response timed out"
+        )
+    }
+
+    func shutdown() {
+        isShutDown = true
+        if let currentLauncher, currentLauncher.isRunning { currentLauncher.terminate() }
+        currentLauncher = nil
+    }
+
+    private var serviceExitedError: ServiceError {
+        ServiceError(code: .internalError, message: "SentientComputerUseService exited")
+    }
+}
+
 private final class TerminationSignals: @unchecked Sendable {
     private let sources: [DispatchSourceSignal]
 
@@ -288,6 +375,11 @@ func siblingServiceURL(adapterURL: URL) -> URL {
         .appendingPathComponent("Contents/MacOS/SentientComputerUseService")
 }
 
+func siblingServiceApplicationURL(adapterURL: URL) -> URL {
+    adapterURL.deletingLastPathComponent()
+        .appendingPathComponent("SentientComputerUseService.app", isDirectory: true)
+}
+
 private func siblingServiceURL() -> URL {
     let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
     let adapter = URL(fileURLWithPath: CommandLine.arguments[0], relativeTo: currentDirectory)
@@ -298,7 +390,11 @@ private func siblingServiceURL() -> URL {
 
 do {
     signal(SIGPIPE, SIG_IGN)
-    let transport = try ServiceProcessTransport(executableURL: siblingServiceURL())
+    let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    let adapter = URL(fileURLWithPath: CommandLine.arguments[0], relativeTo: currentDirectory)
+        .standardizedFileURL
+        .resolvingSymlinksInPath()
+    let transport = try ServiceApplicationTransport(applicationURL: siblingServiceApplicationURL(adapterURL: adapter))
     let terminationSignals = TerminationSignals(input: .standardInput) {
         Task { await transport.shutdown() }
     }

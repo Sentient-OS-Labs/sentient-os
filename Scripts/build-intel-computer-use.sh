@@ -83,6 +83,7 @@ done
 
 SERVICE_APP="$STAGE/plugins/computer-use/bin/SentientComputerUseService.app"
 SERVICE_BINARY="$SERVICE_APP/Contents/MacOS/$SERVICE_NAME"
+/usr/bin/xattr -cr "$SERVICE_APP"
 # shellcheck disable=SC2086 -- SIGN_OPTIONS intentionally expands to separate codesign flags.
 /usr/bin/codesign --force $SIGN_OPTIONS --sign "$SIGN_IDENTITY" "$SERVICE_BINARY"
 # Signing the enclosing app makes macOS TCC attribute Screen Recording and Accessibility to a

@@ -14,6 +14,15 @@ final class ServiceProcessTransportTests: XCTestCase {
         )
     }
 
+    func testServiceApplicationURLUsesSiblingBundle() {
+        let adapter = URL(fileURLWithPath: "/tmp/plugin/bin/SentientComputerUseMCP")
+
+        XCTAssertEqual(
+            siblingServiceApplicationURL(adapterURL: adapter).path,
+            "/tmp/plugin/bin/SentientComputerUseService.app"
+        )
+    }
+
     func testShutdownReturnsAfterGracefulChildExitWithoutSignals() async throws {
         let process = FakeServiceChildProcess(waitResults: [true])
         let fixtures = try TransportFixtures(process: process)
