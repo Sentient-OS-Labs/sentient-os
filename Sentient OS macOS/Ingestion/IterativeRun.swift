@@ -114,7 +114,7 @@ struct IterativeRun {
         // §7.22: if this run includes a DB source (WhatsApp/iMessage/Notes need Full Disk Access),
         // report the FDA probe when it isn't cleanly granted — the top "empty morning" signal (a 3am
         // run that silently reads nothing because TCC denied us). Once per run, structure only.
-        if connectors.contains(where: { [.whatsapp, .imessage, .notes].contains($0.kind) }) {
+        if connectors.contains(where: { [.whatsapp, .imessage, .notes, .appleMail].contains($0.kind) }) {
             Permissions.reportProbe()
         }
 

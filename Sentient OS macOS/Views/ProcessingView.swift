@@ -27,6 +27,7 @@ enum RunSource: Hashable {
     case whatsapp(chatJIDs: Set<String>)    // the opt-in chats to analyze
     case imessage(chatGUIDs: Set<String>)   // the opt-in chats to analyze
     case notes                              // all notes (newest-1000 cap inside the source)
+    case appleMail                          // all Mail accounts (newest-2000 cap inside the source)
 
     var label: String {
         switch self {
@@ -34,11 +35,12 @@ enum RunSource: Hashable {
         case .whatsapp:        return "WhatsApp"
         case .imessage:        return "iMessage"
         case .notes:           return "Apple Notes"
+        case .appleMail:       return "Apple Mail"
         }
     }
 
     /// Map a source selection to the iterative-core connectors. File roots collapse into ONE
-    /// FilesConnector (it pages each root itself); chats/Notes each become their own connector.
+    /// FilesConnector (it pages each root itself); chats/Notes/Mail each become their own connector.
     /// Shared by the home "Analyze Now" and the dev "start on device" buttons so both run the exact
     /// same engine over the same picks.
     static func connectors(from sources: [RunSource]) -> [any Connector] {
@@ -49,6 +51,7 @@ enum RunSource: Hashable {
             case .whatsapp(let jids):  connectors.append(WhatsAppConnector(chatJIDs: jids))
             case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
             case .notes:               connectors.append(NotesConnector())
+            case .appleMail:           connectors.append(MailConnector())
             case .files:               break   // rolled into FilesConnector(roots:)
             }
         }

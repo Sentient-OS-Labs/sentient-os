@@ -69,6 +69,7 @@ struct DevToolsView: View {
     @AppStorage("dbg.run.imessage")  private var runIMessage = false
     @AppStorage("dbg.imessage.chats") private var selectedIMessageChatsCSV = ""
     @AppStorage("dbg.run.notes")     private var runNotes = false
+    @AppStorage("dbg.run.appleMail") private var runAppleMail = false
 
     @State private var run = DevRunModel()
     @State private var deviceJob: DeviceJob?
@@ -587,12 +588,13 @@ struct DevToolsView: View {
                                turnOff: { runIMessage = false },
                                openPicker: { showIMessagePicker = true })
                 notesChip
+                if AppleMailSource.isInstalled { mailChip }
                 gmailChip
                 calendarChip
             }
             .frame(maxWidth: 460)
 
-            Text("The INITIAL / ITERATIVE buttons run every selected source (folders + opted chats + Apple Notes + Gmail + Calendar) through the iterative core. Select only one to test it alone.")
+            Text("The INITIAL / ITERATIVE buttons run every selected source (folders + opted chats + Apple Notes + Apple Mail + Gmail + Calendar) through the iterative core. Select only one to test it alone.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
@@ -611,6 +613,21 @@ struct DevToolsView: View {
         .overlay(Capsule().strokeBorder(on ? .clear : Theme.stroke, lineWidth: 1))
         .contentShape(Capsule())
         .onTapGesture { guard fdaGranted else { return }; runNotes.toggle() }
+    }
+
+    private var mailChip: some View {
+        let on = runAppleMail && fdaGranted
+        return HStack(spacing: 6) {
+            Image(systemName: on ? "checkmark.circle.fill" : "envelope").font(.system(size: 11))
+            Text("Apple Mail").font(.caption.weight(.medium)).lineLimit(1)
+        }
+        .foregroundStyle(on ? .black : (fdaGranted ? Theme.secondary : Theme.faint))
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 11).padding(.vertical, 6)
+        .background(on ? Theme.accent : Color.white.opacity(0.06), in: Capsule())
+        .overlay(Capsule().strokeBorder(on ? .clear : Theme.stroke, lineWidth: 1))
+        .contentShape(Capsule())
+        .onTapGesture { guard fdaGranted else { return }; runAppleMail.toggle() }
     }
 
     /// Gmail (cloud). Not connected → tap opens the connect popup; connected → tap toggles selection.
