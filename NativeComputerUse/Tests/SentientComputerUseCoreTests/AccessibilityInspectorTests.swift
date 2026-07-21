@@ -76,6 +76,27 @@ final class AccessibilityInspectorTests: XCTestCase {
         XCTAssertLessThanOrEqual(encoded.count, 512 * 1_024)
         XCTAssertTrue(snapshot.text.hasSuffix("…[snapshot truncated]"))
     }
+
+    func testSnapshotRequestsOnlyTheRemainingChildBudget() throws {
+        let provider = VirtualWideAXProvider(availableChildren: 1_000_000)
+        let inspector = AccessibilityInspector(provider: provider)
+
+        let snapshot = try inspector.snapshot(app: .fixture, maxDepth: 1, maxElements: 500)
+
+        XCTAssertEqual(snapshot.elements.count, 500)
+        XCTAssertEqual(provider.requestedLimits, [499])
+        XCTAssertEqual(provider.generatedChildren, 499)
+    }
+
+    func testAttributeNormalizationStopsAfterBoundedInputWork() throws {
+        let oversizedLeadingWhitespace = String(repeating: " \n", count: 100_000) + "unreachable"
+        let provider = FakeAXProvider(tree: .chain(length: 1, attributeText: oversizedLeadingWhitespace))
+        let inspector = AccessibilityInspector(provider: provider)
+
+        let snapshot = try inspector.snapshot(app: .fixture, maxDepth: 0, maxElements: 1)
+
+        XCTAssertNil(snapshot.elements[0].title)
+    }
 }
 
 private final class FakeAXProvider: AXProviding {
@@ -97,8 +118,35 @@ private final class FakeAXProvider: AXProviding {
         nodes[element]!
     }
 
-    func children(of element: AXElementReference) throws -> [AXElementReference] {
-        childrenByNode[element, default: []]
+    func children(of element: AXElementReference, limit: Int) throws -> [AXElementReference] {
+        Array(childrenByNode[element, default: []].prefix(limit))
+    }
+}
+
+private final class VirtualWideAXProvider: AXProviding {
+    private let root = AXElementReference(identifier: "root")
+    private let availableChildren: Int
+    private(set) var requestedLimits: [Int] = []
+    private(set) var generatedChildren = 0
+
+    init(availableChildren: Int) {
+        self.availableChildren = availableChildren
+    }
+
+    func rootElement(for app: ApplicationDescriptor) throws -> AXElementReference {
+        root
+    }
+
+    func attributes(for element: AXElementReference) throws -> AXElementAttributes {
+        AXElementAttributes(role: "AXButton", title: element.identifier, value: nil, frame: nil, actions: [])
+    }
+
+    func children(of element: AXElementReference, limit: Int) throws -> [AXElementReference] {
+        requestedLimits.append(limit)
+        guard element == root else { return [] }
+        let count = min(availableChildren, max(0, limit))
+        generatedChildren += count
+        return (0..<count).map { AXElementReference(identifier: "child-\($0)") }
     }
 }
 

@@ -42,7 +42,7 @@ public struct AXElementAttributes: Sendable, Equatable {
 public protocol AXProviding {
     func rootElement(for app: ApplicationDescriptor) throws -> AXElementReference
     func attributes(for element: AXElementReference) throws -> AXElementAttributes
-    func children(of element: AXElementReference) throws -> [AXElementReference]
+    func children(of element: AXElementReference, limit: Int) throws -> [AXElementReference]
 }
 
 public struct SnapshotElement: Codable, Sendable, Equatable {
@@ -177,8 +177,11 @@ public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElem
             elements.append(element)
             references.append(item.element)
 
-            if item.depth < depthLimit {
-                queue.append(contentsOf: try provider.children(of: item.element).map { ($0, item.depth + 1) })
+            let pendingElements = queue.count - cursor
+            let remainingChildBudget = elementLimit - elements.count - pendingElements
+            if item.depth < depthLimit, remainingChildBudget > 0 {
+                let children = try provider.children(of: item.element, limit: remainingChildBudget)
+                queue.append(contentsOf: children.map { ($0, item.depth + 1) })
             }
         }
 
@@ -236,19 +239,46 @@ public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElem
         return snapshot
     }
 
-    private static func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let normalized = value.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
-        return normalized.isEmpty ? nil : normalized
-    }
-
     private static func boundedNormalized(_ value: String?) -> String? {
-        guard let normalized = normalized(value) else { return nil }
-        return boundedUTF8(
-            normalized,
-            maximumBytes: maximumAttributeUTF8Bytes,
-            marker: attributeTruncationMarker
-        )
+        guard let value else { return nil }
+        let markerBytes = attributeTruncationMarker.utf8.count
+        let contentLimit = max(0, maximumAttributeUTF8Bytes - markerBytes)
+        let inputWorkLimit = maximumAttributeUTF8Bytes * 2
+        var result = ""
+        var outputBytes = 0
+        var inspectedBytes = 0
+        var pendingSpace = false
+        var truncated = false
+
+        for character in value {
+            let characterBytes = String(character).utf8.count
+            guard inspectedBytes + characterBytes <= inputWorkLimit else {
+                truncated = true
+                break
+            }
+            inspectedBytes += characterBytes
+
+            if character.isWhitespace {
+                pendingSpace = !result.isEmpty
+                continue
+            }
+
+            let separatorBytes = pendingSpace ? 1 : 0
+            guard outputBytes + separatorBytes + characterBytes <= contentLimit else {
+                truncated = true
+                break
+            }
+            if pendingSpace {
+                result.append(" ")
+                outputBytes += 1
+                pendingSpace = false
+            }
+            result.append(character)
+            outputBytes += characterBytes
+        }
+
+        guard !result.isEmpty else { return nil }
+        return truncated ? result + attributeTruncationMarker : result
     }
 
     private static func boundedSnapshot(
@@ -306,19 +336,6 @@ public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElem
         (try? JSONEncoder().encode(snapshot).count) ?? .max
     }
 
-    private static func boundedUTF8(_ value: String, maximumBytes: Int, marker: String) -> String {
-        guard value.utf8.count > maximumBytes else { return value }
-        let contentLimit = max(0, maximumBytes - marker.utf8.count)
-        var result = ""
-        var byteCount = 0
-        for character in value {
-            let characterBytes = String(character).utf8.count
-            guard byteCount + characterBytes <= contentLimit else { break }
-            result.append(character)
-            byteCount += characterBytes
-        }
-        return result + marker
-    }
 }
 
 public final class SystemAXProvider: AXProviding {
@@ -343,14 +360,29 @@ public final class SystemAXProvider: AXProviding {
         )
     }
 
-    public func children(of element: AXElementReference) throws -> [AXElementReference] {
+    public func children(of element: AXElementReference, limit: Int) throws -> [AXElementReference] {
+        guard limit > 0 else { return [] }
         let axElement = try resolve(element)
         let processIdentifier = try processIdentifier(for: element)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(axElement, kAXChildrenAttribute as CFString, &value) == .success,
-              let children = value as? [AXUIElement] else {
+        var availableCount = 0
+        guard AXUIElementGetAttributeValueCount(
+            axElement,
+            kAXChildrenAttribute as CFString,
+            &availableCount
+        ) == .success else {
             return []
         }
+        var values: CFArray?
+        let requestedCount = min(availableCount, limit)
+        guard requestedCount > 0,
+              AXUIElementCopyAttributeValues(
+                axElement,
+                kAXChildrenAttribute as CFString,
+                0,
+                requestedCount,
+                &values
+              ) == .success,
+              let children = values as? [AXUIElement] else { return [] }
         return children.map { store($0, for: processIdentifier) }
     }
 
