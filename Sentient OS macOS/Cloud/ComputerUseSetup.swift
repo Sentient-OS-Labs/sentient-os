@@ -409,8 +409,10 @@ enum ComputerUseSetup {
         do {
             let withoutSkyNotify = try ComputerUsePluginConfig.removingOwnedSkyNotify(
                 from: original, executable: skyNotifyClient.path)
+            let withoutLegacySkyMCP = try ComputerUsePluginConfig.removingOwnedLegacySkyMCPServer(
+                from: withoutSkyNotify, executable: skyNotifyClient.path)
             let withMarketplace = try ComputerUsePluginConfig.settingLocalMarketplace(
-                name: "sentient", source: intelMarketplaceInstallRoot.path, in: withoutSkyNotify)
+                name: "sentient", source: intelMarketplaceInstallRoot.path, in: withoutLegacySkyMCP)
             let withIntel = try ComputerUsePluginConfig.settingEnabled(
                 true, for: .sentientIntel, in: withMarketplace, createIfMissing: true)
             updated = try ComputerUsePluginConfig.settingEnabled(

@@ -12,6 +12,7 @@ struct ComputerUsePluginConfigTests {
         try testBothArchitectureMigrationsRemainStrictlyExclusive()
         try testLocalMarketplaceRegistrationIsExactAndIdempotent()
         try testIntelMigrationRemovesOnlyOwnedSkyNotify()
+        try testIntelMigrationRemovesOnlyOwnedLegacySkyMCPServer()
         try await testSkyConfigOnlyMigrationDoesNotDownload()
         try await testMissingSkyPayloadUsesFullInstallPath()
         print("ComputerUsePluginConfig fixtures passed")
@@ -213,6 +214,36 @@ struct ComputerUsePluginConfigTests {
             expect(Data(preserved.utf8) == Data(fixture.utf8),
                    "unrelated notify config must remain byte-identical")
         }
+    }
+
+    private static func testIntelMigrationRemovesOnlyOwnedLegacySkyMCPServer() throws {
+        let skyClient = "/Users/test/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+        let legacyRelativeClient = "./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+        let owned = """
+        model = "gpt-5"
+
+        [mcp_servers.computer-use]
+        command = "\(legacyRelativeClient)"
+        args = ["mcp"]
+        cwd = "."
+        enabled = false
+
+        [plugins."keep-me"]
+        enabled = true
+        """
+        let removed = try ComputerUsePluginConfig.removingOwnedLegacySkyMCPServer(
+            from: owned, executable: skyClient)
+        expect(!removed.contains("[mcp_servers.computer-use]"),
+               "Intel migration must remove the stale global Sky MCP table")
+        expect(removed.contains("[plugins.\"keep-me\"]"),
+               "Intel migration must preserve the following unrelated table")
+
+        let unrelated = owned.replacingOccurrences(
+            of: legacyRelativeClient, with: "/usr/local/bin/custom-mcp")
+        let preserved = try ComputerUsePluginConfig.removingOwnedLegacySkyMCPServer(
+            from: unrelated, executable: skyClient)
+        expect(preserved == unrelated,
+               "a custom computer-use MCP table must remain byte-identical")
     }
 
     private static func testSkyConfigOnlyMigrationDoesNotDownload() async throws {

@@ -94,6 +94,28 @@ enum ComputerUsePluginConfig {
         return lines.joined(separator: "\n")
     }
 
+    static func removingOwnedLegacySkyMCPServer(from text: String, executable: String) throws -> String {
+        var lines = text.components(separatedBy: "\n")
+        let tableIndexes = lines.indices.filter { isLegacyComputerUseMCPTable(lines[$0]) }
+        for tableIndex in tableIndexes.reversed() {
+            let endIndex = endOfTable(startingAt: tableIndex, in: lines)
+            let commands = values(forKey: "command", from: tableIndex + 1, to: endIndex, in: lines)
+            let cwds = values(forKey: "cwd", from: tableIndex + 1, to: endIndex, in: lines)
+            let body = lines.dropFirst(tableIndex + 1).prefix(endIndex - tableIndex - 1)
+                .joined(separator: "\n")
+            let legacyRelativeExecutable = "./Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+            guard commands.count == 1,
+                  commands[0] == executable || commands[0] == legacyRelativeExecutable,
+                  cwds == ["."],
+                  body.range(of: #"args\s*=\s*\[\s*\"mcp\"\s*\]"#,
+                             options: String.CompareOptions.regularExpression) != nil,
+                  body.range(of: #"enabled\s*=\s*false"#,
+                             options: String.CompareOptions.regularExpression) != nil else { continue }
+            lines.removeSubrange(tableIndex..<endIndex)
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Dotted aliases are unsupported because appending/editing a table-form key beside one can
     /// produce duplicate TOML semantics. Readiness callers use this to distinguish "plugin absent"
     /// from "plugin state is ambiguous and must be repaired explicitly".
@@ -206,6 +228,14 @@ enum ComputerUsePluginConfig {
                 || inner == "\(root).'\(name)'" { return true }
         }
         return false
+    }
+
+    private static func isLegacyComputerUseMCPTable(_ line: String) -> Bool {
+        let value = uncommented(line).trimmingCharacters(in: .whitespacesAndNewlines)
+            .filter { !$0.isWhitespace }
+        return ["[mcp_servers.computer-use]", #"[mcp_servers.\"computer-use\"]"#,
+                "['mcp_servers'.'computer-use']", #"[\"mcp_servers\".\"computer-use\"]"#]
+            .contains(String(value))
     }
 
     private static func containsDottedMarketplaceKey(name: String, in lines: [String]) -> Bool {
