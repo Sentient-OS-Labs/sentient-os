@@ -55,6 +55,27 @@ final class BucketPointer {
     }
 }
 
+/// DURABLE — one per processed sourceID, regardless of cycle. The fingerprint registry that lets
+/// IterativeRun skip the model call when an item reappears past the high-water mark with unchanged
+/// content. The canonical case: a file whose `addedToDirectoryDate` was refreshed by macOS (iCloud
+/// sync, Spotlight, an app rewrite) but whose `(mtime, size)` is identical — re-summarizing it would
+/// burn model cycles on a verdict we already have. Wiped only by an explicit INITIAL reset
+/// (`clearBucket`) or factory reset (`wipeEverything`).
+@Model
+final class ProcessedItem {
+    @Attribute(.unique) var sourceID: String       // "file:/abs/path" / "notes:<uuid>" / "mail:<rowid>" / …
+    var fingerprint: String                         // content marker — "(mtime)|(size)" for files
+    var bucketKey: String                           // so `clearBucket` can scope its wipe
+    var processedAt: Date
+
+    init(sourceID: String, fingerprint: String, bucketKey: String, processedAt: Date = Date()) {
+        self.sourceID = sourceID
+        self.fingerprint = fingerprint
+        self.bucketKey = bucketKey
+        self.processedAt = processedAt
+    }
+}
+
 /// EPHEMERAL — one survivor summary for one item, this cycle only.
 @Model
 final class CycleNote {
@@ -173,6 +194,10 @@ actor CycleStore {
     func clearBucket(_ bucketKey: String) {
         if let r = row(bucketKey) { modelContext.delete(r) }
         try? modelContext.delete(model: CycleNote.self, where: #Predicate { $0.bucketKey == bucketKey })
+        // The fingerprint registry is durable across cycles, but an explicit INITIAL drops it for this
+        // bucket — the user asked for a clean re-summarize, so the next run can't shortcut on a stale
+        // match.
+        try? modelContext.delete(model: ProcessedItem.self, where: #Predicate { $0.bucketKey == bucketKey })
         try? modelContext.save()
     }
 
@@ -229,6 +254,34 @@ actor CycleStore {
                 CrashReporting.capture(error)
             }
         }
+    }
+
+    // MARK: Fingerprints (durable — the unchanged-item skip)
+
+    /// True if we've previously processed `sourceID` and recorded exactly `fingerprint`. The skip
+    /// path's sole read — called once per candidate that carries a fingerprint. A fetch failure
+    /// degrades to `false` (re-summarize) rather than silently skipping new content.
+    func fingerprintMatches(_ sourceID: String, _ fingerprint: String) -> Bool {
+        guard let r = try? modelContext.fetch(
+            FetchDescriptor<ProcessedItem>(predicate: #Predicate { $0.sourceID == sourceID })
+        ).first else { return false }
+        return r.fingerprint == fingerprint
+    }
+
+    /// Record (or update) the fingerprint for a processed item. Called after a real model run —
+    /// not after a skip — so the registry carries what we ACTUALLY summarized, not what we declined
+    /// to. Survives cycle wipes (durable across proactive runs); cleared only by INITIAL or factory
+    /// reset (see `clearBucket` / `wipeEverything`).
+    func recordFingerprint(_ sourceID: String, fingerprint: String, bucketKey: String) {
+        let pred = #Predicate<ProcessedItem> { $0.sourceID == sourceID }
+        if let existing = try? modelContext.fetch(FetchDescriptor<ProcessedItem>(predicate: pred)).first {
+            existing.fingerprint = fingerprint
+            existing.bucketKey = bucketKey
+            existing.processedAt = Date()
+        } else {
+            modelContext.insert(ProcessedItem(sourceID: sourceID, fingerprint: fingerprint, bucketKey: bucketKey))
+        }
+        try? modelContext.save()
     }
 
     // MARK: Notes (ephemeral)
@@ -305,6 +358,7 @@ actor CycleStore {
     func wipeEverything() {
         try? modelContext.delete(model: CycleNote.self)
         try? modelContext.delete(model: BucketPointer.self)
+        try? modelContext.delete(model: ProcessedItem.self)
         try? modelContext.save()
     }
 
@@ -344,7 +398,7 @@ extension CycleStore {
     /// the namespaced `SentientOS` root in Application Support). Wipe-and-retry-once on an
     /// incompatible schema change (dev convenience).
     static let shared: CycleStore = {
-        let schema = Schema([BucketPointer.self, CycleNote.self])
+        let schema = Schema([BucketPointer.self, CycleNote.self, ProcessedItem.self])
         let url = URL.sentientSupport.appending(path: "IterativeCycle.store")
         let config = ModelConfiguration(schema: schema, url: url)
         if let container = try? ModelContainer(for: schema, configurations: config) {

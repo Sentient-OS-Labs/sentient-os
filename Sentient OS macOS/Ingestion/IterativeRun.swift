@@ -285,6 +285,28 @@ struct IterativeRun {
                     p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
                     p.lastFilePath = w.item.metadata["path"]
 
+                    // Unchanged-item skip: a file whose `addedToDirectoryDate` was refreshed by macOS
+                    // (iCloud sync, Spotlight, an app rewrite) — without a content change — would land
+                    // past the high-water mark with a "new" ItemKey and get re-summarized. The
+                    // Candidate carries a content fingerprint (mtime|size for files); a durable
+                    // registry match means we already have a verdict, so skip the extraction AND the
+                    // model call. The mark still advances; the verdict counters don't (no verdict was
+                    // ever produced for THIS run). Reload counter also doesn't tick — the GPU wasn't
+                    // touched, so no fragmentation to clear.
+                    if let fp = w.item.fingerprint, await store.fingerprintMatches(w.item.id, fp) {
+                        p.lastTitle = nil
+                        p.lastSummary = "(unchanged since last run — skipped)"
+                        p.lastVerdict = nil
+                        switch effective {
+                        case .iterative: await store.advance(bucketKey: bucket.key, note: nil, to: w.key)
+                        case .initial:   await store.sinkFloor(bucketKey: bucket.key, note: nil, top: top!, floor: w.key)
+                        case .auto:      break
+                        }
+                        p.done += 1; processedThisConnector += 1
+                        onProgress(p)
+                        continue
+                    }
+
                     var result = await attempt(w.item, connector: connector)
                     // B10: only a GENERATE failure implicates the engine → the GPU-wedge reload path.
                     // An extraction failure means the file is bad; the engine is fine — never reload for it.
@@ -327,6 +349,13 @@ struct IterativeRun {
                     case .iterative: await store.advance(bucketKey: bucket.key, note: draft, to: w.key)
                     case .initial:   await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
                     case .auto:      break
+                    }
+                    // Record the content fingerprint (when the candidate carries one) so a future run
+                    // can skip an unchanged reappearance. Recorded on every outcome — including
+                    // failures — because the mark has already advanced past this item; a re-attempt
+                    // next run would only repeat the same failure for the same content.
+                    if let fp = w.item.fingerprint {
+                        await store.recordFingerprint(w.item.id, fingerprint: fp, bucketKey: bucket.key)
                     }
                     sinceReload += 1; p.done += 1; processedThisConnector += 1
                     onProgress(p)

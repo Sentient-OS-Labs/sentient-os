@@ -34,6 +34,12 @@ enum SourceKind: String, Codable, Sendable, CaseIterable {
 /// (displayPath, name, created, windowText/noteText, isGroup…). The iterative core keys on `id` plus
 /// the connector's `ItemKey`; `cursorKey`/`cursorValue` are vestigial (sources still set them, but
 /// nothing reads them — they can be dropped in a later sweep).
+///
+/// `fingerprint` is an optional content marker (e.g. "mtime|size" for files). When set, IterativeRun
+/// checks it against a durable registry of previously-processed items — if it matches, the model
+/// call is skipped. This is defense-in-depth against ItemKey drift: a file's addedToDirectoryDate
+/// can refresh on macOS (iCloud sync, Spotlight, app rewrites) even when its content is byte-
+/// identical, which would otherwise push it past the high-water mark and re-summarize it.
 struct Candidate: Sendable, Identifiable {
     let id: String                    // stable source id, e.g. "file:/Users/…/a.pdf"
     let kind: SourceKind
@@ -41,15 +47,17 @@ struct Candidate: Sendable, Identifiable {
     let cursorValue: String           // vestigial
     let itemDate: Date                // the artifact's OWN date (drives ordering + the summary's date)
     let metadata: [String: String]
+    let fingerprint: String?          // optional content marker — if matched, skip the model call
 
     init(id: String, kind: SourceKind, cursorKey: String = "", cursorValue: String = "",
-         itemDate: Date, metadata: [String: String] = [:]) {
+         itemDate: Date, metadata: [String: String] = [:], fingerprint: String? = nil) {
         self.id = id
         self.kind = kind
         self.cursorKey = cursorKey
         self.cursorValue = cursorValue
         self.itemDate = itemDate
         self.metadata = metadata
+        self.fingerprint = fingerprint
     }
 }
 

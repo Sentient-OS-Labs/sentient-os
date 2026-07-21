@@ -226,7 +226,8 @@ struct FilesSource: Sendable {
         let now = Date()
         let rootDepth = root.pathComponents.count
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey,
-                                         .fileSizeKey, .creationDateKey, .addedToDirectoryDateKey]
+                                         .fileSizeKey, .creationDateKey, .addedToDirectoryDateKey,
+                                         .contentModificationDateKey]
         guard let enumerator = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: Array(keys),
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
@@ -265,10 +266,20 @@ struct FilesSource: Sendable {
             ]
             if let created = vals?.creationDate { meta["created"] = Self.dateString(created) }
 
+            // Content fingerprint — defends against `addedToDirectoryDate` refreshing on an unchanged
+            // file (iCloud sync, Spotlight, app rewrites): mtime+size is stable across such refreshes,
+            // so an unchanged file that drifts past the mark is recognized and skipped in IterativeRun.
+            // mtime alone is insufficient: a same-second edit with the same size (rare but possible for
+            // tiny text edits) would slip through. The pair is a pragmatic 1-line-of-defense; content
+            // hashing is overkill here.
+            let mtime = vals?.contentModificationDate ?? .distantPast
+            let size = vals?.fileSize ?? 0
+            let fingerprint = "\(Int(mtime.timeIntervalSince1970))|\(size)"
+
             let candidate = Candidate(id: "file:\(url.path)", kind: .file,
                                       cursorKey: cursorKey,
                                       cursorValue: Self.pointerValue(date: added, path: url.path),
-                                      itemDate: added, metadata: meta)
+                                      itemDate: added, metadata: meta, fingerprint: fingerprint)
             rows.append((candidate, added.timeIntervalSince1970))
         }
         let kept = cappedNewestFirst(rows, budget: Self.perRootCap, now: now)
