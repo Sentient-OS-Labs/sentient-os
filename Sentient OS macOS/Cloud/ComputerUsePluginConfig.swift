@@ -81,6 +81,19 @@ enum ComputerUsePluginConfig {
         state(active, in: text) == .enabled && state(inactive, in: text) == .disabled
     }
 
+    static func hasOwnedSkyNotify(in text: String, executable: String) -> Bool {
+        topLevelOwnedSkyNotifyIndexes(in: text, executable: executable).isEmpty == false
+    }
+
+    static func removingOwnedSkyNotify(from text: String, executable: String) throws -> String {
+        var lines = text.components(separatedBy: "\n")
+        let indexes = topLevelOwnedSkyNotifyIndexes(in: text, executable: executable)
+        for index in indexes.reversed() {
+            lines.remove(at: index)
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Dotted aliases are unsupported because appending/editing a table-form key beside one can
     /// produce duplicate TOML semantics. Readiness callers use this to distinguish "plugin absent"
     /// from "plugin state is ambiguous and must be repaired explicitly".
@@ -162,6 +175,26 @@ enum ComputerUsePluginConfig {
                 || inner == "\(root).'\(plugin.identifier)'" { return true }
         }
         return false
+    }
+
+    private static func topLevelOwnedSkyNotifyIndexes(in text: String, executable: String) -> [Int] {
+        let lines = text.components(separatedBy: "\n")
+        var indexes: [Int] = []
+        for index in lines.indices {
+            if isAnyTable(lines[index]) { break }
+            let parts = uncommented(lines[index]).split(
+                separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard ["notify", #""notify""#, "'notify'"].contains(String(key)) else { continue }
+            let rawValue = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let data = rawValue.data(using: .utf8),
+                  let arguments = try? JSONSerialization.jsonObject(
+                    with: data, options: [.fragmentsAllowed]) as? [String],
+                  arguments == [executable, "turn-ended"] else { continue }
+            indexes.append(index)
+        }
+        return indexes
     }
 
     private static func isMarketplaceTable(_ line: String, name: String) -> Bool {

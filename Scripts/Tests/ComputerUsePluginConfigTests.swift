@@ -11,6 +11,7 @@ struct ComputerUsePluginConfigTests {
         testExplicitPluginStatesDoNotConflateAbsentAndInvalid()
         try testBothArchitectureMigrationsRemainStrictlyExclusive()
         try testLocalMarketplaceRegistrationIsExactAndIdempotent()
+        try testIntelMigrationRemovesOnlyOwnedSkyNotify()
         print("ComputerUsePluginConfig fixtures passed")
     }
 
@@ -181,6 +182,34 @@ struct ComputerUsePluginConfigTests {
         } catch let error as ComputerUsePluginConfig.PatchError {
             expect(error == .invalidMarketplace("sentient"),
                    "unexpected marketplace conflict error: \(error)")
+        }
+    }
+
+    private static func testIntelMigrationRemovesOnlyOwnedSkyNotify() throws {
+        let skyClient = "/Users/test/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+        let owned = "notify = [\"\(skyClient)\", \"turn-ended\"]\n\nmodel = \"gpt-5\"\n"
+        expect(ComputerUsePluginConfig.hasOwnedSkyNotify(in: owned, executable: skyClient),
+               "Intel readiness must detect the exact owned Sky notify")
+        let removed = try ComputerUsePluginConfig.removingOwnedSkyNotify(
+            from: owned, executable: skyClient)
+        expect(removed == "\nmodel = \"gpt-5\"\n",
+               "Intel migration must remove only the owned notify assignment")
+        expect(!ComputerUsePluginConfig.hasOwnedSkyNotify(in: removed, executable: skyClient),
+               "removed config must be Intel-notify ready")
+
+        let unrelatedFixtures = [
+            "notify = [\"/usr/local/bin/my-notifier\", \"turn-ended\"]\n",
+            "notify = [\"\(skyClient)\", \"different-event\"]\n",
+            "# notify = [\"\(skyClient)\", \"turn-ended\"]\n",
+            "[profile.demo]\nnotify = [\"\(skyClient)\", \"turn-ended\"]\n"
+        ]
+        for fixture in unrelatedFixtures {
+            expect(!ComputerUsePluginConfig.hasOwnedSkyNotify(in: fixture, executable: skyClient),
+                   "non-owned notify fixture must not block Intel readiness")
+            let preserved = try ComputerUsePluginConfig.removingOwnedSkyNotify(
+                from: fixture, executable: skyClient)
+            expect(Data(preserved.utf8) == Data(fixture.utf8),
+                   "unrelated notify config must remain byte-identical")
         }
     }
 

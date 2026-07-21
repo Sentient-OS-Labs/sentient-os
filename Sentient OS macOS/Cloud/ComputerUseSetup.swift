@@ -71,6 +71,11 @@ enum ComputerUseSetup {
         codexHome.appendingPathComponent(".tmp/marketplaces/sentient")
     }
 
+    private static var skyNotifyClient: URL {
+        codexHome.appendingPathComponent(
+            "computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient")
+    }
+
     /// Already FULLY wired? All three must hold for computer use to actually work — so a half-finished
     /// copy or a config the user edited out reads as "not installed" and gets repaired on the next run
     /// (rather than a bare dir merely existing). NOT a version check: an older but working install
@@ -112,6 +117,7 @@ enum ComputerUseSetup {
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
         return ComputerUsePluginConfig.localMarketplaceSource(name: "sentient", in: config)
                 == intelMarketplaceInstallRoot.path
+            && !ComputerUsePluginConfig.hasOwnedSkyNotify(in: config, executable: skyNotifyClient.path)
             && ComputerUsePluginConfig.hasExclusiveBackend(
             active: .sentientIntel, inactive: .sky, in: config)
     }
@@ -372,8 +378,10 @@ enum ComputerUseSetup {
         }
         let updated: String
         do {
+            let withoutSkyNotify = try ComputerUsePluginConfig.removingOwnedSkyNotify(
+                from: original, executable: skyNotifyClient.path)
             let withMarketplace = try ComputerUsePluginConfig.settingLocalMarketplace(
-                name: "sentient", source: intelMarketplaceInstallRoot.path, in: original)
+                name: "sentient", source: intelMarketplaceInstallRoot.path, in: withoutSkyNotify)
             let withIntel = try ComputerUsePluginConfig.settingEnabled(
                 true, for: .sentientIntel, in: withMarketplace, createIfMissing: true)
             updated = try ComputerUsePluginConfig.settingEnabled(
@@ -404,8 +412,7 @@ enum ComputerUseSetup {
         }
         var text = original
 
-        let client = codexHome.appendingPathComponent(
-            "computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient").path
+        let client = skyNotifyClient.path
         let source = codexHome.appendingPathComponent(".tmp/bundled-marketplaces/openai-bundled").path
 
         var prefix = "", suffix = ""
