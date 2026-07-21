@@ -430,6 +430,64 @@ final class MCPServerTests: XCTestCase {
         ]))
     }
 
+    func testOversizedToolResponseBecomesBoundedStructuredInternalError() async throws {
+        let result: JSONValue = .object(["blob": .string(String(repeating: "x", count: 600_000))])
+        let server = MCPServer(transport: RecordingTransport(result: result))
+        await completeInitialization(server, id: 100)
+        let request = request(
+            id: .int(101),
+            method: "tools/call",
+            params: .object(["name": .string("list_apps"), "arguments": .object([:])])
+        )
+
+        let handledData = await server.handle(try JSONEncoder().encode(request))
+        let responseData = try XCTUnwrap(handledData)
+        XCTAssertLessThanOrEqual(responseData.count + 1, MCPServer.maximumResponseLineSize)
+
+        let response = try JSONDecoder().decode(JSONValue.self, from: responseData)
+        guard case let .object(envelope) = response,
+              envelope["id"] == .int(101),
+              case let .object(toolResult)? = envelope["result"],
+              case let .object(structured)? = toolResult["structuredContent"],
+              case let .object(error)? = structured["error"] else {
+            return XCTFail("Expected a structured MCP tool error")
+        }
+        XCTAssertEqual(toolResult["isError"], .bool(true))
+        XCTAssertEqual(error["code"], .string(ServiceErrorCode.internalError.rawValue))
+        XCTAssertEqual(try decodedTextContent(toolResult), .object(["error": .object(error)]))
+    }
+
+    func testNearLimitToolResponseIsReturnedUnchanged() async throws {
+        let result: JSONValue = .object(["blob": .string(String(repeating: "x", count: 500_000))])
+        let server = MCPServer(transport: RecordingTransport(result: result))
+        await completeInitialization(server, id: 102)
+        let request = request(
+            id: .int(103),
+            method: "tools/call",
+            params: .object(["name": .string("list_apps"), "arguments": .object([:])])
+        )
+        let handledExpected = await server.handle(request)
+        let expected = try XCTUnwrap(handledExpected)
+
+        let handledData = await server.handle(try JSONEncoder().encode(request))
+        let responseData = try XCTUnwrap(handledData)
+
+        XCTAssertGreaterThan(responseData.count, 950_000)
+        XCTAssertLessThanOrEqual(responseData.count + 1, MCPServer.maximumResponseLineSize)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: responseData), expected)
+    }
+
+    func testWireNotificationRemainsSilent() async throws {
+        let server = MCPServer(transport: RecordingTransport())
+        let notification: JSONValue = .object([
+            "jsonrpc": .string("2.0"),
+            "method": .string("notifications/unknown")
+        ])
+
+        let response = await server.handle(try JSONEncoder().encode(notification))
+        XCTAssertNil(response)
+    }
+
     private func request(id: JSONValue, method: String, params: JSONValue) -> JSONValue {
         .object([
             "jsonrpc": .string("2.0"),

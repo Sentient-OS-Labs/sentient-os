@@ -7,6 +7,7 @@ public protocol ServiceTransport: Sendable {
 
 public actor MCPServer {
     public static let supportedProtocolVersion = "2025-03-26"
+    static let maximumResponseLineSize = 1 * 1024 * 1024
 
     private let transport: any ServiceTransport
     private var hasNegotiatedInitialization = false
@@ -156,11 +157,44 @@ public actor MCPServer {
             return Self.encode(Self.error(id: .null, code: -32700, message: "Parse error"))
         }
         guard let response = await handle(request) else { return nil }
-        return Self.encode(response)
+        return Self.encodeBounded(response, for: request)
     }
 
     static var parseErrorData: Data {
         encode(error(id: .null, code: -32700, message: "Parse error")) ?? Data()
+    }
+
+    static var responseSizeErrorData: Data {
+        encode(error(id: .null, code: -32603, message: "Internal error: response exceeds maximum size")) ?? Data()
+    }
+
+    private static func encodeBounded(_ response: JSONValue, for request: JSONValue) -> Data {
+        if let encoded = encode(response), encoded.count + 1 <= maximumResponseLineSize {
+            return encoded
+        }
+
+        let requestID = validID(in: request) ?? .null
+        let overflowResponse: JSONValue
+        if method(in: request) == "tools/call" {
+            let internalError: JSONValue = .object([
+                "code": .string(ServiceErrorCode.internalError.rawValue),
+                "message": .string("MCP response exceeds maximum size")
+            ])
+            overflowResponse = success(
+                id: requestID,
+                result: toolResult(.object(["error": internalError]), isError: true)
+            )
+        } else {
+            overflowResponse = error(
+                id: requestID,
+                code: -32603,
+                message: "Internal error: response exceeds maximum size"
+            )
+        }
+        if let encoded = encode(overflowResponse), encoded.count + 1 <= maximumResponseLineSize {
+            return encoded
+        }
+        return responseSizeErrorData
     }
 
     private static func method(in request: JSONValue) -> String? {
@@ -348,7 +382,7 @@ public actor MCPServer {
 }
 
 enum MCPStdio {
-    private static let maximumLineSize = 1 * 1024 * 1024
+    private static let maximumLineSize = MCPServer.maximumResponseLineSize
 
     static func run(input: FileHandle, output: FileHandle, server: MCPServer) async {
         var line = Data()
@@ -397,7 +431,9 @@ enum MCPStdio {
     }
 
     private static func write(_ response: Data, to output: FileHandle) -> Bool {
-        var framed = response
+        var framed = response.count + 1 <= maximumLineSize
+            ? response
+            : MCPServer.responseSizeErrorData
         framed.append(0x0A)
         do {
             try output.write(contentsOf: framed)
