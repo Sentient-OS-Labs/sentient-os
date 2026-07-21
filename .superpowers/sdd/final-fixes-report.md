@@ -1,8 +1,8 @@
 # Final Fixes Report
 
-Date: 2026-07-20  
-Base reviewed: `083aa06`  
-Final implementation: `a2ea63c`
+Date: 2026-07-20
+Base reviewed: `083aa06`
+Final implementation: `a4742d9`
 
 ## Outcome
 
@@ -45,6 +45,11 @@ pending the user's normal Screen Recording grant and Sentient OS relaunch.
 - `3bf1b3e` — `fix: bound native process lifecycle`
 - `8ddacec` — `fix: enforce exclusive computer use backend config`
 - `a2ea63c` — `fix: install discoverable Sentient marketplace`
+- `7f74269` — `fix: remove owned Sky notify on Intel`
+- `5db0aec` — `fix: focus target before state capture`
+- `f3941f0` — `fix: repair Sky config without download`
+- `72e0368` — `fix: bound accessibility provider work`
+- `a4742d9` — `fix: cap final MCP response frames`
 
 ## TDD evidence
 
@@ -79,7 +84,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   swift test --package-path NativeComputerUse
 ```
 
-Result: `Executed 89 tests, with 0 failures (0 unexpected)`.
+Result: `Executed 96 tests, with 0 failures (0 unexpected)`.
 
 ### Fresh app artifacts
 
@@ -116,6 +121,42 @@ Real Codex CLI discovered computer-use@sentient 1.0.0 from the local Sentient ma
 The discovery script uses a temporary isolated `CODEX_HOME`, invokes
 `codex plugin marketplace list --json` and
 `codex plugin list --marketplace sentient --available --json`, and deletes the temporary home.
+
+### Round 2 regression evidence
+
+The follow-up review findings were also fixed test-first:
+
+1. Intel migration removes only Sentient's exact top-level Sky `notify` command and preserves
+   unrelated, commented, and nested values byte-for-byte. Readiness rejects the owned command.
+2. `get_app_state` resolves, activates, and verifies the requested app before capture or AX work;
+   focus failure touches neither subsystem.
+3. Apple Silicon setup repairs stale exclusivity config without downloading when the complete local
+   Sky payload is valid, while missing payloads still use the full installer.
+4. AX traversal requests at most the remaining element budget through ranged Accessibility API calls;
+   string normalization and UTF-8 truncation are incremental and have bounded input work.
+5. The encoded MCP response plus newline is at most 1 MiB. Oversized tool results become a bounded,
+   structured `internal_error`; near-limit results remain unchanged and notifications stay silent.
+
+The matching RED and GREEN logs are:
+
+- `/tmp/sentient-round2-red-owned-notify.log`
+- `/tmp/sentient-round2-green-owned-notify.log`
+- `/tmp/sentient-round2-red-get-state-focus.log`
+- `/tmp/sentient-round2-green-get-state-focus.log`
+- `/tmp/sentient-round2-red-sky-config-only.log`
+- `/tmp/sentient-round2-green-sky-config-only.log`
+- `/tmp/sentient-round2-red-ax-internal-bounds.log`
+- `/tmp/sentient-round2-green-ax-internal-bounds.log`
+- `/tmp/sentient-round2-red-mcp-wire-cap.log`
+- `/tmp/sentient-round2-green-mcp-wire-cap.log`
+
+Round 2 final verification used fresh `work/final-round2-intel-derived` and
+`work/final-round2-arm-derived` paths. Both builds reported `BUILD SUCCEEDED`; their app executables
+reported `x86_64` and `arm64`, and the arm64 bundle contained no `IntelComputerUse` resource. The real
+Codex CLI again discovered `computer-use@sentient 1.0.0`. Config and corruption smokes passed, the
+focused lifecycle suite passed 4/4, and final scans found 0 live MCP/service children and 0 capture
+PNGs. The exact range check `git diff --check 5224bc4..HEAD` is part of the final documentation commit
+verification.
 
 ### Config, corruption, timeout, signal, and cleanup smokes
 
