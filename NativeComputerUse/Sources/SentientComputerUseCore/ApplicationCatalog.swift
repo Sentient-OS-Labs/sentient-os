@@ -59,24 +59,65 @@ protocol ApplicationActivating {
     func activateAndVerifyFrontmost(_ app: ApplicationDescriptor) -> Bool
 }
 
+protocol ApplicationLaunchRequesting {
+    func activate(_ application: ApplicationDescriptor) -> Bool
+}
+
+protocol FrontmostApplicationProviding {
+    func frontmostProcessIdentifier() -> Int32?
+}
+
+struct LaunchServicesApplicationLauncher: ApplicationLaunchRequesting {
+    func activate(_ application: ApplicationDescriptor) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        if let bundleIdentifier = application.bundleIdentifier, !bundleIdentifier.isEmpty {
+            process.arguments = ["-b", bundleIdentifier]
+        } else {
+            process.arguments = ["-a", application.name]
+        }
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+}
+
+struct SystemFrontmostApplicationProvider: FrontmostApplicationProviding {
+    func frontmostProcessIdentifier() -> Int32? {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
+    }
+}
+
 struct SystemApplicationActivator: ApplicationActivating {
     private let timeout: TimeInterval
     private let pollInterval: TimeInterval
+    private let launcher: any ApplicationLaunchRequesting
+    private let frontmostProvider: any FrontmostApplicationProviding
 
-    init(timeout: TimeInterval = 1, pollInterval: TimeInterval = 0.02) {
+    init(
+        timeout: TimeInterval = 1,
+        pollInterval: TimeInterval = 0.02,
+        launcher: any ApplicationLaunchRequesting = LaunchServicesApplicationLauncher(),
+        frontmostProvider: any FrontmostApplicationProviding = SystemFrontmostApplicationProvider()
+    ) {
         self.timeout = timeout
         self.pollInterval = pollInterval
+        self.launcher = launcher
+        self.frontmostProvider = frontmostProvider
     }
 
     func activateAndVerifyFrontmost(_ app: ApplicationDescriptor) -> Bool {
-        guard let runningApplication = NSRunningApplication(
-            processIdentifier: pid_t(app.processIdentifier)
-        ) else { return false }
-
-        _ = runningApplication.activate(options: [.activateAllWindows])
+        guard launcher.activate(app) else { return false }
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier {
+            if frontmostProvider.frontmostProcessIdentifier() == app.processIdentifier {
                 return true
             }
             Thread.sleep(forTimeInterval: pollInterval)
