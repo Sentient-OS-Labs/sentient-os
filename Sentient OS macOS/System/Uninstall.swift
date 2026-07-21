@@ -112,7 +112,9 @@ enum Uninstall {
         await beat()
 
         progress(.traces)
+        #if !arch(x86_64)
         Permissions.revokeComputerUseAutomation()
+        #endif
         let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library")
         for sub in ["Caches/\(bundleID)", "HTTPStorages/\(bundleID)", "WebKit/\(bundleID)",
                     "Saved Application State/\(bundleID).savedState", "Logs/SentientOS"] {

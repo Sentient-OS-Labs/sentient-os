@@ -8,7 +8,7 @@ Open an issue first. Not out of bureaucracy, but because we rewrite fast and it 
 
 ## Getting it running
 
-You'll need an Apple Silicon Mac on macOS 15 or later, and Xcode 26.
+You'll need an Apple Silicon or Intel Mac on macOS 15 or later, and Xcode 26. Intel support is experimental; please include your Mac model and macOS version when reporting an issue.
 
 1. Clone the repo and open `Sentient OS macOS.xcodeproj`.
 2. Signing: create a `Signing.local.xcconfig` file next to `Signing.xcconfig` with one line, `DEVELOPMENT_TEAM = <your team id>`. It's gitignored, and it's the only place your team should ever appear. Please don't pick a team in Xcode's Signing & Capabilities dropdown: that silently writes it into the project file, and we'll have to bounce the PR for it.

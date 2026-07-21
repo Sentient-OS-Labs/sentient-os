@@ -47,6 +47,7 @@ struct ComputerUseGateView: View {
                                    fixTitle: gate.micSpeech == .notAsked ? "Allow…" : "Fix…") {
                             fixMicSpeech()
                         }
+                        #if !arch(x86_64)
                         StatusLine(title: "Screen Recording",
                                    health: gate.sentientScreen ? .ok : .warn,   // optional — amber, never blocking
                                    note: gate.sentientScreen ? "granted" : "recommended",
@@ -54,24 +55,27 @@ struct ComputerUseGateView: View {
                                    fixTitle: "Allow…") {
                             fixSentientScreen()
                         }
+                        #endif
                     }
                 }
 
-                SettingsGroup(label: "Codex Permissions") {
+                SettingsGroup(label: computerUsePermissionsLabel) {
                     VStack(alignment: .leading, spacing: 2) {
                         StatusLine(title: "Accessibility (move the mouse, type)",
                                    health: gate.helperAccessibility ? .ok : (gate.helperOnDisk ? .bad : .warn),
                                    note: helperNote(granted: gate.helperAccessibility),
-                                   tip: "Lets Codex's helper app move the mouse and type for you. Granted to OpenAI's helper, not to Sentient.",
+                                   tip: accessibilityTip,
                                    fixTitle: "Grant…") {
-                            fixHelper(.accessibility)
+                            fixComputerUsePermission(.accessibility)
                         }
                         StatusLine(title: "Screen Recording (see the screen)",
-                                   health: gate.helperScreen ? .ok : (gate.helperOnDisk ? .bad : .warn),
-                                   note: helperNote(granted: gate.helperScreen),
-                                   tip: "Lets Codex's helper app see the screen so it acts on the right thing. Granted to OpenAI's helper, not to Sentient.",
-                                   fixTitle: "Grant…") {
-                            fixHelper(.screenRecording)
+                                   health: gate.helperScreen ? .ok
+                                       : (gate.helperScreenRelaunchRequired ? .warn : (gate.helperOnDisk ? .bad : .warn)),
+                                   note: gate.helperScreenRelaunchRequired
+                                       ? "relaunch required" : helperNote(granted: gate.helperScreen),
+                                   tip: screenRecordingTip,
+                                   fixTitle: gate.helperScreenRelaunchRequired ? "Relaunch" : "Grant…") {
+                            fixComputerUsePermission(.screenRecording)
                         }
                     }
                 }
@@ -143,16 +147,51 @@ struct ComputerUseGateView: View {
         PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
     }
 
-    // MARK: The helper's grants — system TCC; the drag panel is the only honest path
+    // MARK: The active computer-use owner's grants
+
+    private var computerUsePermissionsLabel: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel: return "\(Permissions.computerUsePermissionOwnerName) Permissions"
+        case .sky:           return "Codex Permissions"
+        }
+    }
+
+    private var accessibilityTip: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel:
+            return "Accessibility is granted to Sentient OS. It lets Sentient OS move the mouse and type for you through its on-device computer-use service."
+        case .sky:
+            return "Lets Codex's helper app move the mouse and type for you. Granted to OpenAI's helper, not to Sentient."
+        }
+    }
+
+    private var screenRecordingTip: String {
+        switch ComputerUseBackend.current {
+        case .sentientIntel:
+            return "Screen Recording is granted to Sentient OS. It lets Sentient OS see the screen so it acts on the right thing. The grant takes effect after you relaunch Sentient OS."
+        case .sky:
+            return "Lets Codex's helper app see the screen so it acts on the right thing. Granted to OpenAI's helper, not to Sentient."
+        }
+    }
 
     private func helperNote(granted: Bool) -> String {
         if granted { return "granted" }
         return gate.helperOnDisk ? "not granted" : "computer use still setting up"
     }
 
-    private func fixHelper(_ pane: PermissionGuide.Pane) {
+    private func fixComputerUsePermission(_ pane: PermissionGuide.Pane) {
+        #if arch(x86_64)
+        if pane == .accessibility {
+            Permissions.requestComputerUseAccessibility()
+        } else if gate.helperScreenRelaunchRequired {
+            Permissions.relaunch()
+        } else {
+            Permissions.requestComputerUseScreenRecording()
+        }
+        #else
         guard let helper = Permissions.computerUseHelperURL() else { return }
         PermissionGuide.shared.guide(pane, dragging: helper)
+        #endif
     }
 }
 

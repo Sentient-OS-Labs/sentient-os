@@ -1,8 +1,8 @@
 # Computer-Use Bootstrap — Reverse-Engineering Codex & the Copy Logic
 
 **What this is:** the canonical reference for how Sentient makes Codex **computer use** work on a *plain
-Codex CLI* — with no Codex desktop app install — and, more importantly, **how that was reverse-engineered
-and how to re-derive it when OpenAI changes things.** If the copy-in logic ever breaks, start here.
+Codex CLI* — with no Codex desktop app install. Apple Silicon uses the reverse-engineered OpenAI/Sky
+copy path described below; Intel uses Sentient's bundled native service. If either path breaks, start here.
 
 Implementation: `ComputerUseSetup.swift` (the bootstrap), `CodexSetup.swift` (step 3 of the flow),
 `CodexSetupView.swift` (the dev button). Onboarding usage: `Codex Setup Handoff (Onboarding).md`.
@@ -11,6 +11,30 @@ Implementation: `ComputerUseSetup.swift` (the bootstrap), `CodexSetup.swift` (st
 > teardown** (Codex.app 26.623.42026, computer-use plugin 1.0.857), updated for the **July 2026
 > ChatGPT-app rename** (§1.5). They WILL drift. The *method* is what stays true — §4 and §5 are the
 > parts that matter long-term.
+
+---
+
+## 0. Architecture split (added 2026-07-20)
+
+`ComputerUseBackend.current` selects the backend at compile time:
+
+| Sentient process | Backend | Source | Codex plugin |
+|---|---|---|---|
+| `x86_64` | `SentientComputerUseService` + `SentientComputerUseMCP` | Bundled at `Contents/Resources/IntelComputerUse` | `computer-use@sentient` |
+| `arm64` | OpenAI `SkyComputerUseService` | Extracted from the official Codex/ChatGPT DMG | `computer-use@openai-bundled` |
+
+The Intel setup never downloads or launches Sky. It validates the two bundled executables as x86_64,
+then copies the complete plugin tree to
+`~/.codex/plugins/cache/sentient/computer-use/1.0.0/`. `config.toml` enables
+`[plugins."computer-use@sentient"]` and disables the OpenAI plugin if that table already exists. The
+Apple Silicon flow below is intentionally unchanged.
+
+On Intel, macOS attributes Accessibility and Screen Recording to **Sentient OS** (bundle id
+`jesai.Sentient-OS-macOS`), because the local service is its child process. On Apple Silicon, those grants
+still belong to **Codex Computer Use** (`com.openai.sky.CUAService`). Intel does not use or mutate the Sky
+Automation grant lifecycle.
+
+Implementation and reproducible acceptance instructions: `NativeComputerUse/README.md`.
 
 ---
 
@@ -334,3 +358,35 @@ call; the computer-use action needs Accessibility/Screen-Recording granted — h
 - **`CodexCLI.swift`** — the `codex exec` wrapper (how computer use is actually *driven* once installed).
 
 Onboarding wiring guidance: **`Codex Setup Handoff (Onboarding).md`**.
+
+---
+
+## 9. Intel verification snapshot — 2026-07-20
+
+Measured on a MacBookPro16,1 (8-core Intel Core i9, 32 GB) running macOS 26.5.2 (25F84), with Xcode
+26.5 (17F42). Because `xcode-select` pointed at Command Line Tools, the commands used
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` without changing the system selection.
+
+- A clean SwiftPM build ran 98 tests with 0 failures.
+- Fresh x86_64 and arm64 Debug Xcode builds both exited 0. The Intel app contained x86_64-only MCP and
+  service executables; the arm64 app omitted `IntelComputerUse` and retained the Sky bundle-id path.
+- `Scripts/verify-intel-computer-use.sh` exited 0 for both the unsigned verification build and the local
+  ad hoc-signed build.
+- The Keychain exposed no Apple Development or Developer ID code-signing identity. A local x86_64 app
+  was therefore built with an ad hoc signature at
+  `work/intel-cu-signed-derived/Build/Products/Debug/Sentient OS.app`; `codesign --verify --deep --strict`
+  exited 0. This is a local test artifact, not a distributable or notarized build.
+- Two fresh MCP processes initialized protocol `2025-03-26`, exposed exactly six tools, and each listed
+  65 applications. Both then returned the actionable
+  `permission_denied_screen_recording` error for `get_app_state(TextEdit)`.
+- No capture PNG remained in the backend temporary directory, and no service process remained after
+  either smoke run.
+
+**Physical acceptance is pending.** The new local build does not yet hold effective Screen Recording,
+and granting it requires the user to use System Settings and relaunch Sentient. The running installed
+`/Applications/Sentient OS Intel 2.app` was not replaced or relaunched: it is an older ad hoc build that
+does not contain `Contents/Resources/IntelComputerUse`. Consequently the two required real
+`codex exec` TextEdit flows (click, type `SENTIENT_INTEL_OK`, `super+a`, scroll) were not run or claimed.
+
+Deferred Sky-parity features remain: drag-and-drop, secondary Accessibility actions, advanced text
+selection, and full multi-display parity.

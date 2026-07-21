@@ -44,13 +44,15 @@ final class ComputerUseGate {
     /// Sidekick runs text-only; it never gates an action.
     private(set) var sentientScreen = false
 
-    /// The Codex Computer Use helper's presence + its two system-TCC grants (its hands and eyes).
+    /// The active computer-use owner's presence + its two system-TCC grants (hands and eyes).
     private(set) var helperOnDisk = false
     private(set) var helperAccessibility = false
     private(set) var helperScreen = false
+    private(set) var helperScreenRelaunchRequired = false
 
-    /// The REQUIRED grants — what the gate holds actions for. Sentient's own two (Microphone &
-    /// Speech, Screen Recording) are deliberately absent: optional rows, shown but never blocking.
+    /// The REQUIRED grants — what the gate holds actions for. Microphone & Speech stays optional;
+    /// Sentient Screen Recording is optional only for Sky, since Intel computer use owns that same
+    /// grant and requires it to be effective in the running process.
     var allRequiredGranted: Bool {
         helperAccessibility && helperScreen
     }
@@ -94,7 +96,11 @@ final class ComputerUseGate {
             // Seen working — arm the home's regression banner (HealthCaution rung ③).
             HealthCaution.latchComputerUse()
             // Nothing required is missing — the only reason to appear is a one-time optional offer.
+            #if arch(x86_64)
+            let offerScreen = false   // Intel's one Sentient Screen Recording row is required below.
+            #else
             let offerScreen = !sentientScreen && !Self.screenRecordingOffered
+            #endif
             let offerMic = micSpeech != .granted && !Self.micSpeechOffered
             guard offerScreen || offerMic else { return false }
         }
@@ -152,19 +158,20 @@ final class ComputerUseGate {
         } else {
             micSpeech = .notAsked
         }
-        // Preflight is the running process's view — it stays false until a relaunch even after the
-        // user flips the switch. The TCC read (we hold FDA) is the LIVE truth, so the row can go
-        // green the moment they grant; the tip still says a restart is needed for capture.
+        // Intel keeps current-process effectiveness separate from the live TCC switch so the
+        // required row cannot go green until relaunch. Sky retains the existing live optional
+        // Sentient-screen status alongside its separate helper permission.
+        #if arch(x86_64)
+        sentientScreen = Permissions.hasScreenRecording()
+        #else
         sentientScreen = Permissions.hasScreenRecording()
             || Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
                                         clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS")
-        helperOnDisk = Permissions.computerUseHelperURL() != nil
-        helperAccessibility = Permissions.isTCCGranted(
-            service: "kTCCServiceAccessibility",
-            clientBundleID: Permissions.computerUseHelperBundleID)
-        helperScreen = Permissions.isTCCGranted(
-            service: "kTCCServiceScreenCapture",
-            clientBundleID: Permissions.computerUseHelperBundleID)
+        #endif
+        helperOnDisk = Permissions.computerUsePermissionOwnerURL() != nil
+        helperAccessibility = Permissions.hasComputerUseAccessibility()
+        helperScreen = Permissions.hasComputerUseScreenRecording()
+        helperScreenRelaunchRequired = Permissions.computerUseScreenRecordingRequiresRelaunch()
     }
 
     /// The window's main button — dismiss and fire the held action. Only ever fires once every
@@ -188,9 +195,11 @@ final class ComputerUseGate {
     // Sidekick fires from anywhere; a SwiftUI Window scene can't be raised from the coordinator)
 
     private func present() {
+        #if !arch(x86_64)
         // The executor also needs the Automation grant (Sentient → the helper over Apple Events);
         // it's user-invisible and FDA-writable, so heal it here — before the first fire.
         Permissions.selfHealComputerUseAutomation(context: "ComputerUseGate")
+        #endif
         if window == nil {
             let hosting = NSHostingController(rootView: ComputerUseGateView(gate: self))
             let w = NSWindow(contentViewController: hosting)
