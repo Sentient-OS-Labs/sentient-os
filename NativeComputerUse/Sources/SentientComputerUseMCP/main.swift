@@ -282,12 +282,18 @@ private final class TerminationSignals: @unchecked Sendable {
     }
 }
 
+func siblingServiceURL(adapterURL: URL) -> URL {
+    adapterURL.deletingLastPathComponent()
+        .appendingPathComponent("SentientComputerUseService.app", isDirectory: true)
+        .appendingPathComponent("Contents/MacOS/SentientComputerUseService")
+}
+
 private func siblingServiceURL() -> URL {
     let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
     let adapter = URL(fileURLWithPath: CommandLine.arguments[0], relativeTo: currentDirectory)
         .standardizedFileURL
         .resolvingSymlinksInPath()
-    return adapter.deletingLastPathComponent().appendingPathComponent("SentientComputerUseService")
+    return siblingServiceURL(adapterURL: adapter)
 }
 
 do {

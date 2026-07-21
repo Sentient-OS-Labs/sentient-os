@@ -12,16 +12,23 @@ make_valid_app() {
   intel="$app/Contents/Resources/IntelComputerUse"
   plugin="$intel/plugins/computer-use"
   app_binary="$app/Contents/MacOS/Sentient OS"
-  /bin/mkdir -p "$plugin/bin" "$plugin/.codex-plugin" "$plugin/skills/computer-use" \
+  service_app="$plugin/bin/SentientComputerUseService.app"
+  service="$service_app/Contents/MacOS/SentientComputerUseService"
+  /bin/mkdir -p "$service_app/Contents/MacOS" "$plugin/.codex-plugin" "$plugin/skills/computer-use" \
     "$intel/.agents/plugins" "$(/usr/bin/dirname "$app_binary")"
   /usr/bin/xcrun clang -arch x86_64 "$ROOT/Scripts/Tests/empty.c" -o "$plugin/bin/SentientComputerUseMCP"
-  /bin/cp "$plugin/bin/SentientComputerUseMCP" "$plugin/bin/SentientComputerUseService"
+  /bin/cp "$plugin/bin/SentientComputerUseMCP" "$service"
+  /usr/bin/plutil -create xml1 "$service_app/Contents/Info.plist"
+  /usr/bin/plutil -insert CFBundleIdentifier -string "jesai.Sentient-OS-macOS.ComputerUseService" "$service_app/Contents/Info.plist"
+  /usr/bin/plutil -insert CFBundleExecutable -string "SentientComputerUseService" "$service_app/Contents/Info.plist"
+  /usr/bin/plutil -insert CFBundlePackageType -string "APPL" "$service_app/Contents/Info.plist"
   /bin/cp "$ROOT/Scripts/Tests/valid.mcp.json" "$plugin/.mcp.json"
   /bin/cp "$ROOT/NativeComputerUse/Plugin/.codex-plugin/plugin.json" "$plugin/.codex-plugin/plugin.json"
   /bin/cp "$ROOT/NativeComputerUse/Plugin/skills/computer-use/SKILL.md" "$plugin/skills/computer-use/SKILL.md"
   /bin/cp "$ROOT/Scripts/Tests/valid-marketplace.json" "$intel/.agents/plugins/marketplace.json"
   /usr/bin/codesign --force --sign - "$plugin/bin/SentientComputerUseMCP"
-  /usr/bin/codesign --force --sign - "$plugin/bin/SentientComputerUseService"
+  /usr/bin/codesign --force --sign - "$service"
+  /usr/bin/codesign --force --sign - "$service_app"
   /bin/cp "$plugin/bin/SentientComputerUseMCP" "$app_binary"
 }
 
@@ -153,7 +160,7 @@ test_marketplace_contract() {
   echo "Invalid plugin metadata rejected"
 
   make_valid_app "$app"
-  /usr/bin/printf 'tampered' >> "$plugin/bin/SentientComputerUseService"
+  /usr/bin/printf 'tampered' >> "$plugin/bin/SentientComputerUseService.app/Contents/MacOS/SentientComputerUseService"
   if SENTIENT_SKIP_MCP_HANDSHAKE=YES "$ROOT/Scripts/verify-intel-computer-use.sh" "$app"; then
     echo "FAIL: verifier accepted a binary with an invalid signature" >&2
     exit 1

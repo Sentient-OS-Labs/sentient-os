@@ -5,6 +5,15 @@ import XCTest
 @testable import SentientComputerUseMCP
 
 final class ServiceProcessTransportTests: XCTestCase {
+    func testBundledServiceURLUsesSelectableHelperApp() {
+        let adapter = URL(fileURLWithPath: "/tmp/plugin/bin/SentientComputerUseMCP")
+
+        XCTAssertEqual(
+            siblingServiceURL(adapterURL: adapter).path,
+            "/tmp/plugin/bin/SentientComputerUseService.app/Contents/MacOS/SentientComputerUseService"
+        )
+    }
+
     func testShutdownReturnsAfterGracefulChildExitWithoutSignals() async throws {
         let process = FakeServiceChildProcess(waitResults: [true])
         let fixtures = try TransportFixtures(process: process)

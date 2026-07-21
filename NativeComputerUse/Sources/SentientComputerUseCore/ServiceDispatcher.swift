@@ -9,11 +9,11 @@ protocol PermissionChecking {
 
 struct SystemPermissionChecker: PermissionChecking {
     func hasAccessibilityPermission() -> Bool {
-        AXIsProcessTrusted()
+        return AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
     }
 
     func hasScreenRecordingPermission() -> Bool {
-        CGPreflightScreenCaptureAccess()
+        CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess()
     }
 }
 

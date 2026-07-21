@@ -13,7 +13,8 @@ SOURCE_ROOT="${SENTIENT_INTEL_SOURCE_ROOT:-$ROOT/Sentient OS macOS}"
 INTEL_ROOT="$APP/Contents/Resources/IntelComputerUse"
 PLUGIN_ROOT="$INTEL_ROOT/plugins/computer-use"
 MCP="$PLUGIN_ROOT/bin/SentientComputerUseMCP"
-SERVICE="$PLUGIN_ROOT/bin/SentientComputerUseService"
+SERVICE_APP="$PLUGIN_ROOT/bin/SentientComputerUseService.app"
+SERVICE="$SERVICE_APP/Contents/MacOS/SentientComputerUseService"
 PLUGIN_MCP="$PLUGIN_ROOT/.mcp.json"
 PLUGIN_MANIFEST="$PLUGIN_ROOT/.codex-plugin/plugin.json"
 MARKETPLACE_MANIFEST="$INTEL_ROOT/.agents/plugins/marketplace.json"
@@ -39,6 +40,15 @@ for executable in "$MCP" "$SERVICE"; do
     exit 1
   fi
 done
+
+if [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SERVICE_APP/Contents/Info.plist" 2>/dev/null || true)" != "jesai.Sentient-OS-macOS.ComputerUseService" ]; then
+  echo "error: Computer Use helper app has an invalid bundle identifier" >&2
+  exit 1
+fi
+if ! /usr/bin/codesign --verify --strict "$SERVICE_APP" 2>/dev/null; then
+  echo "error: Computer Use helper app has no valid code signature" >&2
+  exit 1
+fi
 
 JQ="$(command -v jq || true)"
 if [ -z "$JQ" ]; then

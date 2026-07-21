@@ -46,11 +46,20 @@ for executable in "$MCP_NAME" "$SERVICE_NAME"; do
 done
 
 /bin/rm -rf "$STAGE"
-/bin/mkdir -p "$STAGE/plugins/computer-use/bin"
+/bin/mkdir -p "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/MacOS"
 /usr/bin/ditto "$PACKAGE/Marketplace" "$STAGE"
 /usr/bin/ditto "$PACKAGE/Plugin" "$STAGE/plugins/computer-use"
 /usr/bin/ditto "$RELEASE_BIN/$MCP_NAME" "$STAGE/plugins/computer-use/bin/$MCP_NAME"
-/usr/bin/ditto "$RELEASE_BIN/$SERVICE_NAME" "$STAGE/plugins/computer-use/bin/$SERVICE_NAME"
+/usr/bin/ditto "$RELEASE_BIN/$SERVICE_NAME" "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/MacOS/$SERVICE_NAME"
+/usr/bin/plutil -create xml1 "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleIdentifier -string "jesai.Sentient-OS-macOS.ComputerUseService" "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleName -string "Sentient Computer Use" "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleDisplayName -string "Sentient Computer Use" "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleExecutable -string "$SERVICE_NAME" "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundlePackageType -string "APPL" "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleVersion -string "1" "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
+/usr/bin/plutil -insert CFBundleShortVersionString -string "1.0.0" "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
+/usr/bin/plutil -insert LSBackgroundOnly -bool true "$STAGE/plugins/computer-use/bin/SentientComputerUseService.app/Contents/Info.plist"
 
 SIGN_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
 SIGN_OPTIONS=""
@@ -61,7 +70,7 @@ case "$SIGN_IDENTITY" in
   "Developer ID"*) SIGN_OPTIONS="$SIGN_OPTIONS --timestamp" ;;
 esac
 
-for executable in "$MCP_NAME" "$SERVICE_NAME"; do
+for executable in "$MCP_NAME"; do
   staged_binary="$STAGE/plugins/computer-use/bin/$executable"
   # shellcheck disable=SC2086 -- SIGN_OPTIONS intentionally expands to separate codesign flags.
   /usr/bin/codesign --force $SIGN_OPTIONS --sign "$SIGN_IDENTITY" "$staged_binary"
@@ -71,5 +80,14 @@ for executable in "$MCP_NAME" "$SERVICE_NAME"; do
     exit 1
   fi
 done
+
+SERVICE_APP="$STAGE/plugins/computer-use/bin/SentientComputerUseService.app"
+SERVICE_BINARY="$SERVICE_APP/Contents/MacOS/$SERVICE_NAME"
+# shellcheck disable=SC2086 -- SIGN_OPTIONS intentionally expands to separate codesign flags.
+/usr/bin/codesign --force $SIGN_OPTIONS --sign "$SIGN_IDENTITY" "$SERVICE_BINARY"
+# Signing the enclosing app makes macOS TCC attribute Screen Recording and Accessibility to a
+# selectable app bundle instead of an anonymous command-line executable.
+# shellcheck disable=SC2086 -- SIGN_OPTIONS intentionally expands to separate codesign flags.
+/usr/bin/codesign --force $SIGN_OPTIONS --sign "$SIGN_IDENTITY" "$SERVICE_APP"
 
 echo "Intel Computer Use: staged signed plugin at $STAGE"
