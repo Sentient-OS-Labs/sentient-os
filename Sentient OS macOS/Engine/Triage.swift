@@ -23,6 +23,9 @@ enum Triage {
     /// WINDOW — with a dedicated, far stricter prompt for GROUP chats (attribution is the hard
     /// part). All emit the SAME JSON contract, so parse()/decide() are shared & unchanged.
     static func prompt(for artifact: Artifact, currentDate: Date) -> String {
+        if artifact.kind == .appleMail {
+            return mailPrompt(for: artifact, currentDate: currentDate)
+        }
         if artifact.kind == .file || artifact.kind == .notes {
             return filePrompt(for: artifact, currentDate: currentDate)
         }
@@ -68,6 +71,44 @@ enum Triage {
         - summary: write it in the third person — when the file is clearly the user's own, say "the user" (e.g. "the user's lease for…"), never "I".
         - title: a short human title, e.g. "UMass Tech Challenge Award".
         - junk: true when a file isn't worth keeping in a curated vault of the user's life (it stays on disk either way). Clear junk: installers & setup files, one-off or random downloads, memes & throwaway images, duplicates, boilerplate or generic documents, expired or now-irrelevant content. Be willing to flag — much of a Downloads folder isn't vault-worthy. But judge by whether the CONTENT genuinely matters, not by file type: a meaningful receipt, booking, ticket, or confirmation can be valuable life context worth keeping; only a trivial one is junk.
+        """
+    }
+
+    /// The Apple Mail bouncer — one email's envelope metadata (sender, subject, mailbox,
+    /// dates, flags). The model judges from the envelope the same way a human scans an
+    /// inbox: does this email represent something worth remembering? Body text extraction
+    /// from .emlx is a follow-up; metadata alone is enough for a strong keeper/junk call
+    /// (the Gmail connector proves this — it works from "subjects, senders, and snippets").
+    private static func mailPrompt(for artifact: Artifact, currentDate: Date) -> String {
+        let today = Self.dateString(currentDate)
+        let emailText = artifact.text ?? "(no metadata)"
+
+        return """
+        You curate a person's private knowledge base — a vault of what genuinely matters in their life, for their AI to draw on. You're shown ONE email from their Apple Mail: the envelope metadata (sender, subject, mailbox, dates) and, when it was recoverable, the message BODY. Decide whether this email represents something worth remembering.
+
+        Nothing is ever deleted from Mail — "junk" only means "don't add this to the vault". Today is \(today).
+
+        Email:
+        \(emailText)
+
+        Be RUTHLESS. The VAST majority of email is ephemeral noise — newsletters, marketing, automated notifications, receipts, OTP/2FA codes, system alerts, "your order shipped" — and worth NOTHING in a knowledge base. DEFAULT TO JUNK. Only keep emails that represent DURABLE life-knowledge: a real request or commitment directed at the user, a booking/appointment/renewal window, a personal or financial matter that will still matter months from now, a decision or plan, or meaningful correspondence about the user's life, work, or relationships.
+
+        If the body is present, judge from the FULL content — the envelope alone may look like noise but the body may carry a real ask or deadline (or vice versa: a fancy subject with an empty/marketing body). If no body is shown, judge from the envelope metadata alone — sender + subject + mailbox is still a strong signal.
+
+        Write the summary FIRST (understand the email), then judge it. Write in the THIRD PERSON — call the user "the user" (or "they"). An email FROM someone else is THEIR words, not the user's — never assert something about the user the email doesn't support. Quoted reply history (lines starting with ">") is CONTEXT, not new information — attribute it to whoever wrote it, never to the user by default.
+
+        PRIVACY — the summary you write is KEPT and may be shared with the user's other AIs. NEVER include full card/account numbers, passwords, verification/2FA codes, or verbatim sensitive medical or financial figures. Summarize around such details, never transcribe them.
+
+        Reply with ONLY a compact JSON object (no markdown, no extra text), with keys in EXACTLY this order:
+
+        {"summary":"<~30 words: what this email is about and why it matters (or doesn't)>","title":"<short 3-6 word title>","junk":<true|false>}
+
+        Then append this key ONLY IF it applies:
+          ,"sensitive":true  — only if it holds highly sensitive data that must never be stored anywhere (SSN, passport/ID, full card numbers, passwords, sensitive medical records)
+
+        Guidance:
+        - junk: true for newsletters, marketing, promotions, automated notifications, receipts (unless a truly meaningful one), OTP/2FA codes, system alerts, spam-like content, and anything ephemeral. A quiet inbox is normal — most emails are junk for a knowledge base.
+        - A genuine keeper: a real ask directed at the user, a deadline or commitment, a booking/renewal window, a personal/financial/work matter of lasting importance, meaningful correspondence about the user's life.
         """
     }
 

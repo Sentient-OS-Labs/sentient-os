@@ -18,6 +18,7 @@ struct SourcesPane: View {
     @AppStorage("dbg.run.desktop")   private var runDesktop = true
     @AppStorage("dbg.run.documents") private var runDocuments = true
     @AppStorage("dbg.run.notes")     private var runNotes = false
+    @AppStorage("dbg.run.appleMail")  private var runAppleMail = false
     @AppStorage("dbg.run.whatsapp")  private var runWhatsApp = false
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
     @AppStorage("dbg.run.imessage")  private var runIMessage = false
@@ -122,6 +123,9 @@ struct SourcesPane: View {
                              detail: imessageChats.isEmpty ? nil : "\(imessageChats.count) chats",
                              on: runIMessage && !imessageChats.isEmpty) { showIMessagePicker = true }
                 SettingsChip(label: "Apple Notes", on: runNotes) { toggleConnector($runNotes) }
+                if AppleMailSource.isInstalled {
+                    SettingsChip(label: "Apple Mail", on: runAppleMail) { toggleConnector($runAppleMail) }
+                }
             }
         }
     }

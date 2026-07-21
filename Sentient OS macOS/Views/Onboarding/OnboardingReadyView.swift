@@ -25,6 +25,7 @@ struct OnboardingReadyView: View {
     @AppStorage("dbg.run.desktop")        private var runDesktop = true
     @AppStorage("dbg.run.documents")      private var runDocuments = true
     @AppStorage("dbg.run.notes")          private var runNotes = false
+    @AppStorage("dbg.run.appleMail")      private var runAppleMail = false
     @AppStorage("dbg.run.whatsapp")       private var runWhatsApp = false
     @AppStorage("dbg.run.imessage")       private var runIMessage = false
     @AppStorage("dbg.whatsapp.chats")     private var whatsappCSV = ""
@@ -90,6 +91,9 @@ struct OnboardingReadyView: View {
                                      detail: imessageChats.isEmpty ? nil : "\(imessageChats.count) chats",
                                      on: runIMessage && !imessageChats.isEmpty) { showIMessagePicker = true }
                         SettingsChip(label: "Apple Notes", on: runNotes) { runNotes.toggle() }
+                        if AppleMailSource.isInstalled {
+                            SettingsChip(label: "Apple Mail", on: runAppleMail) { runAppleMail.toggle() }
+                        }
                     }
                 }
                 SettingsGroup(label: "Through Your ChatGPT") {

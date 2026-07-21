@@ -46,6 +46,7 @@ struct AnalysisPopover: View {
     @AppStorage("dbg.run.desktop")        private var runDesktop = true
     @AppStorage("dbg.run.documents")      private var runDocuments = true
     @AppStorage("dbg.run.notes")          private var runNotes = false
+    @AppStorage("dbg.run.appleMail")      private var runAppleMail = false
     @AppStorage("dbg.whatsapp.chats")     private var whatsappCSV = ""
     @AppStorage("dbg.imessage.chats")     private var imessageCSV = ""
     @AppStorage("dbg.gmail.connected")    private var gmailConnected = false
@@ -56,7 +57,7 @@ struct AnalysisPopover: View {
     @State private var vault: (notes: Int, domains: Int)?
 
     private var anyArmed: Bool {
-        runDownloads || runDesktop || runDocuments || runNotes || !customRoots.isEmpty
+        runDownloads || runDesktop || runDocuments || runNotes || runAppleMail || !customRoots.isEmpty
             || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
             || (gmailConnected && runGmail) || (calendarConnected && runCalendar)
     }
@@ -99,6 +100,9 @@ struct AnalysisPopover: View {
                 }
                 HStack(spacing: 8) {
                     SourceChip("Notes",    on: runNotes) { runNotes.toggle() }
+                    if AppleMailSource.isInstalled {
+                        SourceChip("Apple Mail", on: runAppleMail) { runAppleMail.toggle() }
+                    }
                     SourceChip("Gmail",    on: gmailConnected && runGmail,
                                locked: CodexAuth.knowledgeBaseOnly, action: onPickGmail)
                     SourceChip("Calendar", on: calendarConnected && runCalendar,
