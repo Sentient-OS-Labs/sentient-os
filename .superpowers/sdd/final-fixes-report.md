@@ -2,7 +2,7 @@
 
 Date: 2026-07-20
 Base reviewed: `083aa06`
-Final implementation: `a4742d9`
+Final implementation baseline: `a4742d9`; final sign-off fix is recorded below
 
 ## Outcome
 
@@ -84,7 +84,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   swift test --package-path NativeComputerUse
 ```
 
-Result: `Executed 96 tests, with 0 failures (0 unexpected)`.
+Result after final sign-off: `Executed 98 tests, with 0 failures (0 unexpected)`.
 
 ### Fresh app artifacts
 
@@ -157,6 +157,25 @@ Codex CLI again discovered `computer-use@sentient 1.0.0`. Config and corruption 
 focused lifecycle suite passed 4/4, and final scans found 0 live MCP/service children and 0 capture
 PNGs. The exact range check `git diff --check 5224bc4..HEAD` is part of the final documentation commit
 verification.
+
+### Final sign-off fix
+
+The final review found that Swift `Character` iteration can perform unbounded work on one extended
+grapheme containing a very large combining-mark run. A RED regression reproduced the problem: the
+100,001-scalar grapheme took about five seconds and normalized to `nil`. Normalization now walks
+`unicodeScalars`, where each inspected unit is at most four UTF-8 bytes, and accumulates its bounded
+prefix as UTF-8 bytes to avoid quadratic grapheme re-segmentation. The focused GREEN regression
+completed in 0.015 seconds with a visible truncation marker and output at or below 4 KiB.
+
+The same RED run proved that an oversized valid JSON-RPC batch was incorrectly replaced by a top-level
+object. Oversized batch entries are now capped independently when possible, preserving the response
+array and unaffected entries; an oversized aggregate falls back to a bounded one-entry error array.
+
+- RED: `/tmp/sentient-round2-red-final-signoff.log` (2 expected failures)
+- GREEN: `/tmp/sentient-round2-green-final-signoff.log` (2/2)
+- Full SwiftPM: `/tmp/sentient-round2-final-signoff-full-swift.log` (98/98)
+
+No Xcode rebuild was run for this targeted sign-off change, per review direction.
 
 ### Config, corruption, timeout, signal, and cleanup smokes
 

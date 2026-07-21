@@ -97,6 +97,26 @@ final class AccessibilityInspectorTests: XCTestCase {
 
         XCTAssertNil(snapshot.elements[0].title)
     }
+
+    func testSingleHugeExtendedGraphemeIsBoundedByUnicodeScalarWork() throws {
+        let combiningMark = "\u{0301}"
+        let oversizedGrapheme = "a" + String(repeating: combiningMark, count: 100_000)
+        let inspector = AccessibilityInspector(provider: FakeAXProvider(
+            tree: .chain(length: 1, attributeText: oversizedGrapheme)
+        ))
+
+        let snapshot = try inspector.snapshot(app: .fixture, maxDepth: 0, maxElements: 1)
+        let title = try XCTUnwrap(snapshot.elements[0].title)
+
+        XCTAssertEqual(title.unicodeScalars.first, "a".unicodeScalars.first)
+        XCTAssertTrue(title.hasSuffix("…[truncated]"))
+        XCTAssertLessThanOrEqual(title.utf8.count, AccessibilityInspector.maximumAttributeUTF8Bytes)
+        XCTAssertLessThan(
+            title.unicodeScalars.count,
+            oversizedGrapheme.unicodeScalars.count / 10,
+            "normalization must stop after its bounded scalar/byte prefix"
+        )
+    }
 }
 
 private final class FakeAXProvider: AXProviding {

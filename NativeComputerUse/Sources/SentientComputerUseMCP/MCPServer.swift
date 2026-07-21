@@ -165,7 +165,7 @@ public actor MCPServer {
     }
 
     static var responseSizeErrorData: Data {
-        encode(error(id: .null, code: -32603, message: "Internal error: response exceeds maximum size")) ?? Data()
+        encode(responseSizeError) ?? Data()
     }
 
     private static func encodeBounded(_ response: JSONValue, for request: JSONValue) -> Data {
@@ -173,28 +173,53 @@ public actor MCPServer {
             return encoded
         }
 
+        if case let .array(responses) = response,
+           case let .array(requests) = request {
+            let responseRequests = requests.filter { !isNotification($0) }
+            guard responseRequests.count == responses.count else {
+                return encode(.array([responseSizeError])) ?? Data()
+            }
+            let boundedResponses = zip(responses, responseRequests).map { response, request in
+                if let encoded = encode(response), encoded.count + 2 <= maximumResponseLineSize {
+                    return response
+                }
+                return overflowResponse(for: request)
+            }
+            let boundedBatch: JSONValue = .array(boundedResponses)
+            if let encoded = encode(boundedBatch), encoded.count + 1 <= maximumResponseLineSize {
+                return encoded
+            }
+            return encode(.array([responseSizeError])) ?? Data()
+        }
+
+        let singleOverflowResponse = overflowResponse(for: request)
+        if let encoded = encode(singleOverflowResponse), encoded.count + 1 <= maximumResponseLineSize {
+            return encoded
+        }
+        return responseSizeErrorData
+    }
+
+    private static func overflowResponse(for request: JSONValue) -> JSONValue {
         let requestID = validID(in: request) ?? .null
-        let overflowResponse: JSONValue
         if method(in: request) == "tools/call" {
             let internalError: JSONValue = .object([
                 "code": .string(ServiceErrorCode.internalError.rawValue),
                 "message": .string("MCP response exceeds maximum size")
             ])
-            overflowResponse = success(
+            return success(
                 id: requestID,
                 result: toolResult(.object(["error": internalError]), isError: true)
             )
-        } else {
-            overflowResponse = error(
-                id: requestID,
-                code: -32603,
-                message: "Internal error: response exceeds maximum size"
-            )
         }
-        if let encoded = encode(overflowResponse), encoded.count + 1 <= maximumResponseLineSize {
-            return encoded
-        }
-        return responseSizeErrorData
+        return error(
+            id: requestID,
+            code: -32603,
+            message: "Internal error: response exceeds maximum size"
+        )
+    }
+
+    private static var responseSizeError: JSONValue {
+        error(id: .null, code: -32603, message: "Internal error: response exceeds maximum size")
     }
 
     private static func method(in request: JSONValue) -> String? {

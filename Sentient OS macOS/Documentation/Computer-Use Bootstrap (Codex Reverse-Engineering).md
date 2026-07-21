@@ -367,7 +367,7 @@ Measured on a MacBookPro16,1 (8-core Intel Core i9, 32 GB) running macOS 26.5.2 
 26.5 (17F42). Because `xcode-select` pointed at Command Line Tools, the commands used
 `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` without changing the system selection.
 
-- A clean SwiftPM build ran 96 tests with 0 failures.
+- A clean SwiftPM build ran 98 tests with 0 failures.
 - Fresh x86_64 and arm64 Debug Xcode builds both exited 0. The Intel app contained x86_64-only MCP and
   service executables; the arm64 app omitted `IntelComputerUse` and retained the Sky bundle-id path.
 - `Scripts/verify-intel-computer-use.sh` exited 0 for both the unsigned verification build and the local

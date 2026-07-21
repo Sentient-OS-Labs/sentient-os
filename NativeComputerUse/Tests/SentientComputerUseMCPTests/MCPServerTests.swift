@@ -488,6 +488,34 @@ final class MCPServerTests: XCTestCase {
         XCTAssertNil(response)
     }
 
+    func testOversizedBatchPreservesArrayShapeAndCapsItsToolEntry() async throws {
+        let result: JSONValue = .object(["blob": .string(String(repeating: "x", count: 600_000))])
+        let server = MCPServer(transport: RecordingTransport(result: result))
+        await completeInitialization(server, id: 104)
+        let batch: JSONValue = .array([
+            request(
+                id: .int(105),
+                method: "tools/call",
+                params: .object(["name": .string("list_apps"), "arguments": .object([:])])
+            ),
+            request(id: .int(106), method: "resources/list", params: .object([:]))
+        ])
+
+        let handledData = await server.handle(try JSONEncoder().encode(batch))
+        let responseData = try XCTUnwrap(handledData)
+        XCTAssertLessThanOrEqual(responseData.count + 1, MCPServer.maximumResponseLineSize)
+
+        guard case let .array(responses) = try JSONDecoder().decode(JSONValue.self, from: responseData),
+              responses.count == 2,
+              case let .object(toolEnvelope) = responses[0],
+              toolEnvelope["id"] == .int(105),
+              case let .object(toolResult)? = toolEnvelope["result"] else {
+            return XCTFail("Expected a bounded JSON-RPC batch response")
+        }
+        XCTAssertEqual(toolResult["isError"], .bool(true))
+        XCTAssertEqual(responses[1], jsonRPCError(id: .int(106), code: -32601, message: "Method not found"))
+    }
+
     private func request(id: JSONValue, method: String, params: JSONValue) -> JSONValue {
         .object([
             "jsonrpc": .string("2.0"),

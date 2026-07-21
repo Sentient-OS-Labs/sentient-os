@@ -244,40 +244,39 @@ public final class AccessibilityInspector: AccessibilityInspecting, SnapshotElem
         let markerBytes = attributeTruncationMarker.utf8.count
         let contentLimit = max(0, maximumAttributeUTF8Bytes - markerBytes)
         let inputWorkLimit = maximumAttributeUTF8Bytes * 2
-        var result = ""
-        var outputBytes = 0
+        var output = [UInt8]()
+        output.reserveCapacity(contentLimit)
         var inspectedBytes = 0
         var pendingSpace = false
         var truncated = false
 
-        for character in value {
-            let characterBytes = String(character).utf8.count
-            guard inspectedBytes + characterBytes <= inputWorkLimit else {
+        for scalar in value.unicodeScalars {
+            let scalarBytes = String(scalar).utf8.count
+            guard inspectedBytes + scalarBytes <= inputWorkLimit else {
                 truncated = true
                 break
             }
-            inspectedBytes += characterBytes
+            inspectedBytes += scalarBytes
 
-            if character.isWhitespace {
-                pendingSpace = !result.isEmpty
+            if scalar.properties.isWhitespace {
+                pendingSpace = !output.isEmpty
                 continue
             }
 
             let separatorBytes = pendingSpace ? 1 : 0
-            guard outputBytes + separatorBytes + characterBytes <= contentLimit else {
+            guard output.count + separatorBytes + scalarBytes <= contentLimit else {
                 truncated = true
                 break
             }
             if pendingSpace {
-                result.append(" ")
-                outputBytes += 1
+                output.append(0x20)
                 pendingSpace = false
             }
-            result.append(character)
-            outputBytes += characterBytes
+            output.append(contentsOf: String(scalar).utf8)
         }
 
-        guard !result.isEmpty else { return nil }
+        guard !output.isEmpty else { return nil }
+        let result = String(decoding: output, as: UTF8.self)
         return truncated ? result + attributeTruncationMarker : result
     }
 

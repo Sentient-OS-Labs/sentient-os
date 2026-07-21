@@ -148,7 +148,7 @@ Both commands must print no matching process/file. Delete the scratch TextEdit d
 On a MacBookPro16,1 with an 8-core Intel Core i9 and 32 GB RAM, running macOS 26.5.2 (25F84) and
 Xcode 26.5 (17F42):
 
-- clean SwiftPM build: 96 tests, 0 failures;
+- clean SwiftPM build: 98 tests, 0 failures;
 - fresh x86_64 Debug app build: success; both bundled executables are x86_64;
 - fresh arm64 Debug app build: success; Intel resources absent and Sky routing retained;
 - Intel verifier and both script fixture suites: exit 0;
