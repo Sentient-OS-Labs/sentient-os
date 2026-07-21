@@ -16,14 +16,15 @@
 import Foundation
 
 /// The sources. `rawValue` is what we persist on summaries (the cloud's source-trust tiers key on
-/// it). `file`/`whatsapp`/`imessage`/`notes` are read on-device; `gmail` and `calendar` are the CLOUD
-/// sources — fetched + summarized through the user's Codex connectors (no on-device read), see
-/// GmailConnect / CalendarConnect.
+/// it). `file`/`whatsapp`/`imessage`/`notes`/`appleMail` are read on-device; `gmail` and
+/// `calendar` are the CLOUD sources — fetched + summarized through the user's Codex connectors
+/// (no on-device read), see GmailConnect / CalendarConnect.
 enum SourceKind: String, Codable, Sendable, CaseIterable {
     case file
     case whatsapp
     case imessage
     case notes
+    case appleMail
     case gmail
     case calendar
 }

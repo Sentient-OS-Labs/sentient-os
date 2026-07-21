@@ -73,6 +73,7 @@ enum SourceSelection {
         if bool("dbg.run.whatsapp", default: false) && !chatJIDs.isEmpty { n += 1 }
         if bool("dbg.run.imessage", default: false) && !imessageGUIDs.isEmpty { n += 1 }
         if bool("dbg.run.notes", default: false) { n += 1 }
+        if bool("dbg.run.appleMail", default: false) { n += 1 }
         if bool("dbg.gmail.connected", default: false) && bool("dbg.run.gmail", default: false) { n += 1 }
         if bool("dbg.calendar.connected", default: false) && bool("dbg.run.calendar", default: false) { n += 1 }
         return n
@@ -91,6 +92,9 @@ enum SourceSelection {
             s.append(.imessage(chatGUIDs: imessageGUIDs))
         }
         if bool("dbg.run.notes", default: false) && fdaGranted { s.append(.notes) }
+        if bool("dbg.run.appleMail", default: false) && fdaGranted && AppleMailSource.isInstalled {
+            s.append(.appleMail)
+        }
         return s
     }
 
