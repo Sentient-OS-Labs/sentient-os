@@ -57,6 +57,43 @@ overwrite the edit.
 *(This replaced the pre-B11 update path, which edited the live vault in place with a `.bak` restore —
 that whole choreography, B1, is now deleted.)*
 
+## Corpus batching — large first runs (`Vault/CorpusSlicer.swift`)
+
+`codex exec` accepts a bounded per-turn input (~1 MiB, server-side). A data-rich Mac's first build
+(thousands of survivor summaries) or a heavy week's update backlog can render past that in one
+prompt, so the corpus is fed as a **byte-budgeted sequence of parts** instead of a single prompt.
+
+- **`CorpusSlicer.slice(_:budget:)`** walks the notes in order and closes a part when the next
+  entry's rendered cost would cross the budget (**700 KB default**, ~33% headroom under the cap;
+  entries are never split — an oversized single entry gets its own part, loudly). It's deliberately
+  dumb and deterministic: no ranking, no sampling, so identical input always re-derives identical
+  parts — the property mid-sequence resume depends on. `CorpusSlicer.render` is the SAME entry
+  rendering the prompts use, so measured cost can never drift from what's actually sent.
+- **How the parts fold into one vault:** part one rides the existing **build** prompt; every later
+  part folds into the *same staging dir* through the battle-tested **update/merge** prompt, a fresh
+  codex session each. The single atomic staging → vault swap at the very end is unchanged, so a
+  many-part run still lands as one clean replace. A single-part corpus takes the exact pre-existing
+  code path — zero behavior change for normal-sized runs. `VaultCloud.update()` runs the same
+  slicing loop, with the freshness check and the one swap still at the end.
+- **Resume across parts:** `ResumeToken` carries a `sliceIndex` (the next unfed part) alongside the
+  session id and staging path (decode-compatible with older tokens, which default to part 0). A
+  usage-limit or restart mid-sequence resumes the in-flight session first, then continues the
+  remaining parts — never re-feeding a completed one. A **staging-dir corpus snapshot**
+  (`.sentient-corpus.json`, written only for multi-part runs, deleted before the swap and swept with
+  any orphan staging) guarantees the identical re-slice across restarts even though `CycleStore`
+  returns notes newest-first (a fresh fetch after more ingestion would otherwise shift every
+  boundary).
+- **The guard behind it:** `CodexCLI` rejects any prompt over `promptByteCap` (**950 KB**) pre-spawn
+  with a typed `CLIError.inputTooLarge` — a belt-and-suspenders floor so a mis-budgeted prompt fails
+  cleanly and classifiably (surfaced by `OvernightCaution` as honest banner/takeover copy) instead
+  of erroring deep inside codex. Proactive's judge/research 7-day window is trimmed to the same
+  shared byte budget (oldest dropped first).
+- **Progress:** a multi-part run reports "part N of M" in the takeover phase line and Dev Tools.
+
+Verified end-to-end at real-user scale: ~1,800 mixed-source summaries (2.55 MB rendered, 2.4× the
+per-turn cap) built through 4 parts, with a project thread deliberately scattered across every part
+consolidating into ONE domain in the finished vault — the cross-part seam produces no fragmentation.
+
 ## Progress
 
 Two channels, both optional:
