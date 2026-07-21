@@ -2,7 +2,7 @@ import Foundation
 
 @main
 struct ComputerUsePluginConfigTests {
-    static func main() throws {
+    static func main() async throws {
         try testIntelDisableThenSkyRepair()
         try testAlternateQuoteTableIsUpdatedWithoutDuplicate()
         try testDottedKeysAreRejectedWithoutChangingInput()
@@ -12,6 +12,8 @@ struct ComputerUsePluginConfigTests {
         try testBothArchitectureMigrationsRemainStrictlyExclusive()
         try testLocalMarketplaceRegistrationIsExactAndIdempotent()
         try testIntelMigrationRemovesOnlyOwnedSkyNotify()
+        try await testSkyConfigOnlyMigrationDoesNotDownload()
+        try await testMissingSkyPayloadUsesFullInstallPath()
         print("ComputerUsePluginConfig fixtures passed")
     }
 
@@ -213,6 +215,41 @@ struct ComputerUsePluginConfigTests {
         }
     }
 
+    private static func testSkyConfigOnlyMigrationDoesNotDownload() async throws {
+        let state = SkyInstallFixture(payloadValid: true, ready: false)
+        let coordinator = ComputerUseSkyInstallCoordinator(
+            payloadIsValid: { state.payloadValid },
+            isReady: { state.ready },
+            patchConfig: {
+                state.patchCount += 1
+                state.ready = true
+            },
+            performFullInstall: { state.downloadCount += 1 }
+        )
+
+        let result = try await coordinator.install(force: false)
+
+        expect(result == .configOnly, "valid Sky payload must use config-only migration")
+        expect(state.patchCount == 1, "config-only migration must patch config once")
+        expect(state.downloadCount == 0, "config-only migration must not invoke the downloader")
+    }
+
+    private static func testMissingSkyPayloadUsesFullInstallPath() async throws {
+        let state = SkyInstallFixture(payloadValid: false, ready: false)
+        let coordinator = ComputerUseSkyInstallCoordinator(
+            payloadIsValid: { state.payloadValid },
+            isReady: { state.ready },
+            patchConfig: { state.patchCount += 1 },
+            performFullInstall: { state.downloadCount += 1 }
+        )
+
+        let result = try await coordinator.install(force: false)
+
+        expect(result == .fullInstall, "missing Sky payload must preserve the full install path")
+        expect(state.patchCount == 0, "missing payload cannot be fixed through config")
+        expect(state.downloadCount == 1, "missing payload must invoke full download/install once")
+    }
+
     private static func expect(_ condition: @autoclosure () -> Bool, _ message: String) {
         if !condition() { fail(message) }
     }
@@ -220,5 +257,17 @@ struct ComputerUsePluginConfigTests {
     private static func fail(_ message: String) -> Never {
         FileHandle.standardError.write(Data("FAIL: \(message)\n".utf8))
         exit(1)
+    }
+}
+
+private final class SkyInstallFixture: @unchecked Sendable {
+    var payloadValid: Bool
+    var ready: Bool
+    var patchCount = 0
+    var downloadCount = 0
+
+    init(payloadValid: Bool, ready: Bool) {
+        self.payloadValid = payloadValid
+        self.ready = ready
     }
 }

@@ -87,7 +87,7 @@ enum ComputerUseSetup {
         }
     }
 
-    private static var isSkyInstalled: Bool {
+    private static var isSkyPayloadInstalled: Bool {
         let fm = FileManager.default
         // 1) the native helper's actual Mach-O (not just the .app dir → catches a half-copy)
         let helperBin = codexHome.appendingPathComponent(
@@ -104,7 +104,20 @@ enum ComputerUseSetup {
                                  encoding: .utf8))?.contains("setupComputerUseRuntime") ?? false)
         } ?? false
         guard hasPlugin else { return false }
-        // 3) config.toml actually enables the plugin
+        // 3) the local marketplace snapshot is present and still describes computer-use.
+        let marketplaceManifest = codexHome.appendingPathComponent(
+            ".tmp/bundled-marketplaces/openai-bundled/.agents/plugins/marketplace.json")
+        guard let marketplaceData = try? Data(contentsOf: marketplaceManifest),
+              let marketplace = try? JSONSerialization.jsonObject(with: marketplaceData) as? [String: Any],
+              marketplace["name"] as? String == "openai-bundled",
+              let plugins = marketplace["plugins"] as? [[String: Any]],
+              plugins.contains(where: { $0["name"] as? String == "computer-use" }) else { return false }
+        return true
+    }
+
+    private static var isSkyInstalled: Bool {
+        guard isSkyPayloadInstalled else { return false }
+        // 4) config.toml actually selects Sky exclusively.
         let config = (try? String(contentsOf: codexHome.appendingPathComponent("config.toml"), encoding: .utf8)) ?? ""
         return ComputerUsePluginConfig.hasExclusiveBackend(
             active: .sky, inactive: .sentientIntel, in: config)
@@ -137,9 +150,25 @@ enum ComputerUseSetup {
     }
 
     private static func installSky(force: Bool, onLine: @escaping @Sendable (String) -> Void) async throws {
-        let fm = FileManager.default
-        if !force, isSkyInstalled { onLine("✓ Computer use already set up"); return }
+        let coordinator = ComputerUseSkyInstallCoordinator(
+            payloadIsValid: { isSkyPayloadInstalled },
+            isReady: { isSkyInstalled },
+            patchConfig: { try patchConfig() },
+            performFullInstall: { try await performFullSkyInstall(onLine: onLine) }
+        )
+        let outcome = try await coordinator.install(force: force)
+        switch outcome {
+        case .alreadyReady:
+            onLine("✓ Computer use already set up")
+        case .configOnly:
+            onLine("✓ Computer use config repaired")
+        case .fullInstall:
+            break
+        }
+    }
 
+    private static func performFullSkyInstall(onLine: @escaping @Sendable (String) -> Void) async throws {
+        let fm = FileManager.default
         let tmp = fm.temporaryDirectory
         let dmg = tmp.appendingPathComponent("SentientCodex.dmg")
         let mount = tmp.appendingPathComponent("sentient-codex-mnt-\(UUID().uuidString.prefix(8))")
