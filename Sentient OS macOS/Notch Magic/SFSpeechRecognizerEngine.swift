@@ -18,7 +18,9 @@ final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
     static let maxUtteranceDuration: TimeInterval = 59
 
     private let audioEngine = AVAudioEngine()
-    private let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer()
+    private let recognizer = SpeechLocaleResolver.candidates.lazy
+        .compactMap { SFSpeechRecognizer(locale: $0) }
+        .first ?? SFSpeechRecognizer()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var tapInstalled = false
