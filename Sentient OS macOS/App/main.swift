@@ -18,5 +18,9 @@ if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
     CrashReporting.start(.app)          // crash reporting for the GUI app
     Analytics.start()                   // product analytics (TelemetryDeck) — GUI app only
     Analytics.countInstallOnce()        // the one anonymous install ping — fires even when opted out
+    // Language instructions live in ResponseLanguage (computed per AI call). Clear any copy that
+    // was mistakenly pasted into the editable Proactive text field so deleting that field can
+    // never "lose" localization.
+    CustomInstructions.stripMisplacedLanguageInstructionsIfNeeded()
     SentientOSApp.main()                // normal GUI app
 }

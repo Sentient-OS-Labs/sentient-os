@@ -69,7 +69,7 @@ struct AnalysisPopover: View {
             Text(understoodLine)
                 .display(21).foregroundStyle(.white)
                 .padding(.top, 13)
-            MonoCaps(vaultLine, size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
+            MonoCaps(verbatim: vaultLine, size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
                 .padding(.top, 7)
 
             analyzeButton.padding(.top, 16)
@@ -114,15 +114,19 @@ struct AnalysisPopover: View {
     }
 
     private var understoodLine: String {
+        let locale = AppLanguage.resolvedLocale
         switch thingsUnderstood {
-        case 0:  "Ready to begin."
-        case 1:  "1 thing understood."
-        default: "\(thingsUnderstood.formatted()) things understood."
+        case 0:  return String(localized: "Ready to begin.", locale: locale)
+        case 1:  return String(localized: "1 thing understood.", locale: locale)
+        default: return String(localized: "\(thingsUnderstood.formatted()) things understood.", locale: locale)
         }
     }
     private var vaultLine: String {
-        guard let v = vault, v.notes > 0 else { return "No vault yet · your first analysis builds it" }
-        return "\(v.notes) notes · \(v.domains) domains in your knowledge"
+        let locale = AppLanguage.resolvedLocale
+        guard let v = vault, v.notes > 0 else {
+            return String(localized: "No vault yet · your first analysis builds it", locale: locale)
+        }
+        return String(localized: "\(v.notes) notes · \(v.domains) domains in your knowledge", locale: locale)
     }
     /// Under the button: last run + when the next one comes, or the reason nothing can run.
     @ViewBuilder private var runFooter: some View {
@@ -140,7 +144,7 @@ struct AnalysisPopover: View {
                 }
                 GridRow {
                     MonoCaps("Next run", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-                    footerValue("Tonight at \(Self.overnightTime), if your Mac's plugged in & Sentient's open in the menu bar")
+                    footerValue(String(localized: "Tonight at \(Self.overnightTime), if your Mac's plugged in & Sentient's open in the menu bar", locale: AppLanguage.resolvedLocale))
                 }
             }
         }
@@ -245,7 +249,7 @@ struct SourceChip: View {
             } else if on {
                 Text("✓").foregroundStyle(Theme.Ink.green)
             }
-            Text(name).foregroundStyle(on && !locked ? Theme.Ink.chipInk : .white.opacity(0.28))
+            Text(LocalizedStringKey(stringLiteral: name)).foregroundStyle(on && !locked ? Theme.Ink.chipInk : .white.opacity(0.28))
         }
         .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(0.8)
         .padding(.horizontal, 9).padding(.vertical, 4)

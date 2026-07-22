@@ -18,7 +18,8 @@ final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
     static let maxUtteranceDuration: TimeInterval = 59
 
     private let audioEngine = AVAudioEngine()
-    private let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer()
+    /// Resolved at start() from App language (not at init) so a mid-session language change is honored.
+    private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var tapInstalled = false
@@ -30,7 +31,9 @@ final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
     // MARK: Capture
 
     func start() async throws {
+        let recognizer = Self.makeRecognizer()
         guard let recognizer, recognizer.isAvailable else { throw VoiceError.modelUnavailable }
+        self.recognizer = recognizer
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true   // not shown — they just keep `latest` current for the stop
@@ -72,6 +75,60 @@ final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
         teardown()
     }
 
+    // MARK: Locale
+
+    /// Whether Dictation / classic Speech can capture Russian when SpeechAnalyzer on-device assets fail.
+    static func russianRecognizerIsAvailable() -> Bool {
+        guard AppLanguage.wantsRussianSpeech else { return false }
+        return makeRecognizer() != nil
+    }
+
+    /// Pick an SFSpeechRecognizer for App language — try regional variants, then scan
+    /// `supportedLocales()`, before any default (system) recognizer. Logs clearly on fallback.
+    private static func makeRecognizer() -> SFSpeechRecognizer? {
+        let preferred = AppLanguage.preferredSpeechLocale
+        let app = AppLanguage.stored.rawValue
+        let wantRussian = AppLanguage.wantsRussianSpeech
+        Log("voice: SFSpeech resolving locale (preferred \(preferred.identifier), app language \(app))")
+
+        for candidate in AppLanguage.speechLocaleCandidates {
+            guard let recognizer = SFSpeechRecognizer(locale: candidate), recognizer.isAvailable else { continue }
+            Log("voice: SFSpeech locale → \(candidate.identifier) (isAvailable=true)")
+            return recognizer
+        }
+
+        let supported = SFSpeechRecognizer.supportedLocales()
+        let targetLang: String? = wantRussian ? "ru"
+            : (AppLanguage.stored == .english || preferred.language.languageCode?.identifier == "en"
+               ? "en" : preferred.language.languageCode?.identifier)
+        if let targetLang,
+           let match = supported.first(where: {
+               $0.language.languageCode?.identifier == targetLang
+           }),
+           let recognizer = SFSpeechRecognizer(locale: match),
+           recognizer.isAvailable {
+            Log("voice: SFSpeech locale → \(match.identifier) (scanned supportedLocales for \(targetLang))")
+            return recognizer
+        }
+
+        let supportedIDs = supported.map(\.identifier).joined(separator: ", ")
+        if wantRussian {
+            Log("voice: ✗ no available Russian SFSpeechRecognizer (supported: [\(supportedIDs)]) — refusing English fallback")
+            return nil
+        }
+        Log("voice: ⚠️ preferred SFSpeech locale \(preferred.identifier) unavailable (supported: [\(supportedIDs)]); trying English")
+        for candidate in [Locale(identifier: "en-US"), Locale(identifier: "en-GB"), Locale(identifier: "en")] {
+            guard let recognizer = SFSpeechRecognizer(locale: candidate), recognizer.isAvailable else { continue }
+            Log("voice: SFSpeech locale → \(candidate.identifier) (English fallback)")
+            return recognizer
+        }
+        if let recognizer = SFSpeechRecognizer(), recognizer.isAvailable {
+            Log("voice: SFSpeech locale → system default (isAvailable=true)")
+            return recognizer
+        }
+        return nil
+    }
+
     // MARK: Internals
 
     private func handle(text: String?, isFinal: Bool, failed: Bool) {
@@ -111,5 +168,6 @@ final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
     private func teardown() {
         task = nil
         request = nil
+        recognizer = nil
     }
 }

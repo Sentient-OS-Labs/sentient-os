@@ -4,8 +4,8 @@
 //
 //  The voice front-end for the right-⌘ hotkey: requests microphone + speech permission (once, lazily,
 //  on first hold), picks the OS-appropriate transcription engine, and exposes start / stopAndTranscribe
-//  / cancel. Today only the macOS 26 engine (SpeechAnalyzerEngine) exists; older macOS reports
-//  unavailable. Audio never touches disk — it streams through the on-device model in memory.
+//  / cancel. macOS 26 prefers SpeechAnalyzerEngine; if Russian on-device assets fail but
+//  SFSpeechRecognizer is available (e.g. Dictation), capture falls back to the classic engine.
 //
 //  Key methods: prewarm() · start() · stopAndTranscribe() · cancel().
 //
@@ -49,16 +49,52 @@ final class VoiceCapture {
         }
     }
 
+    /// Proactive Russian STT model install when App language resolves to Russian (App = Russian, or
+    /// System with Russian as the Mac's primary language). English / non-Russian STT is unchanged —
+    /// the coordinator's launch `prewarm()` already covers that path.
+    static func prewarmRussianSpeechIfNeeded() {
+        guard #available(macOS 26, *) else { return }
+        guard AppLanguage.wantsRussianSpeech else { return }
+        Log("voice: proactive prewarm — Russian STT model (App language preference)")
+        Task { await SpeechAnalyzerEngine.prewarm() }
+    }
+
     // MARK: Capture
 
     func start() async throws {
         guard await authorize() else { throw VoiceError.notAuthorized }
-        let engine = Self.makeEngine()
+        if #available(macOS 26, *) {
+            let analyzer = SpeechAnalyzerEngine()
+            self.engine = analyzer
+            do {
+                try await analyzer.start()
+                return
+            } catch {
+                analyzer.cancel()
+                if case VoiceError.modelUnavailable = error,
+                   SFSpeechRecognizerEngine.russianRecognizerIsAvailable() {
+                    Log("voice: SpeechAnalyzer Russian on-device model unavailable — falling back to SFSpeechRecognizer (Dictation-backed)")
+                    let fallback = SFSpeechRecognizerEngine()
+                    self.engine = fallback
+                    do {
+                        try await fallback.start()
+                        return
+                    } catch {
+                        fallback.cancel()
+                        self.engine = nil
+                        throw error
+                    }
+                }
+                self.engine = nil
+                throw error
+            }
+        }
+        let engine = SFSpeechRecognizerEngine()
         self.engine = engine
         do {
             try await engine.start()
         } catch {
-            engine.cancel()   // a failed/bailed start still closes its analyzer session properly
+            engine.cancel()
             self.engine = nil
             throw error
         }
@@ -90,11 +126,6 @@ final class VoiceCapture {
     }
 
     // MARK: Engine selection
-
-    private static func makeEngine() -> any QuickTranscriptionEngine {
-        if #available(macOS 26, *) { return SpeechAnalyzerEngine() }
-        return SFSpeechRecognizerEngine()
-    }
 
     // MARK: Permissions (lazy, on first hold)
 

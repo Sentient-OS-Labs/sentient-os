@@ -25,21 +25,45 @@ struct CloudConnectSheet: View {
         case gmail, calendar
 
         var logoAsset: String { self == .gmail ? "GmailMark" : "GoogleCalendarMark" }
-        var title: String { self == .gmail ? "Connect Gmail" : "Connect Google Calendar" }
-        var connectTitle: String { self == .gmail ? "Connect Gmail" : "Connect Calendar" }
+        var title: String {
+            let locale = AppLanguage.resolvedLocale
+            return self == .gmail
+                ? String(localized: "Connect Gmail", locale: locale)
+                : String(localized: "Connect Google Calendar", locale: locale)
+        }
+        var connectTitle: String {
+            let locale = AppLanguage.resolvedLocale
+            return self == .gmail
+                ? String(localized: "Connect Gmail", locale: locale)
+                : String(localized: "Connect Calendar", locale: locale)
+        }
         var bullets: [(icon: String, text: String)] {
-            [("icloud.slash", self == .gmail ? "Your ChatGPT reads your email, never our servers"
-                                             : "Your ChatGPT reads your calendar, never our servers"),
-             ("link", "Link your Google account on OpenAI's page"),
-             ("lock", "Sentient never sees your password")]
+            let locale = AppLanguage.resolvedLocale
+            let first = self == .gmail
+                ? String(localized: "Your ChatGPT reads your email, never our servers", locale: locale)
+                : String(localized: "Your ChatGPT reads your calendar, never our servers", locale: locale)
+            return [("icloud.slash", first),
+             ("link", String(localized: "Link your Google account on OpenAI's page", locale: locale)),
+             ("lock", String(localized: "Sentient never sees your password", locale: locale))]
         }
-        var connectedLine: String { self == .gmail ? "Gmail connected" : "Calendar connected" }
+        var connectedLine: String {
+            let locale = AppLanguage.resolvedLocale
+            return self == .gmail
+                ? String(localized: "Gmail connected", locale: locale)
+                : String(localized: "Calendar connected", locale: locale)
+        }
         var failedLine: String {
-            self == .gmail
-            ? "Couldn't see Gmail yet. Finish linking on the page, then press Done again."
-            : "Couldn't see your calendar yet. Finish linking on the page, then press Done again."
+            let locale = AppLanguage.resolvedLocale
+            return self == .gmail
+            ? String(localized: "Couldn't see Gmail yet. Finish linking on the page, then press Done again.", locale: locale)
+            : String(localized: "Couldn't see your calendar yet. Finish linking on the page, then press Done again.", locale: locale)
         }
-        var stopLine: String { self == .gmail ? "Stop reading Gmail" : "Stop reading Google Calendar" }
+        var stopLine: String {
+            let locale = AppLanguage.resolvedLocale
+            return self == .gmail
+                ? String(localized: "Stop reading Gmail", locale: locale)
+                : String(localized: "Stop reading Google Calendar", locale: locale)
+        }
         var connectorURL: URL { self == .gmail ? GmailConnect.connectorURL : CalendarConnect.connectorURL }
         var connectedKey: String { self == .gmail ? "dbg.gmail.connected" : "dbg.calendar.connected" }
         var selectedKey: String { self == .gmail ? "dbg.run.gmail" : "dbg.run.calendar" }
@@ -156,9 +180,9 @@ struct CloudConnectSheet: View {
 
     private var doneLabel: String {
         switch phase {
-        case .checking: return "Checking…"
-        case .connected where checkStart != nil: return "Connected"
-        default: return "Done"
+        case .checking: return String(localized: "Checking…", locale: AppLanguage.resolvedLocale)
+        case .connected where checkStart != nil: return String(localized: "Connected", locale: AppLanguage.resolvedLocale)
+        default: return String(localized: "Done", locale: AppLanguage.resolvedLocale)
         }
     }
 

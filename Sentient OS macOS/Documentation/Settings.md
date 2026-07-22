@@ -116,6 +116,12 @@ Live `stats()` activity below; local-only story when sharing is off.
 contains "/mcp", and a forward hit inverts the range (a shipped-then-fixed crash).
 
 ### System (`SystemPane.swift`)
+
+**Language** (2026 — i18n / #264, #267): the first group on the pane — App language, Response
+language, and optional Speak replies. Full behavior, STT/TTS, and catalog rules live in
+`Localization (i18n).md`. App language drives SwiftUI locale + speech recognition; Response language
+injects live prompt text on every AI call (never stored in Proactive instructions).
+
 Reads as three chapters split by two dividers (2026-07-13): *how Sentient runs* (Overnight ·
 Startup · Updates), then a bright hairline; *privacy*; then a **red-tinted hairline**
 (`SettingsHairline(color: Theme.Ink.red, opacity: 0.25)` — the app's one semantic divider, the

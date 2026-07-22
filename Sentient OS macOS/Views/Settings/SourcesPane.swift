@@ -101,7 +101,7 @@ struct SourcesPane: View {
                 SettingsChip(label: "Downloads", on: runDownloads) { toggleConnector($runDownloads) }
                 SettingsChip(label: "Documents", on: runDocuments) { toggleConnector($runDocuments) }
                 ForEach(customRoots, id: \.self) { url in
-                    SettingsChip(label: url.lastPathComponent, detail: "✕", on: true) {
+                    SettingsChip(verbatim: url.lastPathComponent, detail: "✕", on: true) {
                         CustomRoots.remove(url)
                     }
                 }
@@ -115,11 +115,11 @@ struct SourcesPane: View {
             ChipFlow {
                 if WhatsAppSource.isInstalled {
                     SettingsChip(label: "WhatsApp",
-                                 detail: whatsappChats.isEmpty ? nil : "\(whatsappChats.count) chats",
+                                 detail: whatsappChats.isEmpty ? nil : String(localized: "\(whatsappChats.count) chats", locale: AppLanguage.resolvedLocale),
                                  on: runWhatsApp && !whatsappChats.isEmpty) { showWhatsAppPicker = true }
                 }
                 SettingsChip(label: "iMessage",
-                             detail: imessageChats.isEmpty ? nil : "\(imessageChats.count) chats",
+                             detail: imessageChats.isEmpty ? nil : String(localized: "\(imessageChats.count) chats", locale: AppLanguage.resolvedLocale),
                              on: runIMessage && !imessageChats.isEmpty) { showIMessagePicker = true }
                 SettingsChip(label: "Apple Notes", on: runNotes) { toggleConnector($runNotes) }
             }
@@ -164,8 +164,8 @@ struct SourcesPane: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = true
-        panel.prompt = "Add"
-        panel.message = "Add a folder for Sentient to read."
+        panel.prompt = String(localized: "Add", locale: AppLanguage.resolvedLocale)
+        panel.message = String(localized: "Add a folder for Sentient to read.", locale: AppLanguage.resolvedLocale)
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { CustomRoots.add(url) }
     }

@@ -30,14 +30,15 @@ enum Uninstall {
     enum Stage: CaseIterable {
         case helper, cloud, keychain, knowledge, model, traces
         var whisper: String {
-            switch self {
-            case .helper:    return "STANDING DOWN THE WAKE HELPER"
-            case .cloud:     return "REMOVING THE CLOUD COPY"
-            case .keychain:  return "CLEARING YOUR KEYCHAIN KEY"
-            case .knowledge: return "ERASING YOUR KNOWLEDGE BASE"
-            case .model:     return "REMOVING THE ON-DEVICE MODEL"
-            case .traces:    return "SWEEPING THE LAST TRACES"
+            let key: String.LocalizationValue = switch self {
+            case .helper:    "STANDING DOWN THE WAKE HELPER"
+            case .cloud:     "REMOVING THE CLOUD COPY"
+            case .keychain:  "CLEARING YOUR KEYCHAIN KEY"
+            case .knowledge: "ERASING YOUR KNOWLEDGE BASE"
+            case .model:     "REMOVING THE ON-DEVICE MODEL"
+            case .traces:    "SWEEPING THE LAST TRACES"
             }
+            return String(localized: key, locale: AppLanguage.resolvedLocale)
         }
     }
 

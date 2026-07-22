@@ -110,7 +110,7 @@ struct ComputerUseGateView: View {
 
     // MARK: Sentient's grants — native prompts first, the guide as the fallback
 
-    private var micSpeechNote: String {
+    private var micSpeechNote: LocalizedStringKey {
         switch gate.micSpeech {
         case .granted:  return "granted"
         case .notAsked: return "recommended"
@@ -145,7 +145,7 @@ struct ComputerUseGateView: View {
 
     // MARK: The helper's grants — system TCC; the drag panel is the only honest path
 
-    private func helperNote(granted: Bool) -> String {
+    private func helperNote(granted: Bool) -> LocalizedStringKey {
         if granted { return "granted" }
         return gate.helperOnDisk ? "not granted" : "computer use still setting up"
     }

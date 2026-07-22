@@ -214,7 +214,7 @@ struct HealthPane: View {
 
     // MARK: Overnight wake daemon
 
-    private var daemonNote: String {
+    private var daemonNote: LocalizedStringKey {
         switch daemon {
         case .ready:      return "ready"
         case .installing: return "installing…"
@@ -258,7 +258,7 @@ struct HealthPane: View {
 
     // MARK: Microphone & Speech (one row — one call asks for both; optional, so yellow, never red)
 
-    private var micSpeechNote: String {
+    private var micSpeechNote: LocalizedStringKey {
         switch micSpeech {
         case .granted:  return "granted"
         case .notAsked: return "not asked yet"
@@ -314,7 +314,7 @@ struct HealthPane: View {
         }
     }
 
-    private var notifNote: String {
+    private var notifNote: LocalizedStringKey {
         switch notifStatus {
         case .authorized:    return "on"
         case .provisional:   return "quiet"   // the launch-banked provisional grant (no banners/sounds)
@@ -392,9 +392,7 @@ struct HealthPane: View {
                 if codex.loggedIn, let plan {
                     StatusLine(title: "ChatGPT plan",
                                health: plan.tier == .limited ? .warn : .ok,
-                               note: planChecking ? "checking…"
-                                   : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
-                                                           : plan.displayName.lowercased(),
+                               note: planNote(plan, checking: planChecking),
                                tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.",
                                fixTitle: "Re-check") { recheckPlan() }
                 }
@@ -407,7 +405,7 @@ struct HealthPane: View {
                            fix: codex.settingUpComputerUse ? nil : { Task { await codex.setupComputerUse() } })
                 // The ~535 MB download deserves live narration, not just an amber dot.
                 if codex.settingUpComputerUse, let line = codex.computerUseStatus {
-                    SettingsProse(line).padding(.top, 2).padding(.bottom, 6)
+                    SettingsProse(verbatim: line).padding(.top, 2).padding(.bottom, 6)
                 } else {
                     failureLine(codex.computerUseStatus)
                 }
@@ -420,7 +418,7 @@ struct HealthPane: View {
     @ViewBuilder
     private func failureLine(_ status: String?) -> some View {
         if let status, status.hasPrefix("✗") {
-            SettingsProse(status).padding(.top, 2).padding(.bottom, 6)
+            SettingsProse(verbatim: status).padding(.top, 2).padding(.bottom, 6)
         }
     }
 
@@ -471,6 +469,14 @@ struct HealthPane: View {
             if let fresh = try? await CodexAuth.refreshPlan() { plan = fresh }
             planChecking = false
         }
+    }
+
+    private func planNote(_ plan: CodexAuth.Plan, checking: Bool) -> LocalizedStringKey {
+        if checking { return "checking…" }
+        if plan.tier == .limited {
+            return "\(plan.displayName.lowercased()) · knowledge base only"
+        }
+        return LocalizedStringKey(stringLiteral: plan.displayName.lowercased())
     }
 
     // MARK: - Probes

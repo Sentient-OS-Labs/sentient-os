@@ -122,7 +122,7 @@ struct OnboardingPermissionsView: View {
 
     // MARK: Overnight wake daemon (same pattern as Settings → Health)
 
-    private var daemonNote: String {
+    private var daemonNote: LocalizedStringKey {
         switch daemon {
         case .ready:      return "ready"
         case .installing: return "installing…"

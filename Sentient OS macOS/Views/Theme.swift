@@ -81,14 +81,23 @@ enum Theme {
 
 /// Monospace ALL-CAPS with wide tracking — the design language's whisper voice.
 struct MonoCaps: View {
-    let text: String
+    private let text: Text
     let size: CGFloat
     let tracking: CGFloat
     let color: Color
     let weight: Font.Weight
 
-    init(_ text: String, size: CGFloat, tracking: CGFloat, color: Color, weight: Font.Weight = .medium) {
-        self.text = text
+    init(_ key: LocalizedStringKey, size: CGFloat, tracking: CGFloat, color: Color, weight: Font.Weight = .medium) {
+        self.text = Text(key)
+        self.size = size
+        self.tracking = tracking
+        self.color = color
+        self.weight = weight
+    }
+
+    /// Runtime / already-composed labels that must not go through the String Catalog.
+    init(verbatim text: String, size: CGFloat, tracking: CGFloat, color: Color, weight: Font.Weight = .medium) {
+        self.text = Text(verbatim: text)
         self.size = size
         self.tracking = tracking
         self.color = color
@@ -96,9 +105,10 @@ struct MonoCaps: View {
     }
 
     var body: some View {
-        Text(text.uppercased())
+        text
             .font(.system(size: size, weight: weight, design: .monospaced))
             .tracking(tracking)
+            .textCase(.uppercase)
             .foregroundStyle(color)
     }
 }

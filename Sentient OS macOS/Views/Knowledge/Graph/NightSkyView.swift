@@ -69,7 +69,10 @@ struct NightSkyView: View {
     // MARK: HUD (whispers — none of it intercepts the cursor)
 
     private func hud(graph: SkyGraph) -> some View {
-        ZStack {
+        let stats = String(
+            localized: "\(graph.nodes.count) notes · \(graph.edges.count) threads · \(graph.domains.count) constellations",
+            locale: AppLanguage.resolvedLocale)
+        return ZStack {
             Color.clear
             VStack(alignment: .leading, spacing: 5) {
                 MonoCaps("Constellation View", size: 9, tracking: 3, color: Theme.Ink.label)
@@ -80,8 +83,7 @@ struct NightSkyView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.top, 14).padding(.leading, 22)
 
-            MonoCaps("\(graph.nodes.count) notes · \(graph.edges.count) threads · \(graph.domains.count) constellations",
-                     size: 9.5, tracking: 2, color: Theme.Ink.label)
+            MonoCaps(verbatim: stats, size: 9.5, tracking: 2, color: Theme.Ink.label)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 .padding(.bottom, 16).padding(.leading, 22)
 
@@ -117,7 +119,7 @@ struct NightSkyView: View {
 /// wearing the SkyDoorRim so the other mode is discoverable. ⌘⇧G fires whichever door is mounted.
 struct SkyDoor: View {
     let icon: String
-    let label: String
+    let label: LocalizedStringKey
     let action: () -> Void
 
     var body: some View {
@@ -156,8 +158,8 @@ private struct SkyDoorRim: View {
 /// The door's toolbar seat.
 struct SkyDoorToolbarItem: ToolbarContent {
     let icon: String
-    let label: String
-    let help: String
+    let label: LocalizedStringKey
+    let help: LocalizedStringKey
     var placement: ToolbarItemPlacement = .principal   // sky: top-center · reader: .navigation (top-left)
     let action: () -> Void
 
@@ -175,7 +177,7 @@ private struct SkyHoverCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            MonoCaps(info.domainName, size: 8.5, tracking: 2, color: Theme.Ink.label)
+            MonoCaps(verbatim: info.domainName, size: 8.5, tracking: 2, color: Theme.Ink.label)
             Text(info.title)
                 .font(.system(size: 14, design: .serif))
                 .foregroundStyle(Theme.Ink.statusInk)

@@ -60,7 +60,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         await Self.closingSession?.value
         try Task.checkCancellation()
 
-        let transcriber = SpeechTranscriber(locale: await Self.resolvedLocale(), preset: .transcription)
+        let transcriber = SpeechTranscriber(locale: await Self.captureLocale(), preset: .transcription)
         guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
             throw VoiceError.modelUnavailable
         }
@@ -200,16 +200,63 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         resultsTask = nil
     }
 
-    /// The spoken language: the user's locale if supported by the on-device model, else US English.
+    /// The spoken language: App language preference (or system), resolved against installable
+    /// SpeechTranscriber locales. Tries Russian/English regional variants before any English
+    /// fallback — never silently stick on en-US when the user asked for Russian.
     private static func resolvedLocale() async -> Locale {
-        if let match = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) { return match }
+        let preferred = AppLanguage.preferredSpeechLocale
+        let app = AppLanguage.stored.rawValue
+        let wantRussian = AppLanguage.wantsRussianSpeech
+        Log("voice: resolving STT locale (preferred \(preferred.identifier), app language \(app))")
+
+        for candidate in AppLanguage.speechLocaleCandidates {
+            if let match = await SpeechTranscriber.supportedLocale(equivalentTo: candidate) {
+                Log("voice: STT locale → \(match.identifier) (matched from \(candidate.identifier))")
+                return match
+            }
+        }
+
+        // Scan the full supported list by language code (covers ru_RU vs ru-RU identifier drift).
+        let supported = await SpeechTranscriber.supportedLocales
+        let targetLang: String? = wantRussian ? "ru"
+            : (AppLanguage.stored == .english || preferred.language.languageCode?.identifier == "en"
+               ? "en" : preferred.language.languageCode?.identifier)
+        if let targetLang,
+           let match = supported.first(where: {
+               $0.language.languageCode?.identifier == targetLang
+           }) {
+            Log("voice: STT locale → \(match.identifier) (scanned supportedLocales for \(targetLang); \(supported.count) supported)")
+            return match
+        }
+
+        // Last chance: an already-installed locale of the right language (downloadable list can lag).
+        let installed = await SpeechTranscriber.installedLocales
+        if let targetLang,
+           let match = installed.first(where: {
+               $0.language.languageCode?.identifier == targetLang
+           }) {
+            Log("voice: STT locale → \(match.identifier) (from installedLocales for \(targetLang))")
+            return match
+        }
+
+        let supportedIDs = supported.map(\.identifier).joined(separator: ", ")
+        if wantRussian {
+            Log("voice: ✗ no Russian SpeechTranscriber locale (supported: [\(supportedIDs)]) — will not fall back to en-US")
+            return preferred
+        }
+        Log("voice: ⚠️ preferred STT locale \(preferred.identifier) unsupported (supported: [\(supportedIDs)]); falling back to en-US")
+        if let en = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "en-US")) {
+            return en
+        }
         return Locale(identifier: "en-US")
     }
 
     // MARK: Model readiness (memoized · single-flight · shielded from caller cancellation)
 
-    /// Session memo — once the model is verified installed, start() never touches the asset daemon again.
+    /// Session memo — once the model is verified installed for a locale, start() never touches the
+    /// asset daemon again for that locale. Cleared when App language resolves to a different STT locale.
     private static var modelReady = false
+    private static var modelReadyLocaleID: String?
 
     /// The ONE in-flight install. Unstructured on purpose: downloadAndInstall() ignores cooperative
     /// cancellation, so a bailing caller (the 15s watchdog, a tap-to-type, Esc) must never cancel or
@@ -221,24 +268,142 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     /// with an honest "still downloading" notice instead of listening into a model that isn't there.
     static var isModelDownloading: Bool { installTask != nil && !modelReady }
 
+    /// Locale whose on-device model passed `ensureModelReady`. Cleared when App language changes or
+    /// the cached locale no longer matches the STT preference (e.g. en-US memo after switching to Russian).
+    private static func captureLocale() async -> Locale {
+        if modelReady, let id = modelReadyLocaleID {
+            let ready = Locale(identifier: id)
+            if AppLanguage.speechLocaleMatchesPreference(ready) { return ready }
+            Log("voice: cached speech model (\(id)) doesn't match App language — clearing memo")
+            invalidateModelReady()
+        }
+        return await resolvedLocale()
+    }
+
     /// Make sure the on-device model is installed. The installed-locales check is the ONLY honest one:
     /// assetInstallationRequest returns a request even when the model is fully installed, so gating on
     /// it (the old code) meant an asset-daemon round-trip on EVERY capture — usually a ~0.1s no-op,
     /// occasionally a 15s+ park, and the park is what wedged Sidekick when the key lifted early.
     private static func ensureModelReady() async throws {
-        if modelReady { return }
-        let locale = await resolvedLocale()
-        if await installed(locale) {
-            markReady(locale)
-            return
+        let preferred = await resolvedLocale()
+        for locale in await installLocaleCandidates(anchoredOn: preferred) {
+            if try await ensureInstalled(locale) { return }
         }
-        let task = installTask ?? launchInstall(locale: locale)
-        installTask = task
-        try await task.value
+
+        guard AppLanguage.allowsEnglishSpeechFallback else {
+            await logRussianSpeechDiagnostics(note: "SpeechTranscriber install exhausted")
+            Log("voice: ✗ Russian speech model for \(preferred.identifier) isn't ready — refusing en-US capture")
+            throw VoiceError.modelUnavailable
+        }
+
+        let preferredID = preferred.identifier(.bcp47)
+        let en = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: "en-US"))
+            ?? Locale(identifier: "en-US")
+        guard en.identifier(.bcp47) != preferredID else { throw VoiceError.modelUnavailable }
+
+        Log("voice: ⚠️ on-device speech model for \(preferred.identifier) isn't installable; trying en-US for capture")
+        if try await ensureInstalled(en) { return }
+        throw VoiceError.modelUnavailable
     }
 
+    @discardableResult
+    private static func ensureInstalled(_ locale: Locale) async throws -> Bool {
+        let localeID = locale.identifier(.bcp47)
+        if modelReady, modelReadyLocaleID == localeID {
+            if await installed(locale) { return true }
+            invalidateModelReady()
+        }
+        if modelReadyLocaleID != localeID { invalidateModelReady() }
+        if await installed(locale) {
+            markReady(locale)
+            return true
+        }
+        do {
+            let task = installTask ?? launchInstall(locale: locale)
+            installTask = task
+            try await task.value
+        } catch {
+            Log("voice: model install failed for \(locale.identifier) — \(error.localizedDescription)")
+            await logRussianSpeechDiagnostics(note: "install error for \(locale.identifier)")
+            return false
+        }
+        guard await installed(locale) else {
+            await logRussianSpeechDiagnostics(note: "not in installedLocales after \(locale.identifier)")
+            return false
+        }
+        markReady(locale)
+        return true
+    }
+
+    /// Clears the session memo after a failed capture or a vanished on-device model.
+    static func invalidateModelReady() {
+        modelReady = false
+        modelReadyLocaleID = nil
+    }
+
+    /// True when the on-device model for this locale (or its language) is installed.
     private static func installed(_ locale: Locale) async -> Bool {
-        await SpeechTranscriber.installedLocales.contains { $0.identifier(.bcp47) == locale.identifier(.bcp47) }
+        let target = AppLanguage.normalizedSpeechID(locale)
+        let lang = locale.language.languageCode?.identifier
+        return await SpeechTranscriber.installedLocales.contains { installed in
+            AppLanguage.normalizedSpeechID(installed) == target
+                || (lang != nil && installed.language.languageCode?.identifier == lang)
+        }
+    }
+
+    /// Distinct SpeechTranscriber locales to try for install (BCP-47 drift: ru_RU vs ru-RU vs ru).
+    private static func installLocaleCandidates(anchoredOn preferred: Locale) async -> [Locale] {
+        var list: [Locale] = []
+        var seen = Set<String>()
+        let append: (Locale) -> Void = { loc in
+            let id = AppLanguage.normalizedSpeechID(loc)
+            guard seen.insert(id).inserted else { return }
+            list.append(loc)
+        }
+        append(preferred)
+        for candidate in AppLanguage.speechLocaleCandidates {
+            if let match = await SpeechTranscriber.supportedLocale(equivalentTo: candidate) {
+                append(match)
+            }
+        }
+        if AppLanguage.wantsRussianSpeech {
+            let supported = await SpeechTranscriber.supportedLocales
+            for match in supported where match.language.languageCode?.identifier == "ru" {
+                append(match)
+            }
+        }
+        return list
+    }
+
+    /// Actionable RU diagnostics when SpeechAnalyzer assets fail (supported vs installed vs SFSpeech).
+    private static func logRussianSpeechDiagnostics(note: String) async {
+        guard AppLanguage.wantsRussianSpeech else { return }
+        let supported = await SpeechTranscriber.supportedLocales.filter {
+            $0.language.languageCode?.identifier == "ru"
+        }
+        let installed = await SpeechTranscriber.installedLocales.filter {
+            $0.language.languageCode?.identifier == "ru"
+        }
+        let supportedIDs = supported.map(\.identifier).joined(separator: ", ")
+        let installedIDs = installed.isEmpty ? "(none)" : installed.map(\.identifier).joined(separator: ", ")
+        var sfAvailable: [String] = []
+        for loc in SFSpeechRecognizer.supportedLocales() where loc.language.languageCode?.identifier == "ru" {
+            if SFSpeechRecognizer(locale: loc)?.isAvailable == true {
+                sfAvailable.append(loc.identifier)
+            }
+        }
+        let sfLine = sfAvailable.isEmpty ? "(none isAvailable)" : sfAvailable.joined(separator: ", ")
+        Log("voice: RU STT diagnostics (\(note)) — SpeechTranscriber supported: [\(supportedIDs)]; installed: [\(installedIDs)]; SFSpeech isAvailable: [\(sfLine)]")
+    }
+
+    private static func assetStatusLabel(_ status: AssetInventory.Status) -> String {
+        switch status {
+        case .unsupported: return "unsupported"
+        case .supported: return "supported (not installed)"
+        case .downloading: return "downloading"
+        case .installed: return "installed"
+        @unknown default: return "unknown"
+        }
     }
 
     /// The single shared install (a genuine first-run download, or a re-download after an OS purge).
@@ -246,17 +411,35 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         Task {
             defer { installTask = nil }   // finished either way; markReady records a success
             let transcriber = SpeechTranscriber(locale: locale, preset: .transcription)
+            let before = await AssetInventory.status(forModules: [transcriber])
+            Log("voice: asset status for \(locale.identifier) before install — \(assetStatusLabel(before))")
             if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-                Log("voice: downloading the on-device speech model…")
-                try await request.downloadAndInstall()
+                Log("voice: downloading the on-device speech model for \(locale.identifier)…")
+                do {
+                    try await request.downloadAndInstall()
+                } catch {
+                    let after = await AssetInventory.status(forModules: [transcriber])
+                    Log("voice: downloadAndInstall failed for \(locale.identifier) — \(error.localizedDescription); asset status after — \(assetStatusLabel(after))")
+                    throw error
+                }
+            } else {
+                let after = await AssetInventory.status(forModules: [transcriber])
+                Log("voice: no asset install request for \(locale.identifier) — asset status \(assetStatusLabel(after)); checking installedLocales")
+            }
+            guard await installed(locale) else {
+                let after = await AssetInventory.status(forModules: [transcriber])
+                Log("voice: ✗ speech model for \(locale.identifier) not installed after install pass (asset status: \(assetStatusLabel(after)))")
+                throw VoiceError.modelUnavailable
             }
             markReady(locale)
         }
     }
 
     private static func markReady(_ locale: Locale) {
-        guard !modelReady else { return }
+        let localeID = locale.identifier(.bcp47)
+        if modelReady, modelReadyLocaleID == localeID { return }
         modelReady = true
+        modelReadyLocaleID = localeID
         Log("voice: speech model ready (\(locale.identifier))")
         // Pin the asset so macOS keeps it for us (best-effort; 5 reservation slots per app, we use 1).
         Task { try? await AssetInventory.reserve(locale: locale) }

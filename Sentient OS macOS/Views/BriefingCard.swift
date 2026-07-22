@@ -74,7 +74,7 @@ struct BriefingCard: View {
 
     private var offerFace: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps(briefing.kicker, size: 9.5, tracking: 2.0, color: briefing.accent.opacity(0.95))
+            MonoCaps(verbatim: briefing.kicker, size: 9.5, tracking: 2.0, color: briefing.accent.opacity(0.95))
             Text(briefing.title)
                 .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
                 .padding(.top, 8)
@@ -252,10 +252,10 @@ private struct EnvelopeFace: View {
                     // The recipient: the briefing's override when set (demo decks say "For You"),
                     // else the Mac account's first name (same source as the home greeting);
                     // a nameless account just gets "For you".
-                    Text({
-                        if let recipient { return "For \(recipient)" }
-                        return HomeView.macFirstName.isEmpty ? "For you" : "For \(HomeView.macFirstName)"
-                    }())
+                    Text(recipient.map { String(localized: "For \($0)", locale: AppLanguage.resolvedLocale) }
+                         ?? (HomeView.macFirstName.isEmpty
+                             ? String(localized: "For you", locale: AppLanguage.resolvedLocale)
+                             : String(localized: "For \(HomeView.macFirstName)", locale: AppLanguage.resolvedLocale)))
                         .font(.system(size: 22, design: .serif).italic())
                         .foregroundStyle(Theme.Ink.statusInk)
                 }

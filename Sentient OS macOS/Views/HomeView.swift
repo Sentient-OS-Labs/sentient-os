@@ -181,7 +181,7 @@ struct HomeView: View {
             Text(greeting)
                 .display(27)
                 .foregroundStyle(Theme.Ink.statusInk)
-            MonoCaps(readLine, size: 9.5, tracking: 2.2, color: Theme.Ink.deepMuted)
+            MonoCaps(verbatim: readLine, size: 9.5, tracking: 2.2, color: Theme.Ink.deepMuted)
         }
         .padding(.leading, 30)
     }
@@ -202,7 +202,7 @@ struct HomeView: View {
     private var cautionBanner: some View {
         Group {
             if let issue = liveIssue {
-                CautionCapsule(message: issue.message, accent: Theme.Ink.red,
+                CautionCapsule(messageKey: issue.message, accent: Theme.Ink.red,
                                actionTitle: "Open Settings", onAction: openHealthSettings,
                                onDismiss: {
                                    HealthCaution.dismiss(issue)
@@ -211,7 +211,7 @@ struct HomeView: View {
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
-                CautionCapsule(message: caution.kind.message,
+                CautionCapsule(messageKey: caution.kind.message,
                                actionTitle: caution.kind == .loggedOut ? "Open Settings" : nil,
                                onAction: openHealthSettings,
                                onDismiss: {
@@ -250,8 +250,17 @@ struct HomeView: View {
 
     private var greeting: String {
         let hour = Calendar.current.component(.hour, from: Date())
-        let part = hour < 5 ? "Up late" : hour < 12 ? "Good morning"
-                 : hour < 18 ? "Good afternoon" : "Good evening"
+        let locale = AppLanguage.resolvedLocale
+        let part: String
+        if hour < 5 {
+            part = String(localized: "Up late", locale: locale)
+        } else if hour < 12 {
+            part = String(localized: "Good morning", locale: locale)
+        } else if hour < 18 {
+            part = String(localized: "Good afternoon", locale: locale)
+        } else {
+            part = String(localized: "Good evening", locale: locale)
+        }
         let name = Self.macFirstName
         return name.isEmpty ? "\(part)." : "\(part), \(name)."
     }
@@ -260,8 +269,12 @@ struct HomeView: View {
     /// (`thingsUnderstood`, from LifetimeStats), not a hardcoded number.
     private var readLine: String {
         let n = thingsUnderstood
-        guard n > 0 else { return "Ready to read your life" }
-        return "I've read \(n.formatted()) thing\(n == 1 ? "" : "s") so far"
+        let locale = AppLanguage.resolvedLocale
+        guard n > 0 else { return String(localized: "Ready to read your life", locale: locale) }
+        if n == 1 {
+            return String(localized: "I've read \(n.formatted()) thing so far", locale: locale)
+        }
+        return String(localized: "I've read \(n.formatted()) things so far", locale: locale)
     }
 
     /// The user's first name from their macOS account — full name's first word (e.g. "Jesai
@@ -542,7 +555,7 @@ struct HomeView: View {
 // MARK: - Top-bar nav item
 
 private struct NavItem: View {
-    var title: String? = nil
+    var title: LocalizedStringKey? = nil
     var icon: String? = nil
     var dot: Color? = nil
     var action: () -> Void
@@ -701,11 +714,14 @@ final class ForYouModel {
         let v = visit
         let external = ProactiveExecutor.isFireable(action.method)
         if external {
-            let fallback: String = switch action.method {
-            case .gmail:    "Sending your email…"
-            case .calendar: "Updating your calendar…"
-            default:        "Working on your Mac…"
-            }
+            let fallback: String = {
+                let locale = AppLanguage.resolvedLocale
+                switch action.method {
+                case .gmail:    return String(localized: "Sending your email…", locale: locale)
+                case .calendar: return String(localized: "Updating your calendar…", locale: locale)
+                default:        return String(localized: "Working on your Mac…", locale: locale)
+                }
+            }()
             guard let coordinator,
                   coordinator.beginExternalRun(
                       caption: entry(id)?.b.title ?? fallback,
@@ -927,7 +943,7 @@ private struct LetterView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top) {
-                MonoCaps(briefing.kicker, size: 10, tracking: 2.2, color: briefing.accent)
+                MonoCaps(verbatim: briefing.kicker, size: 10, tracking: 2.2, color: briefing.accent)
                 Spacer()
                 Button(action: onClose) {
                     Image(systemName: "xmark")
@@ -1084,7 +1100,7 @@ private struct LetterView: View {
                 .frame(width: 2)
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 14) {
-                    MonoCaps(briefing.draftLabel ?? "Draft", size: 9, tracking: 2.0, color: Theme.Ink.label)
+                    MonoCaps(verbatim: briefing.draftLabel ?? String(localized: "Draft"), size: 9, tracking: 2.0, color: Theme.Ink.label)
                     Spacer()
                     // The edit affordance + auto-save status, in one quiet slot. Fresh card:
                     // "✎ Editable" (an invitation — "Saved" before any edit means nothing to a

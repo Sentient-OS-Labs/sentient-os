@@ -1,3 +1,6 @@
+# Private / temporary design notes — never commit
+_design/
+
 # macOS
 .DS_Store
 

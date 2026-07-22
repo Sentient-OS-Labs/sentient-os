@@ -34,11 +34,12 @@ final class PermissionGuide {
 
         /// The list's name, for the panel copy.
         var title: String {
+            let locale = AppLanguage.resolvedLocale
             switch self {
-            case .fullDiskAccess:  return "Full Disk Access"
-            case .accessibility:   return "Accessibility"
-            case .screenRecording: return "Screen Recording"
-            case .loginItems:      return "Login Items"
+            case .fullDiskAccess:  return String(localized: "Full Disk Access", locale: locale)
+            case .accessibility:   return String(localized: "Accessibility", locale: locale)
+            case .screenRecording: return String(localized: "Screen Recording", locale: locale)
+            case .loginItems:      return String(localized: "Login Items", locale: locale)
             }
         }
 

@@ -137,6 +137,8 @@ actor GiftLetter {
         - It's personal!
 
         LANGUAGE
+        Write the entire letter in \(ResponseLanguage.stored.resolved.promptLanguageName).
+        \(ResponseLanguage.promptBlock)
         No using buzz words nor AI-isms:
         - No em-dashes
         - No "it's not just x, it's y"
@@ -144,14 +146,15 @@ actor GiftLetter {
         - Each pattern = a short bold headline (about 3–7 words, ending in a period) then ONE sentence (about 15–25 words) that explains it with a concrete real detail.
         - These are real examples of the BAD writing we are fixing — NEVER write like this: "You spec hardware in numbers and music in feelings." / "Your optimization points outward." They sound clever and say almost nothing. Banned.
         - Talk to the user as "you." Warm and plain, like a friend who noticed something cool about them.
-
         Explore a **ton** of MD files, and think **deep** about the most delightful, incredible letter before you write anything.
 
         **Important: quality matters much more than quantity! 3-4 high-quality points are wayy better than 6 points you aren't as confident about (the disconnect would ruin the whole point).**
 
         OUTPUT — A SINGLE MARKDOWN LETTER
 
-        Example of a great result:
+        \(ResponseLanguage.stored.resolved == .russian
+            ? "The EXAMPLE below is FORMAT and tone only — write every word of your actual letter in Russian, not English.\n"
+            : "")Example of a great result:
         ```
         # The System Builder's Map
 

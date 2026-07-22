@@ -171,6 +171,7 @@ struct NotchView: View {
                      onStop: { coordinator.stop() },
                      onSubmitText: { coordinator.submitTyped($0) },
                      onNotchClick: { coordinator.notchClicked() })
+            .appLanguage()
     }
 }
 
@@ -373,8 +374,15 @@ struct NotchContent: View {
                         .foregroundStyle(.white.opacity(0.92))
                         .lineLimit(metrics.maxReadBackLines)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
+                } else if statusLine.isEmpty {
+                    Text("working…")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(2).truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .contentTransition(.interpolate)
                 } else {
-                    Text(statusLine.isEmpty ? "working…" : statusLine)
+                    Text(verbatim: statusLine)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.72))
                         .lineLimit(2).truncationMode(.tail)
@@ -391,13 +399,13 @@ struct NotchContent: View {
         case .finishing(let outcome):
             // Failures get a second line: the ✗ statusLine carries the give-up reason (the sentinel's
             // COULD_NOT text or the error), and one truncated line usually eats it.
-            Text(statusLine)
+            Text(verbatim: statusLine)
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(outcome == .failed ? 2 : 1).truncationMode(.tail)
                 .allowsHitTesting(false)
         case .notice(let message):
-            Text(message)
+            Text(verbatim: message)
                 .font(.system(size: 13, design: .serif)).italic()
                 .foregroundStyle(.white.opacity(0.85))
                 .lineLimit(1)
@@ -524,11 +532,12 @@ struct NotchContent: View {
     }
 
     private var a11yLabel: String {
+        let locale = AppLanguage.resolvedLocale
         switch phase {
-        case .hidden: return hovering ? "Sentient — click to type a task" : ""
-        case .opening, .listening, .transcribing: return "Sentient is listening"
-        case .typing: return "Type a task for Sentient"
-        case .running: return "Sentient is working. \(statusLine)"
+        case .hidden: return hovering ? String(localized: "Sentient — click to type a task", locale: locale) : ""
+        case .opening, .listening, .transcribing: return String(localized: "Sentient is listening", locale: locale)
+        case .typing: return String(localized: "Type a task for Sentient", locale: locale)
+        case .running: return String(localized: "Sentient is working. \(statusLine)", locale: locale)
         case .finishing: return statusLine
         case .notice(let m): return m
         }

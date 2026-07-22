@@ -328,7 +328,7 @@ actor ProactiveResearch {
         nothing left to decide or look up.
 
         Right now it is \(today).
-        \(Proactive.instructionsBlock)
+        \(ResponseLanguage.promptBlock)\(Proactive.instructionsBlock)
         ## THREE INVIOLABLE RULES
         **1 — Total accuracy, ZERO fabrication.** The user will ACT on what you produce, so a confident \
         wrong answer is catastrophic, far worse than admitting uncertainty.

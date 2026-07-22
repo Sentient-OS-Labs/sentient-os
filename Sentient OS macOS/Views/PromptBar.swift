@@ -91,12 +91,18 @@ struct PromptBar: View {
     private var runningArea: some View {
         HStack(spacing: 10) {
             OrbMark(size: 16)
-            Text(statusLine.isEmpty ? "Working…" : statusLine)
-                .font(.system(size: 12.5, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.72))
-                .lineLimit(2).truncationMode(.tail)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .animation(.easeInOut(duration: 0.2), value: statusLine)
+            Group {
+                if statusLine.isEmpty {
+                    Text("Working…")
+                } else {
+                    Text(verbatim: statusLine)
+                }
+            }
+            .font(.system(size: 12.5, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.72))
+            .lineLimit(2).truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .animation(.easeInOut(duration: 0.2), value: statusLine)
         }
     }
 
@@ -149,7 +155,7 @@ private struct ModeToggle: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: m.icon).font(.system(size: 10.5, weight: .semibold))
-                Text(m.label).font(.system(size: 11.5, weight: on ? .semibold : .medium))
+                Text(LocalizedStringKey(stringLiteral: m.label)).font(.system(size: 11.5, weight: on ? .semibold : .medium))
             }
             .foregroundStyle(on ? .white : Theme.Ink.label)
             .padding(.horizontal, 11).padding(.vertical, 6)

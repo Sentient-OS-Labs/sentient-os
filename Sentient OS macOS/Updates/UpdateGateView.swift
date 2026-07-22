@@ -106,7 +106,7 @@ struct UpdateGateView: View {
         case .downloading(let fraction):
             VStack(spacing: 18) {
                 UpdateProgressBar(value: fraction).frame(maxWidth: 340)
-                MonoCaps(downloadLabel(fraction), size: 9, tracking: 2, color: Theme.Ink.label)
+                MonoCaps(verbatim: downloadLabel(fraction), size: 9, tracking: 2, color: Theme.Ink.label)
                 quitButton
             }
 
@@ -246,34 +246,37 @@ struct UpdateGateView: View {
     }
 
     private var gateTitle: String {
+        let locale = AppLanguage.resolvedLocale
         switch model.phase {
-        case .found:        return "A new Sentient is ready."
-        case .downloading:  return "Updating Sentient…"
-        case .extracting:   return "Almost there…"
-        case .installing:   return "Installing…"
-        case .failed:       return "Update didn't finish."
+        case .found:        return String(localized: "A new Sentient is ready.", locale: locale)
+        case .downloading:  return String(localized: "Updating Sentient…", locale: locale)
+        case .extracting:   return String(localized: "Almost there…", locale: locale)
+        case .installing:   return String(localized: "Installing…", locale: locale)
+        case .failed:       return String(localized: "Update didn't finish.", locale: locale)
         default:            return ""
         }
     }
 
     private var gateBody: String {
+        let locale = AppLanguage.resolvedLocale
         switch model.phase {
         case .found:
-            return "To keep doing things for you safely, Sentient always runs the latest version. This one's quick; one tap and you're set."
+            return String(localized: "To keep doing things for you safely, Sentient always runs the latest version. This one's quick; one tap and you're set.", locale: locale)
         case .downloading, .extracting:
-            return "Hang tight while Sentient updates itself."
+            return String(localized: "Hang tight while Sentient updates itself.", locale: locale)
         case .installing:
-            return "Sentient is installing the update and will reopen in a moment."
+            return String(localized: "Sentient is installing the update and will reopen in a moment.", locale: locale)
         case .failed:
-            return "Something interrupted the update. Let's try that again."
+            return String(localized: "Something interrupted the update. Let's try that again.", locale: locale)
         default:
             return ""
         }
     }
 
     private func downloadLabel(_ fraction: Double?) -> String {
-        guard let fraction else { return "Downloading update" }
-        return "Downloading · \(Int(fraction * 100))%"
+        let locale = AppLanguage.resolvedLocale
+        guard let fraction else { return String(localized: "Downloading update", locale: locale) }
+        return String(localized: "Downloading · \(Int(fraction * 100))%", locale: locale)
     }
 }
 

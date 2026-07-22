@@ -519,24 +519,26 @@ struct ProcessingView: View {
     }
 
     private static func failTitle(_ kind: OvernightCaution.Kind?) -> String {
+        let locale = AppLanguage.resolvedLocale
         switch kind {
-        case .loggedOut:      "Codex isn't logged in"
-        case .usageLimit:     "We hit ChatGPT's usage limit"
-        case .noInternet:     "No internet connection"
-        case .inputTooLarge:  "This batch was too big to send"
-        case nil:             "Processing failed"
+        case .loggedOut:      return String(localized: "Codex isn't logged in", locale: locale)
+        case .usageLimit:     return String(localized: "We hit ChatGPT's usage limit", locale: locale)
+        case .noInternet:     return String(localized: "No internet connection", locale: locale)
+        case .inputTooLarge:  return String(localized: "This batch was too big to send", locale: locale)
+        case nil:             return String(localized: "Processing failed", locale: locale)
         }
     }
 
     /// Classified failures get a friendly, actionable line (the raw detail is in the log +
     /// Sentry); unclassified ones show the step's own message, as before.
     private static func failBody(_ failure: CycleFailure) -> String {
+        let locale = AppLanguage.resolvedLocale
         switch failure.kind {
-        case .loggedOut:      "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
-        case .usageLimit:     "Your plan's window resets on its own. Everything so far is saved; retry in a while and I'll pick up right where we stopped."
-        case .noInternet:     "This step runs in the cloud. Once you're back online, hit Retry; everything so far is saved."
-        case .inputTooLarge:  "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
-        case nil:             failure.message
+        case .loggedOut:      return String(localized: "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped.", locale: locale)
+        case .usageLimit:     return String(localized: "Your plan's window resets on its own. Everything so far is saved; retry in a while and I'll pick up right where we stopped.", locale: locale)
+        case .noInternet:     return String(localized: "This step runs in the cloud. Once you're back online, hit Retry; everything so far is saved.", locale: locale)
+        case .inputTooLarge:  return String(localized: "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more.", locale: locale)
+        case nil:             return failure.message
         }
     }
 

@@ -21,6 +21,9 @@ struct SystemPane: View {
     /// carry their choice over. Analytics has its own key since the two toggles split.
     @AppStorage("diagnosticsEnabled") private var crashReportsEnabled = true
     @AppStorage("analyticsEnabled") private var analyticsEnabled = true
+    @AppStorage(AppLanguage.key) private var appLanguageRaw = AppLanguage.system.rawValue
+    @AppStorage(ResponseLanguage.key) private var responseLanguageRaw = ResponseLanguage.sameAsApp.rawValue
+    @AppStorage(SpeechOutput.enabledKey) private var speakReplies = false
 
     @Environment(\.dismiss) private var dismiss   // Reset closes Settings to reveal onboarding
 
@@ -30,13 +33,15 @@ struct SystemPane: View {
     @State private var resetting = false
     @State private var showUninstall = false
     @State private var showPrivacyPolicy = false
+    @State private var russianSpeechModelDownloading = false
     @State private var activity = PipelineActivity.shared   // Reset + Uninstall lock while a run is active
 
     var body: some View {
         SettingsPane(title: "System", whisper: "How Sentient lives on this Mac.") {
             VStack(alignment: .leading, spacing: 34) {
-                // Three chapters, two dividers: how Sentient runs · privacy · the exit door —
-                // the second line is red on purpose (you cross it into destructive territory).
+                // Four chapters: language · how Sentient runs · privacy · the exit door —
+                // the second hairline is red on purpose (you cross it into destructive territory).
+                languageGroup
                 overnightGroup
                 startupGroup
                 updatesGroup
@@ -51,6 +56,75 @@ struct SystemPane: View {
             }
         }
         .task { launchAtLogin = LoginItem.isEnabled }   // live status — revocable in System Settings
+        .task { await monitorRussianSpeechModelDownload() }
+    }
+
+    /// Poll `VoiceCapture.isModelDownloading` while Settings is open — static engine state, not @Observable.
+    @MainActor
+    private func monitorRussianSpeechModelDownload() async {
+        while !Task.isCancelled {
+            let downloading = AppLanguage.wantsRussianSpeech && VoiceCapture.isModelDownloading
+            if downloading != russianSpeechModelDownloading {
+                russianSpeechModelDownloading = downloading
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+        }
+    }
+
+    // MARK: - App language (#267) + response language (prompt injection)
+
+    private var languageGroup: some View {
+        SettingsGroup(label: "Language") {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsProse("Language for Sentient's menus and settings. Follows your Mac by default.")
+                HStack(spacing: 14) {
+                    Text("App language")
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                    Spacer(minLength: 12)
+                    Picker("", selection: $appLanguageRaw) {
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.labelKey).tag(language.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 160)
+                }
+                .padding(.vertical, 5)
+                .onChange(of: appLanguageRaw) { _, _ in
+                    NotificationCenter.default.post(name: .appLanguageDidChange, object: nil)
+                }
+
+                if russianSpeechModelDownloading {
+                    Text("Downloading Russian voice model…")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Theme.Ink.deepMuted)
+                }
+
+                SettingsProse("Language for Sidekick replies, morning cards, and letters. Follows App language by default. Applied automatically on every AI call — not a prompt you edit or delete in Proactive & Sidekick.")
+                HStack(spacing: 14) {
+                    Text("Response language")
+                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                    Spacer(minLength: 12)
+                    Picker("", selection: $responseLanguageRaw) {
+                        ForEach(ResponseLanguage.allCases) { language in
+                            Text(language.labelKey).tag(language.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: 160)
+                }
+                .padding(.vertical, 5)
+
+                SettingsHairline()
+                SettingToggleLine(
+                    title: "Speak replies",
+                    sub: "When on, Sentient reads Sidekick outcomes aloud using your Mac's voice for the response language.",
+                    isOn: $speakReplies
+                )
+            }
+        }
     }
 
     // MARK: - Overnight intelligence (the story, not a setting)
@@ -171,7 +245,7 @@ struct SystemPane: View {
         SettingsGroup(label: "Danger Zone") {
             VStack(alignment: .leading, spacing: 10) {
                 SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, all suggestions, and the cloud copy your AIs read. Sentient takes you back through setup and starts over from scratch. Your private link stays valid; the next processing run fills it again.")
-                SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
+                SettingsPillButton(title: resetting ? LocalizedStringKey("Erasing…") : LocalizedStringKey("Reset Sentient…"),
                                    tint: Self.dangerRed) { confirmReset = true }
                     .disabled(resetting || activity.isRunning)
                 if activity.isRunning {

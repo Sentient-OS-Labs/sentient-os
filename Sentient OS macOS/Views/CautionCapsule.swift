@@ -12,11 +12,32 @@
 import SwiftUI
 
 struct CautionCapsule: View {
-    let message: String
+    let message: LocalizedStringKey
     var accent: Color = Theme.Ink.amber
-    var actionTitle: String? = nil
+    var actionTitle: LocalizedStringKey? = nil
     var onAction: () -> Void = {}
     let onDismiss: () -> Void
+
+    /// Health / overnight caution messages live as English catalog keys in Foundation types.
+    init(messageKey: String, accent: Color = Theme.Ink.amber,
+         actionTitle: LocalizedStringKey? = nil,
+         onAction: @escaping () -> Void = {}, onDismiss: @escaping () -> Void) {
+        self.message = LocalizedStringKey(stringLiteral: messageKey)
+        self.accent = accent
+        self.actionTitle = actionTitle
+        self.onAction = onAction
+        self.onDismiss = onDismiss
+    }
+
+    init(message: LocalizedStringKey, accent: Color = Theme.Ink.amber,
+         actionTitle: LocalizedStringKey? = nil,
+         onAction: @escaping () -> Void = {}, onDismiss: @escaping () -> Void) {
+        self.message = message
+        self.accent = accent
+        self.actionTitle = actionTitle
+        self.onAction = onAction
+        self.onDismiss = onDismiss
+    }
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -81,20 +102,20 @@ struct UpdateNoticeCapsule: View {
     ZStack {
         Color.black.ignoresSafeArea()
         VStack(alignment: .trailing, spacing: 14) {
-            CautionCapsule(message: OvernightCaution.Kind.loggedOut.message,
+            CautionCapsule(messageKey: OvernightCaution.Kind.loggedOut.message,
                            actionTitle: "Open Settings", onAction: {}, onDismiss: {})
-            CautionCapsule(message: OvernightCaution.Kind.noInternet.message, onDismiss: {})
-            CautionCapsule(message: OvernightCaution.Kind.usageLimit.message, onDismiss: {})
-            CautionCapsule(message: HealthCaution.Issue.permissions([.fullDiskAccess]).message,
+            CautionCapsule(messageKey: OvernightCaution.Kind.noInternet.message, onDismiss: {})
+            CautionCapsule(messageKey: OvernightCaution.Kind.usageLimit.message, onDismiss: {})
+            CautionCapsule(messageKey: HealthCaution.Issue.permissions([.fullDiskAccess]).message,
                            accent: Theme.Ink.red,
                            actionTitle: "Open Settings", onAction: {}, onDismiss: {})
-            CautionCapsule(message: HealthCaution.Issue.permissions([.fullDiskAccess, .launchAtLogin]).message,
+            CautionCapsule(messageKey: HealthCaution.Issue.permissions([.fullDiskAccess, .launchAtLogin]).message,
                            accent: Theme.Ink.red,
                            actionTitle: "Open Settings", onAction: {}, onDismiss: {})
-            CautionCapsule(message: HealthCaution.Issue.codexSignedOut.message,
+            CautionCapsule(messageKey: HealthCaution.Issue.codexSignedOut.message,
                            accent: Theme.Ink.red,
                            actionTitle: "Open Settings", onAction: {}, onDismiss: {})
-            CautionCapsule(message: HealthCaution.Issue.computerUseBroken(payloadGone: true).message,
+            CautionCapsule(messageKey: HealthCaution.Issue.computerUseBroken(payloadGone: true).message,
                            accent: Theme.Ink.red,
                            actionTitle: "Open Settings", onAction: {}, onDismiss: {})
             CautionCapsule(message: "Sentient just updated!",
