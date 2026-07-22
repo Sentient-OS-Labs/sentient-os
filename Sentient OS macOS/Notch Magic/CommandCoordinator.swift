@@ -82,6 +82,12 @@ final class CommandCoordinator {
     /// the show runs through the REAL TextField. nil = the user owns the field.
     private(set) var demoDraft: String?
 
+    /// Incremented only after NotchWindowController has made the tap-to-type panel key. The view
+    /// uses this explicit hand-off instead of guessing that one main-queue turn is long enough for
+    /// AppKit focus setup (the hotkey path can otherwise show a field while keystrokes stay in the
+    /// previously active app).
+    private(set) var typingFocusRequest = 0
+
     private let hotkey = SidekickHotkeyMonitor()
     private let voice = VoiceCapture()
     private var hotkeyChangeObserver: NSObjectProtocol?
@@ -434,6 +440,13 @@ final class CommandCoordinator {
         guard phase == .typing else { return }
         setPhase(.hidden)
         Log("notch typing dismissed")
+    }
+
+    /// AppKit owns when the non-activating panel actually becomes key; only its controller should
+    /// request SwiftUI field focus, and only while the typing phase is still current.
+    func requestTypingFocus() {
+        guard phase == .typing else { return }
+        typingFocusRequest &+= 1
     }
 
     // MARK: The notch as a button (the hover affordance)
