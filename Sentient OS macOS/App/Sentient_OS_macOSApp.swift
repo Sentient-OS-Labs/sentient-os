@@ -32,6 +32,7 @@ struct SentientOSApp: App {
         WindowGroup(id: Self.homeWindowID) {
             RootView()
                 .environment(appState)
+                .appLanguage()
                 .preferredColorScheme(.dark)   // Sentient OS is dark-only — no light mode
                 .task { await VaultCloud.pushIfDirty() }   // catch up a mirror sync deferred by an earlier quit/failure
         }
@@ -58,6 +59,7 @@ struct SentientOSApp: App {
         Window("Proactive · Execute", id: ProactiveExecuteView.windowID) {
             ProactiveExecuteView()
                 .environment(appState)
+                .appLanguage()
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
@@ -71,6 +73,7 @@ struct SentientOSApp: App {
         Window("", id: KnowledgeView.windowID) {
             KnowledgeView()
                 .environment(appState)
+                .appLanguage()
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
@@ -82,6 +85,7 @@ struct SentientOSApp: App {
         Window("", id: SettingsView.windowID) {
             SettingsView()
                 .environment(appState)
+                .appLanguage()
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
@@ -93,6 +97,7 @@ struct SentientOSApp: App {
         Window("", id: ConnectAIsView.windowID) {
             ConnectAIsView()
                 .environment(appState)
+                .appLanguage()
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
@@ -104,6 +109,7 @@ struct SentientOSApp: App {
         Window("Overnight Processing", id: OvernightDevView.windowID) {
             OvernightDevView()
                 .environment(appState)
+                .appLanguage()
                 .preferredColorScheme(.dark)
         }
         .windowResizability(.contentMinSize)
@@ -113,6 +119,7 @@ struct SentientOSApp: App {
         MenuBarExtra {
             MenuBarView()
                 .environment(appState)
+                .appLanguage()
                 .preferredColorScheme(.dark)
         } label: {
             Image(nsImage: OrbMark.menuBarIcon)   // the home's ring+dot mark, as a template

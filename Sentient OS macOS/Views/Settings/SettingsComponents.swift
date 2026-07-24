@@ -15,8 +15,8 @@ import SwiftUI
 /// an optional quiet whisper under it, then the scrolling body — capped to an editorial
 /// measure so a wide window never stretches lines unreadable.
 struct SettingsPane<Content: View>: View {
-    let title: String
-    var whisper: String? = nil
+    let title: LocalizedStringKey
+    var whisper: LocalizedStringKey? = nil
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -43,16 +43,27 @@ struct SettingsPane<Content: View>: View {
 
 /// A labelled group — the mono-caps whisper above whatever form the group's content takes.
 struct SettingsGroup<Content: View>: View {
-    let label: String
-    var badge: String? = nil          // e.g. "coming soon" on a not-yet-wired group
+    let label: LocalizedStringKey
+    var badge: LocalizedStringKey? = nil          // e.g. "coming soon" on a not-yet-wired group
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
             HStack(spacing: 8) {
-                MonoCaps(label, size: 9.5, tracking: 2.4, color: .white.opacity(0.7), weight: .semibold)
+                Text(label)
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .tracking(2.4)
+                    .textCase(.uppercase)
+                    .foregroundStyle(.white.opacity(0.7))
                 if let badge {
-                    MonoCaps("· \(badge)", size: 8, tracking: 1.6, color: .white.opacity(0.5))
+                    HStack(spacing: 4) {
+                        Text("·")
+                        Text(badge)
+                    }
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .tracking(1.6)
+                    .textCase(.uppercase)
+                    .foregroundStyle(.white.opacity(0.5))
                 }
             }
             content
@@ -62,11 +73,14 @@ struct SettingsGroup<Content: View>: View {
 
 /// Editorial body prose — explanation that reads as voice, not as a widget. No box.
 struct SettingsProse: View {
-    let text: String
-    init(_ text: String) { self.text = text }
+    private let text: Text
+
+    init(_ key: LocalizedStringKey) { self.text = Text(key) }
+    /// Engine / runtime strings that must not go through the String Catalog.
+    init(verbatim string: String) { self.text = Text(verbatim: string) }
 
     var body: some View {
-        Text(text)
+        text
             .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
             .lineSpacing(3)
             .fixedSize(horizontal: false, vertical: true)
@@ -75,8 +89,8 @@ struct SettingsProse: View {
 
 /// A switch on a hairline line — title, quiet subtitle, toggle. No box, no icon.
 struct SettingToggleLine: View {
-    let title: String
-    let sub: String
+    let title: LocalizedStringKey
+    let sub: LocalizedStringKey
     @Binding var isOn: Bool
 
     var body: some View {
@@ -97,13 +111,26 @@ struct SettingToggleLine: View {
 /// A small capsule button — the standard quiet action (Fix…, Copy, Regenerate…). `tint` carries
 /// the danger/success variants; the default is bright ink with a hairline ring.
 struct SettingsPillButton: View {
-    let title: String
+    private let title: Text
     var tint: Color = Theme.Ink.bright
     let action: () -> Void
 
+    init(title: LocalizedStringKey, tint: Color = Theme.Ink.bright, action: @escaping () -> Void) {
+        self.title = Text(title)
+        self.tint = tint
+        self.action = action
+    }
+
+    /// Runtime labels (caution banners, etc.) that are not catalog keys.
+    init(verbatim title: String, tint: Color = Theme.Ink.bright, action: @escaping () -> Void) {
+        self.title = Text(verbatim: title)
+        self.tint = tint
+        self.action = action
+    }
+
     var body: some View {
         Button(action: action) {
-            Text(title)
+            title
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(tint)
                 .padding(.horizontal, 11).padding(.vertical, 5)
@@ -156,7 +183,7 @@ struct ChipFlow: Layout {
 /// Gmail/Calendar) is the one deliberate exception to the always-white rule: a lock in place of
 /// the dot, softened ink, no action — unavailable, with the hover tip explaining why.
 struct SettingsChip: View {
-    let label: String
+    private let label: Text
     var detail: String? = nil
     let on: Bool
     var isAction: Bool = false
@@ -164,6 +191,27 @@ struct SettingsChip: View {
     var action: (() -> Void)? = nil
 
     @State private var lockHover = false
+
+    init(label: LocalizedStringKey, detail: String? = nil, on: Bool,
+         isAction: Bool = false, locked: Bool = false, action: (() -> Void)? = nil) {
+        self.label = Text(label)
+        self.detail = detail
+        self.on = on
+        self.isAction = isAction
+        self.locked = locked
+        self.action = action
+    }
+
+    /// Folder names / runtime labels that must not go through the String Catalog.
+    init(verbatim label: String, detail: String? = nil, on: Bool,
+         isAction: Bool = false, locked: Bool = false, action: (() -> Void)? = nil) {
+        self.label = Text(verbatim: label)
+        self.detail = detail
+        self.on = on
+        self.isAction = isAction
+        self.locked = locked
+        self.action = action
+    }
 
     @ViewBuilder var body: some View {
         if locked {
@@ -190,11 +238,11 @@ struct SettingsChip: View {
                         .fill(on ? Theme.Ink.green : .white.opacity(0.4))
                         .frame(width: 5, height: 5)
                 }
-                Text(label)
+                label
                     .font(.system(size: 12, weight: on || isAction ? .medium : .regular))
                     .foregroundStyle(.white.opacity(locked ? 0.55 : 1))
                 if let detail {
-                    Text(detail).font(.system(size: 10.5))
+                    Text(verbatim: detail).font(.system(size: 10.5))
                         .foregroundStyle(on ? Theme.Ink.green.opacity(0.85) : .white.opacity(0.62))
                 }
             }
@@ -221,7 +269,7 @@ struct SettingsChip: View {
 /// tooltip's delay made it look like there was none. Shared by SettingsChip and SourceChip.
 struct LockedChipTip: View {
     var body: some View {
-        Text(CodexAuth.connectorLockedTip)
+        Text("Only supported on ChatGPT Plus")
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(.white.opacity(0.88))
             .padding(.horizontal, 10).padding(.vertical, 5)
@@ -262,7 +310,7 @@ final class TipWarmth {
 /// The tiny info icon beside a permission name. Hover 0.15s to open the explanation (a small
 /// popover); while any tip is warm, siblings open instantly.
 struct InfoTip: View {
-    let text: String
+    let text: LocalizedStringKey
     @State private var shown = false
     @State private var hoverTask: Task<Void, Never>?
 
@@ -305,11 +353,11 @@ struct InfoTip: View {
 struct StatusLine: View {
     enum Health { case ok, warn, bad }
 
-    let title: String
+    let title: LocalizedStringKey
     let health: Health
-    let note: String                    // "granted" / "not granted" / "logged in"
-    var tip: String? = nil              // the info-icon explanation (InfoTip)
-    var fixTitle: String = "Fix…"
+    let note: LocalizedStringKey        // "granted" / "not granted" / "logged in"
+    var tip: LocalizedStringKey? = nil  // the info-icon explanation (InfoTip)
+    var fixTitle: LocalizedStringKey = "Fix…"
     var fix: (() -> Void)? = nil
 
     /// Status-LED colors — warn stays punchier than the ink amber on purpose.
@@ -329,8 +377,11 @@ struct StatusLine: View {
                 if let tip { InfoTip(text: tip) }
             }
             Spacer(minLength: 12)
-            MonoCaps(note, size: 8.5, tracking: 1.6,
-                     color: health == .ok ? Theme.Ink.label : dot)
+            Text(note)
+                .font(.system(size: 8.5, weight: .medium, design: .monospaced))
+                .tracking(1.6)
+                .textCase(.uppercase)
+                .foregroundStyle(health == .ok ? Theme.Ink.label : dot)
             if health != .ok, let fix {
                 SettingsPillButton(title: fixTitle, action: fix)
             }
@@ -342,7 +393,7 @@ struct StatusLine: View {
 /// A multiline text box — the one bordered input surface in Settings. Autosaves through its
 /// binding (pair with @AppStorage at the call site); shows a quiet placeholder while empty.
 struct SettingsTextBox: View {
-    let placeholder: String
+    let placeholder: LocalizedStringKey
     @Binding var text: String
 
     var body: some View {

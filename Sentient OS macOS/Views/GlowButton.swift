@@ -11,7 +11,7 @@
 import SwiftUI
 
 struct GlowButton: View {
-    let title: String
+    let title: LocalizedStringKey
     var systemImage: String = "sparkles"
     var active: Bool = true
     var reversed: Bool = false       // spin the halo the other direction
@@ -45,7 +45,7 @@ struct GlowButton: View {
 /// two sit SIDE BY SIDE as a row (the crossroads' "I've upgraded to ChatGPT Plus") rather than
 /// stacked; still no halo, so the glow stays the only jewelry on the screen.
 struct QuietPillButton: View {
-    let title: String
+    let title: LocalizedStringKey
     var large: Bool = false
     let action: () -> Void
 

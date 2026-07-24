@@ -19,7 +19,7 @@ struct SettingsView: View {
         case sources, proactive, shareKnowledge, system, health
 
         var id: Self { self }
-        var title: String {
+        var title: LocalizedStringKey {
             switch self {
             case .sources:   return "Knowledge Sources"
             case .proactive: return "Proactive & Sidekick"
@@ -93,7 +93,11 @@ struct SettingsView: View {
     /// The About corner — what used to want its own tab, tucked where it belongs.
     private var aboutFooter: some View {
         VStack(alignment: .leading, spacing: 9) {
-            MonoCaps("Sentient OS · v\(UpdateController.currentVersionString)", size: 8, tracking: 1.6, color: Theme.Ink.deepMuted)
+            Text("Sentient OS · v\(UpdateController.currentVersionString)")
+                .font(.system(size: 8, weight: .medium, design: .monospaced))
+                .tracking(1.6)
+                .textCase(.uppercase)
+                .foregroundStyle(Theme.Ink.deepMuted)
             footerLink("Open source on GitHub", icon: "heart.fill",
                        url: "https://github.com/Sentient-OS-Labs/sentient-os",
                        color: Theme.Ink.gold)   // the pride mark — gold, deliberately louder than the footer's whisper
@@ -103,7 +107,7 @@ struct SettingsView: View {
         .padding(.horizontal, 10)
     }
 
-    private func footerLink(_ title: String, icon: String, url: String,
+    private func footerLink(_ title: LocalizedStringKey, icon: String, url: String,
                             color: Color = Theme.Ink.label) -> some View {
         Button {
             if let u = URL(string: url) { NSWorkspace.shared.open(u) }

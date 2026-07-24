@@ -28,6 +28,7 @@ struct ProactivePane: View {
                 SettingsGroup(label: "Proactive Intelligence") {
                     VStack(alignment: .leading, spacing: 10) {
                         SettingsProse("Every morning, Sentient surfaces a few things worth doing, already done and waiting for your go. Tell it what you care about, and what to skip.")
+                        SettingsProse("The language of morning cards is set in Settings → System → Response language — it is applied automatically and is not edited here.")
                         SettingsTextBox(placeholder: "e.g. Don't give me suggestions about Chase Bank alerts.",
                                         text: $proactiveInstructions)
                     }
@@ -93,11 +94,11 @@ private struct SpeedIntelligenceSlider: View {
             // One line under the pill: the landed tier under the left edge, the honest
             // model spec under the right — both live during a drag.
             HStack(alignment: .firstTextBaseline) {
-                Text(hovered.label)
+                Text(verbatim: hovered.label)
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(.white)
                 Spacer()
-                MonoCaps(hovered.modelLine, size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+                MonoCaps(verbatim: hovered.modelLine, size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
             }
             .frame(width: Self.width)
         }

@@ -59,7 +59,7 @@ struct ShareKnowledgePane: View {
         }
     }
 
-    private func pillar(_ icon: String, _ text: String) -> some View {
+    private func pillar(_ icon: String, _ text: LocalizedStringKey) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 9) {
             Image(systemName: icon)
                 .font(.system(size: 10))
@@ -84,7 +84,7 @@ struct ShareKnowledgePane: View {
                         .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                ConnectCTA(title: enabled ? "Configure" : "Set up in 2 minutes") {
+                ConnectCTA(title: enabled ? LocalizedStringKey("Configure") : LocalizedStringKey("Set up in 2 minutes")) {
                     openWindow(id: ConnectAIsView.windowID)
                 }
             }
@@ -100,7 +100,8 @@ struct ShareKnowledgePane: View {
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.Ink.body)
                 if let last = stats?.lastAccess {
-                    MonoCaps("Last read · \(last.formatted(.relative(presentation: .named)))",
+                    MonoCaps(verbatim: String(localized: "Last read · \(last.formatted(.relative(presentation: .named)))",
+                                              locale: AppLanguage.resolvedLocale),
                              size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
                 }
             }
@@ -108,9 +109,17 @@ struct ShareKnowledgePane: View {
     }
 
     private var activityLine: String {
-        guard let stats else { return "No activity yet. Connect an AI and ask it about you." }
-        if stats.notesRead24h == 0 { return "Your AIs haven't read anything in the last day." }
-        return "Your AIs read \(stats.notesRead24h) note\(stats.notesRead24h == 1 ? "" : "s") in the last 24 hours."
+        let locale = AppLanguage.resolvedLocale
+        guard let stats else {
+            return String(localized: "No activity yet. Connect an AI and ask it about you.", locale: locale)
+        }
+        if stats.notesRead24h == 0 {
+            return String(localized: "Your AIs haven't read anything in the last day.", locale: locale)
+        }
+        if stats.notesRead24h == 1 {
+            return String(localized: "Your AIs read \(stats.notesRead24h) note in the last 24 hours.", locale: locale)
+        }
+        return String(localized: "Your AIs read \(stats.notesRead24h) notes in the last 24 hours.", locale: locale)
     }
 
     // MARK: - Local-only (shown when sharing is off)
@@ -133,7 +142,7 @@ struct ShareKnowledgePane: View {
 /// The pane's compact glow CTA: a dark capsule with the AI-gradient as a thin ring + a soft
 /// halo behind it. Jewelry at settings scale — deliberately NOT the home's big white GlowButton.
 private struct ConnectCTA: View {
-    let title: String
+    let title: LocalizedStringKey
     let action: () -> Void
 
     private var gradient: AngularGradient {

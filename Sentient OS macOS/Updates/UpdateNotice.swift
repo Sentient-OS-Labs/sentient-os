@@ -63,7 +63,11 @@ enum UpdateNotice {
         guard let last, last != current else { return }
         Log("Update: version changed \(last) → \(current) — arming the just-updated notice")
         defaults.set(current, forKey: noticeKey)
-        Task { await Notify.now(title: "Sentient just updated.", body: "Now running version \(shortVersion).") }
+        Task {
+            await Notify.now(
+                title: String(localized: "Sentient just updated.", locale: AppLanguage.resolvedLocale),
+                body: String(localized: "Now running version \(shortVersion).", locale: AppLanguage.resolvedLocale))
+        }
     }
 
     /// The armed notice's version — nil when none. Views read this on appearance (the same

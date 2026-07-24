@@ -28,7 +28,7 @@ struct GiftShareView: View {
         VStack(spacing: 26) {
             // The letter card — the same frame the expanded letter wears in the app.
             VStack(alignment: .leading, spacing: 0) {
-                MonoCaps(briefing.kicker, size: 10, tracking: 2.2, color: briefing.accent)
+                MonoCaps(verbatim: briefing.kicker, size: 10, tracking: 2.2, color: briefing.accent)
                 Text(briefing.title)
                     .font(.system(size: 30, design: .serif)).foregroundStyle(.white)
                     .padding(.top, 8)

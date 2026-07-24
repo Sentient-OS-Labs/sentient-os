@@ -127,21 +127,22 @@ struct OnboardingCodexLoginView: View {
 
 /// The monospace-caps whisper label every onboarding screen opens with.
 struct OnboardingWhisper: View {
-    let text: String
-    init(_ text: String) { self.text = text }
+    let text: LocalizedStringKey
+    init(_ text: LocalizedStringKey) { self.text = text }
 
     var body: some View {
         Text(text)
             .font(.system(size: 11, weight: .medium, design: .monospaced))
             .kerning(2)
+            .textCase(.uppercase)
             .foregroundStyle(Theme.faint)
     }
 }
 
 /// A green-dot "this step is done" line (shared: the login step and the plan crossroads).
 struct OnboardingDoneLine: View {
-    let text: String
-    init(_ text: String) { self.text = text }
+    let text: LocalizedStringKey
+    init(_ text: LocalizedStringKey) { self.text = text }
 
     var body: some View {
         HStack(spacing: 11) {

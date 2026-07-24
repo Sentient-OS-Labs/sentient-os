@@ -318,7 +318,10 @@ struct KnowledgeView: View {
     /// first-responder walk as the backstop — matched by the field's placeholder, so it can
     /// never grab the sidebar's search box or any other field.
     private func claimCreateFieldFocus() {
-        let placeholder = createIsFolder ? "Folder name" : "Note name"
+        let locale = AppLanguage.resolvedLocale
+        let placeholder = createIsFolder
+            ? String(localized: "Folder name", locale: locale)
+            : String(localized: "Note name", locale: locale)
         for delay: TimeInterval in [0.1, 0.35] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                 guard showCreatePrompt else { return }
@@ -352,7 +355,8 @@ struct KnowledgeView: View {
     }
 
     private func createNote(named raw: String, in dir: URL) {
-        let url = Self.uniqueURL(in: dir, name: Self.cleanName(raw, fallback: "Untitled"), ext: "md")
+        let untitled = String(localized: "Untitled", locale: AppLanguage.resolvedLocale)
+        let url = Self.uniqueURL(in: dir, name: Self.cleanName(raw, fallback: untitled), ext: "md")
         let title = url.deletingPathExtension().lastPathComponent
         do {
             try "# \(title)\n\n".write(to: url, atomically: true, encoding: .utf8)
@@ -368,7 +372,8 @@ struct KnowledgeView: View {
     }
 
     private func createFolder(named raw: String, in dir: URL) {
-        let url = Self.uniqueURL(in: dir, name: Self.cleanName(raw, fallback: "New Folder"), ext: nil)
+        let fallback = String(localized: "New Folder", locale: AppLanguage.resolvedLocale)
+        let url = Self.uniqueURL(in: dir, name: Self.cleanName(raw, fallback: fallback), ext: nil)
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         } catch {
@@ -446,7 +451,11 @@ struct KnowledgeView: View {
 
     private var countText: String {
         let n = vault?.titleIndex.count ?? 0
-        return "\(n) note\(n == 1 ? "" : "s")"
+        let locale = AppLanguage.resolvedLocale
+        if n == 1 {
+            return String(localized: "1 note", locale: locale)
+        }
+        return String(localized: "\(n) notes", locale: locale)
     }
 
     /// The quiet "+" in the header — the discoverable face of creation (folders also grow a
@@ -490,9 +499,9 @@ struct KnowledgeView: View {
         }
     }
 
-    /// A leading status glyph (a glowing dot, or a spinner while syncing) + "<verb> (🔒 Encrypted)"
-    /// as one single-colored line — the lock is inline in the Text so it tints with everything else.
-    private func cloudStatus(_ verb: String, color: Color, dot: Color, spinner: Bool) -> some View {
+    /// A leading status glyph (a glowing dot, or a spinner while syncing) + "<verb> | Encrypted"
+    /// as one single-colored line — the lock sits beside a catalog key so both localize.
+    private func cloudStatus(_ verb: LocalizedStringKey, color: Color, dot: Color, spinner: Bool) -> some View {
         HStack(spacing: 7) {
             if spinner {
                 ProgressView().controlSize(.small).scaleEffect(0.5).frame(width: 6, height: 6)
@@ -503,7 +512,8 @@ struct KnowledgeView: View {
             HStack(spacing: 6) {
                 Text(verb)
                 Rectangle().fill(color.opacity(0.35)).frame(width: 1, height: 11)   // subtle divider
-                Text("\(Image(systemName: "lock.fill")) Encrypted")
+                Image(systemName: "lock.fill")
+                Text("Encrypted")
             }
             .font(.system(size: 11.5))
             .foregroundStyle(color)
@@ -643,7 +653,7 @@ struct KnowledgeView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
                         Color.clear.frame(height: 0).id("top")
-                        MonoCaps(url.lastPathComponent, size: 9, tracking: 2, color: Theme.Ink.deepMuted)
+                        MonoCaps(verbatim: url.lastPathComponent, size: 9, tracking: 2, color: Theme.Ink.deepMuted)
                             .lineLimit(1).truncationMode(.middle)
                             .padding(.bottom, 11)
                         Text(note.title)
@@ -676,7 +686,7 @@ struct KnowledgeView: View {
     /// Esc cancels (prompting if there are unsaved changes).
     private func editorView(_ url: URL) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps(url.lastPathComponent, size: 9, tracking: 2, color: Theme.Ink.deepMuted)
+            MonoCaps(verbatim: url.lastPathComponent, size: 9, tracking: 2, color: Theme.Ink.deepMuted)
                 .lineLimit(1).truncationMode(.middle)
                 .padding(.bottom, 12)
             TextEditor(text: $editText)
@@ -695,7 +705,7 @@ struct KnowledgeView: View {
         .onExitCommand { cancelEdit() }
     }
 
-    private func emptyState(title: String, subtitle: String?) -> some View {
+    private func emptyState(title: LocalizedStringKey, subtitle: LocalizedStringKey?) -> some View {
         VStack(spacing: 14) {
             Orb(size: 92)
             Text(title).font(.system(size: 20, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
@@ -784,7 +794,7 @@ private struct FolderRow: View {
             .fixedSize()
             .opacity(hover ? 1 : 0)
             .padding(.trailing, 6)
-            .help("New note or folder in \(name)")
+            .help(Text(String(localized: "New note or folder in \(name)", locale: AppLanguage.resolvedLocale)))
         }
         .background(rowBackground(selected: false, hover: hover))
         .onHover { hover = $0 }

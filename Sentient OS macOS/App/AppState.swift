@@ -73,6 +73,15 @@ final class AppState {
         // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
         // the coordinator: the notch experience still plays, the codex run just never fires.
         commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
+        NotificationCenter.default.addObserver(
+            forName: .appLanguageDidChange, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated {
+                if #available(macOS 26, *) { SpeechAnalyzerEngine.invalidateModelReady() }
+                VoiceCapture.prewarmRussianSpeechIfNeeded()
+            }
+        }
+        VoiceCapture.prewarmRussianSpeechIfNeeded()   // launch with App = RU or System + primary RU
         notch.start()                // raise the notch overlay window
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)

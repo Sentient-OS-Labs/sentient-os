@@ -192,7 +192,7 @@ final class ComputerUseGate {
         // it's user-invisible and FDA-writable, so heal it here — before the first fire.
         Permissions.selfHealComputerUseAutomation(context: "ComputerUseGate")
         if window == nil {
-            let hosting = NSHostingController(rootView: ComputerUseGateView(gate: self))
+            let hosting = NSHostingController(rootView: ComputerUseGateView(gate: self).appLanguage())
             let w = NSWindow(contentViewController: hosting)
             w.styleMask = [.titled, .closable, .fullSizeContentView]
             w.titlebarAppearsTransparent = true

@@ -39,7 +39,7 @@ struct LetterBody: View {
                 .foregroundStyle(.white.opacity(0.92))
                 .padding(.top, 6)
         } else if line.hasPrefix("## ") {
-            MonoCaps(String(line.dropFirst(3)).uppercased(), size: 10, tracking: 2.2,
+            MonoCaps(verbatim: String(line.dropFirst(3)), size: 10, tracking: 2.2,
                      color: neutral ? .white.opacity(0.5) : accent.opacity(0.95))   // section whisper
                 .padding(.top, 12)
         } else if line.hasPrefix("# ") {

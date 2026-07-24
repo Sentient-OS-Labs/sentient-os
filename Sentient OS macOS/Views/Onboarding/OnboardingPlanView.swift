@@ -39,7 +39,7 @@ struct OnboardingPlanView: View {
                 Color.clear.frame(height: 1)   // invisible: full plans skip this screen entirely
 
             case .crossroads:
-                OnboardingWhisper("YOUR CHATGPT PLAN · \(planName.uppercased())")
+                OnboardingWhisper("Your ChatGPT plan · \(planName)")
 
                 Text("We noticed you're not on ChatGPT Plus.")
                     .display(26)
@@ -79,7 +79,7 @@ struct OnboardingPlanView: View {
                 }
 
             case .waiting:
-                OnboardingWhisper("YOUR CHATGPT PLAN · \(planName.uppercased())")
+                OnboardingWhisper("Your ChatGPT plan · \(planName)")
 
                 Text("Finish upgrading in your browser.\nThis screen notices on its own.")
                     .font(.system(size: 15))
@@ -106,7 +106,7 @@ struct OnboardingPlanView: View {
                 }
 
             case .unlocked:
-                OnboardingWhisper("YOUR CHATGPT PLAN · \(planName.uppercased())")
+                OnboardingWhisper("Your ChatGPT plan · \(planName)")
                 OnboardingDoneLine("\(planName) unlocked. Welcome to the full Sentient.")
             }
 

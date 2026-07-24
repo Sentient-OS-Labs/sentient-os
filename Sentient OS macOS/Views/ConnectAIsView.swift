@@ -338,10 +338,10 @@ struct ConnectAIsView: View {
             StepVideo(resource: video, aspect: aspect)
             MonoCaps("Step \(n)", size: 9, tracking: 2.2, color: Theme.Ink.label)
                 .padding(.top, 14)
-            Text(title).font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
+            Text(LocalizedStringKey(stringLiteral: title)).font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
                 .padding(.top, 6)
             controls().padding(.top, 10)
-            Text(caption).font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
+            Text(LocalizedStringKey(stringLiteral: caption)).font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
                 .lineSpacing(2.5)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 9)
@@ -365,9 +365,9 @@ struct ConnectAIsView: View {
                 .frame(width: 24, height: 24)
                 .overlay(Circle().strokeBorder(.white.opacity(0.14), lineWidth: 1))
             VStack(alignment: .leading, spacing: 8) {
-                Text(title).font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
+                Text(LocalizedStringKey(stringLiteral: title)).font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
                 controls()
-                Text(sub).font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
+                Text(LocalizedStringKey(stringLiteral: sub)).font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
@@ -386,9 +386,10 @@ struct ConnectAIsView: View {
     private var sharingPill: some View {
         HStack(spacing: 8) {
             if busy { ProgressView().controlSize(.mini) }
-            Text(pillLabel)
+            Text(verbatim: pillLabel)
                 .font(.system(size: 8.5, weight: .semibold, design: .monospaced)).tracking(1.4)
                 .foregroundStyle(Theme.Ink.green)
+                .textCase(.uppercase)
             // The setter never writes `enabled` itself — flipping off only raises the confirm,
             // so "Keep Sharing" leaves the switch on; disconnect() is what actually turns it off.
             Toggle("", isOn: Binding(
@@ -405,8 +406,11 @@ struct ConnectAIsView: View {
     /// The synced stamp (the last successful push) answers "is my AIs' copy current?" at a
     /// glance; no stamp = enabled but not yet pushed.
     private var pillLabel: String {
-        guard let pushed = MirrorClient.lastPush else { return "MCP ON" }
-        return "MCP ON · SYNCED \(pushed.glanceStamp.uppercased())"
+        let locale = AppLanguage.resolvedLocale
+        guard let pushed = MirrorClient.lastPush else {
+            return String(localized: "MCP ON", locale: locale)
+        }
+        return String(localized: "MCP ON · SYNCED \(pushed.glanceStamp)", locale: locale)
     }
 
     // MARK: - MirrorClient plumbing (the SAME path Settings + the popover drive)
@@ -472,7 +476,7 @@ private struct StepLink: View {
             if let url = URL(string: urlString) { NSWorkspace.shared.open(url) }
         } label: {
             HStack(spacing: 5) {
-                Text(title)
+                Text(LocalizedStringKey(stringLiteral: title))
                 Image(systemName: "arrow.up.right").font(.system(size: 8.5, weight: .semibold))
             }
             .font(.system(size: 11, weight: .medium))

@@ -86,6 +86,9 @@ actor Proactive {
     /// prompt block — or "" when they've set none. Shared by PART 1 (decide) and PART 2 (research +
     /// prepare), like `recent`/`summaryLines`, so both honor the user's wishes with one wording. It's a
     /// high-priority directive but NEVER overrides the accuracy / never-fire rules.
+    ///
+    /// Language of card titles/descriptions/plans/buttons is NOT here — that comes from
+    /// `ResponseLanguage.promptBlock` on every call (computed live; not user-editable content).
     static var instructionsBlock: String {
         let t = CustomInstructions.proactive
         guard !t.isEmpty else { return "" }
@@ -96,7 +99,9 @@ actor Proactive {
         proactive suggestions. Treat this as a high-priority directive and follow it wherever it \
         applies: drop what they ask you to drop, favor what they say matters, and respect how they \
         want things handled. It NEVER overrides the hard accuracy rules (never fabricate a date, fact, \
-        or source) or the never-fire rule; within those, the user's wishes win over your defaults.
+        or source) or the never-fire rule; within those, the user's wishes win over your defaults. \
+        This block is NOT the response-language setting — follow ## RESPONSE LANGUAGE for the \
+        language of titles, descriptions, plans, and buttons.
 
         \(t)
 
@@ -264,7 +269,7 @@ actor Proactive {
         single time. When in doubt, leave it out.
 
         Right now it is \(today).
-        \(Self.instructionsBlock)
+        \(ResponseLanguage.promptBlock)\(Self.instructionsBlock)
         ## YOUR EDGE IS BREADTH — you see every source at once
         Everyone else's AI is trapped inside one app. You are not. These summaries span the user's \
         ENTIRE digital life at once — files, WhatsApp, iMessage, Apple Notes, Calendar, and email. \

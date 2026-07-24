@@ -31,9 +31,10 @@ struct ModelDownloadWhisper: View {
 
     /// "1.24 of 3.66 GB" — decimal GB, same voice as the full-screen downloading view.
     private var gbLine: String {
-        String(format: "%.2f of %.2f GB",
-               Double(download.bytesDone) / 1_000_000_000,
-               Double(download.bytesTotal) / 1_000_000_000)
+        let template = String(localized: "%.2f of %.2f GB", locale: AppLanguage.resolvedLocale)
+        return String(format: template,
+                     Double(download.bytesDone) / 1_000_000_000,
+                     Double(download.bytesTotal) / 1_000_000_000)
     }
 
     var body: some View {

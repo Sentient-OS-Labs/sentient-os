@@ -72,7 +72,7 @@ struct OnboardingReadyView: View {
                         SettingsChip(label: "Documents", on: runDocuments) { runDocuments.toggle() }
                         SettingsChip(label: "Downloads", on: runDownloads) { runDownloads.toggle() }
                         ForEach(customRoots, id: \.self) { url in
-                            SettingsChip(label: url.lastPathComponent, detail: "✕", on: true) {
+                            SettingsChip(verbatim: url.lastPathComponent, detail: "✕", on: true) {
                                 CustomRoots.remove(url)
                             }
                         }

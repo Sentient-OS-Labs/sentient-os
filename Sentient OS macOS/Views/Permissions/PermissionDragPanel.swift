@@ -269,7 +269,7 @@ struct PermissionPanelView: View {
             HStack(alignment: .center, spacing: 8) {
                 GuideDirectionIcon(isDragging: guide.isDraggingApp, isDragMode: guide.job?.appURL != nil)
                 VStack(alignment: .leading, spacing: 3) {
-                    MonoCaps(guide.job?.pane.title.uppercased() ?? "", size: 8.5, tracking: 2.0,
+                    MonoCaps(verbatim: guide.job?.pane.title ?? "", size: 8.5, tracking: 2.0,
                              color: Theme.Ink.label)
                     Text(guide.instruction)
                         .font(.system(size: 13))

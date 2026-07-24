@@ -50,7 +50,7 @@ struct PrivacyPolicyView: View {
         .preferredColorScheme(.dark)
     }
 
-    private func prose(_ text: String) -> some View {
+    private func prose(_ text: LocalizedStringKey) -> some View {
         Text(text)
             .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.body)
             .lineSpacing(3.5)

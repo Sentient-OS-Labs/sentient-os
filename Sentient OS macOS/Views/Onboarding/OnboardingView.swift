@@ -210,7 +210,7 @@ struct OnboardingView: View {
 /// `glow` adds the rotating AI-gradient halo (GlowHalo intensity) — off by default, reserved
 /// for the one deliberate jewelry moment (the film's hood-park Continue).
 struct OnboardingNextButton: View {
-    let title: String
+    let title: LocalizedStringKey
     var enabled: Bool = true
     var glow: Double = 0
     let action: () -> Void

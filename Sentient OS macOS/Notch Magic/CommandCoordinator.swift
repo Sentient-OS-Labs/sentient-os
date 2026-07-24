@@ -325,6 +325,8 @@ final class CommandCoordinator {
         if VoiceCapture.isModelDownloading {
             flash("still downloading the voice model", for: 2.0)
             Log("hold answered with a download notice — speech model installing")
+            setPhase(.listening)           // show the committed beat while the in-flight install finishes
+            if !listening { startCapture() }
             return
         }
         setPhase(.listening)               // committed to voice — the "lean in" beat
@@ -373,8 +375,12 @@ final class CommandCoordinator {
         Task { [weak self] in
             guard let self else { return }
             await self.voiceStartTask?.value     // ensure capture actually started (or failed)
-            guard self.listening else { return } // a start failure already set a notice/hidden phase
             guard self.phaseToken == token else { return }   // timed out / Esc'd while waiting
+            guard self.listening else {
+                // Start failed while the user was still holding — voiceStartFailed already flashed.
+                if case .transcribing = self.phase { self.setPhase(.hidden) }
+                return
+            }
             do {
                 let text = try await self.voice.stopAndTranscribe()
                 guard self.phaseToken == token else { return }   // timed out / Esc'd mid-finalize
@@ -405,14 +411,28 @@ final class CommandCoordinator {
         if error is CancellationError { return }   // an intentional bail (tap-to-type / Esc / watchdog) — not a failure
         if case VoiceError.notAuthorized = error {
             flash("turn on the microphone to talk to Sentient")
+            return
+        }
+        Log("voice start failed — \(error.localizedDescription)")
+        if case VoiceError.modelUnavailable = error {
+            if #available(macOS 26, *) { SpeechAnalyzerEngine.invalidateModelReady() }
+            voice.prewarm()
+        }
+        let notice: String
+        if case VoiceError.modelUnavailable = error {
+            notice = AppLanguage.wantsRussianSpeech
+                ? "Russian voice model isn’t ready — check System Settings → Keyboard → Dictation, then try again"
+                : "voice model isn’t ready yet, try again in a moment"
         } else {
-            Log("voice start failed — \(error.localizedDescription)")
-            // Hide only if we're still in the voice moment — a late failure must never clobber a
-            // newer phase (the watchdog's notice, an open type field, a running task).
-            switch phase {
-            case .opening, .listening, .transcribing: setPhase(.hidden)
-            default: break
-            }
+            #if DEBUG
+            notice = "voice didn’t start (\(error.localizedDescription))"
+            #else
+            notice = "didn’t catch that"
+            #endif
+        }
+        switch phase {
+        case .opening, .listening, .transcribing: flash(notice)
+        default: break
         }
     }
 

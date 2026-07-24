@@ -34,15 +34,16 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
 
     /// The tier's display name (the slider's readout).
     var label: String {
-        switch self {
+        let key: String.LocalizationValue = switch self {
         case .faster: "Faster"
         case .medium: "Medium"
         case .smarter: "Smarter"
         }
+        return String(localized: key, locale: AppLanguage.resolvedLocale)
     }
 
     /// The honest spec line under the slider — the model named out loud. ("med", not the
-    /// effort's raw "medium" — the whisper reads tighter.)
+    /// effort's raw "medium" — the whisper reads tighter.) Brand / effort tokens stay English.
     var modelLine: String {
         let thinking = switch self {
         case .faster: "low"

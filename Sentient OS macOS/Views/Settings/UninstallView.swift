@@ -104,7 +104,7 @@ struct UninstallView: View {
     }
 
     /// One line of the what-gets-removed manifest — a quiet symbol + body ink.
-    private func manifestRow(_ symbol: String, _ text: String) -> some View {
+    private func manifestRow(_ symbol: String, _ text: LocalizedStringKey) -> some View {
         HStack(spacing: 10) {
             Image(systemName: symbol)
                 .font(.system(size: 11))
@@ -118,7 +118,7 @@ struct UninstallView: View {
 
     private var working: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps(stage.whisper, size: 9.5, tracking: 2.4, color: .white.opacity(0.7), weight: .semibold)
+            MonoCaps(verbatim: stage.whisper, size: 9.5, tracking: 2.4, color: .white.opacity(0.7), weight: .semibold)
                 .id(stage)
                 .transition(.opacity)
                 .animation(.easeInOut(duration: 0.3), value: stage)
@@ -157,7 +157,7 @@ struct UninstallView: View {
 
     /// The centered quiet text action that sits under a pill pair (Cancel Uninstall here;
     /// the feedback button is its sibling on the farewell and gone screens).
-    private func quietLink(_ title: String, action: @escaping () -> Void) -> some View {
+    private func quietLink(_ title: LocalizedStringKey, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11.5))
@@ -214,7 +214,7 @@ struct UninstallView: View {
 
     // MARK: - Shared bits
 
-    private func prose(_ text: String) -> some View {
+    private func prose(_ text: LocalizedStringKey) -> some View {
         Text(text)
             .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.body)
             .lineSpacing(3.5)
@@ -225,8 +225,14 @@ struct UninstallView: View {
         Button(action: shareFeedback) {
             HStack(spacing: 6) {
                 Image(systemName: feedbackCopied ? "checkmark" : "envelope").font(.system(size: 10))
-                Text(feedbackCopied ? "feedback@sentient-os.ai copied" : "Email the founders")
-                    .font(.system(size: 11.5))
+                Group {
+                    if feedbackCopied {
+                        Text("feedback@sentient-os.ai copied")
+                    } else {
+                        Text("Email the founders")
+                    }
+                }
+                .font(.system(size: 11.5))
             }
             .foregroundStyle(Theme.Ink.bright.opacity(0.9))
         }
@@ -276,7 +282,7 @@ struct UninstallView: View {
 /// SettingsPillButton stays the pane-level danger affordance.
 private struct FarewellPill: View {
     enum Style { case quiet, danger, bright }
-    let title: String
+    let title: LocalizedStringKey
     let style: Style
     let action: () -> Void
 
