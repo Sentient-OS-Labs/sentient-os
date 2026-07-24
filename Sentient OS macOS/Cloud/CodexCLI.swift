@@ -460,6 +460,11 @@ actor CodexCLI {
             // re-bootstrap) lays a fresh STOCK SKILL.md, whose policy stalls headless runs on
             // "shall I proceed?" questions nothing can answer. Cheap file check, idempotent.
             ComputerUseSkillPatch.ensureApplied()
+            // Self-heal the Automation grant (Sentient → Codex Computer Use over Apple Events) too:
+            // if it's missing, the very first MCP call (`list_apps`) blocks forever. The gate also
+            // heals this on every intercept, but `runAgentCommand` is the load-bearing seam — every
+            // fire reaches it, and defense-in-depth here costs one indexed TCC SELECT.
+            Permissions.selfHealComputerUseAutomation(context: "CodexCLI.runAgentCommand")
             var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
                         "-m", model.rawValue,
                         "-c", "model_reasoning_effort=\"\(effort.rawValue)\""]
