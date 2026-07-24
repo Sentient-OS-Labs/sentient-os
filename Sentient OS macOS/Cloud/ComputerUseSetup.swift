@@ -97,7 +97,6 @@ enum ComputerUseSetup {
 
         let tmp = fm.temporaryDirectory
         let dmg = tmp.appendingPathComponent("SentientCodex.dmg")
-        let mount = tmp.appendingPathComponent("sentient-codex-mnt-\(UUID().uuidString.prefix(8))")
         defer { try? fm.removeItem(at: dmg) }
 
         // 1) Download (≈535 MB) straight from OpenAI's CDN, with % progress.
@@ -110,13 +109,16 @@ enum ComputerUseSetup {
             }.run(from: dmgURL)
         } catch { throw SetupError.download((error as? LocalizedError)?.errorDescription ?? "\(error)") }
 
-        // 2) Mount read-only.
+        // 2) Mount read-only. Let hdiutil pick the mountpoint and read it back from -plist rather
+        //    than forcing a pre-created path: a caller-supplied `-mountpoint` under $TMPDIR can leave
+        //    `ditto` unable to realpath() the mounted source ("Cannot get the real path for source"),
+        //    even though FileManager can stat it. See #286.
         onLine("Mounting installer…")
-        try? fm.createDirectory(at: mount, withIntermediateDirectories: true)
         let attach = try await sh("/usr/bin/hdiutil",
-                                  ["attach", dmg.path, "-nobrowse", "-readonly", "-mountpoint", mount.path])
+                                  ["attach", dmg.path, "-nobrowse", "-readonly", "-plist"])
         guard attach.status == 0 else { throw SetupError.mount(attach.out.trimmedTail) }
-        defer { detachQuietly(mount); try? fm.removeItem(at: mount) }
+        let mount = try mountPoint(fromAttachPlist: attach.out)
+        defer { detachQuietly(mount) }
 
         // 3) Locate the payload + its version.
         let src = try marketplace(inMount: mount)
@@ -150,14 +152,41 @@ enum ComputerUseSetup {
     // MARK: Steps
 
     /// Replace `dst` with a fresh copy of `src` via /usr/bin/ditto (signature/xattr-preserving).
+    /// Copies into a sibling staging path first and swaps only after the copy is validated, so a
+    /// failed `ditto` can never leave `dst` empty — previously `removeItem(dst)` ran before the copy,
+    /// which destroyed a working install on every failed setup attempt. See #286.
     private static func dittoReplace(_ src: URL, _ dst: URL) async throws {
         let fm = FileManager.default
-        try? fm.removeItem(at: dst)
         try? fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let r = try await sh("/usr/bin/ditto", [src.path, dst.path])
-        guard r.status == 0, fm.fileExists(atPath: dst.path) else {
+        let staging = dst.appendingPathExtension("staging")
+        try? fm.removeItem(at: staging)
+        let r = try await sh("/usr/bin/ditto", [src.path, staging.path])
+        guard r.status == 0, fm.fileExists(atPath: staging.path) else {
+            try? fm.removeItem(at: staging)
             throw SetupError.copy("ditto \(src.lastPathComponent): \(r.out.trimmedTail)")
         }
+        try? fm.removeItem(at: dst)
+        do { try fm.moveItem(at: staging, to: dst) }
+        catch {
+            try? fm.removeItem(at: staging)
+            throw SetupError.copy("swap \(dst.lastPathComponent): \(error)")
+        }
+    }
+
+    /// The real mount point hdiutil chose, parsed from `hdiutil attach -plist`. Using the value
+    /// hdiutil reports (rather than a caller-supplied `-mountpoint`) keeps the mounted source path
+    /// `ditto`-resolvable. See #286.
+    private static func mountPoint(fromAttachPlist plist: String) throws -> URL {
+        guard let data = plist.data(using: .utf8),
+              let root = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+              let entities = root["system-entities"] as? [[String: Any]] else {
+            throw SetupError.mount("couldn't parse hdiutil -plist output")
+        }
+        guard let mp = entities.compactMap({ ($0["mount-point"] as? String) })
+            .first(where: { !$0.isEmpty }) else {
+            throw SetupError.mount("no mount-point in hdiutil output")
+        }
+        return URL(fileURLWithPath: mp)
     }
 
     /// The desktop app's "enable" flow doesn't just copy the plugin — it selects a skill VARIANT:
