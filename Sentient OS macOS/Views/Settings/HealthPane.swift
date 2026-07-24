@@ -482,7 +482,7 @@ struct HealthPane: View {
         refreshMicSpeech()
         screenRec = Permissions.hasScreenRecording()
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
-        codex.refreshInstalled()
+        await codex.refreshInstalled()
         codex.refreshComputerUse()
         plan = CodexAuth.currentPlan()   // pure file read (the JWT claim on disk)
         if fdaGranted {

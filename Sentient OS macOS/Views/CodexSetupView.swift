@@ -42,8 +42,8 @@ struct CodexSetupView: View {
         .frame(width: 560, height: 640)
         .background(Theme.bg)
         .onAppear {
-            codex.refreshInstalled()
             codex.refreshComputerUse()
+            Task { await codex.refreshInstalled() }
             Task { await codex.refreshLoginStatus() }
         }
     }

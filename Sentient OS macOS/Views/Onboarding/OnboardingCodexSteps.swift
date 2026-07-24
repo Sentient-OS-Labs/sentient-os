@@ -82,15 +82,17 @@ struct OnboardingCodexLoginView: View {
         }
         .padding(40)
         .onAppear {
-            codex.refreshInstalled()
-            Task { await codex.refreshLoginStatus() }
-            // Two nets in one kick: no binary (the launch kick failed or skipped a half-deleted
-            // setup) → install; binary present but the installer hasn't run this launch (the
-            // launch kick deliberately skips USED setups) → run it anyway, because the installer
-            // doubles as the updater and setup should hand the latest CLI to the later steps.
-            if !codex.installing && (!codex.installed || !codex.ranInstallerThisLaunch) {
-                Task { await codex.installCodex() }
+            Task {
+                await codex.refreshInstalled()
+                // Two nets in one kick: no binary (the launch kick failed or skipped a half-deleted
+                // setup) → install; binary present but the installer hasn't run this launch (the
+                // launch kick deliberately skips USED setups) → run it anyway, because the installer
+                // doubles as the updater and setup should hand the latest CLI to the later steps.
+                if !codex.installing && (!codex.installed || !codex.ranInstallerThisLaunch) {
+                    await codex.installCodex()
+                }
             }
+            Task { await codex.refreshLoginStatus() }
         }
         .task {
             // The confirmation poll: run `codex --help` now, then every 2s until it answers —
@@ -98,7 +100,7 @@ struct OnboardingCodexLoginView: View {
             // path this succeeds on the first try and the button is never seen greyed.
             while !Task.isCancelled {
                 if await CodexCLI.isRunnable() {
-                    codex.refreshInstalled()   // align the shared engine's flag
+                    await codex.refreshInstalled()   // align the shared engine's flag
                     withAnimation(.easeInOut(duration: 0.3)) { codexConfirmed = true }
                     return
                 }

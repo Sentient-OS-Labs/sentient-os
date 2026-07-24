@@ -13,7 +13,7 @@
 //  bootstrap runs through ComputerUseSetup; this file owns the flow.
 //
 //  Key methods:
-//   - refreshInstalled()   → re-detect whether the codex binary is present
+//   - refreshInstalled()   → re-detect whether the codex binary is present (async, off-main)
 //   - installCodex()       → step 1: run OpenAI's installer (ALWAYS runs — it doubles as the
 //                            updater over an existing install; streams progress)
 //   - startLogin/confirmLogin → step 2: interactive `codex login` (browser) + confirm
@@ -33,19 +33,33 @@ final class CodexSetup {
     /// One shared instance so onboarding and the dev tools observe the same setup state.
     static let shared = CodexSetup()
 
-    private init() {}
+    private init() {
+        // Warm up `installed` off the main thread. Kicking a Task here is safe: it's enqueued, so
+        // this initializer returns and the singleton's `dispatch_once` completes before the probe
+        // ever runs — and the probe does its disk/shell work off the main actor. Detection must
+        // NEVER run synchronously inside this initializer (see `installed`).
+        Task { await refreshInstalled() }
+    }
 
     // MARK: Step 1 — install
 
     /// Is the Codex CLI binary present on disk? (NOT whether it's logged in — that's step 2.)
-    private(set) var installed: Bool = CodexCLI.locateBinary() != nil
+    /// Starts `false`; warmed up asynchronously OFF the main thread by `init`. This must NEVER be
+    /// computed inside this singleton's lazy initializer: `locateBinary()`'s last-resort fallback
+    /// spawns a login shell (a blocking `Process`), and inside the `@MainActor` `dispatch_once`
+    /// that lets `waitUntilExit` pump the main runloop and re-enter the same once-block — a
+    /// recursive-lock trap. Detection stays off the initializer, always.
+    private(set) var installed: Bool = false
     /// An install is currently running (drives the spinner + disables the button).
     private(set) var installing = false
     /// Latest streamed progress line, or the final ✓/✗ result.
     private(set) var installStatus: String?
 
-    /// Cheap re-detect of step 1's status — call on appear and after an install.
-    func refreshInstalled() { installed = CodexCLI.locateBinary() != nil }
+    /// Cheap re-detect of step 1's status — call on appear and after an install. Runs the probe
+    /// off the main thread (`locateBinary()` can spawn a login shell), so it never blocks the UI.
+    func refreshInstalled() async {
+        installed = await Task.detached { CodexCLI.locateBinary() != nil }.value
+    }
 
     /// One successful installer run already happened this launch — the once-per-launch guard for
     /// the onboarding screen's update kick (a second run would just re-resolve the same release).
@@ -163,7 +177,7 @@ final class CodexSetup {
             computerUseStatus = "✓ Computer use already set up"
             return
         }
-        refreshInstalled()   // fresh probe, not the cached flag — the user may have installed codex themselves
+        await refreshInstalled()   // fresh probe, not the cached flag — the user may have installed codex themselves
         guard installed else { computerUseStatus = "✗ Install the Codex CLI first"; return }
         settingUpComputerUse = true
         computerUseStatus = force ? "Re-installing…" : "Starting…"
@@ -212,7 +226,7 @@ final class CodexSetup {
     /// "just run all three in order" driver can ignore it because every action (installCodex /
     /// startLogin / setupComputerUse) already self-guards and no-ops when its step is done.
     func whatsNeeded() async -> [Step] {
-        refreshInstalled()
+        await refreshInstalled()
         await refreshLoginStatus()
         refreshComputerUse()
         var pending: [Step] = []
