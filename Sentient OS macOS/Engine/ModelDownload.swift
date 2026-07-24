@@ -86,12 +86,17 @@ final class ModelDownload {
         guard ModelLocator.resolve() == nil else { phase = .ready; return }
 
         let job = ModelDownloadJob.production
-        // Disk pre-check: the peak footprint is parts + the assembled copy of the tail (~4.2 GB
-        // fresh), less whatever staging already holds. Failing here beats a cryptic mid-write error.
+        // Disk pre-check: the model is ~3 GB, but the download stages parts and assembles a full
+        // copy before the atomic move, and the Mac still needs room to breathe. Require a
+        // comfortable 10 GB floor so we fail HERE with a clear message instead of wedging
+        // mid-write. `?? .max` is deliberate fail-open: a glitched capacity read never blocks a
+        // healthy Mac.
+        let requiredFree: Int64 = 10_000_000_000   // 10 GB
         let free = (try? URL.sentientSupport.resourceValues(
             forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage) ?? .max
-        if free < (job.bytes - ModelFetch.stagedBytes(of: job)) + 1_500_000_000 {
-            fail("Your Mac is low on disk space. Free up about 6 GB, then hit Try Again.", type: "disk_space")
+        if free < requiredFree {
+            fail("Your Mac is out of disk space. Sentient's on-device model is about 3 GB, so please free up space until you have about 10 GB available, then hit Try Again.",
+                 type: "disk_space")
             return
         }
 
@@ -195,7 +200,7 @@ enum ModelFetchError: Error {
         case .checksumMismatch:
             return "The download finished but did not verify cleanly. Hit Try Again for a fresh download."
         case .diskWrite:
-            return "Your Mac ran out of disk space during the download. Free up about 6 GB, then hit Try Again."
+            return "Your Mac ran out of disk space during the download. Free up space until you have about 10 GB available, then hit Try Again."
         case .badResponse(let code):
             return "The download server had a problem (HTTP \(code)). Try again in a few minutes."
         case .shortDelivery:
