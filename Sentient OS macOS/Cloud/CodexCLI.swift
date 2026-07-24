@@ -11,7 +11,7 @@
 //  the doc below).
 //
 //  Key methods:
-//   - CodexCLI.locateBinary()  → cached absolute-path discovery (known paths + zsh -lc which)
+//   - CodexCLI.locateBinary()  → binary discovery (managed install first, then cache/known paths/which)
 //   - install(onLine:)         → run OpenAI's standalone installer (the codex-setup onboarding step)
 //   - startLogin / loginStatus → step 2: interactive `codex login` (browser) + the status check
 //   - validate(force:)         → Availability via ping (only a good verdict is cached)
@@ -185,17 +185,24 @@ actor CodexCLI {
 
     private static let pathCacheKey = "codexcli.binaryPath"
 
-    /// Known install locations, then a login-shell `which` (GUI apps don't inherit the user's
-    /// PATH). The result is cached in UserDefaults and re-verified on every read.
+    /// The managed install first (unconditionally), then known locations, then a login-shell
+    /// `which` (GUI apps don't inherit the user's PATH). Discovery results are cached in
+    /// UserDefaults and re-verified on every read.
     static func locateBinary() -> String? {
         let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser.path
+        // The standalone installer's symlink — the ONE copy our installer keeps current — wins
+        // over everything, INCLUDING the cache: on a Mac that also has a brew/npm codex, a cached
+        // brew path would otherwise field every run with a stale binary while the fresh install
+        // sat unused. `isExecutableFile` resolves the symlink, so a dangling link (e.g. a wiped
+        // `~/.codex/packages`) falls through to the fallbacks instead of being returned.
+        let managed = "\(home)/.local/bin/codex"
+        if fm.isExecutableFile(atPath: managed) { return managed }
         if let cached = UserDefaults.standard.string(forKey: pathCacheKey),
            fm.isExecutableFile(atPath: cached) {
             return cached
         }
-        let home = fm.homeDirectoryForCurrentUser.path
         var known = [
-            "\(home)/.local/bin/codex",        // the standalone installer's symlink
             "/opt/homebrew/bin/codex",         // brew / npm -g (Apple Silicon)
             "/usr/local/bin/codex",
         ]
