@@ -22,8 +22,7 @@ the form, etc.).
 **Implementation: `Cloud/ComputerUseSkillPatch.swift` — fully automated since 2026-07-09.** No manual
 step survives:
 
-- **Applied at install** — `ComputerUseSetup.install()` calls `ensureApplied()` right after the skill
-  variant swap.
+- **Applied at install** — `ComputerUseSetup.install()` calls `ensureApplied()` right after the copies.
 - **Self-healed before every computer-use run** — `CodexCLI.runAgentCommand()` calls `ensureApplied()`
   pre-flight (cheap file reads, idempotent). So when a plugin update lands a fresh stock `SKILL.md`
   underneath us (the desktop app updating, a re-bootstrap, codex's own plugin machinery), the very next
@@ -34,10 +33,12 @@ step survives:
 
 ## The patch is SECTION-SCOPED — never overwrite the whole file
 
-Since the 2026-07 plugin (v1.0.1000366), `SKILL.md` is not just the policy: the installed (node-repl
-variant) file opens with **load-bearing runtime documentation** — the `node_repl` bootstrap, the
-`sky.*` API surface, the workflow guide — and the confirmation policy is its **tail**. Overwriting the
-whole file (the pre-July patch approach) would delete the runtime docs and **break computer use**.
+Since the 2026-07 plugins, `SKILL.md` is not just the policy — the file opens with content that must
+survive, and the confirmation policy is its **tail**. On today's installs (the policy-only stub, kept
+as shipped since plugin 1.0.1000502 — bootstrap doc §1.6) that head is the skill intro; on the older
+node-repl-variant installs it was the load-bearing `node_repl` runtime docs (`sky.*` API, workflow
+guide). Overwriting the whole file (the pre-July patch approach) would destroy the head — on a
+node-repl-era install that **broke computer use**.
 
 So the patch:
 1. **Detects** a stock file by markers that exist only in OpenAI's policy (a patched file has none):
@@ -80,6 +81,7 @@ transcripts; they're append-only history, and editing them corrupts the JSONL.
 
 ## Runtime note (2026-07)
 
-The CLI picks the plugin's runtime at launch — node_repl (codex 0.142.x) or the direct MCP tools
-(0.144.x) — independent of the skill file (bootstrap doc §1.5). The policy tail rides identically in
-both worlds; the patch doesn't care which runtime is active. Verified in production on both.
+The policy tail rides identically in every runtime era — the node_repl skill (codex 0.142.x-era
+installs), the direct MCP tools (0.144.x), and the pure-MCP plugin (1.0.1000502+, the current world —
+bootstrap doc §1.6). The patch doesn't care which is active: it only ever touches the tail below the
+anchor. Verified in production across all three.
