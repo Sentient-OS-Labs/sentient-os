@@ -17,11 +17,19 @@ plumbing).
 
 ## Surface
 
-- `CodexCLI.locateBinary()` — known paths (`~/.local/bin/codex`, `/opt/homebrew/bin/codex`,
-  `/usr/local/bin/codex`), then every nvm-managed node version's `bin/codex` (newest first —
-  npm-under-nvm hides the binary in a versioned dir), then a login `zsh -lic "which codex"`
-  (interactive — `.zshrc` is where nvm/asdf init; `-lc` alone never sources it). Cached in
-  UserDefaults (`codexcli.binaryPath`), re-verified on every read.
+- `CodexCLI.locateBinary()` — the **managed install first, unconditionally**:
+  `~/.local/bin/codex` (the standalone installer's symlink — the one copy our setup engine keeps
+  current) wins over everything including the cache whenever it's executable
+  (`isExecutableFile` resolves the symlink, so a dangling link falls through). ⚠️ This precedence
+  is load-bearing: on a Mac that also has a brew/npm codex, a cached brew path would otherwise
+  field every run with a stale binary forever while the fresh install sat unused — runs failed
+  in-app while codex "worked fine in Terminal" (field-found 2026-07-24, the launch-week
+  dual-install breakage). Then the fallbacks: the UserDefaults cache (`codexcli.binaryPath`,
+  re-verified on every read), known paths (`/opt/homebrew/bin/codex`, `/usr/local/bin/codex`),
+  every nvm-managed node version's `bin/codex` (newest first — npm-under-nvm hides the binary in
+  a versioned dir), then a login `zsh -lic "which codex"` (interactive — `.zshrc` is where
+  nvm/asdf init; `-lc` alone never sources it). Only scan/`which` results are cached; the managed
+  hit never writes the cache (it needs no memo, and the cache stays useful as the fallback).
 - `install(onLine:)` — runs OpenAI's official standalone installer (`curl … install.sh |
   CODEX_NON_INTERACTIVE=1 sh`) streaming its output; success = the binary is actually present after
   (a `curl | sh` pipeline can exit 0 with nothing installed). The `CodexSetup` engine's step 1.

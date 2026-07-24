@@ -144,7 +144,7 @@ TelemetryDeck since 2026-07-12):
 | `codex.fire_fallback` | `ProactiveExecutor.runConnector` | a sandboxed connector fire's write auto-cancelled (agent `COULD_NOT` + the verbatim "cancelled MCP tool call" in the raw JSONL) and the executor retried once on the legacy bypass path — the signal that codex's apps-approve config surface changed under us | `channel` (gmail/calendar) | warning |
 | `codex_auth.refresh_failed` | `CodexAuth` | the on-demand codex token re-mint gets a non-OK HTTP status | `status` | warning |
 | `engine.load_failed` | `IterativeRun` | the on-device model won't load (→ a 0-item run) | `error`, `model_present` | error |
-| `model.download.failed` | `ModelDownload` | the onboarding model download exhausted its retries / aborted | `reason` | error |
+| `model.download.failed` | `ModelDownload` | the onboarding model download exhausted its retries / aborted | `reason` — `disk_space` (the 10 GB preflight floor refused to start), `disk_write` (the disk filled mid-transfer), `checksum_mismatch`, `upstream_changed`, `bad_response`, `short_delivery`, `network` | error |
 | `source.dropped` | `IterativeRun` | `connector.buckets()` throws (FDA denied / DB-copy failed) → whole source skipped | `source`, `error` | error |
 | `engine.hard_stop` | `IterativeRun` | the GPU-wedge cascade the reloads couldn't clear | `reloads_without_progress`, `consecutive_failures` | error |
 | `triage.parse_failure_spike` | `IterativeRun` | ≥20% of a run's items were garbled model replies (not real junk), ≥30 items | `parse_failures`, `done` | warning |

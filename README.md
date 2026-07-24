@@ -82,7 +82,7 @@ Download the DMG from [the latest release](https://github.com/Sentient-OS-Labs/s
 brew install --cask sentient-os-labs/tap/sentient-os
 ```
 
-You'll need an Apple Silicon Mac (M1 or newer) on macOS 15 or later. 8 GB of RAM is enough; we tuned the on-device model until it fit.
+You'll need an Apple Silicon Mac (M1 or newer) on macOS 15 or later. 8 GB of RAM is enough; we tuned the on-device model until it fit. Keep about 10 GB of disk free before you start: the on-device model is a 3.7 GB download, and it needs room to land.
 
 One requirement: the full version of Sentient runs its cloud compute through your own ChatGPT Plus subscription (about $20 a month, paid to OpenAI, not to us). That's not a catch, that's the architecture: your Mac does about 90% of the compute, your frontier model covers the rest, and that's how Sentient stays free with a straight face. A free ChatGPT account still gets the preview tier: the overnight reading, the knowledge base, the Knowledge window, and the MCP mirror.
 
@@ -204,7 +204,7 @@ And when you want out entirely: one click in Settings wipes the cloud copy and r
 <summary><b>What Macs does it run on?</b></summary>
 <br/>
 
-Apple Silicon (M1 or newer) on macOS 15 or later. 8 GB of RAM is enough; the on-device model has inference optimizations to work in it.
+Apple Silicon (M1 or newer) on macOS 15 or later. 8 GB of RAM is enough; the on-device model has inference optimizations to work in it. You'll also want about 10 GB of free disk space when you first set it up, since the on-device model is a 3.7 GB download.
 
 </details>
 
