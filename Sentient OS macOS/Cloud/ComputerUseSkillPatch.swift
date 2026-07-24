@@ -10,8 +10,8 @@
 //  every high-stakes guardrail (deletion, accounts, financial, system settings, medical, the
 //  anti-prompt-injection rule) and drops only the everyday re-confirmations.
 //
-//  It replaces ONLY the policy tail of the file — everything above it (the node_repl runtime
-//  bootstrap + API docs, since plugin v1.0.1000366) is load-bearing and untouched.
+//  It replaces ONLY the policy tail of the file — everything above the anchor heading (the skill
+//  intro; on old node-repl-era installs, the runtime bootstrap + API docs) stays untouched.
 //
 //  Key entry point:
 //   - ComputerUseSkillPatch.ensureApplied()  → find the real SKILL.md copies; tail-patch any that

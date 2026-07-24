@@ -6,15 +6,22 @@
 //  app install. OpenAI ships the entire computer-use payload (the plugin + the native
 //  "Codex Computer Use.app" helper) bundled INSIDE their desktop app (renamed Codex.app →
 //  ChatGPT.app 2026-07, same DMG URL); the desktop "enable computer use" toggle is a local file
-//  copy PLUS a skill-variant swap (reverse-engineered + proven byte-identical). So we reproduce
-//  it ourselves: download OpenAI's official DMG, lift the bundled `openai-bundled` marketplace
-//  out of it, lay the three trees into ~/.codex, select the node-repl skill variant, relax the
-//  confirmation policy (ComputerUseSkillPatch), and patch config.toml.
+//  copy (reverse-engineered + proven byte-identical). So we reproduce it ourselves: download
+//  OpenAI's official DMG, lift the bundled `openai-bundled` marketplace and the native helper
+//  out of it, lay the three trees into ~/.codex, relax the confirmation policy
+//  (ComputerUseSkillPatch), and patch config.toml.
 //  Nothing is hosted by us — the bits come straight from OpenAI's CDN.
+//
+//  Since plugin 1.0.1000502 (2026-07) the CLI's route is PURE MCP: the plugin's `.mcp.json`
+//  registers a `computer-use` MCP server whose launcher execs the installed helper's native
+//  client — the tools (click, type_text, get_app_state, …) are served natively, no node runtime
+//  involved. The node-repl skill variant that we used to swap in is the DESKTOP app's arm of the
+//  runtime split (it spawns node out of its own bundle; the plain CLI can't), so the swap is gone:
+//  the shipped policy-only SKILL.md is exactly right for the CLI.
 //
 //  Key entry points:
 //   - ComputerUseSetup.isInstalled            → already bootstrapped? (plugin cache + native helper)
-//   - ComputerUseSetup.install(onLine:)       → download → mount → ditto → variant swap → patch → detach
+//   - ComputerUseSetup.install(onLine:)       → download → mount → ditto → patch → detach
 //
 //  Doc: Documentation/Computer-Use Bootstrap (Codex Reverse-Engineering).md
 //
@@ -28,18 +35,28 @@ enum ComputerUseSetup {
     /// <app>/Contents/Resources/plugins/openai-bundled/.
     static let dmgURL = URL(string: "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg")!
 
-    /// The bundled marketplace inside the mounted DMG's app. The app's name has changed once
+    /// The mounted DMG's app + the bundled marketplace inside it. The app's name has changed once
     /// already (Codex.app → ChatGPT.app, 2026-07), so locate whatever .app sits at the DMG root
     /// and key on the payload's shape, never on the app's name.
-    private static func marketplace(inMount mount: URL) throws -> URL {
+    private static func payloadSource(inMount mount: URL) throws -> (app: URL, marketplace: URL) {
         let apps = ((try? FileManager.default.contentsOfDirectory(at: mount, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension == "app" }
         for app in apps {
             let candidate = app.appendingPathComponent("Contents/Resources/plugins/openai-bundled")
-            if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+            if FileManager.default.fileExists(atPath: candidate.path) { return (app, candidate) }
         }
         throw SetupError.missingSource(apps.isEmpty ? "no .app in the DMG"
                                                     : "no openai-bundled marketplace in \(apps.map(\.lastPathComponent).joined(separator: ", "))")
+    }
+
+    /// The native "Codex Computer Use.app" helper inside the mounted app. It has lived in two
+    /// places so far: inside the plugin folder itself (through plugin 1.0.1000366), then inside
+    /// the bundled @oai/sky node module (1.0.1000502+, 2026-07) — try both shapes.
+    private static func nativeHelper(app: URL, pluginSrc: URL) throws -> URL {
+        let candidates = [pluginSrc.appendingPathComponent("Codex Computer Use.app"),
+                          app.appendingPathComponent("Contents/Resources/cua_node/lib/node_modules/@oai/sky/Codex Computer Use.app")]
+        if let found = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) { return found }
+        throw SetupError.missingSource("Codex Computer Use.app (looked in the plugin folder and cua_node/@oai/sky)")
     }
 
     enum SetupError: LocalizedError {
@@ -70,15 +87,17 @@ enum ComputerUseSetup {
         let helperBin = codexHome.appendingPathComponent(
             "computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService")
         guard fm.fileExists(atPath: helperBin.path) else { return false }
-        // 2) at least one installed plugin version carrying its manifest AND the node-repl skill
-        //    (the runtime-bootstrap instructions codex needs — the DMG ships a policy-only stub
-        //    SKILL.md, so a plain copy without install()'s variant swap is a broken half-install
-        //    and must read as "not installed" so it gets repaired)
+        // 2) at least one installed plugin version carrying its manifest, the .mcp.json that
+        //    registers the computer-use MCP server, and the launcher it points at. A
+        //    node-repl-era install (pre-1.0.1000502, no .mcp.json) reads as "not installed" ON
+        //    PURPOSE: its skill drives a node_repl tool current CLIs no longer have, so it
+        //    self-migrates to the MCP payload on the next setup pass.
         let pluginRoot = codexHome.appendingPathComponent("plugins/cache/openai-bundled/computer-use")
         let hasPlugin = (try? fm.contentsOfDirectory(atPath: pluginRoot.path))?.contains {
-            fm.fileExists(atPath: pluginRoot.appendingPathComponent("\($0)/.codex-plugin/plugin.json").path)
-                && ((try? String(contentsOf: pluginRoot.appendingPathComponent("\($0)/skills/computer-use/SKILL.md"),
-                                 encoding: .utf8))?.contains("setupComputerUseRuntime") ?? false)
+            let root = pluginRoot.appendingPathComponent($0)
+            return fm.fileExists(atPath: root.appendingPathComponent(".codex-plugin/plugin.json").path)
+                && fm.fileExists(atPath: root.appendingPathComponent(".mcp.json").path)
+                && fm.isExecutableFile(atPath: root.appendingPathComponent("bin/computer-use-client-launcher").path)
         } ?? false
         guard hasPlugin else { return false }
         // 3) config.toml actually enables the plugin
@@ -119,9 +138,10 @@ enum ComputerUseSetup {
         defer { detachQuietly(mount); try? fm.removeItem(at: mount) }
 
         // 3) Locate the payload + its version.
-        let src = try marketplace(inMount: mount)
+        let (app, src) = try payloadSource(inMount: mount)
         let pluginSrc = src.appendingPathComponent("plugins/computer-use")
         guard fm.fileExists(atPath: pluginSrc.path) else { throw SetupError.missingSource(pluginSrc.lastPathComponent) }
+        let helperSrc = try nativeHelper(app: app, pluginSrc: pluginSrc)
         let version = try readVersion(pluginSrc.appendingPathComponent(".codex-plugin/plugin.json"))
         onLine("Found computer-use \(version); installing…")
 
@@ -131,12 +151,9 @@ enum ComputerUseSetup {
         onLine("Copying plugin…")
         try await dittoReplace(pluginSrc, codexHome.appendingPathComponent("plugins/cache/openai-bundled/computer-use/\(version)"))
         onLine("Copying native helper…")
-        try await dittoReplace(pluginSrc.appendingPathComponent("Codex Computer Use.app"),
-                               codexHome.appendingPathComponent("computer-use/Codex Computer Use.app"))
+        try await dittoReplace(helperSrc, codexHome.appendingPathComponent("computer-use/Codex Computer Use.app"))
 
-        // 5) Select the node-repl skill variant, then relax its confirmation policy.
-        onLine("Selecting the node-repl skill variant…")
-        try selectNodeReplVariant(version: version)
+        // 5) Relax the skill's confirmation policy.
         ComputerUseSkillPatch.ensureApplied()
 
         // 6) Wire it up in config.toml (idempotent).
@@ -149,46 +166,19 @@ enum ComputerUseSetup {
 
     // MARK: Steps
 
-    /// Replace `dst` with a fresh copy of `src` via /usr/bin/ditto (signature/xattr-preserving).
+    /// Replace `dst` with a fresh copy of `src` via /usr/bin/ditto (signature/xattr-preserving;
+    /// --noqtn matches the desktop app's own copy — no quarantine rides into ~/.codex).
     private static func dittoReplace(_ src: URL, _ dst: URL) async throws {
         let fm = FileManager.default
         try? fm.removeItem(at: dst)
         try? fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let r = try await sh("/usr/bin/ditto", [src.path, dst.path])
+        let r = try await sh("/usr/bin/ditto", ["--noqtn", src.path, dst.path])
         guard r.status == 0, fm.fileExists(atPath: dst.path) else {
             throw SetupError.copy("ditto \(src.lastPathComponent): \(r.out.trimmedTail)")
         }
     }
 
-    /// The desktop app's "enable" flow doesn't just copy the plugin — it selects a skill VARIANT:
-    /// the shipped `skills/computer-use/SKILL.md` is a policy-only stub, and the real CLI skill
-    /// (node_repl runtime bootstrap + API docs + policy) sits beside the manifest as
-    /// `.codex-plugin/computer-use-node-repl.md`. Without the swap, codex has no idea how to start
-    /// the runtime and flails. Reproduce it in both installed trees and stamp
-    /// `bundledContentVariant` into both plugin.json copies — byte-matching the desktop app's own
-    /// output (verified against a real desktop-app install, 2026-07-09). A payload without the
-    /// variant file predates the mechanism and is complete as shipped → no-op.
-    private static func selectNodeReplVariant(version: String) throws {
-        let roots = [codexHome.appendingPathComponent("plugins/cache/openai-bundled/computer-use/\(version)"),
-                     codexHome.appendingPathComponent(".tmp/bundled-marketplaces/openai-bundled/plugins/computer-use")]
-        guard let variant = try? String(contentsOf: roots[0].appendingPathComponent(".codex-plugin/computer-use-node-repl.md"),
-                                        encoding: .utf8) else { return }
-        for root in roots {
-            do {
-                try variant.write(to: root.appendingPathComponent("skills/computer-use/SKILL.md"),
-                                  atomically: true, encoding: .utf8)
-                let manifest = root.appendingPathComponent(".codex-plugin/plugin.json")
-                guard var obj = try JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any] else {
-                    throw SetupError.copy("plugin.json isn't an object")
-                }
-                obj["bundledContentVariant"] = "node-repl"
-                try (try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]))
-                    .write(to: manifest, options: .atomic)
-            } catch { throw SetupError.copy("variant swap in \(root.lastPathComponent): \(error)") }
-        }
-    }
-
-    /// Pull the plugin version (e.g. "1.0.857") out of the plugin's manifest — it names the cache dir.
+    /// Pull the plugin version (e.g. "1.0.1000502") out of the plugin's manifest — it names the cache dir.
     private static func readVersion(_ pluginJSON: URL) throws -> String {
         guard let data = try? Data(contentsOf: pluginJSON),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
