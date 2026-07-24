@@ -244,9 +244,16 @@ actor CodexCLI {
     /// (verified end-to-end); it's harmless on the script's binary downloads. Drop the sed once
     /// OpenAI fixes install.sh.
     static func install(onLine: @escaping @Sendable (String) -> Void) async throws {
-        let pipeline = #"curl -fsSL https://chatgpt.com/codex/install.sh | sed 's|curl -fsSL|curl -fsSL -H "Accept: application/json"|g' | CODEX_NON_INTERACTIVE=1 sh"#
+        // Survive a slow connection, fail fast on a dead one. The outer curl (the tiny install.sh)
+        // caps at 60s; the sed injects matching resilience into the script's OWN curl calls (the
+        // real binary download): abort only if throughput stays under ~8 KB/s for 30s, so a
+        // stalled transfer dies in seconds instead of burning the whole budget while a slow-but-
+        // moving download keeps going. The outer timeout is generous (15 min) so a genuinely slow
+        // link can finish — the old 300s ceiling was SIGTERM-ing in-progress downloads on slow
+        // connections [MEASURED from install traces, 2026-07-24].
+        let pipeline = #"curl -fsSL --connect-timeout 30 --max-time 60 https://chatgpt.com/codex/install.sh | sed 's|curl -fsSL|curl -fsSL -H "Accept: application/json" --connect-timeout 30 --speed-limit 8192 --speed-time 30|g' | CODEX_NON_INTERACTIVE=1 sh"#
         let out = try await executeStreaming(binary: "/bin/sh", args: ["-c", pipeline],
-                                             timeout: 300, onLine: onLine)
+                                             timeout: 900, onLine: onLine)
         UserDefaults.standard.removeObject(forKey: pathCacheKey)   // force a fresh discovery scan
         guard locateBinary() != nil else {
             let detail = out.stderr.isEmpty ? out.stdout : out.stderr

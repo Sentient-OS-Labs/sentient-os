@@ -55,6 +55,11 @@ struct OnboardingCodexLoginView: View {
                             .kerning(1.5)
                             .foregroundStyle(Theme.faint)
                     }
+                } else if codex.installGaveUp && !codex.installed {
+                    // The auto-install couldn't finish (no network, connection reset, or Codex is
+                    // unavailable in this region). Point the user to install it themselves; the
+                    // `.task` poll below picks Codex up automatically the moment it lands.
+                    CodexInstallFailedPanel()
                 } else {
                     // The login button — greyed until `codex --help` confirms the install landed.
                     OnboardingNextButton(title: "Log in with ChatGPT", enabled: codexConfirmed) {
@@ -84,11 +89,13 @@ struct OnboardingCodexLoginView: View {
         .onAppear {
             Task {
                 await codex.refreshInstalled()
-                // Two nets in one kick: no binary (the launch kick failed or skipped a half-deleted
-                // setup) → install; binary present but the installer hasn't run this launch (the
-                // launch kick deliberately skips USED setups) → run it anyway, because the installer
-                // doubles as the updater and setup should hand the latest CLI to the later steps.
-                if !codex.installing && (!codex.installed || !codex.ranInstallerThisLaunch) {
+                // No binary (the launch kick failed or skipped a half-deleted setup) → retry via
+                // ensureInstalled, which surfaces the manual-install panel if it gives up. Binary
+                // already present but the installer hasn't run this launch → run it anyway (it
+                // doubles as the updater, handing the latest CLI to the later steps).
+                if !codex.installed {
+                    await codex.ensureInstalled()
+                } else if !codex.ranInstallerThisLaunch {
                     await codex.installCodex()
                 }
             }
@@ -124,6 +131,46 @@ struct OnboardingCodexLoginView: View {
 }
 
 // MARK: - Shared onboarding bits
+
+/// Shown on the Codex step when the automatic install has clearly failed (retries exhausted):
+/// no network, a connection reset, or Codex being unavailable in the user's region. It points the
+/// user to install Codex themselves; the step's `codex --help` poll picks it up the moment it
+/// lands, and a relaunch resumes right here (onboarding persists its step). Copy approved 2026-07-24.
+private struct CodexInstallFailedPanel: View {
+    private let guideURL = URL(string: "https://learn.chatgpt.com/docs/codex/cli#getting-started")!
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Sentient couldn't finish installing Codex automatically.")
+                .font(.system(size: 15))
+                .foregroundStyle(Theme.Ink.body)
+                .multilineTextAlignment(.center)
+
+            Text("You can install it yourself in a minute. Once you do that, you can restart Sentient and pick up right where you left off.")
+                .font(.system(size: 13))
+                .foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+
+            OnboardingNextButton(title: "Open the Codex install guide") {
+                NSWorkspace.shared.open(guideURL)
+            }
+            .padding(.top, 4)
+
+            Text("We also suggest connecting through a VPN.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.secondary)
+                .multilineTextAlignment(.center)
+
+            Text("Codex isn't available in a few countries.")
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .kerning(0.5)
+                .foregroundStyle(Theme.faint)
+                .padding(.top, 2)
+        }
+        .frame(maxWidth: 460)
+    }
+}
 
 /// The monospace-caps whisper label every onboarding screen opens with.
 struct OnboardingWhisper: View {

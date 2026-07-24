@@ -54,11 +54,16 @@ final class CodexSetup {
     private(set) var installing = false
     /// Latest streamed progress line, or the final ✓/✗ result.
     private(set) var installStatus: String?
+    /// True once install RETRIES are exhausted and codex still isn't on disk — drives onboarding's
+    /// "install it yourself" panel. Reset when a fresh `ensureInstalled` run begins; any positive
+    /// detection (`refreshInstalled`) clears it.
+    private(set) var installGaveUp = false
 
     /// Cheap re-detect of step 1's status — call on appear and after an install. Runs the probe
     /// off the main thread (`locateBinary()` can spawn a login shell), so it never blocks the UI.
     func refreshInstalled() async {
         installed = await Task.detached { CodexCLI.locateBinary() != nil }.value
+        if installed { installGaveUp = false }
     }
 
     /// One successful installer run already happened this launch — the once-per-launch guard for
@@ -92,6 +97,28 @@ final class CodexSetup {
             stepFailed(.install, error, binaryFound: installed)   // "installer ran, binary missing" if false
         }
         installing = false
+    }
+
+    /// Install with retries; flip `installGaveUp` when the budget is spent and codex still isn't
+    /// here. The ONE place the install RETRY policy lives — both the launch kick (AppState) and the
+    /// onboarding screen drive this, so there's no second, divergent loop. A no-op if codex is
+    /// already present or an install is already running. Each attempt is patient (900s + curl
+    /// speed-limits in CodexCLI.install), so a slow download finishes on the first try; fast-failing
+    /// causes (no network, connection reset, region block) exhaust the retries in a couple minutes
+    /// and surface the "install it yourself" panel.
+    func ensureInstalled(attempts: Int = 3) async {
+        guard !installed, !installing else { return }
+        installGaveUp = false
+        for attempt in 1...attempts {
+            await installCodex()
+            if installed { return }
+            if attempt < attempts {
+                Log("CodexSetup: install attempt \(attempt) failed — retrying in 10s")
+                try? await Task.sleep(for: .seconds(10))
+            }
+        }
+        installGaveUp = !installed
+        if installGaveUp { Log("CodexSetup: install gave up after \(attempts) attempts — surfacing the manual-install panel") }
     }
 
     // MARK: Step 2 — auth (codex login)

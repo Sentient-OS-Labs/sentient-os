@@ -138,16 +138,11 @@ final class AppState {
                     Log("Onboarding: ~/.codex is a real setup — skipping the background codex install")
                     return
                 }
-                // OpenAI's installer fails transiently (its GitHub-JSON parsing flaps per
-                // request), so one attempt isn't enough: retry with a 10s gap while the user is
-                // still on the slides/perms. A retried flap usually succeeds on the next try.
-                for attempt in 1...4 {
-                    await CodexSetup.shared.installCodex()
-                    if CodexSetup.shared.installed { return }
-                    Log("Onboarding: codex install attempt \(attempt) failed — retrying in 10s")
-                    try? await Task.sleep(for: .seconds(10))
-                }
-                Log("Onboarding: codex install still failing after 4 attempts — the login screen's re-kick is the remaining net")
+                // OpenAI's installer fails transiently (its GitHub-JSON parsing flaps per request),
+                // so one attempt isn't enough. The retry policy + the give-up flag live in
+                // CodexSetup.ensureInstalled — ONE source of truth the onboarding screen drives too;
+                // a give-up surfaces the "install it yourself" panel on the codex screen.
+                await CodexSetup.shared.ensureInstalled()
             }
         }
     }
