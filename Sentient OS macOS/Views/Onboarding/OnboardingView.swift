@@ -4,8 +4,11 @@
 //
 //  First-launch onboarding: the film slide (OnboardingFilmView — the website's self-scrolling
 //  film in a webview, parking on the morning home),
-//  then permissions (OnboardingPermissionsView), then codex login (OnboardingCodexSteps),
-//  then the plan crossroads (OnboardingPlanView — free/go accounts only; full plans skip it),
+//  then the frontier-model step (OnboardingFrontierModelView — the engine pills over the
+//  Settings panels, with the codex login embedded as the ChatGPT panel),
+//  then the plan crossroads (OnboardingPlanView — free/go ChatGPT accounts only; full plans
+//  and custom engines skip it; it rides directly behind the login that triggers it),
+//  then permissions (OnboardingPermissionsView),
 //  then the ready-to-process screen (OnboardingReadyView) whose Start Analysis presents the REAL
 //  ProcessingView takeover (pausable) — and only a finished run calls `onFinished` and reveals
 //  the home. If the on-device model hasn't finished downloading (ModelDownload — AppState kicks
@@ -73,13 +76,13 @@ struct OnboardingView: View {
                 // rest and blooms its own Continue (OnboardingFilmView owns the choreography).
                 OnboardingFilmView(onContinue: advance).transition(.opacity)
             case 1:
-                OnboardingPermissionsView(onContinue: advance).transition(.opacity)
+                OnboardingFrontierModelView(onContinue: advance).transition(.opacity)
             case 2:
-                OnboardingCodexLoginView(onContinue: advance).transition(.opacity)
-            case 3:
-                // The plan crossroads — free/go accounts decide here; full plans skip it
-                // before it renders (OnboardingPlanView auto-advances).
+                // The plan crossroads — free/go ChatGPT accounts decide here; full plans and
+                // custom engines skip it before it renders (OnboardingPlanView auto-advances).
                 OnboardingPlanView(onContinue: advance).transition(.opacity)
+            case 3:
+                OnboardingPermissionsView(onContinue: advance).transition(.opacity)
             default:
                 if analyzing, let modelPath {
                     // The REAL first analysis — the same engine + takeover as the home's Analyze
@@ -198,9 +201,9 @@ struct OnboardingView: View {
 
     private func goBack() {
         var target = step - 1
-        // The crossroads only exists for free/go accounts — never strand a full plan on an
-        // auto-advancing screen (back would visibly bounce forward again).
-        if target == 3 && !CodexAuth.isLimited() { target -= 1 }
+        // The crossroads only exists for free/go ChatGPT accounts — never strand a full plan
+        // or a custom engine on an auto-advancing screen (back would visibly bounce forward).
+        if target == 2 && (!CodexAuth.isLimited() || ModelBackend.current == .custom) { target -= 1 }
         withAnimation(.easeInOut(duration: 0.25)) { step = max(0, target) }
     }
 

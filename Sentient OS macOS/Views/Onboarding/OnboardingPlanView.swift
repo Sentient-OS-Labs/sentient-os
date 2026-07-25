@@ -2,9 +2,11 @@
 //  OnboardingPlanView.swift
 //  Sentient OS macOS
 //
-//  The plan crossroads — the step between codex login and the ready screen, and ONLY free/go
-//  accounts ever see it: a full plan (plus/pro/team/…, or anything we can't read — fail open)
-//  auto-advances before a single pixel renders. Free/go users get an honest fork: upgrade to
+//  The plan crossroads — the step right behind the frontier-model step (before permissions),
+//  and ONLY free/go ChatGPT accounts ever see it: a full plan (plus/pro/team/…, or anything we
+//  can't read — fail open) auto-advances before a single pixel renders, and so does a CUSTOM
+//  frontier engine (their own endpoint powers everything; the ChatGPT plan is irrelevant even
+//  when a stale free/go codex login sits on disk). Free/go users get an honest fork: upgrade to
 //  Plus (opens ChatGPT's pricing page, then this screen notices the upgrade on its own via
 //  CodexAuth.refreshPlan — the same on-demand token re-mint codex does every 8 days), say they
 //  ALREADY upgraded (a confirm, then we simply believe them — CodexAuth.assertedPlus; people
@@ -88,13 +90,7 @@ struct OnboardingPlanView: View {
                     .lineSpacing(4)
 
                 VStack(spacing: 16) {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.mini)
-                        Text("waiting for your upgrade…")
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .kerning(1.5)
-                            .foregroundStyle(Theme.faint)
-                    }
+                    MonoWaitLine("waiting for your upgrade…")
                     // The trust path, not a check: the account can read Free here long after a
                     // real payment (the refreshed token re-mints from the same stale session),
                     // so the button takes the user's word — same confirm as the crossroads'.
@@ -116,6 +112,12 @@ struct OnboardingPlanView: View {
         }
         .padding(40)
         .task {
+            // A custom frontier engine bypasses the ChatGPT plan entirely (knowledgeBaseOnly
+            // already reads false there) — never show the crossroads, whatever the disk claims.
+            if previewPlan == nil, ModelBackend.current == .custom {
+                onContinue()
+                return
+            }
             // The silent gate: read the claim off disk (no network). Anything but a positive
             // free/go read means this screen isn't for them.
             let current = previewPlan ?? CodexAuth.currentPlan()
