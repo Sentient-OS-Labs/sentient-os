@@ -51,6 +51,18 @@ for step in await codex.whatsNeeded() {        // e.g. [.computerUse] if 1 & 2 a
 - **Dumb sequential also works.** If you'd rather just call `installCodex()` → login → `setupComputerUse()`
   in order without `whatsNeeded()`, that's safe — every action self-guards. `whatsNeeded()` just lets you
   skip rendering finished steps.
+- **The install is network-resilient (shipped in 1.3).** A slow or unavailable network can no longer
+  leave the user staring at an endless "installing Codex" spinner. `CodexCLI.install` puts a
+  connect-timeout on the `install.sh` fetch and a throughput floor (`--speed-limit`/`--speed-time`) on
+  the script's own binary download, so a *stalled* transfer fails fast (~30 s) while a *slow-but-moving*
+  one still finishes; the per-attempt budget is 900 s (raised from 300 s, which was cutting off
+  in-progress downloads on genuinely slow links). **`CodexSetup.ensureInstalled(attempts:)` is the
+  single source of truth for the retry policy** (+ an `installGaveUp` flag) — both the launch-time kick
+  (`AppState`) and the onboarding screen drive this one method, so there's no second, divergent retry
+  loop. When retries are exhausted, onboarding shows a terminal **`CodexInstallFailedPanel`** (a link to
+  the official Codex install guide, a VPN suggestion, and a note that Codex is unavailable in a few
+  regions) instead of hanging; the step's existing `codex --help` poll picks the CLI up the moment it
+  lands, so onboarding resumes on its own (including after a relaunch).
 - **Computer use is ~505 MB + a few minutes** (downloads OpenAI's DMG). Stream `computerUseStatus` to the
   UI (it carries live "Downloading… 42%", "Copying plugin…", "✓ ready" lines). Gate it behind step 1 (it
   refuses if codex isn't installed — and it re-probes the DISK for the binary, not the cached flag, so a
