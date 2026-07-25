@@ -99,6 +99,7 @@ enum Uninstall {
 
         progress(.keychain)
         MirrorClient.destroyKeychainIdentity()
+        CustomProvider.destroy()   // the frontier-model choice + its endpoint API key
         await beat()
 
         progress(.knowledge)

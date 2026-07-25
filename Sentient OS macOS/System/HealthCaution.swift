@@ -115,11 +115,14 @@ enum HealthCaution {
         if !LoginItem.isEnabled { missing.append(.launchAtLogin) }
         if !missing.isEmpty, !dismissed.contains("permissions") { return .permissions(missing) }
 
-        // ② Codex — gone, or signed out.
+        // ② Codex — gone, or signed out. The signed-out rung is ChatGPT-backend-only: a custom
+        // frontier model needs no codex login (its endpoint answering is probed at run time —
+        // a live endpoint check here would cost a whole model call per foreground).
         let codexInstalled = CodexCLI.locateBinary() != nil
         if !dismissed.contains("codex") {
             if !codexInstalled { return .codexMissing }
-            if await !loggedIn(force: forceCodexRecheck) { return .codexSignedOut }
+            if ModelBackend.current == .chatgpt,
+               await !loggedIn(force: forceCodexRecheck) { return .codexSignedOut }
         }
 
         // ③ Computer use — only once latched, and only with FDA to read the helper's system-TCC

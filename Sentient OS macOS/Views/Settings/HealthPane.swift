@@ -53,19 +53,26 @@ struct HealthPane: View {
 
     private var showCodexPermissions: Bool { fdaGranted && codex.computerUseReady }
 
-    /// The whole codex stack, healthy — the CLI, the account, computer use, AND its two helper
-    /// grants (verifiable only with FDA; unverifiable never claims "all good"). A free/go plan
-    /// keeps the group expanded so its amber row stays visible.
+    /// On the ChatGPT backend the account rows matter (logged in + a non-limited plan); on a
+    /// custom frontier model the endpoint being configured stands in for both.
+    private var accountHealthy: Bool {
+        ModelBackend.current == .chatgpt
+            ? codex.loggedIn && plan?.tier != .limited
+            : CustomProvider.current.isUsable
+    }
+
+    /// The whole codex stack, healthy — the CLI, the account (or the custom endpoint), computer
+    /// use, AND its two helper grants (verifiable only with FDA; unverifiable never claims
+    /// "all good"). A free/go plan keeps the group expanded so its amber row stays visible.
     private var codexAllGreen: Bool {
-        codex.installed && codex.loggedIn && codex.computerUseReady
+        codex.installed && accountHealthy && codex.computerUseReady
             && fdaGranted && helperAccessibility && helperScreenRecording
-            && plan?.tier != .limited
     }
 
     private var allGreen: Bool {
         fdaGranted && daemon == .ready && loginOn && micSpeech == .granted && screenRec
             && (notifStatus == .authorized || notifStatus == .provisional)
-            && codex.installed && codex.loggedIn && codex.computerUseReady
+            && codex.installed && accountHealthy && codex.computerUseReady
             && (!showCodexPermissions || (helperAccessibility && helperScreenRecording))
     }
 
@@ -381,22 +388,34 @@ struct HealthPane: View {
                            fixTitle: "Install…",
                            fix: codex.installing ? nil : { Task { await codex.installCodex() } })
                 failureLine(codex.installStatus)
-                StatusLine(title: "ChatGPT account",
-                           health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
-                           note: codex.loggedIn ? "logged in"
-                               : codex.loggingIn ? "finish in your browser" : "not logged in",
-                           tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
-                           fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
-                           fix: codex.loggedIn ? nil : { codex.startLogin() })
-                failureLine(codex.loginStatusLine)
-                if codex.loggedIn, let plan {
-                    StatusLine(title: "ChatGPT plan",
-                               health: plan.tier == .limited ? .warn : .ok,
-                               note: planChecking ? "checking…"
-                                   : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
-                                                           : plan.displayName.lowercased(),
-                               tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.",
-                               fixTitle: "Re-check") { recheckPlan() }
+                if ModelBackend.current == .custom {
+                    StatusLine(title: "Frontier model",
+                               health: CustomProvider.current.isUsable ? .ok : .bad,
+                               note: CustomProvider.current.isUsable
+                                   ? CustomProvider.current.modelName : "not set up",
+                               tip: "Sentient's cloud thinking runs through your own model endpoint instead of a ChatGPT login.\n\nPick and test it in Frontier Model Choice.",
+                               fixTitle: "Configure…") {
+                        NotificationCenter.default.post(name: SettingsView.switchPane,
+                                                        object: SettingsView.Pane.frontierModel)
+                    }
+                } else {
+                    StatusLine(title: "ChatGPT account",
+                               health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
+                               note: codex.loggedIn ? "logged in"
+                                   : codex.loggingIn ? "finish in your browser" : "not logged in",
+                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
+                               fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
+                               fix: codex.loggedIn ? nil : { codex.startLogin() })
+                    failureLine(codex.loginStatusLine)
+                    if codex.loggedIn, let plan {
+                        StatusLine(title: "ChatGPT plan",
+                                   health: plan.tier == .limited ? .warn : .ok,
+                                   note: planChecking ? "checking…"
+                                       : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
+                                                               : plan.displayName.lowercased(),
+                                   tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.\n\nPrefer no ChatGPT at all? Frontier Model Choice can point Sentient at your own model instead.",
+                                   fixTitle: "Re-check") { recheckPlan() }
+                    }
                 }
                 StatusLine(title: "Computer use",
                            health: codex.computerUseReady ? .ok : (codex.settingUpComputerUse ? .warn : .bad),

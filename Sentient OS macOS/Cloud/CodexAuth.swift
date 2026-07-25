@@ -49,18 +49,35 @@ enum CodexAuth {
     /// The ChatGPT pricing page — where the crossroads screen and every upsell surface send users.
     static let upgradeURL = URL(string: "https://chatgpt.com/#pricing")!
 
-    /// The hover notice on locked Gmail/Calendar chips (knowledge-base-only mode) — shared by
-    /// every surface that shows them, so the wording never drifts.
-    static let connectorLockedTip = "Only supported on ChatGPT Plus"
+    /// The hover notice on locked Gmail/Calendar chips — shared by every surface that shows
+    /// them, so the wording never drifts. Two reasons a chip locks: a free/go ChatGPT account
+    /// (knowledge-base-only mode), or a custom frontier model (the hosted connectors ride
+    /// ChatGPT auth inside codex and don't exist on a custom endpoint).
+    static var connectorLockedTip: String {
+        ModelBackend.current == .custom
+            ? "Available with your ChatGPT account"
+            : "Only supported on ChatGPT Plus"
+    }
+
+    /// Should the Gmail/Calendar chips render locked? Either lock reason (free/go plan, or a
+    /// custom frontier model) — the one predicate every chip surface uses.
+    static var connectorsLocked: Bool {
+        knowledgeBaseOnly || !ModelBackend.connectorsAvailable
+    }
 
     // MARK: Persisted state
 
     /// The user is a free/go account who chose "continue with just the knowledge base" in
     /// onboarding. THE gate every limited-mode surface checks (scheduler auto-enable, Sidekick
     /// arming, proactive stages, connector chips, the home's preview state).
+    /// A CUSTOM frontier model (Settings → Frontier Model Choice) unlocks the full experience:
+    /// the getter reads false there no matter what the stored flag says — their own endpoint
+    /// powers everything a paid ChatGPT plan would (minus the hosted connectors, which gate
+    /// separately via ModelBackend.connectorsAvailable). The stored flag is preserved, so
+    /// switching back to the ChatGPT backend restores the free/go experience unchanged.
     static let kbOnlyKey = "plan.kbOnly"
     static var knowledgeBaseOnly: Bool {
-        get { UserDefaults.standard.bool(forKey: kbOnlyKey) }
+        get { ModelBackend.current != .custom && UserDefaults.standard.bool(forKey: kbOnlyKey) }
         set { UserDefaults.standard.set(newValue, forKey: kbOnlyKey) }
     }
 

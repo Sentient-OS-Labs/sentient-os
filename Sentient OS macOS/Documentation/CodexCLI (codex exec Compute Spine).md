@@ -88,17 +88,29 @@ an absent `open_world_hint` counts as open-world) · `outputSchema`
 `numTurns` (completed items) · `durationMS` (wall clock, measured here) · `inputTokens` /
 `cachedInputTokens` / `outputTokens` · `raw` (full JSONL).
 
-## Plan-tuned models (`planTuned`)
+## The model chokepoint (`backendTuned`)
 
-Both spines — `run()` (every `Invocation`) and `runAgentCommand` (computer use) — pass the model
-through `planTuned` right before spawning. On a **positive** free/go plan read (`CodexAuth.isLimited()`),
-any `.gpt56sol` call downshifts to **`.gpt56terra` at `.medium`**; the `.luna` Gmail tier is
-untouched, and unknown/missing plans keep sol (CodexAuth's fail-open policy, so paid plans see zero
-change). Free/go ChatGPT accounts lost `gpt-5.6-sol` access through `codex exec` (a server-side
-"model not supported" refusal), so this substitution keeps knowledge-base work answering on those
-plans. Living at the spine means every caller — and any future one — is covered without per-call-site
-checks, and the plan is re-read per run, so an upgrade to Plus puts the very next call back on sol.
-Failure telemetry reports the model that actually ran, so field events show terra for free accounts.
+Both spines — `run()` (every `Invocation`) and `runAgentCommand` (computer use) — resolve the model
+through `backendTuned` right before spawning. It returns a model **string** and the reasoning-effort
+**string** that ride `-m` and `-c model_reasoning_effort`.
+
+**On the ChatGPT backend:** a **positive** free/go plan read (`CodexAuth.isLimited()`) downshifts any
+`.gpt56sol` call to **`gpt-5.6-terra` at `.medium`**; the `.luna` Gmail tier is untouched, and
+unknown/missing plans keep sol (CodexAuth's fail-open policy, so paid plans see zero change). Free/go
+ChatGPT accounts lost `gpt-5.6-sol` access through `codex exec` (a server-side "model not supported"
+refusal), so this substitution keeps knowledge-base work answering on those plans. The plan is
+re-read per run, so an upgrade to Plus puts the very next call back on sol.
+
+**On a custom backend** (Settings → Frontier Model Choice): the tier enums collapse — the user's own
+model string rides EVERY call, and their single free-form reasoning level replaces the caller's
+effort (per-call tuning and the Speed slider are ChatGPT's alone; providers have hard, opposite
+reasoning quirks). `run()` additionally injects the provider overrides, forces `webSearch=false` and
+`includeUserConfig=false`, and swaps `--output-schema` for a prompt instruction decoded through
+`Envelope.jsonResult`. → `Frontier Model Choice (BYOM).md`.
+
+Living at the spine means every caller — and any future one — is covered without per-call-site checks.
+Failure telemetry reports the model that actually ran (terra for free accounts; the literal `"custom"`
+on a custom backend, so a user's model slug never leaves the Mac).
 
 ## Input-size guard (`inputTooLarge`)
 

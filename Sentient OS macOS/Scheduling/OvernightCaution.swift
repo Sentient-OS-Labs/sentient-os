@@ -77,14 +77,20 @@ enum OvernightCaution {
         default:
             break
         }
-        // A 401 in codex's own output means the token died SERVER-side — auth.json still looks
-        // logged-in to the local probe below, so codex's stderr is the only tell (the exact
-        // failure of 2026-07-12: a token invalidated by a re-login elsewhere).
-        if case CodexCLI.CLIError.notAvailable(.notWorking(let detail)) = error,
-           detail.contains("401") || detail.localizedCaseInsensitiveContains("unauthorized") {
-            return .loggedOut
+        // The logged-out rungs are ChatGPT-backend-only: on a custom frontier model there is no
+        // codex login, and a 401 there means the endpoint rejected the user's API key — "log
+        // back in" would be wrong advice. (An endpoint-specific caution kind can come later;
+        // unclassifiable stays honest silence.)
+        if ModelBackend.current == .chatgpt {
+            // A 401 in codex's own output means the token died SERVER-side — auth.json still looks
+            // logged-in to the local probe below, so codex's stderr is the only tell (the exact
+            // failure of 2026-07-12: a token invalidated by a re-login elsewhere).
+            if case CodexCLI.CLIError.notAvailable(.notWorking(let detail)) = error,
+               detail.contains("401") || detail.localizedCaseInsensitiveContains("unauthorized") {
+                return .loggedOut
+            }
+            if await !CodexCLI.loginStatus() { return .loggedOut }   // local auth check — reliable even offline
         }
-        if await !CodexCLI.loginStatus() { return .loggedOut }   // local auth check — reliable even offline
         if await !networkUp() { return .noInternet }
         return nil
     }

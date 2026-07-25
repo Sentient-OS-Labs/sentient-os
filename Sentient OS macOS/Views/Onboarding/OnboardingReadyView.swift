@@ -97,9 +97,9 @@ struct OnboardingReadyView: View {
                         SettingsProse("Read through your own connectors, never our servers.")
                         ChipFlow {
                             SettingsChip(label: "Gmail", on: gmailConnected && runGmail,
-                                         locked: CodexAuth.knowledgeBaseOnly) { showGmailConnect = true }
+                                         locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
                             SettingsChip(label: "Google Calendar", on: calendarConnected && runCalendar,
-                                         locked: CodexAuth.knowledgeBaseOnly) { showCalendarConnect = true }
+                                         locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
                         }
                     }
                 }

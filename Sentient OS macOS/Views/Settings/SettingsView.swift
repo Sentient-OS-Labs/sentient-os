@@ -14,14 +14,15 @@ import AppKit
 struct SettingsView: View {
     static let windowID = "settings"
 
-    /// The five sections, in sidebar order.
+    /// The six sections, in sidebar order.
     enum Pane: CaseIterable, Identifiable {
-        case sources, proactive, shareKnowledge, system, health
+        case sources, frontierModel, proactive, shareKnowledge, system, health
 
         var id: Self { self }
         var title: String {
             switch self {
             case .sources:   return "Knowledge Sources"
+            case .frontierModel: return "Frontier Model Choice"
             case .proactive: return "Proactive & Sidekick"
             case .shareKnowledge: return "Give AIs Knowledge"
             case .system:    return "System"
@@ -31,6 +32,7 @@ struct SettingsView: View {
         var icon: String {
             switch self {
             case .sources:   return "tray.full"
+            case .frontierModel: return "cpu"
             case .proactive: return "sparkles"
             case .shareKnowledge: return "antenna.radiowaves.left.and.right"
             case .system:    return "gearshape"
@@ -44,6 +46,10 @@ struct SettingsView: View {
     /// is already open the focus just returns to it on its current pane.
     static var requestedPane: Pane?
 
+    /// In-window pane switch — a pane deep-linking to a sibling (Health's "Frontier model"
+    /// row → Frontier Model Choice). Post with the target Pane as the notification object.
+    static let switchPane = Notification.Name("sentient.settings.switchPane")
+
     @State private var selection: Pane = .sources
 
     var body: some View {
@@ -53,6 +59,9 @@ struct SettingsView: View {
             detail
         }
         .background(Theme.bg.ignoresSafeArea())
+        // 880 comfortably carries Frontier Model Choice's widest fixed row (3 × 176pt pills +
+        // spacing = 544) beside the sidebar, pane padding, and legacy-scrollbar slack — the
+        // strip is fixed-geometry, so nothing the scrollbar does can ever reflow it.
         .frame(minWidth: 880, minHeight: 600)
         // The update surface, hosted here too: System's "Check for Updates Now" shows its info
         // card over THIS window (not buried in the home behind it), and a mandatory gate takes
@@ -60,6 +69,9 @@ struct SettingsView: View {
         .overlay { UpdateGateView(host: .settings) }
         .onAppear {
             if let pane = Self.requestedPane { selection = pane; Self.requestedPane = nil }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Self.switchPane)) { note in
+            if let pane = note.object as? Pane { selection = pane }
         }
     }
 
@@ -124,6 +136,7 @@ struct SettingsView: View {
             Group {
                 switch selection {
                 case .sources:   SourcesPane()
+                case .frontierModel: FrontierModelPane()
                 case .proactive: ProactivePane()
                 case .shareKnowledge: ShareKnowledgePane()
                 case .system:    SystemPane()

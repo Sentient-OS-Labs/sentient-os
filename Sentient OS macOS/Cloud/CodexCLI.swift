@@ -30,10 +30,13 @@ actor CodexCLI {
 
     // MARK: Types
 
-    /// Reasoning-effort tier (codex `model_reasoning_effort`). All four are accepted by codex.
-    /// Per-call: Gmail connect-check = `.low`, Gmail processing = `.high`, knowledge-base work
-    /// (and everything else) = `.high`. Nothing runs `.xhigh` anymore — gpt-5.6-sol thinks far
-    /// too long there (the initial vault build was downgraded to `.high`, 2026-07-10).
+    /// Reasoning-effort tier for CHATGPT-backend calls (codex `model_reasoning_effort`). All
+    /// four are accepted by codex. Per-call: Gmail connect-check = `.low`, Gmail processing =
+    /// `.high`, knowledge-base work (and everything else) = `.high`. Nothing runs `.xhigh`
+    /// anymore — gpt-5.6-sol thinks far too long there (the initial vault build was downgraded
+    /// to `.high`, 2026-07-10). A CUSTOM backend never uses this enum: the user's free-form
+    /// reasoning level (Frontier Model Choice — `none`, `xhigh`, `adaptive`, whatever their
+    /// model speaks) rides the wire as a raw string via backendTuned.
     enum Effort: String, Sendable {
         case low
         case medium
@@ -51,14 +54,26 @@ actor CodexCLI {
         case gpt56luna = "gpt-5.6-luna"  // Gmail connect-check + processing
     }
 
-    /// Free/go ChatGPT accounts lost access to gpt-5.6-sol (it stopped answering through
-    /// `codex exec` on those plans, 2026-07-19) — so on a POSITIVE free/go plan read, any sol
-    /// call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep sol (CodexAuth's
-    /// fail-open policy), and the luna tier is untouched. Living here at the spine means every
-    /// caller — and any future one — is covered without per-call-site checks.
-    private static func planTuned(model: Model, effort: Effort) -> (Model, Effort) {
-        guard model == .gpt56sol, CodexAuth.isLimited() else { return (model, effort) }
-        return (.gpt56terra, .medium)
+    /// The ONE model-resolution choke point: every run's `-m` value comes from here.
+    ///  - Custom backend (Settings → Frontier Model Choice): the user's endpoint model rides
+    ///    EVERY call — the tier enums collapse to one model, and the caller's effort is
+    ///    replaced by the pane's ONE per-endpoint reasoning level (per-call effort tuning is
+    ///    ChatGPT's alone; providers have hard reasoning quirks — Claude-class needs off,
+    ///    Gemini rejects off — so the user's setting must win everywhere, Speed slider
+    ///    included). The luna callers (Gmail/Calendar) never reach here in custom mode —
+    ///    connectors are ChatGPT-only.
+    ///  - ChatGPT backend: free/go accounts lost access to gpt-5.6-sol (it stopped answering
+    ///    through `codex exec` on those plans, 2026-07-19) — so on a POSITIVE free/go plan
+    ///    read, any sol call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep sol
+    ///    (CodexAuth's fail-open policy), and the luna tier is untouched.
+    /// Living here at the spine means every caller — and any future one — is covered without
+    /// per-call-site checks.
+    private static func backendTuned(model: Model, effort: Effort) -> (modelID: String, effortArg: String) {
+        if ModelBackend.current == .custom {
+            return (CustomProvider.current.modelName, CustomProvider.reasoning)
+        }
+        guard model == .gpt56sol, CodexAuth.isLimited() else { return (model.rawValue, effort.rawValue) }
+        return (Model.gpt56terra.rawValue, Effort.medium.rawValue)
     }
 
     /// OS-level (Seatbelt) confinement of everything the agent does — stronger than a tool
@@ -146,6 +161,19 @@ actor CodexCLI {
         let cachedInputTokens: Int?
         let outputTokens: Int?
         let raw: String                        // full JSONL, for debugging
+
+        /// The final message reduced to its JSON payload: everything outside the outermost
+        /// `{…}`/`[…]` (markdown fences, stray prose) is stripped. On the ChatGPT backend
+        /// (`--output-schema` server-enforced) this is the message itself; on a custom endpoint
+        /// the model was only ASKED for bare JSON, so schema consumers decode from HERE —
+        /// fail-closed decoding stays their job.
+        var jsonResult: String {
+            let text = result.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let first = text.firstIndex(where: { $0 == "{" || $0 == "[" }) else { return text }
+            let close: Character = text[first] == "{" ? "}" : "]"
+            guard let last = text.lastIndex(of: close), last > first else { return text }
+            return String(text[first...last])
+        }
     }
 
     enum Availability: Sendable, Equatable {
@@ -339,27 +367,91 @@ actor CodexCLI {
     // MARK: Validation
 
     private var cachedAvailability: Availability?
+    private var cachedAvailabilityFingerprint: String?
 
-    /// Is `codex exec` actually usable (installed AND logged in)? Only a GOOD verdict is cached —
-    /// a failed probe re-checks on every call, so codex fixed mid-session (re-login, reinstall) is
-    /// seen by the very next retry (a cached failure once made the processing screen's Retry
-    /// unwinnable until relaunch — field-found 2026-07-12). `force: true` re-probes past a good
-    /// cache too (e.g. right after the installer flow).
+    /// Is `codex exec` actually usable (installed AND — on the ChatGPT backend — logged in;
+    /// on a custom backend, the endpoint answering)? Only a GOOD verdict is cached — a failed
+    /// probe re-checks on every call, so codex fixed mid-session (re-login, reinstall, an
+    /// endpoint coming online) is seen by the very next retry (a cached failure once made the
+    /// processing screen's Retry unwinnable until relaunch — field-found 2026-07-12). The cache
+    /// is keyed on the backend fingerprint, so switching backends (or editing the endpoint) in
+    /// Settings invalidates a stale good verdict. `force: true` re-probes past a good cache too
+    /// (e.g. right after the installer flow).
     func validate(force: Bool = false) async -> Availability {
-        if !force, let cachedAvailability { return cachedAvailability }
+        let fingerprint = Self.backendFingerprint()
+        if !force, let cachedAvailability, cachedAvailabilityFingerprint == fingerprint {
+            return cachedAvailability
+        }
         let result = await Self.ping()
-        if case .available = result { cachedAvailability = result } else { cachedAvailability = nil }
+        if case .available = result {
+            cachedAvailability = result
+            cachedAvailabilityFingerprint = fingerprint
+        } else {
+            cachedAvailability = nil
+        }
         return result
     }
 
-    private static func ping() async -> Availability {
+    private static func backendFingerprint() -> String {
+        guard ModelBackend.current == .custom else { return "chatgpt" }
+        let p = CustomProvider.current
+        return "custom|\(p.baseURL)|\(p.modelName)"
+    }
+
+    /// The Frontier Model Choice pane's "Test Connection" — one call that settles BOTH questions
+    /// for the saved custom endpoint (regardless of the active backend, since the pane tests
+    /// before activating): does it answer, and can it SEE? A random 4-digit code is rendered to a
+    /// PNG, attached with `-i`, and the model is asked to read it back. Vision is a hard
+    /// requirement for a custom engine — computer use is the product and it runs on screenshots,
+    /// so a blind model would fail every run with an opaque 404. `.available` here is what sets
+    /// `CustomProvider.visionVerified`.
+    static func probeCustomEndpoint() async -> Availability {
+        await ping(forceCustom: true)
+    }
+
+    private static func ping(forceCustom: Bool = false) async -> Availability {
         guard let bin = locateBinary() else { return .notInstalled }
+        let custom = forceCustom || ModelBackend.current == .custom
+        var args = ["exec", "--json", "--ignore-user-config", "-s", Sandbox.readOnly.rawValue]
+        var timeout: TimeInterval = 30
+        var prompt = "Reply with exactly: PIGGYBACK_OK"
+        var probeImage: (url: URL, code: String)?
+        defer { if let probeImage { try? FileManager.default.removeItem(at: probeImage.url) } }
+
+        if custom {
+            let provider = CustomProvider.current
+            guard provider.isConfigured else {
+                return .notWorking("Custom model not configured — set a base URL and model name.")
+            }
+            for override in provider.providerOverrides() { args += ["-c", override] }
+            // The probe rides the SAME reasoning level real runs will use (providers have hard
+            // quirks either direction — a wrong level must fail HERE, not at 3am), and a local
+            // server may need to load the model into memory before its first token.
+            args += ["-m", provider.modelName,
+                     "-c", "model_reasoning_effort=\"\(CustomProvider.reasoning)\""]
+            timeout = 180
+            if let made = CustomProvider.makeVisionProbeImage() {
+                probeImage = made
+                args += ["-i", made.url.path]      // a flag must follow, so the variadic ends here
+                prompt = "Read the 4 digits in the attached image. Reply with EXACTLY those 4 digits and nothing else."
+            }
+        }
+        args += ["--skip-git-repo-check", prompt]
         do {
-            let out = try await executeAsync(
-                binary: bin,
-                args: ["exec", "--json", "--skip-git-repo-check", "--ignore-user-config",
-                       "-s", Sandbox.readOnly.rawValue, "Reply with exactly: PIGGYBACK_OK"],
-                stdinText: nil, cwd: nil, timeout: 30)
+            let out = try await executeAsync(binary: bin, args: args,
+                                             stdinText: nil, cwd: nil, timeout: timeout)
+            if let probeImage {
+                guard out.status == 0 else {
+                    let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+                    return .notWorking(String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))
+                }
+                // The model must have READ the code — proof it sees screenshots, not just that
+                // the endpoint tolerated an image part.
+                guard out.stdout.contains(probeImage.code) else {
+                    return .notWorking("blind: the model answered but could not read the test image")
+                }
+                return .available(path: bin)
+            }
             if out.status == 0 && out.stdout.contains("PIGGYBACK_OK") { return .available(path: bin) }
             let detail = out.stderr.isEmpty ? out.stdout : out.stderr
             return .notWorking(String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))
@@ -375,17 +467,39 @@ actor CodexCLI {
     func run(_ invocation: Invocation,
              onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
         var invocation = invocation
-        (invocation.model, invocation.effort) = Self.planTuned(model: invocation.model,
-                                                               effort: invocation.effort)
+        let (modelID, effortArg) = Self.backendTuned(model: invocation.model,
+                                                     effort: invocation.effort)
+        if ModelBackend.current == .custom {
+            // The custom endpoint rides the existing plumbing: the provider table + guards as
+            // per-run `-c` overrides, and NO web_search (an OpenAI-server-side tool — a foreign
+            // endpoint either rejects or silently drops it).
+            invocation.configOverrides += CustomProvider.current.providerOverrides()
+            invocation.webSearch = false
+            // Hermetic: a ChatGPT-logged-in Mac otherwise loads every hosted-connector plugin
+            // into the run (hundreds of KB of tool specs — a context bomb for a 63k local
+            // model, and dead weight everywhere: connectors are ChatGPT-only). Computer use is
+            // unaffected — it rides runAgentCommand, which keeps the user config.
+            invocation.includeUserConfig = false
+            // `--output-schema` is unreliable off-OpenAI (several Responses shims accept the
+            // schema and ignore it; codex's schema path hung against LM Studio — measured
+            // 2026-07-24). The schema becomes a prompt instruction; Envelope.jsonResult is the
+            // tolerant parse seam consumers decode from (fail-closed decoding stays theirs).
+            if let schema = invocation.outputSchema {
+                invocation.outputSchema = nil
+                invocation.prompt += "\n\nReply with ONLY a single JSON value that validates "
+                    + "against this JSON Schema; no prose, no markdown fences:\n\(schema)"
+            }
+        }
         let t0 = Date()   // §7.9: for the codex.failure duration on the throw path
         do {
-            return try await runInner(invocation, onLine: onLine)
+            return try await runInner(invocation, modelID: modelID, effortArg: effortArg,
+                                      onLine: onLine)
         } catch {
             // A cancelled Task is the user's STOP: the SIGTERM'd process exits non-zero, which
             // masqueraded as a real exitFailure in Sentry (field-found 2026-07-12). Not a defect.
             if !Task.isCancelled {
                 Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
-                                      model: invocation.model, effort: invocation.effort,
+                                      modelID: modelID, effort: effortArg,
                                       resumed: invocation.resumeSessionID != nil,
                                       durationMS: Int(Date().timeIntervalSince(t0) * 1000),
                                       diag: invocation.diag)
@@ -401,7 +515,7 @@ actor CodexCLI {
     /// path slipped in — a named canary instead of a mystery exitFailure.
     static let promptByteCap = 950_000
 
-    private func runInner(_ invocation: Invocation,
+    private func runInner(_ invocation: Invocation, modelID: String, effortArg: String,
                           onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
         if invocation.prompt.utf8.count > Self.promptByteCap {
             throw CLIError.inputTooLarge(chars: invocation.prompt.utf8.count)
@@ -427,7 +541,9 @@ actor CodexCLI {
             { @Sendable raw in if let s = Self.humanLine(fromJSONL: raw) { sink(s) } }
         }
         let out = try await Self.executeAsync(binary: bin,
-                                              args: Self.arguments(for: invocation, schemaFile: schemaFile),
+                                              args: Self.arguments(for: invocation, modelID: modelID,
+                                                                   effortArg: effortArg,
+                                                                   schemaFile: schemaFile),
                                               stdinText: invocation.prompt,
                                               cwd: invocation.cwd,
                                               timeout: invocation.timeout,
@@ -459,10 +575,12 @@ actor CodexCLI {
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
-        // per run, so a change applies to the very next fire with no restart. planTuned: computer
-        // use is Plus-gated, but dev tools can still reach this on a free account — same downshift.
-        let (model, effort) = Self.planTuned(model: .gpt56sol,
-                                             effort: ComputerUseSpeed.current.effort)
+        // per run, so a change applies to the very next fire with no restart. backendTuned: on the
+        // custom backend the user's endpoint model + its ONE reasoning level drive computer use
+        // (verified end-to-end via OpenRouter 2026-07-24); on ChatGPT, computer use is Plus-gated
+        // but dev tools can still reach this on a free account — same downshift.
+        let (modelID, effortArg) = Self.backendTuned(model: .gpt56sol,
+                                                     effort: ComputerUseSpeed.current.effort)
         do {
             // Same pre-spawn guard as `run` — this spine passes the prompt as ARGV, where an
             // oversized prompt dies even earlier (ARG_MAX) with an unhelpful spawn error.
@@ -475,8 +593,11 @@ actor CodexCLI {
             // "shall I proceed?" questions nothing can answer. Cheap file check, idempotent.
             ComputerUseSkillPatch.ensureApplied()
             var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                        "-m", model.rawValue,
-                        "-c", "model_reasoning_effort=\"\(effort.rawValue)\""]
+                        "-m", modelID,
+                        "-c", "model_reasoning_effort=\"\(effortArg)\""]
+            if ModelBackend.current == .custom {
+                for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
+            }
             if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
             args += ["--skip-git-repo-check", prompt]
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
@@ -492,7 +613,7 @@ actor CodexCLI {
             // polluting Sentry 2026-07-12).
             if !Task.isCancelled {
                 Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                      model: model, effort: effort, resumed: false,
+                                      modelID: modelID, effort: effortArg, resumed: false,
                                       durationMS: Int(Date().timeIntervalSince(t0) * 1000))
             }
             throw error
@@ -502,8 +623,10 @@ actor CodexCLI {
     /// Emit a structured codex failure — the CLIError CASE NAME only (never `.message`/stderr/prompt,
     /// which embed user content). One seam for the whole cloud spine; `feature` makes it attributable;
     /// `diag` is the caller's structured extras (Invocation.diag — ints/enums only, pre-vetted).
+    /// On the custom backend the model tag reports the literal "custom" — a user's model slug (or a
+    /// private deployment name) is free text and never leaves the Mac.
     private static func emitCodexFailure(event: String, _ error: Error, feature: String,
-                                         model: Model, effort: Effort, resumed: Bool, durationMS: Int,
+                                         modelID: String, effort: String, resumed: Bool, durationMS: Int,
                                          diag: [String: String] = [:]) {
         let caseName: String
         let level: CrashReporting.DiagLevel
@@ -523,11 +646,12 @@ actor CodexCLI {
             extra["prompt_chars"] = String(chars)
         default:                    (caseName, level) = (String(describing: type(of: error)), .error)
         }
-        extra["effort"] = effort.rawValue
+        extra["effort"] = effort
         extra["resumed"] = String(resumed)
         extra["duration_ms"] = String(durationMS)
+        let modelTag = ModelBackend.current == .custom ? "custom" : modelID
         CrashReporting.captureEvent(event, level: level,
-            tags: ["feature": feature, "error": caseName, "model": model.rawValue],
+            tags: ["feature": feature, "error": caseName, "model": modelTag],
             extra: extra,
             fingerprint: ["codex", feature, caseName])
     }
@@ -536,13 +660,14 @@ actor CodexCLI {
     /// [MEASURED] A resumed session's workspace root is the PROCESS cwd (not the remembered
     /// one), so `execute`'s cwd is load-bearing there, and the sandbox rides the
     /// `sandbox_mode` config key instead of `-s`.
-    private static func arguments(for inv: Invocation, schemaFile: String?) -> [String] {
+    private static func arguments(for inv: Invocation, modelID: String, effortArg: String,
+                                  schemaFile: String?) -> [String] {
         var args = ["exec"]
         if let sid = inv.resumeSessionID { args += ["resume", sid] }
         args += ["--json",
                  "--skip-git-repo-check",      // staging dirs and the vault aren't git repos
-                 "-m", inv.model.rawValue,
-                 "-c", "model_reasoning_effort=\"\(inv.effort.rawValue)\""]
+                 "-m", modelID,
+                 "-c", "model_reasoning_effort=\"\(effortArg)\""]
         if !inv.includeUserConfig {
             args += ["--ignore-user-config"]   // explicit hermetic opt-out only — includeUserConfig
         }                                      // defaults TRUE, so by default we DON'T pass this and
@@ -706,6 +831,8 @@ actor CodexCLI {
                         "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin",
                         "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
+        // Same unconditional endpoint-key injection as the sanitized env (see execute()).
+        env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
         return env
     }
 
@@ -753,6 +880,12 @@ actor CodexCLI {
         let current = ProcessInfo.processInfo.environment
         for key in ["HOME", "USER"] where current[key] != nil { env[key] = current[key] }
         env["PATH"] = [binDir, "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
+        // The custom endpoint's key rides the env var the provider table's `env_key` names —
+        // injected UNCONDITIONALLY: codex ignores it unless a run's provider references it, and
+        // the pane's pre-activation Test Connection probes the custom path while ChatGPT is
+        // still the active backend. (codex hard-errors on an unset/empty env_key var; a value
+        // here also blocks the ChatGPT-token fallthrough on keyless local servers.)
+        env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
         proc.environment = env
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
