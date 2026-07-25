@@ -2,17 +2,17 @@
 //  OnboardingCodexSteps.swift
 //  Sentient OS macOS
 //
-//  Onboarding's codex step — a pure renderer over the SHARED CodexSetup engine (the same
-//  instance the dev tools' CodexSetupView drives; zero setup logic lives here).
+//  Onboarding's codex login, in panel form — a pure renderer over the SHARED CodexSetup engine
+//  (the same instance the dev tools' CodexSetupView drives; zero setup logic lives here).
 //
-//  OnboardingCodexLoginView is purely the browser login: one button that opens the OAuth page,
-//  then the screen NOTICES the finished sign-in on its own (a 2s `codex login status` poll while
-//  the browser is out + a re-check on app foreground) — no "I'm done" button. Continue gates on
-//  logged in. The CLI install happens in the BACKGROUND (AppState's launch kick); in the rare
-//  case it hasn't finished yet, the login button stays greyed and the screen polls `codex --help`
-//  (CodexCLI.isRunnable — the ground truth, not a path check) every 2s, un-greying the moment
-//  codex actually answers. A silent same-engine re-kick is the safety net, so a failed or
-//  skipped install can never dead-end the flow.
+//  OnboardingCodexLoginPanel is the ChatGPT panel inside the frontier-model step's engine
+//  picker (OnboardingFrontierModelView): one button that opens the OAuth page, then the panel
+//  NOTICES the finished sign-in on its own (a 2s `codex login status` poll while the browser is
+//  out; the step adds a re-check on app foreground) — no "I'm done" button. The login button
+//  stays greyed until the step's `codex --help` poll confirms the background CLI install landed
+//  (`codexReady` — the install kicks live in the step, since custom endpoints need the CLI too).
+//  Also home to the shared onboarding bits: OnboardingWhisper · OnboardingDoneLine ·
+//  MonoWaitLine · OnboardingStatusText.
 //
 //  (Computer-use setup is deliberately NOT in onboarding — it happens later, elsewhere.)
 //
@@ -20,119 +20,77 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Step: log in to codex
+// MARK: - The ChatGPT panel: log in to codex
 
-struct OnboardingCodexLoginView: View {
-    let onContinue: () -> Void
+struct OnboardingCodexLoginPanel: View {
+    /// The step's `codex --help` confirmation — the ground truth that un-greys the login button.
+    let codexReady: Bool
 
     @State private var codex = CodexSetup.shared
-    /// `codex --help` answered — the ground-truth install confirmation that un-greys the button.
-    @State private var codexConfirmed = false
+    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
+
+    private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
 
     var body: some View {
-        VStack(spacing: 40) {
-            Spacer()
+        SettingsGroup(label: "Your ChatGPT") {
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, because the connectors only exist here.")
 
-            OnboardingWhisper("CONNECT CODEX")
-
-            Text("Sign in with your ChatGPT account.\nSentient's cloud thinking runs through OpenAI's Codex, on your own plan.")
-                .font(.system(size: 15))
-                .foregroundStyle(Theme.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(4)
-
-            VStack(spacing: 16) {
-                if codex.loggedIn {
-                    OnboardingDoneLine("Logged in to Codex")
-                } else if codex.loggingIn {
-                    Text("Finish signing in in your browser. This screen notices on its own.")
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(Theme.Ink.body)
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.mini)
-                        Text("waiting for the browser sign-in…")
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .kerning(1.5)
-                            .foregroundStyle(Theme.faint)
-                    }
-                } else if codex.installGaveUp && !codex.installed {
-                    // The auto-install couldn't finish (no network, connection reset, or Codex is
-                    // unavailable in this region). Point the user to install it themselves; the
-                    // `.task` poll below picks Codex up automatically the moment it lands.
-                    CodexInstallFailedPanel()
-                } else {
-                    // The login button — greyed until `codex --help` confirms the install landed.
-                    OnboardingNextButton(title: "Log in with ChatGPT", enabled: codexConfirmed) {
-                        codex.startLogin()
-                    }
-                    if !codexConfirmed {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.mini)
-                            Text("installing codex in the background…")
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                                .kerning(1.5)
-                                .foregroundStyle(Theme.faint)
-                        }
-                    }
-                    OnboardingStatusText(codex.loginStatusLine)
-                }
-            }
-            .frame(maxWidth: 560)
-
-            OnboardingNextButton(title: "Continue", enabled: codex.loggedIn, action: onContinue)
-
-            Spacer()
-
-            OnboardingTrustFooter()
-        }
-        .padding(40)
-        .onAppear {
-            Task {
-                await codex.refreshInstalled()
-                // No binary (the launch kick failed or skipped a half-deleted setup) → retry via
-                // ensureInstalled, which surfaces the manual-install panel if it gives up. Binary
-                // already present but the installer hasn't run this launch → run it anyway (it
-                // doubles as the updater, handing the latest CLI to the later steps).
-                if !codex.installed {
-                    await codex.ensureInstalled()
-                } else if !codex.ranInstallerThisLaunch {
-                    await codex.installCodex()
-                }
-            }
-            Task { await codex.refreshLoginStatus() }
-        }
-        .task {
-            // The confirmation poll: run `codex --help` now, then every 2s until it answers —
-            // "command not found" (no binary) means the install is still going. On the normal
-            // path this succeeds on the first try and the button is never seen greyed.
-            while !Task.isCancelled {
-                if await CodexCLI.isRunnable() {
-                    await codex.refreshInstalled()   // align the shared engine's flag
-                    withAnimation(.easeInOut(duration: 0.3)) { codexConfirmed = true }
-                    return
-                }
-                try? await Task.sleep(for: .seconds(2))
+                loginStates
             }
         }
         .task(id: codex.loggingIn) {
             // The sign-in watcher (replaces the old "I've finished" button): while the browser
             // flow is out, quietly re-check `codex login status` every 2s — the section flips to
-            // the green done line by itself the moment auth.json lands.
+            // the green done line by itself the moment auth.json lands. (Switching tabs cancels
+            // this; the step's foreground re-check still notices a finished sign-in.)
             guard codex.loggingIn else { return }
             while !Task.isCancelled, codex.loggingIn, !codex.loggedIn {
                 try? await Task.sleep(for: .seconds(2))
                 await codex.refreshLoginStatus()
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            Task { await codex.refreshLoginStatus() }   // back from the browser — often already done
+    }
+
+    /// The login state machine: done → browser out → install failed → the button.
+    @ViewBuilder private var loginStates: some View {
+        if codex.loggedIn {
+            OnboardingDoneLine("Logged in to Codex")
+            if backend != .chatgpt {
+                // A custom engine won Test & Select earlier — logging in doesn't switch
+                // by itself (browsing never disturbs a live engine); this does.
+                SettingsPillButton(title: "Use ChatGPT") {
+                    backendRaw = ModelBackend.chatgpt.rawValue
+                }
+            }
+        } else if codex.loggingIn {
+            Text("Finish signing in in your browser. This screen notices on its own.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.Ink.body)
+            MonoWaitLine("waiting for the browser sign-in…")
+        } else if codex.installGaveUp && !codex.installed {
+            // The auto-install couldn't finish (no network, connection reset, or Codex is
+            // unavailable in this region). Point the user to install it themselves; the
+            // step's poll picks Codex up automatically the moment it lands.
+            CodexInstallFailedPanel()
+        } else {
+            // The login button — greyed until `codex --help` confirms the install
+            // landed. Centered with its status lines: it's the panel's one big CTA.
+            VStack(spacing: 10) {
+                OnboardingNextButton(title: "Log in with ChatGPT", enabled: codexReady) {
+                    codex.startLogin()
+                }
+                if !codexReady {
+                    MonoWaitLine("installing codex in the background…")
+                }
+                OnboardingStatusText(codex.loginStatusLine)
+            }
+            .frame(maxWidth: .infinity)
         }
     }
 }
 
-// MARK: - Shared onboarding bits
-
-/// Shown on the Codex step when the automatic install has clearly failed (retries exhausted):
+/// Shown on the ChatGPT panel when the automatic install has clearly failed (retries exhausted):
 /// no network, a connection reset, or Codex being unavailable in the user's region. It points the
 /// user to install Codex themselves; the step's `codex --help` poll picks it up the moment it
 /// lands, and a relaunch resumes right here (onboarding persists its step). Copy approved 2026-07-24.
@@ -140,37 +98,29 @@ private struct CodexInstallFailedPanel: View {
     private let guideURL = URL(string: "https://learn.chatgpt.com/docs/codex/cli#getting-started")!
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             Text("Sentient couldn't finish installing Codex automatically.")
-                .font(.system(size: 15))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.Ink.body)
-                .multilineTextAlignment(.center)
 
-            Text("You can install it yourself in a minute. Once you do that, you can restart Sentient and pick up right where you left off.")
-                .font(.system(size: 13))
-                .foregroundStyle(Theme.secondary)
-                .multilineTextAlignment(.center)
-                .lineSpacing(3)
+            SettingsProse("You can install it yourself in a minute. Once you do that, you can restart Sentient and pick up right where you left off.")
 
             OnboardingNextButton(title: "Open the Codex install guide") {
                 NSWorkspace.shared.open(guideURL)
             }
-            .padding(.top, 4)
+            .frame(maxWidth: .infinity)
 
-            Text("We also suggest connecting through a VPN.")
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.secondary)
-                .multilineTextAlignment(.center)
+            SettingsProse("We also suggest connecting through a VPN.")
 
             Text("Codex isn't available in a few countries.")
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .kerning(0.5)
                 .foregroundStyle(Theme.faint)
-                .padding(.top, 2)
         }
-        .frame(maxWidth: 460)
     }
 }
+
+// MARK: - Shared onboarding bits
 
 /// The monospace-caps whisper label every onboarding screen opens with.
 struct OnboardingWhisper: View {
@@ -185,7 +135,7 @@ struct OnboardingWhisper: View {
     }
 }
 
-/// A green-dot "this step is done" line (shared: the login step and the plan crossroads).
+/// A green-dot "this step is done" line (shared: the login panel and the plan crossroads).
 struct OnboardingDoneLine: View {
     let text: String
     init(_ text: String) { self.text = text }
@@ -200,9 +150,26 @@ struct OnboardingDoneLine: View {
     }
 }
 
+/// A mini spinner + mono-caps whisper — the quiet "something is happening on its own" line
+/// (waiting for the browser sign-in, the background codex install, the upgrade watch).
+struct MonoWaitLine: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.mini)
+            Text(text)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .kerning(1.5)
+                .foregroundStyle(Theme.faint)
+        }
+    }
+}
+
 /// The engine's latest streamed/status line — monospaced, colored by its ✓/✗ prefix (the same
 /// convention the dev CodexSetupView renders).
-private struct OnboardingStatusText: View {
+struct OnboardingStatusText: View {
     let status: String?
     init(_ status: String?) { self.status = status }
 
@@ -212,19 +179,20 @@ private struct OnboardingStatusText: View {
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(status.hasPrefix("✓") ? Theme.Ink.green
                                : status.hasPrefix("✗") ? .red : Theme.secondary)
-                .multilineTextAlignment(.center)
+                .multilineTextAlignment(.leading)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
 
-#Preview("Onboarding — codex login") {
+#Preview("Onboarding — codex login panel") {
     ZStack {
         Theme.bg.ignoresSafeArea()
-        OnboardingCodexLoginView(onContinue: {})
+        OnboardingCodexLoginPanel(codexReady: true)
+            .frame(maxWidth: 640)
+            .padding(40)
     }
-    .frame(width: 1180, height: 880)
+    .frame(width: 780, height: 500)
     .preferredColorScheme(.dark)
 }
-

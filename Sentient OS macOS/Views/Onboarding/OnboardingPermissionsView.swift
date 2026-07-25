@@ -5,11 +5,12 @@
 //  Onboarding's permissions step: Sentient's three core grants as the same StatusLine rows
 //  Settings → Health uses, with the same fix actions. The rows unlock SEQUENTIALLY (each greyed
 //  until the previous one is granted) and Full Disk Access is deliberately LAST: FDA is the one
-//  grant that forces an app relaunch, and putting it at the end means the relaunch restarts the
-//  background codex install as late as possible — so it's done before the user reaches the codex
-//  login step. Continue stays disabled until all three are green; the persisted onboarding step
-//  brings the user straight back here after the FDA relaunch. Statuses re-probe when the app
-//  foregrounds (returning from System Settings).
+//  grant that forces an app relaunch, so it lands only once the other grants are banked. The
+//  frontier-model step (codex login included) comes BEFORE this screen — the relaunch never
+//  disturbs it, since auth.json and the engine choice persist on disk. Continue stays disabled
+//  until all three are green; the persisted onboarding step brings the user straight back here
+//  after the FDA relaunch. Statuses re-probe when the app foregrounds (returning from System
+//  Settings).
 //
 
 import SwiftUI
