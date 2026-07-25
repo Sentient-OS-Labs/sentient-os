@@ -100,9 +100,9 @@ struct AnalysisPopover: View {
                 HStack(spacing: 8) {
                     SourceChip("Notes",    on: runNotes) { runNotes.toggle() }
                     SourceChip("Gmail",    on: gmailConnected && runGmail,
-                               locked: CodexAuth.knowledgeBaseOnly, action: onPickGmail)
+                               locked: CodexAuth.connectorsLocked, action: onPickGmail)
                     SourceChip("Calendar", on: calendarConnected && runCalendar,
-                               locked: CodexAuth.knowledgeBaseOnly, action: onPickCalendar)
+                               locked: CodexAuth.connectorsLocked, action: onPickCalendar)
                 }
             }
             .padding(.top, 11)

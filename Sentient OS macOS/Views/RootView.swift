@@ -87,8 +87,8 @@ struct RootView: View {
                 ProcessingView(modelPath: modelPath,
                                connectors: RunSource.connectors(from: selectedSources),
                                mode: .auto,
-                               runGmail: gmailConnected && runGmail,
-                               runCalendar: calendarConnected && runCalendar,
+                               runGmail: ModelBackend.connectorsAvailable && gmailConnected && runGmail,
+                               runCalendar: ModelBackend.connectorsAvailable && calendarConnected && runCalendar,
                                fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
                     appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 14h clock

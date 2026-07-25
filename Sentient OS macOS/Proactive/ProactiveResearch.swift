@@ -151,7 +151,7 @@ actor ProactiveResearch {
         Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, Gmail MCP + web, never fire)…")
         do {
             let env = try await CodexCLI.shared.run(inv, onLine: onLine)
-            let parsed = Self.parse(env.result)
+            let parsed = Self.parse(env.jsonResult)
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
             let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)
             Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")

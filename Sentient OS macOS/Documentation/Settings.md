@@ -1,7 +1,10 @@
 # Settings — the two-pane window
 
 The real Settings (shipped 2026-07-04, PRs #107 + #109): a modern two-pane window in the
-OLED-editorial design language. Sidebar of five sections on the left (plus the About footer:
+OLED-editorial design language. Sidebar of six sections on the left — **Frontier Model Choice**
+joined 2026-07-24 (which engine powers the cloud 10%: the ChatGPT sub, a Claude plan (coming soon),
+OpenRouter, LM Studio, or any Responses-API endpoint; its own deep doc is
+`Frontier Model Choice (BYOM).md`) — (plus the About footer:
 version, GitHub, report-an-issue — the "Open source on GitHub" link + heart wear
 **`Theme.Ink.gold`**, the open-source pride mark, deliberately louder than the footer's whisper
 and distinct from the caution amber), the selected pane on the right, and the trust ribbon —
@@ -89,7 +92,11 @@ the one source of truth: key `sidekick.speed`, tiers Faster/Medium/Smarter → g
 low/medium/high, default Faster = the pre-slider behavior). **It governs EVERY computer-use run**
 — Sidekick, the command bar, and a card's fire all ride `runAgentCommand`, which reads the
 setting fresh per run (live, no restart). A brighter `SettingsHairline(opacity: 0.12)` splits the
-Proactive and Sidekick groups (same splitter as Health's codex divider).
+Proactive and Sidekick groups (same splitter as Health's codex divider). **The slider is
+ChatGPT-only (2026-07-24):** on a custom frontier model it dims to 40%, goes inert, and a hover
+capsule explains that the model's single reasoning level lives in Frontier Model Choice (providers
+have hard, opposite reasoning quirks, so per-run tuning isn't safe there); its readout then names
+the user's own model and level instead of gpt-5.6-sol.
 
 ### Give AIs Knowledge (`ShareKnowledgePane.swift`)
 *(Renamed 2026-07-13 from "Connect AIs to Knowledge"/`YourAIsPane` — the whole surface family is

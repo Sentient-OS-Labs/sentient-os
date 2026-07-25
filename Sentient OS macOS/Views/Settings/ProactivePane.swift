@@ -20,6 +20,12 @@ struct ProactivePane: View {
     @AppStorage("sidekick.hotkey") private var sidekickHotkey = "rightCommand"
     @AppStorage(CustomInstructions.sidekickKey) private var sidekickContext = ""
     @AppStorage(ComputerUseSpeed.key) private var speedRaw = ComputerUseSpeed.faster.rawValue
+    /// The slider is ChatGPT-only: a custom frontier model carries ONE reasoning level set in
+    /// Frontier Model Choice (provider quirks make per-run tuning unsafe there).
+    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
+    @State private var speedHover = false
+
+    private var onChatGPT: Bool { (ModelBackend(rawValue: backendRaw) ?? .chatgpt) == .chatgpt }
 
     var body: some View {
         SettingsPane(title: "Proactive & Sidekick",
@@ -60,9 +66,39 @@ struct ProactivePane: View {
                             get: { ComputerUseSpeed(rawValue: speedRaw) ?? .faster },
                             set: { speedRaw = $0.rawValue }))
                     }
+                    // ChatGPT-only: a custom frontier model rides ONE reasoning level (set in
+                    // Frontier Model Choice) — the dimmed slider + hover tip say so honestly.
+                    .opacity(onChatGPT ? 1 : 0.4)
+                    .allowsHitTesting(onChatGPT)
+                    .contentShape(Rectangle())
+                    .onHover { hovering in
+                        if !onChatGPT { speedHover = hovering } else { speedHover = false }
+                    }
+                    .overlay(alignment: .topLeading) {
+                        if !onChatGPT && speedHover { speedLockedTip.offset(y: -34) }
+                    }
+                    .animation(.easeInOut(duration: 0.15), value: speedHover)
                 }
             }
         }
+    }
+}
+
+extension ProactivePane {
+    /// The instant hover notice on the dimmed slider (custom backend active) — the same quiet
+    /// capsule voice as LockedChipTip, sized for a sentence.
+    private var speedLockedTip: some View {
+        Text("Only for ChatGPT subscription logins through Codex. Your model's reasoning lives in Frontier Model Choice.")
+            .font(.system(size: 10.5, weight: .medium))
+            .foregroundStyle(.white.opacity(0.88))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color(white: 0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(.white.opacity(0.14), lineWidth: 1))
+            .frame(maxWidth: 340, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .allowsHitTesting(false)
+            .transition(.opacity)
     }
 }
 

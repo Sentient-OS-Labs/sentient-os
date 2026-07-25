@@ -23,20 +23,25 @@ import Foundation
 
 enum CorpusSlicer {
 
-    /// UTF-8 bytes of rendered corpus per slice. Headroom math: the vault prompt core + output
-    /// instructions + a merge skeleton stay well under the 1,048,576-char server cap with ~33%
-    /// margin (the server counts "characters" — measured within ~0.4% of UTF-8 bytes on this
-    /// corpus shape; the margin also absorbs Unicode counting ambiguity). Shared with Proactive's
-    /// window trim. Don't shave it.
+    /// UTF-8 bytes of rendered corpus per slice, ChatGPT backend. Headroom math: the vault
+    /// prompt core + output instructions + a merge skeleton stay well under the 1,048,576-char
+    /// server cap with ~33% margin (the server counts "characters" — measured within ~0.4% of
+    /// UTF-8 bytes on this corpus shape; the margin also absorbs Unicode counting ambiguity).
+    /// Shared with Proactive's window trim. Don't shave it.
     static let defaultBudget = 700_000
 
     /// The live budget — `SENTIENT_SLICE_BUDGET` overrides in DEBUG so self-tests can force
     /// multi-slice runs from a tiny corpus (Release ignores the env, like SENTIENT_VAULT_ROOT).
+    /// On the custom backend the binding constraint is the endpoint's CONTEXT WINDOW, not
+    /// codex's input cap — the budget shrinks to the provider's tier (local 63k-window models
+    /// get ~130 KB parts, remote ~280 KB; see CustomProvider.corpusSliceBudget), so a data-rich
+    /// first run just takes more slices instead of overflowing the model.
     static var budget: Int {
         #if DEBUG
         if let raw = ProcessInfo.processInfo.environment["SENTIENT_SLICE_BUDGET"],
            let n = Int(raw), n > 0 { return n }
         #endif
+        if ModelBackend.current == .custom { return CustomProvider.current.corpusSliceBudget }
         return defaultBudget
     }
 

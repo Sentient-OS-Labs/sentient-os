@@ -307,7 +307,7 @@ actor ProactiveExecutor {
         unrelated apps or files. You cannot ask the user follow-up questions — the moment you stop \
         responding, the attempt is over. If you cannot complete the task with computer use, STOP and \
         reply with `STATUS: COULD_NOT — <reason>`.
-
+        \(CustomProvider.computerUsePromptRules)
         <<<CONTENT
         \(content)
         CONTENT>>>

@@ -42,12 +42,19 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
     }
 
     /// The honest spec line under the slider — the model named out loud. ("med", not the
-    /// effort's raw "medium" — the whisper reads tighter.)
+    /// effort's raw "medium" — the whisper reads tighter.) On a custom frontier model the
+    /// user's own model is the one doing the thinking, so it gets the credit.
     var modelLine: String {
         let thinking = switch self {
         case .faster: "low"
         case .medium: "med"
         case .smarter: "high"
+        }
+        if ModelBackend.current == .custom {
+            // The slider doesn't drive custom models — the pane's reasoning level does, so the
+            // readout under the (dimmed) slider tells the truth about what actually runs.
+            let name = CustomProvider.current.modelName
+            return "\(name.isEmpty ? "Your model" : name) · \(CustomProvider.reasoning) thinking"
         }
         return "GPT-5.6 Sol · \(thinking) thinking"
     }

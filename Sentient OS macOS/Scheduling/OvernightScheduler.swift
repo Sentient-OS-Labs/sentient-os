@@ -264,8 +264,9 @@ final class OvernightScheduler {
         let fda = Permissions.hasFullDiskAccess()
         let sources = SourceSelection.current(fdaGranted: fda)
         let connectors = RunSource.connectors(from: sources)
-        let runGmail = ud("dbg.gmail.connected") && ud("dbg.run.gmail")
-        let runCalendar = ud("dbg.calendar.connected") && ud("dbg.run.calendar")
+        // Connectors ride ChatGPT auth inside codex — a custom frontier backend has none.
+        let runGmail = ModelBackend.connectorsAvailable && ud("dbg.gmail.connected") && ud("dbg.run.gmail")
+        let runCalendar = ModelBackend.connectorsAvailable && ud("dbg.calendar.connected") && ud("dbg.run.calendar")
         log.line("FDA=\(fda) · detected: \(sources.isEmpty ? "none" : sources.map(\.label).joined(separator: ", ")) · gmail=\(runGmail) calendar=\(runCalendar)")
         guard !connectors.isEmpty || runGmail || runCalendar else { log.line("nothing enabled — skipping run."); return }
         let modelPath = ModelLocator.resolve()
