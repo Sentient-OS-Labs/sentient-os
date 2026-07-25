@@ -154,17 +154,22 @@ Open source is also personal. [Writing Tools](https://github.com/theJayTea/Writi
 <summary><b>Do I need a ChatGPT subscription? Or can it run fully locally?</b></summary>
 <br/>
 
-No. The on-device model does about 90% of the compute, going through your entire life locally; frontier intelligence handles the final 10%: building your knowledge base, verifying and preparing your proactive cards, and running Sidekick. That 10% isn't tied to any one provider: you pick what powers it in Settings, and there are five ways to plug it in:
+No. The on-device model does about 90% of the compute, going through your entire life locally; frontier intelligence handles the final 10% (the final stage of knowledge base creation, proactive intelligence, and running Sidekick).
 
-1. **A local model through LM Studio**
-2. **Any model on OpenRouter**
-3. **Your ChatGPT subscription**
-4. **Your Claude subscription** (coming soon)
-5. **Any other frontier model you want to connect**: anything that speaks the OpenAI Responses API, including fully self-hosted
+That 10% isn't tied to any one provider and you have many choices:
 
-If you go the ChatGPT route: a free ChatGPT account comes with a small amount of codex compute, enough to build your knowledge base, but not enough to power proactive intelligence or Sidekick (and ChatGPT Go doesn't unlock them either). The full engine needs ChatGPT Plus, about $20 a month, paid to OpenAI, not to us.
+- **Your ChatGPT subscription**
+- **A local model through LM Studio**
+- **Any model on OpenRouter**
+- **Your Claude subscription** (coming soon)
+- **Any other frontier model you want to connect**: anything that speaks the OpenAI Responses API works, including fully self-hosted
 
-We still recommend Plus as the nicest path: right now, Sentient connects to your Gmail and Google Calendar through OpenAI's own connectors, which require Plus, and your knowledge base is much nicer with them in it. Bring your own model and you get the full engine, just without those two connectors. One honest note: acting on a real Mac is a high bar, so Sidekick and proactive cards work best with a genuinely frontier model behind them.
+If you go the ChatGPT route:
+
+- A free ChatGPT account comes with a small amount of codex compute, enough to build your knowledge base, but not enough to power proactive intelligence or Sidekick (and ChatGPT Go doesn't unlock them either).
+- The full engine needs ChatGPT Plus, about $20 a month, paid to OpenAI, not to us.
+
+We still recommend Plus as the nicest path: right now, Sentient connects to your Gmail and Google Calendar through OpenAI's own connectors, which require Plus.
 
 </details>
 
