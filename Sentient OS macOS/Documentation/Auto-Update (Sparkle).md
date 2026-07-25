@@ -16,10 +16,12 @@ install genuinely can't happen.
 > appcast, each leg verified live (Gatekeeper "Notarized Developer ID", cask install on real
 > hardware, feed serving the correct EdDSA-signed enclosure).
 >
-> **The first over-the-air updates — 1.1 (build 2) and 1.2 (build 3) — shipped 2026-07-20**, each
-> through the same two-script pipeline, publishing the appcast + site Download URL so the installed
-> 1.0/1.1 fleet self-updates. 1.2 is the first release to exercise the **windowless silent relaunch**
-> (below) against a real signed update.
+> **The over-the-air updates — 1.1 (build 2) and 1.2 (build 3) on 2026-07-20, then 1.3 (build 4) on
+> 2026-07-25 — all shipped** through the same two-script pipeline, publishing the appcast + site
+> Download URL so the installed fleet self-updates. 1.2 was the first release to exercise the
+> **windowless silent relaunch** (below) against a real signed update; 1.3 shipped the bring-your-own
+> frontier-model engine (`Frontier Model Choice (BYOM).md`) plus computer-use-setup and
+> Codex-install reliability fixes.
 
 ---
 
