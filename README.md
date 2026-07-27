@@ -84,8 +84,6 @@ brew install --cask sentient-os-labs/tap/sentient-os
 
 You'll need an Apple Silicon Mac (M1 or newer) on macOS 15 or later. 8 GB of RAM is enough; we tuned the on-device model until it fit. Keep about 10 GB of disk free before you start: the on-device model is a 3.7 GB download, and it needs room to land.
 
-One requirement: the full version of Sentient runs its cloud compute through your own ChatGPT Plus subscription (about $20 a month, paid to OpenAI, not to us). That's not a catch, that's the architecture: your Mac does about 90% of the compute, your frontier model covers the rest, and that's how Sentient stays free with a straight face. A free ChatGPT account still gets the preview tier: the overnight reading, the knowledge base, the Knowledge window, and the MCP mirror.
-
 Building from source is straightforward: clone, open `Sentient OS macOS.xcodeproj` in Xcode 26, press Run. The on-device model downloads itself during onboarding.
 
 <br/>
@@ -94,7 +92,7 @@ Building from source is straightforward: clone, open `Sentient OS macOS.xcodepro
 
 <sub><samp>YOUR MAC · YOUR CHATGPT PLAN · OUR SERVERS</samp></sub>
 
-The whole architecture in one sentence: your Mac does about 90% of the compute, your ChatGPT subscription does the rest, and our servers do nothing.
+The whole architecture in one sentence: your Mac does about 90% of the compute, and your frontier model (your ChatGPT sub, Open Router, or LM Studio) does the rest. Our servers do nothing.
 
 <div align="center"><img src=".github/readme/under-the-hood.png" alt="Your Mac runs the pipeline, your ChatGPT plan runs the frontier model, and Sentient's servers hold nothing" width="880" /></div>
 
@@ -107,7 +105,7 @@ That third column is our favorite thing we've ever shipped, and it's empty on pu
 - **The 3 AM machine.** <samp>a codesign-verified root helper · a deadman timer · ac + thermal gates · crash-safe resume</samp>
 - **The cloud brain.** <samp>computer use on the plain Codex CLI · frontier compute on your subscription · marginal cost ~$0 · no sentient servers</samp>
 
-And about that cloud brain. Sentient's frontier model is your own Codex CLI, signed into your own ChatGPT account. That includes computer use: OpenAI only ships it inside their desktop app, but the "enable" switch turned out to be a local file copy. So Sentient downloads Codex Computer Use straight from OpenAI and gives it to your Codex CLI, on your machine, and we never host or proxy it.
+And about that cloud brain. Sentient's frontier model is your own Codex CLI, connected to your own frontier model, or signed into your own ChatGPT account. That includes computer use: OpenAI only ships it inside their desktop app, but the "enable" switch turned out to be a local file copy. So Sentient downloads Codex Computer Use straight from OpenAI and gives it to your Codex CLI, on your machine, and we never host or proxy it.
 <br/>
 
 ## The privacy flex.
