@@ -118,6 +118,7 @@ final class NotchWindowController {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
+        panel.becomesKeyOnlyIfNeeded = false
         panel.isMovable = false
         panel.ignoresMouseEvents = false
         panel.animationBehavior = .none
@@ -187,13 +188,25 @@ final class NotchWindowController {
     /// fallback if it's unavailable.
     ///
     /// `makeKey` (typing only) makes the panel KEY so its text field can take keystrokes — it's a
-    /// non-activating panel, so this never brings the app forward over whatever you're using.
+    /// non-activating panel, so this never brings the app forward over whatever you're using. Once
+    /// AppKit has accepted the key-window request, explicitly hand focus to the SwiftUI field; the
+    /// view must not race the phase update against this call.
     private func reveal(makeKey: Bool = false) {
         guard let panel else { return }
         panel.collectionBehavior = Self.collectionBehavior
         if makeKey {
-            panel.makeKeyAndOrderFront(nil)
+            // `makeKeyAndOrderFront` routes through the normal ordering policy, which can leave a
+            // non-activating panel visible but non-key when this path starts in another app's global
+            // hotkey monitor. Order independently of activation, then explicitly steal key focus —
+            // exactly what `.nonactivatingPanel` is designed to permit without activating Sentient.
+            panel.orderFrontRegardless()
+            panel.makeKey()
             typingKeyAt = Date()
+            if panel.isKeyWindow {
+                coordinator.requestTypingFocus()
+            } else {
+                Log("notch typing panel could not become key")
+            }
         } else {
             panel.orderFrontRegardless()
         }

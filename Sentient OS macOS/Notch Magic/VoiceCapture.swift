@@ -14,6 +14,23 @@ import Foundation
 import AVFoundation
 import Speech
 
+/// Speech recognition follows the user's macOS language priority instead of forcing one locale for
+/// everyone. `Locale.current` covers regional formatting setups that are not present in the preferred
+/// language list, while US English remains the final compatibility fallback.
+enum SpeechLocaleResolver {
+    static var candidates: [Locale] {
+        var identifiers = Locale.preferredLanguages
+        identifiers.append(Locale.current.identifier)
+        identifiers.append("en-US")
+
+        var seen = Set<String>()
+        return identifiers.compactMap { identifier in
+            let locale = Locale(identifier: identifier)
+            return seen.insert(locale.identifier.lowercased()).inserted ? locale : nil
+        }
+    }
+}
+
 @MainActor
 final class VoiceCapture {
     private var engine: (any QuickTranscriptionEngine)?

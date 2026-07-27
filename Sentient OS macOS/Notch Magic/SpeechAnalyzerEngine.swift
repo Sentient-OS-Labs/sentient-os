@@ -200,9 +200,12 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         resultsTask = nil
     }
 
-    /// The spoken language: the user's locale if supported by the on-device model, else US English.
+    /// Follow macOS's preferred-language order, then fall back to US English if no preferred locale is
+    /// supported by SpeechTranscriber. A Chinese-first Mac therefore selects Chinese automatically.
     private static func resolvedLocale() async -> Locale {
-        if let match = await SpeechTranscriber.supportedLocale(equivalentTo: Locale.current) { return match }
+        for locale in SpeechLocaleResolver.candidates {
+            if let match = await SpeechTranscriber.supportedLocale(equivalentTo: locale) { return match }
+        }
         return Locale(identifier: "en-US")
     }
 

@@ -166,6 +166,7 @@ struct NotchView: View {
                      remembering: coordinator.run.remembering,
                      hovering: coordinator.notchHovering,
                      demoText: coordinator.demoDraft,
+                     focusRequest: coordinator.typingFocusRequest,
                      showStop: !coordinator.run.isDemo,
                      metrics: metrics,
                      onStop: { coordinator.stop() },
@@ -188,6 +189,9 @@ struct NotchContent: View {
     /// The onboarding demo's auto-typing: when set, the type field's draft mirrors it (the show
     /// runs through the REAL TextField). nil = the user owns the field.
     var demoText: String? = nil
+    /// Monotonic request emitted after the panel is key. Keeping this separate from `phase` avoids
+    /// the global-hotkey race where the field renders before AppKit can accept keyboard focus.
+    var focusRequest: Int = 0
     /// False during the onboarding demo run — scripted theater has nothing to STOP.
     var showStop: Bool = true
     let metrics: NotchMetrics
@@ -239,7 +243,10 @@ struct NotchContent: View {
                 .clipShape(NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom))
         }
         .frame(width: size.width, height: size.height)
-        .accessibilityElement(children: .combine)        // on the notch itself, never the full canvas
+        // Keep the real text field independently focusable/exposed while typing. Combining the whole
+        // notch into one accessibility element turns the live field into an `unknown` element and
+        // prevents keyboard/assistive focus from targeting it reliably.
+        .accessibilityElement(children: phase == .typing ? .contain : .combine)
         .accessibilityLabel(a11yLabel)
         .scaleEffect(visible || hoverIdle ? 1 : 0.94, anchor: .top)
         .opacity(shellOpacity)                           // shell stays opaque & MERGES into a real notch on dismiss (fades only if there's none)
@@ -251,10 +258,12 @@ struct NotchContent: View {
         .onChange(of: phase) { _, newPhase in
             if newPhase == .typing {
                 draft = ""
-                DispatchQueue.main.async { fieldFocused = true }   // focus once the panel has become key
             } else {
                 fieldFocused = false
             }
+        }
+        .onChange(of: focusRequest) { _, _ in
+            if phase == .typing { fieldFocused = true }
         }
         // The onboarding demo types through the real field: the draft mirrors the scripted text
         // while it's set (the field renders + measures exactly as if the user typed it).
