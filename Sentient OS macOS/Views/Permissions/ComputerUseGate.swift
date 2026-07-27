@@ -89,6 +89,12 @@ final class ComputerUseGate {
     ///     optional nudge never eats what the user fired.
     func intercept(_ action: @escaping @MainActor () -> Void) -> Bool {
         refresh()
+        // The executor also needs the Automation grant (Sentient → the helper over Apple Events);
+        // it's user-invisible and FDA-writable, so heal it on EVERY fire — not just when this window
+        // shows. Without this, a previously-working setup whose grant got dropped (a Sentient rebuild
+        // with new signing, a ChatGPT.app/plugin update, an OS update) hangs at `list_apps` forever,
+        // because the fast-return path below never reaches the old `present()`-site self-heal.
+        Permissions.selfHealComputerUseAutomation(context: "ComputerUseGate")
         let blocking = !allRequiredGranted
         if !blocking {
             // Seen working — arm the home's regression banner (HealthCaution rung ③).
@@ -188,9 +194,6 @@ final class ComputerUseGate {
     // Sidekick fires from anywhere; a SwiftUI Window scene can't be raised from the coordinator)
 
     private func present() {
-        // The executor also needs the Automation grant (Sentient → the helper over Apple Events);
-        // it's user-invisible and FDA-writable, so heal it here — before the first fire.
-        Permissions.selfHealComputerUseAutomation(context: "ComputerUseGate")
         if window == nil {
             let hosting = NSHostingController(rootView: ComputerUseGateView(gate: self))
             let w = NSWindow(contentViewController: hosting)
