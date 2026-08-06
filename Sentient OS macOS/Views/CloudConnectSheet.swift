@@ -28,10 +28,9 @@ struct CloudConnectSheet: View {
         var title: String { self == .gmail ? "Connect Gmail" : "Connect Google Calendar" }
         var connectTitle: String { self == .gmail ? "Connect Gmail" : "Connect Calendar" }
         var bullets: [(icon: String, text: String)] {
-            [("icloud.slash", self == .gmail ? "Your ChatGPT reads your email, never our servers"
-                                             : "Your ChatGPT reads your calendar, never our servers"),
-             ("link", "Link your Google account on OpenAI's page"),
-             ("lock", "Sentient never sees your password")]
+            [("checkmark.shield", "Sentient enables only the named read tools for this source"),
+             ("link", "The account link is managed on OpenAI's page"),
+             ("lock", "Other apps, Codex memories, and user MCP servers stay blocked")]
         }
         var connectedLine: String { self == .gmail ? "Gmail connected" : "Calendar connected" }
         var failedLine: String {
@@ -44,6 +43,7 @@ struct CloudConnectSheet: View {
         var connectedKey: String { self == .gmail ? "dbg.gmail.connected" : "dbg.calendar.connected" }
         var selectedKey: String { self == .gmail ? "dbg.run.gmail" : "dbg.run.calendar" }
         var analyticsName: String { self == .gmail ? "gmail" : "calendar" }
+        var source: SourceSelection.CloudSource { self == .gmail ? .gmail : .calendar }
 
         func probe() async -> Bool {
             self == .gmail ? await GmailConnect.probeConnected() : await CalendarConnect.probeConnected()
@@ -58,6 +58,10 @@ struct CloudConnectSheet: View {
     private enum Phase { case idle, checking, connected, failed }
     @State private var phase: Phase = .idle
     @State private var checkStart: Date?     // non-nil while the fill sweep runs (and through the green beat)
+    @State private var showRemoveConfirmation = false
+    @State private var removalError: String?
+    @State private var mayContainImportedKnowledge = false
+    @State private var lastAccess: Date?
 
     init(_ service: Service) {
         self.service = service
@@ -96,8 +100,8 @@ struct CloudConnectSheet: View {
                 .padding(.top, 14)
                 .frame(minHeight: 42, alignment: .top)
 
-            if connected && selected && phase != .checking {
-                stopLink.padding(.top, 2)
+            if connected && phase != .checking {
+                sourceControls.padding(.top, 2)
             }
         }
         .padding(.horizontal, 36).padding(.top, 40).padding(.bottom, 24)
@@ -106,6 +110,13 @@ struct CloudConnectSheet: View {
         .overlay(alignment: .topLeading) { closeButton.padding(12) }
         .animation(.easeOut(duration: 0.2), value: phase)
         .onAppear { if connected && selected { phase = .connected } }   // already linked → Done just closes
+        .task { await refreshSourceFacts() }
+        .alert("Remove imported knowledge?", isPresented: $showRemoveConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Remove & Rebuild", role: .destructive) { removeAndRebuild() }
+        } message: {
+            Text("Sentient cannot safely delete individual claims. It will erase the derived knowledge base and rebuild it from your remaining enabled sources. Your account link and setup stay intact.")
+        }
     }
 
     // MARK: - The two buttons (+ the ✕)
@@ -113,7 +124,8 @@ struct CloudConnectSheet: View {
     private var connectButton: some View {
         Button { NSWorkspace.shared.open(service.connectorURL) } label: {
             HStack(spacing: 7) {
-                Text(service.connectTitle).font(.system(size: 14, weight: .semibold))
+                Text(connected ? "Manage connection on OpenAI" : service.connectTitle)
+                    .font(.system(size: 14, weight: .semibold))
                 Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
             }
             .foregroundStyle(.black)
@@ -187,7 +199,9 @@ struct CloudConnectSheet: View {
             case .failed:
                 Text(service.failedLine).foregroundStyle(Theme.Ink.amber)
             default:
-                Text("Linked it on the page? Press Done and I'll check.")
+                Text(connected && !selected
+                     ? "Linked on OpenAI, but not enabled in Sentient. Press Done to verify and enable it."
+                     : "Linked it on the page? Press Done and I'll check.")
                     .foregroundStyle(Theme.faint)
             }
         }
@@ -196,14 +210,61 @@ struct CloudConnectSheet: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The whisper disconnect — text, not a button: present where you'd look for it, never
-    /// competing with the two real buttons. A full disconnect (no in-between state): turning the
-    /// source back on means the whole connect flow again, probe included.
-    private var stopLink: some View {
-        Button(service.stopLine) { connected = false; selected = false; dismiss() }
-            .buttonStyle(.plain)
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.Ink.deepMuted)
+    /// Sentient enablement and derived-knowledge controls. The OpenAI account link is deliberately
+    /// independent: stopping local use never claims to revoke that external connection.
+    private var sourceControls: some View {
+        VStack(spacing: 8) {
+            if selected {
+                Button("Stop using in Sentient") {
+                    Task {
+                        await SourceSelection.stopUsing(service.source)
+                        selected = false
+                        await refreshSourceFacts()
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            if mayContainImportedKnowledge {
+                Button("Remove imported knowledge and rebuild", role: .destructive) {
+                    showRemoveConfirmation = true
+                }
+                .buttonStyle(.plain)
+                .disabled(PipelineActivity.shared.isRunning)
+            }
+            if let lastAccess {
+                Text("Last successful access: \(lastAccess.formatted(date: .abbreviated, time: .shortened))")
+                    .foregroundStyle(Theme.faint)
+            }
+            if mayContainImportedKnowledge {
+                Text("The current knowledge base may still contain this source until it is rebuilt.")
+                    .foregroundStyle(Theme.Ink.amber)
+            }
+            if let removalError { Text(removalError).foregroundStyle(Theme.Ink.amber) }
+        }
+        .font(.system(size: 11))
+    }
+
+    private func refreshSourceFacts() async {
+        let state = await VaultProvenanceStore.shared.state()
+        let kind: SourceKind = service.source == .gmail ? .gmail : .calendar
+        let accessed = await CodexAccessLedger.shared.lastSuccessfulAccess(to: service.source)
+        await MainActor.run {
+            mayContainImportedKnowledge = state.mayContain(kind)
+            lastAccess = accessed
+        }
+    }
+
+    private func removeAndRebuild() {
+        Task {
+            do {
+                try await DerivedKnowledgeReset.removeImportedKnowledge(from: service.source)
+                await MainActor.run { dismiss() }
+            } catch {
+                await MainActor.run {
+                    removalError = (error as? LocalizedError)?.errorDescription ?? "Removal failed."
+                }
+            }
+        }
     }
 
     // MARK: - Done: verify, persist, and let the green beat land

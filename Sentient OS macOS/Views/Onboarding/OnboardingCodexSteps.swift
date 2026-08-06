@@ -34,7 +34,7 @@ struct OnboardingCodexLoginPanel: View {
     var body: some View {
         SettingsGroup(label: "Your ChatGPT") {
             VStack(alignment: .leading, spacing: 14) {
-                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, because the connectors only exist here.")
+                SettingsProse("This sign-in authenticates Codex model access. It does not import your ChatGPT conversations, memories, custom instructions, projects, or uploaded files. Gmail and Calendar are connected and enabled separately.")
 
                 loginStates
             }

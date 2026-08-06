@@ -92,9 +92,9 @@ struct OnboardingReadyView: View {
                         SettingsChip(label: "Apple Notes", on: runNotes) { runNotes.toggle() }
                     }
                 }
-                SettingsGroup(label: "Through Your ChatGPT") {
+                SettingsGroup(label: "Connected account sources") {
                     VStack(alignment: .leading, spacing: 12) {
-                        SettingsProse("Read through your own connectors, never our servers.")
+                        SettingsProse("ChatGPT sign-in powers the model; Gmail and Calendar are separate, explicitly enabled sources. Sentient does not import your ChatGPT chats, memories, instructions, projects, or files.")
                         ChipFlow {
                             SettingsChip(label: "Gmail", on: gmailConnected && runGmail,
                                          locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
