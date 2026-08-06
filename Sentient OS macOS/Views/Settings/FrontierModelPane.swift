@@ -37,7 +37,7 @@ struct FrontierModelPane: View {
     private var chatgptPanel: some View {
         SettingsGroup(label: "Your ChatGPT") {
             VStack(alignment: .leading, spacing: 14) {
-                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, because the connectors only exist here.")
+                SettingsProse("ChatGPT sign-in authenticates Codex model access. It does not import ChatGPT conversations, memories, custom instructions, projects, or files. Gmail and Calendar are separate sources you explicitly enable.")
                 if backend == .chatgpt {
                     FrontierActiveLine("Sentient is running on your ChatGPT.")
                     SettingsProse("Login and plan live in Permissions & Health.")

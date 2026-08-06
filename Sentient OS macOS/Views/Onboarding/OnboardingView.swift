@@ -91,8 +91,8 @@ struct OnboardingView: View {
                                    connectors: RunSource.connectors(from:
                                        SourceSelection.current(fdaGranted: Permissions.hasFullDiskAccess())),
                                    mode: .auto,
-                                   runGmail: gmailConnected && runGmail,
-                                   runCalendar: calendarConnected && runCalendar,
+                                   runGmail: SourceSelection.isAuthorized(.gmail),
+                                   runCalendar: SourceSelection.isAuthorized(.calendar),
                                    fullCycle: BriefingDeck(rawValue: deckRaw) == .real,
                                    pausable: true,
                                    onExitEarly: { withAnimation(.easeInOut(duration: 0.3)) { analyzing = false } },

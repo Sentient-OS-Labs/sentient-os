@@ -33,7 +33,12 @@ struct SourcesPane: View {
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
     @State private var showCalendarConnect = false
+    @State private var showAccessHistory = false
     @State private var flashMinimum = false
+    @State private var accessReceipts: [CodexAccessReceipt] = []
+    @State private var provenanceState: VaultProvenanceState = .empty
+    @State private var gmailLastAccess: Date?
+    @State private var calendarLastAccess: Date?
 
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
     private var whatsappChats: Set<String> { Set(whatsappCSV.split(separator: ",").map(String.init)) }
@@ -60,7 +65,10 @@ struct SourcesPane: View {
                 cloudGroup
             }
         }
-        .task { fdaGranted = Permissions.hasFullDiskAccess() }
+        .task {
+            fdaGranted = Permissions.hasFullDiskAccess()
+            await refreshCloudFacts()
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             fdaGranted = Permissions.hasFullDiskAccess()   // may have changed in System Settings
         }
@@ -78,6 +86,11 @@ struct SourcesPane: View {
         }
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
+        .sheet(isPresented: $showAccessHistory) { CodexAccessHistoryView(receipts: accessReceipts) }
+        .onChange(of: gmailConnected) { _, _ in Task { await refreshCloudFacts() } }
+        .onChange(of: runGmail) { _, _ in Task { await refreshCloudFacts() } }
+        .onChange(of: calendarConnected) { _, _ in Task { await refreshCloudFacts() } }
+        .onChange(of: runCalendar) { _, _ in Task { await refreshCloudFacts() } }
     }
 
     // MARK: - Full Disk Access fix-it (only when missing)
@@ -129,16 +142,66 @@ struct SourcesPane: View {
     // MARK: - Cloud sources
 
     private var cloudGroup: some View {
-        SettingsGroup(label: "Through Your ChatGPT") {
-            VStack(alignment: .leading, spacing: 12) {
-                SettingsProse("Read through your own connectors, never our servers.")
-                ChipFlow {
-                    SettingsChip(label: "Gmail", on: gmailConnected && runGmail,
-                                 locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
-                    SettingsChip(label: "Google Calendar", on: calendarConnected && runCalendar,
-                                 locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
+        SettingsGroup(label: "Connected account sources") {
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsProse("ChatGPT sign-in authenticates the model. It does not give Sentient blanket access to your account. Gmail and Calendar are enabled independently; web access is limited to proactive research, and computer use requires a user-initiated action.")
+                SettingsProse("Not accessed by Sentient: ordinary ChatGPT conversations, saved memories, custom instructions, projects, uploaded files, unrelated account apps, and user-configured MCP servers.")
+                cloudStatusRow(source: .gmail, connected: gmailConnected, selected: runGmail,
+                               lastAccess: gmailLastAccess,
+                               mayContain: provenanceState.mayContain(.gmail)) {
+                    showGmailConnect = true
                 }
+                cloudStatusRow(source: .calendar, connected: calendarConnected, selected: runCalendar,
+                               lastAccess: calendarLastAccess,
+                               mayContain: provenanceState.mayContain(.calendar)) {
+                    showCalendarConnect = true
+                }
+                Button("View data-access history") { showAccessHistory = true }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Theme.Ink.bright)
             }
+        }
+    }
+
+    private func cloudStatusRow(source: SourceSelection.CloudSource, connected: Bool, selected: Bool,
+                                lastAccess: Date?, mayContain: Bool,
+                                action: @escaping () -> Void) -> some View {
+        let sentientStatus = SourceSelection.isAuthorized(source) ? "enabled"
+            : (selected && connected ? "unavailable on the current model backend" : "not enabled")
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack {
+                Text(source.displayName).font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(connected ? "Manage" : "Connect", action: action)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(CodexAuth.connectorsLocked)
+            }
+            Text("OpenAI link: \(connected ? "last verified available" : "not verified") · Sentient: \(sentientStatus)")
+                .foregroundStyle(Theme.faint)
+            Text(lastAccess.map { "Last successful access: \($0.formatted(date: .abbreviated, time: .shortened))" }
+                 ?? "Last successful access: none recorded")
+                .foregroundStyle(Theme.faint)
+            Text(mayContain ? "Current knowledge base may contain this source." : "Current knowledge base does not record this source.")
+                .foregroundStyle(mayContain ? Theme.Ink.amber : Theme.faint)
+        }
+        .font(.system(size: 11))
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(0.035)))
+    }
+
+    private func refreshCloudFacts() async {
+        async let receipts = CodexAccessLedger.shared.snapshot()
+        async let provenance = VaultProvenanceStore.shared.state()
+        async let gmail = CodexAccessLedger.shared.lastSuccessfulAccess(to: .gmail)
+        async let calendar = CodexAccessLedger.shared.lastSuccessfulAccess(to: .calendar)
+        let values = await (receipts, provenance, gmail, calendar)
+        await MainActor.run {
+            accessReceipts = values.0
+            provenanceState = values.1
+            gmailLastAccess = values.2
+            calendarLastAccess = values.3
         }
     }
 
@@ -168,6 +231,72 @@ struct SourcesPane: View {
         panel.message = "Add a folder for Sentient to read."
         guard panel.runModal() == .OK else { return }
         for url in panel.urls { CustomRoots.add(url) }
+    }
+}
+
+private struct CodexAccessHistoryView: View {
+    let receipts: [CodexAccessReceipt]
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Data-access history").font(.title2.weight(.semibold))
+                    Text("Capability and lifecycle only. Prompts, queries, arguments, and results are never stored.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+            }
+            if receipts.isEmpty {
+                ContentUnavailableView("No recorded Codex access", systemImage: "checkmark.shield")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 8) {
+                        ForEach(receipts) { receipt in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(receipt.feature.rawValue).font(.system(size: 12, weight: .semibold))
+                                    Spacer()
+                                    Text(receipt.outcome.rawValue).font(.caption)
+                                }
+                                Text(receipt.timestamp.formatted(date: .abbreviated, time: .standard))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                Text("Declared: " + (receipt.declaredCapabilities.isEmpty
+                                     ? "none" : receipt.declaredCapabilities.map(\.rawValue).joined(separator: ", ")))
+                                    .font(.caption)
+                                Text("Observed: \(Self.observationSummary(receipt.observations))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Text("Session: \(receipt.session.rawValue) · policy v\(receipt.policyVersion)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(10)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.04)))
+                        }
+                    }
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 620, height: 520)
+        .background(Theme.bg)
+    }
+
+    private static func observationSummary(_ observations: [CodexAccessObservation]) -> String {
+        guard !observations.isEmpty else { return "none" }
+        return observations.map { observation in
+            let capability: String
+            switch observation.kind {
+            case .web: capability = "web"
+            case .hostedApp:
+                let app = observation.app == .gmail ? "gmail" : "calendar"
+                capability = "\(app).\(observation.tool?.rawValue ?? "unknown")"
+            case .unknownMCP: capability = "unknown-mcp"
+            case .computerUse: capability = "computer-use (detail unavailable)"
+            }
+            return "\(capability):\(observation.lifecycle.rawValue)"
+        }.joined(separator: ", ")
     }
 }
 

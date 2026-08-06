@@ -58,7 +58,7 @@ struct AnalysisPopover: View {
     private var anyArmed: Bool {
         runDownloads || runDesktop || runDocuments || runNotes || !customRoots.isEmpty
             || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
-            || (gmailConnected && runGmail) || (calendarConnected && runCalendar)
+            || SourceSelection.isAuthorized(.gmail) || SourceSelection.isAuthorized(.calendar)
     }
     private var armed: Bool { anyArmed && !modelMissing }
 

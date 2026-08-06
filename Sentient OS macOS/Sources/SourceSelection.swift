@@ -50,6 +50,44 @@ enum CustomRoots {
 /// home popover, Dev Tools, and the 3am run all share them). Never rename them casually: they're
 /// persisted on user machines, and a rename without a migration silently resets everyone's setup.
 enum SourceSelection {
+    enum CloudSource: String, Sendable, Codable, CaseIterable {
+        case gmail, calendar
+
+        var connectedKey: String { self == .gmail ? "dbg.gmail.connected" : "dbg.calendar.connected" }
+        var selectedKey: String { self == .gmail ? "dbg.run.gmail" : "dbg.run.calendar" }
+        var bucketKey: String { rawValue }
+        var displayName: String { self == .gmail ? "Gmail" : "Google Calendar" }
+    }
+
+    enum AuthorizationError: LocalizedError {
+        case notAuthorized(CloudSource)
+        var errorDescription: String? {
+            switch self {
+            case .notAuthorized(let source):
+                return "\(source.displayName) is not enabled for Sentient."
+            }
+        }
+    }
+
+    /// The only production authorization predicate for account-backed data. A linked account is
+    /// not consent to use it, and a selected source cannot run on a backend without connectors.
+    static func isAuthorized(_ source: CloudSource) -> Bool {
+        ModelBackend.connectorsAvailable
+            && bool(source.connectedKey, default: false)
+            && bool(source.selectedKey, default: false)
+    }
+
+    static func requireAuthorized(_ source: CloudSource) throws {
+        guard isAuthorized(source) else { throw AuthorizationError.notAuthorized(source) }
+    }
+
+    /// Privacy stop: leave the OpenAI account link intact, disable Sentient's use immediately,
+    /// and erase the source's summaries and high-water cursor so re-enabling starts transparently.
+    static func stopUsing(_ source: CloudSource) async {
+        UserDefaults.standard.set(false, forKey: source.selectedKey)
+        await CycleStore.shared.clearBucket(source.bucketKey)
+    }
+
     static var chatJIDs: Set<String> {
         Set((UserDefaults.standard.string(forKey: "dbg.whatsapp.chats") ?? "")
             .split(separator: ",").map(String.init))
@@ -75,10 +113,8 @@ enum SourceSelection {
         if bool("dbg.run.notes", default: false) { n += 1 }
         // The cloud connectors ride ChatGPT auth inside codex — on a custom frontier backend
         // they can't run, so they don't count toward the minimum either.
-        if ModelBackend.connectorsAvailable {
-            if bool("dbg.gmail.connected", default: false) && bool("dbg.run.gmail", default: false) { n += 1 }
-            if bool("dbg.calendar.connected", default: false) && bool("dbg.run.calendar", default: false) { n += 1 }
-        }
+        if isAuthorized(.gmail) { n += 1 }
+        if isAuthorized(.calendar) { n += 1 }
         return n
     }
 

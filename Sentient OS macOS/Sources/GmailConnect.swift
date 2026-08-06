@@ -33,7 +33,7 @@ enum GmailConnect {
     static let bucketKey = "gmail"
 
     /// OpenAI's hosted Gmail connector page — opened from CloudConnectSheet's "Connect Gmail".
-    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
+    static let connectorURL = URL(string: "https://chatgpt.com/apps/gmail/connector_2128aebfecb84f64a069897515042a44")!
 
     /// Newest-N threads per read (the connector-limits doc's cap; a heavy week exceeds it).
     private static let threadCap = 300
@@ -79,8 +79,7 @@ enum GmailConnect {
 
     /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
     static func probeConnected() async -> Bool {
-        var inv = CodexCLI.Invocation(prompt: probePrompt)
-        inv.feature = "gmail"
+        var inv = CodexCLI.Invocation(prompt: probePrompt, policy: .gmailProbe)
         inv.model = .gpt56luna               // light model for the connect-check
         inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
         inv.sandbox = .readOnly
@@ -106,6 +105,7 @@ enum GmailConnect {
     /// re-runs all four after clearBucket), matching the iterative path's all-or-nothing commit.
     @discardableResult
     static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
+        try SourceSelection.requireAuthorized(.gmail)
         await CycleStore.shared.clearBucket(bucketKey)
         let runStart = Date()
         let cal = Calendar.current
@@ -141,6 +141,7 @@ enum GmailConnect {
             for try await done in group {
                 completed += 1
                 if let r = done.result {
+                    try SourceSelection.requireAuthorized(.gmail)
                     await record(r, itemDate: done.window.itemDate, label: done.window.label)
                     recorded += 1
                     onProgress(.windowDone(total: initialWeeks, label: done.window.label,
@@ -157,6 +158,8 @@ enum GmailConnect {
         // High-water mark = run start. Iterative reads everything after it (a few hours of overlap
         // is harmless — the cloud updater synthesizes — and beats a boundary gap).
         await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        do { try SourceSelection.requireAuthorized(.gmail) }
+        catch { await CycleStore.shared.clearBucket(bucketKey); throw error }
         Log("GmailConnect.runInitial: ✅ \(recorded)/\(initialWeeks) weekly summaries recorded (parallel); pointer → \(runStart)")
         return recorded
     }
@@ -167,6 +170,7 @@ enum GmailConnect {
     /// full initial read if Gmail has never been read on this Mac.
     @discardableResult
     static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
+        try SourceSelection.requireAuthorized(.gmail)
         guard let mark = await CycleStore.shared.pointer(bucketKey) else {
             return try await runInitial(onProgress: onProgress)   // never read → fall back to initial
         }
@@ -179,6 +183,7 @@ enum GmailConnect {
         onProgress(.windowStart(total: 1, label: sinceLabel, prompt: prompt))
         var recorded = 0
         if let r = try await read(prompt: prompt) {
+            try SourceSelection.requireAuthorized(.gmail)
             await record(r, itemDate: runStart, label: sinceLabel)
             recorded = 1
             onProgress(.windowDone(total: 1, label: sinceLabel,
@@ -188,6 +193,8 @@ enum GmailConnect {
                                    summary: nil, threads: 0, completed: 1, keptSoFar: 0))
         }
         await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        do { try SourceSelection.requireAuthorized(.gmail) }
+        catch { await CycleStore.shared.clearBucket(bucketKey); throw error }
         Log("GmailConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
         return recorded
     }
@@ -195,14 +202,15 @@ enum GmailConnect {
     // MARK: - One read (a single codex exec over a date window)
 
     private static func read(prompt: String) async throws -> ReadResult? {
-        var inv = CodexCLI.Invocation(prompt: prompt)
-        inv.feature = "gmail"
+        try SourceSelection.requireAuthorized(.gmail)
+        var inv = CodexCLI.Invocation(prompt: prompt, policy: .gmailImport)
         inv.model = .gpt56luna               // light model for the high-volume Gmail reads
         inv.effort = .medium                 // gpt-5.6-luna → medium
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long
         let env = try await CodexCLI.shared.run(inv)
+        try SourceSelection.requireAuthorized(.gmail)   // a mid-run privacy stop discards the result
         return parse(env.result)
     }
 

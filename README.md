@@ -16,13 +16,15 @@ By morning, Sentient offers your grunt work done in one click: that reply you fo
 
 And anywhere on your Mac, click the notch and tell Sidekick: "Finish this for me". It uses your apps like you would, even in the background while you carry on.
 
-No accounts, and your raw personal data never leaves your Mac. Free, forever. And every word of this is verifiable right here in this codebase :)
+No Sentient account. Raw data from local Mac sources stays on the Mac; explicitly enabled cloud
+sources are accessed through narrowly scoped tools on your OpenAI account. Free, forever. And every
+word of this is verifiable right here in this codebase :)
 
 <br/>
 
 ## While you sleep, it reads your entire life.
 
-<sub><samp>3:00 AM · ON THIS MAC · NOTHING LEAVES</samp></sub>
+<sub><samp>3:00 AM · LOCAL SOURCES STAY ON THIS MAC</samp></sub>
 
 At 3 AM every night, Sentient quietly wakes your Mac (lid closed is fine; it falls back asleep after) and reads what's new: files and screenshots, WhatsApp, iMessage, and Apple Notes, decoded straight out of the databases already sitting on your disk. Gmail and Google Calendar ride in through your own OpenAI connectors.
 
@@ -118,19 +120,29 @@ Most privacy pages are a company promising to behave. This one is a tour of why 
 
 Here's the machinery that makes that true whether we behave or not:
 
-1. **Raw data never leaves the Mac.** The cloud only ever sees short, PII-stripped, third-person summaries. And behind the model sits a deterministic regex backstop: anything carrying an SSN, card number, or passport number is dropped outright, no appeal.
+1. **Raw local-source data never leaves the Mac.** Files, local messages, and Notes are reduced to short, PII-stripped, third-person summaries before frontier synthesis. A deterministic regex backstop drops items carrying an SSN, card number, or passport number outright. Gmail and Calendar are already cloud sources; when enabled, their narrowly allowed connector tools run through the user's OpenAI account rather than a Sentient server.
 2. **Junk and sensitive items leave zero trace.** Judged on-device, dropped, gone. Not encrypted, not archived. Nonexistent.
-3. **No accounts. Ever.** A random token in your Mac's Keychain is your entire identity to the mirror. We cannot tie a knowledge base to a human being. Can't, not won't.
-4. **Deletion is total and boring.** One click removes the cloud copy. Stop syncing and it deletes itself within 30 days anyway.
+3. **No Sentient accounts. Ever.** A random token in your Mac's Keychain is your entire identity to the mirror. We cannot tie a knowledge base to a human being. Can't, not won't.
+4. **Mirror deletion is total and boring.** One click removes the optional encrypted cloud copy. Stop syncing and it deletes itself within 30 days anyway.
 5. **Your Mac's copy is the real one.** Every cloud copy is disposable by design, and no Sentient server stores anything at rest except the opt-in mirror's ciphertext.
 6. **The whole stack is open source.** The app, the relay, all of it, under AGPL-3.0.
 
-Only two optional features ever touch a server at all, and neither bends the line above:
+Only two optional features use Sentient's relay or diagnostic processors; Codex/OpenAI access is
+separately described immediately below:
 
 - **The cloud MCP mirror is opt-in, and off by default.** It exists only if you turn it on to give your ChatGPT and Claude your knowledge base. Your Mac seals everything with AES-256-GCM before anything uploads, the key lives only on your Mac and in your private link, and the relay stores only ciphertext with no key to unlock it. The relay's code is open source too.
 - **Anonymous diagnostics, and nothing else.** Crash reports (Sentry) and usage analytics (TelemetryDeck), both privacy-focused, open-source frameworks, both structure-only by construction: counts, enums, stack traces, never your content. Your files, summaries, and knowledge base never leave your Mac as part of either. Each has its own off switch in Settings; crash reports turn off completely, and analytics keeps only a handful of extremely anonymized usage-count pings (how many people use Sentient, and how often Sidekick, proactive cards, overnight runs, and the home screen are used), tied to nothing and no one, disclosed right under the toggle.
 
-And one line most companies would bury: features that run through your own Codex CLI are governed by OpenAI's privacy policy, the same one your ChatGPT account already lives under. Your existing relationship with OpenAI, not a new one with us. What's more, even OpenAI never sees your raw life: only the PII-stripped summaries, scrubbed on-device by the model and again by dedicated PII-stripping passes, before anything leaves the Mac.
+Codex access is default-deny per operation. ChatGPT sign-in authenticates the model; it does **not**
+import your ChatGPT conversations, saved memories, custom instructions, projects, or uploaded files.
+Sentient blocks Codex memories, unrelated account apps, user MCP configuration, and web access unless
+the current feature explicitly needs a narrower capability. Gmail and Calendar are independently
+enabled sources with exact read/write tool allowlists. A local, content-free access history records
+capability and lifecycle only, never prompts, queries, arguments, results, recipients, titles, or paths.
+You can stop using a source without unlinking it on OpenAI, manage the account link separately, or
+remove its imported knowledge by rebuilding derived knowledge from your remaining sources.
+
+And one line most companies would bury: features that run through your own Codex CLI are governed by OpenAI's privacy policy, the same one your ChatGPT account already lives under. Your existing relationship with OpenAI, not a new one with us. Knowledge-base synthesis sees the PII-stripped summaries created on-device. Gmail and Calendar connector operations send the narrowly scoped prompts needed to read or perform the selected account action through OpenAI's connector service; Sentient does not route that content through its own servers.
 
 <br/>
 

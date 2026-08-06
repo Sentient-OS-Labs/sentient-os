@@ -87,8 +87,8 @@ struct RootView: View {
                 ProcessingView(modelPath: modelPath,
                                connectors: RunSource.connectors(from: selectedSources),
                                mode: .auto,
-                               runGmail: ModelBackend.connectorsAvailable && gmailConnected && runGmail,
-                               runCalendar: ModelBackend.connectorsAvailable && calendarConnected && runCalendar,
+                               runGmail: SourceSelection.isAuthorized(.gmail),
+                               runCalendar: SourceSelection.isAuthorized(.calendar),
                                fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
                     appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 14h clock
@@ -144,6 +144,10 @@ struct RootView: View {
         }
         .onChange(of: showDevTools) { _, open in
             if !open { fdaGranted = Permissions.hasFullDiskAccess() }   // may have changed in the sheet
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .sentientRebuildRequested)) { _ in
+            guard modelPath != nil, SourceSelection.selectionCount > 0 else { return }
+            withAnimation(.easeInOut(duration: 0.3)) { isProcessing = true }
         }
     }
 

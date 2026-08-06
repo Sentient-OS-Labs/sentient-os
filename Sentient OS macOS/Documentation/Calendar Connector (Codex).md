@@ -1,102 +1,43 @@
-# Calendar Connector (Codex)
+# Google Calendar connector — explicit account source
 
-Google Calendar is the **second cloud source** — a twin of Gmail (see `Gmail Connector (Codex).md`). It
-can't be read on-device, so we both **fetch and summarize** it through the user's own **Codex Google
-Calendar connector** — OpenAI's account-level `codex_apps/google_calendar.*` tools (`get_profile`,
-`search_events`, `read_event`, and the write tools `create_event` / `delete_event`), reached by
-`codex exec`. No on-device model touches the calendar.
+Google Calendar is an optional cloud source reached through the user's OpenAI-hosted Calendar app.
+ChatGPT/Codex authentication, the OpenAI account link, and Sentient enablement are separate states.
 
-Code: `Sources/CalendarConnect.swift` · UI: `Views/CloudConnectSheet.swift` (ONE sheet shared with
-Gmail). The add-event **write** path is separate — `ProactiveExecutor.fireCalendar`.
+## Authorization and tools
 
-## How a user connects (the 2026-07-13 redesign)
-Identical to Gmail's flow (the shared `CloudConnectSheet(.calendar)` — see `Gmail Connector
-(Codex).md` §How a user connects for the full anatomy): **Connect Calendar** opens OpenAI's hosted
-connector page (`chatgpt.com/plugins/plugin_connector_1p_…?q=calendar`), **Done** runs the 1 s
-settle + `probeConnected()` YES/NO under the green fill sweep, YES persists connected + selected
-and auto-dismisses, and the whisper **"Stop reading Google Calendar"** link fully disconnects (no
-half-connected state).
+Every production read requires `SourceSelection.isAuthorized(.calendar)`, defined as connector
+support plus connected plus selected. The connection probe is an explicit user action and exposes
+only `get_profile` before selection.
 
-## How reads work (rides the existing iterative stack)
-Calendar flows through the **same INITIAL / ITERATIVE buttons** as every other connector — it's just a
-source, run as its own cloud "leg" in `ProcessingView` (twin to the Gmail leg), shown in the same
-takeover. No `IterativeRun` / on-device model involved.
+| Operation | Exact tools |
+|---|---|
+| connection probe | `get_profile` |
+| initial/iterative import | `search_events`, `read_event` |
+| proactive context | `search_events` |
+| create action | `create_event` only |
+| update action | `update_event` only |
 
-- **Initial** (`runInitial`) — the last **year** as **12 MONTHLY `codex exec` calls**, newest month
-  first. One dense **summary per month**, keeping ONLY the genuinely important events. Monthly chunking
-  keeps each context window bounded and gives per-month progress; the windows are rolling 30-ish-day
-  spans anchored at today, contiguous and **past-only** (future events ride the proactive fetch, not the
-  knowledge base).
-- **Iterative** (`runIterative`) — one call covering events since the high-water mark
-  (start time in `[mark, now)`), then the mark advances. Falls back to initial if never run.
+Create and update are separate policies; both write tools are never enabled by default. Existing
+proactive cards currently create events and therefore request only `create_event`. A disabled
+source cannot be read or written from scheduler, dev tools, proactive processing, or the executor.
 
-Each monthly/iterative summary becomes one ephemeral **`CycleNote`** in bucket `"calendar"`
-(`kind: .calendar`, `reminderFlagged = has_action_items`). The existing **"tell cloud"** buttons fold
-them into the vault — `VaultCloud` is source-agnostic, so **no knowledge-base code changed**. Pointer =
-run start (a little overlap on the next run beats a boundary gap).
+Every run ignores user config/rules and blocks memories, unrelated apps, user MCP servers, plugins,
+and web. Write failure does not broaden the tool set or retry with danger bypass.
 
-## The read prompt curates RUTHLESSLY
-A calendar is mostly routine, so the prompt **keeps only what matters** — real meetings, interviews,
-trips, appointments, deadlines, events with specific people — and **drops the noise**: recurring
-standups, "Lunch", focus-time/"do not schedule" blocks, generic holds, declined events. A quiet window
-→ `notable: false`, `summary: ""`. Attribution guard: a calendar event is the user's *schedule*, not a
-claim about who they are (don't absorb an attendee's job/biography into the user). PII-light: never
-transcribe meeting-link tokens or dial-in PINs.
+## Reads and provenance
 
-Structured reply (`--output-schema`): `{ event_count, notable, has_action_items, summary }` (mirrors
-Gmail's shape; `additionalProperties:false` required — see Gmail doc's schema gotcha).
+Initial ingestion summarizes twelve monthly windows. Iterative ingestion reads since the durable
+high-water mark. Proactive context independently reads the last seven days and next 24 hours only
+when Calendar remains authorized. Retained imports are source-tagged summaries in bucket
+`calendar`; no raw event bodies are persisted by the connector.
 
-## The proactive fetch — the one thing Gmail doesn't have
-`fetchProactiveContext()` is a **separate** read used only by Proactive Intelligence. Unlike the
-curated source read, it does **NOT** filter — it dumps the user's **last 7 days + next 24 hours** of
-events (ALL of them) as a compact, chronological text block. That block is injected into **BOTH**
-proactive stages:
-- **PART 1 — Decide** (`Proactive.findActionItems(…, calendarContext:)`) — a `## THE USER'S LIVE
-  CALENDAR` section, pre-fetched as text so PART 1 stays hermetic/tool-free. Lets the judge reason
-  about time-sensitivity (prep for tomorrow's meeting, a free slot that makes a proposal possible).
-- **PART 2 — Research & Prepare** (`ProactiveResearch.researchAndPrepare(…, calendarContext:)`) — the
-  same block as a grounding surface: confirm free/busy, get an event's real time, catch a thing already
-  on the calendar. PART 2 may still call the live Calendar tool to read a specific event in more detail.
+Successful vault swaps update source-level provenance with the number of Calendar summaries handed
+to synthesis. This does not claim which sentence or note came from an individual event. Vaults
+created before provenance are reported as legacy/unknown until rebuilt.
 
-Reply (`--output-schema`): `{ connected, events_text }` — `connected:false` ⇒ proactive runs without
-calendar context. The dev "proactive system" / "research + prepare" buttons fetch this when Calendar is
-connected, then pass it into the call. (The judge already lists Calendar among its sources, so the
-calendar *summaries* from the source reads flow into PART 1 with zero prompt change; the live fetch is
-extra grounding on top.)
+## User controls
 
-## Writes (add an event) — `bypassApprovals`, already built
-Writing an event is **not** in `CalendarConnect` — it's `ProactiveExecutor.fireCalendar` (the proactive
-executor's calendar channel), which the user fires with one tap. **[MEASURED June 21]** the calendar
-write tools behave **exactly like Gmail's `send_email`**: `create_event` is **approval-gated** and
-returns `"user cancelled MCP tool call"` headless under a read-only sandbox + `approval_policy=never`.
-The fix is the same flag — **`Invocation.bypassApprovals = true`** →
-`--dangerously-bypass-approvals-and-sandbox` (no approvals, no sandbox; trusted app-authored prompts
-only) — which `fireCalendar` already sets. Verified live end-to-end: create → read-back → delete all
-succeed under the bypass flag. So the write path needed **no change**; all of `CalendarConnect`'s reads
-are read-only and need no bypass.
-
-## Models & effort (the light cloud tier, like Gmail)
-`gpt-5.6-luna` carries every Calendar **read** — `.medium` for the summaries and the proactive fetch,
-`.low` for the connect-check (a tool-availability YES/NO; speed is the UX) — calendar data is small
-and structured. The **write** (executor) uses the default `gpt-5.6-sol` / `.high`. Set via
-`CodexCLI.Invocation.model` + `.effort`.
-
-| Call | Model | Effort | Sandbox |
-|---|---|---|---|
-| Connect-check (`probeConnected`) | `gpt-5.6-luna` | `low` | read-only |
-| Reads (`runInitial`/`runIterative`) | `gpt-5.6-luna` | `medium` | read-only |
-| Proactive fetch (`fetchProactiveContext`) | `gpt-5.6-luna` | `medium` | read-only |
-| Add-event (`ProactiveExecutor.fireCalendar`) | `gpt-5.6-sol` | `high` | **bypassApprovals** |
-
-## Gotchas (measured live, June 21)
-- **The connector works regardless of `--ignore-user-config`.** The calendar tools are account-level
-  (`codex_apps/google_calendar.*`), visible to `codex exec` either way — same as Gmail. `includeUserConfig`
-  defaults `true`, so the user's `~/.codex` + MCP servers load and the connector works.
-- **Read tools pass under the read-only sandbox**; only the *write* tools are approval-gated (above).
-- All Calendar reads pass `webSearch = false` — the calendar is the only source they need.
-
-## Not yet / next
-- **Dev-only surface** (the `dbg.calendar.*` prefs + the chip in DevToolsView), exactly like Gmail. The
-  connect sheet is also reachable from the home's Analysis popover and Settings → Knowledge Sources; the dedicated onboarding moment is still to build.
-- ~~Scheduler wiring~~ ✅ done — `ProactiveCycle` fetches the calendar context **once** and hands it
-  to both PART 1 and PART 2 (only the two standalone dev buttons still fetch independently).
+Stopping use keeps the OpenAI connection, disables Sentient access, and clears the Calendar bucket
+and cursor. Managing the connection opens OpenAI's app page. Removing imported knowledge performs a
+confirmed full derived-data reset and rebuild from remaining sources because surgical claim removal
+cannot be proven safe.

@@ -63,10 +63,23 @@ actor VaultCloud {
     /// nothing durable to continue (no session to reopen AND no completed slices in staging), or
     /// the staging dir is gone (deleted / disk cleaned).
     private static func loadResume(_ key: String) -> VaultGenerator.ResumeToken? {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let t = try? JSONDecoder().decode(VaultGenerator.ResumeToken.self, from: data),
+        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
+        guard let t = try? JSONDecoder().decode(VaultGenerator.ResumeToken.self, from: data) else {
+            // Pre-policy sessions may have inherited user context. Never reopen them; remove their
+            // staging copy as well as the durable handle.
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let path = obj["stagingPath"] as? String {
+                VaultGenerator.discardManagedStaging(atPath: path)
+            }
+            UserDefaults.standard.removeObject(forKey: key)
+            return nil
+        }
+        guard t.policy == .vault,
+              t.policyFingerprint == t.policy.fingerprint,
+              VaultGenerator.isManagedStagingPath(t.stagingPath),
               t.sessionID != nil || (t.sliceIndex ?? 0) > 0,
               FileManager.default.fileExists(atPath: t.stagingPath) else {
+            VaultGenerator.discardManagedStaging(atPath: t.stagingPath)
             UserDefaults.standard.removeObject(forKey: key)
             return nil
         }
@@ -75,6 +88,17 @@ actor VaultCloud {
 
     private func setCreateResume(_ t: VaultGenerator.ResumeToken?) { createResume = t; Self.persistResume(t, Self.createResumeKey) }
     private func setUpdateResume(_ t: VaultGenerator.ResumeToken?) { updateResume = t; Self.persistResume(t, Self.updateResumeKey) }
+
+    /// Privacy/reset boundary: a staged vault may already contain summaries from a source being
+    /// removed, so neither its Codex session nor its files may survive into the clean rebuild.
+    func discardResumableBuilds() {
+        for token in [createResume, updateResume].compactMap({ $0 }) {
+            VaultGenerator.discardManagedStaging(atPath: token.stagingPath)
+        }
+        setCreateResume(nil)
+        setUpdateResume(nil)
+        VaultGenerator.sweepOrphanStaging(keeping: nil)
+    }
 
     /// Persist (only a resumable token — a session id to reopen, or completed slices whose fold
     /// lives in staging) or clear the handle on disk.
@@ -156,6 +180,8 @@ actor VaultCloud {
         let slices: [[CloudNote]]
         var next: Int                                   // the next unfed slice
         let inFlight: String?                           // a session to resume first
+        let provenanceSummaryCounts = updateResume?.provenanceSummaryCounts
+            ?? VaultProvenanceStore.summaryCounts(notes)
         if let token = updateResume {
             staging = URL(fileURLWithPath: token.stagingPath, isDirectory: true)
             baseline = token.vaultFingerprint ?? VaultGenerator.vaultFingerprint(vault)
@@ -188,8 +214,7 @@ actor VaultCloud {
 
         /// The shared per-run configuration every merge invocation gets.
         func configure(_ prompt: String) -> CodexCLI.Invocation {
-            var i = CodexCLI.Invocation(prompt: prompt)
-            i.feature = "vault"
+            var i = CodexCLI.Invocation(prompt: prompt, policy: .vault)
             i.effort = .high                                    // incremental KB update (gpt-5.6-sol → high)
             i.sandbox = .workspaceWrite                        // edits confined to the staging dir
             i.cwd = staging.path
@@ -211,7 +236,9 @@ actor VaultCloud {
                 do {
                     _ = try await VaultGenerator().runCodexInStaging(invocation, staging: staging, onLine: onLine)
                 } catch let VaultGenerator.VaultError.usageLimit(message, token) {
-                    var t = token; t.sliceIndex = updateResume?.sliceIndex   // unchanged — still the same slice
+                    var t = token
+                    t.sliceIndex = updateResume?.sliceIndex   // unchanged — still the same slice
+                    t.provenanceSummaryCounts = provenanceSummaryCounts
                     throw VaultGenerator.VaultError.usageLimit(message: message, resume: t)
                 }
             }
@@ -229,9 +256,15 @@ actor VaultCloud {
                 do {
                     _ = try await VaultGenerator().runCodexInStaging(invocation, staging: staging, onLine: onLine)
                 } catch let VaultGenerator.VaultError.usageLimit(message, token) {
-                    guard slices.count > 1 else { throw VaultGenerator.VaultError.usageLimit(message: message, resume: token) }
+                    if slices.count <= 1 {
+                        var t = token
+                        t.provenanceSummaryCounts = provenanceSummaryCounts
+                        throw VaultGenerator.VaultError.usageLimit(message: message, resume: t)
+                    }
                     // A session that never started can't be resumed — its slice stays the next unfed.
-                    var t = token; t.sliceIndex = (token.sessionID != nil) ? next + 1 : next
+                    var t = token
+                    t.sliceIndex = (token.sessionID != nil) ? next + 1 : next
+                    t.provenanceSummaryCounts = provenanceSummaryCounts
                     throw VaultGenerator.VaultError.usageLimit(message: message, resume: t)
                 }
                 next += 1
@@ -251,7 +284,14 @@ actor VaultCloud {
                 return 0
             }
             CorpusSlicer.deleteCorpus(in: staging)              // the snapshot must never enter the vault
-            try VaultGenerator.swapStagingIntoVault(staging)    // atomic; live vault untouched until here
+            try await VaultProvenanceStore.shared.prepareUpdate(summaryCounts: provenanceSummaryCounts)
+            do {
+                try VaultGenerator.swapStagingIntoVault(staging)    // atomic; live vault untouched until here
+            } catch {
+                await VaultProvenanceStore.shared.discardPending()
+                throw error
+            }
+            await VaultProvenanceStore.shared.promotePending()
             setUpdateResume(nil)
             await markDirty()
             Log("VaultCloud.update: ✅ \(notes.count) notes merged")

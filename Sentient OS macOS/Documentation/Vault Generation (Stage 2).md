@@ -1,5 +1,25 @@
 # Vault Generation — Stage 2 (the agentic build)
 
+## Data-access policy and provenance (issue #307)
+
+Vault build, update, and resume use `CodexDataAccessPolicy.vault`: no web, memories, hosted account
+apps, user MCP servers, user rules, or plugins. They are the only resumable Codex operations. The
+full policy plus a fingerprint is persisted in every resume token; legacy or mismatched tokens are
+discarded with their staging directory and restart under the current restricted policy.
+
+`VaultProvenanceStore` records source-level lineage only. Before an atomic vault replacement it
+writes a pending candidate containing each represented `SourceKind`, the number of summaries handed
+to successful synthesis, and first/last incorporation times. The candidate is promoted only after
+the vault swap succeeds. Swap failure removes the pending candidate; a crash or promotion failure
+leaves pending state, which the UI reports conservatively as unknown. A vault with no manifest is
+legacy/unknown until rebuilt. The manifest never claims sentence-, item-, or file-level lineage.
+
+Removing one source therefore cannot safely edit individual claims. The privacy removal flow first
+disables that source, then erases the entire derived vault, CycleStore pointers/summaries, proactive
+artifacts, resumable staging sessions, and provenance before rebuilding from remaining selected
+sources. If no sources remain, the knowledge base stays empty. Account links, backend, onboarding,
+and preferences are preserved.
+
 `VaultGenerator.generate(notes:resume:onProgress:onLine:)` turns the on-device survivor summaries
 (passed as `[CloudNote]`) into the markdown knowledge base at `~/Sentient OS - Knowledge Base/`,
 through ONE route: `codex exec` via the `CodexCLI` spine — `gpt-5.6-sol` at **`.high` effort**
@@ -41,10 +61,13 @@ Neither build nor update ever touches the live knowledge base mid-run. Shared he
 Only after the run succeeds (build: >0 notes; update: passes the freshness check) is the swap done.
 A mid-run death (limit / crash / kill) leaves the previous vault untouched and the staging dir resumable.
 
-**Durable resume for BOTH** — `VaultCloud` persists the `ResumeToken(sessionID, stagingPath[, vaultFingerprint])`
+**Durable resume for BOTH** — `VaultCloud` persists the `ResumeToken(sessionID, stagingPath,
+policy, policyFingerprint[, vaultFingerprint, sliceIndex, provenanceSummaryCounts])`
 to UserDefaults (`vault.create.resume` / `vault.update.resume`), loaded in `init`, discarded if the
-staging dir is gone or there's no session. So a usage limit **or an app restart** resumes over staging
-instead of re-running the expensive initial build from scratch. (`ResumeToken` is `Codable`.)
+staging dir is gone, there is no durable progress, or the complete policy/fingerprint is missing or
+mismatched. So a usage limit **or an app restart** resumes over staging instead of re-running the
+expensive initial build from scratch, while pre-policy sessions deliberately restart. (`ResumeToken`
+is `Codable`.)
 
 **Update freshness check (concurrent editor edits)** — the Knowledge editor writes note files directly
 into the live vault, so `update()` guards against clobbering a user edit: it (a) **skips** the merge if

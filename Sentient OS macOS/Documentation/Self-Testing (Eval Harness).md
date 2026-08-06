@@ -1,5 +1,26 @@
 # Self-Testing — the headless eval harness
 
+## Default-deny access tests
+
+Data-access tests must use synthetic prompts and JSONL fixtures only. Never inspect a real inbox,
+calendar, ChatGPT memory, account app, recipient, or event, and never send/create anything.
+
+For issue #307, recreate a temporary harness that covers:
+
+- strict argument compilation for isolated, Gmail/Calendar read, exact connector write, web research,
+  custom backend, computer use, ephemeral, and resumable policies;
+- equality of the original and resumed vault policy plus rejection of pre-policy resume tokens;
+- the central `connected && selected && connectorsAvailable` authorization predicate at ingestion,
+  scheduler, dev, proactive, and executor entry points;
+- synthetic web/MCP started/completed/failed items, unknown/undeclared activity, typed policy
+  violations, and result suppression;
+- receipt encoding contains no fixture queries, arguments, results, prompts, paths, recipients, or
+  titles; retention is bounded to 250 and corruption/reset are safe;
+- provenance pending/promote behavior around successful and failed swaps, legacy/unknown state, and
+  a full derived-data rebuild that preserves setup.
+
+Delete all files under `Self Tests - Temp/` after the assertions pass.
+
 **How we verify backend behavior: run the REAL app binary headless with an env var, exercise the
 actual code paths, print the results, exit — no UI, no guessing.** This is the project's eval culture.
 Self-tests are *scaffolding*: you write one to nail a behavior, then delete it. That's why

@@ -15,10 +15,9 @@
 //
 //  THE TWO INVARIANTS (both enforced in the prompt AND the invocation):
 //    • Accuracy: receipts-only, never fabricate; "couldn't confirm" → `unverified` is a valid outcome.
-//    • Never fire: it stages but NEVER sends/submits/pays/RSVPs. Three independent layers: the
-//      prompt rule · `bypassApprovals = false` + sandbox (a connector WRITE auto-cancels headless) ·
-//      `stripConnectorActionTools` (the sending/destructive connector tools are absent from the
-//      run's tool surface entirely — an injected instruction has nothing to call).
+//    • Never fire: it stages but NEVER sends/submits/pays/RSVPs. The invocation's declared policy
+//      exposes only live web and, when the user has authorized Gmail, its two read tools. Sending
+//      and every other hosted app/tool are absent from the run's tool surface.
 //
 //  Output: ready-to-fire `PreparedAction`s (carrying the verify verdict + the prepared draft + a
 //  deterministic `execution_recipe` — the routing contract PART 3's executor runs)
@@ -134,23 +133,23 @@ actor ProactiveResearch {
         let vault = VaultGenerator.vaultRoot
         guard FileManager.default.fileExists(atPath: vault.path) else { throw ResError.noVault }
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, recent: recent, now: now, calendarContext: calendarContext))
-        inv.feature = "proactive-research"
+        var inv = CodexCLI.Invocation(
+            prompt: Self.prompt(items: items, recent: recent, now: now, calendarContext: calendarContext),
+            policy: .proactiveResearch(gmailAuthorized: SourceSelection.isAuthorized(.gmail))
+        )
         inv.effort = .high                  // gpt-5.6-sol → high (accuracy + the prepared draft are the product)
         inv.sandbox = .readOnly             // verifies + stages — never sends, drafts into a provider, or acts
         inv.cwd = vault.path                // working dir = the knowledge base (a research surface + the voice)
-        inv.webSearch = true                // ground external facts (on-sale/event dates, deadlines, form fields)
-        inv.includeUserConfig = true        // load the user's MCP servers — the Gmail MCP (read-only)
-        inv.bypassApprovals = false         // ⚠️ load-bearing: NO fire — a connector write auto-cancels
-        inv.configOverrides = CodexCLI.Invocation.stripConnectorActionTools
-                                            // ⚠️ and the send/destroy connector tools don't even
-                                            // exist in this run — reads untouched
         inv.outputSchema = Self.schema
         inv.timeout = 1_800                 // agentic verify + prepare (Gmail + web + vault) over ≤5 items runs long
 
         Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, Gmail MCP + web, never fire)…")
         do {
             let env = try await CodexCLI.shared.run(inv, onLine: onLine)
+            if inv.policy.allows(app: .gmail, tool: .searchEmails),
+               !SourceSelection.isAuthorized(.gmail) {
+                throw SourceSelection.AuthorizationError.notAuthorized(.gmail)
+            }
             let parsed = Self.parse(env.jsonResult)
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
             let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)

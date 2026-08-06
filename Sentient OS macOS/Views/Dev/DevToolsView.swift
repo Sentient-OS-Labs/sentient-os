@@ -450,7 +450,10 @@ struct DevToolsView: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered).tint(Theme.Ink.green)
-            .disabled(deviceJob != nil || run.busy != nil || (Self.modelPath == nil && !((gmailConnected && runGmail) || (calendarConnected && runCalendar))))
+            .disabled(deviceJob != nil || run.busy != nil
+                      || (Self.modelPath == nil
+                          && !SourceSelection.isAuthorized(.gmail)
+                          && !SourceSelection.isAuthorized(.calendar)))
             if let s = run.status[id] {
                 Text(s)
                     .font(.system(.caption2, design: .monospaced))
@@ -464,8 +467,8 @@ struct DevToolsView: View {
     /// of it — device sources AND Gmail (the cloud leg shows in the same takeover). Non-destructive: a
     /// from-scratch run is the deliberate "Reset everything" button under More.
     private func startOnDevice(id: String, mode: IterativeRun.Mode) {
-        let gmailRun = gmailConnected && runGmail
-        let calendarRun = calendarConnected && runCalendar
+        let gmailRun = SourceSelection.isAuthorized(.gmail)
+        let calendarRun = SourceSelection.isAuthorized(.calendar)
         let connectors = RunSource.connectors(from: selectedSources)
         guard gmailRun || calendarRun || !connectors.isEmpty else {
             run.status[id] = "✗ select a source above (folder / chat / Apple Notes / Gmail / Calendar)"; return
@@ -517,7 +520,9 @@ struct DevToolsView: View {
         var calCtx: String?
         if calendarConnected {
             progress("Gathering your live calendar, then analyzing every source…")
-            calCtx = await CalendarConnect.fetchProactiveContext()
+            if SourceSelection.isAuthorized(.calendar) {
+                calCtx = await CalendarConnect.fetchProactiveContext()
+            }
         }
         progress("Analyzing the last week across every source (files · chats · Notes · Gmail · Calendar)…")
         do {
@@ -544,7 +549,9 @@ struct DevToolsView: View {
         var calCtx: String?
         if calendarConnected {
             progress("Gathering your live calendar, then verifying every item…")
-            calCtx = await CalendarConnect.fetchProactiveContext()
+            if SourceSelection.isAuthorized(.calendar) {
+                calCtx = await CalendarConnect.fetchProactiveContext()
+            }
         }
         progress("Verifying + preparing \(items.count) item\(items.count == 1 ? "" : "s") against your calendar, Gmail, web & your vault…")
         do {

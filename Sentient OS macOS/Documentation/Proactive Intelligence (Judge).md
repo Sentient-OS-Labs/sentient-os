@@ -1,5 +1,26 @@
 # Proactive Intelligence — the 3-part pipeline (Judge → Research & Prepare → Fire)
 
+## Explicit data-access boundaries (issue #307)
+
+The judge is hermetic and ephemeral: it sees the supplied recent summaries and optional Calendar
+text already fetched by the dedicated Calendar policy, with web, memories, apps, user MCP servers,
+plugins, and user rules disabled.
+
+Research is a separate ephemeral policy. It enables live web search and, only while
+`SourceSelection.isAuthorized(.gmail)` remains true, the exact Gmail read tools
+`search_emails`, `read_email`, and `read_email_thread`. It receives Calendar context as prompt text
+only when Calendar is independently authorized. Send, create, update, delete, and destructive tools
+do not exist in the research run.
+
+Execution is another boundary after user confirmation. Gmail exposes only `send_email`; the current
+Calendar card exposes only `create_event`. A disabled source refuses the action even if a card was
+prepared earlier. Connector failure is final and never retries with an app-wide approval or sandbox
+bypass. Computer-use cards use the separate, explicitly user-initiated computer-use policy, which
+loads only Sentient's bundled plugin and records that detailed non-JSONL observation is unavailable.
+
+Every stage produces a content-free local access receipt. Policy violations discard the agent result
+before any proactive parser or executor can consume it.
+
 The product's headline feature (Arch §7). Proactive is its **own module** (`Proactive/`), sequenced
 AFTER a knowledge-base build/update, never concurrently (two agentic jobs over the same knowledge
 base). Three parts, each its own prompt:
@@ -9,8 +30,8 @@ base). Three parts, each its own prompt:
   knowledge base) AND stages every survivor **ready to fire** (draft + execution recipe), in one
   read-only pass. `Proactive/ProactiveResearch.swift`.
 - **PART 3 — Fire (the executor)**: the single write-capable step — on the user's one-button press it
-  runs a `PreparedAction`'s recipe (connector channels sandboxed with per-run write pre-approval;
-  computer use on `bypassApprovals`). `Proactive/ProactiveExecutor.swift`.
+  runs a `PreparedAction`'s recipe (connector channels sandboxed with exactly one confirmed write
+  tool; computer use on the isolated user-initiated bypass path). `Proactive/ProactiveExecutor.swift`.
 
 **Parts 1–2 are the read-only, no-side-effects world; the one write-capable step is PART 3** — the
 pipeline lines up exactly on the permission boundary.
@@ -47,8 +68,9 @@ that reads ONE input and ranks it:
   9 AM and 6 PM.
 
 PART 1 deliberately uses **NO tools** — no vault reads, no Gmail/Calendar MCP, no web search. The call
-runs hermetic (`includeUserConfig = false`, `webSearch = false`) over a neutral empty scratch dir as
-`cwd`, so even the read-only file tools have nothing to find: it judges from the summaries (plus the
+runs with `.proactiveJudge`, which ignores user config/rules and disables web, apps, memories, user
+MCP servers, and plugins, over a neutral empty scratch dir as `cwd`. Even the read-only file tools
+have nothing to find: it judges from the summaries (plus the
 pre-fetched calendar text) ALONE. The deep grounding — vault + Gmail MCP + web — is **PART 2's** job,
 and PART 2 is **verify-only**: it can correct, enrich, or DROP a PART 1 item, but never add a new one.
 That makes PART 1's shortlist the ceiling.
@@ -97,8 +119,8 @@ Accuracy-first and deliberately detailed. Cross-source context is the moat, but 
 ### Invocation specifics
 
 `CodexCLI.Invocation`: `effort .high`, `sandbox .readOnly`, `cwd =` a neutral empty scratch dir,
-`webSearch = false` + `includeUserConfig = false` (hermetic — no tools), `outputSchema`, `timeout
-1200s`, `feature "proactive"`. Errors typed (`ProError`): `noRecent` / `usageLimit` / `failed`. The
+policy `.proactiveJudge` (hermetic, ephemeral, no external tools), `outputSchema`, and timeout 1200s.
+Errors are typed (`ProError`): `noRecent` / `usageLimit` / `failed`. The
 last run persists to UserDefaults (`Proactive.latest()`) for PART 2 + the dev viewer.
 
 ## PART 2 — Research & Prepare
@@ -117,17 +139,13 @@ Three inviolable rules, enforced in the prompt AND the invocation:
 - **Accuracy / anti-hallucination** — receipts-only (state a live fact only if a tool returned it this
   run), mandatory identity-match for any external fact, "couldn't confirm" → `status: unverified` as a
   valid outcome. Verify-only on discovery (never invents a new item — that's PART 1).
-- **Never fires** — it stages but never sends/submits/pays/RSVPs. Three independent layers
-  (2026-07-18): the prompt rule · `bypassApprovals = false` + sandbox (a connector WRITE like Gmail
-  `send_email` auto-cancels headless) · `stripConnectorActionTools` (the sending/destructive
-  connector tools are absent from the run's tool surface entirely — a stripped tool fails as
-  "is not a function", so an injected instruction has nothing to call; reads keep working).
-- **Never computer use** — verification never drives the Mac, its apps, or its browser; Gmail MCP +
-  web + vault are the ONLY surfaces. Needed because `includeUserConfig = true` (for the Gmail MCP)
-  also rides the computer-use skill along from `~/.codex` — the sandbox stops writes, but nothing else
-  stopped a "let me just look at the screen to verify" detour. Computer use belongs solely to PART 3,
-  on the user's press, and only when the card's method calls for it (research cards fire nothing). The
-  judge's prompt carries a matching line for symmetry, though its hermetic call has no tools anyway.
+- **Never fires** — it stages but never sends/submits/pays/RSVPs. The prompt says so, Seatbelt remains
+  read-only, and the policy exposes only web plus the exact authorized Gmail read tools. Write and
+  destructive tools are absent from the run's tool surface, so injected instructions cannot call them.
+- **Never computer use** — verification never drives the Mac, its apps, or its browser; Gmail reads,
+  web, and the vault are the only surfaces. User configuration, rules, MCP servers, memories, and
+  plugins are ignored, so the computer-use plugin cannot enter this run. Computer use belongs solely
+  to PART 3 after the user's press.
 
 Research surfaces (all read-only): the **full last-week summary corpus** (the SAME window PART 1 saw,
 as background context), the **knowledge base** (`cwd` — identity anchor + the user's **voice** + the
@@ -137,9 +155,9 @@ mark `unverified` if absent), **web search** (external facts, identity-matched),
 **standing instructions** — the SAME `Proactive.instructionsBlock` PART 1 shows — so preferences that
 shape staging (a channel to prefer, a draft tone, a thing to skip) hold through the prune-to-5.
 
-`CodexCLI.Invocation`: `effort .high`, `sandbox .readOnly`, `cwd = vault`, `webSearch = true`,
-`includeUserConfig = true`, `bypassApprovals = false`, `configOverrides =
-stripConnectorActionTools`, `outputSchema`, `timeout 1800s`, `feature "proactive-research"`. Output: `{ready:[{title, method, target, urgency, due_date, status,
+`CodexCLI.Invocation`: policy `.proactiveResearch(gmailAuthorized:)`, `effort .high`, sandbox
+`.readOnly`, `cwd = vault`, `outputSchema`, and timeout 1800s. The centralized compiler adds strict
+config isolation, live web, and only the authorized Gmail read tools. Output: `{ready:[{title, method, target, urgency, due_date, status,
 verification, card_summary, prepared_content, execution_recipe, button_text, detail_label, sources,
 review_note}], dropped:[{title, reason}]}`.
 
@@ -170,15 +188,11 @@ Errors typed (`ResError`): `noItems` / `noVault` / `usageLimit` / `failed`. Pers
 
 The single write-capable step: on the user's one-button press, `fire(_:progress:)` performs a
 `PreparedAction` for real, routed by `method`:
-- **gmail** → the user's Gmail MCP via codex — **sandboxed** (`-s read-only`) with the connector
-  write tools pre-approved for the one run (`configOverrides = approveConnectorWrites`; a real
-  `send_email` verified under the intact Seatbelt, 2026-07-18). **Drift-proof fallback:** if the
-  approve config ever stops taking (a future codex changing the apps config surface), the executor
-  detects it deterministically — agent `COULD_NOT` + the verbatim "cancelled MCP tool call" marker
-  in the raw JSONL, never the model's paraphrase — and retries ONCE with `bypassApprovals` (the
-  same fixed wrapper), emitting `codex.fire_fallback` so the regression is visible in the field.
-- **calendar** → the user's calendar MCP via codex (same sandboxed pre-approval + fallback; an
-  honest "couldn't" if none exists).
+- **gmail** → the user's Gmail MCP via codex — **sandboxed** (`-s read-only`) with only the exact
+  `send_email` tool enabled after confirmation. A policy/config/tool failure is final; it never
+  retries with broader permissions or a sandbox bypass.
+- **calendar** → the user's calendar MCP via codex with only `create_event` for the current card
+  (`update_event` is a separate exact policy for a confirmed update), also with no broader retry.
 - **computer** → **computer use via the Codex CLI** (`CodexCLI.runAgentCommand` — the SAME spine the
   home command bar and Sidekick use): native apps, chat sends (WhatsApp/iMessage via Messages), and
   logged-in website tasks in the user's real browser. This works on the plain CLI —
