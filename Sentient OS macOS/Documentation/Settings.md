@@ -59,15 +59,26 @@ The real source picker, on the SAME keys as Analyze Now / Dev Tools / the 3am ru
 (`SourceSelection`, `Sources/SourceSelection.swift`). Three groups: **Folders**
 (Desktop/Downloads/Documents toggles + persistent custom roots + Add Folder), **Chats & Notes**
 (WhatsApp — hidden when not installed — and iMessage open the shared `ChatPicker`; Apple Notes
-toggles), **Through Your ChatGPT** (Gmail / Calendar open their real connect sheets; note:
+toggles), **Connected account sources** (Gmail / Calendar open their real connect sheets; note:
 connecting ARMS the source — the initial read happens on the next run, same as connecting from
 the Home popover. In knowledge-base-only mode these two chips render LOCKED — dim + lock glyph +
 the instant `LockedChipTip` hover "Only supported on ChatGPT Plus"). A fix-it `StatusLine`
 appears when Full Disk Access is missing. The **four-selection minimum**
 (`SourceSelection.selectionCount` / `minimumSelections` — every folder, chat source, Notes, and
 connector counts as ONE; the same rule onboarding's ready screen enforces, so the two surfaces
-can never drift) guards chip toggle-offs on the 4→3 drop only (a pre-onboarding state below four
-is never trapped); violations flash the bottom whisper amber.
+can never drift) guards ordinary chip toggle-offs on the 4→3 drop only. Privacy actions for a cloud
+source always win: **Stop using in Sentient** can go below the recommendation, keeps the OpenAI link,
+and clears that source's summaries/cursor. **Manage connection on OpenAI** opens the account app page.
+**Remove imported knowledge and rebuild** disables the source, erases all derived knowledge and
+proactive artifacts, and rebuilds from remaining sources because claim-level deletion cannot be
+proved from a synthesized vault.
+
+The cloud-source cards explicitly separate model authentication, OpenAI link state, and Sentient
+enablement. They show last successful access from the local content-free ledger and conservative
+vault provenance. A Data-access history sheet lists only feature, declared capability categories,
+canonical observed lifecycle, outcome, and session type. Normal ChatGPT chats, saved memories,
+custom instructions, projects/files, unrelated account apps, Codex memories, and user MCP servers
+are named as not accessed.
 
 **`CustomRoots`** (in `Sources/SourceSelection.swift`) is the persistent store for user-added
 folders: one newline-joined UserDefaults string (`files.customRoots`) so views react via plain
@@ -132,8 +143,9 @@ The overnight-intelligence story (prose; 3 AM is our taste, not a dial), launch-
 split consents (crash reports `diagnosticsEnabled` → Sentry · analytics `analyticsEnabled` →
 TelemetryDeck, each with its own `applyEnabledChange()`), and the **Danger Zone**: Reset runs the
 shared `FactoryReset` (`Ingestion/FactoryReset.swift` — cycle store + knowledge-base folder +
-proactive traces + lifetime counters + the cloud mirror copy, deleted best-effort so an offline
-reset still succeeds; same code path as Dev Tools' "Reset everything", so the wipes can never
+resumable vault staging/tokens + proactive traces + lifetime counters + the Codex access ledger +
+active/pending vault provenance + the cloud mirror copy, deleted best-effort so an offline reset
+still succeeds; same code path as Dev Tools' "Reset everything", so the wipes can never
 drift. The mirror token + opt-in survive — the share URL pasted into the user's connectors keeps
 working, and the next push recreates the copy). **Reset also REWINDS to the start of onboarding**:
 it clears `onboarding.step`, `plan.kbOnly`, and `hasCompletedOnboarding` (flipping the live
