@@ -4,8 +4,8 @@
 //
 //  Google Calendar — a CLOUD source, twin to Gmail (GmailConnect). The calendar can't be read
 //  on-device, so we both FETCH and SUMMARIZE through the user's own Codex Google Calendar connector
-//  (account-level `codex_apps/google_calendar.*` — get_profile / search_events / read_event, visible
-//  to `codex exec` whether or not `--ignore-user-config` is passed; verified live June 21).
+//  (account-level `codex_apps/google_calendar.*` — get_profile / search_events / read_event). Every
+//  call exposes only the exact hosted tools declared by its default-deny data-access policy.
 //
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
 //  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
@@ -22,10 +22,8 @@
 //  block. That block is injected into BOTH proactive stages (Proactive.findActionItems and
 //  ProactiveResearch.researchAndPrepare) so the engine knows what's actually on the user's calendar.
 //
-//  Writes (add an event) are NOT here — that's ProactiveExecutor.fireCalendar, which runs
-//  sandboxed with the write tools pre-approved per run (`approveConnectorWrites`; the calendar
-//  write tools are approval-gated and auto-cancel headless otherwise, exactly like Gmail's
-//  send_email — verified live June 21). All reads here are read-only and need no special config.
+//  Writes (add an event) are NOT here — that's ProactiveExecutor.fireCalendar, which exposes only
+//  the exact confirmed write tool. All reads here use the corresponding least-privileged policy.
 //
 //  Doc: Documentation/Calendar Connector (Codex).md
 //
@@ -38,7 +36,7 @@ enum CalendarConnect {
     static let bucketKey = "calendar"
 
     /// OpenAI's hosted Google Calendar connector page — opened from CloudConnectSheet's "Connect Calendar".
-    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+    static let connectorURL = URL(string: "https://chatgpt.com/apps/google-calendar/connector_947e0d954944416db111db556030eea6")!
 
     /// Newest-N events per read window (a busy month rarely exceeds this; a guard against a runaway list).
     private static let eventCap = 200
@@ -68,12 +66,10 @@ enum CalendarConnect {
 
     /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
     static func probeConnected() async -> Bool {
-        var inv = CodexCLI.Invocation(prompt: probePrompt)
-        inv.feature = "calendar"
+        var inv = CodexCLI.Invocation(prompt: probePrompt, policy: .calendarProbe)
         inv.model = .gpt56luna               // light model for the connect-check
         inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
         inv.sandbox = .readOnly
-        inv.webSearch = false
         inv.timeout = 120
         do {
             let env = try await CodexCLI.shared.run(inv)
@@ -93,6 +89,7 @@ enum CalendarConnect {
     /// Records each into CycleStore; sets the high-water mark to the run-start on completion.
     @discardableResult
     static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
+        try SourceSelection.requireAuthorized(.calendar)
         await CycleStore.shared.clearBucket(bucketKey)
         let runStart = Date()
         let cal = Calendar.current
@@ -114,6 +111,7 @@ enum CalendarConnect {
             let prompt = readPrompt(range: range, label: monthLabel)
             onProgress(.windowStart(step: month + 1, total: initialMonths, label: monthLabel, prompt: prompt))
             if let r = try await read(prompt: prompt) {
+                try SourceSelection.requireAuthorized(.calendar)
                 let itemDate = upperDay
                 await record(r, itemDate: itemDate, label: monthLabel)
                 recorded += 1
@@ -127,6 +125,8 @@ enum CalendarConnect {
         // High-water mark = run start. Iterative reads everything after it (a little overlap is
         // harmless — the cloud updater synthesizes — and beats a boundary gap).
         await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        do { try SourceSelection.requireAuthorized(.calendar) }
+        catch { await CycleStore.shared.clearBucket(bucketKey); throw error }
         Log("CalendarConnect.runInitial: ✅ \(recorded)/\(initialMonths) monthly summaries recorded; pointer → \(runStart)")
         return recorded
     }
@@ -137,6 +137,7 @@ enum CalendarConnect {
     /// initial read if Calendar has never been read on this Mac.
     @discardableResult
     static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
+        try SourceSelection.requireAuthorized(.calendar)
         guard let mark = await CycleStore.shared.pointer(bucketKey) else {
             return try await runInitial(onProgress: onProgress)   // never read → fall back to initial
         }
@@ -148,6 +149,7 @@ enum CalendarConnect {
         onProgress(.windowStart(step: 1, total: 1, label: sinceLabel, prompt: prompt))
         var recorded = 0
         if let r = try await read(prompt: prompt) {
+            try SourceSelection.requireAuthorized(.calendar)
             await record(r, itemDate: runStart, label: sinceLabel)
             recorded = 1
             onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
@@ -157,6 +159,8 @@ enum CalendarConnect {
                                    summary: nil, events: 0, keptSoFar: 0))
         }
         await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        do { try SourceSelection.requireAuthorized(.calendar) }
+        catch { await CycleStore.shared.clearBucket(bucketKey); throw error }
         Log("CalendarConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
         return recorded
     }
@@ -168,16 +172,16 @@ enum CalendarConnect {
     /// (a "free" slot is as informative as a meeting). Returns nil when the connector is unavailable or
     /// the read fails (proactive then runs without calendar context). Read-only; no bypass needed.
     static func fetchProactiveContext() async -> String? {
-        var inv = CodexCLI.Invocation(prompt: proactiveFetchPrompt)
-        inv.feature = "calendar-proactive"
+        guard SourceSelection.isAuthorized(.calendar) else { return nil }
+        var inv = CodexCLI.Invocation(prompt: proactiveFetchPrompt, policy: .calendarProactive)
         inv.model = .gpt56luna
         inv.effort = .medium
         inv.sandbox = .readOnly
-        inv.webSearch = false
         inv.outputSchema = proactiveSchema
         inv.timeout = 300
         do {
             let env = try await CodexCLI.shared.run(inv)
+            guard SourceSelection.isAuthorized(.calendar) else { return nil }
             guard let span = jsonSpan(env.result),
                   let data = span.data(using: .utf8),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -198,15 +202,15 @@ enum CalendarConnect {
     // MARK: - One read (a single codex exec over a date window)
 
     private static func read(prompt: String) async throws -> ReadResult? {
-        var inv = CodexCLI.Invocation(prompt: prompt)
-        inv.feature = "calendar"
+        try SourceSelection.requireAuthorized(.calendar)
+        var inv = CodexCLI.Invocation(prompt: prompt, policy: .calendarImport)
         inv.model = .gpt56luna               // light model — calendar data is small + structured
         inv.effort = .medium                 // gpt-5.6-luna → medium
         inv.sandbox = .readOnly              // we only read the calendar + return text (no writes)
-        inv.webSearch = false                // the calendar is the only source this needs
         inv.outputSchema = readSchema
         inv.timeout = 600
         let env = try await CodexCLI.shared.run(inv)
+        try SourceSelection.requireAuthorized(.calendar)   // a mid-run privacy stop discards the result
         return parse(env.result)
     }
 

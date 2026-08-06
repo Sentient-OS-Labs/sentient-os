@@ -89,7 +89,8 @@ final class CommandRunModel {
             #endif
             Log("──────────────── live codex output ↓ ────────────────")
             do {
-                let out = try await CodexCLI.shared.runAgentCommand(prompt, imagePaths: shots.map(\.path)) { line in
+                let out = try await CodexCLI.shared.runAgentCommand(prompt, policy: .computerUse,
+                                                                    imagePaths: shots.map(\.path)) { line in
                     Task { @MainActor in
                         #if DEBUG
                         Log("CMD │ \(line)")

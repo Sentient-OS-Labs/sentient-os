@@ -22,8 +22,11 @@ enum FactoryReset {
     /// the next launch regardless.
     @MainActor
     static func run(appState: AppState? = nil) async {
+        await VaultCloud.shared.discardResumableBuilds()
         await CycleStore.shared.wipeEverything()
         try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
+        await VaultProvenanceStore.shared.reset()
+        await CodexAccessLedger.shared.reset()
         ProactiveCycle.resetAll()
         LifetimeStats.reset()
         try? await MirrorClient.shared.deleteRemote()   // best-effort — offline reset still works

@@ -135,13 +135,13 @@ actor Proactive {
             .appendingPathComponent("sentient-proactive-judge", isDirectory: true)
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(recent: recent, now: now, calendarContext: calendarContext))
-        inv.feature = "proactive"
+        var inv = CodexCLI.Invocation(
+            prompt: Self.prompt(recent: recent, now: now, calendarContext: calendarContext),
+            policy: .proactiveJudge
+        )
         inv.effort = .high                  // gpt-5.6-sol → high (this judgment is the product)
         inv.sandbox = .readOnly             // never writes or acts
         inv.cwd = scratch.path              // neutral empty dir — nothing to read
-        inv.webSearch = false               // summaries-only; web research is PART 2
-        inv.includeUserConfig = false       // hermetic — no user MCP servers (Gmail is PART 2)
         inv.outputSchema = Self.schema
         inv.timeout = 1_200                 // deep reasoning can run long
 

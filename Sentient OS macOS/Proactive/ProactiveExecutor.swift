@@ -5,11 +5,10 @@
 //  Proactive Intelligence — PART 3 of 3: THE EXECUTOR. On the user's one-button press it actually
 //  FIRES a `PreparedAction` that PART 2 staged. Real channels, picked by `method`:
 //    • gmail    → the user's Gmail connector (MCP) via codex — SANDBOXED (`read-only` Seatbelt),
-//      with the connector write tools pre-approved for the one run (`approveConnectorWrites`);
-//      no bypass. Email always goes through the connector (Google device-binds web sessions),
-//      never a browser.
-//    • calendar → the user's calendar tool/MCP via codex, same sandboxed pre-approval (real if one
-//      is configured; honest if not).
+//      with only `gmail.send_email` exposed for the confirmed run. Email always goes through the
+//      connector (Google device-binds web sessions), never a browser.
+//    • calendar → the user's calendar connector via codex, with only the exact confirmed create or
+//      update tool exposed (real if configured; honest if not).
 //    • computer → the user's Mac directly via codex computer use (bypass-sandbox — required: the
 //      computer-use plugin's per-app elicitations auto-deny headless under any Seatbelt profile).
 //      This also covers logged-in WEBSITE tasks (register / RSVP / buy / fill a form) by driving
@@ -148,35 +147,32 @@ actor ProactiveExecutor {
     // MARK: Gmail channel
 
     private func fireGmail(routing: String, content: String, progress: @escaping @Sendable (String) -> Void) async -> FireResult {
+        guard SourceSelection.isAuthorized(.gmail) else {
+            return .notFireable("Gmail is no longer enabled for Sentient.")
+        }
         progress("Sending via your Gmail connector…")
-        var inv = CodexCLI.Invocation(prompt: Self.gmailWrapper(routing: routing, content: content))
-        inv.feature = "gmail-write"
+        var inv = CodexCLI.Invocation(prompt: Self.gmailWrapper(routing: routing, content: content),
+                                      policy: .gmailAction)
         inv.effort = .high                   // gpt-5.6-sol → high
         inv.sandbox = .readOnly              // Seatbelt ON — the send needs no shell/file writes
-        inv.configOverrides = CodexCLI.Invocation.approveConnectorWrites
-                                             // hosted send_email is approval-gated headless →
-                                             // pre-approve it for THIS run, sandbox intact
-                                             // (replaced bypassApprovals, 2026-07-18)
-        inv.includeUserConfig = true         // load the user's Gmail MCP
-        inv.webSearch = false
         inv.timeout = 300
-        Log("ProactiveExecutor/gmail: firing one email via Gmail MCP (sandboxed, writes pre-approved)…")
+        Log("ProactiveExecutor/gmail: firing one email via the exact Gmail send policy (sandboxed)…")
         return await runConnector(inv, channel: "gmail", progress: progress)
     }
 
     // MARK: Calendar channel  (user's calendar MCP, if any — honest when none)
 
     private func fireCalendar(routing: String, content: String, progress: @escaping @Sendable (String) -> Void) async -> FireResult {
+        guard SourceSelection.isAuthorized(.calendar) else {
+            return .notFireable("Google Calendar is no longer enabled for Sentient.")
+        }
         progress("Adding to your calendar…")
-        var inv = CodexCLI.Invocation(prompt: Self.calendarWrapper(routing: routing, content: content))
-        inv.feature = "calendar-write"
+        var inv = CodexCLI.Invocation(prompt: Self.calendarWrapper(routing: routing, content: content),
+                                      policy: .calendarAction(.createEvent))
         inv.effort = .high                   // gpt-5.6-sol → high
         inv.sandbox = .readOnly              // Seatbelt ON — the event create needs no shell/file writes
-        inv.configOverrides = CodexCLI.Invocation.approveConnectorWrites   // same sandboxed
-        inv.includeUserConfig = true                                       // pre-approval as gmail
-        inv.webSearch = false
         inv.timeout = 300
-        Log("ProactiveExecutor/calendar: firing one event via the user's calendar tool (sandboxed, writes pre-approved)…")
+        Log("ProactiveExecutor/calendar: firing one event via the exact Calendar create policy (sandboxed)…")
         return await runConnector(inv, channel: "calendar", progress: progress)
     }
 
@@ -189,22 +185,6 @@ actor ProactiveExecutor {
             Log("ProactiveExecutor/\(channel): ✓ (\(env.result.count) chars)")   // B7: length, not content
             switch AgentStatus.parse(env.result) {
             case .couldNot(let reason):
-                // Self-healing fallback: agent-reported failure + the deterministic auto-cancel
-                // marker in the JSONL = the sandboxed `approveConnectorWrites` config didn't take
-                // (a codex update changed the apps config surface / an old CLI). ONE retry on the
-                // legacy bypass path — same fixed app-authored wrapper — so the sandbox hardening
-                // can never cost a user their fire; the event tells us the field regressed.
-                if !inv.bypassApprovals, env.raw.contains("cancelled MCP tool call") {
-                    Log("ProactiveExecutor/\(channel): sandboxed write auto-cancelled — one retry on the bypass path")
-                    CrashReporting.captureEvent("codex.fire_fallback", level: .warning,
-                        tags: ["channel": channel], extra: [:],
-                        fingerprint: ["codex", "fire_fallback", channel])
-                    var retry = inv
-                    retry.bypassApprovals = true
-                    retry.configOverrides = []
-                    progress("Retrying…")
-                    return await runConnector(retry, channel: channel, progress: progress)
-                }
                 return FireResult(outcome: .failed(reason.isEmpty ? "The agent reported it couldn't complete this." : reason),
                                   board: .refused, statusPresent: true, errorClass: "refused")
             case .done: return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: true, errorClass: nil)
@@ -226,6 +206,7 @@ actor ProactiveExecutor {
         Log("ProactiveExecutor/computer: firing one computer-use task via codex (runAgentCommand)…")
         do {
             let out = try await CodexCLI.shared.runAgentCommand(Self.computerWrapper(routing: routing, content: content),
+                                                                policy: .computerUse,
                                                                 timeout: 900) { line in progress(line) }
             let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let final = lines.last ?? "Done on your Mac."

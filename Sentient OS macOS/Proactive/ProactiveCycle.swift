@@ -124,8 +124,7 @@ actor ProactiveCycle {
             ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // never leave stale cards
         } else {
             var calCtx: String?
-            if ModelBackend.connectorsAvailable,
-               UserDefaults.standard.bool(forKey: "dbg.calendar.connected") {
+            if SourceSelection.isAuthorized(.calendar) {
                 calCtx = await CalendarConnect.fetchProactiveContext()
             }
 

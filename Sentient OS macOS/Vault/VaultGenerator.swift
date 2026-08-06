@@ -48,6 +48,8 @@ actor VaultGenerator {
     struct ResumeToken: Sendable, Codable {
         let sessionID: String?
         let stagingPath: String
+        let policy: CodexDataAccessPolicy
+        let policyFingerprint: String
         /// UPDATE only (B11 freshness check): the live vault's fingerprint captured when staging was
         /// seeded, carried across a usage-limit resume so the swap can still detect a concurrent
         /// editor edit made during the (possibly multi-attempt) run. nil for a build.
@@ -58,6 +60,21 @@ actor VaultGenerator {
         /// worth keeping even without a session id), and `sessionID` (when present) belongs to
         /// slice sliceIndex - 1, still in flight.
         var sliceIndex: Int? = nil
+        /// Source-level counts from the exact corpus this resumable run is incorporating. This
+        /// prevents newly arrived summaries from being attributed to an older staged build.
+        var provenanceSummaryCounts: [SourceKind: Int]? = nil
+
+        init(sessionID: String?, stagingPath: String, policy: CodexDataAccessPolicy,
+             vaultFingerprint: String? = nil, sliceIndex: Int? = nil,
+             provenanceSummaryCounts: [SourceKind: Int]? = nil) {
+            self.sessionID = sessionID
+            self.stagingPath = stagingPath
+            self.policy = policy
+            self.policyFingerprint = policy.fingerprint
+            self.vaultFingerprint = vaultFingerprint
+            self.sliceIndex = sliceIndex
+            self.provenanceSummaryCounts = provenanceSummaryCounts
+        }
     }
 
     enum VaultError: LocalizedError {
@@ -96,6 +113,23 @@ actor VaultGenerator {
     /// volume (an atomic swap/move needs that) — true for both the real HOME vault and a scratch
     /// `SENTIENT_VAULT_ROOT` test dir.
     static var stagingParent: URL { vaultRoot.deletingLastPathComponent() }
+
+    /// Resume tokens are durable local input. Never let a corrupt/tampered token turn cleanup into
+    /// deletion of an arbitrary path; only our named sibling staging directories qualify.
+    static func isManagedStagingPath(_ path: String) -> Bool {
+        let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        let resolved = url.resolvingSymlinksInPath()
+        let parent = stagingParent.standardizedFileURL.resolvingSymlinksInPath()
+        return url.deletingLastPathComponent() == stagingParent.standardizedFileURL
+            && resolved.deletingLastPathComponent() == parent
+            && url.lastPathComponent.hasPrefix(stagingPrefix)
+    }
+
+    static func discardManagedStaging(atPath path: String) {
+        guard isManagedStagingPath(path) else { return }
+        let url = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        try? FileManager.default.removeItem(at: url)
+    }
 
     /// A fresh staging dir. `seedFrom` (the live vault, for UPDATE) is copied in so codex has the
     /// existing notes to edit; nil (for BUILD) leaves it empty. Sweeps orphaned staging dirs first.
@@ -180,7 +214,8 @@ actor VaultGenerator {
             // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
             Log("VaultGenerator: ⚠️ usage limit (session \(sessionID ?? "nil")); staging kept for resume")
             throw VaultError.usageLimit(message: message,
-                                        resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
+                                        resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path,
+                                                            policy: invocation.policy))
         }
     }
 
@@ -199,6 +234,16 @@ actor VaultGenerator {
     ) async throws -> Result {
         onProgress(.gathering(notes.count))
         let fm = FileManager.default
+
+        if let resume,
+           (!Self.isManagedStagingPath(resume.stagingPath)
+            || resume.policy != .vault
+            || resume.policyFingerprint != resume.policy.fingerprint) {
+            Self.discardManagedStaging(atPath: resume.stagingPath)
+            return try await generate(notes: notes, resume: nil, onProgress: onProgress, onLine: onLine)
+        }
+        let provenanceSummaryCounts = resume?.provenanceSummaryCounts
+            ?? VaultProvenanceStore.summaryCounts(notes)
 
         // Build works in a throwaway staging dir (empty), swapped into the real vault only on success
         // (B11 helpers) — a mid-run death never touches the existing vault. Resume reuses its dir.
@@ -268,8 +313,7 @@ actor VaultGenerator {
                 Continue merging the new items into the vault exactly where you left off — the edits \
                 you already made are still in the working directory. When everything is merged, reply \
                 with one line: the number of notes you created or edited.
-                """)
-            invocation.feature = "vault"
+                """, policy: resume.policy)
             invocation.sandbox = .workspaceWrite
             invocation.cwd = staging.path
             invocation.resumeSessionID = sid
@@ -278,7 +322,9 @@ actor VaultGenerator {
             do {
                 record(try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine))
             } catch let VaultError.usageLimit(message, token) {
-                var t = token; t.sliceIndex = resume.sliceIndex      // unchanged — still the same slice
+                var t = token
+                t.sliceIndex = resume.sliceIndex      // unchanged — still the same slice
+                t.provenanceSummaryCounts = provenanceSummaryCounts
                 throw VaultError.usageLimit(message: message, resume: t)
             }
         }
@@ -296,8 +342,7 @@ actor VaultGenerator {
                 prompt = VaultCloud.updatePrompt(skeleton: VaultCloud.skeleton(of: staging), notes: slices[next])
             }
 
-            var invocation = CodexCLI.Invocation(prompt: prompt)
-            invocation.feature = "vault"
+            var invocation = CodexCLI.Invocation(prompt: prompt, policy: .vault)
             // Effort stays at the .high default — .xhigh thinks far too long on gpt-5.6-sol for the
             // initial build (downgraded 2026-07-10), and .high is also what a free/go plan's tiny
             // monthly quota can afford (~70% of it).
@@ -313,9 +358,15 @@ actor VaultGenerator {
             do {
                 record(try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine))
             } catch let VaultError.usageLimit(message, token) {
-                guard slices.count > 1 else { throw VaultError.usageLimit(message: message, resume: token) }
+                if slices.count <= 1 {
+                    var t = token
+                    t.provenanceSummaryCounts = provenanceSummaryCounts
+                    throw VaultError.usageLimit(message: message, resume: t)
+                }
                 // A session that never started can't be resumed — its slice stays the next unfed.
-                var t = token; t.sliceIndex = (token.sessionID != nil) ? next + 1 : next
+                var t = token
+                t.sliceIndex = (token.sessionID != nil) ? next + 1 : next
+                t.provenanceSummaryCounts = provenanceSummaryCounts
                 throw VaultError.usageLimit(message: message, resume: t)
             }
             if next == 0, Self.census(of: staging).notes == 0 {
@@ -338,15 +389,18 @@ actor VaultGenerator {
         // touched); on any throw the vault is left intact (B11 swapStagingIntoVault).
         onProgress(.materializing(notes: written))
         CorpusSlicer.deleteCorpus(in: staging)               // the snapshot must never enter the vault
+        try await VaultProvenanceStore.shared.prepareBuild(summaryCounts: provenanceSummaryCounts)
         do {
             try Self.swapStagingIntoVault(staging)
         } catch {
+            await VaultProvenanceStore.shared.discardPending()
             Log("VaultGenerator: ❌ swap failed, vault left intact — \(ErrorLabel(error))")
             // Structured event, not capture(error): a Cocoa move error embeds the failing note's
             // PATH (i.e. a note title) which the scrubber can't fully strip from a spaced vault path.
             CrashReporting.captureEvent("vault_swap_failed", tags: ["error": ErrorLabel(error)])
             throw error
         }
+        await VaultProvenanceStore.shared.promotePending()
         Log("VaultGenerator: ✅ vault swapped into place — \(written) notes at \(Self.vaultRoot.path)")
 
         return Result(notes: written, folders: folders,

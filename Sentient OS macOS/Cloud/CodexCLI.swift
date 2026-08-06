@@ -86,69 +86,25 @@ actor CodexCLI {
     /// One headless `codex exec` call, fully specified.
     struct Invocation: Sendable {
         var prompt: String
+        let policy: CodexDataAccessPolicy
         var model: Model = .gpt56sol              // gpt-5.6-sol for everything except the Gmail tier
         var effort: Effort = .high             // gpt-5.6-sol default (nothing overrides upward); Gmail tier → .medium
         var sandbox: Sandbox = .readOnly
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd
-        var webSearch = true                   // native web_search tool — available to EVERY call
-        var includeUserConfig = true           // load the user's ~/.codex config + MCP servers (e.g.
-                                               // their Gmail MCP) for EVERY call. Set false for a
-                                               // hermetic run (then we pass --ignore-user-config).
-        var bypassApprovals = false            // --dangerously-bypass-approvals-and-sandbox: NO
-                                               // approval prompts AND NO sandbox. COMPUTER USE ONLY:
-                                               // the computer-use plugin's per-app "allow app X?"
-                                               // elicitations auto-accept only under the full-access
-                                               // profile — under any Seatbelt profile a headless run
-                                               // auto-denies them (measured 2026-07-18). Hosted
-                                               // connector WRITES no longer ride this — they use
-                                               // `approveConnectorWrites` (sandbox stays ON).
-                                               // TRUSTED, app-authored prompts ONLY (no sandbox!).
-        var configOverrides: [String] = []     // extra raw `-c key=value` TOML overrides, scoped to
-                                               // THIS run only (never persisted into the user's
-                                               // config.toml). Use the curated presets below.
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
         var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
-        var feature: String = "unknown"        // §7.9: which caller — so a codex.failure is attributable
-                                               // (gmail / calendar / vault / proactive / …). Diagnostics
-                                               // tag ONLY; never affects the run.
         var diag: [String: String] = [:]       // caller-supplied structured diagnostics merged into a
                                                // codex.failure's extra (e.g. the vault's corpus_chars /
                                                // slices / slice_index). Ints and enums rendered as
                                                // strings ONLY — never paths, UUIDs, or free text (the
                                                // Sentry scrubber [Filtered]s those into uselessness).
 
-        init(prompt: String) { self.prompt = prompt }
-
-        /// Pre-approves hosted-connector WRITE tools (Gmail `send_email`, Calendar create) for one
-        /// run while the Seatbelt sandbox stays ON — the sandboxed replacement for `bypassApprovals`
-        /// on the executor's connector channels. `apps._default` is the catch-all codex's approval
-        /// chain falls to for ANY connector, so this is portable across users and connector-catalog
-        /// ids (verified live with a real Gmail send under `-s read-only`, 2026-07-18). Reserve it
-        /// for fixed, app-authored prompts that fire exactly one declared action.
-        static let approveConnectorWrites = [
-            #"apps._default.default_tools_approval_mode="approve""#,
-        ]
-
-        /// Removes the connector tools that transmit externally (`open_world_hint` — e.g. Gmail
-        /// send) or destroy data (`destructive_hint` — trash/delete) from the run's tool surface
-        /// entirely; read tools are untouched. For read-only phases (proactive research): "never
-        /// fire" becomes the tools not existing — on top of the prompt rule and the headless
-        /// auto-cancel of unapproved writes. Verified live 2026-07-18: Gmail search completes
-        /// while a send attempt fails with "is not a function" — the tool is genuinely absent.
-        /// The keys MUST be the LONG global catalog connector ids: friendly slugs ("gmail") are
-        /// silent no-ops for hosted connectors, and the app-wide `apps._default` variant strips
-        /// the READ tools too (both measured, codexperms self-test). The ids are global marketplace
-        /// constants (same for every user — see OpenAI's public `openai/plugins` repo, or
-        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). If one ever
-        /// rotated, this strip degrades to a harmless no-op and the other two layers still hold.
-        static let stripConnectorActionTools = [
-            "apps.connector_2128aebfecb84f64a069897515042a44.open_world_enabled=false",    // gmail
-            "apps.connector_2128aebfecb84f64a069897515042a44.destructive_enabled=false",   // gmail
-            "apps.connector_947e0d954944416db111db556030eea6.open_world_enabled=false",    // google-calendar
-            "apps.connector_947e0d954944416db111db556030eea6.destructive_enabled=false",   // google-calendar
-        ]
+        init(prompt: String, policy: CodexDataAccessPolicy) {
+            self.prompt = prompt
+            self.policy = policy
+        }
     }
 
     /// The `--json` JSONL stream, reduced to an envelope.
@@ -160,7 +116,7 @@ actor CodexCLI {
         let inputTokens: Int?
         let cachedInputTokens: Int?
         let outputTokens: Int?
-        let raw: String                        // full JSONL, for debugging
+        let accessObservations: [CodexAccessObservation]
 
         /// The final message reduced to its JSON payload: everything outside the outermost
         /// `{…}`/`[…]` (markdown fences, stray prose) is stripped. On the ChatGPT backend
@@ -188,6 +144,9 @@ actor CodexCLI {
         case timedOut(after: TimeInterval)
         case exitFailure(code: Int32, message: String)
         case badEnvelope(String)
+        case unsupportedVersion(found: String, minimum: String)
+        case invalidPolicy(String)
+        case policyViolation(CodexAccessObservation)
         /// Subscription window exhausted. `sessionID` (when present) lets the caller resume the
         /// same agentic session later instead of starting over.
         case usageLimit(message: String, sessionID: String?)
@@ -203,15 +162,55 @@ actor CodexCLI {
             case .timedOut(let t):                return "codex exec timed out after \(Int(t))s"
             case .exitFailure(let code, let m):   return "codex exited \(code): \(m.prefix(300))"
             case .badEnvelope(let m):             return "Unparseable codex output: \(m.prefix(300))"
+            case .unsupportedVersion(let found, let minimum):
+                return "Codex \(minimum) or newer is required (found \(found)). Update Codex and try again."
+            case .invalidPolicy(let reason):      return "Codex data-access policy rejected: \(reason)"
+            case .policyViolation:                return "Codex attempted data access outside this run's declared policy."
             case .usageLimit(let m, _):           return "Codex usage limit: \(m.prefix(200))"
             case .inputTooLarge(let c):           return "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
             }
         }
     }
 
+    /// Internal transport that preserves content-free observations when JSONL parsing fails. The
+    /// public error is unwrapped again in `run`, so existing typed caller behavior is unchanged.
+    private struct ObservedRunFailure: Error {
+        let error: CLIError
+        let observations: [CodexAccessObservation]
+    }
+
     // MARK: Discovery
 
     private static let pathCacheKey = "codexcli.binaryPath"
+    static let minimumVersion = "0.146.0"
+
+    /// Version-gate the strict policy surface (`--strict-config`, ephemeral sessions and exact
+    /// app/tool controls) before any prompt is sent. Unknown versions fail closed.
+    private static func versionError(binary: String) -> CLIError? {
+        guard let out = try? execute(binary: binary, args: ["--version"], stdinText: nil,
+                                     cwd: nil, timeout: 10), out.status == 0 else {
+            return .unsupportedVersion(found: "unknown", minimum: minimumVersion)
+        }
+        let found = (out.stdout + " " + out.stderr)
+            .split(whereSeparator: { $0 == " " || $0 == "\n" })
+            .map(String.init)
+            .first(where: { $0.first?.isNumber == true && $0.contains(".") }) ?? "unknown"
+        guard version(found, isAtLeast: minimumVersion) else {
+            return .unsupportedVersion(found: found, minimum: minimumVersion)
+        }
+        return nil
+    }
+
+    private static func version(_ found: String, isAtLeast required: String) -> Bool {
+        func parts(_ value: String) -> [Int] {
+            value.split(separator: ".").prefix(3).map { component in
+                Int(component.prefix(while: \.isNumber)) ?? 0
+            }
+        }
+        let lhs = parts(found), rhs = parts(required)
+        guard lhs.count == 3, rhs.count == 3 else { return false }
+        return lhs.lexicographicallyPrecedes(rhs) == false
+    }
 
     /// The managed install first (unconditionally), then known locations, then a login-shell
     /// `which` (GUI apps don't inherit the user's PATH). Discovery results are cached in
@@ -410,9 +409,27 @@ actor CodexCLI {
     }
 
     private static func ping(forceCustom: Bool = false) async -> Availability {
-        guard let bin = locateBinary() else { return .notInstalled }
+        let policy = CodexDataAccessPolicy.validation
+        let receiptTime = Date()
+        func finish(_ value: Availability,
+                    observations: [CodexAccessObservation] = [],
+                    forcedOutcome: CodexAccessReceipt.Outcome? = nil) async -> Availability {
+            let outcome: CodexAccessReceipt.Outcome
+            if let forcedOutcome { outcome = forcedOutcome }
+            else if case .available = value { outcome = .succeeded }
+            else { outcome = .failed }
+            await CodexAccessLedger.shared.record(policy: policy, observations: observations,
+                                                   outcome: outcome, at: receiptTime)
+            return value
+        }
+        guard let bin = locateBinary() else { return await finish(.notInstalled) }
+        if let error = versionError(binary: bin) {
+            return await finish(.notWorking(error.description))
+        }
         let custom = forceCustom || ModelBackend.current == .custom
-        var args = ["exec", "--json", "--ignore-user-config", "-s", Sandbox.readOnly.rawValue]
+        var args = ["exec", "--json", "--ephemeral", "--strict-config", "--ignore-user-config",
+                    "--ignore-rules", "-s", Sandbox.readOnly.rawValue]
+        for override in policy.configurationOverrides() { args += ["-c", override] }
         var timeout: TimeInterval = 30
         var prompt = "Reply with exactly: PIGGYBACK_OK"
         var probeImage: (url: URL, code: String)?
@@ -421,7 +438,7 @@ actor CodexCLI {
         if custom {
             let provider = CustomProvider.current
             guard provider.isConfigured else {
-                return .notWorking("Custom model not configured — set a base URL and model name.")
+                return await finish(.notWorking("Custom model not configured — set a base URL and model name."))
             }
             for override in provider.providerOverrides() { args += ["-c", override] }
             // The probe rides the SAME reasoning level real runs will use (providers have hard
@@ -440,23 +457,33 @@ actor CodexCLI {
         do {
             let out = try await executeAsync(binary: bin, args: args,
                                              stdinText: nil, cwd: nil, timeout: timeout)
+            let observations = accessObservations(in: out.stdout)
+            let envelope: Envelope
+            do {
+                envelope = try parseEnvelope(out, durationMS: 0, policy: policy)
+            } catch {
+                let outcome: CodexAccessReceipt.Outcome
+                if case CLIError.policyViolation = error { outcome = .policyViolation }
+                else { outcome = .failed }
+                return await finish(.notWorking("\(error)"), observations: observations,
+                                    forcedOutcome: outcome)
+            }
             if let probeImage {
-                guard out.status == 0 else {
-                    let detail = out.stderr.isEmpty ? out.stdout : out.stderr
-                    return .notWorking(String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))
-                }
                 // The model must have READ the code — proof it sees screenshots, not just that
                 // the endpoint tolerated an image part.
-                guard out.stdout.contains(probeImage.code) else {
-                    return .notWorking("blind: the model answered but could not read the test image")
+                guard envelope.result.contains(probeImage.code) else {
+                    return await finish(.notWorking("blind: the model answered but could not read the test image"),
+                                        observations: observations)
                 }
-                return .available(path: bin)
+                return await finish(.available(path: bin), observations: observations)
             }
-            if out.status == 0 && out.stdout.contains("PIGGYBACK_OK") { return .available(path: bin) }
-            let detail = out.stderr.isEmpty ? out.stdout : out.stderr
-            return .notWorking(String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))
+            if envelope.result.contains("PIGGYBACK_OK") {
+                return await finish(.available(path: bin), observations: observations)
+            }
+            return await finish(.notWorking("The validation model returned an unexpected response."),
+                                observations: observations)
         } catch {
-            return .notWorking("\(error)")
+            return await finish(.notWorking("\(error)"))
         }
     }
 
@@ -467,19 +494,18 @@ actor CodexCLI {
     func run(_ invocation: Invocation,
              onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
         var invocation = invocation
+        let receiptTime = Date()
         let (modelID, effortArg) = Self.backendTuned(model: invocation.model,
                                                      effort: invocation.effort)
         if ModelBackend.current == .custom {
-            // The custom endpoint rides the existing plumbing: the provider table + guards as
-            // per-run `-c` overrides, and NO web_search (an OpenAI-server-side tool — a foreign
-            // endpoint either rejects or silently drops it).
-            invocation.configOverrides += CustomProvider.current.providerOverrides()
-            invocation.webSearch = false
-            // Hermetic: a ChatGPT-logged-in Mac otherwise loads every hosted-connector plugin
-            // into the run (hundreds of KB of tool specs — a context bomb for a 63k local
-            // model, and dead weight everywhere: connectors are ChatGPT-only). Computer use is
-            // unaffected — it rides runAgentCommand, which keeps the user config.
-            invocation.includeUserConfig = false
+            // Hosted apps and OpenAI web search are account services, not capabilities a custom
+            // endpoint can safely inherit. Fail closed if a caller routes such a policy here.
+            guard invocation.policy.hostedApps.isEmpty, invocation.policy.web == .denied else {
+                let error = CLIError.invalidPolicy("hosted apps and web research require the ChatGPT backend")
+                await CodexAccessLedger.shared.record(policy: invocation.policy, observations: [],
+                                                       outcome: .failed, at: receiptTime)
+                throw error
+            }
             // `--output-schema` is unreliable off-OpenAI (several Responses shims accept the
             // schema and ignore it; codex's schema path hung against LM Studio — measured
             // 2026-07-24). The schema becomes a prompt instruction; Envelope.jsonResult is the
@@ -492,19 +518,45 @@ actor CodexCLI {
         }
         let t0 = Date()   // §7.9: for the codex.failure duration on the throw path
         do {
-            return try await runInner(invocation, modelID: modelID, effortArg: effortArg,
-                                      onLine: onLine)
+            let envelope = try await runInner(invocation, modelID: modelID, effortArg: effortArg,
+                                              onLine: onLine)
+            await CodexAccessLedger.shared.record(policy: invocation.policy,
+                                                   observations: envelope.accessObservations,
+                                                   outcome: .succeeded, at: receiptTime)
+            return envelope
         } catch {
+            let reportedError: Error
+            let observations: [CodexAccessObservation]
+            if let observedFailure = error as? ObservedRunFailure {
+                reportedError = observedFailure.error
+                observations = observedFailure.observations
+            } else {
+                reportedError = error
+                observations = []
+            }
+            let outcome: CodexAccessReceipt.Outcome
+            if case CLIError.policyViolation = reportedError {
+                outcome = .policyViolation
+            } else if case CLIError.invalidPolicy = reportedError {
+                outcome = .policyViolation
+            } else if Task.isCancelled {
+                outcome = .cancelled
+            } else {
+                outcome = .failed
+            }
+            await CodexAccessLedger.shared.record(policy: invocation.policy, observations: observations,
+                                                   outcome: outcome, at: receiptTime)
             // A cancelled Task is the user's STOP: the SIGTERM'd process exits non-zero, which
             // masqueraded as a real exitFailure in Sentry (field-found 2026-07-12). Not a defect.
             if !Task.isCancelled {
-                Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
+                Self.emitCodexFailure(event: "codex.failure", reportedError,
+                                      feature: invocation.policy.purpose.rawValue,
                                       modelID: modelID, effort: effortArg,
                                       resumed: invocation.resumeSessionID != nil,
                                       durationMS: Int(Date().timeIntervalSince(t0) * 1000),
                                       diag: invocation.diag)
             }
-            throw error
+            throw reportedError
         }
     }
 
@@ -517,9 +569,22 @@ actor CodexCLI {
 
     private func runInner(_ invocation: Invocation, modelID: String, effortArg: String,
                           onLine: (@Sendable (String) -> Void)? = nil) async throws -> Envelope {
+        guard invocation.policy.version == CodexDataAccessPolicy.currentVersion else {
+            throw CLIError.invalidPolicy("unsupported policy version")
+        }
+        guard !invocation.policy.userInitiatedComputerUse else {
+            throw CLIError.invalidPolicy("computer use must use the dedicated agent-command spine")
+        }
+        if invocation.resumeSessionID != nil, invocation.policy.session != .resumable {
+            throw CLIError.invalidPolicy("an ephemeral policy cannot resume a session")
+        }
         if invocation.prompt.utf8.count > Self.promptByteCap {
             throw CLIError.inputTooLarge(chars: invocation.prompt.utf8.count)
         }
+        guard let located = Self.locateBinary() else {
+            throw CLIError.notAvailable(.notInstalled)
+        }
+        if let error = Self.versionError(binary: located) { throw error }
         let availability = await validate()
         guard case .available(let bin) = availability else {
             throw CLIError.notAvailable(availability)
@@ -548,7 +613,13 @@ actor CodexCLI {
                                               cwd: invocation.cwd,
                                               timeout: invocation.timeout,
                                               onStdoutLine: stdoutLine)
-        return try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
+        do {
+            return try Self.parseEnvelope(out,
+                                          durationMS: Int(Date().timeIntervalSince(started) * 1000),
+                                          policy: invocation.policy)
+        } catch let error as CLIError {
+            throw ObservedRunFailure(error: error, observations: Self.accessObservations(in: out.stdout))
+        }
     }
 
     /// The command bar's "Let me DO stuff for you" spine — computer use (the "computer use" phrase is
@@ -563,17 +634,19 @@ actor CodexCLI {
     /// (content = DATA), one-declared-task, user-fired only, live streaming + universal STOP. Each output LINE is
     /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
     /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
-    /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
-    /// --ignore-user-config). Returns the full output.
+    /// (`~/.local/bin/codex` first). User config, rules, memories, account apps, MCP servers, and
+    /// plugins remain blocked except for the exact bundled computer-use plugin. Returns the full output.
     ///
     /// `imagePaths` (optional): screenshots of the user's displays (main first), attached with
     /// `codex exec -i <file>...` so the agent SEES what they're looking at (the notch/command-bar
     /// path passes one per display; the proactive executor passes none). They're placed right before
     /// `--skip-git-repo-check` so the flag terminates `-i`'s variadic `<FILE>...` and the prompt is
     /// never mistaken for another image.
-    func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
+    func runAgentCommand(_ prompt: String, policy: CodexDataAccessPolicy,
+                         imagePaths: [String] = [], timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
+        let receiptTime = Date()
         // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
         // per run, so a change applies to the very next fire with no restart. backendTuned: on the
         // custom backend the user's endpoint model + its ONE reasoning level drive computer use
@@ -582,19 +655,25 @@ actor CodexCLI {
         let (modelID, effortArg) = Self.backendTuned(model: .gpt56sol,
                                                      effort: ComputerUseSpeed.current.effort)
         do {
+            guard policy == .computerUse, policy.userInitiatedComputerUse else {
+                throw CLIError.invalidPolicy("agent commands require the explicit user-initiated computer-use policy")
+            }
             // Same pre-spawn guard as `run` — this spine passes the prompt as ARGV, where an
             // oversized prompt dies even earlier (ARG_MAX) with an unhelpful spawn error.
             if prompt.utf8.count > Self.promptByteCap {
                 throw CLIError.inputTooLarge(chars: prompt.utf8.count)
             }
             guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+            if let error = Self.versionError(binary: bin) { throw error }
             // Self-heal the relaxed confirmation policy: a plugin update (desktop app or a
             // re-bootstrap) lays a fresh STOCK SKILL.md, whose policy stalls headless runs on
             // "shall I proceed?" questions nothing can answer. Cheap file check, idempotent.
             ComputerUseSkillPatch.ensureApplied()
-            var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
+            var args = ["exec", "--ephemeral", "--strict-config", "--ignore-user-config",
+                        "--ignore-rules", "--dangerously-bypass-approvals-and-sandbox",
                         "-m", modelID,
                         "-c", "model_reasoning_effort=\"\(effortArg)\""]
+            for override in policy.configurationOverrides() { args += ["-c", override] }
             if ModelBackend.current == .custom {
                 for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
             }
@@ -605,8 +684,19 @@ actor CodexCLI {
                 let detail = out.stderr.isEmpty ? out.stdout : out.stderr
                 throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
             }
+            await CodexAccessLedger.shared.record(policy: policy,
+                                                   observations: [.computerUseUnavailable],
+                                                   outcome: .succeeded, at: receiptTime)
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
+            let outcome: CodexAccessReceipt.Outcome
+            if case CLIError.invalidPolicy = error { outcome = .policyViolation }
+            else { outcome = Task.isCancelled ? .cancelled : .failed }
+            await CodexAccessLedger.shared.record(policy: policy,
+                                                   observations: policy.userInitiatedComputerUse
+                                                       ? [.computerUseUnavailable] : [],
+                                                   outcome: outcome,
+                                                   at: receiptTime)
             // §7.9: computer-use is the full-capability path (bypass-sandbox, user-fired), so a
             // genuine failure is worth a structured event. Case name only — and never on a cancelled
             // Task (the user's STOP kills codex → non-zero exit, which is not a failure; field-found
@@ -640,6 +730,9 @@ actor CodexCLI {
             (caseName, level) = ("exitFailure", .error)
             extra["exit_code"] = String(code)
         case CLIError.badEnvelope:  (caseName, level) = ("badEnvelope", .error)
+        case CLIError.unsupportedVersion: (caseName, level) = ("unsupportedVersion", .warning)
+        case CLIError.invalidPolicy: (caseName, level) = ("invalidPolicy", .error)
+        case CLIError.policyViolation: (caseName, level) = ("policyViolation", .error)
         case CLIError.inputTooLarge(let chars):
             // The canary: every prompt path is byte-budgeted, so this should stay at zero.
             (caseName, level) = ("inputTooLarge", .error)
@@ -660,42 +753,30 @@ actor CodexCLI {
     /// [MEASURED] A resumed session's workspace root is the PROCESS cwd (not the remembered
     /// one), so `execute`'s cwd is load-bearing there, and the sandbox rides the
     /// `sandbox_mode` config key instead of `-s`.
-    private static func arguments(for inv: Invocation, modelID: String, effortArg: String,
-                                  schemaFile: String?) -> [String] {
+    static func arguments(for inv: Invocation, modelID: String, effortArg: String,
+                          schemaFile: String?) -> [String] {
         var args = ["exec"]
         if let sid = inv.resumeSessionID { args += ["resume", sid] }
-        args += ["--json",
+        args += ["--json", "--strict-config", "--ignore-user-config", "--ignore-rules",
                  "--skip-git-repo-check",      // staging dirs and the vault aren't git repos
                  "-m", modelID,
                  "-c", "model_reasoning_effort=\"\(effortArg)\""]
-        if !inv.includeUserConfig {
-            args += ["--ignore-user-config"]   // explicit hermetic opt-out only — includeUserConfig
-        }                                      // defaults TRUE, so by default we DON'T pass this and
-                                               // the user's ~/.codex config + MCP servers ARE loaded.
-
-        // Approvals + sandbox. `codex exec` is headless and can't answer an approval prompt:
-        //  · default → `approval_policy=never` (don't stall) + the Seatbelt sandbox (`-s`) as the
-        //    real guardrail for shell/file ops. Hosted-connector WRITE tools are approval-gated
-        //    ("user cancelled MCP tool call" headless) — a caller that must fire one keeps this
-        //    sandboxed path and adds `approveConnectorWrites` to `configOverrides` instead.
-        //  · bypassApprovals → `--dangerously-bypass-approvals-and-sandbox` (NO approvals, NO
-        //    sandbox) — computer use only (its per-app elicitations auto-deny headless under any
-        //    Seatbelt profile). Mutually exclusive — codex rejects `-s`/approval_policy with it.
-        if inv.bypassApprovals {
-            args += ["--dangerously-bypass-approvals-and-sandbox"]
-            if inv.resumeSessionID == nil, let cwd = inv.cwd { args += ["--cd", cwd] }
-        } else {
-            args += ["-c", "approval_policy=\"never\""]
-            if inv.resumeSessionID == nil {
-                args += ["-s", inv.sandbox.rawValue]
-                if let cwd = inv.cwd { args += ["--cd", cwd] }
-                for dir in inv.addDirs { args += ["--add-dir", dir] }
-            } else {
-                args += ["-c", "sandbox_mode=\"\(inv.sandbox.rawValue)\""]
-            }
+        if inv.policy.session == .ephemeral {
+            args += ["--ephemeral"]
         }
-        for override in inv.configOverrides { args += ["-c", override] }
-        if inv.webSearch { args += ["-c", "tools.web_search=true"] }
+        for override in inv.policy.configurationOverrides() { args += ["-c", override] }
+        if ModelBackend.current == .custom {
+            for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
+        }
+
+        // Agent commands own the only bypass path. JSON invocations always keep Seatbelt enabled.
+        if inv.resumeSessionID == nil {
+            args += ["-s", inv.sandbox.rawValue]
+            if let cwd = inv.cwd { args += ["--cd", cwd] }
+            for dir in inv.addDirs { args += ["--add-dir", dir] }
+        } else {
+            args += ["-c", "sandbox_mode=\"\(inv.sandbox.rawValue)\""]
+        }
         if let schemaFile { args += ["--output-schema", schemaFile] }
         args.append("-")                       // the prompt arrives on stdin
         return args
@@ -707,12 +788,14 @@ actor CodexCLI {
                                             "limit resets", "quota", "too many requests",
                                             "out of extra usage", "plan limit"]
 
-    private static func parseEnvelope(_ out: ExecResult, durationMS: Int) throws -> Envelope {
+    static func parseEnvelope(_ out: ExecResult, durationMS: Int,
+                              policy: CodexDataAccessPolicy) throws -> Envelope {
         var sessionID: String?
         var lastMessage: String?
         var completedItems = 0
         var usage: [String: Any]?
         var errors: [String] = []
+        let observations = accessObservations(in: out.stdout)
 
         for line in out.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
@@ -721,12 +804,14 @@ actor CodexCLI {
             switch type {
             case "thread.started":
                 sessionID = obj["thread_id"] as? String
-            case "item.completed":
-                completedItems += 1
-                if let item = obj["item"] as? [String: Any],
-                   item["type"] as? String == "agent_message",
-                   let text = item["text"] as? String {
-                    lastMessage = text
+            case "item.started", "item.completed":
+                if type == "item.completed" { completedItems += 1 }
+                if let item = obj["item"] as? [String: Any] {
+                    if type == "item.completed",
+                       item["type"] as? String == "agent_message",
+                       let text = item["text"] as? String {
+                        lastMessage = text
+                    }
                 }
             case "turn.completed":
                 usage = obj["usage"] as? [String: Any]
@@ -739,6 +824,12 @@ actor CodexCLI {
             default:
                 break
             }
+        }
+
+        // Authorization is checked before exit/message handling. Even a run that later failed must
+        // never have an undeclared tool result returned to a caller.
+        if let unauthorized = observations.first(where: { !policy.allows($0) }) {
+            throw CLIError.policyViolation(unauthorized)
         }
 
         // Failure = non-zero exit OR no final message (a recovered mid-run error that still
@@ -774,8 +865,21 @@ actor CodexCLI {
             inputTokens: usage?["input_tokens"] as? Int,
             cachedInputTokens: usage?["cached_input_tokens"] as? Int,
             outputTokens: usage?["output_tokens"] as? Int,
-            raw: out.stdout
+            accessObservations: observations
         )
+    }
+
+    /// One content-free scan shared by success, failure, and validation paths. Keeping this
+    /// independent of result parsing ensures failed tool lifecycles still reach the receipt.
+    private static func accessObservations(in jsonl: String) -> [CodexAccessObservation] {
+        jsonl.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let data = line.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let eventType = obj["type"] as? String,
+                  eventType == "item.started" || eventType == "item.completed",
+                  let item = obj["item"] as? [String: Any] else { return nil }
+            return CodexAccessObservation.canonical(item: item, eventType: eventType)
+        }
     }
 
     /// Reduce one raw `--json` event line to a short, human-readable play-by-play line for a live UI

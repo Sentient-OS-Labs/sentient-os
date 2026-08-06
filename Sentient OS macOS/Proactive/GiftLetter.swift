@@ -56,13 +56,10 @@ actor GiftLetter {
         try? fm.removeItem(at: giftFile)               // clear any stale copy before the run
         defer { try? fm.removeItem(at: giftFile) }     // never leave it behind, on ANY exit path
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(vaultPath: vault.path))
-        inv.feature = "giftletter"
+        var inv = CodexCLI.Invocation(prompt: Self.prompt(vaultPath: vault.path), policy: .giftLetter)
         inv.effort = .high                  // the gift should feel like magic — give it the deep pass
         inv.sandbox = .workspaceWrite       // it WRITES "Gift from Sentient.md" into the vault folder
         inv.cwd = vault.path                // the knowledge base is the working dir → reads + writes here
-        inv.webSearch = false               // grounded ONLY in their own life — no external facts
-        inv.includeUserConfig = false       // hermetic — no user MCP servers, nothing leaks in
         inv.timeout = 1_200
 
         Log("GiftLetter: writing the welcome gift from the knowledge base at \(vault.lastPathComponent)…")
