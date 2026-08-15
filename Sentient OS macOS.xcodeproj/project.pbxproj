@@ -1,0 +1,490 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		5A5A9A0001000000000000A1 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5A5A9A0001000000000000A2 /* Sparkle */; };
+		5A7E1D0002000000000000B1 /* TelemetryDeck in Frameworks */ = {isa = PBXBuildFile; productRef = 5A7E1D0002000000000000B2 /* TelemetryDeck */; };
+		5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.plist in Copy wake-helper daemon plist */ = {isa = PBXBuildFile; fileRef = 5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */; };
+		5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5AB7600D2FD12ABE00149A7F /* LiteRTLM */; };
+		5AE5710001000000000000A1 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 5AE5710001000000000000A2 /* Sentry */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		5A7E1D0003000000000000C1 /* Copy wake-helper daemon plist */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchDaemons;
+			dstSubfolderSpec = 1;
+			files = (
+				5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.plist in Copy wake-helper daemon plist */,
+			);
+			name = "Copy wake-helper daemon plist";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		5A3F39112FD0F43300DD835E /* Sentient OS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Sentient OS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		5A5167160C0F16AB00000001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
+		5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "jesai.Sentient-OS-macOS.WakeHelper.plist"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		5A3F39132FD0F43300DD835E /* Sentient OS macOS */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "Sentient OS macOS";
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		5A3F390E2FD0F43300DD835E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */,
+				5AE5710001000000000000A1 /* Sentry in Frameworks */,
+				5A7E1D0002000000000000B1 /* TelemetryDeck in Frameworks */,
+				5A5A9A0001000000000000A1 /* Sparkle in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		5A3F39082FD0F43300DD835E = {
+			isa = PBXGroup;
+			children = (
+				5A3F39132FD0F43300DD835E /* Sentient OS macOS */,
+				5A5167160C0F16AB00000001 /* Signing.xcconfig */,
+				5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */,
+				5A3F39122FD0F43300DD835E /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		5A3F39122FD0F43300DD835E /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				5A3F39112FD0F43300DD835E /* Sentient OS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		5A3F39102FD0F43300DD835E /* Sentient OS macOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5A3F391C2FD0F43400DD835E /* Build configuration list for PBXNativeTarget "Sentient OS macOS" */;
+			buildPhases = (
+				5A3F390D2FD0F43300DD835E /* Sources */,
+				5A3F390E2FD0F43300DD835E /* Frameworks */,
+				5A3F390F2FD0F43300DD835E /* Resources */,
+				5A7E1D0003000000000000C1 /* Copy wake-helper daemon plist */,
+				5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */,
+				5AE5710001000000000000B1 /* Upload dSYMs to Sentry */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				5A3F39132FD0F43300DD835E /* Sentient OS macOS */,
+			);
+			name = "Sentient OS macOS";
+			packageProductDependencies = (
+				5AB7600D2FD12ABE00149A7F /* LiteRTLM */,
+				5AE5710001000000000000A2 /* Sentry */,
+				5A7E1D0002000000000000B2 /* TelemetryDeck */,
+				5A5A9A0001000000000000A2 /* Sparkle */,
+			);
+			productName = "Sentient OS macOS";
+			productReference = 5A3F39112FD0F43300DD835E /* Sentient OS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		5A3F39092FD0F43300DD835E /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2650;
+				LastUpgradeCheck = 2650;
+				TargetAttributes = {
+					5A3F39102FD0F43300DD835E = {
+						CreatedOnToolsVersion = 26.5;
+					};
+				};
+			};
+			buildConfigurationList = 5A3F390C2FD0F43300DD835E /* Build configuration list for PBXProject "Sentient OS macOS" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 5A3F39082FD0F43300DD835E;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5AB7600C2FD12ABE00149A7F /* XCLocalSwiftPackageReference "Vendor/LiteRTLM" */,
+				5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */,
+				5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */,
+				5A5A9A0001000000000000A3 /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 5A3F39122FD0F43300DD835E /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				5A3F39102FD0F43300DD835E /* Sentient OS macOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		5A3F390F2FD0F43300DD835E /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Trim app bundle (thin LiteRT-LM, drop docs)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Sentient OS bundle-trim phase (runs before the final app code-sign, so the seal stays\n# valid). Two jobs, both shrinking the shipped .app:\n#\n# 1) Thin the prebuilt LiteRT-LM dylib to the app's ARCHS. Google ships CLiteRTLM_mac as a\n#    fat arm64+x86_64 binary (~127MB); arm64-only roughly halves the .app. ARCHS=arm64\n#    only governs code Xcode COMPILES -- a checksum-pinned remote SwiftPM binary is copied\n#    in whole, so we strip it here. Idempotent (skips an already-thin slice) + re-signs.\n# 2) Drop the internal engineering docs the synchronized file group sweeps in (the per-feature\n#    'Documentation - *.md' files, incl. the 'Documentation - General - *' set). They're public in the repo and never\n#    read at runtime; dead weight. Globbed so future docs are dropped automatically.\nset -e\n\nDYLIB=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libCLiteRTLM_mac.dylib\"\nif [ -f \"$DYLIB\" ]; then\n  THINNED=0\n  for arch in $(lipo -archs \"$DYLIB\"); do\n    case \" $ARCHS \" in\n      *\" $arch \"*) ;;\n      *) echo \"Thinning libCLiteRTLM_mac.dylib: removing $arch\"; lipo -remove \"$arch\" \"$DYLIB\" -output \"$DYLIB\"; THINNED=1 ;;\n    esac\n  done\n  if [ \"$THINNED\" = \"1\" ]; then\n    # Re-sign with the SAME options Xcode used, so a notarized Release stays valid: hardened\n    # runtime when enabled, plus a secure timestamp for Developer ID (distribution) signing\n    # only -- Apple Development / adhoc dev builds need neither (and skip the network round-trip).\n    SIGN_OPTS=\"\"\n    [ \"$ENABLE_HARDENED_RUNTIME\" = \"YES\" ] && SIGN_OPTS=\"--options runtime\"\n    case \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" in \"Developer ID\"*) SIGN_OPTS=\"$SIGN_OPTS --timestamp\" ;; esac\n    echo \"Re-signing thinned libCLiteRTLM_mac.dylib ($SIGN_OPTS)\"\n    codesign --force $SIGN_OPTS --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$DYLIB\"\n  fi\nelse\n  echo \"warning: libCLiteRTLM_mac.dylib not found at $DYLIB -- skipping arch thinning\"\nfi\n\nRES=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -d \"$RES\" ]; then\n  find \"$RES\" -name \"*.md\" -print -delete\nfi\n";
+		};
+		5AE5710001000000000000B1 /* Upload dSYMs to Sentry */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Upload dSYMs to Sentry";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Upload the app's dSYM to Sentry so RELEASE crash reports symbolicate to real function\n# names + line numbers (Debug builds have symbols locally, so this is Release-only). Reads\n# auth + org/project from the gitignored .sentryclirc at SRCROOT. Every guard EXITS 0 so a\n# missing token, missing sentry-cli, or a failed upload NEVER breaks the build -- Debug\n# builds, OSS clones, and CI without the config just skip it. Doc: Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md\nif [ \"${CONFIGURATION}\" != \"Release\" ]; then\n  echo \"Sentry: skipping dSYM upload (CONFIGURATION=${CONFIGURATION})\"\n  exit 0\nfi\nSENTRY_CLI=\"$(command -v sentry-cli || echo /opt/homebrew/bin/sentry-cli)\"\nif [ ! -x \"$SENTRY_CLI\" ]; then\n  echo \"warning: sentry-cli not found -- skipping Sentry dSYM upload (brew install getsentry/tools/sentry-cli)\"\n  exit 0\nfi\ncd \"${SRCROOT}\" || exit 0\nif [ ! -f .sentryclirc ] && [ -z \"${SENTRY_AUTH_TOKEN}\" ]; then\n  echo \"warning: no .sentryclirc or SENTRY_AUTH_TOKEN -- skipping Sentry dSYM upload\"\n  exit 0\nfi\necho \"Sentry: uploading dSYMs from ${DWARF_DSYM_FOLDER_PATH}\"\n\"$SENTRY_CLI\" debug-files upload --include-sources \"${DWARF_DSYM_FOLDER_PATH}\" || echo \"warning: Sentry dSYM upload failed (continuing build)\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5A3F390D2FD0F43300DD835E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		5A3F391A2FD0F43400DD835E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A5167160C0F16AB00000001 /* Signing.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		5A3F391B2FD0F43400DD835E /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = 5A5167160C0F16AB00000001 /* Signing.xcconfig */;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		5A3F391D2FD0F43400DD835E /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Sentient OS macOS.entitlements";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 4;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Sentient OS uses Automation so the computer-use agent you ask it to run can control apps on your Mac on your behalf.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sentient OS listens when you hold the right Command key, so you can speak the task you want done.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Sentient OS turns what you say — on your Mac — into the task you want it to do for you.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "jesai.Sentient-OS-macOS";
+				PRODUCT_NAME = "Sentient OS";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		5A3F391E2FD0F43400DD835E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = "Sentient OS macOS.entitlements";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 4;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SELECTED_FILES = readonly;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Sentient OS uses Automation so the computer-use agent you ask it to run can control apps on your Mac on your behalf.";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Sentient OS listens when you hold the right Command key, so you can speak the task you want done.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Sentient OS turns what you say — on your Mac — into the task you want it to do for you.";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 1.3;
+				PRODUCT_BUNDLE_IDENTIFIER = "jesai.Sentient-OS-macOS";
+				PRODUCT_NAME = "Sentient OS";
+				REGISTER_APP_GROUPS = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5A3F390C2FD0F43300DD835E /* Build configuration list for PBXProject "Sentient OS macOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A3F391A2FD0F43400DD835E /* Debug */,
+				5A3F391B2FD0F43400DD835E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		5A3F391C2FD0F43400DD835E /* Build configuration list for PBXNativeTarget "Sentient OS macOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A3F391D2FD0F43400DD835E /* Debug */,
+				5A3F391E2FD0F43400DD835E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5AB7600C2FD12ABE00149A7F /* XCLocalSwiftPackageReference "Vendor/LiteRTLM" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/LiteRTLM;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		5A5A9A0001000000000000A3 /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.9.4;
+			};
+		};
+		5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/TelemetryDeck/SwiftSDK";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.0.0;
+			};
+		};
+		5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/getsentry/sentry-cocoa.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 8.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		5A5A9A0001000000000000A2 /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A5A9A0001000000000000A3 /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+		5A7E1D0002000000000000B2 /* TelemetryDeck */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5A7E1D0002000000000000B3 /* XCRemoteSwiftPackageReference "SwiftSDK" */;
+			productName = TelemetryDeck;
+		};
+		5AB7600D2FD12ABE00149A7F /* LiteRTLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LiteRTLM;
+		};
+		5AE5710001000000000000A2 /* Sentry */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5AE5710001000000000000A3 /* XCRemoteSwiftPackageReference "sentry-cocoa" */;
+			productName = Sentry;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 5A3F39092FD0F43300DD835E /* Project object */;
+}

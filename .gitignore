@@ -1,0 +1,32 @@
+# macOS
+.DS_Store
+
+# Xcode — per-user state (never commit; machine-specific noise)
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Xcode / build output
+DerivedData/
+build/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM
+*.dSYM.zip
+
+# Swift Package Manager
+.build/
+.swiftpm/
+# (Package.resolved is deliberately COMMITTED — everyone resolves identical deps.)
+
+# On-device model weights (3.66 GB; bundled locally for dev, downloaded by users — never committed)
+*.litertlm
+
+# Sentry CLI config — holds the dSYM-upload AUTH TOKEN (a real bearer secret; NEVER commit).
+# Each dev/CI keeps their own; the Release build phase reads it. org/project are non-secret.
+.sentryclirc
+
+# Per-developer signing override (see Signing.xcconfig) — each dev's own DEVELOPMENT_TEAM.
+Signing.local.xcconfig
+

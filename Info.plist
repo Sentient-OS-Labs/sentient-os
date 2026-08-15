@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Sparkle auto-update configuration.
+
+	  This partial Info.plist carries ONLY the Sparkle keys. Everything else (bundle id, name,
+	  versions, the NS*UsageDescription strings) is still synthesized by GENERATE_INFOPLIST_FILE=YES
+	  and the INFOPLIST_KEY_* build settings — Xcode MERGES the generated keys on top of this file
+	  (that's why INFOPLIST_FILE + GENERATE_INFOPLIST_FILE coexist here). Do NOT duplicate generated
+	  keys in this file. Doc: Sentient OS macOS/Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md
+
+	  🔑 SUPublicEDKey below is the REAL production key (minted 2026-07-07 on Jesai's Mac). Its
+	  matching private seed lives ONLY in Jesai's login Keychain (service `https://sparkle-project.org`,
+	  account `ed25519`) — NEVER in the repo. This public key is the permanent root of trust: every
+	  future update must be EdDSA-signed with the matching private seed or the installed fleet rejects
+	  it. Back that seed up (export via `generate_keys -x` → 1Password, shared with Aditya) — losing it
+	  strands every user with no upgrade path. Rotating it means first shipping a build carrying a new
+	  key, so treat it as forever.
+	-->
+
+	<!-- The appcast Sparkle polls. Hosted on our own domain (Vercel) — a permanent contract, since
+	     every shipped build bakes this URL in forever. The DMG downloads live on GitHub Releases. -->
+	<key>SUFeedURL</key>
+	<string>https://sentient-os.ai/appcast.xml</string>
+
+	<!-- REAL production key (minted 2026-07-07). Private seed lives only in Jesai's login Keychain. -->
+	<key>SUPublicEDKey</key>
+	<string>Fyi7OXvg0zcV820ryP5HBQZTeBpVgXuKilIAVFTRLX0=</string>
+
+	<!-- Check every 3 hours (10800s; Sparkle's floor is 3600). Frequent releases are planned, and
+	     pairing steady discovery with the silent idle-relaunch below keeps users effortlessly current.
+	     Note: UpdateController.start() also fires ONE background check at launch, so a fresh relaunch
+	     discovers updates immediately regardless of this cadence. No second-launch permission prompt —
+	     there's nothing to opt out of. -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>10800</integer>
+
+	<!-- Chrome-style silent auto-update. Sparkle silently downloads + stages new versions; then
+	     UpdateController's `willInstallUpdateOnQuit` hook installs + relaunches on its own the moment
+	     it's safe (no pipeline run in flight, user not actively using the app) — no "install on quit"
+	     wait, zero taps. Because Sentient is a long-running menu-bar app, we deliberately do NOT set
+	     SUScheduledImpatientCheckInterval: idle-relaunch replaces the old 2-day forced-gate nag.
+	     Our OLED forced-update gate (SentientUpdateDriver / UpdateGateView — no skip, no remind) now
+	     appears ONLY when a silent install is genuinely impossible: macOS needs an admin password
+	     (app in a non-user-writable dir) or an install error — plus user-initiated "Check for Updates". -->
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+
+	<!-- Privacy Constitution: send no system profile, and never run JavaScript in release notes.
+	     The only network exposure is the appcast GET (IP + User-Agent) over HTTPS — no account. -->
+	<key>SUEnableSystemProfiling</key>
+	<false/>
+	<key>SUSendProfileInfo</key>
+	<false/>
+	<key>SUEnableJavaScript</key>
+	<false/>
+</dict>
+</plist>

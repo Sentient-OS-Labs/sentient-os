@@ -1,0 +1,17 @@
+// Signing.xcconfig — the ONE place the signing team lives (project.pbxproj carries none).
+//
+// The committed default is the SHIPPING team (Jesai's paid Apple Developer account —
+// Developer ID + notarization for the release DMG require it; free accounts can't do either).
+//
+// Per-developer override (e.g. Aditya's free account): create `Signing.local.xcconfig` next to
+// this file — it's git-ignored — containing one line:
+//     DEVELOPMENT_TEAM = <your team id>
+//
+// ⚠️ Never pick a Team via Xcode's Signing & Capabilities dropdown: that writes an explicit
+// DEVELOPMENT_TEAM back into project.pbxproj, which OVERRIDES this file and restarts the
+// two-devs-two-teams pbxproj ping-pong this setup exists to kill. If a PR diff ever shows a
+// DEVELOPMENT_TEAM line in project.pbxproj, that's what happened — reject it.
+
+DEVELOPMENT_TEAM = YJ8AZR3G5Q
+
+#include? "Signing.local.xcconfig"
