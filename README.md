@@ -249,3 +249,4 @@ Say hi: [jesai@sentient-os.ai](mailto:jesai@sentient-os.ai)
 <sub><samp>AGPL-3.0 · COMMERCIAL LICENSING IN <a href="LICENSING.md">LICENSING.MD</a> · <a href="https://sentient-os.ai">SENTIENT-OS.AI</a></samp></sub>
 </div>
 # sentient
+# sentient
