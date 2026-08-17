@@ -65,14 +65,14 @@ struct HealthPane: View {
     /// use, AND its two helper grants (verifiable only with FDA; unverifiable never claims
     /// "all good"). A free/go plan keeps the group expanded so its amber row stays visible.
     private var codexAllGreen: Bool {
-        codex.installed && accountHealthy && codex.computerUseReady
+        codex.installed && !codex.outdated && accountHealthy && codex.computerUseReady
             && fdaGranted && helperAccessibility && helperScreenRecording
     }
 
     private var allGreen: Bool {
         fdaGranted && daemon == .ready && loginOn && micSpeech == .granted && screenRec
             && (notifStatus == .authorized || notifStatus == .provisional)
-            && codex.installed && accountHealthy && codex.computerUseReady
+            && codex.installed && !codex.outdated && accountHealthy && codex.computerUseReady
             && (!showCodexPermissions || (helperAccessibility && helperScreenRecording))
     }
 
@@ -382,10 +382,13 @@ struct HealthPane: View {
         SettingsGroup(label: "Set Up Codex") {
             VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Codex CLI",
-                           health: codex.installed ? .ok : (codex.installing ? .warn : .bad),
-                           note: codex.installing ? "installing…" : (codex.installed ? "installed" : "not installed"),
-                           tip: "OpenAI's official Codex command line tool. Sentient runs its cloud thinking through it, using your own ChatGPT subscription.\n\nInstall runs OpenAI's own installer; if codex is already there it simply updates in place, and your login and settings are untouched.",
-                           fixTitle: "Install…",
+                           health: codex.installing ? .warn : (codex.installed && !codex.outdated ? .ok : .bad),
+                           note: codex.installing ? (codex.installed ? "updating…" : "installing…")
+                               : !codex.installed ? "not installed"
+                               : codex.outdated ? "needs an update"
+                               : (codex.version.map { "installed · \($0)" } ?? "installed"),
+                           tip: "OpenAI's official Codex command line tool. Sentient runs its cloud thinking through it, using your own ChatGPT subscription.\n\nSentient keeps it up to date on its own, quietly, at most once a day while you're away from the app. Install runs OpenAI's own installer; if codex is already there it simply updates in place, and your login and settings are untouched.",
+                           fixTitle: codex.installed ? "Update…" : "Install…",
                            fix: codex.installing ? nil : { Task { await codex.installCodex() } })
                 failureLine(codex.installStatus)
                 if ModelBackend.current == .custom {

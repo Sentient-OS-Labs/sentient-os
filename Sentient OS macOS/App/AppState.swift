@@ -84,6 +84,16 @@ final class AppState {
             Task { dockPolicy.reevaluate() }
         }
 
+        // Keep the managed Codex CLI current (CodexSetup.updateIfDue): a 15-minute tick that only
+        // acts when the user is away, the pipeline is idle, and the Sidekick/card run lock is free,
+        // at most one update a day. Post-onboarding only — onboarding runs the installer itself.
+        // Read the codex doc's "Keeping the CLI current" before touching this.
+        if hasCompletedOnboarding {
+            CodexSetup.shared.startKeepingCurrent { [weak self] in
+                self?.commandCoordinator.run.isRunning ?? true
+            }
+        }
+
         // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
         // grants quiet Notification Center delivery and lists us in Settings → Notifications (the
         // user sees at most the passive "Sentient OS can send you notifications" notice). Asked

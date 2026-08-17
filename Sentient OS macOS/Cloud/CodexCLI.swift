@@ -12,7 +12,9 @@
 //
 //  Key methods:
 //   - CodexCLI.locateBinary()  → binary discovery (managed install first, then cache/known paths/which)
-//   - install(onLine:)         → run OpenAI's standalone installer (the codex-setup onboarding step)
+//   - install(onLine:)         → run OpenAI's standalone installer (the codex-setup onboarding step;
+//                                it doubles as the updater — CodexSetup.updateIfDue runs it daily)
+//   - installedVersion / latestReleasedVersion / isNewer → the daily update's cheap version pre-check
 //   - startLogin / loginStatus → step 2: interactive `codex login` (browser) + the status check
 //   - validate(force:)         → Availability via ping (only a good verdict is cached)
 //   - run(_:)                  → Envelope (blocking JSONL mode)
@@ -195,6 +197,11 @@ actor CodexCLI {
         /// turn/start before the model runs). Thrown by the pre-spawn guard in both spines;
         /// with corpus slicing in place this is a canary that should never fire.
         case inputTooLarge(chars: Int)
+        /// The installed CLI is older than the files in the shared `~/.codex` (a newer codex,
+        /// typically the ChatGPT desktop app, rewrote `models_cache.json` in a schema this binary
+        /// can't read). `autoUpdating` = the binary is our managed install and CodexSetup is
+        /// already updating it; false means the user's own brew/npm codex, which we don't touch.
+        case staleClient(autoUpdating: Bool)
 
         var description: String {
             switch self {
@@ -205,6 +212,9 @@ actor CodexCLI {
             case .badEnvelope(let m):             return "Unparseable codex output: \(m.prefix(300))"
             case .usageLimit(let m, _):           return "Codex usage limit: \(m.prefix(200))"
             case .inputTooLarge(let c):           return "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
+            case .staleClient(let auto):
+                return auto ? "Codex was out of date. Updating it now; try again in a moment."
+                            : "Codex is out of date and can't read its newer files. Update it, then try again."
             }
         }
     }
@@ -212,6 +222,15 @@ actor CodexCLI {
     // MARK: Discovery
 
     private static let pathCacheKey = "codexcli.binaryPath"
+
+    /// Where OpenAI's standalone installer puts the CLI: a symlink into
+    /// `~/.codex/packages/standalone/current/`. The ONE copy Sentient installs and keeps current.
+    static let managedBinaryPath = FileManager.default.homeDirectoryForCurrentUser.path + "/.local/bin/codex"
+
+    /// Is the binary every run resolves to OUR managed install (vs. the user's own brew/npm/nvm
+    /// codex)? The daily updater only ever touches the managed copy: a package-managed codex is
+    /// the user's package manager's business.
+    static var usingManagedBinary: Bool { locateBinary() == managedBinaryPath }
 
     /// The managed install first (unconditionally), then known locations, then a login-shell
     /// `which` (GUI apps don't inherit the user's PATH). Discovery results are cached in
@@ -224,8 +243,7 @@ actor CodexCLI {
         // brew path would otherwise field every run with a stale binary while the fresh install
         // sat unused. `isExecutableFile` resolves the symlink, so a dangling link (e.g. a wiped
         // `~/.codex/packages`) falls through to the fallbacks instead of being returned.
-        let managed = "\(home)/.local/bin/codex"
-        if fm.isExecutableFile(atPath: managed) { return managed }
+        if fm.isExecutableFile(atPath: managedBinaryPath) { return managedBinaryPath }
         if let cached = UserDefaults.standard.string(forKey: pathCacheKey),
            fm.isExecutableFile(atPath: cached) {
             return cached
@@ -362,6 +380,54 @@ actor CodexCLI {
         if out.status == 0 { return true }
         let lowered = (out.stdout + out.stderr).lowercased()
         return lowered.contains("logged in") && !lowered.contains("not logged in")
+    }
+
+    // MARK: Versions (the daily update's cheap pre-check — see CodexSetup.updateIfDue)
+
+    /// The installed CLI's version string (`codex --version` → "codex-cli 0.147.0" → "0.147.0"),
+    /// or nil when there's no binary or it doesn't answer.
+    static func installedVersion() async -> String? {
+        guard let bin = locateBinary() else { return nil }
+        guard let out = try? await executeAsync(binary: bin, args: ["--version"],
+                                                stdinText: nil, cwd: nil, timeout: 10),
+              out.status == 0 else { return nil }
+        return out.stdout.split(whereSeparator: \.isWhitespace).last.map(String.init)
+    }
+
+    /// The newest released CLI version, from the same channel feed OpenAI's installer resolves
+    /// against (`releases.openai.com/codex/channels/latest`, `tag_name` = "rust-v0.147.0"). nil
+    /// when offline or the feed's shape changed; the caller then falls back to just running the
+    /// installer, which does its own resolution.
+    static func latestReleasedVersion() async -> String? {
+        guard let url = URL(string: "https://releases.openai.com/codex/channels/latest") else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        request.httpMethod = "GET"
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tag = obj["tag_name"] as? String else { return nil }
+        let version = tag.hasPrefix("rust-v") ? String(tag.dropFirst("rust-v".count)) : tag
+        return version.isEmpty ? nil : version
+    }
+
+    /// Is `candidate` a newer release than `installed`? Semver-shaped: numeric core compared
+    /// component-wise; when cores tie, a final release beats a prerelease ("0.147.0" is newer than
+    /// "0.147.0-alpha.6.5", so a hand-dropped alpha still moves up to its release), and two
+    /// prereleases of the same core are treated as equal (never churn between alphas).
+    static func isNewer(_ candidate: String, than installed: String) -> Bool {
+        func split(_ v: String) -> (core: [Int], prerelease: Bool) {
+            let parts = v.split(separator: "-", maxSplits: 1)
+            let core = (parts.first ?? "").split(separator: ".").map { Int($0) ?? 0 }
+            return (core, parts.count > 1)
+        }
+        let a = split(candidate), b = split(installed)
+        let n = max(a.core.count, b.core.count)
+        for i in 0..<n {
+            let x = i < a.core.count ? a.core[i] : 0
+            let y = i < b.core.count ? b.core[i] : 0
+            if x != y { return x > y }
+        }
+        return !a.prerelease && b.prerelease
     }
 
     // MARK: Validation
@@ -601,8 +667,10 @@ actor CodexCLI {
             if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
             args += ["--skip-git-repo-check", prompt]
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
+            Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
                 let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+                if let stale = Self.staleClientError(in: out.stderr, detail) { throw stale }
                 throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
             }
             return out.stdout.isEmpty ? out.stderr : out.stdout
@@ -640,6 +708,11 @@ actor CodexCLI {
             (caseName, level) = ("exitFailure", .error)
             extra["exit_code"] = String(code)
         case CLIError.badEnvelope:  (caseName, level) = ("badEnvelope", .error)
+        case CLIError.staleClient(let auto):
+            // Environment drift (a newer codex rewrote the shared cache), self-healed when the
+            // binary is ours — counted so we can see how often the field hits it.
+            (caseName, level) = ("staleClient", .warning)
+            extra["auto_updating"] = String(auto)
         case CLIError.inputTooLarge(let chars):
             // The canary: every prompt path is byte-budgeted, so this should stay at zero.
             (caseName, level) = ("inputTooLarge", .error)
@@ -707,6 +780,39 @@ actor CodexCLI {
                                             "limit resets", "quota", "too many requests",
                                             "out of extra usage", "plan limit"]
 
+    /// The stale-client signature: an older CLI failing to deserialize a `~/.codex` cache a newer
+    /// codex wrote (field-found on 1.3: `codex_models_manager: failed to renew cache TTL: missing
+    /// field \`base_instructions\``, after the ChatGPT desktop app's bundled CLI rewrote
+    /// `models_cache.json`; reproduced 2026-08-17 as `failed to load models cache: missing field
+    /// \`base_instructions\`` on 0.144.6 against a 0.147.0 cache). Deliberately narrow: only
+    /// serde's "missing field" WITH the cache context, never any "missing field" (a bad `-c`
+    /// override says that too), so it can't misfire on our own config mistakes.
+    private static func isStaleClientSignature(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        if lowered.contains("failed to renew cache ttl") { return true }
+        return lowered.contains("missing field `") && lowered.contains("cache")
+    }
+
+    /// The run's stderr carries the signature, whatever the outcome (measured: an older CLI logs
+    /// the cache error, refetches, and usually finishes fine). Drifting: tell CodexSetup so the
+    /// next idle tick updates ahead of the daily cap. No error, no banner — a FAILED run is
+    /// classified separately below.
+    private static func noteStaleSignatureIfPresent(_ stderr: String) {
+        guard isStaleClientSignature(stderr) else { return }
+        Task { @MainActor in CodexSetup.shared.noteStaleSignal() }
+    }
+
+    /// Classify a FAILED run as a stale client if any of `texts` carries the signature, and kick
+    /// the repair: CodexSetup updates the managed binary right away (a no-op for a brew/npm
+    /// codex, which stays the user's to update) and raises the health rung so the home and
+    /// Settings say what happened. Returns nil when it's some other failure.
+    private static func staleClientError(in texts: String...) -> CLIError? {
+        guard texts.contains(where: isStaleClientSignature) else { return nil }
+        let managed = usingManagedBinary
+        Task { @MainActor in await CodexSetup.shared.repairStaleClient() }   // logs there
+        return .staleClient(autoUpdating: managed)
+    }
+
     private static func parseEnvelope(_ out: ExecResult, durationMS: Int) throws -> Envelope {
         var sessionID: String?
         var lastMessage: String?
@@ -741,6 +847,8 @@ actor CodexCLI {
             }
         }
 
+        noteStaleSignatureIfPresent(out.stderr)   // success or failure: the drift nudge either way
+
         // Failure = non-zero exit OR no final message (a recovered mid-run error that still
         // produced an answer with exit 0 counts as success). The thread id arrives in the very
         // first event, so even a mid-run usage limit keeps its resume handle.
@@ -760,6 +868,9 @@ actor CodexCLI {
             if usageLimitMarkers.contains(where: { lowered.contains($0) }) {
                 throw CLIError.usageLimit(message: String(detail.prefix(600)), sessionID: sessionID)
             }
+            // The cache-schema error lands on stderr (tracing), which `detail` skips when the JSONL
+            // carried its own error message — so check both.
+            if let stale = staleClientError(in: out.stderr, detail) { throw stale }
             if out.status != 0 {
                 throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
             }
