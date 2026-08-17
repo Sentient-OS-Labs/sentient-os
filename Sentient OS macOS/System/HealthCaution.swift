@@ -5,7 +5,8 @@
 //  The home's LIVE health banner — the sibling of OvernightCaution (which records a past event,
 //  this probes CURRENT state). One ladder, most severe first: ① an essential permission is off
 //  (Full Disk Access · the overnight wake helper · launch at login — all gated green in
-//  onboarding, so any red here is drift) → ② codex is gone or signed out → ③ computer use broke
+//  onboarding, so any red here is drift) → ② codex is gone, signed out, or out of date (a run
+//  failed on the stale-client signature and the update hasn't landed) → ③ computer use broke
 //  AFTER it was once seen working (the everReady latch, so a user who never set it up is never
 //  nagged). The home renders the top un-muted rung as a red capsule (HomeView.cautionBanner) and
 //  re-probes on foreground, so a fix in Settings clears the banner the moment the user returns.
@@ -32,6 +33,7 @@ enum HealthCaution {
         case permissions([EssentialPermission])
         case codexMissing
         case codexSignedOut
+        case codexOutdated                          // a run failed on the stale-client signature; CodexSetup.outdated
         case computerUseBroken(payloadGone: Bool)   // true = the ~/.codex bootstrap vanished; false = the helper's grants did
 
         /// The banner line — quiet, first-person, honest about what happens next.
@@ -50,6 +52,8 @@ enum HealthCaution {
                 return "Codex is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
             case .codexSignedOut:
                 return "Codex is signed out, so proactive work is paused. Log back in and I'll catch up tonight."
+            case .codexOutdated:
+                return "Codex on this Mac is out of date and can't read its newer files. One click in Settings updates it."
             case .computerUseBroken(let payloadGone):
                 return payloadGone
                     ? "Computer use needs setting up again; Codex may have updated. One click in Settings fixes it."
@@ -61,7 +65,7 @@ enum HealthCaution {
         var kindKey: String {
             switch self {
             case .permissions:                   return "permissions"
-            case .codexMissing, .codexSignedOut: return "codex"
+            case .codexMissing, .codexSignedOut, .codexOutdated: return "codex"
             case .computerUseBroken:             return "computerUse"
             }
         }
@@ -115,14 +119,17 @@ enum HealthCaution {
         if !LoginItem.isEnabled { missing.append(.launchAtLogin) }
         if !missing.isEmpty, !dismissed.contains("permissions") { return .permissions(missing) }
 
-        // ② Codex — gone, or signed out. The signed-out rung is ChatGPT-backend-only: a custom
-        // frontier model needs no codex login (its endpoint answering is probed at run time —
-        // a live endpoint check here would cost a whole model call per foreground).
+        // ② Codex — gone, signed out, or out of date. The signed-out rung is ChatGPT-backend-only:
+        // a custom frontier model needs no codex login (its endpoint answering is probed at run
+        // time — a live endpoint check here would cost a whole model call per foreground). The
+        // out-of-date rung is evidence-driven (a run failed on the stale-client signature) and
+        // melts the moment CodexSetup's update lands.
         let codexInstalled = CodexCLI.locateBinary() != nil
         if !dismissed.contains("codex") {
             if !codexInstalled { return .codexMissing }
             if ModelBackend.current == .chatgpt,
                await !loggedIn(force: forceCodexRecheck) { return .codexSignedOut }
+            if CodexSetup.shared.outdated { return .codexOutdated }
         }
 
         // ③ Computer use — only once latched, and only with FDA to read the helper's system-TCC

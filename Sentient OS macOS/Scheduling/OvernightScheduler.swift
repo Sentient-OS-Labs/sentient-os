@@ -289,6 +289,12 @@ final class OvernightScheduler {
             while !Task.isCancelled { _ = await WakeHelperClient.shared.heartbeat(); try? await Task.sleep(for: .seconds(60)) }
         }
 
+        // The night's cloud legs deserve a current Codex CLI: the daily update runs here first
+        // (self-capped to once a day, a no-op when already newest; a failed update never blocks
+        // the run — the legs go on with the CLI they have).
+        await CodexSetup.shared.updateIfDue(trigger: "overnight")
+        if let v = CodexSetup.shared.version { log.line("codex CLI \(v)") }
+
         if !connectors.isEmpty, let modelPath {
             log.line("IterativeRun .auto over \(connectors.count) connector(s)…")
             let throttle = LogThrottle()
