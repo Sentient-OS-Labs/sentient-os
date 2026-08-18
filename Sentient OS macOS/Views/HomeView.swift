@@ -212,8 +212,8 @@ struct HomeView: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
                 CautionCapsule(message: caution.kind.message,
-                               actionTitle: caution.kind == .loggedOut ? "Open Settings" : nil,
-                               onAction: openHealthSettings,
+                               actionTitle: cautionAction(caution.kind)?.title,
+                               onAction: cautionAction(caution.kind)?.run ?? {},
                                onDismiss: {
                                    OvernightCaution.clear()
                                    withAnimation(.easeInOut(duration: 0.25)) { self.caution = nil }
@@ -227,6 +227,17 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.trailing, 30).padding(.top, 64)
+    }
+
+    /// The amber caution's one-click fix, where there is one: a signed-out codex is fixed in
+    /// Permissions & Health; a full disk in System Settings' Storage pane. Weather kinds (offline,
+    /// usage limit) have nothing to click.
+    private func cautionAction(_ kind: OvernightCaution.Kind) -> (title: String, run: () -> Void)? {
+        switch kind {
+        case .loggedOut: return ("Open Settings", openHealthSettings)
+        case .diskFull:  return ("Manage Storage", { DiskSpace.openStorageSettings() })
+        case .noInternet, .usageLimit, .inputTooLarge: return nil
+        }
     }
 
     /// Land directly on Permissions & Health — every banner's fix lives there; never strand the

@@ -3,14 +3,15 @@
 //  Sentient OS macOS
 //
 //  Cycle-failure classification + the morning-after caution. `classify(_:)` turns a cycle failure
-//  into one of the three reasons a user can actually act on or should simply know about — codex
-//  signed out · no internet · usage limit — and serves BOTH failure surfaces: the UNATTENDED 3am
-//  run persists it via `record(_:)` (at ProactiveCycle's catch sites, the one choke point every
-//  codex call already funnels typed errors through) and the home renders it as a quiet amber
-//  capsule (HomeView.cautionBanner); the WATCHED processing takeover shows the same kind live on
-//  its failed screen (ProcessingView.failedView — "Codex isn't logged in" + a login button). Any
-//  later fully successful cycle clears the caution; so does the banner's ✕. Other failure kinds
-//  stay log/Sentry territory — no banner.
+//  into one of the reasons a user can actually act on or should simply know about — codex signed
+//  out · no internet · usage limit · a full disk — and serves BOTH failure surfaces: the UNATTENDED
+//  3am run persists it via `record(_:)` (at ProactiveCycle's catch sites, the one choke point every
+//  codex call already funnels typed errors through, plus the scheduler's own device-stage halt for
+//  a full disk) and the home renders it as a quiet amber capsule (HomeView.cautionBanner); the
+//  WATCHED processing takeover shows the same kind live on its failed screen
+//  (ProcessingView.failedView — "Codex isn't logged in" + a login button, "Your Mac's disk is
+//  full" + a storage button). Any later fully successful cycle clears the caution; so does the
+//  banner's ✕. Other failure kinds stay log/Sentry territory — no banner.
 //
 //  Key methods: classify(_:) · record(_:) (3am only) · latest() · clear()
 //
@@ -27,6 +28,8 @@ enum OvernightCaution {
         case usageLimit     // the ChatGPT plan's window was exhausted mid-run
         case inputTooLarge  // a prompt exceeded codex's turn-input cap (a canary — corpus
                             // slicing budgets every prompt path, so this should never fire)
+        case diskFull       // the Mac's disk is full: the device stage stopped (nothing it read
+                            // could be saved) or the knowledge-base staging copy couldn't be written
 
         /// The banner line — quiet, first-person, honest about what happens next.
         var message: String {
@@ -35,6 +38,7 @@ enum OvernightCaution {
             case .noInternet: return "No internet last night, so I couldn't do my overnight work. I'll try again tonight."
             case .usageLimit: return "We hit ChatGPT's usage limit last night. I'll pick it up again tomorrow."
             case .inputTooLarge: return "Last night's batch was more than ChatGPT accepts at once. Your analysis is saved; I'll try again tonight."
+            case .diskFull:   return "Your Mac's disk is full, so I couldn't save last night's work. Free up some space and I'll catch up tonight."
             }
         }
     }
@@ -61,6 +65,9 @@ enum OvernightCaution {
     /// the UI only ever states what was verified). Shared by the 3am run (record + banner) and
     /// the watched takeover's failed screen.
     static func classify(_ error: Error) async -> Kind? {
+        // A full disk is certain and local (the knowledge-base staging copy is written on the Mac);
+        // it must never be misread as an internet or login problem, so it goes first.
+        if DiskSpace.isDiskFull(error) { return .diskFull }
         // Typed errors first — certain, no probing needed. The cycle's stage wrappers each re-wrap
         // the spine's usage limit in their own enum (create/update/judge/research), so match them
         // all: a stringly wrap here once left the amber banner blind to a vault-leg usage limit.

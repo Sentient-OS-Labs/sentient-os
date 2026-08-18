@@ -313,6 +313,13 @@ final class OvernightScheduler {
         await CodexSetup.shared.updateIfDue(trigger: "overnight")
         if let v = CodexSetup.shared.version { log.line("codex CLI \(v)") }
 
+        /// Let the Mac sleep again — the one exit every path takes (normal end, or the disk-full stop).
+        func releaseAwake() async {
+            heart.cancel()
+            let ended = await WakeHelperClient.shared.endAwake()
+            log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
+        }
+
         if !connectors.isEmpty, let modelPath {
             log.line("IterativeRun .auto over \(connectors.count) connector(s)…")
             let throttle = LogThrottle()
@@ -322,6 +329,15 @@ final class OvernightScheduler {
             log.line("device DONE: \(p.survivors) kept · \(p.junk) junk · \(p.failed) failed of \(p.total)")
             deviceItems = p.total; deviceKept = p.survivors; deviceFailed = p.failed
             deviceSeconds = Int(Date().timeIntervalSince(woke))
+            // A full disk stopped the read (see IterativeRun): nothing more can be saved tonight, and
+            // the cloud legs write too (marks, the knowledge-base staging copy). Record the morning
+            // caution and end the night here; the marks are per-item atomic, so tomorrow resumes.
+            if p.diskFull {
+                log.line("disk full — stopping the night here; the morning caution says so.")
+                OvernightCaution.record(.diskFull)
+                await releaseAwake()
+                return
+            }
         }
         if runGmail {
             firstCloudCallAt = firstCloudCallAt ?? Date()
@@ -358,9 +374,7 @@ final class OvernightScheduler {
             }
         }
 
-        heart.cancel()
-        let ended = await WakeHelperClient.shared.endAwake()
-        log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
+        await releaseAwake()
         Analytics.signal("Scheduler.overnightCompleted", tier: .core)   // always-on usage ping: an overnight run finished cleanly
 
         // ONE row per user-night: did the cloud stage work, and if not, which leg failed why —

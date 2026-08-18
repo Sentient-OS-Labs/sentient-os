@@ -85,6 +85,8 @@ struct UpdateNoticeCapsule: View {
                            actionTitle: "Open Settings", onAction: {}, onDismiss: {})
             CautionCapsule(message: OvernightCaution.Kind.noInternet.message, onDismiss: {})
             CautionCapsule(message: OvernightCaution.Kind.usageLimit.message, onDismiss: {})
+            CautionCapsule(message: OvernightCaution.Kind.diskFull.message,
+                           actionTitle: "Manage Storage", onAction: {}, onDismiss: {})
             CautionCapsule(message: HealthCaution.Issue.permissions([.fullDiskAccess]).message,
                            accent: Theme.Ink.red,
                            actionTitle: "Open Settings", onAction: {}, onDismiss: {})

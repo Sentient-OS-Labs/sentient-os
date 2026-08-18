@@ -87,6 +87,11 @@ struct RunProgress: Sendable {
     var lastVerdict: Verdict?
     var lastSeconds: Double?
     var totalSeconds: Double = 0   // sum over successful generations (for avg)
+    /// The run stopped early because the Mac's disk is full: either the free-space pre-flight
+    /// refused to start, or a per-item commit reported `.diskFull` mid-run. Everything up to the
+    /// halt is saved (marks are per-item atomic); nothing after it was read. The caller shows the
+    /// disk-full screen / morning caution instead of running the cloud tail (which writes too).
+    var diskFull = false
 }
 
 struct IterativeRun {
@@ -108,6 +113,16 @@ struct IterativeRun {
              onProgress: @Sendable @escaping (RunProgress) -> Void = { _ in }) async -> RunProgress {
         var p = RunProgress()
         guard !connectors.isEmpty else { return p }
+        // Free-space pre-flight: a run's results live on disk (the cycle store, the WAL-safe chat
+        // database copies, later the knowledge-base staging copy). Below the floor nothing we read
+        // could be kept, so don't wake the engine at all; the caller shows the disk-full screen.
+        // fail-open on a nil read (a glitched capacity read never blocks a healthy Mac).
+        if let free = DiskSpace.available(), free < DiskSpace.runFloor {
+            Log("IterativeRun: \(free / 1_048_576) MB free is under the \(DiskSpace.runFloor / 1_048_576) MB floor — not starting (disk full)")
+            Analytics.signal("Processing.diskFull", parameters: ["at": "preflight"])
+            p.diskFull = true
+            return p
+        }
         PipelineActivity.begin()                 // Settings' Reset is disabled while we're mid-run
         defer { PipelineActivity.end() }
 
@@ -323,10 +338,21 @@ struct IterativeRun {
 
                     // ONE atomic store write per item: optional survivor note + marker advance — no gap
                     // for a crash to land in. Iterative climbs the mark; initial sinks the floor.
+                    let outcome: CycleStore.CommitOutcome
                     switch effective {
-                    case .iterative: await store.advance(bucketKey: bucket.key, note: draft, to: w.key)
-                    case .initial:   await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
-                    case .auto:      break
+                    case .iterative: outcome = await store.advance(bucketKey: bucket.key, note: draft, to: w.key)
+                    case .initial:   outcome = await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
+                    case .auto:      outcome = .saved   // resolved above; never reached
+                    }
+                    // A full disk fails every item after this one identically: stop the whole run
+                    // here (this item's mark wasn't saved, so it's simply first up next time), and
+                    // let the caller surface it. Grinding on used to spend the whole night's engine
+                    // time on results that couldn't be kept, then repeat it the next night.
+                    if outcome == .diskFull {
+                        Log("IterativeRun: disk full after \(p.done) items — stopping the run")
+                        Analytics.signal("Processing.diskFull", parameters: ["at": "midrun", "done": String(p.done)])
+                        p.diskFull = true
+                        break runLoop
                     }
                     sinceReload += 1; p.done += 1; processedThisConnector += 1
                     onProgress(p)

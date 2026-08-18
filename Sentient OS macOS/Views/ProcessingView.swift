@@ -101,7 +101,11 @@ struct ProcessingView: View {
     private var shownSurvivors: Int { progress.survivors + (demoBaseTotal > 0 ? demoBaseDone * 58 / 100 : 0) }
     private var shownJunk: Int { progress.junk + (demoBaseTotal > 0 ? demoBaseDone * 36 / 100 : 0) }
 
-    private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(CycleFailure) }
+    private enum UIState: Equatable {
+        case loadingModel, processing, preparing, completed
+        case failed(CycleFailure)   // the cloud tail errored (classified when it could be)
+        case diskFull               // the on-device read stopped: the Mac's disk is full (IterativeRun)
+    }
     @State private var state: UIState = .loadingModel
     /// The failed screen's inline codex login (the "Codex isn't logged in" fix) — same shared
     /// engine Settings → Health drives; `loginStarted` scopes the auto-notice poll + auto-retry
@@ -153,7 +157,8 @@ struct ProcessingView: View {
                     case .processing:     processingContent
                     case .preparing:      preparingView
                     case .completed:      completedView
-                    case .failed(let e):  failedView(e)
+                    case .failed(let e):  failedView(kind: e.kind, message: e.message)
+                    case .diskFull:       failedView(kind: .diskFull, message: "")
                     }
                 }
                 Spacer(minLength: 0)
@@ -475,21 +480,30 @@ struct ProcessingView: View {
         }
     }
 
-    private func failedView(_ failure: CycleFailure) -> some View {
+    /// The failed screen for BOTH failure kinds the takeover can end in: the cloud tail's
+    /// classified `CycleFailure` (kind + its own message) and the on-device read's disk-full stop
+    /// (kind `.diskFull`, no message of its own). Classified kinds get a friendly title/body and,
+    /// where there's something to click, the fix next to Retry.
+    private func failedView(kind: OvernightCaution.Kind?, message: String) -> some View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 46))
                 .foregroundStyle(.orange.opacity(0.85))
-            Text(Self.failTitle(failure.kind)).font(.title3.weight(.semibold)).foregroundStyle(.white)
-            Text(Self.failBody(failure)).font(.caption).foregroundStyle(.white.opacity(0.5))
+            Text(Self.failTitle(kind)).font(.title3.weight(.semibold)).foregroundStyle(.white)
+            Text(Self.failBody(kind: kind, message: message)).font(.caption).foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             HStack(spacing: 12) {
                 Button("Back", action: onExitEarly ?? onDone).buttonStyle(.bordered).tint(.white)
-                if failure.kind == .loggedOut {
+                if kind == .loggedOut {
                     Button("Retry") { Task { started = false; await startIfNeeded() } }
                         .buttonStyle(.bordered).tint(.white)
                     Button("Log in to Codex") { loginStarted = true; codex.startLogin(force: true) }
                         .buttonStyle(.borderedProminent).tint(.white)
                         .disabled(codex.loggingIn)
+                } else if kind == .diskFull {
+                    Button("Retry") { Task { started = false; await startIfNeeded() } }
+                        .buttonStyle(.bordered).tint(.white)
+                    Button("Manage Storage") { DiskSpace.openStorageSettings() }
+                        .buttonStyle(.borderedProminent).tint(.white)
                 } else {
                     Button("Retry") { Task { started = false; await startIfNeeded() } }
                         .buttonStyle(.borderedProminent).tint(.white)
@@ -524,19 +538,21 @@ struct ProcessingView: View {
         case .usageLimit:     "We hit ChatGPT's usage limit"
         case .noInternet:     "No internet connection"
         case .inputTooLarge:  "This batch was too big to send"
+        case .diskFull:       "Your Mac's disk is full"
         case nil:             "Processing failed"
         }
     }
 
     /// Classified failures get a friendly, actionable line (the raw detail is in the log +
     /// Sentry); unclassified ones show the step's own message, as before.
-    private static func failBody(_ failure: CycleFailure) -> String {
-        switch failure.kind {
+    private static func failBody(kind: OvernightCaution.Kind?, message: String) -> String {
+        switch kind {
         case .loggedOut:      "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
         case .usageLimit:     "Your plan's window resets on its own. Everything so far is saved; retry in a while and I'll pick up right where we stopped."
         case .noInternet:     "This step runs in the cloud. Once you're back online, hit Retry; everything so far is saved."
         case .inputTooLarge:  "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
-        case nil:             failure.message
+        case .diskFull:       "I can't save what I read until there's room on this Mac. Free up some space (a few GB is plenty), then hit Retry; everything so far is saved and I'll pick up right where we stopped."
+        case nil:             message
         }
     }
 
@@ -701,6 +717,10 @@ struct ProcessingView: View {
         // tail (knowledge base + cycle) must ONLY ever run at the end of a live, complete read.
         guard generation == runGeneration else { return }
         progress = Self.composed(carried, final)   // completion shows the whole session's counts
+
+        // The read stopped because the disk is full: nothing more can be saved, and the cloud tail
+        // writes too (the knowledge-base staging copy) — show the fix instead of running it.
+        if final.diskFull { withAnimation { state = .diskFull }; return }
 
         // Real-mode Analyze Now: after the read, file into the knowledge base + run all three proactive
         // steps + wipe the summaries — surfacing each phase — then reveal the real cards on the home.
