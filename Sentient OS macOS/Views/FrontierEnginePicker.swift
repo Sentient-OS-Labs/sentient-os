@@ -365,7 +365,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         testing = true
         testVerdict = "Showing your model a picture and asking it to read the number… local models can take a minute to load."
         Task {
-            let verdict = await CodexCLI.probeCustomEndpoint()
+            let verdict = await CodexTrigger.$current.withValue(.probe) { await CodexCLI.probeCustomEndpoint() }
             await MainActor.run {
                 testing = false
                 switch verdict {

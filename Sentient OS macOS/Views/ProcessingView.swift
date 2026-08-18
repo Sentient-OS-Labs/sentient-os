@@ -651,6 +651,13 @@ struct ProcessingView: View {
     /// complete, internally-consistent snapshot, so dropping intermediate frames never desyncs the
     /// prompt pane from the card.
     private func run() async {
+        // Every codex call under this run reports its trigger (task-local, inherited by the child
+        // task below): onboarding's first analysis vs the home's Analyze Now are different failure
+        // populations in Sentry. `pausable` is the onboarding-only footer mode.
+        await CodexTrigger.$current.withValue(pausable ? .onboarding : .analyzeNow) { await runBody() }
+    }
+
+    private func runBody() async {
         let generation = runGeneration   // this invocation's identity — stale once pause/stop bump it
         // Keep the display awake ONLY for the initial ingest — the long one. The home + 3am both run
         // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 14h auto-enable

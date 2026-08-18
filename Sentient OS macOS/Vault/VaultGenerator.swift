@@ -178,7 +178,7 @@ actor VaultGenerator {
             return try await CodexCLI.shared.run(invocation, onLine: onLine)
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
-            Log("VaultGenerator: ⚠️ usage limit (session \(sessionID ?? "nil")); staging kept for resume")
+            Log("VaultGenerator: ⚠️ usage limit (thread \(sessionID ?? "nil")); staging kept for resume")
             throw VaultError.usageLimit(message: message,
                                         resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
         }
@@ -231,7 +231,7 @@ actor VaultGenerator {
                 // a single note, resuming it buys nothing — restart fresh under the slicer instead
                 // (also covers any stale launch-window token whose oversized first turn never ran).
                 if Self.census(of: staging).notes == 0 {
-                    Log("VaultGenerator: ⚠️ resume session left staging empty — restarting the build fresh")
+                    Log("VaultGenerator: ⚠️ resumed thread left staging empty — restarting the build fresh")
                     try? fm.removeItem(at: staging)
                     return try await generate(notes: notes, resume: nil, onProgress: onProgress, onLine: onLine)
                 }

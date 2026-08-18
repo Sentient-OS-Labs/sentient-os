@@ -435,6 +435,33 @@ actor CodexCLI {
     private var cachedAvailability: Availability?
     private var cachedAvailabilityFingerprint: String?
 
+    // MARK: Diagnostics state (structure-only; see CodexDiagnostics.swift)
+
+    /// Has ANY codex call succeeded since launch? Reported as `first_cloud_call_this_launch` on
+    /// a failure (`first_cloud_call_this_launch`) — the 3 AM run's first ping of the day is a distinct population.
+    private var sessionHadSuccess = false
+    /// Pings since `beginDiagnosticsRun()` (the overnight run's per-night count) and the first
+    /// ping's wall time — the night summary reports both.
+    private var pingsThisRun = 0
+    private var firstPingMS: Int?
+    /// When the current diagnostics run began (nil outside an overnight run).
+    private var diagnosticsRunStart: Date?
+    /// `codex --version`, probed once per launch on the first ping (nil = no binary / no answer).
+    private var cachedVersion: String?
+    private static let launchedAt = Date()
+
+    /// The overnight run calls this once at wake so the night's summary counts from zero.
+    func beginDiagnosticsRun() {
+        pingsThisRun = 0
+        firstPingMS = nil
+        diagnosticsRunStart = Date()
+    }
+
+    /// The counters the night summary reports (`overnight.cloud_stage`).
+    func diagnosticsRunSummary() -> (pings: Int, firstPingMS: Int?, version: String?) {
+        (pingsThisRun, firstPingMS, cachedVersion)
+    }
+
     /// Is `codex exec` actually usable (installed AND — on the ChatGPT backend — logged in;
     /// on a custom backend, the endpoint answering)? Only a GOOD verdict is cached — a failed
     /// probe re-checks on every call, so codex fixed mid-session (re-login, reinstall, an
@@ -448,12 +475,30 @@ actor CodexCLI {
         if !force, let cachedAvailability, cachedAvailabilityFingerprint == fingerprint {
             return cachedAvailability
         }
+        // Breadcrumbs for the one call that decides "cloud is on/off" — start + verdict, timed.
+        // Structure only: the model is `default` (codex's own) or `custom` (never the slug), the
+        // verdict is a closed reason (never the ping's stderr).
+        let backend = ModelBackend.current == .custom ? "custom" : "chatgpt"
+        let budget = ModelBackend.current == .custom ? 180 : 30
+        if cachedVersion == nil { cachedVersion = await Self.installedVersion() }
+        Log("codex ping: start backend=\(backend) model=\(backend == "custom" ? "custom" : "default") timeout=\(budget)s trigger=\(CodexTrigger.current.rawValue) attempt=1")
+        let t0 = Date()
         let result = await Self.ping()
-        if case .available = result {
+        let ms = Int(Date().timeIntervalSince(t0) * 1000)
+        pingsThisRun += 1
+        if firstPingMS == nil { firstPingMS = ms }
+        switch result {
+        case .available:
             cachedAvailability = result
             cachedAvailabilityFingerprint = fingerprint
-        } else {
+            sessionHadSuccess = true
+            Log("codex ping: available in \(ms)ms")
+        case .notInstalled:
             cachedAvailability = nil
+            Log("codex ping: notInstalled in \(ms)ms")
+        case .notWorking(let detail):
+            cachedAvailability = nil
+            Log("codex ping: notWorking:\(CodexFailureReason.classify(text: detail).rawValue) in \(ms)ms")
         }
         return result
     }
@@ -564,11 +609,12 @@ actor CodexCLI {
             // A cancelled Task is the user's STOP: the SIGTERM'd process exits non-zero, which
             // masqueraded as a real exitFailure in Sentry (field-found 2026-07-12). Not a defect.
             if !Task.isCancelled {
-                Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
-                                      modelID: modelID, effort: effortArg,
-                                      resumed: invocation.resumeSessionID != nil,
-                                      durationMS: Int(Date().timeIntervalSince(t0) * 1000),
-                                      diag: invocation.diag)
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=\(invocation.feature) in \(ms)ms")
+                emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
+                                 modelID: modelID, effort: effortArg,
+                                 resumed: invocation.resumeSessionID != nil,
+                                 durationMS: ms, timeoutS: Int(invocation.timeout), diag: invocation.diag)
             }
             throw error
         }
@@ -602,6 +648,10 @@ actor CodexCLI {
         defer { if let schemaFile { try? FileManager.default.removeItem(atPath: schemaFile) } }
 
         let started = Date()
+        // One breadcrumb per exec, start + end — the shape of the run, never its content. On the
+        // custom backend the model is reported as `custom` (a user's model slug is free text).
+        let modelTag = ModelBackend.current == .custom ? "custom" : modelID
+        Log("codex exec: start feature=\(invocation.feature) model=\(modelTag) effort=\(effortArg) resume=\(invocation.resumeSessionID != nil) sandbox=\(invocation.sandbox.rawValue) prompt_kb=\(invocation.prompt.utf8.count / 1024) trigger=\(CodexTrigger.current.rawValue)")
         // When a caller wants live play-by-play, adapt each raw --json line into a readable one.
         let stdoutLine: (@Sendable (String) -> Void)? = onLine.map { sink in
             { @Sendable raw in if let s = Self.humanLine(fromJSONL: raw) { sink(s) } }
@@ -614,7 +664,10 @@ actor CodexCLI {
                                               cwd: invocation.cwd,
                                               timeout: invocation.timeout,
                                               onStdoutLine: stdoutLine)
-        return try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
+        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
+        sessionHadSuccess = true
+        Log("codex exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
+        return env
     }
 
     /// The command bar's "Let me DO stuff for you" spine — computer use (the "computer use" phrase is
@@ -666,6 +719,8 @@ actor CodexCLI {
             }
             if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
             args += ["--skip-git-repo-check", prompt]
+            let modelTag = ModelBackend.current == .custom ? "custom" : modelID
+            Log("codex exec: start feature=computer model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
             Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
@@ -673,6 +728,8 @@ actor CodexCLI {
                 if let stale = Self.staleClientError(in: out.stderr, detail) { throw stale }
                 throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
             }
+            sessionHadSuccess = true
+            Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
             // §7.9: computer-use is the full-capability path (bypass-sandbox, user-fired), so a
@@ -680,28 +737,50 @@ actor CodexCLI {
             // Task (the user's STOP kills codex → non-zero exit, which is not a failure; field-found
             // polluting Sentry 2026-07-12).
             if !Task.isCancelled {
-                Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                      modelID: modelID, effort: effortArg, resumed: false,
-                                      durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
+                emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
+                                 modelID: modelID, effort: effortArg, resumed: false, durationMS: ms,
+                                 timeoutS: Int(timeout))
             }
             throw error
         }
     }
 
-    /// Emit a structured codex failure — the CLIError CASE NAME only (never `.message`/stderr/prompt,
-    /// which embed user content). One seam for the whole cloud spine; `feature` makes it attributable;
-    /// `diag` is the caller's structured extras (Invocation.diag — ints/enums only, pre-vetted).
-    /// On the custom backend the model tag reports the literal "custom" — a user's model slug (or a
-    /// private deployment name) is free text and never leaves the Mac.
-    private static func emitCodexFailure(event: String, _ error: Error, feature: String,
-                                         modelID: String, effort: String, resumed: Bool, durationMS: Int,
-                                         diag: [String: String] = [:]) {
+    /// Emit a structured codex failure. One seam for the whole cloud spine. Every value is an
+    /// enum / bool / int / version string — never `.message`, stderr, the prompt, a token, or an
+    /// account id (the free text is classified into `CodexFailureReason` on the Mac and dropped).
+    /// `feature` makes it attributable; `diag` is the caller's structured extras (Invocation.diag —
+    /// ints/enums only, pre-vetted). On the custom backend the model tag reports the literal
+    /// "custom" — a user's model slug (or a private deployment name) is free text.
+    ///
+    /// Tags (indexed): feature · error (case) · model · backend · phase (ping|exec) · availability
+    /// (notInstalled|notWorking|n/a) · reason (CodexFailureReason) · trigger (CodexTrigger) ·
+    /// network / interface (NetworkSnapshot) · login_mode / plan / access_expired
+    /// (CodexAuthSnapshot; keys avoid the scrubber words auth/token/session) · codex_version.
+    /// Extras: exit_code · duration_ms · timeout_s · attempt · effort · resumed ·
+    /// mins_since_last_refresh · has_refresh · secs_since_wake ·
+    /// first_cloud_call_this_launch · hours_since_launch · ping_model · pings_this_run (+ diag).
+    /// Fingerprint: [codex, feature, case, reason, trigger] — so a 3 AM `token_expired` and an
+    /// onboarding `not_logged_in` are different issues.
+    private func emitCodexFailure(event: String, _ error: Error, feature: String,
+                                  modelID: String, effort: String, resumed: Bool, durationMS: Int,
+                                  timeoutS: Int? = nil, diag: [String: String] = [:]) {
         let caseName: String
         let level: CrashReporting.DiagLevel
         var extra = diag
+        var availability = "n/a"
+        var phase = "exec"
         switch error {
         case CLIError.usageLimit:   return   // expected, not a defect — the amber caution + resume own it
-        case CLIError.notAvailable: (caseName, level) = ("notAvailable", .warning)
+        case CLIError.notAvailable(let a):
+            (caseName, level) = ("notAvailable", .warning)
+            phase = "ping"
+            switch a {
+            case .notInstalled: availability = "notInstalled"
+            case .notWorking:   availability = "notWorking"
+            case .available:    availability = "available"
+            }
         case CLIError.timedOut:     (caseName, level) = ("timedOut", .warning)
         case CLIError.launchFailed: (caseName, level) = ("launchFailed", .error)
         case CLIError.exitFailure(let code, _):
@@ -719,14 +798,40 @@ actor CodexCLI {
             extra["prompt_chars"] = String(chars)
         default:                    (caseName, level) = (String(describing: type(of: error)), .error)
         }
+        let reason = CodexFailureReason.classify(error)
+        let trigger = CodexTrigger.current
+        let net = NetworkSnapshot.shared.current
+        let auth = CodexAuthSnapshot.read()
+        let custom = ModelBackend.current == .custom
+
         extra["effort"] = effort
         extra["resumed"] = String(resumed)
         extra["duration_ms"] = String(durationMS)
-        let modelTag = ModelBackend.current == .custom ? "custom" : modelID
-        CrashReporting.captureEvent(event, level: level,
-            tags: ["feature": feature, "error": caseName, "model": modelTag],
-            extra: extra,
-            fingerprint: ["codex", feature, caseName])
+        extra["timeout_s"] = String(phase == "ping" ? (custom ? 180 : 30) : (timeoutS ?? -1))
+        extra["attempt"] = "1"
+        extra["ping_model"] = custom ? "custom" : "default"
+        extra["pings_this_run"] = String(pingsThisRun)
+        extra["first_cloud_call_this_launch"] = String(!sessionHadSuccess)   // not "*_session": a scrubber word
+        extra["hours_since_launch"] = String(Int(Date().timeIntervalSince(Self.launchedAt) / 3600))
+        extra["secs_since_wake"] = diagnosticsRunStart.map { String(Int(Date().timeIntervalSince($0))) } ?? "-1"
+        extra.merge(auth.extras) { cur, _ in cur }
+
+        var tags: [String: String] = [
+            "feature": feature,
+            "error": caseName,
+            "model": custom ? "custom" : modelID,
+            "backend": custom ? "custom" : "chatgpt",
+            "phase": phase,
+            "availability": availability,
+            "reason": reason.rawValue,
+            "trigger": trigger.rawValue,
+            "network": net.status,
+            "interface": net.interface,
+            "codex_version": cachedVersion ?? "unknown",
+        ]
+        tags.merge(auth.tags) { cur, _ in cur }
+        CrashReporting.captureEvent(event, level: level, tags: tags, extra: extra,
+            fingerprint: ["codex", feature, caseName, reason.rawValue, trigger.rawValue])
     }
 
     /// `exec resume` accepts only a subset of `exec`'s flags — no `-s`/`--cd`/`--add-dir`.

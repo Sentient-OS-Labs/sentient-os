@@ -255,7 +255,14 @@ final class OvernightScheduler {
     /// The actual run: keep awake → read the selected connectors with `.auto` (+ Gmail/Calendar) →
     /// run the shared `ProactiveCycle` tail (knowledge base → mirror → proactive → wipe) → release.
     private func runProcessing(log: SchedulerLog) async {
-        log.line("WOKE at \(Date()) — beginning the run.")
+        // Every codex call under this run reports trigger=overnight (task-local, inherited by the
+        // child tasks the legs spawn) — the 3 AM failure population gets its own fingerprint.
+        await CodexTrigger.$current.withValue(.overnight) { await runProcessingBody(log: log) }
+    }
+
+    private func runProcessingBody(log: SchedulerLog) async {
+        let woke = Date()
+        log.line("WOKE at \(woke) — beginning the run.")
         Analytics.signal("Scheduler.overnightStarted")   // the 3am wake fired and we're processing
 
         // DETECT — identical to the dev UI / Analyze Now (the shared SourceSelection reader).
@@ -285,6 +292,17 @@ final class OvernightScheduler {
 
         let began = await WakeHelperClient.shared.beginAwake(timeout: 1800)
         log.line("beginAwake (disablesleep 1): \(began ? "OK" : "FAILED")")
+        // The night's diagnostics baseline: what the network and codex's login look like BEFORE
+        // any cloud call — so a dead cloud stage can be read against them in the morning
+        // (structure only; see CodexDiagnostics.swift).
+        await CodexCLI.shared.beginDiagnosticsRun()
+        let netAtStart = NetworkSnapshot.shared.current
+        log.line("network: \(netAtStart.status)/\(netAtStart.interface) \(Int(Date().timeIntervalSince(woke)))s since wake")
+        let signin = CodexAuthSnapshot.read()
+        log.line(signin.logLine)
+        var legs: [String: String] = ["gmail": "skipped", "calendar": "skipped", "vault": "ok", "proactive": "skipped"]
+        var firstCloudCallAt: Date?
+        var deviceItems = 0, deviceKept = 0, deviceFailed = 0, deviceSeconds = 0
         let heart = Task {
             while !Task.isCancelled { _ = await WakeHelperClient.shared.heartbeat(); try? await Task.sleep(for: .seconds(60)) }
         }
@@ -302,9 +320,19 @@ final class OvernightScheduler {
                 throttle.maybe { log.line("  … \(pr.done)/\(pr.total)  kept=\(pr.survivors) junk=\(pr.junk) failed=\(pr.failed)") }
             }
             log.line("device DONE: \(p.survivors) kept · \(p.junk) junk · \(p.failed) failed of \(p.total)")
+            deviceItems = p.total; deviceKept = p.survivors; deviceFailed = p.failed
+            deviceSeconds = Int(Date().timeIntervalSince(woke))
         }
-        if runGmail    { await cloudLeg("Gmail",    log: log) { try await GmailConnect.runIterative    { _ in } } }
-        if runCalendar { await cloudLeg("Calendar", log: log) { try await CalendarConnect.runIterative { _ in } } }
+        if runGmail {
+            firstCloudCallAt = firstCloudCallAt ?? Date()
+            legs["gmail"] = await cloudLeg("Gmail", log: log) { try await GmailConnect.runIterative { _ in } }
+        }
+        if runCalendar {
+            firstCloudCallAt = firstCloudCallAt ?? Date()
+            legs["calendar"] = await cloudLeg("Calendar", log: log) { try await CalendarConnect.runIterative { _ in } }
+        }
+        firstCloudCallAt = firstCloudCallAt ?? Date()   // the ProactiveCycle tail is a cloud call too
+        if CodexAuth.knowledgeBaseOnly == false { legs["proactive"] = "ok" }   // provisional; a failure below overrides
 
         // The shared post-read tail — knowledge base (create/update) → mirror push → proactive
         // (decide → research → prepare) → wipe summaries. This is the EXACT chain the home's Analyze
@@ -324,18 +352,58 @@ final class OvernightScheduler {
         }) {
             // Detail withheld (can embed codex output); the morning caution + codex.failure carry the kind.
             log.line("proactive cycle ended with a failure (summaries kept for retry)")
+            switch failure.stage {
+            case .vault:      legs["vault"] = failure.reason.rawValue; legs["proactive"] = "skipped"
+            case .deciding, .preparing: legs["proactive"] = failure.reason.rawValue
+            }
         }
 
         heart.cancel()
         let ended = await WakeHelperClient.shared.endAwake()
         log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
         Analytics.signal("Scheduler.overnightCompleted", tier: .core)   // always-on usage ping: an overnight run finished cleanly
+
+        // ONE row per user-night: did the cloud stage work, and if not, which leg failed why —
+        // read against the network + login baseline taken at wake. Replaces reading three
+        // scattered warnings per night. Structure only.
+        let diag = await CodexCLI.shared.diagnosticsRunSummary()
+        let failed = legs.values.filter { $0 != "ok" && $0 != "skipped" }
+        let ran = legs.values.filter { $0 != "skipped" }
+        let offlineReasons: Set<String> = ["dns", "connect_timeout", "tls"]
+        let outcome: String
+        if failed.isEmpty { outcome = "ok" }
+        else if netAtStart.status != "satisfied" || failed.allSatisfy({ offlineReasons.contains($0) }) { outcome = "offline" }
+        else if failed.count < ran.count { outcome = "partial" }
+        else { outcome = "failed" }
+        var tags: [String: String] = [
+            "trigger": "overnight", "outcome": outcome,
+            "gmail": legs["gmail"]!, "calendar": legs["calendar"]!,
+            "vault": legs["vault"]!, "proactive": legs["proactive"]!,
+            "network_at_start": netAtStart.status, "interface_at_start": netAtStart.interface,
+            "codex_version": diag.version ?? "unknown",
+        ]
+        tags.merge(signin.tags) { cur, _ in cur }
+        var extra: [String: String] = [
+            "device_items": String(deviceItems), "device_kept": String(deviceKept),
+            "device_failed": String(deviceFailed), "secs_device_stage": String(deviceSeconds),
+            "pings": String(diag.pings), "ping_ms_first": diag.firstPingMS.map(String.init) ?? "n/a",
+            "secs_wake_to_first_cloud_call": String(Int((firstCloudCallAt ?? Date()).timeIntervalSince(woke))),
+        ]
+        extra.merge(signin.extras) { cur, _ in cur }
+        CrashReporting.captureEvent("overnight.cloud_stage", level: outcome == "ok" ? .info : .warning,
+                                    tags: tags, extra: extra,
+                                    fingerprint: ["overnight", "cloud_stage", outcome])
     }
 
-    private func cloudLeg(_ name: String, log: SchedulerLog, _ body: () async throws -> Void) async {
+    /// Runs one cloud leg and returns "ok" or the closed-vocabulary reason it failed with.
+    private func cloudLeg(_ name: String, log: SchedulerLog, _ body: () async throws -> Void) async -> String {
         log.line("\(name) leg…")
-        do { try await body(); log.line("\(name) DONE") }
-        catch { log.line("\(name) FAILED: \(ErrorLabel(error))") }
+        do { try await body(); log.line("\(name) DONE"); return "ok" }
+        catch {
+            let reason = CodexFailureReason.classify(error)
+            log.line("\(name) FAILED: \(ErrorLabel(error)) — \(reason.rawValue)")
+            return reason.rawValue
+        }
     }
 
     // MARK: - Time helpers

@@ -72,7 +72,7 @@ actor GiftLetter {
             let fromFile = (try? String(contentsOf: giftFile, encoding: .utf8)) ?? ""
             let letter = Self.cleanMarkdown(fromFile.isEmpty ? env.result : fromFile)
             guard !letter.isEmpty else { throw GiftError.empty }
-            Log("GiftLetter: ✅ welcome letter (\(letter.count) chars, turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
+            Log("GiftLetter: ✅ welcome letter (\(letter.count) chars, turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
             Self.saveLatest(letter)
             return letter
         } catch let CodexCLI.CLIError.usageLimit(message, _) {

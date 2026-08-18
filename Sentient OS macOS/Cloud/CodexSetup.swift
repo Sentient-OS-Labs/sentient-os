@@ -290,7 +290,7 @@ final class CodexSetup {
             // URLs elided from the stream: the login flow prints the OAuth auth URL (PKCE/state
             // params), and every Log() line ships as a Release breadcrumb.
             loginProcess = try CodexCLI.startLogin { line in
-                Log("[codex-login] \(line.contains("://") ? "<url elided>" : line)")
+                Log("[codex-signin] \(line.contains("://") ? "<url elided>" : line)")
             }
             loggingIn = true
             // UI-neutral on purpose: onboarding and Settings → Health both auto-notice the

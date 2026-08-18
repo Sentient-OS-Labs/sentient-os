@@ -149,7 +149,7 @@ actor Proactive {
         do {
             let env = try await CodexCLI.shared.run(inv, onLine: onLine)
             let items = Array(Self.parse(env.jsonResult).prefix(Self.maxItems))
-            Log("Proactive.judge: ✅ \(items.count) action item(s) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
+            Log("Proactive.judge: ✅ \(items.count) action item(s) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
             #if DEBUG   // B7: title/action/importance/sources are the user's life — DEBUG-only so it can
                         // never become a Release breadcrumb (Sentry is Release-only).
             for (i, it) in items.enumerated() {

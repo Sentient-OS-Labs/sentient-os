@@ -129,7 +129,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
                 }
             }
             teardown()
-            Log("voice: finalized (\(Self.msLabel(clock.now - started))ms · tap \(taps) · fed 0 — no audio, session closed)")
+            Log("voice: finalized (\(Self.msLabel(clock.now - started))ms · tap \(taps) · fed 0 — no audio, capture closed)")
             return ""
         }
 
@@ -140,7 +140,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
             let finalize = Task { try await analyzer.finalizeAndFinishThroughEndOfInput() }
             let bound = Task {
                 try await Task.sleep(for: .seconds(5))
-                Log("voice: finalize parked — force-closing the session")
+                Log("voice: finalize parked — force-closing the capture")
                 await analyzer.cancelAndFinishNow()
             }
             _ = try? await finalize.value
