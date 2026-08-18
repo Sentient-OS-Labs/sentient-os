@@ -36,8 +36,14 @@ enum ProactiveCyclePhase: Sendable {
 /// A failed cycle step. `kind` is the verified, user-actionable reason (codex signed out ·
 /// offline · usage limit) when one could be established — nil means show `message` as-is.
 struct CycleFailure: Sendable, Equatable {
+    /// Which stage of the tail failed — the night summary reports vault vs proactive separately.
+    enum Stage: String, Sendable { case vault, deciding, preparing }
+
     let message: String
     let kind: OvernightCaution.Kind?
+    let stage: Stage
+    /// The closed-vocabulary reason (CodexFailureReason) — structure only, for diagnostics.
+    let reason: CodexFailureReason
 }
 
 actor ProactiveCycle {
@@ -100,7 +106,7 @@ actor ProactiveCycle {
         } catch {
             Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
             // half-edited vault isn't dirty; summaries kept
-            return await Self.fail("Knowledge base: \(Self.msg(error))", error: error,
+            return await Self.fail("Knowledge base: \(Self.msg(error))", error: error, stage: .vault,
                                    scheduled: scheduled, progress: progress)
         }
         await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
@@ -136,7 +142,7 @@ actor ProactiveCycle {
             } catch Proactive.ProError.noRecent {
                 items = []                                   // nothing recent enough — clear cards, still success
             } catch {
-                return await Self.fail("Deciding: \(Self.msg(error))", error: error,
+                return await Self.fail("Deciding: \(Self.msg(error))", error: error, stage: .deciding,
                                        scheduled: scheduled, progress: progress)
             }
             Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
@@ -153,7 +159,7 @@ actor ProactiveCycle {
                         "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"],
                         floatValue: Double(result.ready.count), tier: .core)
                 } catch {
-                    return await Self.fail("Preparing: \(Self.msg(error))", error: error,
+                    return await Self.fail("Preparing: \(Self.msg(error))", error: error, stage: .preparing,
                                            scheduled: scheduled, progress: progress)
                 }
             }
@@ -174,9 +180,11 @@ actor ProactiveCycle {
 
     /// The one shape every catch site shares: classify the failure, persist the caution on the
     /// unattended run, surface it to the live UI, and hand it back for the caller's return.
-    private static func fail(_ message: String, error: Error, scheduled: Bool,
+    private static func fail(_ message: String, error: Error, stage: CycleFailure.Stage, scheduled: Bool,
                              progress: @Sendable (ProactiveCyclePhase) -> Void) async -> CycleFailure {
-        let failure = CycleFailure(message: message, kind: await OvernightCaution.classify(error))
+        let failure = CycleFailure(message: message, kind: await OvernightCaution.classify(error),
+                                   stage: stage, reason: CodexFailureReason.classify(error))
+        Log("proactive cycle: \(stage.rawValue) failed — \(failure.reason.rawValue)")   // reason enum only; the message embeds codex output
         if scheduled { OvernightCaution.record(failure.kind) }   // the morning-after banner
         progress(.failed(failure))
         return failure

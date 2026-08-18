@@ -76,7 +76,8 @@ enum CalendarConnect {
         inv.webSearch = false
         inv.timeout = 120
         do {
-            let env = try await CodexCLI.shared.run(inv)
+            // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
+            let env = try await CodexTrigger.$current.withValue(.probe) { try await CodexCLI.shared.run(inv) }
             let answer = env.result.uppercased()
             let yes = answer.contains("YES") && !answer.contains("NO")
             Log("CalendarConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")

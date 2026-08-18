@@ -83,6 +83,7 @@
 			buildConfigurationList = 5A3F391C2FD0F43400DD835E /* Build configuration list for PBXNativeTarget "Sentient OS macOS" */;
 			buildPhases = (
 				5A3F390D2FD0F43300DD835E /* Sources */,
+				5AC0DE1E01000000000000E1 /* Lint log vocabulary (Debug) */,
 				5A3F390E2FD0F43300DD835E /* Frameworks */,
 				5A3F390F2FD0F43300DD835E /* Resources */,
 				5A7E1D0003000000000000C1 /* Copy wake-helper daemon plist */,
@@ -158,6 +159,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		5AC0DE1E01000000000000E1 /* Lint log vocabulary (Debug) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Lint log vocabulary (Debug)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Debug-only: fail the build if a Log() literal or a diagnostics tag/extra carries a word Sentry's\n# server-side scrubber redacts wholesale (token/auth/session/...). Doc: Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  \"${SRCROOT}/Scripts/lint_log_words.sh\" \"${SRCROOT}\"\nfi\n";
+		};
 		5AAAA0012FD0F43300DD835E /* Trim app bundle (thin LiteRT-LM, drop docs) */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;

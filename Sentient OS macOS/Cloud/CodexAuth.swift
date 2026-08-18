@@ -98,15 +98,17 @@ enum CodexAuth {
 
     // MARK: Read (no network)
 
-    private static var authURL: URL {
+    /// nonisolated: read from the CodexCLI actor and background diagnostics too (pure file path).
+    private nonisolated static var authURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/auth.json")
     }
 
     /// Decode the plan from auth.json's JWT claims. Pure file read — safe to call every launch,
     /// every cycle. Returns nil when it can't know (no file, API-key-only auth, undecodable) —
-    /// callers treat nil as full (fail open).
-    static func currentPlan() -> Plan? {
+    /// callers treat nil as full (fail open). nonisolated: a pure file read, safe from any executor
+    /// (CodexAuthSnapshot reads it off the CodexCLI actor).
+    nonisolated static func currentPlan() -> Plan? {
         guard let data = try? Data(contentsOf: authURL),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let tokens = root["tokens"] as? [String: Any] else { return nil }
@@ -126,7 +128,7 @@ enum CodexAuth {
 
     /// Extract `chatgpt_plan_type` from a JWT's payload segment (base64url, no signature check —
     /// we're reading our own user's token off their own disk, not authenticating anyone).
-    private static func planClaim(fromJWT jwt: String) -> String? {
+    private nonisolated static func planClaim(fromJWT jwt: String) -> String? {
         let segments = jwt.split(separator: ".")
         guard segments.count >= 2 else { return nil }
         var b64 = segments[1].replacingOccurrences(of: "-", with: "+")

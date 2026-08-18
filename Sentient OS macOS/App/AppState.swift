@@ -77,6 +77,13 @@ final class AppState {
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
         UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
+        // Diagnostics baseline for the session (structure only, see CodexDiagnostics.swift): start
+        // the network monitor now so a codex failure right after a wake never reads "unknown", and
+        // leave one breadcrumb saying what codex's login looks like at launch.
+        Task.detached(priority: .utility) {
+            NetworkSnapshot.shared.start()
+            Log(CodexAuthSnapshot.read().logLine)
+        }
         // A silent auto-update relaunch opens no window, so DockPolicy's open/close notifications
         // never fire — evaluate once (next runloop tick, after launch settles) so the Dock icon
         // drops to match the windowless launch instead of lingering with nothing behind it.
@@ -109,7 +116,7 @@ final class AppState {
                 Log("Notifications: launch status = \(label)")
                 if status == .notDetermined {
                     _ = try? await center.requestAuthorization(options: [.provisional])
-                    Log("Notifications: banked provisional (quiet) authorization")
+                    Log("Notifications: banked provisional (quiet) permission")
                 }
             }
         }

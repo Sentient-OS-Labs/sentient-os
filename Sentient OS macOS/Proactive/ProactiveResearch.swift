@@ -154,7 +154,7 @@ actor ProactiveResearch {
             let parsed = Self.parse(env.jsonResult)
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
             let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)
-            Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
+            Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
             #if DEBUG   // B7: the per-item detail carries preparedContent/titles/recipes (the user's life) —
                         // DEBUG-only so it can NEVER become a Release breadcrumb (Sentry is Release-only).
             for (i, a) in result.ready.enumerated() {

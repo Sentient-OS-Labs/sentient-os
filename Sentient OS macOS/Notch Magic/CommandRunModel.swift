@@ -89,12 +89,15 @@ final class CommandRunModel {
             #endif
             Log("──────────────── live codex output ↓ ────────────────")
             do {
-                let out = try await CodexCLI.shared.runAgentCommand(prompt, imagePaths: shots.map(\.path)) { line in
-                    Task { @MainActor in
-                        #if DEBUG
-                        Log("CMD │ \(line)")
-                        #endif
-                        self?.push(line)
+                // trigger=sidekick: every codex call under this press reports it (task-local).
+                let out = try await CodexTrigger.$current.withValue(.sidekick) {
+                    try await CodexCLI.shared.runAgentCommand(prompt, imagePaths: shots.map(\.path)) { line in
+                        Task { @MainActor in
+                            #if DEBUG
+                            Log("CMD │ \(line)")
+                            #endif
+                            self?.push(line)
+                        }
                     }
                 }
                 let secs = Int(Date().timeIntervalSince(started))

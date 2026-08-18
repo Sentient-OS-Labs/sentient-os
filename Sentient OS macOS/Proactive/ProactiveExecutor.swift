@@ -57,6 +57,11 @@ actor ProactiveExecutor {
     // MARK: Fire
 
     func fire(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
+        // trigger=card: every codex call under a card fire reports it (task-local, inherited).
+        await CodexTrigger.$current.withValue(.card) { await fireBody(action, progress: progress) }
+    }
+
+    private func fireBody(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         let recipe = action.executionRecipe.trimmingCharacters(in: .whitespacesAndNewlines)
         let content = action.preparedContent     // the VERBATIM, possibly user-edited artifact to send
         // The routing the message channels act on: the (possibly user-EDITED) "To:" recipient first,
