@@ -15,6 +15,9 @@
 //                    Junk/sensitive store nothing. `kind` + `sourceID` carry the cloud's trust tag.
 //
 //  Only this actor touches the @Models; callers pass Sendable value types (ItemKey, CycleNoteItem).
+//  Every per-item commit reports a `CommitOutcome`: a FULL DISK comes back as `.diskFull` so the run
+//  stops at the first one (every later item would fail the same way and be lost); any other store
+//  failure is retried once, logged, and reported to Sentry once per kind per session, never per item.
 //
 
 import Foundation
@@ -161,7 +164,8 @@ actor CycleStore {
 
     /// Set a bucket's mark directly (used by the Gmail cloud leg, which stamps a run-time pointer and
     /// has no on-device descent). On-device runs use the atomic `advance` / `sinkFloor` instead.
-    func setPointer(_ bucketKey: String, _ mark: ItemKey) {
+    @discardableResult
+    func setPointer(_ bucketKey: String, _ mark: ItemKey) -> CommitOutcome {
         commit(bucketKey: bucketKey, note: nil, apply: { r in
             r.order = mark.order; r.tiebreak = mark.tiebreak; r.updatedAt = Date()
         }, make: {
@@ -196,37 +200,66 @@ actor CycleStore {
         do { return try fetchRow(bucketKey) }
         catch {
             Log("CycleStore.row(\(Self.scheme(bucketKey))) fetch failed: \(ErrorLabel(error))")
-            CrashReporting.capture(error)
+            report(error, op: "fetch")
             return nil
         }
+    }
+
+    // MARK: Failure reporting
+
+    /// What a per-item commit did. `.diskFull` is the one outcome the RUN must act on: stop now,
+    /// nothing after this can be saved. `.failed` is any other store failure (already retried once,
+    /// logged, reported); the mark for that one item wasn't persisted, so it simply reprocesses next
+    /// run, and the run continues.
+    enum CommitOutcome: Sendable { case saved, diskFull, failed }
+
+    /// Store failure kinds (domain + code) already reported to Sentry this process. A full disk or a
+    /// wedged store fails EVERY item the same way; one event per kind is the signal, hundreds are noise
+    /// (and each `capture(error)` used to snapshot every thread on the caller). Structure only.
+    private var reportedFailures: Set<String> = []
+
+    private func report(_ error: Error, op: String) {
+        let ns = error as NSError
+        let key = "\(ns.domain):\(ns.code)"
+        guard reportedFailures.insert(key).inserted else { return }
+        CrashReporting.captureEvent("store.commit_failed", level: .error,
+            tags: ["op": op, "domain": ns.domain, "code": String(ns.code)],
+            fingerprint: ["store", "commit_failed", ns.domain, String(ns.code)])
     }
 
     /// The collision-safe update-or-insert for a bucket's pointer, committing an optional survivor
     /// note in the SAME save (the crash-safety atomicity). B9: a fetch or save failure no longer
     /// swallows the mark — on failure we roll back, then retry as an explicit update of the row that
-    /// actually exists (the unique-collision case), so a bucket can't reprocess forever.
+    /// actually exists (the unique-collision case), so a bucket can't reprocess forever. A FULL DISK
+    /// is the exception: no retry (it would fail identically), no per-item Sentry event; the caller
+    /// gets `.diskFull` and stops the run (a run that grinds on burns the whole night's engine time
+    /// on results it can't keep, then repeats it the next night; field-found 2026-08-15).
     private func commit(bucketKey: String, note: NoteDraft?,
-                        apply: (BucketPointer) -> Void, make: () -> BucketPointer) {
+                        apply: (BucketPointer) -> Void, make: () -> BucketPointer) -> CommitOutcome {
         func attempt() throws {
             if let note { insertNote(bucketKey: bucketKey, note: note) }
             if let r = try fetchRow(bucketKey) { apply(r) }
             else { modelContext.insert(make()) }
             try modelContext.save()
         }
-        do { try attempt() }
+        do { try attempt(); return .saved }
         catch {
-            Log("CycleStore.commit(\(Self.scheme(bucketKey))) failed: \(ErrorLabel(error)) — rolling back, retrying as update")
-            CrashReporting.capture(error)
             modelContext.rollback()
+            if DiskSpace.isDiskFull(error) {
+                Log("CycleStore.commit(\(Self.scheme(bucketKey))) failed: disk full — mark NOT persisted; the run must stop")
+                return .diskFull
+            }
+            Log("CycleStore.commit(\(Self.scheme(bucketKey))) failed: \(ErrorLabel(error)) — rolling back, retrying as update")
+            report(error, op: "commit")
             do {
-                if let note { insertNote(bucketKey: bucketKey, note: note) }
-                if let r = try fetchRow(bucketKey) { apply(r) }
-                else { modelContext.insert(make()) }   // genuinely no row → last-resort insert
-                try modelContext.save()
+                try attempt()   // the row that DOES exist now takes the update path
+                return .saved
             } catch {
                 modelContext.rollback()
+                if DiskSpace.isDiskFull(error) { return .diskFull }
                 Log("CycleStore.commit(\(Self.scheme(bucketKey))) recovery failed: \(ErrorLabel(error)) — mark NOT persisted this item")
-                CrashReporting.capture(error)
+                report(error, op: "commit_retry")
+                return .failed
             }
         }
     }
@@ -252,7 +285,7 @@ actor CycleStore {
     /// EVERYDAY (iterative) — record an optional survivor note AND advance the high-water bookmark to
     /// `mark`, in one save. No gap between the two writes ⇒ a crash can never leave a note without its
     /// bookmark (which would re-summarize the item into a duplicate). Clears any floor.
-    func advance(bucketKey: String, note: NoteDraft?, to mark: ItemKey) {
+    func advance(bucketKey: String, note: NoteDraft?, to mark: ItemKey) -> CommitOutcome {
         commit(bucketKey: bucketKey, note: note, apply: { r in
             r.order = mark.order; r.tiebreak = mark.tiebreak
             r.floorOrder = nil; r.floorTiebreak = nil; r.updatedAt = Date()
@@ -264,7 +297,7 @@ actor CycleStore {
     /// FIRST RUN (initial descent) — record an optional survivor note AND sink the floor to `floor`
     /// (top stays fixed), in one save. Creates the row with `top` on the first step. A crash leaves an
     /// honest floor → the next run resumes strictly below it.
-    func sinkFloor(bucketKey: String, note: NoteDraft?, top: ItemKey, floor: ItemKey) {
+    func sinkFloor(bucketKey: String, note: NoteDraft?, top: ItemKey, floor: ItemKey) -> CommitOutcome {
         commit(bucketKey: bucketKey, note: note, apply: { r in
             r.order = top.order; r.tiebreak = top.tiebreak
             r.floorOrder = floor.order; r.floorTiebreak = floor.tiebreak; r.updatedAt = Date()
@@ -283,7 +316,7 @@ actor CycleStore {
             try modelContext.save()
         } catch {
             Log("CycleStore.collapseFloor(\(Self.scheme(bucketKey))) failed: \(ErrorLabel(error))")
-            CrashReporting.capture(error)
+            report(error, op: "collapse_floor")
         }
     }
 
