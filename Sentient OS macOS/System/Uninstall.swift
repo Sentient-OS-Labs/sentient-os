@@ -109,7 +109,7 @@ enum Uninstall {
         await beat()
 
         progress(.model)
-        try? FileManager.default.removeItem(at: URL.sentientSupport)   // model + download staging + the store
+        try? FileManager.default.removeItem(at: URL.sentientSupport)   // model + download staging + the store + the cua driver
         await beat()
 
         progress(.traces)
@@ -124,7 +124,7 @@ enum Uninstall {
         d.synchronize()
         await beat()
 
-        Log("Uninstall: removed wake helper + cloud copy + keychain identity + knowledge base + model + store + caches + TCC grant + defaults · left the .app, ~/.codex, and gift keepsakes untouched")
+        Log("Uninstall: removed wake helper + cloud copy + keychain identity + knowledge base + model + cua driver + store + caches + TCC grant + defaults · left the .app, ~/.codex, and gift keepsakes untouched")
         return true
     }
 

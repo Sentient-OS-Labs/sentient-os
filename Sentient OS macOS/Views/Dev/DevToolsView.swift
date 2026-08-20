@@ -79,6 +79,8 @@ struct DevToolsView: View {
     @State private var showPermissions = false
     @State private var showHotkeyLab = false
     @State private var showCodexSetup = false
+    @AppStorage(ComputerUseDriver.key) private var driverRaw = ComputerUseDriver.codex.rawValue
+    @State private var codexSetup = CodexSetup.shared
     @State private var showMore = false
     @State private var fdaGranted = false
     @State private var resetResult: String?
@@ -216,6 +218,72 @@ struct DevToolsView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: Computer-use driver (the A/B switch)
+
+    /// Which driver acts on the Mac — the whole point of running both side by side. The flip is
+    /// live (every run reads `ComputerUseDriver.current` fresh), so the same task can be fired
+    /// through each without a restart, which is what makes an honest comparison possible.
+    private var driverSection: some View {
+        let driver = ComputerUseDriver(rawValue: driverRaw) ?? .codex
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Computer-use driver")
+                .font(.callout.weight(.medium)).foregroundStyle(.white)
+            HStack(spacing: 8) {
+                ForEach(ComputerUseDriver.allCases, id: \.rawValue) { option in
+                    driverButton(option, selected: option == driver)
+                }
+            }
+            Text(driver.note)
+                .font(.caption2).foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+            if driver == .cua {
+                // The one thing that can make this switch a no-op: the binary isn't down yet.
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(codexSetup.cuaDriverReady ? Theme.Ink.green : Color.orange)
+                        .frame(width: 6, height: 6)
+                    Text(codexSetup.cuaDriverReady
+                         ? "cua-driver \(CuaDriver.version) installed"
+                         : (codexSetup.settingUpCuaDriver ? "downloading…" : "not installed — runs will fail until it is"))
+                        .font(.caption2).foregroundStyle(Theme.faint)
+                    Spacer()
+                    Button(codexSetup.cuaDriverReady ? "Re-install" : "Install") {
+                        Task { await codexSetup.setupCuaDriver(force: codexSetup.cuaDriverReady) }
+                    }
+                    .controlSize(.small)
+                    .disabled(codexSetup.settingUpCuaDriver)
+                }
+                if let line = codexSetup.cuaDriverStatus {
+                    Text(line)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(line.hasPrefix("✓") ? Theme.Ink.green : line.hasPrefix("✗") ? .red : Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Sentient's OWN Accessibility + Screen Recording are what this driver runs on — the permission gate asks for those instead of the Codex helper's.")
+                    .font(.caption2).foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+        .onAppear { codexSetup.refreshCuaDriver() }
+    }
+
+    /// One driver segment — lit when it's the active one (same shape as the deck picker).
+    private func driverButton(_ option: ComputerUseDriver, selected: Bool) -> some View {
+        Button { ComputerUseDriver.select(option); driverRaw = option.rawValue } label: {
+            Text(option.label.uppercased())
+                .font(.caption2.weight(.bold)).tracking(1.5)
+                .foregroundStyle(selected ? .white : Theme.faint)
+                .frame(maxWidth: .infinity, minHeight: 32)
+                .background(.white.opacity(selected ? 0.14 : 0.04), in: RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(.white.opacity(selected ? 0.25 : 0.08), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
     /// Opens the one CODEX SETUP window (install · log in · computer use) — all three steps live in
     /// `CodexSetupView`, driven by the shared `CodexSetup` engine (the same code onboarding will use).
     private var codexSetupButton: some View {
@@ -260,6 +328,7 @@ struct DevToolsView: View {
                         viewActionItemsButton
                     }
                     mcpToggleButton
+                    driverSection
                     codexSetupButton
                     permissionsButton
                     hotkeyLabButton

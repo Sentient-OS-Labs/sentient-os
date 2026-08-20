@@ -40,19 +40,36 @@ final class ComputerUseGate {
     enum MicSpeechState { case granted, notAsked, denied }
     private(set) var micSpeech: MicSpeechState = .notAsked
 
-    /// Sentient's own Screen Recording — the screen context snapshot. OPTIONAL: without it,
-    /// Sidekick runs text-only; it never gates an action.
+    /// Sentient's own Screen Recording — the screen context snapshot on the codex path, and the
+    /// driver's EYES on the cua path (see `allRequiredGranted`), since cua-driver runs inside
+    /// Sentient's TCC chain and captures windows as us.
     private(set) var sentientScreen = false
+
+    /// Sentient's own Accessibility — the cua driver's HANDS. Nothing on the codex path (OpenAI's
+    /// helper carries its own grant), REQUIRED on the cua path: every AX read and every background
+    /// click the driver makes is answered with Sentient's grant, because Sentient is the responsible
+    /// app in the chain that spawned it.
+    private(set) var sentientAccessibility = false
 
     /// The Codex Computer Use helper's presence + its two system-TCC grants (its hands and eyes).
     private(set) var helperOnDisk = false
     private(set) var helperAccessibility = false
     private(set) var helperScreen = false
 
-    /// The REQUIRED grants — what the gate holds actions for. Sentient's own two (Microphone &
-    /// Speech, Screen Recording) are deliberately absent: optional rows, shown but never blocking.
+    /// The REQUIRED grants — what the gate holds actions for. WHICH ones depends on the active
+    /// driver (Driver/ComputerUseDriver), because the two drivers are two different apps asking:
+    ///   · `.codex` — OpenAI's helper acts as ITSELF, so its Accessibility + Screen Recording are
+    ///     the required pair, and Sentient's own two stay optional rows (shown, never blocking).
+    ///   · `.cua`   — cua-driver acts inside SENTIENT's responsibility chain, so macOS answers its
+    ///     checks with Sentient's grants: Sentient's Accessibility (its hands) and Screen Recording
+    ///     (its eyes) are required instead, and the helper's rows don't gate anything.
+    /// Microphone & Speech is optional on both — voice is one of several ways to ask, never the
+    /// thing that acts.
     var allRequiredGranted: Bool {
-        helperAccessibility && helperScreen
+        switch ComputerUseDriver.current {
+        case .codex: helperAccessibility && helperScreen
+        case .cua:   sentientAccessibility && sentientScreen
+        }
     }
 
     // MARK: The gate
@@ -94,7 +111,7 @@ final class ComputerUseGate {
             // Seen working — arm the home's regression banner (HealthCaution rung ③).
             HealthCaution.latchComputerUse()
             // Nothing required is missing — the only reason to appear is a one-time optional offer.
-            let offerScreen = !sentientScreen && !Self.screenRecordingOffered
+            let offerScreen = ComputerUseDriver.current == .codex && !sentientScreen && !Self.screenRecordingOffered
             let offerMic = micSpeech != .granted && !Self.micSpeechOffered
             guard offerScreen || offerMic else { return false }
         }
@@ -158,6 +175,7 @@ final class ComputerUseGate {
         sentientScreen = Permissions.hasScreenRecording()
             || Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
                                         clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS")
+        sentientAccessibility = Permissions.hasAccessibility()
         helperOnDisk = Permissions.computerUseHelperURL() != nil
         helperAccessibility = Permissions.isTCCGranted(
             service: "kTCCServiceAccessibility",
@@ -177,6 +195,9 @@ final class ComputerUseGate {
             return
         }
         HealthCaution.latchComputerUse()   // the gate's moment of truth — regressions may now banner
+        // A grant may have landed while a cua daemon was already running, and TCC answers are cached
+        // per process — so the next command must get a fresh one or it would act half-blind.
+        Task { await CuaDriverHost.shared.markGrantsChanged() }
         let action = pending
         pending = nil
         Analytics.signal("PermissionGate.continued", parameters: ["all_granted": "true"])

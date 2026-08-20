@@ -17,6 +17,7 @@
 
 import Foundation
 import AppKit
+import ApplicationServices // AXIsProcessTrusted — Sentient's own Accessibility grant (the cua driver's hands)
 import CoreGraphics // CGPreflight/RequestScreenCaptureAccess — Sentient's own Screen Recording grant
 import Security   // SecCode/SecStaticCode → an app's Designated Requirement (the TCC csreq blob)
 import SQLite3    // direct, parameterized write into the user's TCC.db (we already hold Full Disk Access)
@@ -226,6 +227,24 @@ enum Permissions {
     /// list; the grant only takes effect after an app restart. Returns the current (pre-restart) status.
     @discardableResult
     static func requestScreenRecording() -> Bool { CGRequestScreenCaptureAccess() }
+
+    // MARK: - Sentient's own Accessibility (the cua driver's hands)
+
+    /// True iff Sentient already holds Accessibility. `AXIsProcessTrusted()` never prompts, and it
+    /// answers for THIS process — which is exactly the right question here: cua-driver is spawned
+    /// inside Sentient's responsibility chain, so macOS charges its clicks and AX reads to us.
+    /// (Unlike Screen Recording, this one is live: a grant flipped in Settings is visible without a
+    /// relaunch, because AX is checked per call rather than cached at capture-session setup.)
+    static func hasAccessibility() -> Bool { AXIsProcessTrusted() }
+
+    /// Ask for Accessibility. The one-shot system prompt ("… would like to control this computer")
+    /// with a Open System Settings button; macOS shows it once per app identity, so a user who has
+    /// already dismissed it gets nothing and needs the Settings pane instead (the gate's Fix…).
+    /// Returns the pre-grant status.
+    @discardableResult
+    static func requestAccessibility() -> Bool {
+        AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+    }
 
     // MARK: - Settings deep-links (we can't flip these toggles; the user does)
 
