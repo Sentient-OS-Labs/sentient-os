@@ -177,8 +177,8 @@ struct OnboardingView: View {
         #endif
     }
 
-    /// Two minutes into the first analysis, bootstrap codex computer use (setup step 3) silently
-    /// in the background — so it's ready by the time the home's cards and Sidekick need it, with
+    /// Two minutes into the first analysis, bootstrap BOTH computer-use drivers (setup steps 3 and
+    /// 3b) silently in the background — so it's ready by the time the home's cards and Sidekick need it, with
     /// no onboarding screen of its own. Armed when the analysis takeover APPEARS (not at Start
     /// Analysis), so its ~535 MB DMG never races the model download still finishing behind the
     /// downloading screen. An unstructured Task on purpose: pausing or exiting the
@@ -192,6 +192,14 @@ struct OnboardingView: View {
             try? await Task.sleep(for: .seconds(120))
             Log("Onboarding: 2 min into first analysis — starting background computer-use setup")
             await CodexSetup.shared.setupComputerUse()
+        }
+        // The Cua driver rides the same moment, in PARALLEL: a separate ~40 MB download that needs
+        // no codex binary and no login, so it never queues behind OpenAI's ~535 MB DMG. Both drivers
+        // on disk is what makes the dev picker a flip instead of a wait. Same unstructured-Task
+        // manners as above — pausing or leaving the analysis must not cancel a download mid-flight.
+        Task {
+            try? await Task.sleep(for: .seconds(120))
+            await CodexSetup.shared.setupCuaDriver()
         }
     }
 

@@ -313,7 +313,7 @@ actor ProactiveExecutor {
         responding, the attempt is over. If you cannot complete the task with computer use, STOP and \
         reply with `STATUS: COULD_NOT — <reason>`.
         \(CustomProvider.computerUsePromptRules)
-        <<<CONTENT
+        \(CuaDriver.promptRules)<<<CONTENT
         \(content)
         CONTENT>>>
 

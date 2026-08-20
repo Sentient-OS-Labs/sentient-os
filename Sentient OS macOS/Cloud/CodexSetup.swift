@@ -369,10 +369,56 @@ final class CodexSetup {
         settingUpComputerUse = false
     }
 
+    // MARK: Step 3b — the Cua driver (the other computer-use driver, side by side)
+    //
+    // The alternative to OpenAI's helper (see Driver/ComputerUseDriver): one pinned ~40 MB binary
+    // that codex loads as an MCP server and that acts inside a single window without stealing the
+    // cursor. It rides the SAME setup moment as step 3 and runs in PARALLEL with it — 40 MB next to
+    // 535 MB is noise, and having both on disk is what makes the dev picker a flip rather than a
+    // download. When OpenAI's path retires, this becomes the only thing that step fetches.
+
+    /// Is the pinned cua-driver on disk?
+    private(set) var cuaDriverReady = CuaDriver.isInstalled
+    /// A cua-driver install is running (drives the spinner + disables the button).
+    private(set) var settingUpCuaDriver = false
+    /// Latest streamed progress line, or the final ✓/✗ result.
+    private(set) var cuaDriverStatus: String?
+
+    /// Cheap re-detect — call on appear and after a setup.
+    func refreshCuaDriver() { cuaDriverReady = CuaDriver.isInstalled }
+
+    /// Step 3b — download + verify + install the pinned cua-driver. Detection-first (a no-op when
+    /// the pinned version is already there; `force` re-fetches). Unlike step 3 this needs NO codex
+    /// binary and no login: it is a self-contained download, so it can run before, during, or after
+    /// the rest of setup.
+    func setupCuaDriver(force: Bool = false) async {
+        guard !settingUpCuaDriver else { return }
+        if !force, CuaDriver.isInstalled {
+            cuaDriverReady = true
+            cuaDriverStatus = "✓ Cua driver already installed"
+            return
+        }
+        settingUpCuaDriver = true
+        cuaDriverStatus = force ? "Re-installing…" : "Starting…"
+        do {
+            try await CuaDriverSetup.install(force: force) { [weak self] line in
+                Log("[cua-driver] \(line)")
+                Task { @MainActor in self?.cuaDriverStatus = line }
+            }
+            cuaDriverReady = true
+            cuaDriverStatus = "✓ Cua driver ready"
+        } catch {
+            cuaDriverReady = CuaDriver.isInstalled
+            cuaDriverStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+            stepFailed(.cuaDriver, error)
+        }
+        settingUpCuaDriver = false
+    }
+
     // MARK: Onboarding driver (one source of truth for BOTH a dumb-sequential and a smart flow)
 
     /// The three setup steps, in order.
-    enum Step: String, Sendable { case install, login, computerUse }
+    enum Step: String, Sendable { case install, login, computerUse, cuaDriver }
 
     /// §7.24: a setup step failed — error TYPE only (never the streamed installer/login lines, which
     /// embed paths/account hints). `binary_found` on install is the specific "installer ran, binary
@@ -394,10 +440,13 @@ final class CodexSetup {
         await refreshInstalled()
         await refreshLoginStatus()
         refreshComputerUse()
+        refreshCuaDriver()
         var pending: [Step] = []
         if !installed        { pending.append(.install) }
         if !loggedIn         { pending.append(.login) }
         if !computerUseReady { pending.append(.computerUse) }
+        // .cuaDriver is deliberately NOT pending-listed: onboarding must never wait on the
+        // experimental driver, and its own arming step fetches it in the background.
         return pending
     }
 }

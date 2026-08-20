@@ -710,17 +710,41 @@ actor CodexCLI {
             // Self-heal the relaxed confirmation policy: a plugin update (desktop app or a
             // re-bootstrap) lays a fresh STOCK SKILL.md, whose policy stalls headless runs on
             // "shall I proceed?" questions nothing can answer. Cheap file check, idempotent.
-            ComputerUseSkillPatch.ensureApplied()
+            // Which hands act on the Mac (Driver/ComputerUseDriver) — read fresh per run, so the
+            // dev picker applies to the very next fire. `.codex` is the shipped path: OpenAI's own
+            // plugin, whose stock confirmation policy would stall a headless run, hence the patch.
+            // `.cua` swaps in cua-driver as an MCP server and disables OpenAI's plugin for that run,
+            // so exactly one set of hands is ever in the conversation.
+            let driver = ComputerUseDriver.current
+            if driver == .codex { ComputerUseSkillPatch.ensureApplied() }
             var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
                         "-m", modelID,
                         "-c", "model_reasoning_effort=\"\(effortArg)\""]
+            if driver == .cua {
+                guard CuaDriver.isInstalled else { throw CLIError.notAvailable(.notInstalled) }
+                // Hermetic on purpose — and it is the ONLY lever that works. ~/.codex carries
+                // OpenAI's computer-use PLUGIN, whose skill advertisement makes the model announce
+                // "using the computer-use skill", shell out to read SKILL.md, and burn a turn before
+                // it touches a cua tool (field log 2026-08-19, 22:07 run). Measured: a `-c`
+                // plugins-disable is a no-op and even disabling the plugin's MCP server leaves the
+                // skill advertised; only --ignore-user-config removes it. Cost, eyes open: the
+                // hosted Gmail/Calendar connector skills drop off cua runs too (the model does mail
+                // through the UI instead) — an A/B asymmetry to remember when reading eval results.
+                args += ["--ignore-user-config"]
+                // Sentient's own daemon does the driving; codex only gets a proxy pointed at it.
+                // Started here (not at launch) so a Mac that never fires a command never runs one.
+                guard let socket = await CuaDriverHost.shared.ensureRunning() else {
+                    throw CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
+                }
+                for override in CuaDriver.codexOverrides(socketPath: socket) { args += ["-c", override] }
+            }
             if ModelBackend.current == .custom {
                 for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
             }
             if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
             args += ["--skip-git-repo-check", prompt]
             let modelTag = ModelBackend.current == .custom ? "custom" : modelID
-            Log("codex exec: start feature=computer model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
+            Log("codex exec: start feature=computer driver=\(driver.rawValue) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
             Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
