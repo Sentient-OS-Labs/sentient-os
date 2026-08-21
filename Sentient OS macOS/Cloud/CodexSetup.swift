@@ -3,21 +3,23 @@
 //  Sentient OS macOS
 //
 //  The unified Codex SETUP engine — the SINGLE code path that onboarding AND the dev tools both
-//  drive, so there's never a second, divergent copy. Getting Codex computer use working on the
-//  user's Mac is three steps:
-//    1. INSTALL       — drop the Codex CLI binary on disk.
-//    2. AUTH          — `codex login` with the user's OpenAI account.
-//    3. COMPUTER USE  — patch ~/.codex so computer use works via the CLI (ComputerUseSetup).
+//  drive, so there's never a second, divergent copy. Getting Sentient's cloud spine plus computer
+//  use working on the user's Mac is three steps:
+//    1. INSTALL   — drop the Codex CLI binary on disk.
+//    2. AUTH      — `codex login` with the user's OpenAI account.
+//    3. DRIVER    — download + verify the pinned cua-driver, the hands of computer use
+//                   (Driver/CuaDriverSetup; needs neither the binary nor the login).
 //  Observable + a shared instance, so both UIs render the same live status off one source of truth.
-//  The actual binary install runs through CodexCLI (its Process plumbing); the computer-use
-//  bootstrap runs through ComputerUseSetup; this file owns the flow.
+//  The actual binary install runs through CodexCLI (its Process plumbing); the driver install runs
+//  through CuaDriverSetup; this file owns the flow.
 //
 //  Key methods:
 //   - refreshInstalled()   → re-detect whether the codex binary is present (async, off-main)
 //   - installCodex()       → step 1: run OpenAI's installer (ALWAYS runs — it doubles as the
 //                            updater over an existing install; streams progress)
 //   - startLogin/confirmLogin → step 2: interactive `codex login` (browser) + confirm
-//   - setupComputerUse()   → step 3: bootstrap computer use from OpenAI's DMG (streams progress)
+//   - setupCuaDriver()     → step 3: fetch + verify + install the pinned driver (streams progress)
+//   - ensureCuaDriver()    → the fire-time self-heal: driver on disk before a computer-use run
 //   - whatsNeeded()        → fresh check of all three; returns the pending steps (smart-flow driver)
 //   - updateIfDue(trigger:) → keep the managed CLI current: at most one update attempt a day,
 //                            skipped when already the newest release (a 1 KB version check)
@@ -319,63 +321,12 @@ final class CodexSetup {
         }
     }
 
-    // MARK: Step 3 — computer use
-
-    /// Is computer use bootstrapped into ~/.codex? (the plugin + native helper are on disk)
-    private(set) var computerUseReady = ComputerUseSetup.isInstalled
-    /// A computer-use setup is running (drives the spinner + disables the button).
-    private(set) var settingUpComputerUse = false
-    /// Latest streamed progress line, or the final ✓/✗ result.
-    private(set) var computerUseStatus: String?
-
-    /// Cheap re-detect of step 3's status — call on appear and after a setup.
-    func refreshComputerUse() { computerUseReady = ComputerUseSetup.isInstalled }
-
-    /// Step 3 — make computer use work on the plain Codex CLI (no desktop app). Detection-first:
-    /// a no-op if already set up. Downloads OpenAI's official installer DMG, lifts out the bundled
-    /// computer-use payload, lays it into ~/.codex, and patches config.toml — streaming progress.
-    /// Both onboarding and the dev button call THIS — no duplicated logic.
-    func setupComputerUse(force: Bool = false) async {
-        guard !settingUpComputerUse else { return }
-        if !force, ComputerUseSetup.isInstalled {
-            computerUseReady = true
-            computerUseStatus = "✓ Computer use already set up"
-            return
-        }
-        await refreshInstalled()   // fresh probe, not the cached flag — the user may have installed codex themselves
-        guard installed else { computerUseStatus = "✗ Install the Codex CLI first"; return }
-        settingUpComputerUse = true
-        computerUseStatus = force ? "Re-installing…" : "Starting…"
-        do {
-            try await ComputerUseSetup.install(force: force) { [weak self] line in
-                Log("[codex-cu] \(line)")
-                Task { @MainActor in self?.computerUseStatus = line }
-            }
-            computerUseReady = true
-            computerUseStatus = "✓ Computer use ready"
-            // The helper is now on disk, so pre-grant the Automation right (Sentient → the helper
-            // over Apple Events) HERE — user-invisible, FDA-writable — so the first fire never
-            // waits on it. Idempotent + fully guarded (no-op without FDA, or if already granted).
-            // A short settle first: the code-signature blob is read off the freshly-laid bundle.
-            Task {
-                try? await Task.sleep(for: .seconds(2))
-                Permissions.selfHealComputerUseAutomation(context: "CodexSetup.computerUse")
-            }
-        } catch {
-            computerUseReady = ComputerUseSetup.isInstalled
-            computerUseStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
-            stepFailed(.computerUse, error)
-        }
-        settingUpComputerUse = false
-    }
-
-    // MARK: Step 3b — the Cua driver (the other computer-use driver, side by side)
+    // MARK: Step 3 — the computer-use driver (cua-driver)
     //
-    // The alternative to OpenAI's helper (see Driver/ComputerUseDriver): one pinned ~40 MB binary
-    // that codex loads as an MCP server and that acts inside a single window without stealing the
-    // cursor. It rides the SAME setup moment as step 3 and runs in PARALLEL with it — 40 MB next to
-    // 535 MB is noise, and having both on disk is what makes the dev picker a flip rather than a
-    // download. When OpenAI's path retires, this becomes the only thing that step fetches.
+    // The hands (see Driver/CuaDriver): one pinned ~40 MB binary that codex loads as an MCP server
+    // and that acts inside a single window without stealing the cursor. Unlike steps 1 and 2 it
+    // needs NO codex binary and no login — a self-contained download that can run before, during,
+    // or after the rest of setup.
 
     /// Is the pinned cua-driver on disk?
     private(set) var cuaDriverReady = CuaDriver.isInstalled
@@ -387,10 +338,9 @@ final class CodexSetup {
     /// Cheap re-detect — call on appear and after a setup.
     func refreshCuaDriver() { cuaDriverReady = CuaDriver.isInstalled }
 
-    /// Step 3b — download + verify + install the pinned cua-driver. Detection-first (a no-op when
-    /// the pinned version is already there; `force` re-fetches). Unlike step 3 this needs NO codex
-    /// binary and no login: it is a self-contained download, so it can run before, during, or after
-    /// the rest of setup.
+    /// Step 3 — download + verify + install the pinned cua-driver. Detection-first (a no-op when
+    /// the pinned version is already there; `force` re-fetches). Onboarding, the dev tools, and
+    /// the Health pane's fix all call THIS — no duplicated logic.
     func setupCuaDriver(force: Bool = false) async {
         guard !settingUpCuaDriver else { return }
         if !force, CuaDriver.isInstalled {
@@ -415,10 +365,30 @@ final class CodexSetup {
         settingUpCuaDriver = false
     }
 
+    /// The fire-time self-heal (CodexCLI.runAgentCommand): make sure the pinned driver is on disk
+    /// before a computer-use run. Installed → immediate true. An install already in flight
+    /// (onboarding's fetch, a Health fix) → wait for IT rather than racing a second download over
+    /// the same staging. Otherwise run the normal setup (a measured 2–3 s on a good connection).
+    /// Returns the final on-disk truth; the caller still guards on it.
+    @discardableResult
+    func ensureCuaDriver() async -> Bool {
+        if CuaDriver.isInstalled { cuaDriverReady = true; return true }
+        if settingUpCuaDriver {
+            // Bounded wait — a stuck download must fail the fire, not hang it forever.
+            for _ in 0..<480 where settingUpCuaDriver {   // ~2 min at 250 ms
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+        } else {
+            await setupCuaDriver()
+        }
+        refreshCuaDriver()
+        return cuaDriverReady
+    }
+
     // MARK: Onboarding driver (one source of truth for BOTH a dumb-sequential and a smart flow)
 
     /// The three setup steps, in order.
-    enum Step: String, Sendable { case install, login, computerUse, cuaDriver }
+    enum Step: String, Sendable { case install, login, cuaDriver }
 
     /// §7.24: a setup step failed — error TYPE only (never the streamed installer/login lines, which
     /// embed paths/account hints). `binary_found` on install is the specific "installer ran, binary
@@ -432,21 +402,18 @@ final class CodexSetup {
     }
 
     /// Authoritative, FRESH check of all three steps: re-detects the binary on disk, runs
-    /// `codex login status`, and re-checks the computer-use bootstrap — then returns the steps
-    /// still PENDING, in order. A smart onboarding calls this to decide what to render/run; a dumb
+    /// `codex login status`, and re-checks the driver install — then returns the steps still
+    /// PENDING, in order. A smart onboarding calls this to decide what to render/run; a dumb
     /// "just run all three in order" driver can ignore it because every action (installCodex /
-    /// startLogin / setupComputerUse) already self-guards and no-ops when its step is done.
+    /// startLogin / setupCuaDriver) already self-guards and no-ops when its step is done.
     func whatsNeeded() async -> [Step] {
         await refreshInstalled()
         await refreshLoginStatus()
-        refreshComputerUse()
         refreshCuaDriver()
         var pending: [Step] = []
-        if !installed        { pending.append(.install) }
-        if !loggedIn         { pending.append(.login) }
-        if !computerUseReady { pending.append(.computerUse) }
-        // .cuaDriver is deliberately NOT pending-listed: onboarding must never wait on the
-        // experimental driver, and its own arming step fetches it in the background.
+        if !installed      { pending.append(.install) }
+        if !loggedIn       { pending.append(.login) }
+        if !cuaDriverReady { pending.append(.cuaDriver) }
         return pending
     }
 }

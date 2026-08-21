@@ -5,8 +5,9 @@
 //  Sentient's long-lived cua-driver daemon — the process that actually clicks and types when the
 //  Cua driver is the active one. Sentient spawns it ITSELF (never `open`, never NSWorkspace: macOS
 //  attributes TCC to the top of the launch chain, and going through LaunchServices would hand the
-//  daemon its own identity and cost the user a second Accessibility prompt). A codex run then talks
-//  to it through a thin `cua-driver mcp --embedded --socket …` proxy that executes nothing itself.
+//  daemon its own identity and cost the user a second Accessibility prompt). A codex run then
+//  drives it with one-shot CLI calls through the shim this host writes per generation
+//  (`<shim> <tool> '<json>'` — the shim bakes in the daemon's socket; see CuaDriver.shimURL).
 //
 //  Why a daemon at all, when `mcp --direct` needs no lifecycle code: only the daemon owns an AppKit
 //  runloop, and that runloop is what draws the agent cursor — the glowing pointer that shows the
@@ -90,7 +91,14 @@ actor CuaDriverHost {
                        // Exit when our end of stdin closes (the lifeline below).
                        "--parent-liveness-stdio",
                        // We own the permission experience; the daemon must never raise its own UI.
-                       "--no-permissions-gate"]
+                       "--no-permissions-gate",
+                       // The agent cursor's motion: the daemon default is glide 0 — the cursor
+                       // TELEPORTS between action points, which reads as nothing happening.
+                       // 420 ms is upstream's own showcase glide; per-run cursor instances are
+                       // built from this launch-time config (measured 2026-08-20: the overlay
+                       // renders and pins above the target window — a fresh session just needs
+                       // motion to be visible as motion).
+                       "--glide-ms", "420"]
         // A curated environment, not ours wholesale: the daemon needs only enough to find the user's
         // home and temp dir. The three privacy variables are NOT optional — cua-driver ships with
         // PostHog telemetry ON and a daily GitHub update check, and neither belongs on a Sentient
@@ -127,6 +135,7 @@ actor CuaDriverHost {
         // Poll rather than sleep, so a fast Mac isn't taxed and a slow one isn't cut short.
         for _ in 0..<100 {
             if FileManager.default.fileExists(atPath: endpoint.path) {
+                writeShim(socket: endpoint.path)
                 Log("CuaDriverHost: daemon up (cua-driver \(CuaDriver.version), pid \(p.processIdentifier))")
                 return endpoint.path
             }
@@ -189,6 +198,35 @@ actor CuaDriverHost {
         process = nil
         lifeline = nil
         socket = nil
+    }
+
+    /// Write the CLI shim for this daemon generation — the space-free launcher the model's shell
+    /// calls (`<shim> <tool> '<json>'`). Our `--socket` goes FIRST so it always wins (the driver
+    /// takes the first occurrence of a flag), and the privacy env rides along so a one-shot call
+    /// can never phone home. Also (re)creates the screenshot drop-box and wipes the previous
+    /// generation's frames — they are content-bearing images of the user's windows, so they live
+    /// exactly as long as they're useful.
+    private func writeShim(socket: String) {
+        let fm = FileManager.default
+        let shim = CuaDriver.shimURL
+        let shots = CuaDriver.shotsDirURL
+        do {
+            try fm.createDirectory(at: shim.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.removeItem(at: shots)                     // wipe last generation's frames
+            try fm.createDirectory(at: shots, withIntermediateDirectories: true)
+            let script = """
+            #!/bin/sh
+            # Sentient OS — cua-driver one-shot launcher (regenerated per daemon generation).
+            export CUA_DRIVER_RS_TELEMETRY_ENABLED=false CUA_TELEMETRY_ENABLED=false CUA_DRIVER_RS_UPDATE_CHECK=false
+            exec "\(CuaDriver.binaryURL.path)" --socket "\(socket)" "$@"
+            """
+            try script.write(to: shim, atomically: true, encoding: .utf8)
+            try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shim.path)
+        } catch {
+            // Non-fatal on purpose: the daemon is up; a failed shim only surfaces when the model's
+            // first call can't find it, and the run's own failure line says why.
+            Log("CuaDriverHost: could not write the CLI shim — \(ErrorLabel(error))")
+        }
     }
 
     /// Keep the daemon's stderr moving (a full pipe would stall it) and hold the last few lines for

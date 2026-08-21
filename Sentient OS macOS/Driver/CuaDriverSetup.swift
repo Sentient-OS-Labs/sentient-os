@@ -2,9 +2,8 @@
 //  CuaDriverSetup.swift
 //  Sentient OS macOS  ·  Driver/
 //
-//  Puts the pinned cua-driver binary on the user's Mac. The sibling of Cloud/ComputerUseSetup (which
-//  lifts OpenAI's computer-use payload out of their DMG) for the other driver — same shape, same
-//  detection-first manners, a fortieth of the download.
+//  Puts the pinned cua-driver binary on the user's Mac — step 3 of Codex setup (CodexSetup owns
+//  the flow; onboarding arms it in the background two minutes into the first analysis).
 //
 //  The chain, in order, each step able to say no:
 //    1. Download the pinned release tarball straight from Cua's GitHub release (~40 MB).

@@ -4,18 +4,18 @@
 //
 //  The first-use permission gate for everything that acts on the Mac. Every computer-use surface
 //  (the home command bar, Sidekick's hotkey, a proactive card's fire) funnels through
-//  `intercept(_:)`: while any REQUIRED action grant is missing — the Codex Computer Use helper's
-//  Accessibility and Screen Recording — it stashes the pending action, raises the one-time setup
-//  window (ComputerUseGateView), and fires the action when the user taps Continue. Sentient's own
-//  grants ride along as OPTIONAL rows (Microphone & Speech — Sidekick's voice; Screen Recording —
-//  the screen-context snapshot): missing either never gates anything — no mic means hold-to-talk
-//  stays off (tap-to-type and typed commands still work), no screen grant means commands run
-//  text-only. Each optional grant is offered exactly once (persisted flags), and a voice HOLD
-//  against a DENIED mic re-raises the window as a non-blocking fix surface (presentVoiceFixIfDenied
-//  — a denied grant has no native prompt left to show). Closing the window instead cancels the
-//  pending action. All required grants green and both optionals offered means it never appears at
-//  all. Status probes reuse Permissions/VoiceCapture (the helper's grants are system-TCC, read via
-//  our FDA).
+//  `intercept(_:)`: while any REQUIRED action grant is missing — Sentient's own Accessibility (the
+//  cua driver's hands) and Screen Recording (its eyes) — it stashes the pending action, raises the
+//  one-time setup window (ComputerUseGateView), and fires the action when the user taps Continue.
+//  The driver runs inside Sentient's responsibility chain, so macOS answers its checks with
+//  Sentient's grants: the user grants twice, to the app they already trust, and no helper app ever
+//  appears in System Settings. Microphone & Speech rides along as an OPTIONAL row (Sidekick's
+//  voice): missing it never gates anything — hold-to-talk stays off while tap-to-type and typed
+//  commands still work. The optional grant is offered exactly once (a persisted flag), and a voice
+//  HOLD against a DENIED mic re-raises the window as a non-blocking fix surface
+//  (presentVoiceFixIfDenied — a denied grant has no native prompt left to show). Closing the
+//  window instead cancels the pending action. All required grants green and the optional offered
+//  means it never appears at all. Status probes reuse Permissions/VoiceCapture.
 //
 //  Key methods: intercept(_:) · refresh() · continueNow()
 //
@@ -40,51 +40,28 @@ final class ComputerUseGate {
     enum MicSpeechState { case granted, notAsked, denied }
     private(set) var micSpeech: MicSpeechState = .notAsked
 
-    /// Sentient's own Screen Recording — the screen context snapshot on the codex path, and the
-    /// driver's EYES on the cua path (see `allRequiredGranted`), since cua-driver runs inside
-    /// Sentient's TCC chain and captures windows as us.
+    /// Sentient's own Screen Recording — the cua driver's EYES (per-window screenshots) and the
+    /// screen-context snapshot at fire time, since the driver runs inside Sentient's TCC chain and
+    /// captures windows as us.
     private(set) var sentientScreen = false
 
-    /// Sentient's own Accessibility — the cua driver's HANDS. Nothing on the codex path (OpenAI's
-    /// helper carries its own grant), REQUIRED on the cua path: every AX read and every background
-    /// click the driver makes is answered with Sentient's grant, because Sentient is the responsible
-    /// app in the chain that spawned it.
+    /// Sentient's own Accessibility — the cua driver's HANDS: every AX read and every background
+    /// click the driver makes is answered with Sentient's grant, because Sentient is the
+    /// responsible app in the chain that spawned it.
     private(set) var sentientAccessibility = false
 
-    /// The Codex Computer Use helper's presence + its two system-TCC grants (its hands and eyes).
-    private(set) var helperOnDisk = false
-    private(set) var helperAccessibility = false
-    private(set) var helperScreen = false
-
-    /// The REQUIRED grants — what the gate holds actions for. WHICH ones depends on the active
-    /// driver (Driver/ComputerUseDriver), because the two drivers are two different apps asking:
-    ///   · `.codex` — OpenAI's helper acts as ITSELF, so its Accessibility + Screen Recording are
-    ///     the required pair, and Sentient's own two stay optional rows (shown, never blocking).
-    ///   · `.cua`   — cua-driver acts inside SENTIENT's responsibility chain, so macOS answers its
-    ///     checks with Sentient's grants: Sentient's Accessibility (its hands) and Screen Recording
-    ///     (its eyes) are required instead, and the helper's rows don't gate anything.
-    /// Microphone & Speech is optional on both — voice is one of several ways to ask, never the
-    /// thing that acts.
-    var allRequiredGranted: Bool {
-        switch ComputerUseDriver.current {
-        case .codex: helperAccessibility && helperScreen
-        case .cua:   sentientAccessibility && sentientScreen
-        }
-    }
+    /// The REQUIRED grants — what the gate holds actions for: Sentient's Accessibility (the
+    /// driver's hands) and Screen Recording (its eyes). Microphone & Speech is optional — voice is
+    /// one of several ways to ask, never the thing that acts.
+    var allRequiredGranted: Bool { sentientAccessibility && sentientScreen }
 
     // MARK: The gate
 
-    /// Persisted so each of Sentient's OPTIONAL grants (Screen Recording · Microphone & Speech)
-    /// is offered exactly once in the app's lifetime. The gate blocks only on REQUIRED grants, so
-    /// without these a user who already had the Codex helper's grants (e.g. set up via the
-    /// ChatGPT app) would sail straight past and never be pitched Sentient's own two. Cleared by
-    /// FactoryReset so a rebuild re-offers them.
-    static let screenRecordingOfferedKey = "computerUse.screenRecordingOffered"
+    /// Persisted so Sentient's OPTIONAL grant (Microphone & Speech) is offered exactly once in the
+    /// app's lifetime. The gate blocks only on REQUIRED grants, so without this a user who granted
+    /// them and skipped voice would never be pitched it again. Cleared by FactoryReset so a rebuild
+    /// re-offers it.
     static let micSpeechOfferedKey = "computerUse.micSpeechOffered"
-    private static var screenRecordingOffered: Bool {
-        get { UserDefaults.standard.bool(forKey: screenRecordingOfferedKey) }
-        set { UserDefaults.standard.set(newValue, forKey: screenRecordingOfferedKey) }
-    }
     private static var micSpeechOffered: Bool {
         get { UserDefaults.standard.bool(forKey: micSpeechOfferedKey) }
         set { UserDefaults.standard.set(newValue, forKey: micSpeechOfferedKey) }
@@ -100,23 +77,20 @@ final class ComputerUseGate {
     ///   • a REQUIRED grant is missing → BLOCKING: always re-shows (or re-focuses) and re-holds the
     ///     action until every required grant is green — so a feature can never fire half-granted no
     ///     matter how many times the window was dismissed (Continue is disabled, close drops it).
-    ///   • all required are green but one of Sentient's OPTIONAL grants (Microphone & Speech ·
-    ///     Screen Recording) is missing and hasn't been offered yet → NON-BLOCKING, once ever:
-    ///     Continue is enabled immediately and closing still FIRES the held command, so an
-    ///     optional nudge never eats what the user fired.
+    ///   • all required are green but Sentient's OPTIONAL grant (Microphone & Speech) is missing
+    ///     and hasn't been offered yet → NON-BLOCKING, once ever: Continue is enabled immediately
+    ///     and closing still FIRES the held command, so an optional nudge never eats what the user
+    ///     fired.
     func intercept(_ action: @escaping @MainActor () -> Void) -> Bool {
         refresh()
         let blocking = !allRequiredGranted
         if !blocking {
             // Seen working — arm the home's regression banner (HealthCaution rung ③).
             HealthCaution.latchComputerUse()
-            // Nothing required is missing — the only reason to appear is a one-time optional offer.
-            let offerScreen = ComputerUseDriver.current == .codex && !sentientScreen && !Self.screenRecordingOffered
-            let offerMic = micSpeech != .granted && !Self.micSpeechOffered
-            guard offerScreen || offerMic else { return false }
+            // Nothing required is missing — the only reason to appear is the one-time optional offer.
+            guard micSpeech != .granted, !Self.micSpeechOffered else { return false }
         }
-        // The rows are shown → they've now been offered them.
-        if !sentientScreen { Self.screenRecordingOffered = true }
+        // The row is shown → it's now been offered.
         if micSpeech != .granted { Self.micSpeechOffered = true }
         presentedBlocking = blocking
         let wasVisible = window?.isVisible ?? false
@@ -158,7 +132,7 @@ final class ComputerUseGate {
         return true
     }
 
-    /// Re-probe all four grants (cheap; the TCC reads are two tiny indexed SELECTs).
+    /// Re-probe all three grants (cheap; the TCC read is one tiny indexed SELECT).
     func refresh() {
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
         let speech = SFSpeechRecognizer.authorizationStatus()
@@ -176,13 +150,6 @@ final class ComputerUseGate {
             || Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
                                         clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS")
         sentientAccessibility = Permissions.hasAccessibility()
-        helperOnDisk = Permissions.computerUseHelperURL() != nil
-        helperAccessibility = Permissions.isTCCGranted(
-            service: "kTCCServiceAccessibility",
-            clientBundleID: Permissions.computerUseHelperBundleID)
-        helperScreen = Permissions.isTCCGranted(
-            service: "kTCCServiceScreenCapture",
-            clientBundleID: Permissions.computerUseHelperBundleID)
     }
 
     /// The window's main button — dismiss and fire the held action. Only ever fires once every
@@ -209,9 +176,6 @@ final class ComputerUseGate {
     // Sidekick fires from anywhere; a SwiftUI Window scene can't be raised from the coordinator)
 
     private func present() {
-        // The executor also needs the Automation grant (Sentient → the helper over Apple Events);
-        // it's user-invisible and FDA-writable, so heal it here — before the first fire.
-        Permissions.selfHealComputerUseAutomation(context: "ComputerUseGate")
         if window == nil {
             let hosting = NSHostingController(rootView: ComputerUseGateView(gate: self))
             let w = NSWindow(contentViewController: hosting)

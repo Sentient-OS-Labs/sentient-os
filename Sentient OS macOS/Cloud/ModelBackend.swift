@@ -238,49 +238,26 @@ struct CustomProvider: Sendable {
         return (url, code)
     }
 
-    /// Tool-usage + safety rules injected into the app-authored computer-use prompts
-    /// (Sidekick's commandPrompt, the executor's computerWrapper) ON THE CUSTOM BACKEND ONLY —
-    /// empty on ChatGPT, so the shipped, field-proven prompts stay byte-identical there.
-    /// Why: codex only ADVERTISES the computer-use skill (one line + a file path); GPT-5.6 goes
-    /// and reads SKILL.md, but weaker custom models measurably don't (2026-07-24: MiniMax sent
+    /// Extra guardrails injected into the app-authored computer-use prompts (Sidekick's
+    /// commandPrompt, the executor's computerWrapper) ON THE CUSTOM BACKEND ONLY — empty on
+    /// ChatGPT. The full operating manual is CuaDriverSkill.rules for every backend; these lines
+    /// add only what weaker custom models measurably need on top (2026-07-24: MiniMax sent
     /// `element_index: ""`, got `invalidElementID`, "fixed" it with the window element, clicked
-    /// the window center 15 times, then claimed success off an accidental spacebar play). So the
-    /// operating rules AND a compressed confirmation policy ride inline for custom models.
+    /// the window center 15 times, then claimed success off an accidental spacebar play): a hard
+    /// safety stop-list and an anti-stall rule.
     static var computerUsePromptRules: String {
         guard ModelBackend.current == .custom else { return "" }
         return """
 
-        COMPUTER-USE TOOL RULES (follow exactly):
-        1. Before interacting with an app each turn, call get_app_state once and study BOTH the \
-        screenshot and the accessibility tree it returns.
-        2. To click something the accessibility tree ACTUALLY lists, pass element_index alone \
-        (omit x/y). If the tree does not list what you can see in the screenshot (many apps \
-        expose only the window frame and menu bar), aim with the screenshot instead: pass x and \
-        y alone and OMIT the element_index field completely — never send it as an empty string, \
-        and never fall back to clicking a window/container element.
-        3. After each click or keystroke, call get_app_state again and confirm the screen \
-        changed the way you expected before taking the next step.
-        4. The SCREENSHOT is the source of truth, not the accessibility tree. Many apps list \
-        only their sidebar or window frame in the tree and never show the main content pane, so \
-        a tree that looks empty or unchanged does NOT mean your click failed. Judge what \
-        happened from the screenshot, and never abandon a correctly targeted click to start \
-        guessing at other coordinates.
-        5. Before declaring the task done, verify from the LATEST screenshot that the goal \
-        state is actually visible. If you cannot verify it, report honestly that you could not.
-        6. Safety, non-negotiable: do the user's stated task without re-asking, but STOP (end \
+        EXTRA RULES (follow exactly):
+        1. Safety, non-negotiable: do the user's stated task without re-asking, but STOP (end \
         with STATUS: COULD_NOT and ask the user to take over) before any of these: deleting \
         data, payments or other financial transactions, changing passwords or security \
         settings, creating accounts or API keys, installing software, or sending sensitive \
         personal data (passwords, financials, government IDs) anywhere the task did not \
         explicitly name.
-        7. The screenshot you receive IS the coordinate space, and it is only as large as the \
-        app's window, often much smaller than the screen. Read its actual pixel dimensions from \
-        the image before aiming, keep every coordinate inside those bounds, and never estimate \
-        against an assumed screen size. If a click reports that no window was found at that \
-        position, your coordinates were outside the image, so re-read its size rather than \
-        nudging your guess.
-        8. KEEP GOING UNTIL IT IS DONE. This is a multi-step task and you run autonomously: \
-        after every tool call, immediately make the next one. Do NOT end your turn to narrate \
+        2. KEEP GOING UNTIL IT IS DONE. This is a multi-step task and you run autonomously: \
+        after every cua call, immediately make the next one. Do NOT end your turn to narrate \
         what you are about to do, do not stop to check in, and do not stop until the task is \
         actually complete (or you have genuinely failed). Ending your turn early counts as \
         failure. You cannot ask questions; nobody will reply.

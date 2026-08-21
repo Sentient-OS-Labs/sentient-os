@@ -35,8 +35,7 @@ enum FactoryReset {
         // reset on purpose — like the wake helper it's a setup choice, not a learning; a rebuild
         // should come back up on the same engine. Uninstall is what destroys it.
         d.removeObject(forKey: AppState.onboardingKey)
-        d.removeObject(forKey: ComputerUseGate.screenRecordingOfferedKey)   // re-offer Sentient's optional grants on rebuild
-        d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)
+        d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)         // re-offer the optional voice grant on rebuild
         d.removeObject(forKey: HealthCaution.computerUseEverReadyKey)       // the home's computer-use banner re-arms at the rebuild's own gate
         // The overnight scheduler starts over too: the 14h clock re-stamps at the REBUILD's first
         // cycle (not the wiped one's), the auto-enable one-shot is re-armed, and the production

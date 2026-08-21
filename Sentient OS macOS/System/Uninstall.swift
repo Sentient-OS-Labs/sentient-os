@@ -5,14 +5,15 @@
 //  The one full teardown — FactoryReset's strict superset, driven by Settings → System →
 //  Uninstall Sentient (UninstallView). Removes EVERYTHING Sentient ever created on this Mac:
 //  the root wake helper (+ its /Library files), the cloud mirror copy AND the Keychain identity,
-//  the knowledge base, the on-device model, the cycle store, the login item, the TCC Automation
-//  grant, caches, and the whole defaults domain. Every step is best-effort and idempotent, so a
-//  crash or relaunch mid-way just re-runs cleanly (post-wipe the app lands in onboarding).
+//  the knowledge base, the on-device model + the cua driver (both under the swept SentientOS
+//  root), the cycle store, the login item, the legacy 1.x Automation TCC row, caches, and the
+//  whole defaults domain. Every step is best-effort and idempotent, so a crash or relaunch
+//  mid-way just re-runs cleanly (post-wipe the app lands in onboarding).
 //
 //  Deliberately NOT touched: the .app bundle itself (the gone screen asks the user to drag it to
-//  the Trash — decided 2026-07-10), ALL of ~/.codex (the computer-use payload, config.toml, and
-//  the user's own codex login stay), the Desktop gift keepsakes, and the SIP-protected system
-//  TCC rows. A destructive sequence must never drift — change it HERE only.
+//  the Trash — decided 2026-07-10), ALL of ~/.codex (config.toml, any 1.x-era computer-use
+//  payload, and the user's own codex login stay), the Desktop gift keepsakes, and the
+//  SIP-protected system TCC rows. A destructive sequence must never drift — change it HERE only.
 //
 //  Key members: Stage (the sheet's whisper per step) · run(appState:progress:helperDecision:)
 //  (the teardown) · finishAndQuit() (the gone screen's Quit + post-exit sweeper).

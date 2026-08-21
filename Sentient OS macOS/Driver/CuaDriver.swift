@@ -8,18 +8,23 @@
 //  per-window clicks and keystrokes with no cursor warp and no focus steal — plus per-window
 //  screenshots and accessibility trees, and a typed route into a Chromium page over CDP.
 //
-//  How a run uses it: Sentient owns a long-lived daemon (Driver/CuaDriverHost) and a codex run gets
-//  a thin `mcp --embedded --socket …` proxy that forwards to it and executes nothing itself. The
-//  daemon is a DIRECT child of Sentient, so macOS answers its Accessibility and Screen Recording
-//  checks with SENTIENT's grants: the user grants twice, to the app they already trust, and no
-//  second helper ever appears in System Settings. The daemon also owns the AppKit runloop that
-//  draws the agent cursor — the reason this shape is worth its lifecycle code over `mcp --direct`.
+//  How a run uses it — the HYBRID transport: Sentient owns a long-lived daemon
+//  (Driver/CuaDriverHost) and the codex agent reaches it two ways at once, both clients of the SAME
+//  daemon. The EYES ride MCP: a thin `mcp --embedded --socket …` proxy exposing ONLY the four
+//  vision tools (mcpTools), so every look is one call with the screenshot inline, at ~3k tokens of
+//  schema. The HANDS ride the CLI: one-shot `<shim> <tool> '<json>'` calls for every action and
+//  the whole browser family, taught by CuaDriverSkill at zero schema cost. The daemon is a DIRECT
+//  child of Sentient, so macOS answers its Accessibility and Screen Recording checks with
+//  SENTIENT's grants: the user grants twice, to the app they already trust, and no second helper
+//  ever appears in System Settings. The daemon also owns the AppKit runloop that draws the agent
+//  cursor — the reason this shape is worth its lifecycle code over `mcp --direct`.
 //
 //  Key members:
 //   - version / tarballURL / tarballSHA256 → the pinned release (CuaDriverSetup fetches exactly this)
 //   - binaryURL / isInstalled              → the resolved binary and its readiness probe
-//   - codexOverrides()                     → the `-c` block that registers it with codex
-//   - enabledTools                         → the trimmed tool surface the model actually gets
+//   - mcpTools / codexOverrides()          → the eyes: the vision tools registered with codex over MCP
+//   - shimURL / shotsDirURL                → the CLI shim + screenshot drop-box (CuaDriverHost writes them)
+//   - enabledTools                         → the full allowlist CuaDriverSkill teaches the model
 //
 //
 
@@ -81,10 +86,13 @@ enum CuaDriver {
 
     // MARK: The tool surface handed to the model
 
-    /// The tools codex exposes to the model, out of the 56 cua-driver advertises. Trimmed for two
-    /// reasons: cost (the full surface is ~148 KB of JSON schema — measured 35k tokens on a task
-    /// that needs 15k with a trimmed list) and blast radius (the excluded ones are management, not
-    /// action). Every excluded tool still exists in the binary; the model simply never sees it.
+    /// The tools the model is ALLOWED to call, out of the 56 cua-driver advertises — spliced into
+    /// CuaDriverSkill's manual as the explicit allowlist. The `mcpTools` subset arrives as real MCP
+    /// tools; everything else here is CLI-only, taught by the skill text. Prompt-enforced (the
+    /// daemon serves its full surface to any same-user client; a capability manifest can't narrow
+    /// it for us because a manifest also origin-pins `browser_navigate`, and our tasks go to
+    /// arbitrary URLs — verified against authorization.rs 2026-08-20). Same posture the old MCP
+    /// `enabled_tools` trim had: advisory to the model, invisible tools simply never get taught.
     ///
     /// Deliberately OUT: `page` (its legacy Apple Events route can quit the user's browser and
     /// rewrite every profile's Preferences), `kill_app`, `bring_to_front` (steals the foreground
@@ -98,6 +106,8 @@ enum CuaDriver {
         "click", "double_click", "right_click", "drag", "scroll",
         "type_text", "press_key", "hotkey", "set_value", "invoke_menu",
         "set_window_frame", "verify_state",
+        // Magnify a dense region to aim precisely (pairs with from_zoom on click/type_text).
+        "zoom",
         // Exact values in and out of a field without a select-and-copy dance.
         "clipboard_read", "clipboard_write",
         // The typed browser route: a real page instead of pixels over a browser window.
@@ -105,70 +115,79 @@ enum CuaDriver {
         "browser_click", "browser_type", "browser_pointer", "browser_dialog",
     ]
 
-    // MARK: What the model needs to know
+    // MARK: The MCP eyes (the vision tools, and only them)
 
-    /// Operating rules injected into the app-authored computer-use prompts (Sidekick's
-    /// commandPrompt, the executor's computerWrapper) ON THE CUA DRIVER ONLY — empty on `.codex`,
-    /// so the shipped, field-proven prompts stay byte-identical there.
-    ///
-    /// Why any at all: cua-driver's own MCP `instructions` teach the snapshot → act → verify loop,
-    /// and its tool descriptions are unusually good. What they do NOT carry is the no-foreground
-    /// discipline — the whole reason we would run this driver — which upstream keeps in a 4,000-line
-    /// skill pack the model never sees here. These are the lines from that pack that change what the
-    /// model does, compressed.
-    static var promptRules: String {
-        guard ComputerUseDriver.current == .cua else { return "" }
-        return """
-        How to use the cua_driver tools (they act INSIDE one window; the cursor never moves and the         frontmost app never changes — keep it that way):
-        - Look before every action and check after it. `get_window_state(pid, window_id)` returns the         element tree AND a screenshot together. Element tokens die the moment you take a newer         snapshot of that window, so re-snapshot each turn rather than reusing one.
-        - Address elements by `element_token` whenever the tree has them; reach for x/y pixels only         for canvas, video, or custom-drawn surfaces the tree can't see.
-        - Background delivery is the default and it is the point. Escalate to         `delivery_mode: "foreground"` only after the driver actually refuses or an action verifiably         did nothing — never up front because an app "seems like" it will need it.
-        - The tree lies on Electron and Catalyst apps (Slack, WhatsApp, VS Code): a write can read         back as applied while the real field never changed. The screenshot in the same response is         the truth. When a typed value doesn't take, use the pixel form — `type_text(pid, window_id,         x, y, text)` — which clicks to focus and then types.
-        - Keyboard commits (Return, Tab) don't land on a minimized window; `set_value` writes the         field directly instead.
-        - In a browser, never send ⌘L or the tab-switching shortcuts: the browser pulls itself to the         front and the user sees their tabs move. Open a page with `launch_app(bundle_id, urls)` or         `browser_navigate`.
-        - For page content, bind the window with `get_browser_state` and use the `browser_*` tools.         On macOS a trusted `browser_click` is refused on purpose (it would raise the window) — pass         `input_route: "dom_event"`, then verify with a fresh snapshot, and if the page ignored the         synthetic click fall back to a normal `click` on the browser window. A pixel right-click on         web content arrives as a left-click; right-click by element token instead.
-        - Read the `effect` field honestly. `unverifiable` or `suspected_noop` is not success, and a         refusal tells you which rung to try next. Never report a task done on an action you could         not confirm.
+    /// The tools registered with codex over MCP — the model's EYES. Exactly the image-returning
+    /// native-window tools, nothing else: their results land in context as real inline images (one
+    /// call per look, no save-file → view-image hop), while their schemas cost only ~3k tokens —
+    /// the expensive schemas (click ~1.6k, type_text ~1.4k…) belong to the action tools, which ride
+    /// the CLI for free. `get_browser_state` is deliberately NOT here: browser targets and refs are
+    /// session-scoped and a session never bridges transports (verified in run_call's namespace
+    /// handling, 2026-08-21), so the whole browser family stays on the CLI where one shared
+    /// `"session"` label keeps bind → snapshot → act coherent. The four below carry no session
+    /// coupling — the element cache is daemon-owned, keyed (pid, window_id) — so a token read over
+    /// MCP works in a CLI click.
+    static let mcpTools = ["get_window_state", "get_desktop_state", "zoom", "verify_state"]
 
+    // MARK: The codex wiring (MCP = eyes only)
 
-        """
-    }
-
-    // MARK: The codex wiring
-
-    /// The `-c` overrides that register cua-driver with ONE codex run. Per-run on purpose (the same
+    /// The `-c` overrides that register the eyes with ONE codex run. Per-run on purpose (the same
     /// law as the frontier-model overrides): nothing is ever written into the user's own
-    /// `~/.codex/config.toml`, so a Sentient experiment can't reshape their codex.
-    ///
-    /// One driver per run is enforced by the RUN being hermetic (`--ignore-user-config`, added in
-    /// runAgentCommand): OpenAI's computer-use plugin lives in ~/.codex, and a hermetic run never
-    /// loads it. Verified 2026-08-19 that this is the only lever which works — `-c` overrides on
-    /// `plugins.*` don't take, and disabling the plugin's MCP server still leaves its SKILL
-    /// advertised, which is what sent the model on a "using the computer-use skill" detour.
+    /// `~/.codex/config.toml`. `enabled_tools` filters the daemon's 56-tool surface down to
+    /// `mcpTools` harness-side — the model never sees a byte of the other schemas.
     ///
     /// `mcp --embedded --socket <path>` is a PROXY: it forwards tool calls to Sentient's daemon and
     /// never executes anything itself, so codex spawning it is harmless to TCC attribution (the
     /// daemon, our own child, is what macOS charges). `--grant existing-profile` is NOT passed here
     /// — launch grants belong to the runtime, which is the daemon, and CuaDriverHost passes it there.
     ///
-    /// The three environment variables are NOT optional for us: cua-driver ships with product
-    /// telemetry ON (PostHog) and a daily GitHub update check, both of which would put a Sentient
-    /// user's machine on someone else's network on our behalf. codex hands the child a curated base
-    /// environment (HOME, PATH, TMPDIR, USER, SHELL, LANG) and merges these on top, so this is the
-    /// child's whole world.
+    /// The env block is NOT optional: cua-driver ships with product telemetry ON (PostHog) and a
+    /// daily GitHub update check, and neither belongs on a Sentient user's machine on our behalf.
     static func codexOverrides(socketPath: String) -> [String] {
-        let tools = enabledTools.map { "\"\($0)\"" }.joined(separator: ",")
+        let tools = mcpTools.map { "\"\($0)\"" }.joined(separator: ",")
         return [
             "mcp_servers.cua_driver.command=\"\(binaryURL.path)\"",
             "mcp_servers.cua_driver.args=[\"mcp\",\"--embedded\",\"--socket\",\"\(socketPath)\"]",
             "mcp_servers.cua_driver.env={CUA_DRIVER_EMBEDDED=\"1\",CUA_DRIVER_RS_TELEMETRY_ENABLED=\"false\",CUA_TELEMETRY_ENABLED=\"false\",CUA_DRIVER_RS_UPDATE_CHECK=\"false\"}",
             "mcp_servers.cua_driver.enabled_tools=[\(tools)]",
-            // A driver that fails to start must fail the RUN, not quietly leave the model with no
-            // hands (it would happily "finish" the task by doing nothing).
+            // Eyes that fail to open must fail the RUN, not quietly leave the model blind (it
+            // would happily "finish" the task off the tree alone).
             "mcp_servers.cua_driver.required=true",
             // A single window snapshot on a big app can take a while; codex's 60 s default cuts
             // real work short.
             "mcp_servers.cua_driver.tool_timeout_sec=120",
             "mcp_servers.cua_driver.startup_timeout_sec=30",
         ]
+    }
+
+    // MARK: The CLI shim (how a codex run reaches the daemon)
+
+    /// The one-line launcher a computer-use run invokes as `<shim> <tool> '<json>'`. It lives at a
+    /// SPACE-FREE path on purpose (the real binary sits under "Application Support", and an LLM
+    /// writing shell commands around a spaced path is a per-call quoting hazard), bakes in the
+    /// daemon's per-generation `--socket`, and pins the privacy env (telemetry + update check off)
+    /// so no one-shot call ever phones home. CuaDriverHost rewrites it on every daemon generation;
+    /// the PATH is stable, so CuaDriverSkill can reference it from a prompt built before the run.
+    /// Parent dir is `~/Library/Caches/<bundleID>` — already inside Uninstall's sweep.
+    static var shimURL: URL {
+        cachesRoot.appendingPathComponent("cua")
+    }
+
+    /// Where the model saves every screenshot it takes (`--screenshot-out-file <here>/<step>.png`),
+    /// then views it. These are content-bearing frames of the user's windows, so CuaDriverHost
+    /// wipes the directory on every fresh daemon generation, and Uninstall's caches sweep takes the
+    /// whole folder. NOTE: must stay a REAL directory path — the driver's output-path check refuses
+    /// a symlinked ancestor like `/tmp` (field-found 2026-08-20), which caches paths never are.
+    static var shotsDirURL: URL {
+        cachesRoot.appendingPathComponent("cua-shots", isDirectory: true)
+    }
+
+    /// `~/Library/Caches/<bundleID>/` — the app's own caches namespace (created on demand by
+    /// CuaDriverHost). Chosen over the Application Support root for the one property that matters
+    /// here: no spaces anywhere in the path.
+    private static var cachesRoot: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS",
+                                    isDirectory: true)
     }
 }

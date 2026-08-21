@@ -83,6 +83,10 @@ final class AppState {
         Task.detached(priority: .utility) {
             NetworkSnapshot.shared.start()
             Log(CodexAuthSnapshot.read().logLine)
+            // Legacy cleanup (Sentient 1.x → cua driver): drop the Automation TCC row the old
+            // codex-helper path wrote. Best-effort and idempotent — a quiet no-op on clean Macs,
+            // so it simply runs every launch instead of carrying a migration flag.
+            Permissions.revokeComputerUseAutomation()
         }
         // A silent auto-update relaunch opens no window, so DockPolicy's open/close notifications
         // never fire — evaluate once (next runloop tick, after launch settles) so the Dock icon
@@ -100,6 +104,11 @@ final class AppState {
                 self?.commandCoordinator.run.isRunning ?? true
             }
         }
+
+        // (A Mac updating from the codex-helper era gets the driver through the one-time
+        // ComputerUseUpgrade window at its first home open — an announced moment, deliberately
+        // NOT a silent background download. The fire-time self-heal covers a Sidekick fire that
+        // beats the home to it.)
 
         // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
         // grants quiet Notification Center delivery and lists us in Settings → Notifications (the

@@ -3,15 +3,14 @@
 //  Sentient OS macOS
 //
 //  Settings → Permissions & Health: the health board. Live LED rows for every grant Sentient
-//  actually asks for, in severity order — SENTIENT (Full Disk Access · the overnight wake daemon ·
-//  launch-at-login · mic & speech · notifications), SET UP CODEX (CLI · account · ChatGPT plan
-//  via CodexAuth · computer use, via the shared CodexSetup engine), and CODEX PERMISSIONS (the
-//  helper's Accessibility + Screen
-//  Recording — system-TCC, status-only, shown once computer use exists). The Automation grant has
-//  NO row: it self-heals silently shortly after the pane opens (the user has no job there).
+//  actually asks for, in severity order — ON-DEVICE INTELLIGENCE (Full Disk Access · the overnight
+//  wake daemon · launch-at-login), SIDEKICK & PROACTIVE (mic & speech · Accessibility and Screen
+//  Recording, the cua driver's hands and eyes — Sentient's OWN grants, since the driver runs
+//  inside Sentient's TCC chain · notifications), and SET UP CODEX (CLI · account · ChatGPT plan
+//  via CodexAuth · the computer-use driver, via the shared CodexSetup engine).
 //  Red = a core capability is broken · yellow = optional, fixable-later, or working on it. The
 //  codex fix buttons drive the shared engine INLINE (install / browser login with auto-notice /
-//  computer-use bootstrap — no sheet; CodexSetupView is dev-tools-only now). When the whole codex
+//  the driver download — no sheet; CodexSetupView is dev-tools-only now). When the whole codex
 //  stack is green it collapses to one glowing summary line (tap for details) — a browsing user
 //  shouldn't wade through five rows of "fine". Statuses re-probe on app foreground.
 //  (Reset lives in Settings → System.)
@@ -33,12 +32,9 @@ struct HealthPane: View {
     @State private var daemon: DaemonState = .notSetUp
     @State private var loginOn = LoginItem.isEnabled
     @State private var micSpeech: MicSpeechState = .notAsked
-    @State private var screenRec = Permissions.hasScreenRecording()   // Sentient's own grant — Sidekick's screen context
+    @State private var screenRec = Permissions.hasScreenRecording()   // Sentient's own grant — the driver's eyes
+    @State private var accessibility = Permissions.hasAccessibility() // Sentient's own grant — the driver's hands
     @State private var notifStatus: UNAuthorizationStatus = .notDetermined
-
-    // The Codex helper's system-TCC grants (read via FDA; shown once computer use exists)
-    @State private var helperAccessibility = false
-    @State private var helperScreenRecording = false
 
     // ChatGPT plan (decoded from the user's own codex login — CodexAuth)
     @State private var plan: CodexAuth.Plan?
@@ -51,8 +47,6 @@ struct HealthPane: View {
     private enum DaemonState { case ready, installing, notSetUp, disabled }
     private enum MicSpeechState { case granted, notAsked, denied }
 
-    private var showCodexPermissions: Bool { fdaGranted && codex.computerUseReady }
-
     /// On the ChatGPT backend the account rows matter (logged in + a non-limited plan); on a
     /// custom frontier model the endpoint being configured stands in for both.
     private var accountHealthy: Bool {
@@ -61,19 +55,17 @@ struct HealthPane: View {
             : CustomProvider.current.isUsable
     }
 
-    /// The whole codex stack, healthy — the CLI, the account (or the custom endpoint), computer
-    /// use, AND its two helper grants (verifiable only with FDA; unverifiable never claims
-    /// "all good"). A free/go plan keeps the group expanded so its amber row stays visible.
+    /// The whole codex stack, healthy — the CLI, the account (or the custom endpoint), and the
+    /// computer-use driver. A free/go plan keeps the group expanded so its amber row stays visible.
     private var codexAllGreen: Bool {
-        codex.installed && !codex.outdated && accountHealthy && codex.computerUseReady
-            && fdaGranted && helperAccessibility && helperScreenRecording
+        codex.installed && !codex.outdated && accountHealthy && codex.cuaDriverReady
     }
 
     private var allGreen: Bool {
-        fdaGranted && daemon == .ready && loginOn && micSpeech == .granted && screenRec
+        fdaGranted && daemon == .ready && loginOn && micSpeech == .granted
+            && screenRec && accessibility
             && (notifStatus == .authorized || notifStatus == .provisional)
-            && codex.installed && !codex.outdated && accountHealthy && codex.computerUseReady
-            && (!showCodexPermissions || (helperAccessibility && helperScreenRecording))
+            && codex.installed && !codex.outdated && accountHealthy && codex.cuaDriverReady
     }
 
     var body: some View {
@@ -88,27 +80,20 @@ struct HealthPane: View {
                     sidekickGroup
                     SettingsHairline(opacity: 0.12)
                         .padding(.vertical, -7)   // the brighter, tighter group splitter (matches ProactivePane's)
-                        .rise(6, revealed: revealed)
+                        .rise(7, revealed: revealed)
                     Group {
                         if codexAllGreen && !codexExpanded {
                             SettingsGroup(label: "Codex") { codexSummaryLine }
                         } else {
-                            VStack(alignment: .leading, spacing: 30) {
-                                codexSetupGroup
-                                if showCodexPermissions { codexPermissionsGroup }
-                            }
+                            codexSetupGroup
                         }
                     }
-                    .rise(7, revealed: revealed)
+                    .rise(8, revealed: revealed)
                 }
                 .task { revealed = true }
             }
         }
-        .task {
-            await refresh()
-            try? await Task.sleep(for: .seconds(0.5))
-            Permissions.selfHealComputerUseAutomation(context: "HealthPane")
-        }
+        .task { await refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refresh() }   // the user may just have fixed something in System Settings
         }
@@ -199,14 +184,22 @@ struct HealthPane: View {
                     fixMicSpeech()
                 }
                 .rise(3, revealed: revealed)
+                StatusLine(title: "Accessibility",
+                           health: accessibility ? .ok : .bad,   // the driver's hands — computer use is off without it
+                           note: accessibility ? "granted" : "not granted",
+                           tip: "Lets Sentient read what's on a window and click and type inside it — in the background, without taking over your cursor.\n\nGranted to Sentient itself, so there's no second helper app to trust. Without it, Sentient can't act on your Mac for you.",
+                           fixTitle: "Allow…") {
+                    fixAccessibility()
+                }
+                .rise(4, revealed: revealed)
                 StatusLine(title: "Screen Recording",
-                           health: screenRec ? .ok : .warn,   // optional — Sidekick runs text-only without it
-                           note: screenRec ? "granted" : "optional",
-                           tip: "Optional but recommended.\nLets Sidekick see a screenshot of your screen the moment you summon it, so it can see the thing you're asking about (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}).\n\nWithout it, you'll have to explicitly tell Sidekick which app you want it to start controlling.",
+                           health: screenRec ? .ok : .bad,   // the driver's eyes — computer use is off without it
+                           note: screenRec ? "granted" : "not granted",
+                           tip: "Lets Sentient see the window it's working in, so it acts on the right thing — and see your screen the moment you summon Sidekick (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}).\n\nGranted to Sentient itself. Screenshots are read on this Mac and passed to your own Codex; they never reach a Sentient server.",
                            fixTitle: "Allow…") {
                     fixScreenRecording()
                 }
-                .rise(4, revealed: revealed)
+                .rise(5, revealed: revealed)
                 StatusLine(title: "Notifications",
                            health: notifHealth,
                            note: notifNote,
@@ -214,7 +207,7 @@ struct HealthPane: View {
                            fixTitle: notifStatus == .notDetermined ? "Allow…" : "Fix…") {
                     fixNotifications()
                 }
-                .rise(5, revealed: revealed)
+                .rise(6, revealed: revealed)
             }
         }
     }
@@ -289,7 +282,7 @@ struct HealthPane: View {
         }
     }
 
-    // MARK: Screen Recording (Sentient's own grant — Sidekick's screen context)
+    // MARK: Accessibility + Screen Recording (Sentient's own grants — the driver's hands and eyes)
 
     /// The Screen Recording list is drag-authorizable, and Sentient may not be IN the list at all
     /// (on Tahoe, CGRequestScreenCaptureAccess doesn't reliably add it — field-verified), so the
@@ -298,6 +291,20 @@ struct HealthPane: View {
     private func fixScreenRecording() {
         guard !screenRec else { return }
         PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
+    }
+
+    /// Accessibility has a real system prompt (unlike Screen Recording on Tahoe), so ask directly.
+    /// macOS shows it once per app identity — a user who already dismissed it gets nothing, hence
+    /// the deep-link fallback a beat later, once the probe says it didn't take. (Same manners as
+    /// the computer-use gate's fix.)
+    private func fixAccessibility() {
+        guard !accessibility else { return }
+        Permissions.requestAccessibility()
+        Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            accessibility = Permissions.hasAccessibility()
+            if !accessibility { Permissions.openAccessibilitySettings() }
+        }
     }
 
     private func refreshMicSpeech() {
@@ -421,17 +428,17 @@ struct HealthPane: View {
                     }
                 }
                 StatusLine(title: "Computer use",
-                           health: codex.computerUseReady ? .ok : (codex.settingUpComputerUse ? .warn : .bad),
-                           note: codex.settingUpComputerUse ? "setting up…"
-                               : (codex.computerUseReady ? "ready" : "not set up"),
-                           tip: "The Codex add-on that can click, type, and act on your Mac when you fire an action.\n\nSet up downloads OpenAI's official Codex Desktop app package straight from OpenAI (about 535 MB), lifts out its computer-use plugin, and wires it into Codex CLI on this Mac. No desktop app installs; nothing is hosted by us.",
+                           health: codex.cuaDriverReady ? .ok : (codex.settingUpCuaDriver ? .warn : .bad),
+                           note: codex.settingUpCuaDriver ? "setting up…"
+                               : (codex.cuaDriverReady ? "ready" : "not set up"),
+                           tip: "The driver that clicks and types on your Mac when you fire an action — inside the app's window, in the background, without taking over your cursor.\n\nSet up downloads one pinned open-source driver (cua-driver, about 40 MB), verifies it against a known checksum and its developer's signature, and installs it for Sentient alone. Nothing is hosted by us.",
                            fixTitle: "Set up…",
-                           fix: codex.settingUpComputerUse ? nil : { Task { await codex.setupComputerUse() } })
-                // The ~535 MB download deserves live narration, not just an amber dot.
-                if codex.settingUpComputerUse, let line = codex.computerUseStatus {
+                           fix: codex.settingUpCuaDriver ? nil : { Task { await codex.setupCuaDriver() } })
+                // The download deserves live narration, not just an amber dot.
+                if codex.settingUpCuaDriver, let line = codex.cuaDriverStatus {
                     SettingsProse(line).padding(.top, 2).padding(.bottom, 6)
                 } else {
-                    failureLine(codex.computerUseStatus)
+                    failureLine(codex.cuaDriverStatus)
                 }
             }
         }
@@ -443,43 +450,6 @@ struct HealthPane: View {
     private func failureLine(_ status: String?) -> some View {
         if let status, status.hasPrefix("✗") {
             SettingsProse(status).padding(.top, 2).padding(.bottom, 6)
-        }
-    }
-
-    // MARK: - CODEX PERMISSIONS (the helper's hands and eyes — system TCC, status + deep-link only)
-
-    private var codexPermissionsGroup: some View {
-        SettingsGroup(label: "Codex Permissions") {
-            VStack(alignment: .leading, spacing: 2) {
-                StatusLine(title: "Accessibility (move the mouse, type)",
-                           health: helperAccessibility ? .ok : .bad,
-                           note: helperAccessibility ? "granted" : "not granted",
-                           tip: "Lets Codex's helper app move the mouse and type for you. Granted to OpenAI's helper, not to Sentient.",
-                           fixTitle: "Grant…") {
-                    guideHelper(.accessibility)
-                }
-                StatusLine(title: "Screen Recording (see the screen)",
-                           health: helperScreenRecording ? .ok : .bad,
-                           note: helperScreenRecording ? "granted" : "not granted",
-                           tip: "Lets Codex's helper app see the screen so it acts on the right thing. Granted to OpenAI's helper, not to Sentient.",
-                           fixTitle: "Grant…") {
-                    guideHelper(.screenRecording)
-                }
-                SettingsProse("These belong to Codex's Computer Use helper, not Sentient. Flip its switch in each list; macOS may also prompt on the first computer-use run.")
-                    .padding(.top, 6)
-            }
-        }
-    }
-
-    /// The helper's system-TCC grants: the floating drag panel with the helper app as the card
-    /// (drag it into the list). Helper somehow missing → the plain deep-link is the fallback.
-    private func guideHelper(_ pane: PermissionGuide.Pane) {
-        if let helper = Permissions.computerUseHelperURL() {
-            PermissionGuide.shared.guide(pane, dragging: helper)
-        } else if pane == .accessibility {
-            Permissions.openAccessibilitySettings()
-        } else {
-            Permissions.openScreenRecordingSettings()
         }
     }
 
@@ -502,19 +472,17 @@ struct HealthPane: View {
         loginOn = LoginItem.isEnabled
         await refreshDaemon()
         refreshMicSpeech()
+        // The preflight is this process's view (stale until relaunch after a grant), so the
+        // FDA-backed TCC read rides along as the live truth — same manners as the gate.
         screenRec = Permissions.hasScreenRecording()
+            || (fdaGranted && Permissions.isTCCGranted(
+                    service: "kTCCServiceScreenCapture",
+                    clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"))
+        accessibility = Permissions.hasAccessibility()
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         await codex.refreshInstalled()
-        codex.refreshComputerUse()
+        codex.refreshCuaDriver()
         plan = CodexAuth.currentPlan()   // pure file read (the JWT claim on disk)
-        if fdaGranted {
-            helperAccessibility = Permissions.isTCCGranted(
-                service: "kTCCServiceAccessibility",
-                clientBundleID: Permissions.computerUseHelperBundleID)
-            helperScreenRecording = Permissions.isTCCGranted(
-                service: "kTCCServiceScreenCapture",
-                clientBundleID: Permissions.computerUseHelperBundleID)
-        }
         await codex.refreshLoginStatus()   // last — it shells out to `codex login status`
         withAnimation(.easeOut(duration: 0.2)) { checked = true }   // first probe done → reveal
     }

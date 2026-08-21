@@ -34,7 +34,7 @@ enum HealthCaution {
         case codexMissing
         case codexSignedOut
         case codexOutdated                          // a run failed on the stale-client signature; CodexSetup.outdated
-        case computerUseBroken(payloadGone: Bool)   // true = the ~/.codex bootstrap vanished; false = the helper's grants did
+        case computerUseBroken(payloadGone: Bool)   // true = the cua-driver binary vanished; false = Sentient's own grants did
 
         /// The banner line — quiet, first-person, honest about what happens next.
         var message: String {
@@ -56,8 +56,8 @@ enum HealthCaution {
                 return "Codex on this Mac is out of date and can't read its newer files. One click in Settings updates it."
             case .computerUseBroken(let payloadGone):
                 return payloadGone
-                    ? "Computer use needs setting up again; Codex may have updated. One click in Settings fixes it."
-                    : "Codex's computer use lost its permissions, so I can't act on your Mac for you."
+                    ? "Computer use needs setting up again. One click in Settings fixes it."
+                    : "Computer use is missing its permissions, so I can't act on your Mac for you."
             }
         }
 
@@ -132,16 +132,25 @@ enum HealthCaution {
             if CodexSetup.shared.outdated { return .codexOutdated }
         }
 
-        // ③ Computer use — only once latched, and only with FDA to read the helper's system-TCC
-        // grants (without FDA rung ① already speaks; unverifiable must never claim broken).
-        if fda, codexInstalled, !dismissed.contains("computerUse") {
-            if !ComputerUseSetup.isInstalled {
-                if computerUseEverReady { return .computerUseBroken(payloadGone: true) }
+        // ③ Computer use — only once latched. The cua driver runs inside Sentient's own TCC chain,
+        // so its hands and eyes are Sentient's own grants: probed directly, no FDA needed
+        // (AXIsProcessTrusted answers live; the Screen Recording preflight is this process's view,
+        // so the FDA-backed TCC read rides along as the live truth when it's available).
+        if codexInstalled, !dismissed.contains("computerUse") {
+            if !CuaDriver.isInstalled {
+                // The update-migration window (ComputerUseUpgrade) presents on this exact state at
+                // home open, with the download as ITS one glowing fix — while it's up, a red
+                // banner behind it would be the same message twice. The banner still covers the
+                // window-less case (the driver vanishing mid-session; the next home open raises
+                // the window and this rung goes quiet again).
+                if computerUseEverReady, !ComputerUseUpgrade.shared.isPresenting {
+                    return .computerUseBroken(payloadGone: true)
+                }
             } else {
-                let hands = Permissions.isTCCGranted(service: "kTCCServiceAccessibility",
-                                                     clientBundleID: Permissions.computerUseHelperBundleID)
-                let eyes = Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
-                                                    clientBundleID: Permissions.computerUseHelperBundleID)
+                let hands = Permissions.hasAccessibility()
+                let eyes = Permissions.hasScreenRecording()
+                    || (fda && Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
+                                                        clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"))
                 if hands && eyes {
                     latchComputerUse()   // healthy — arm the latch so future drift banners
                 } else if computerUseEverReady {

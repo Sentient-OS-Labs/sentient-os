@@ -12,22 +12,15 @@
 	  is a Hardened Runtime capability: freely usable, no provisioning profile, works for any signer.
 
 	  It covers both the mic and Speech recognition (which records from the same input). Screen
-	  Recording needs no entitlement (TCC-only).
-
-	  Apple Events (automation): computer use spawns `codex`, whose helper client talks to the Codex
-	  Computer Use service over Apple Events, and macOS attributes that send to Sentient as the
-	  TCC-responsible app. Under the Hardened Runtime, macOS only shows the Automation consent
-	  dialog ("Sentient OS wants access to control Codex Computer Use") to apps carrying this
-	  entitlement; without it tccd denies silently ("Policy disallows prompt"). Also a Hardened
-	  Runtime capability: no provisioning profile, works for any signer.
+	  Recording and Accessibility need no entitlement (TCC-only) — the cua driver runs inside
+	  Sentient's own TCC chain on exactly those two grants, and it sends no Apple Events, so the
+	  automation entitlement the 1.x codex-helper path needed is gone with it.
 
 	  Note: `com.apple.security.files.user-selected.read-only` is still auto-injected by the
 	  ENABLE_USER_SELECTED_FILES=readonly build setting and merged in at sign time; it's an inert
 	  template leftover (see Architecture §11) and isn't repeated here.
 	-->
 	<key>com.apple.security.device.audio-input</key>
-	<true/>
-	<key>com.apple.security.automation.apple-events</key>
 	<true/>
 </dict>
 </plist>
