@@ -30,7 +30,7 @@
 //   - noteStaleSignal()    → the signature on a run that still succeeded: pull the next daily
 //                            update forward (hourly at most), no banner
 //
-//  Doc: Cloud/Documentation - Cloud - Codex Setup & Computer Use Bootstrap.md
+//  Doc: Cloud/Documentation - Cloud - Codex Setup.md
 //
 
 import Foundation

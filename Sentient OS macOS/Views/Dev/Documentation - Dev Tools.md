@@ -13,7 +13,7 @@ seams the shipping UI uses; nothing has its own processing path.
 | `ProactiveExecuteView.swift` | PART 3's bench: the real ready-to-fire `PreparedAction`s from the last research run, each with a working FIRE button through `ProactiveExecutor`. |
 | `ProactiveItemsView.swift` | The last judge run's items in full detail. |
 | `SummariesView.swift` | The current cycle's survivor summaries in `CycleStore`, with Export / Import (dump the whole set to JSON, or load one to REPLACE this machine's set, backing up first; pointers are never touched). |
-| `PermissionsView.swift` | Every macOS grant in two groups (Sentient's, the codex helper's), with re-checks and the Automation grant write. |
+| `PermissionsView.swift` | Every macOS grant Sentient cares about (all its own now), with re-checks and the legacy Automation-row cleanup. |
 | `HotkeyLabView.swift` | The bench that proved the permission-free hotkey (NSEvent `flagsChanged` monitors). Superseded by `SidekickHotkeyMonitor`; kept for feel-testing. |
 | `../CodexSetupView.swift` | The three-step Codex setup window over the shared `CodexSetup` engine (in `Views/`). |
 
@@ -32,4 +32,4 @@ around. Headless self-tests are documented in `Documentation - General - Self-Te
 
 ## Related docs
 
-`Ingestion/Documentation - Ingestion Pipeline.md`, `Proactive/Documentation - Proactive Intelligence.md`, `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Cloud/Documentation - Cloud - Codex Setup & Computer Use Bootstrap.md`, `Cloud/Documentation - Cloud - MCP Mirror.md`.
+`Ingestion/Documentation - Ingestion Pipeline.md`, `Proactive/Documentation - Proactive Intelligence.md`, `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Cloud/Documentation - Cloud - Codex Setup.md`, `Driver/Documentation - Driver (cua-driver).md`, `Cloud/Documentation - Cloud - MCP Mirror.md`.

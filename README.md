@@ -103,9 +103,9 @@ That third column is our favorite thing we've ever shipped, and it's empty on pu
 - **Reading your real life.** <samp>typedstream decoding · protobuf walks · wal-safe copy-reads · date-added, not mtime · never spotlight</samp>
 - **Privacy engineering.** <samp>zero-trace triage · fail-closed parsing · a pii regex backstop · aes-256-gcm before anything leaves · a 30-day dead-man lease</samp>
 - **The 3 AM machine.** <samp>a codesign-verified root helper · a deadman timer · ac + thermal gates · crash-safe resume</samp>
-- **The cloud brain.** <samp>computer use on the plain Codex CLI · frontier compute on your subscription · marginal cost ~$0 · no sentient servers</samp>
+- **The cloud brain.** <samp>your own Codex CLI as the brain, the open-source cua driver as the hands · frontier compute on your subscription · marginal cost ~$0 · no sentient servers</samp>
 
-And about that cloud brain. Sentient's frontier model is your own Codex CLI, connected to your own frontier model, or signed into your own ChatGPT account. That includes computer use: OpenAI only ships it inside their desktop app, but the "enable" switch turned out to be a local file copy. So Sentient downloads Codex Computer Use straight from OpenAI and gives it to your Codex CLI, on your machine, and we never host or proxy it.
+And about that cloud brain. Sentient's frontier model is your own Codex CLI, connected to your own frontier model, or signed into your own ChatGPT account. The hands are the open-source [cua driver](https://github.com/trycua/cua) (MIT), embedded inside Sentient itself: it clicks and types in the background — no cursor warp, no focus steal, so you keep working while your agent drives another app — under Sentient's own macOS permissions, with the binary version-pinned, checksummed, and signature-verified before it ever runs. We never host or proxy any of it.
 <br/>
 
 ## The privacy flex.

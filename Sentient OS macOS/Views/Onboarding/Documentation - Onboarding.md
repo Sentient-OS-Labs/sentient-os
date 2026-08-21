@@ -10,7 +10,7 @@ Full Disk Access requires resumes exactly where the user left off.
 
 | File | Job |
 |---|---|
-| `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, the DEBUG "SKIP TO HOME" handle, and the two-minutes-in computer-use bootstrap. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
+| `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, the DEBUG "SKIP TO HOME" handle, and the two-minutes-in cua-driver download. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
 | `OnboardingFilmView.swift` | Step 0: the website's film in a `WKWebView`. |
 | `OnboardingFrontierModelView.swift` · `OnboardingCodexSteps.swift` | Step 1: the engine picker with the codex login as the ChatGPT panel; the install kick, the `codex --help` confirmation poll, the manual-install panel; the shared onboarding bits (`OnboardingWhisper`, `OnboardingDoneLine`, `MonoWaitLine`, `OnboardingStatusText`). |
 | `OnboardingPlanView.swift` | Step 2: the plan crossroads. |
@@ -69,7 +69,7 @@ finished run calls `onFinished`.
 
 ## Things that happen around the steps
 
-- The Codex CLI installs silently from launch (`AppState`); the on-device model starts downloading 2 s after the post-FDA relaunch; computer use bootstraps silently **two minutes into the first analysis** (armed when the takeover appears, so its ~535 MB DMG never races the model download's tail; an unstructured task, so pausing the analysis never cancels it).
+- The Codex CLI installs silently from launch (`AppState`); the on-device model starts downloading 2 s after the post-FDA relaunch; the cua driver downloads silently **two minutes into the first analysis** (armed when the takeover appears, so its ~40 MB fetch never races the model download's tail; an unstructured task, so pausing the analysis never cancels it).
 - `DisplayAwake` holds the screen on for the whole flow (the download and the first analysis run behind the slides).
 - Right-clicks are swallowed for onboarding's whole lifetime (the film's webview would offer a browser context menu).
 - Sidekick is home-only: before the film's notch beat a press does nothing; after it, the honest "finish onboarding to use Sidekick" aside; the notch's hover swell is off before the beat too.
@@ -77,4 +77,4 @@ finished run calls `onFinished`.
 
 ## Related docs
 
-`Cloud/Documentation - Cloud - Codex Setup & Computer Use Bootstrap.md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Engine/Documentation - On-Device Engine & Triage.md` (the download), `Views/Documentation - Views - Home, Processing & Shared UI.md` (`ProcessingView`, the finale), `Notch Magic/Documentation - Sidekick - General.md` (the notch demo).
+`Cloud/Documentation - Cloud - Codex Setup.md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Engine/Documentation - On-Device Engine & Triage.md` (the download), `Views/Documentation - Views - Home, Processing & Shared UI.md` (`ProcessingView`, the finale), `Notch Magic/Documentation - Sidekick - General.md` (the notch demo).

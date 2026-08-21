@@ -24,14 +24,19 @@ the custom-endpoint key variable). Optional `onLine:` streams a humanized play-b
 `$ command`s, `→ tool` calls, `🔎` searches) for live UIs.
 
 **`runAgentCommand(prompt, imagePaths:, timeout:, onLine:) → String`** is the computer-use path. The
-prompt rides in **argv**, output is human-readable (no `--json`), every line is pumped to `onLine` as it
-arrives, and it runs with the **full inherited environment plus a rich PATH** (`richEnvironment`): the
-computer-use helper's IPC socket lives under the real `$TMPDIR`, so the sanitized environment would hang
-it. Flags: `--dangerously-bypass-approvals-and-sandbox` (required: the computer-use plugin's per-app
-elicitations auto-deny headless under any Seatbelt profile), `-m` + the Speed slider's effort,
-optional `-i <screenshots>` (Sidekick's per-display stills; a following flag terminates the variadic),
-`--skip-git-repo-check`. It self-heals the confirmation-policy patch before every run
-(`ComputerUseSkillPatch.ensureApplied()`).
+prompt rides in **argv**, output is human-readable (no `--json`), and every line is pumped to `onLine`
+as it arrives. Before spawning it guarantees the hands: the cua driver on disk
+(`CodexSetup.ensureCuaDriver`, the fire-time self-heal) and Sentient's daemon up
+(`CuaDriverHost.ensureRunning`, which also rewrites the CLI shim with the live socket). The run is
+**hermetic** (`--ignore-user-config` — the user's own plugins, skills, and MCP servers never load, so
+nothing can detour the model or bloat the prompt; the hosted Gmail/Calendar connectors survive a
+hermetic run, so an "email X" task keeps its connector route) and registers exactly one MCP server via
+per-run `-c` overrides: the driver's four vision tools (`CuaDriver.codexOverrides` — see the Driver
+doc for the hybrid transport). Flags: `--dangerously-bypass-approvals-and-sandbox` (required: a
+headless run has no one to answer approvals, and a Seatbelt profile would block both the agent's
+one-shot CLI calls and the daemon's Unix socket), `-m` + the Speed slider's effort, optional
+`-i <screenshots>` (Sidekick's per-display stills; a following flag terminates the variadic),
+`--skip-git-repo-check`.
 
 **Cancellation is real on both paths:** cancelling the awaiting Swift Task terminates the codex child
 process (a process holder inside `withTaskCancellationHandler`). Every STOP button in the app reaches
@@ -118,4 +123,4 @@ to the scoreboard.
 
 ## Related docs
 
-`Cloud/Documentation - Cloud - Codex Setup & Computer Use Bootstrap.md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Proactive/Documentation - Proactive Intelligence.md`, `Notch Magic/Documentation - Sidekick - General.md`.
+`Cloud/Documentation - Cloud - Codex Setup.md`, `Driver/Documentation - Driver (cua-driver).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Proactive/Documentation - Proactive Intelligence.md`, `Notch Magic/Documentation - Sidekick - General.md`.

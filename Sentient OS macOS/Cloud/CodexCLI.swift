@@ -1065,9 +1065,10 @@ actor CodexCLI {
 
     /// Full inherited environment + a rich PATH, for the codex calls that need the real GUI session
     /// context (NOT the bare HOME/USER env `execute` uses). Computer use needs the inherited $TMPDIR
-    /// + session/bootstrap vars (its `SkyComputerUseService` IPC socket lives under $TMPDIR, so the
-    /// bare env hangs at `list_apps`); `codex login` needs the same so the browser launch works. The
-    /// binary's own dir leads PATH (npm shims `#!/usr/bin/env node` right next to themselves).
+    /// and session vars (the cua daemon's socket and the shim's screenshot drop-box resolve against
+    /// the real per-user temp and caches paths); `codex login` needs the same so the browser launch
+    /// works. The binary's own dir leads PATH (npm shims `#!/usr/bin/env node` right next to
+    /// themselves).
     private static func richEnvironment(binDir: String) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         let home = env["HOME"] ?? NSHomeDirectory()
@@ -1075,7 +1076,6 @@ actor CodexCLI {
                         "\(home)/.local/bin",
                         "/opt/homebrew/bin", "/opt/homebrew/sbin",
                         "/usr/local/bin",
-                        "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin",
                         "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
         // Same unconditional endpoint-key injection as the sanitized env (see execute()).
@@ -1233,8 +1233,8 @@ actor CodexCLI {
                 proc.executableURL = URL(fileURLWithPath: binary)
                 proc.arguments = args
                 // Full inherited env + rich PATH (see richEnvironment): computer use needs the real
-                // $TMPDIR + GUI session vars (its helper IPC socket lives under $TMPDIR), and so does
-                // `codex login`'s browser launch — the bare HOME/USER env `execute` uses won't do.
+                // $TMPDIR + GUI session vars (the cua daemon's socket lives under the per-user temp
+                // dir), and so does `codex login`'s browser launch — the bare env won't do.
                 proc.environment = richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
 
                 let outPipe = Pipe(), errPipe = Pipe()

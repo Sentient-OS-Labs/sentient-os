@@ -77,14 +77,12 @@ but honest.
 
 ## Prompt rules for weaker models
 
-codex only advertises the computer-use skill (one line and a path to `SKILL.md`); GPT-5.6 reads the
-file, weaker models measurably do not. `CustomProvider.computerUsePromptRules` injects eight operating
-rules into the two app-authored computer-use prompts (Sidekick's `commandPrompt` and the executor's
-`computerWrapper`) on the custom backend ONLY: call `get_app_state` first; click by `element_index`
-only when the tree lists it, else x/y with the field OMITTED; verify after every action; the screenshot
-is the source of truth, not the tree; verify the goal state before declaring done; a compressed
-confirmation policy; the screenshot IS the coordinate space; keep going until done. The shipped ChatGPT
-prompts stay byte-identical.
+Every backend now gets the cua driver's full operating manual inline (`CuaDriverSkill.rules`, see the
+Driver doc). `CustomProvider.computerUsePromptRules` adds what weaker custom models measurably need on
+top, on the custom backend ONLY: a hard safety stop-list (deleting data, payments, passwords,
+accounts, installing software, sending sensitive data anywhere the task did not name → stop with
+COULD_NOT) and an anti-stall rule (keep going until done; no narrating turns, no check-ins — nobody
+can reply). The ChatGPT-backend prompts carry only the shared manual.
 
 ## Model reality
 

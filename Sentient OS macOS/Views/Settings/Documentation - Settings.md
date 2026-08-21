@@ -64,16 +64,16 @@ start of onboarding and dismisses Settings; locked while `PipelineActivity` repo
 (the codex login check shells out), then rows cascading in. ON-DEVICE INTELLIGENCE: Full Disk Access
 (fix = the drag panel with Sentient as the card + a relaunch link), Overnight wake (green only when the
 daemon answers over XPC; `notSetUp` fixes with the password installer, `disabled` gets a Turn On… into
-Login Items), Launch at login (needs-approval gets the guide's instruction panel). SIDEKICK & PROACTIVE:
-Microphone & Speech (one row, native prompts; only an explicit denial goes red), Screen Recording
-(Sentient's own, optional, amber; drag panel), Notifications. SET UP CODEX: Codex CLI, ChatGPT account
-(or, on a custom backend, a Frontier model row that deep-links to that pane), ChatGPT plan (amber on
-free/go with a Re-check that re-mints the token), Computer use; the fixes drive the shared `CodexSetup`
-engine INLINE (amber = working on it; the browser login is auto-noticed by a 2 s poll; the bootstrap
-streams its progress under the row). CODEX PERMISSIONS: the helper's Accessibility and Screen Recording,
-shown once computer use exists (drag panel with the helper as the card). When the whole codex stack is
-green it collapses to one summary line. The Automation grant has no row: it self-heals ~0.5 s after the
-pane opens. Statuses re-probe on every foreground.
+Login Items), Launch at login (needs-approval gets the guide's instruction panel). SIDEKICK &
+PROACTIVE: Microphone & Speech (one row, native prompts; only an explicit denial goes red), then the
+cua driver's action grants — both Sentient's own, since the driver runs inside Sentient's TCC chain:
+Accessibility (fix = the real system prompt, falling back to the Settings pane) and Screen Recording
+(fix = the drag panel with Sentient as the card), and Notifications. SET UP CODEX: Codex CLI, ChatGPT
+account (or, on a custom backend, a Frontier model row that deep-links to that pane), ChatGPT plan
+(amber on free/go with a Re-check that re-mints the token), Computer use (the pinned cua-driver binary;
+its fix streams the download's progress under the row); the fixes drive the shared `CodexSetup` engine
+INLINE (amber = working on it; the browser login is auto-noticed by a 2 s poll). When the whole codex
+stack is green it collapses to one summary line. Statuses re-probe on every foreground.
 
 ## The Uninstall sheet (`UninstallView`)
 

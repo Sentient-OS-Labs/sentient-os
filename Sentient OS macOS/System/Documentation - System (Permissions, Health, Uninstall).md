@@ -8,7 +8,7 @@ user's standing instructions, the app-support root, and the full uninstall teard
 
 | File | Job |
 |---|---|
-| `Permissions.swift` | Full Disk Access detection + deep link + relaunch; the Automation grant for the codex computer-use helper (written into the user's TCC database); read-only status of the helper's Accessibility and Screen Recording (system TCC); Sentient's own Screen Recording; the System Settings deep links. |
+| `Permissions.swift` | Full Disk Access detection + deep link + relaunch; Sentient's own Accessibility and Screen Recording status (the cua driver's action grants); TCC status reads; the legacy 1.x Automation-row cleanup; the System Settings deep links. |
 | `HealthCaution.swift` | The home's LIVE health banner: probes current state, most severe first, and reports the worst un-muted issue. |
 | `Notify.swift` | The notification permission ask and `now(title:body:)`. |
 | `DisplayAwake.swift` | Keeps the screen on during long foreground work (onboarding, a home-launched first analysis) via `ProcessInfo.beginActivity`. Not the root `pmset` path. |
@@ -27,42 +27,31 @@ fresh process, `relaunch()` (`open -n` the bundle, then terminate). FDA can read
 launched from Terminal (TCC attribution). Onboarding's Grant… uses the floating drag panel with Sentient
 itself as the card (see the Permission Gate doc).
 
-## The Automation grant (Sentient → the codex computer-use helper)
+## Sentient's own action grants (the cua driver's hands and eyes)
 
-To act, Sentient spawns `codex`, so macOS makes Sentient the TCC-responsible app; codex talks to its
-bundled helper (`com.openai.sky.CUAService`, "Codex Computer Use.app") over Apple Events, which the
-Automation service gates. This specific helper exposes no idle Apple Event endpoint, so macOS can show
-no consent dialog at all (`AEDeterminePermissionToAutomateTarget` returns `procNotFound`), and without
-the grant the very first computer-use action blocks forever. Terminal and Warp acquire the identical
-grant the first time you run computer use from them.
+The cua driver runs inside Sentient's TCC responsibility chain (see the Driver doc), so acting on the
+Mac needs exactly two grants and both are **Sentient's own**: **Accessibility** (click, type — probed
+live with `AXIsProcessTrusted`, granted through the native system prompt) and **Screen Recording**
+(see the screen — `hasScreenRecording()` via `CGPreflightScreenCaptureAccess`, never prompts; granted
+through the drag panel with Sentient as the card, since `CGRequestScreenCaptureAccess` does not
+reliably add the app to the list on Tahoe). A preflight stays false until the process is replaced, so
+the FDA-backed TCC read (`isTCCGranted`) rides along as the live truth the health rows use — and a
+grant landing marks the daemon for replacement, because macOS caches TCC answers per process. Screen
+Recording also gates Sidekick's fire-time screen stills.
 
-`grantComputerUseAutomation()` therefore writes the one `kTCCServiceAppleEvents` row into the USER's
-own TCC database (writable with the Full Disk Access the user already granted): client = Sentient,
-indirect object = the helper, both code-requirement blobs generated at runtime from the live signed
-bundles (so it is correct for any signer and contains nothing device-specific), `auth_value 2`, then
-`killall tccd` so the row applies immediately. It authorizes exactly one thing: Sentient controlling its
-own bundled helper. `revokeComputerUseAutomation()` deletes exactly that row (uninstall).
-`selfHealComputerUseAutomation(context:)` probes and re-grants in the background if missing; it runs
-right after a successful computer-use bootstrap, when Settings → Health opens, when the first-use
-permission gate presents, and from Dev Tools. Idempotent, silent, fully guarded (no FDA or no helper on
-disk = no-op).
+`isTCCGranted(service:clientBundleID:)` reads `auth_value == 2` from the right database for the
+service (the SIP-protected system database for Accessibility, ScreenCapture, AllFiles, ListenEvent,
+PostEvent; the user database otherwise).
 
-## The helper's own grants (read-only)
+## Legacy cleanup: the 1.x Automation row
 
-The helper's **Accessibility** (move the mouse, type) and **Screen Recording** (see the screen) live in
-the SYSTEM TCC database, which is SIP-protected: nothing but Apple's `tccd` can write it. So those are
-status + deep-link only: `isTCCGranted(service:clientBundleID:)` reads `auth_value == 2` from the
-right database for the service (system for Accessibility, ScreenCapture, AllFiles, ListenEvent,
-PostEvent; the user database otherwise). The user grants them by dragging the helper into the list (the
-Permission Guide's drag panel).
-
-## Sentient's own Screen Recording
-
-`hasScreenRecording()` (`CGPreflightScreenCaptureAccess`, never prompts) gates Sidekick's screen
-stills. OPTIONAL by decision: no grant → text-only commands. It is granted through the drag panel with
-Sentient as the card, not `CGRequestScreenCaptureAccess` (which does not reliably add the app to the
-list on Tahoe). A preflight stays false until relaunch; the TCC read is the live truth the health rows
-use.
+Sentient 1.x drove computer use through OpenAI's bundled "Codex Computer Use" helper and wrote itself
+a `kTCCServiceAppleEvents` row (Sentient → the helper) into the user's TCC database so headless runs
+never stalled on a consent macOS had no prompt for. The cua driver sends no Apple Events, so on an
+updated Mac that row is dead weight — and ours to sweep. `revokeComputerUseAutomation()` deletes
+exactly that row: called once per launch (cheap, idempotent — `AppState.init`) and by Uninstall. The
+helper's own rows live in the SIP-protected system TCC database and are not ours to remove; with
+nothing driving the helper they are inert.
 
 ## The live health ladder (`HealthCaution.probe`)
 
@@ -71,7 +60,7 @@ appear and every app foreground, and returns the worst un-muted issue:
 
 1. **Essential permissions off:** Full Disk Access; the overnight wake helper (`WakeHelperClient.isReachable()`, the XPC ground truth a file check cannot fake); launch at login. All three were green in onboarding, so any red here is drift.
 2. **Codex gone or signed out** (the login check shells out, so its verdict is cached ~5 min; the home passes `forceCodexRecheck` while a codex banner is up so a fix clears on the next foreground). Signed-out is ChatGPT-backend only.
-3. **Computer use regressed:** the `~/.codex` payload vanished, or the helper lost Accessibility / Screen Recording, but ONLY once the `computerUse.everReady` latch is set (by the probe when everything reads healthy, and by the permission gate at its moment of truth; cleared by FactoryReset), so a user who never set it up is never nagged.
+3. **Computer use regressed:** the cua-driver binary vanished, or Sentient's own Accessibility / Screen Recording grants did — but ONLY once the `computerUse.everReady` latch is set (by the probe when everything reads healthy, and by the permission gate at its moment of truth; cleared by FactoryReset), so a user who never set it up is never nagged. The binary-missing case stays quiet while the `ComputerUseUpgrade` window is presenting on that exact state (the same message twice helps no one) and still covers the window-less case (the driver vanishing mid-session).
 
 Nothing persists; broken shows, fixed melts away. ✕ mutes an issue KIND for the session (a lower rung may
 then surface). Nothing at all on the free-plan home. The banner's Open Settings lands on Permissions &
@@ -102,16 +91,17 @@ out (the preferences plist, the support dir, saved state) and hard-exits with `e
 termination invites the frameworks to write state back and can wedge behind the presented sheet).
 
 Deliberately untouched: the `.app` bundle (the gone screen asks the user to drag it to the Trash), all
-of `~/.codex` (the computer-use payload, config, and the user's own codex login), the Desktop gift
-keepsakes, and the SIP-protected system TCC rows.
+of `~/.codex` (the user's own codex config and login), the Desktop gift keepsakes, and the
+SIP-protected system TCC rows. The cua driver and its shim/screenshot caches go with the Application
+Support and caches sweeps.
 
 ## Rules
 
-- Never write anything outside `URL.sentientSupport`, the knowledge base folder, and the temp dir.
-- The Automation grant authorizes Sentient → its own helper, nothing broader; do not widen it.
+- Never write anything outside `URL.sentientSupport`, the app's caches dir, the knowledge base folder, and the temp dir.
+- The legacy Automation cleanup only ever DELETES its one row; the app never writes TCC grants again.
 - Health verdicts must come from ground truth (an XPC probe, a TCC read), never a cached file check.
 - Two destructive sequences (`FactoryReset`, `Uninstall`) live in exactly one place each; never duplicate them.
 
 ## Related docs
 
-`Views/Permissions/Documentation - Permission Gate & Guide.md` (how grants are actually acquired), `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Settings/Documentation - Settings.md` (the Health pane and the Uninstall sheet), `Cloud/Documentation - Cloud - Codex Setup & Computer Use Bootstrap.md`.
+`Views/Permissions/Documentation - Permission Gate & Guide.md` (how grants are actually acquired), `Driver/Documentation - Driver (cua-driver).md` (the daemon those grants power), `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Settings/Documentation - Settings.md` (the Health pane and the Uninstall sheet), `Cloud/Documentation - Cloud - Codex Setup.md`.

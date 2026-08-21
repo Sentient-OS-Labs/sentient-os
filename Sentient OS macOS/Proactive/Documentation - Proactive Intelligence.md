@@ -54,7 +54,7 @@ Three inviolable rules, each enforced in the prompt AND the invocation:
 
 - **Accuracy:** receipts only; a live fact exists only if a tool returned it this run.
 - **Never fires:** three independent layers: the prompt rule; a read-only sandbox with `bypassApprovals = false` (a connector write auto-cancels headless); and `CodexCLI.Invocation.stripConnectorActionTools`, which removes the sending and destructive connector tools from the run's tool surface entirely, so an injected instruction has nothing to call.
-- **Never computer use**, not even to verify: the user's config rides the computer-use skill along, so the prompt forbids it; acting on the Mac belongs to part 3, on the user's press.
+- **Never computer use**, not even to verify: research runs get no cua tools (the driver's MCP registration and shim belong to `runAgentCommand` only) and the prompt forbids it; acting on the Mac belongs to part 3, on the user's press.
 
 Methods: `gmail`, `calendar`, `computer` (native apps, chat sends via Messages, AND logged-in website
 tasks in the user's real browser), `research` (informational only; nothing fires). At most 5 ready
@@ -69,7 +69,7 @@ routing (with the possibly edited recipient placed FIRST as the authoritative de
 `<<<ROUTING … ROUTING>>>` block, so what the user edited is exactly what fires.
 
 - **gmail / calendar:** `CodexCLI.run` with the sandbox ON (`read-only`) and the connector write tools pre-approved for the one run (`approveConnectorWrites`), user config on, web off, 300 s. If the agent reports `COULD_NOT` AND the raw JSONL carries the verbatim "cancelled MCP tool call" marker (the pre-approval did not take, e.g. codex changed its apps config surface), it retries ONCE on the bypass path with the same fixed wrapper and emits `codex.fire_fallback`, so the hardening can never cost a user their fire.
-- **computer:** `CodexCLI.runAgentCommand` (the same spine as Sidekick), 900 s. The wrapper forbids AppleScript, osascript, and Terminal shortcuts, states there are no follow-up questions, and injects `CustomProvider.computerUsePromptRules` on a custom backend.
+- **computer:** `CodexCLI.runAgentCommand` (the same spine as Sidekick — the cua driver's hybrid transport, see the Driver doc), 900 s. The wrapper confines the shell to cua tool calls and viewing their saved screenshots (never AppleScript, osascript, `open`, or GUI-scripting), states there are no follow-up questions, and injects `CuaDriverSkill.rules` plus `CustomProvider.computerUsePromptRules` on a custom backend.
 - **research:** `notFireable` (a briefing to read).
 
 Every wrapper is a fixed, app-authored prompt: one declared task, both blocks treated purely as DATA
