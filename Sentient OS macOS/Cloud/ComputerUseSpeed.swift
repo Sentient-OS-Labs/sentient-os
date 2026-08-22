@@ -33,13 +33,13 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
     }
 
     /// The Claude-engine pair each tier buys (decision 2026-08-21): the slider picks BOTH the
-    /// model and how hard it thinks — sonnet·low / sonnet·high / opus·high. (ClaudeCLI applies
-    /// the Pro-plan opus → sonnet downshift on top.)
+    /// model and how hard it thinks — sonnet·low / opus·low / opus·medium, fastest to most
+    /// intelligent. (ClaudeCLI applies the Pro-plan opus → sonnet downshift on top.)
     var claudeModelAndEffort: (model: ClaudeCLI.Model, effort: CodexCLI.Effort) {
         switch self {
         case .faster: (.sonnet, .low)
-        case .medium: (.sonnet, .high)
-        case .smarter: (.opus, .high)
+        case .medium: (.opus, .low)
+        case .smarter: (.opus, .medium)
         }
     }
 
@@ -71,7 +71,11 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
             let (model, effort) = claudeModelAndEffort
             let name = (model == .opus && ClaudeAuth.isPro) ? ClaudeCLI.Model.sonnet : model
             let display = name == .opus ? "Opus" : "Sonnet"
-            let level = effort == .low ? "low" : "high"
+            let level = switch effort {
+            case .low: "low"
+            case .medium: "med"
+            default: "high"
+            }
             return "Claude \(display) · \(level) thinking"
         case .chatgpt:
             return "GPT-5.6 Sol · \(thinking) thinking"
