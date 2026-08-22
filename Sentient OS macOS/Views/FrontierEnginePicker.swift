@@ -57,19 +57,13 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     /// passes true — login honesty lives in Permissions & Health there; onboarding passes the
     /// live codex login state.
     let chatgptHealthy: Bool
-    /// Onboarding greys Test & Select until the background codex install answers — the CLI is
-    /// the engine room even for custom endpoints (the vision probe runs through `codex exec`).
-    /// Settings always passes true.
-    let codexReady: Bool
     private let chatgptPanel: () -> ChatGPTPanel
 
     init(layout: Layout = .settingsGrid,
          chatgptHealthy: Bool = true,
-         codexReady: Bool = true,
          @ViewBuilder chatgptPanel: @escaping () -> ChatGPTPanel) {
         self.layout = layout
         self.chatgptHealthy = chatgptHealthy
-        self.codexReady = codexReady
         self.chatgptPanel = chatgptPanel
     }
 
@@ -193,16 +187,9 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     private func selectTab(_ t: Tab) {
         tab = t
         testVerdict = nil
-        // Lazy engine install (decision 2026-08-21): picking a tab is the moment its engine
-        // family's CLI earns a download — codex serves ChatGPT AND every custom endpoint (the
-        // vision probe runs through `codex exec`); Claude Code serves the Claude tab. Both
-        // ensureInstalled calls are detection-first no-ops once the binary exists.
-        switch t {
-        case .claude:
-            Task { await claude.ensureInstalled() }
-        case .chatgpt, .openRouter, .lmStudio, .custom:
-            Task { await CodexSetup.shared.ensureInstalled() }
-        }
+        // NO install kicks here (field-found 2026-08-22: a browsing tab click silently
+        // downloaded codex on a Claude-backend Mac). Lazy install fires only on COMMITMENT
+        // actions: the sign-in buttons, Use ChatGPT, and Test & Select — never on browsing.
         if t == .lmStudio, !localWarningShown {
             localWarningShown = true
             showLocalWarning = true
@@ -340,16 +327,13 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
                 HStack(spacing: 10) {
                     SettingsPillButton(title: testing ? "Testing…" : "Test & Select",
-                                       tint: codexReady ? Theme.Ink.bright : Theme.Ink.deepMuted) {
-                        guard codexReady, !testing else { return }
+                                       tint: Theme.Ink.bright) {
+                        guard !testing else { return }
                         runTest(preset: preset)
                     }
                     if isActive(preset) {
                         FrontierActiveLine("This model is running Sentient.")
                     }
-                }
-                if !codexReady {
-                    MonoWaitLine("installing codex in the background…")
                 }
                 if let testVerdict {
                     SettingsProse(testVerdict)
@@ -453,6 +437,13 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         testing = true
         testVerdict = "Showing your model a picture and asking it to read the number… local models can take a minute to load."
         Task {
+            // Test & Select is the COMMITMENT moment for the custom family, so the lazy codex
+            // install happens here (the vision probe runs through `codex exec` — the CLI is the
+            // engine room even for custom endpoints). A detection-first no-op when it exists.
+            if !CodexSetup.shared.installed {
+                testVerdict = "Installing codex first (it runs the test), then showing your model the picture…"
+                await CodexSetup.shared.ensureInstalled()
+            }
             let verdict = await CodexTrigger.$current.withValue(.probe) { await CodexCLI.probeCustomEndpoint() }
             await MainActor.run {
                 testing = false
@@ -463,7 +454,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                     testVerdict = "✓ Your model answered and read the picture. Sentient is now running on it."
                 case .notInstalled:
                     verified = false
-                    testVerdict = "✗ Codex CLI is missing on this Mac. Install it in Permissions & Health first; it's the engine room even for custom models."
+                    testVerdict = "✗ Codex CLI couldn't be installed on this Mac (it runs the test). Check your connection and try again."
                 case .notWorking(let detail):
                     verified = false
                     testVerdict = "✗ \(friendly(detail))"

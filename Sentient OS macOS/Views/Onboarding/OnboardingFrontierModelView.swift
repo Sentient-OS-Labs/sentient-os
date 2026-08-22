@@ -64,8 +64,7 @@ struct OnboardingFrontierModelView: View {
                     }
 
                     FrontierEnginePicker(layout: .singleRow,
-                                         chatgptHealthy: codex.loggedIn,
-                                         codexReady: codexConfirmed) {
+                                         chatgptHealthy: codex.loggedIn) {
                         OnboardingCodexLoginPanel(codexReady: codexConfirmed)
                     }
 

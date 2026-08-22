@@ -44,6 +44,9 @@ struct FrontierModelPane: View {
                 } else {
                     SettingsPillButton(title: "Use ChatGPT") {
                         backendRaw = ModelBackend.chatgpt.rawValue
+                        // The commitment moment — the lazy codex install fires here (a
+                        // detection-first no-op when the CLI already exists).
+                        Task { await CodexSetup.shared.ensureInstalled() }
                     }
                 }
             }

@@ -6,13 +6,16 @@
 //  actually asks for, in severity order — ON-DEVICE INTELLIGENCE (Full Disk Access · the overnight
 //  wake daemon · launch-at-login), SIDEKICK & PROACTIVE (mic & speech · Accessibility and Screen
 //  Recording, the cua driver's hands and eyes — Sentient's OWN grants, since the driver runs
-//  inside Sentient's TCC chain · notifications), and SET UP CODEX (CLI · account · ChatGPT plan
-//  via CodexAuth · the computer-use driver, via the shared CodexSetup engine).
+//  inside Sentient's TCC chain · notifications), and the ENGINE group, which follows the live
+//  frontier-model choice (decided 2026-08-22): ChatGPT backend → SET UP CODEX (CLI · account ·
+//  plan · computer use), Claude backend → SET UP CLAUDE (Claude Code CLI · Claude account ·
+//  computer use), custom backends → SET UP COMPUTER USE (the driver row alone — the Frontier
+//  Model pane owns endpoint health there).
 //  Red = a core capability is broken · yellow = optional, fixable-later, or working on it. The
-//  codex fix buttons drive the shared engine INLINE (install / browser login with auto-notice /
-//  the driver download — no sheet; CodexSetupView is dev-tools-only now). When the whole codex
-//  stack is green it collapses to one glowing summary line (tap for details) — a browsing user
-//  shouldn't wade through five rows of "fine". Statuses re-probe on app foreground.
+//  engine fix buttons drive the shared setup engines INLINE (install / browser login with
+//  auto-notice / the driver download — no sheet). When the whole engine stack is green it
+//  collapses to one glowing summary line (tap for details) — a browsing user shouldn't wade
+//  through five rows of "fine". Statuses re-probe on app foreground.
 //  (Reset lives in Settings → System.)
 //
 
@@ -26,6 +29,12 @@ struct HealthPane: View {
     /// Optional on purpose: the pane's #Preview renders without an AppState in the environment.
     @Environment(AppState.self) private var appState: AppState?
     @State private var codex = CodexSetup.shared
+    @State private var claude = ClaudeSetup.shared
+    /// The live frontier-model choice — observed so switching engines re-renders the pane's
+    /// engine group in place.
+    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
+
+    private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
 
     // Sentient's own grants
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
@@ -47,25 +56,25 @@ struct HealthPane: View {
     private enum DaemonState { case ready, installing, notSetUp, disabled }
     private enum MicSpeechState { case granted, notAsked, denied }
 
-    /// On the ChatGPT backend the account rows matter (logged in + a non-limited plan); on a
-    /// custom frontier model the endpoint being configured stands in for both.
-    private var accountHealthy: Bool {
-        ModelBackend.current == .chatgpt
-            ? codex.loggedIn && plan?.tier != .limited
-            : CustomProvider.current.isUsable
-    }
-
-    /// The whole codex stack, healthy — the CLI, the account (or the custom endpoint), and the
-    /// computer-use driver. A free/go plan keeps the group expanded so its amber row stays visible.
-    private var codexAllGreen: Bool {
-        codex.installed && !codex.outdated && accountHealthy && codex.cuaDriverReady
+    /// The live engine's whole stack, healthy — what the group's collapse and the pane's
+    /// all-clear whisper judge. Per engine: ChatGPT = CLI + login + a non-limited plan;
+    /// Claude = Claude Code + its login; custom = the driver alone (the Frontier Model pane
+    /// owns endpoint health there). The computer-use driver rides every engine.
+    private var engineAllGreen: Bool {
+        guard codex.cuaDriverReady else { return false }
+        switch backend {
+        case .chatgpt: return codex.installed && !codex.outdated
+                           && codex.loggedIn && plan?.tier != .limited
+        case .claude:  return claude.installed && claude.loggedIn
+        case .custom:  return true
+        }
     }
 
     private var allGreen: Bool {
         fdaGranted && daemon == .ready && loginOn && micSpeech == .granted
             && screenRec && accessibility
             && (notifStatus == .authorized || notifStatus == .provisional)
-            && codex.installed && !codex.outdated && accountHealthy && codex.cuaDriverReady
+            && engineAllGreen
     }
 
     var body: some View {
@@ -82,10 +91,14 @@ struct HealthPane: View {
                         .padding(.vertical, -7)   // the brighter, tighter group splitter (matches ProactivePane's)
                         .rise(7, revealed: revealed)
                     Group {
-                        if codexAllGreen && !codexExpanded {
-                            SettingsGroup(label: "Codex") { codexSummaryLine }
+                        if engineAllGreen && !codexExpanded {
+                            SettingsGroup(label: engineSummaryLabel) { engineSummaryLine }
                         } else {
-                            codexSetupGroup
+                            switch backend {
+                            case .chatgpt: codexSetupGroup
+                            case .claude:  claudeSetupGroup
+                            case .custom:  computerUseOnlyGroup
+                            }
                         }
                     }
                     .rise(8, revealed: revealed)
@@ -106,6 +119,16 @@ struct HealthPane: View {
                 await codex.refreshLoginStatus()
             }
             if codex.loggedIn { plan = CodexAuth.currentPlan() }   // the plan row rides the login
+        }
+        .task(id: claude.loggingIn) {
+            // The Claude twin of the auto-notice poll.
+            while !Task.isCancelled, claude.loggingIn, !claude.loggedIn {
+                try? await Task.sleep(for: .seconds(2))
+                await claude.refreshLoginStatus()
+            }
+        }
+        .onChange(of: backendRaw) {
+            Task { await refresh() }   // a fresh engine choice re-probes its own rows
         }
     }
 
@@ -354,16 +377,32 @@ struct HealthPane: View {
         }
     }
 
-    // MARK: - The collapsed codex summary (everything green = one quiet line; expanding REPLACES
+    // MARK: - The collapsed engine summary (everything green = one quiet line; expanding REPLACES
     // it — a one-way door per visit, so the detail view never carries an extra clutter line)
 
-    private var codexSummaryLine: some View {
+    private var engineSummaryLabel: String {
+        switch backend {
+        case .chatgpt: "Codex"
+        case .claude:  "Claude"
+        case .custom:  "Computer Use"
+        }
+    }
+
+    private var engineSummaryText: String {
+        switch backend {
+        case .chatgpt: "Codex is all good."
+        case .claude:  "Claude is all good."
+        case .custom:  "Computer use is ready."
+        }
+    }
+
+    private var engineSummaryLine: some View {
         Button {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) { codexExpanded = true }
         } label: {
             HStack(spacing: 11) {
                 HealthDot(color: Theme.Ink.green)
-                Text("Codex is all good.")
+                Text(engineSummaryText)
                     .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
                 Spacer(minLength: 12)
                 MonoCaps("Details", size: 8.5, tracking: 1.6, color: Theme.Ink.label)
@@ -398,49 +437,81 @@ struct HealthPane: View {
                            fixTitle: codex.installed ? "Update…" : "Install…",
                            fix: codex.installing ? nil : { Task { await codex.installCodex() } })
                 failureLine(codex.installStatus)
-                if ModelBackend.current == .custom {
-                    StatusLine(title: "Frontier model",
-                               health: CustomProvider.current.isUsable ? .ok : .bad,
-                               note: CustomProvider.current.isUsable
-                                   ? CustomProvider.current.modelName : "not set up",
-                               tip: "Sentient's cloud thinking runs through your own model endpoint instead of a ChatGPT login.\n\nPick and test it in Frontier Model Choice.",
-                               fixTitle: "Configure…") {
-                        NotificationCenter.default.post(name: SettingsView.switchPane,
-                                                        object: SettingsView.Pane.frontierModel)
-                    }
-                } else {
-                    StatusLine(title: "ChatGPT account",
-                               health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
-                               note: codex.loggedIn ? "logged in"
-                                   : codex.loggingIn ? "finish in your browser" : "not logged in",
-                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
-                               fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
-                               fix: codex.loggedIn ? nil : { codex.startLogin() })
-                    failureLine(codex.loginStatusLine)
-                    if codex.loggedIn, let plan {
-                        StatusLine(title: "ChatGPT plan",
-                                   health: plan.tier == .limited ? .warn : .ok,
-                                   note: planChecking ? "checking…"
-                                       : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
-                                                               : plan.displayName.lowercased(),
-                                   tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.\n\nPrefer no ChatGPT at all? Frontier Model Choice can point Sentient at your own model instead.",
-                                   fixTitle: "Re-check") { recheckPlan() }
-                    }
+                StatusLine(title: "ChatGPT account",
+                           health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
+                           note: codex.loggedIn ? "logged in"
+                               : codex.loggingIn ? "finish in your browser" : "not logged in",
+                           tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
+                           fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
+                           fix: codex.loggedIn ? nil : { codex.startLogin() })
+                failureLine(codex.loginStatusLine)
+                if codex.loggedIn, let plan {
+                    StatusLine(title: "ChatGPT plan",
+                               health: plan.tier == .limited ? .warn : .ok,
+                               note: planChecking ? "checking…"
+                                   : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
+                                                           : plan.displayName.lowercased(),
+                               tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.\n\nPrefer no ChatGPT at all? Frontier Model Choice can point Sentient at your own model instead.",
+                               fixTitle: "Re-check") { recheckPlan() }
                 }
-                StatusLine(title: "Computer use",
-                           health: codex.cuaDriverReady ? .ok : (codex.settingUpCuaDriver ? .warn : .bad),
-                           note: codex.settingUpCuaDriver ? "setting up…"
-                               : (codex.cuaDriverReady ? "ready" : "not set up"),
-                           tip: "The driver that clicks and types on your Mac when you fire an action — inside the app's window, in the background, without taking over your cursor.\n\nSet up downloads one pinned open-source driver (cua-driver, about 40 MB), verifies it against a known checksum and its developer's signature, and installs it for Sentient alone. Nothing is hosted by us.",
-                           fixTitle: "Set up…",
-                           fix: codex.settingUpCuaDriver ? nil : { Task { await codex.setupCuaDriver() } })
-                // The download deserves live narration, not just an amber dot.
-                if codex.settingUpCuaDriver, let line = codex.cuaDriverStatus {
-                    SettingsProse(line).padding(.top, 2).padding(.bottom, 6)
-                } else {
-                    failureLine(codex.cuaDriverStatus)
-                }
+                computerUseRow
             }
+        }
+    }
+
+    // MARK: - SET UP CLAUDE (the Claude backend's twin — Claude Code CLI · account · computer use)
+
+    private var claudeSetupGroup: some View {
+        SettingsGroup(label: "Set Up Claude") {
+            VStack(alignment: .leading, spacing: 2) {
+                StatusLine(title: "Claude Code CLI",
+                           health: claude.installing ? .warn : (claude.installed ? .ok : .bad),
+                           note: claude.installing ? (claude.installed ? "updating…" : "installing…")
+                               : !claude.installed ? "not installed"
+                               : (claude.version.map { "installed · \($0)" } ?? "installed"),
+                           tip: "Anthropic's official Claude Code command line tool. Sentient runs its cloud thinking through it, using your own Claude subscription.\n\nSentient keeps it up to date on its own, quietly, at most once a day while you're away from the app. Install runs Anthropic's own installer; if Claude Code is already there it simply updates in place, and your login and settings are untouched.",
+                           fixTitle: claude.installed ? "Update…" : "Install…",
+                           fix: claude.installing ? nil : { Task { await claude.installClaude() } })
+                failureLine(claude.installStatus)
+                StatusLine(title: "Claude account",
+                           health: claude.loggedIn ? .ok : (claude.loggingIn ? .warn : .bad),
+                           note: claude.loggedIn
+                               ? (claude.plan.map { "signed in · \($0.lowercased()) plan" } ?? "signed in")
+                               : claude.loggingIn ? "finish in your browser" : "not signed in",
+                           tip: "Your own Claude login for Claude Code (Pro, Max, or Team).\n\n\u{201C}Sign in\u{201D} asks Claude Code to open your browser. Sentient never sees your credentials, and the login is shared with any Claude Code you already use on this Mac.",
+                           fixTitle: claude.loggingIn ? "Re-open…" : "Sign in…",
+                           fix: claude.loggedIn ? nil : { claude.startLogin() })
+                failureLine(claude.loginStatusLine)
+                computerUseRow
+            }
+        }
+    }
+
+    // MARK: - SET UP COMPUTER USE (custom backends — endpoint health lives in Frontier Model Choice)
+
+    private var computerUseOnlyGroup: some View {
+        SettingsGroup(label: "Set Up Computer Use") {
+            VStack(alignment: .leading, spacing: 2) {
+                computerUseRow
+            }
+        }
+    }
+
+    /// The computer-use driver row — identical on every engine (the cua driver is shared, and
+    /// CodexSetup owns its one install path for all of them).
+    @ViewBuilder private var computerUseRow: some View {
+        StatusLine(title: "Computer use",
+                   health: codex.cuaDriverReady ? .ok : (codex.settingUpCuaDriver ? .warn : .bad),
+                   note: codex.settingUpCuaDriver ? "setting up…"
+                       : (codex.cuaDriverReady ? "ready" : "not set up"),
+                   tip: "The driver that clicks and types on your Mac when you fire an action — inside the app's window, in the background, without taking over your cursor.\n\nSet up downloads one pinned open-source driver (cua-driver, about 40 MB), verifies it against a known checksum and its developer's signature, and installs it for Sentient alone. Nothing is hosted by us.",
+                   fixTitle: "Set up…",
+                   fix: codex.settingUpCuaDriver ? nil : { Task { await codex.setupCuaDriver() } })
+        // The download deserves live narration, not just an amber dot.
+        if codex.settingUpCuaDriver, let line = codex.cuaDriverStatus {
+            SettingsProse(line).padding(.top, 2).padding(.bottom, 6)
+        } else {
+            failureLine(codex.cuaDriverStatus)
         }
     }
 
@@ -480,10 +551,20 @@ struct HealthPane: View {
                     clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"))
         accessibility = Permissions.hasAccessibility()
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
-        await codex.refreshInstalled()
         codex.refreshCuaDriver()
-        plan = CodexAuth.currentPlan()   // pure file read (the JWT claim on disk)
-        await codex.refreshLoginStatus()   // last — it shells out to `codex login status`
+        // Only the LIVE engine's rows are probed (the login checks shell out, seconds each) —
+        // custom backends probe nothing here, their endpoint health lives in the Frontier pane.
+        switch backend {
+        case .chatgpt:
+            await codex.refreshInstalled()
+            plan = CodexAuth.currentPlan()   // pure file read (the JWT claim on disk)
+            await codex.refreshLoginStatus()   // last — it shells out to `codex login status`
+        case .claude:
+            await claude.refreshInstalled()
+            await claude.refreshLoginStatus()  // shells out to `claude auth status`
+        case .custom:
+            break
+        }
         withAnimation(.easeOut(duration: 0.2)) { checked = true }   // first probe done → reveal
     }
 }
