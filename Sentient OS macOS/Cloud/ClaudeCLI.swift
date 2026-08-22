@@ -419,7 +419,14 @@ actor ClaudeCLI {
                     + imagePaths.map { "- \($0)" }.joined(separator: "\n")
             }
 
-            let args = ["-p",
+            // ⚠️ The prompt sits DIRECTLY after -p (the documented `claude -p "query"` form),
+            // never trailing the flag list: claude's tool flags are VARIADIC (--allowedTools /
+            // --disallowedTools / --mcp-config each keep consuming space-separated values), so a
+            // bare positional after one gets eaten as another value and the run dies with
+            // "Input must be provided either through stdin or as a prompt argument"
+            // [FIELD-FOUND 2026-08-21, the first live Sidekick fire]. Same trap as codex's `-i`
+            // variadic, dodged the same way: no positional ever follows a variadic flag.
+            let args = ["-p", fullPrompt,
                         "--output-format", "stream-json", "--verbose",
                         "--model", modelID,
                         "--effort", effortArg,
@@ -432,8 +439,7 @@ actor ClaudeCLI {
                         // else from the built-in surface (a file the task needs written goes
                         // through the shell, same as on codex).
                         "--tools", "Bash,Read",
-                        "--disallowedTools", CuaDriver.claudeDisallowedMcpTools.joined(separator: ","),
-                        fullPrompt]
+                        "--disallowedTools", CuaDriver.claudeDisallowedMcpTools.joined(separator: ",")]
 
             var env = Self.baseEnv
             // Screenshot-bearing MCP results are big (the default 25k-token cap would truncate a

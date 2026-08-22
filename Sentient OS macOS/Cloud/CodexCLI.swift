@@ -210,14 +210,23 @@ actor CodexCLI {
         case staleClient(autoUpdating: Bool)
 
         var description: String {
+            // BOTH engines throw this type (ClaudeCLI reuses it), and these lines reach
+            // user-visible surfaces (the notch's failure line, the takeover) — so the engine is
+            // named at render time from the live backend. staleClient stays codex-worded: only
+            // the codex spine ever throws it.
+            let claude = ModelBackend.current == .claude
+            let engine = claude ? "Claude Code" : "Codex"
+            let binary = claude ? "claude" : "codex"
             switch self {
-            case .notAvailable(let a):            return "Codex unavailable: \(a)"
-            case .launchFailed(let m):            return "Failed to launch codex: \(m)"
-            case .timedOut(let t):                return "codex exec timed out after \(Int(t))s"
-            case .exitFailure(let code, let m):   return "codex exited \(code): \(m.prefix(300))"
-            case .badEnvelope(let m):             return "Unparseable codex output: \(m.prefix(300))"
-            case .usageLimit(let m, _):           return "Codex usage limit: \(m.prefix(200))"
-            case .inputTooLarge(let c):           return "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
+            case .notAvailable(let a):            return "\(engine) unavailable: \(a)"
+            case .launchFailed(let m):            return "Failed to launch \(binary): \(m)"
+            case .timedOut(let t):                return "\(claude ? "claude -p" : "codex exec") timed out after \(Int(t))s"
+            case .exitFailure(let code, let m):   return "\(binary) exited \(code): \(m.prefix(300))"
+            case .badEnvelope(let m):             return "Unparseable \(binary) output: \(m.prefix(300))"
+            case .usageLimit(let m, _):           return "\(engine) usage limit: \(m.prefix(200))"
+            case .inputTooLarge(let c):           return claude
+                ? "Prompt too large for Claude Code: \(c) chars"
+                : "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
             case .staleClient(let auto):
                 return auto ? "Codex was out of date. Updating it now; try again in a moment."
                             : "Codex is out of date and can't read its newer files. Update it, then try again."
