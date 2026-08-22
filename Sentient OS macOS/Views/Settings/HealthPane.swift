@@ -9,8 +9,9 @@
 //  inside Sentient's TCC chain · notifications), and the ENGINE group, which follows the live
 //  frontier-model choice (decided 2026-08-22): ChatGPT backend → SET UP CODEX (CLI · account ·
 //  plan · computer use), Claude backend → SET UP CLAUDE (Claude Code CLI · Claude account ·
-//  computer use), custom backends → SET UP COMPUTER USE (the driver row alone — the Frontier
-//  Model pane owns endpoint health there).
+//  computer use), custom backends → SET UP CODEX with the endpoint row in place of the account
+//  rows (codex is the harness for custom endpoints too — no ChatGPT login needed, but the CLI
+//  row stays).
 //  Red = a core capability is broken · yellow = optional, fixable-later, or working on it. The
 //  engine fix buttons drive the shared setup engines INLINE (install / browser login with
 //  auto-notice / the driver download — no sheet). When the whole engine stack is green it
@@ -58,15 +59,16 @@ struct HealthPane: View {
 
     /// The live engine's whole stack, healthy — what the group's collapse and the pane's
     /// all-clear whisper judge. Per engine: ChatGPT = CLI + login + a non-limited plan;
-    /// Claude = Claude Code + its login; custom = the driver alone (the Frontier Model pane
-    /// owns endpoint health there). The computer-use driver rides every engine.
+    /// Claude = Claude Code + its login; custom = CLI + a proven endpoint (codex is the
+    /// harness there too). The computer-use driver rides every engine.
     private var engineAllGreen: Bool {
         guard codex.cuaDriverReady else { return false }
         switch backend {
         case .chatgpt: return codex.installed && !codex.outdated
                            && codex.loggedIn && plan?.tier != .limited
         case .claude:  return claude.installed && claude.loggedIn
-        case .custom:  return true
+        case .custom:  return codex.installed && !codex.outdated
+                           && CustomProvider.current.isUsable
         }
     }
 
@@ -95,9 +97,8 @@ struct HealthPane: View {
                             SettingsGroup(label: engineSummaryLabel) { engineSummaryLine }
                         } else {
                             switch backend {
-                            case .chatgpt: codexSetupGroup
-                            case .claude:  claudeSetupGroup
-                            case .custom:  computerUseOnlyGroup
+                            case .chatgpt, .custom: codexSetupGroup
+                            case .claude:           claudeSetupGroup
                             }
                         }
                     }
@@ -381,19 +382,11 @@ struct HealthPane: View {
     // it — a one-way door per visit, so the detail view never carries an extra clutter line)
 
     private var engineSummaryLabel: String {
-        switch backend {
-        case .chatgpt: "Codex"
-        case .claude:  "Claude"
-        case .custom:  "Computer Use"
-        }
+        backend == .claude ? "Claude" : "Codex"
     }
 
     private var engineSummaryText: String {
-        switch backend {
-        case .chatgpt: "Codex is all good."
-        case .claude:  "Claude is all good."
-        case .custom:  "Computer use is ready."
-        }
+        backend == .claude ? "Claude is all good." : "Codex is all good."
     }
 
     private var engineSummaryLine: some View {
@@ -437,22 +430,37 @@ struct HealthPane: View {
                            fixTitle: codex.installed ? "Update…" : "Install…",
                            fix: codex.installing ? nil : { Task { await codex.installCodex() } })
                 failureLine(codex.installStatus)
-                StatusLine(title: "ChatGPT account",
-                           health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
-                           note: codex.loggedIn ? "logged in"
-                               : codex.loggingIn ? "finish in your browser" : "not logged in",
-                           tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
-                           fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
-                           fix: codex.loggedIn ? nil : { codex.startLogin() })
-                failureLine(codex.loginStatusLine)
-                if codex.loggedIn, let plan {
-                    StatusLine(title: "ChatGPT plan",
-                               health: plan.tier == .limited ? .warn : .ok,
-                               note: planChecking ? "checking…"
-                                   : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
-                                                           : plan.displayName.lowercased(),
-                               tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.\n\nPrefer no ChatGPT at all? Frontier Model Choice can point Sentient at your own model instead.",
-                               fixTitle: "Re-check") { recheckPlan() }
+                if backend == .custom {
+                    // Codex is the harness for custom endpoints too (the vision probe and every
+                    // run go through `codex exec`) — the CLI row stays, and the endpoint stands
+                    // in for the account rows: no ChatGPT login exists or is needed here.
+                    StatusLine(title: "Frontier model",
+                               health: CustomProvider.current.isUsable ? .ok : .bad,
+                               note: CustomProvider.current.isUsable
+                                   ? CustomProvider.current.modelName : "not set up",
+                               tip: "Sentient's cloud thinking runs through your own model endpoint instead of a ChatGPT login.\n\nPick and test it in Frontier Model Choice.",
+                               fixTitle: "Configure…") {
+                        NotificationCenter.default.post(name: SettingsView.switchPane,
+                                                        object: SettingsView.Pane.frontierModel)
+                    }
+                } else {
+                    StatusLine(title: "ChatGPT account",
+                               health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
+                               note: codex.loggedIn ? "logged in"
+                                   : codex.loggingIn ? "finish in your browser" : "not logged in",
+                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
+                               fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
+                               fix: codex.loggedIn ? nil : { codex.startLogin() })
+                    failureLine(codex.loginStatusLine)
+                    if codex.loggedIn, let plan {
+                        StatusLine(title: "ChatGPT plan",
+                                   health: plan.tier == .limited ? .warn : .ok,
+                                   note: planChecking ? "checking…"
+                                       : plan.tier == .limited ? "\(plan.displayName.lowercased()) · knowledge base only"
+                                                               : plan.displayName.lowercased(),
+                                   tip: "Free and Go plans carry a tiny monthly Codex quota and no Gmail or Calendar connectors, so Sentient runs in a one-time knowledge-base-only mode.\n\nChatGPT Plus unlocks Proactive Intelligence, Sidekick, and nightly knowledge-base updates.\n\nUpgraded? Reset Sentient (in the System tab) to activate the full Sentient OS experience.\n\nPrefer no ChatGPT at all? Frontier Model Choice can point Sentient at your own model instead.",
+                                   fixTitle: "Re-check") { recheckPlan() }
+                    }
                 }
                 computerUseRow
             }
@@ -482,16 +490,6 @@ struct HealthPane: View {
                            fixTitle: claude.loggingIn ? "Re-open…" : "Sign in…",
                            fix: claude.loggedIn ? nil : { claude.startLogin() })
                 failureLine(claude.loginStatusLine)
-                computerUseRow
-            }
-        }
-    }
-
-    // MARK: - SET UP COMPUTER USE (custom backends — endpoint health lives in Frontier Model Choice)
-
-    private var computerUseOnlyGroup: some View {
-        SettingsGroup(label: "Set Up Computer Use") {
-            VStack(alignment: .leading, spacing: 2) {
                 computerUseRow
             }
         }
@@ -552,8 +550,9 @@ struct HealthPane: View {
         accessibility = Permissions.hasAccessibility()
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         codex.refreshCuaDriver()
-        // Only the LIVE engine's rows are probed (the login checks shell out, seconds each) —
-        // custom backends probe nothing here, their endpoint health lives in the Frontier pane.
+        // Only the LIVE engine's rows are probed (the login checks shell out, seconds each).
+        // Custom backends keep the codex CLI probe (codex is their harness) but skip the login
+        // check — no ChatGPT account is needed there.
         switch backend {
         case .chatgpt:
             await codex.refreshInstalled()
@@ -563,7 +562,7 @@ struct HealthPane: View {
             await claude.refreshInstalled()
             await claude.refreshLoginStatus()  // shells out to `claude auth status`
         case .custom:
-            break
+            await codex.refreshInstalled()
         }
         withAnimation(.easeOut(duration: 0.2)) { checked = true }   // first probe done → reveal
     }
