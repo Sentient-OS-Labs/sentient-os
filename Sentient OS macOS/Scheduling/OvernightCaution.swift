@@ -31,13 +31,22 @@ enum OvernightCaution {
         case diskFull       // the Mac's disk is full: the device stage stopped (nothing it read
                             // could be saved) or the knowledge-base staging copy couldn't be written
 
-        /// The banner line — quiet, first-person, honest about what happens next.
+        /// The banner line — quiet, first-person, honest about what happens next. Engine-aware
+        /// at RENDER time (the record persists only overnight, so the live backend names the
+        /// engine truthfully).
         var message: String {
+            let claude = ModelBackend.current == .claude
             switch self {
-            case .loggedOut:  return "I couldn't work last night. Codex was signed out; log back in and I'll catch up tonight."
+            case .loggedOut:  return claude
+                ? "I couldn't work last night. Claude Code was signed out; sign back in and I'll catch up tonight."
+                : "I couldn't work last night. Codex was signed out; log back in and I'll catch up tonight."
             case .noInternet: return "No internet last night, so I couldn't do my overnight work. I'll try again tonight."
-            case .usageLimit: return "We hit ChatGPT's usage limit last night. I'll pick it up again tomorrow."
-            case .inputTooLarge: return "Last night's batch was more than ChatGPT accepts at once. Your analysis is saved; I'll try again tonight."
+            case .usageLimit: return claude
+                ? "We hit Claude's usage limit last night. I'll pick it up again tomorrow."
+                : "We hit ChatGPT's usage limit last night. I'll pick it up again tomorrow."
+            case .inputTooLarge: return claude
+                ? "Last night's batch was more than Claude accepts at once. Your analysis is saved; I'll try again tonight."
+                : "Last night's batch was more than ChatGPT accepts at once. Your analysis is saved; I'll try again tonight."
             case .diskFull:   return "Your Mac's disk is full, so I couldn't save last night's work. Free up some space and I'll catch up tonight."
             }
         }
@@ -84,10 +93,17 @@ enum OvernightCaution {
         default:
             break
         }
-        // The logged-out rungs are ChatGPT-backend-only: on a custom frontier model there is no
-        // codex login, and a 401 there means the endpoint rejected the user's API key — "log
+        // The logged-out rungs are subscription-backend-only: on a custom frontier model there
+        // is no login, and a 401 there means the endpoint rejected the user's API key — "log
         // back in" would be wrong advice. (An endpoint-specific caution kind can come later;
         // unclassifiable stays honest silence.)
+        if ModelBackend.current == .claude {
+            if case CodexCLI.CLIError.notAvailable(.notWorking(let detail)) = error,
+               detail.localizedCaseInsensitiveContains("not logged in") {
+                return .loggedOut
+            }
+            if await !ClaudeCLI.loginStatus() { return .loggedOut }
+        }
         if ModelBackend.current == .chatgpt {
             // A 401 in codex's own output means the token died SERVER-side — auth.json still looks
             // logged-in to the local probe below, so codex's stderr is the only tell (the exact

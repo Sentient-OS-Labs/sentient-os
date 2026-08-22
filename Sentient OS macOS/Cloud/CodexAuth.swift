@@ -51,11 +51,11 @@ enum CodexAuth {
 
     /// The hover notice on locked Gmail/Calendar chips — shared by every surface that shows
     /// them, so the wording never drifts. Two reasons a chip locks: a free/go ChatGPT account
-    /// (knowledge-base-only mode), or a custom frontier model (the hosted connectors ride
-    /// ChatGPT auth inside codex and don't exist on a custom endpoint).
+    /// (knowledge-base-only mode), or a custom frontier model (hosted connectors ride
+    /// subscription-account auth — ChatGPT's or Claude's — and don't exist on a custom endpoint).
     static var connectorLockedTip: String {
         ModelBackend.current == .custom
-            ? "Available with your ChatGPT account"
+            ? "Available with a ChatGPT or Claude subscription"
             : "Only supported on ChatGPT Plus"
     }
 
@@ -70,14 +70,14 @@ enum CodexAuth {
     /// The user is a free/go account who chose "continue with just the knowledge base" in
     /// onboarding. THE gate every limited-mode surface checks (scheduler auto-enable, Sidekick
     /// arming, proactive stages, connector chips, the home's preview state).
-    /// A CUSTOM frontier model (Settings → Frontier Model Choice) unlocks the full experience:
-    /// the getter reads false there no matter what the stored flag says — their own endpoint
-    /// powers everything a paid ChatGPT plan would (minus the hosted connectors, which gate
-    /// separately via ModelBackend.connectorsAvailable). The stored flag is preserved, so
-    /// switching back to the ChatGPT backend restores the free/go experience unchanged.
+    /// A NON-ChatGPT backend (a custom endpoint, or the Claude engine) unlocks the full
+    /// experience: the getter reads false there no matter what the stored flag says — the
+    /// free/go limitation is a ChatGPT-plan fact, and the other engines gate themselves
+    /// (Claude Code has no free tier at all; a custom endpoint is the user's own compute).
+    /// The stored flag is preserved, so switching back restores the free/go experience unchanged.
     static let kbOnlyKey = "plan.kbOnly"
     static var knowledgeBaseOnly: Bool {
-        get { ModelBackend.current != .custom && UserDefaults.standard.bool(forKey: kbOnlyKey) }
+        get { ModelBackend.current == .chatgpt && UserDefaults.standard.bool(forKey: kbOnlyKey) }
         set { UserDefaults.standard.set(newValue, forKey: kbOnlyKey) }
     }
 

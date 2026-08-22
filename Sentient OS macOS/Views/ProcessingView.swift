@@ -107,10 +107,11 @@ struct ProcessingView: View {
         case diskFull               // the on-device read stopped: the Mac's disk is full (IterativeRun)
     }
     @State private var state: UIState = .loadingModel
-    /// The failed screen's inline codex login (the "Codex isn't logged in" fix) — same shared
-    /// engine Settings → Health drives; `loginStarted` scopes the auto-notice poll + auto-retry
-    /// to a login WE opened from that screen.
+    /// The failed screen's inline engine login (the "isn't logged in" fix) — the same shared
+    /// setup engines Settings drives, picked by the live backend; `loginStarted` scopes the
+    /// auto-notice poll + auto-retry to a login WE opened from that screen.
     @State private var codex = CodexSetup.shared
+    @State private var claude = ClaudeSetup.shared
     @State private var loginStarted = false
     @State private var prepStatus = "Preparing your suggestions…"
     /// The 10-minute patience flip for the cloud tail's bottom line (see `patienceLine`).
@@ -496,9 +497,15 @@ struct ProcessingView: View {
                 if kind == .loggedOut {
                     Button("Retry") { Task { started = false; await startIfNeeded() } }
                         .buttonStyle(.bordered).tint(.white)
-                    Button("Log in to Codex") { loginStarted = true; codex.startLogin(force: true) }
-                        .buttonStyle(.borderedProminent).tint(.white)
-                        .disabled(codex.loggingIn)
+                    if ModelBackend.current == .claude {
+                        Button("Sign in to Claude") { loginStarted = true; claude.startLogin(force: true) }
+                            .buttonStyle(.borderedProminent).tint(.white)
+                            .disabled(claude.loggingIn)
+                    } else {
+                        Button("Log in to Codex") { loginStarted = true; codex.startLogin(force: true) }
+                            .buttonStyle(.borderedProminent).tint(.white)
+                            .disabled(codex.loggingIn)
+                    }
                 } else if kind == .diskFull {
                     Button("Retry") { Task { started = false; await startIfNeeded() } }
                         .buttonStyle(.bordered).tint(.white)
@@ -509,22 +516,24 @@ struct ProcessingView: View {
                         .buttonStyle(.borderedProminent).tint(.white)
                 }
             }
-            if loginStarted, codex.loggingIn {
+            if loginStarted, (ModelBackend.current == .claude ? claude.loggingIn : codex.loggingIn) {
                 Text("A browser window opened. Finish signing in there; I'll retry on my own.")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
         }
         // The browser-login auto-notice, same as Settings → Health and onboarding: while our
-        // login is out, poll `codex login status` (the codex login process self-exits once
-        // auth.json lands, no confirm button); the moment it reads logged-in, retry the cycle
-        // on our own. Leaving the failed state cancels the poll.
+        // login is out, poll the active engine's login status (the login process self-exits
+        // once the sign-in lands, no confirm button); the moment it reads logged-in, retry the
+        // cycle on our own. Leaving the failed state cancels the poll.
         .task(id: loginStarted) {
             guard loginStarted else { return }
-            while !Task.isCancelled, !codex.loggedIn {
+            let isClaude = ModelBackend.current == .claude
+            while !Task.isCancelled, !(isClaude ? claude.loggedIn : codex.loggedIn) {
                 try? await Task.sleep(for: .seconds(1.5))
-                await codex.refreshLoginStatus()
+                if isClaude { await claude.refreshLoginStatus() }
+                else { await codex.refreshLoginStatus() }
             }
-            guard !Task.isCancelled, codex.loggedIn else { return }
+            guard !Task.isCancelled, (isClaude ? claude.loggedIn : codex.loggedIn) else { return }
             loginStarted = false
             // Unstructured on purpose: the retry flips state out of .failed, which tears THIS
             // task down — the run must survive that.
@@ -533,9 +542,10 @@ struct ProcessingView: View {
     }
 
     private static func failTitle(_ kind: OvernightCaution.Kind?) -> String {
-        switch kind {
-        case .loggedOut:      "Codex isn't logged in"
-        case .usageLimit:     "We hit ChatGPT's usage limit"
+        let claude = ModelBackend.current == .claude
+        return switch kind {
+        case .loggedOut:      claude ? "Claude isn't signed in" : "Codex isn't logged in"
+        case .usageLimit:     claude ? "We hit Claude's usage limit" : "We hit ChatGPT's usage limit"
         case .noInternet:     "No internet connection"
         case .inputTooLarge:  "This batch was too big to send"
         case .diskFull:       "Your Mac's disk is full"
@@ -546,11 +556,16 @@ struct ProcessingView: View {
     /// Classified failures get a friendly, actionable line (the raw detail is in the log +
     /// Sentry); unclassified ones show the step's own message, as before.
     private static func failBody(kind: OvernightCaution.Kind?, message: String) -> String {
-        switch kind {
-        case .loggedOut:      "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
+        let claude = ModelBackend.current == .claude
+        return switch kind {
+        case .loggedOut:      claude
+            ? "Sentient runs on your own Claude account through Claude Code, and that sign-in has stopped working. Sign back in and I'll pick up right where we stopped."
+            : "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
         case .usageLimit:     "Your plan's window resets on its own. Everything so far is saved; retry in a while and I'll pick up right where we stopped."
         case .noInternet:     "This step runs in the cloud. Once you're back online, hit Retry; everything so far is saved."
-        case .inputTooLarge:  "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
+        case .inputTooLarge:  claude
+            ? "Sentient tried to send Claude more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
+            : "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
         case .diskFull:       "I can't save what I read until there's room on this Mac. Free up some space (a few GB is plenty), then hit Retry; everything so far is saved and I'll pick up right where we stopped."
         case nil:             message
         }

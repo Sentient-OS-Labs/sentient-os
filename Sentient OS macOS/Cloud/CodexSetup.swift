@@ -190,6 +190,9 @@ final class CodexSetup {
     /// the installer runs and resolves on its own — the pre-1.4 behavior. `trigger` names the
     /// caller in the log ("idle" · "overnight").
     func updateIfDue(trigger: String) async {
+        // An engine out of service earns no background downloads: while Claude is the backend,
+        // codex sits idle (chatgpt AND custom both run through codex, so only .claude skips).
+        guard ModelBackend.current != .claude else { return }
         guard installed, !installing else { return }
         guard CodexCLI.usingManagedBinary else { return }   // not ours to update
         // Once a day; a stale-client signal on a successful run pulls the next attempt forward,
@@ -239,6 +242,9 @@ final class CodexSetup {
         guard !installing, UserPresence.isAwayFromApp, !PipelineActivity.shared.isRunning,
               runLockHeld?() != true else { return }
         Task { await updateIfDue(trigger: "idle") }
+        // The one idle tick keeps EVERY managed engine CLI current — ClaudeSetup self-guards
+        // (only while Claude is the backend, only the managed binary, once a day).
+        Task { await ClaudeSetup.shared.updateIfDue(trigger: "idle") }
     }
 
     /// A codex run just failed on the stale-client signature (CodexCLI classified it). Flag it for

@@ -32,6 +32,17 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
         }
     }
 
+    /// The Claude-engine pair each tier buys (decision 2026-08-21): the slider picks BOTH the
+    /// model and how hard it thinks — sonnet·low / sonnet·high / opus·high. (ClaudeCLI applies
+    /// the Pro-plan opus → sonnet downshift on top.)
+    var claudeModelAndEffort: (model: ClaudeCLI.Model, effort: CodexCLI.Effort) {
+        switch self {
+        case .faster: (.sonnet, .low)
+        case .medium: (.sonnet, .high)
+        case .smarter: (.opus, .high)
+        }
+    }
+
     /// The tier's display name (the slider's readout).
     var label: String {
         switch self {
@@ -50,12 +61,20 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
         case .medium: "med"
         case .smarter: "high"
         }
-        if ModelBackend.current == .custom {
+        switch ModelBackend.current {
+        case .custom:
             // The slider doesn't drive custom models — the pane's reasoning level does, so the
             // readout under the (dimmed) slider tells the truth about what actually runs.
             let name = CustomProvider.current.modelName
             return "\(name.isEmpty ? "Your model" : name) · \(CustomProvider.reasoning) thinking"
+        case .claude:
+            let (model, effort) = claudeModelAndEffort
+            let name = (model == .opus && ClaudeAuth.isPro) ? ClaudeCLI.Model.sonnet : model
+            let display = name == .opus ? "Opus" : "Sonnet"
+            let level = effort == .low ? "low" : "high"
+            return "Claude \(display) · \(level) thinking"
+        case .chatgpt:
+            return "GPT-5.6 Sol · \(thinking) thinking"
         }
-        return "GPT-5.6 Sol · \(thinking) thinking"
     }
 }

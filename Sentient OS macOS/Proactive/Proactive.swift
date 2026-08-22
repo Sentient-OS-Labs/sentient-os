@@ -147,7 +147,7 @@ actor Proactive {
 
         Log("Proactive.judge: \(recent.count) summaries in the last \(Self.lookbackDays)d → asking Codex (summaries-only, hermetic)…")
         do {
-            let env = try await CodexCLI.shared.run(inv, onLine: onLine)
+            let env = try await FrontierRun.run(inv, onLine: onLine)
             let items = Array(Self.parse(env.jsonResult).prefix(Self.maxItems))
             Log("Proactive.judge: ✅ \(items.count) action item(s) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
             #if DEBUG   // B7: title/action/importance/sources are the user's life — DEBUG-only so it can

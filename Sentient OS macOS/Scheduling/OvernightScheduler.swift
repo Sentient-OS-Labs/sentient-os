@@ -312,6 +312,8 @@ final class OvernightScheduler {
         // the run — the legs go on with the CLI they have).
         await CodexSetup.shared.updateIfDue(trigger: "overnight")
         if let v = CodexSetup.shared.version { log.line("codex CLI \(v)") }
+        await ClaudeSetup.shared.updateIfDue(trigger: "overnight")   // self-guards: Claude backend only
+        if ModelBackend.current == .claude, let v = ClaudeSetup.shared.version { log.line("claude CLI \(v)") }
 
         /// Let the Mac sleep again — the one exit every path takes (normal end, or the disk-full stop).
         func releaseAwake() async {

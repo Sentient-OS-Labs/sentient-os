@@ -34,6 +34,8 @@ enum HealthCaution {
         case codexMissing
         case codexSignedOut
         case codexOutdated                          // a run failed on the stale-client signature; CodexSetup.outdated
+        case claudeMissing                          // Claude backend: the Claude Code binary vanished
+        case claudeSignedOut                        // Claude backend: `claude auth status` reads logged out
         case computerUseBroken(payloadGone: Bool)   // true = the cua-driver binary vanished; false = Sentient's own grants did
 
         /// The banner line — quiet, first-person, honest about what happens next.
@@ -54,6 +56,10 @@ enum HealthCaution {
                 return "Codex is signed out, so proactive work is paused. Log back in and I'll catch up tonight."
             case .codexOutdated:
                 return "Codex on this Mac is out of date and can't read its newer files. One click in Settings updates it."
+            case .claudeMissing:
+                return "Claude Code is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
+            case .claudeSignedOut:
+                return "Claude Code is signed out, so proactive work is paused. Sign back in and I'll catch up tonight."
             case .computerUseBroken(let payloadGone):
                 return payloadGone
                     ? "Computer use needs setting up again. One click in Settings fixes it."
@@ -65,7 +71,8 @@ enum HealthCaution {
         var kindKey: String {
             switch self {
             case .permissions:                   return "permissions"
-            case .codexMissing, .codexSignedOut, .codexOutdated: return "codex"
+            case .codexMissing, .codexSignedOut, .codexOutdated,
+                 .claudeMissing, .claudeSignedOut: return "codex"   // one engine-rung mute kind
             case .computerUseBroken:             return "computerUse"
             }
         }
@@ -119,24 +126,32 @@ enum HealthCaution {
         if !LoginItem.isEnabled { missing.append(.launchAtLogin) }
         if !missing.isEmpty, !dismissed.contains("permissions") { return .permissions(missing) }
 
-        // ② Codex — gone, signed out, or out of date. The signed-out rung is ChatGPT-backend-only:
-        // a custom frontier model needs no codex login (its endpoint answering is probed at run
-        // time — a live endpoint check here would cost a whole model call per foreground). The
-        // out-of-date rung is evidence-driven (a run failed on the stale-client signature) and
-        // melts the moment CodexSetup's update lands.
-        let codexInstalled = CodexCLI.locateBinary() != nil
+        // ② The frontier engine — gone, signed out, or (codex) out of date. Engine-aware: the
+        // Claude backend probes Claude Code; chatgpt/custom probe codex (a custom endpoint still
+        // runs THROUGH the codex harness — only the login rung is skipped there, since custom
+        // needs no ChatGPT login, and a live endpoint check would cost a model call per
+        // foreground). The out-of-date rung is codex-only, evidence-driven (stale-client
+        // signature) and melts the moment CodexSetup's update lands.
+        let engineIsClaude = ModelBackend.current == .claude
+        let engineBinaryPresent = engineIsClaude ? ClaudeCLI.locateBinary() != nil
+                                                 : CodexCLI.locateBinary() != nil
         if !dismissed.contains("codex") {
-            if !codexInstalled { return .codexMissing }
-            if ModelBackend.current == .chatgpt,
-               await !loggedIn(force: forceCodexRecheck) { return .codexSignedOut }
-            if CodexSetup.shared.outdated { return .codexOutdated }
+            if engineIsClaude {
+                if !engineBinaryPresent { return .claudeMissing }
+                if await !claudeLoggedIn(force: forceCodexRecheck) { return .claudeSignedOut }
+            } else {
+                if !engineBinaryPresent { return .codexMissing }
+                if ModelBackend.current == .chatgpt,
+                   await !loggedIn(force: forceCodexRecheck) { return .codexSignedOut }
+                if CodexSetup.shared.outdated { return .codexOutdated }
+            }
         }
 
         // ③ Computer use — only once latched. The cua driver runs inside Sentient's own TCC chain,
         // so its hands and eyes are Sentient's own grants: probed directly, no FDA needed
         // (AXIsProcessTrusted answers live; the Screen Recording preflight is this process's view,
         // so the FDA-backed TCC read rides along as the live truth when it's available).
-        if codexInstalled, !dismissed.contains("computerUse") {
+        if engineBinaryPresent, !dismissed.contains("computerUse") {
             if !CuaDriver.isInstalled {
                 // The update-migration window (ComputerUseUpgrade) presents on this exact state at
                 // home open, with the download as ITS one glowing fix — while it's up, a red
@@ -167,6 +182,19 @@ enum HealthCaution {
         }
         let verdict = await CodexCLI.loginStatus()
         codexLogin = (verdict, Date())
+        return verdict
+    }
+
+    /// The Claude twin (`claude auth status` shells out too — same ~5 min cache, same bypass
+    /// while an engine banner is showing).
+    private static var claudeLogin: (verdict: Bool, at: Date)?
+
+    private static func claudeLoggedIn(force: Bool) async -> Bool {
+        if !force, let cached = claudeLogin, Date().timeIntervalSince(cached.at) < 300 {
+            return cached.verdict
+        }
+        let verdict = await ClaudeCLI.loginStatus()
+        claudeLogin = (verdict, Date())
         return verdict
     }
 }

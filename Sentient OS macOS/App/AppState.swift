@@ -145,31 +145,11 @@ final class AppState {
             }
         }
 
-        // First launch (onboarding not yet completed): kick off the codex CLI install silently in
-        // the background, 1s after launch, while the user reads the intro slides. A USED codex
-        // setup on this Mac (~/.codex/auth.json or config.toml — codex writes those once it's
-        // actually run) means never auto-install over it at launch — those setups get their CLI
-        // update from the onboarding codex screen's kick instead (the installer doubles as the
-        // updater). The bare ~/.codex folder is NOT proof: an install interrupted mid-download
-        // (the FDA relaunch) leaves one behind, and skipping on it would strand onboarding
-        // without codex. A quit-and-relaunch mid-onboarding re-runs the installer, which is safe
-        // (update in place). Login + computer-use stay interactive, later in the flow.
-        if !hasCompletedOnboarding {
-            Task {
-                try? await Task.sleep(for: .seconds(1))
-                let fm = FileManager.default
-                let codexDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
-                if fm.fileExists(atPath: codexDir.appendingPathComponent("auth.json").path)
-                    || fm.fileExists(atPath: codexDir.appendingPathComponent("config.toml").path) {
-                    Log("Onboarding: ~/.codex is a real setup — skipping the background codex install")
-                    return
-                }
-                // OpenAI's installer fails transiently (its GitHub-JSON parsing flaps per request),
-                // so one attempt isn't enough. The retry policy + the give-up flag live in
-                // CodexSetup.ensureInstalled — ONE source of truth the onboarding screen drives too;
-                // a give-up surfaces the "install it yourself" panel on the codex screen.
-                await CodexSetup.shared.ensureInstalled()
-            }
-        }
+        // No engine CLI installs at launch anymore (decision 2026-08-21): each engine's CLI
+        // downloads lazily, the moment the user actually picks it on the frontier-model step —
+        // FrontierEnginePicker.selectTab and the panels' sign-in actions drive
+        // CodexSetup.ensureInstalled / ClaudeSetup.ensureInstalled. A user who chooses Claude
+        // never downloads codex, and vice versa; a user with a real setup already on disk skips
+        // the download entirely (ensureInstalled is detection-first).
     }
 }

@@ -91,7 +91,7 @@ final class CommandRunModel {
             do {
                 // trigger=sidekick: every codex call under this press reports it (task-local).
                 let out = try await CodexTrigger.$current.withValue(.sidekick) {
-                    try await CodexCLI.shared.runAgentCommand(prompt, imagePaths: shots.map(\.path)) { line in
+                    try await FrontierRun.runAgentCommand(prompt, imagePaths: shots.map(\.path)) { line in
                         Task { @MainActor in
                             #if DEBUG
                             Log("CMD │ \(line)")

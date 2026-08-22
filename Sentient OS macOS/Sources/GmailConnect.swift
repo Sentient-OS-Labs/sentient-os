@@ -87,7 +87,7 @@ enum GmailConnect {
         inv.timeout = 120
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
-            let env = try await CodexTrigger.$current.withValue(.probe) { try await CodexCLI.shared.run(inv) }
+            let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
             let answer = env.result.uppercased()
             let yes = answer.contains("YES") && !answer.contains("NO")
             Log("GmailConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
@@ -203,7 +203,8 @@ enum GmailConnect {
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long
-        let env = try await CodexCLI.shared.run(inv)
+        inv.claudePermissionMode = "auto"    // Claude engine: connector READS flow via the classifier
+        let env = try await FrontierRun.run(inv)
         return parse(env.result)
     }
 

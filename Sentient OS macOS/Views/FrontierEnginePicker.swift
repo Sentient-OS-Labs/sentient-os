@@ -40,7 +40,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         var badge: String? {
             switch self {
             case .chatgpt:  return "recommended"
-            case .claude:   return "coming soon"
+            case .claude:   return nil
             case .lmStudio: return "local"
             case .custom:   return "local"
             case .openRouter: return nil
@@ -82,6 +82,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     @AppStorage(CustomProvider.visionVerifiedKey) private var verified = false
 
     @State private var tab: Tab = .chatgpt
+    @State private var claude = ClaudeSetup.shared
     @State private var apiKey = ""
     @State private var showLocalWarning = false
     /// The local-reality popup fires once per picker visit, on the LM Studio tab.
@@ -96,11 +97,15 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     /// The tab wearing the "active engine" dot.
     private var activeTab: Tab {
-        guard backend == .custom else { return .chatgpt }
-        switch savedPreset {
-        case .openRouter: return .openRouter
-        case .lmStudio:   return .lmStudio
-        case .custom:     return .custom
+        switch backend {
+        case .chatgpt: return .chatgpt
+        case .claude:  return .claude
+        case .custom:
+            switch savedPreset {
+            case .openRouter: return .openRouter
+            case .lmStudio:   return .lmStudio
+            case .custom:     return .custom
+            }
         }
     }
 
@@ -172,9 +177,14 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     }
 
     /// The active dot stays honest: a custom engine only wears it once it's proven usable,
-    /// and ChatGPT's honesty is the host's call (Settings: always; onboarding: logged in).
+    /// Claude's is its live login, and ChatGPT's honesty is the host's call (Settings: always;
+    /// onboarding: logged in).
     private func isActiveEngineHealthy(_ t: Tab) -> Bool {
-        t == .chatgpt ? chatgptHealthy : CustomProvider.current.isUsable
+        switch t {
+        case .chatgpt: return chatgptHealthy
+        case .claude:  return claude.loggedIn
+        default:       return CustomProvider.current.isUsable
+        }
     }
 
     /// Browsing tabs never disturbs a live engine: fields are only prefilled while nothing
@@ -183,6 +193,16 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     private func selectTab(_ t: Tab) {
         tab = t
         testVerdict = nil
+        // Lazy engine install (decision 2026-08-21): picking a tab is the moment its engine
+        // family's CLI earns a download — codex serves ChatGPT AND every custom endpoint (the
+        // vision probe runs through `codex exec`); Claude Code serves the Claude tab. Both
+        // ensureInstalled calls are detection-first no-ops once the binary exists.
+        switch t {
+        case .claude:
+            Task { await claude.ensureInstalled() }
+        case .chatgpt, .openRouter, .lmStudio, .custom:
+            Task { await CodexSetup.shared.ensureInstalled() }
+        }
         if t == .lmStudio, !localWarningShown {
             localWarningShown = true
             showLocalWarning = true
@@ -201,13 +221,81 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         }
     }
 
-    // MARK: - Claude (coming soon)
+    // MARK: - Claude (the claude -p engine)
 
     private var claudePanel: some View {
-        SettingsGroup(label: "Your Claude Plan", badge: "coming soon") {
+        SettingsGroup(label: "Your Claude") {
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsProse("Claude Code runs on your own Claude subscription (Pro, Max, or Team), so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, computer use.")
+
+                claudeStates
+
+                SettingsHairline()
+                SettingsProse("Gmail and Calendar can ride your claude.ai connectors: connect them once at claude.ai, under Settings, then Connectors, and Sentient's reads use them here.")
+            }
+        }
+        .onAppear {
+            Task {
+                await claude.refreshInstalled()
+                await claude.refreshLoginStatus()
+            }
+        }
+        .task(id: claude.loggingIn) {
+            // The sign-in watcher: while the browser flow is out, quietly re-check every 2s —
+            // the panel flips to the signed-in state by itself the moment the login lands.
+            guard claude.loggingIn else { return }
+            while !Task.isCancelled, claude.loggingIn, !claude.loggedIn {
+                try? await Task.sleep(for: .seconds(2))
+                await claude.refreshLoginStatus()
+            }
+        }
+    }
+
+    /// The Claude state machine: signed in (plan named, Use Claude or the live line) → browser
+    /// out → install failed → the sign-in CTA (which lazily installs the CLI first).
+    @ViewBuilder private var claudeStates: some View {
+        if claude.loggedIn {
+            OnboardingDoneLine(claude.plan.map { "Signed in to Claude Code · \($0) plan" }
+                               ?? "Signed in to Claude Code")
+            if backend == .claude {
+                FrontierActiveLine("Sentient is running on your Claude.")
+            } else {
+                SettingsPillButton(title: "Use Claude") {
+                    backendRaw = ModelBackend.claude.rawValue
+                }
+            }
+        } else if claude.loggingIn {
+            Text("Finish signing in in your browser. This screen notices on its own.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.Ink.body)
+            MonoWaitLine("waiting for the browser sign-in…")
+        } else if claude.installGaveUp && !claude.installed {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Your Claude subscription will power Sentient the same way ChatGPT does today, through Claude Code's own command line. It's on the bench and coming soon.")
-                MonoCaps("claude -p · in the works", size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+                Text("Sentient couldn't finish installing Claude Code automatically.")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.Ink.body)
+                SettingsProse("You can install it yourself in a minute with this Terminal command, then come back here:")
+                Text("curl -fsSL https://claude.ai/install.sh | bash")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.Ink.statusInk)
+                    .textSelection(.enabled)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsPillButton(title: claude.installing ? "Setting up…" : "Sign in with Claude") {
+                    guard !claude.installing else { return }
+                    Task {
+                        // Lazy install: Claude Code downloads at THIS click, never at launch.
+                        if !claude.installed { await claude.ensureInstalled() }
+                        if claude.installed { claude.startLogin() }
+                    }
+                }
+                if claude.installing {
+                    MonoWaitLine("installing claude code…")
+                    OnboardingStatusText(claude.installStatus)
+                } else {
+                    OnboardingStatusText(claude.loginStatusLine)
+                }
             }
         }
     }
@@ -268,7 +356,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 }
 
                 SettingsHairline()
-                SettingsProse("Gmail and Calendar ride your ChatGPT account, so they sit out while a custom model is active. Everything else works, and your data still never leaves this Mac except what the model itself is sent.")
+                SettingsProse("Gmail and Calendar ride a ChatGPT or Claude subscription, so they sit out while a custom model is active. Everything else works, and your data still never leaves this Mac except what the model itself is sent.")
             }
         }
     }

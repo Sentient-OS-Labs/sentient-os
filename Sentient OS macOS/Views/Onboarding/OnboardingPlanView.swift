@@ -112,9 +112,10 @@ struct OnboardingPlanView: View {
         }
         .padding(40)
         .task {
-            // A custom frontier engine bypasses the ChatGPT plan entirely (knowledgeBaseOnly
-            // already reads false there) — never show the crossroads, whatever the disk claims.
-            if previewPlan == nil, ModelBackend.current == .custom {
+            // A non-ChatGPT engine (Claude, or a custom endpoint) bypasses the ChatGPT plan
+            // entirely (knowledgeBaseOnly already reads false there) — never show the
+            // crossroads, whatever the disk claims.
+            if previewPlan == nil, ModelBackend.current != .chatgpt {
                 onContinue()
                 return
             }

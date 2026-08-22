@@ -77,7 +77,7 @@ enum CalendarConnect {
         inv.timeout = 120
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
-            let env = try await CodexTrigger.$current.withValue(.probe) { try await CodexCLI.shared.run(inv) }
+            let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
             let answer = env.result.uppercased()
             let yes = answer.contains("YES") && !answer.contains("NO")
             Log("CalendarConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
@@ -177,8 +177,9 @@ enum CalendarConnect {
         inv.webSearch = false
         inv.outputSchema = proactiveSchema
         inv.timeout = 300
+        inv.claudePermissionMode = "auto"    // Claude engine: connector READS flow via the classifier
         do {
-            let env = try await CodexCLI.shared.run(inv)
+            let env = try await FrontierRun.run(inv)
             guard let span = jsonSpan(env.result),
                   let data = span.data(using: .utf8),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -207,7 +208,8 @@ enum CalendarConnect {
         inv.webSearch = false                // the calendar is the only source this needs
         inv.outputSchema = readSchema
         inv.timeout = 600
-        let env = try await CodexCLI.shared.run(inv)
+        inv.claudePermissionMode = "auto"    // Claude engine: connector READS flow via the classifier
+        let env = try await FrontierRun.run(inv)
         return parse(env.result)
     }
 
