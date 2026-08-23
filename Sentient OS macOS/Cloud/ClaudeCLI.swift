@@ -89,15 +89,16 @@ actor ClaudeCLI {
         static let gmailReads = ["get_message", "get_thread", "list_drafts", "list_labels",
                                  "search_threads"].map { "mcp__claude_ai_Gmail__\($0)" }
 
-        /// Google Calendar rides a server-level allow FOR NOW: the connector's tool names can't
-        /// be captured until an account links it (⚠️ verify the prefix and tighten to named
-        /// read tools the moment one does — the server name should normalize like Gmail's:
-        /// "claude.ai Google Calendar" → mcp__claude_ai_Google_Calendar).
-        static let calendarServer = "mcp__claude_ai_Google_Calendar"
+        /// The claude.ai Google Calendar connector's read-only tools — the full 9-tool surface
+        /// was captured live 2026-08-23 (suggest_time only computes free slots; the other four
+        /// are create/update/delete/RSVP and stay denied on read runs).
+        static let calendarReads = ["get_event", "list_calendars", "list_events",
+                                    "search_events", "suggest_time"]
+            .map { "mcp__claude_ai_Google_Calendar__\($0)" }
 
         /// What a connector-READ run pre-approves. Both families ride along on either source's
         /// runs — harmless, they're read-only.
-        static var readAllowRules: [String] { gmailReads + [calendarServer] }
+        static var readAllowRules: [String] { gmailReads + calendarReads }
     }
 
     // MARK: Environment
