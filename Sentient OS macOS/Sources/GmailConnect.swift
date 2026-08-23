@@ -33,7 +33,14 @@ enum GmailConnect {
     static let bucketKey = "gmail"
 
     /// OpenAI's hosted Gmail connector page — opened from CloudConnectSheet's "Connect Gmail".
-    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
+    /// Where the user links Google — engine-aware (decided 2026-08-23): OpenAI's hosted
+    /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
+    /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
+    static var connectorURL: URL {
+        ModelBackend.current == .claude
+            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/gmail-gmailmcp")!
+            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
+    }
 
     /// Newest-N threads per read (the connector-limits doc's cap; a heavy week exceeds it).
     private static let threadCap = 300
@@ -85,6 +92,9 @@ enum GmailConnect {
         inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
         inv.sandbox = .readOnly
         inv.timeout = 120
+        inv.claudePermissionMode = "auto"    // Claude engine: a real read attempt must be able to
+                                             // FLOW (dontAsk would deny it and read as NO even
+                                             // when the connector is linked)
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
             let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }

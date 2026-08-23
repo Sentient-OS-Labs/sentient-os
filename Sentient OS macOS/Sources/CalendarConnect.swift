@@ -38,7 +38,14 @@ enum CalendarConnect {
     static let bucketKey = "calendar"
 
     /// OpenAI's hosted Google Calendar connector page — opened from CloudConnectSheet's "Connect Calendar".
-    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+    /// Where the user links Google — engine-aware (decided 2026-08-23): OpenAI's hosted
+    /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
+    /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
+    static var connectorURL: URL {
+        ModelBackend.current == .claude
+            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/google-calendar-calendarmcp")!
+            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+    }
 
     /// Newest-N events per read window (a busy month rarely exceeds this; a guard against a runaway list).
     private static let eventCap = 200
@@ -75,6 +82,9 @@ enum CalendarConnect {
         inv.sandbox = .readOnly
         inv.webSearch = false
         inv.timeout = 120
+        inv.claudePermissionMode = "auto"    // Claude engine: a real read attempt must be able to
+                                             // FLOW (dontAsk would deny it and read as NO even
+                                             // when the connector is linked)
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
             let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }

@@ -92,7 +92,8 @@ struct OnboardingReadyView: View {
                         SettingsChip(label: "Apple Notes", on: runNotes) { runNotes.toggle() }
                     }
                 }
-                SettingsGroup(label: "Through Your ChatGPT") {
+                SettingsGroup(label: ModelBackend.current == .claude ? "Through Your Claude"
+                                                                     : "Through Your ChatGPT") {
                     VStack(alignment: .leading, spacing: 12) {
                         SettingsProse("Read through your own connectors, never our servers.")
                         ChipFlow {
