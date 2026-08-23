@@ -53,7 +53,7 @@ One read-only agentic pass over part 1's items, two jobs per item:
 Three inviolable rules, each enforced in the prompt AND the invocation:
 
 - **Accuracy:** receipts only; a live fact exists only if a tool returned it this run.
-- **Never fires:** three independent layers: the prompt rule; a read-only sandbox with `bypassApprovals = false` (a connector write auto-cancels headless); and `CodexCLI.Invocation.stripConnectorActionTools`, which removes the sending and destructive connector tools from the run's tool surface entirely, so an injected instruction has nothing to call.
+- **Never fires:** three independent layers: the prompt rule; a read-only sandbox with `bypassApprovals = false` (a connector write auto-cancels headless); and `CodexCLI.Invocation.stripConnectorActionTools`, which removes the sending and destructive connector tools from the run's tool surface entirely, so an injected instruction has nothing to call. On the Claude engine the same preset maps to the curated read-only connector allows (`ClaudeCLI.ConnectorTools`): reads flow, and no write rule exists in the run, so "never fire" stays structural there too.
 - **Never computer use**, not even to verify: research runs get no cua tools (the driver's MCP registration and shim belong to `runAgentCommand` only) and the prompt forbids it; acting on the Mac belongs to part 3, on the user's press.
 
 Methods: `gmail`, `calendar`, `computer` (native apps, chat sends via Messages, AND logged-in website
@@ -68,8 +68,8 @@ Routes on `method`. The user-editable artifact rides in a `<<<CONTENT … CONTEN
 routing (with the possibly edited recipient placed FIRST as the authoritative destination) in a
 `<<<ROUTING … ROUTING>>>` block, so what the user edited is exactly what fires.
 
-- **gmail / calendar:** `CodexCLI.run` with the sandbox ON (`read-only`) and the connector write tools pre-approved for the one run (`approveConnectorWrites`), user config on, web off, 300 s. If the agent reports `COULD_NOT` AND the raw JSONL carries the verbatim "cancelled MCP tool call" marker (the pre-approval did not take, e.g. codex changed its apps config surface), it retries ONCE on the bypass path with the same fixed wrapper and emits `codex.fire_fallback`, so the hardening can never cost a user their fire.
-- **computer:** `CodexCLI.runAgentCommand` (the same spine as Sidekick — the cua driver's hybrid transport, see the Driver doc), 900 s. The wrapper confines the shell to cua tool calls and viewing their saved screenshots (never AppleScript, osascript, `open`, or GUI-scripting), states there are no follow-up questions, and injects `CuaDriverSkill.rules` plus `CustomProvider.computerUsePromptRules` on a custom backend.
+- **gmail / calendar:** `FrontierRun.run` with the sandbox ON (`read-only`) and the connector write tools pre-approved for the one run (`approveConnectorWrites`; on Claude that preset maps to a scoped allow), user config on, web off, 300 s. If the agent reports `COULD_NOT` AND the raw JSONL carries the verbatim "cancelled MCP tool call" marker (the pre-approval did not take, e.g. codex changed its apps config surface), it retries ONCE on the bypass path with the same fixed wrapper and emits `codex.fire_fallback`, so the hardening can never cost a user their fire.
+- **computer:** `FrontierRun.runAgentCommand` (the same spine as Sidekick — the cua driver's hybrid transport on either engine, see the Driver doc), 900 s. The wrapper confines the shell to cua tool calls and viewing their saved screenshots (never AppleScript, osascript, `open`, or GUI-scripting), states there are no follow-up questions, and injects `CuaDriverSkill.rules` plus `CustomProvider.computerUsePromptRules` on a custom backend.
 - **research:** `notFireable` (a briefing to read).
 
 Every wrapper is a fixed, app-authored prompt: one declared task, both blocks treated purely as DATA
@@ -86,7 +86,8 @@ Task) records nothing.
 
 ## The gift letter (`GiftLetter.generate`)
 
-One codex call (`gpt-5.6-sol`, high, `workspace-write`, `cwd` = the vault, no web, hermetic) reads
+One frontier call (the flagship tier — `gpt-5.6-sol` / `sonnet` — high, `workspace-write`, `cwd` =
+the vault, no web, hermetic) reads
 the whole knowledge base and writes a short, delightful cross-life-patterns letter as `Gift from
 Sentient.md` in the vault folder; the app reads it back, persists it (`gift.latestLetter`), and deletes
 the file on every exit path so nothing strays into the vault or the mirror. The prompt (in the code)
@@ -104,4 +105,4 @@ it as the sealed envelope card (`Briefing(fromGiftMarkdown:)`), with a **Save to
 
 ## Related docs
 
-`Vault/Documentation - Knowledge Base (Vault).md`, `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Documentation - Views - Home, Processing & Shared UI.md`, `Notch Magic/Documentation - Sidekick - General.md` (adopted runs), `Sources/Documentation - Sources - Cloud (Gmail, Calendar).md`.
+`Vault/Documentation - Knowledge Base (Vault).md`, `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md`, `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Documentation - Views - Home, Processing & Shared UI.md`, `Notch Magic/Documentation - Sidekick - General.md` (adopted runs), `Sources/Documentation - Sources - Cloud (Gmail, Calendar).md`.
