@@ -82,9 +82,10 @@ enum CalendarConnect {
         inv.sandbox = .readOnly
         inv.webSearch = false
         inv.timeout = 120
-        inv.claudePermissionMode = "auto"    // Claude engine: a real read attempt must be able to
-                                             // FLOW (dontAsk would deny it and read as NO even
-                                             // when the connector is linked)
+        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools —
+                                             // nothing else approves a connector call headless,
+                                             // and a denied read would read as NO even when the
+                                             // connector is linked (measured 2026-08-23)
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
             let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
@@ -187,7 +188,7 @@ enum CalendarConnect {
         inv.webSearch = false
         inv.outputSchema = proactiveSchema
         inv.timeout = 300
-        inv.claudePermissionMode = "auto"    // Claude engine: connector READS flow via the classifier
+        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools
         do {
             let env = try await FrontierRun.run(inv)
             guard let span = jsonSpan(env.result),
@@ -218,7 +219,7 @@ enum CalendarConnect {
         inv.webSearch = false                // the calendar is the only source this needs
         inv.outputSchema = readSchema
         inv.timeout = 600
-        inv.claudePermissionMode = "auto"    // Claude engine: connector READS flow via the classifier
+        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools
         let env = try await FrontierRun.run(inv)
         return parse(env.result)
     }

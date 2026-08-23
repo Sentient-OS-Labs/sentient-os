@@ -148,8 +148,9 @@ actor ProactiveResearch {
         inv.outputSchema = Self.schema
         inv.timeout = 1_800                 // agentic verify + prepare (Gmail + web + vault) over ≤5 items runs long
         inv.claudeModel = .opus             // the Claude engine's heavy leg: research earns Opus
-                                            // (v1 note: on Claude, MCP stays denied in this read-only
-                                            // run, so research grounds on web + vault — no Gmail reads)
+                                            // (on Claude, the strip preset above maps to the curated
+                                            // connector READ allows — Gmail reads flow, writes stay
+                                            // structurally impossible, same posture as codex's strip)
 
         Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, Gmail MCP + web, never fire)…")
         do {

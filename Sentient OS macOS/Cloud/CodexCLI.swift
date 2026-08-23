@@ -124,8 +124,11 @@ actor CodexCLI {
         // the Invocation is the ONE shape both engines speak, so the two engine-specific knobs
         // live here rather than forking the type):
         var claudeModel: ClaudeCLI.Model? = nil       // override the tier map (heavy legs pin .opus)
-        var claudePermissionMode: String? = nil       // e.g. "auto" for hosted-connector READ runs
-                                                      // (the classifier plays codex's approval chain)
+        var claudeConnectorReads = false              // hosted-connector READ run: pre-approve the
+                                                      // curated read tools (ClaudeCLI.ConnectorTools;
+                                                      // writes stay denied — measured 2026-08-23:
+                                                      // nothing short of an allow rule approves a
+                                                      // connector tool headless, auto mode included)
 
         init(prompt: String) { self.prompt = prompt }
 

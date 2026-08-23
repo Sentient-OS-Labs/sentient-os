@@ -74,16 +74,46 @@ actor ClaudeCLI {
         return (model.rawValue, effort.rawValue)
     }
 
+    // MARK: The hosted connectors (claude.ai Gmail / Google Calendar)
+
+    /// The permission rules for the claude.ai connectors. Ground truth (measured 2026-08-23 on
+    /// this codebase's first linked account): headless, NOTHING approves a connector tool call
+    /// except an explicit allow rule — `auto` mode denies them too. So connector READ runs
+    /// pre-approve exactly the read tools, by name, fail-closed: a tool Anthropic adds or
+    /// renames stays denied until it's curated here (a probe reading NO is visible; a stray
+    /// write would not be).
+    enum ConnectorTools {
+        /// The claude.ai Gmail connector's read-only tools — the full 28-tool surface was
+        /// captured live 2026-08-23; these five are everything that doesn't mutate (the rest is
+        /// send/reply/forward/draft/label/spam/trash territory and stays denied on read runs).
+        static let gmailReads = ["get_message", "get_thread", "list_drafts", "list_labels",
+                                 "search_threads"].map { "mcp__claude_ai_Gmail__\($0)" }
+
+        /// Google Calendar rides a server-level allow FOR NOW: the connector's tool names can't
+        /// be captured until an account links it (⚠️ verify the prefix and tighten to named
+        /// read tools the moment one does — the server name should normalize like Gmail's:
+        /// "claude.ai Google Calendar" → mcp__claude_ai_Google_Calendar).
+        static let calendarServer = "mcp__claude_ai_Google_Calendar"
+
+        /// What a connector-READ run pre-approves. Both families ride along on either source's
+        /// runs — harmless, they're read-only.
+        static var readAllowRules: [String] { gmailReads + [calendarServer] }
+    }
+
     // MARK: Environment
 
-    /// Kill switches for EVERY claude spawn: their auto-updater (ours runs the updates), their
-    /// telemetry and error reporting (never on a Sentient user's machine on our behalf), and
-    /// non-essential traffic. Merged over the sanitized/rich env by the shared plumbing.
+    /// Kill switches for EVERY claude spawn: their auto-updater (ours runs the updates) and
+    /// their telemetry and error reporting (never on a Sentient user's machine on our behalf).
+    /// Merged over the sanitized/rich env by the shared plumbing.
+    /// ⚠️ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC must NEVER join this list: Claude Code
+    /// counts the claude.ai CONNECTOR FETCH as non-essential traffic, so the flag starts every
+    /// run connector-blind and the Gmail/Calendar probes read an honest-but-wrong NO
+    /// [FIELD-FOUND 2026-08-23, the first live connector link]. Hermetic runs don't need it
+    /// anyway — `--strict-mcp-config` is the real wall there.
     static let baseEnv: [String: String] = [
         "DISABLE_AUTOUPDATER": "1",
         "DISABLE_TELEMETRY": "1",
         "DISABLE_ERROR_REPORTING": "1",
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     ]
 
     // MARK: Discovery
@@ -339,9 +369,11 @@ actor ClaudeCLI {
         //  · approveConnectorWrites (the executor's gmail/calendar fire) → dontAsk + every MCP
         //    tool pre-approved for this ONE app-authored, single-declared-action run — the same
         //    scope codex's `apps._default` approve carried.
-        //  · claudePermissionMode (e.g. "auto" on the Gmail/Calendar READ runs) wins outright:
-        //    the classifier plays the role of codex's approval chain — reads flow, a stray write
-        //    gets flagged, and headless has nobody to ask so flagged means denied.
+        //  · claudeConnectorReads (probes + the Gmail/Calendar reads) → the curated read-tool
+        //    allow rules (ConnectorTools); writes stay denied by dontAsk. Measured 2026-08-23:
+        //    connector tools headless are approved by allow rules ONLY — auto mode denies them.
+        //  · stripConnectorActionTools (proactive research) → the same read-only allows: reads
+        //    flow, and "never fire" stays structural because no write rule exists in the run.
         var skippedPermissions = false
         if inv.bypassApprovals {
             // The codex bypass twin (the executor's connector self-heal retry rides this in
@@ -351,15 +383,17 @@ actor ClaudeCLI {
             skippedPermissions = true
         } else {
             let mode: String
-            if let override = inv.claudePermissionMode {
-                mode = override
-            } else if inv.configOverrides == CodexCLI.Invocation.approveConnectorWrites {
+            if inv.configOverrides == CodexCLI.Invocation.approveConnectorWrites {
                 mode = "dontAsk"
                 allowed.append("mcp__*")
             } else {
                 switch inv.sandbox {
                 case .readOnly: mode = "dontAsk"
                 case .workspaceWrite: mode = "acceptEdits"
+                }
+                if inv.claudeConnectorReads
+                    || inv.configOverrides == CodexCLI.Invocation.stripConnectorActionTools {
+                    allowed += ConnectorTools.readAllowRules
                 }
             }
             args += ["--permission-mode", mode]
