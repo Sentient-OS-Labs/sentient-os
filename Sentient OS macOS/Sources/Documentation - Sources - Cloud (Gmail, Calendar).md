@@ -1,10 +1,13 @@
 # Sources: Gmail and Google Calendar (Sources/)
 
 The two cloud sources. Neither can be read on-device, so Sentient both **fetches and summarizes** them
-through the user's own Codex connectors (OpenAI's account-level `codex_apps/gmail.*` and
-`codex_apps/google_calendar.*` tools, reached by `codex exec`). No on-device model touches them, and no
-Sentient server is involved. Both ride the ChatGPT-account auth inside codex, so they only exist on the
-ChatGPT backend (locked chips on a custom frontier model and on free/go plans).
+through the user's own hosted connectors, per engine: on the ChatGPT backend, OpenAI's account-level
+`codex_apps/gmail.*` / `codex_apps/google_calendar.*` tools reached by `codex exec`; on the Claude
+backend, the **claude.ai Gmail and Google Calendar connectors** reached by `claude -p`
+(`mcp__claude_ai_Gmail__*` / `mcp__claude_ai_Google_Calendar__*` — the ClaudeCLI doc's connector
+section). No on-device model touches them, and no Sentient server is involved. They ride
+subscription-account auth, so the chips lock on a custom frontier model and on free/go ChatGPT plans.
+All runs go through `FrontierRun`, so this file's prompts and parsing serve both engines unchanged.
 
 ## Files
 
@@ -20,12 +23,15 @@ calendar channels (see the Proactive doc).
 ## Connecting
 
 `CloudConnectSheet(.gmail)` / `.calendar` is reachable from Settings → Knowledge Sources, the home's
-Analysis popover, onboarding's ready screen, and Dev Tools. Flow: **Connect** opens OpenAI's hosted
-connector page (`GmailConnect.connectorURL` / `CalendarConnect.connectorURL`) where the user links
-Google; **Done** waits 1 s, then runs `probeConnected()`, a `codex exec` (`gpt-5.6-luna`, low effort,
-read-only) that must reply exactly YES or NO. YES persists `dbg.gmail.connected` + `dbg.run.gmail`
-(calendar twins), shows a green beat, and auto-dismisses; NO shows a quiet retry line. The "Stop
-reading …" link fully disconnects (both flags cleared); reconnecting is the whole flow again.
+Analysis popover, onboarding's ready screen, and Dev Tools. Flow: **Connect** opens the ENGINE'S
+connector page (`GmailConnect.connectorURL` / `CalendarConnect.connectorURL` pick per backend:
+OpenAI's hosted connector page on ChatGPT, claude.ai's connector directory on Claude; the sheet's
+copy follows, and the sources group header reads "Through Your ChatGPT" / "Through Your Claude")
+where the user links Google; **Done** waits 1 s, then runs `probeConnected()`, a real headless run
+(luna tier — `gpt-5.6-luna` / `haiku`, low effort, read-only) that must reply exactly YES or NO off
+an actual connector read. YES persists `dbg.gmail.connected` + `dbg.run.gmail` (calendar twins),
+shows a green beat, and auto-dismisses; NO shows a quiet retry line. The "Stop reading …" link fully
+disconnects (both flags cleared); reconnecting is the whole flow again.
 
 ## How reads work
 
@@ -43,17 +49,18 @@ run start; a little overlap next run beats a boundary gap.
 - `runIterative`: events with a start time in `[mark, now)`.
 - **`fetchProactiveContext()`** is separate and deliberately uncurated: the last 7 days plus the next 24 hours, every event, as a compact chronological text block (`{connected, events_text}`). `ProactiveCycle` fetches it once and injects it into both the judge and the research prompts, so the judge can reason about time-sensitivity while staying tool-free.
 
-Models: `gpt-5.6-luna` for every read (medium effort; low for the connect probe), read-only sandbox,
-web search off for calendar. Sending an email or creating an event runs on the default `gpt-5.6-sol`
-in the executor.
+Models: the luna tier for every read (`gpt-5.6-luna` on codex, `haiku` on claude; medium effort, low
+for the connect probe), read-only sandbox, web search off for calendar. Sending an email or creating
+an event runs on the flagship tier in the executor.
 
 ## Facts worth knowing
 
-- The connectors are account-level, so they work whether or not the user's `~/.codex` config is loaded (`includeUserConfig`).
+- The connectors are account-level on both engines, so they work whether or not the user's own CLI config is loaded (`includeUserConfig`).
 - OpenAI strict output schemas need `additionalProperties: false` on the object and every property in `required`, or codex fails with `invalid_json_schema`.
-- Read tools pass under the read-only sandbox. Only the WRITE tools (`send_email`, `create_event`) are approval-gated headless; the executor pre-approves them per run with the sandbox intact (`CodexCLI.Invocation.approveConnectorWrites`).
+- **codex:** read tools pass under the read-only sandbox; only the WRITE tools (`send_email`, `create_event`) are approval-gated headless, and the executor pre-approves them per run with the sandbox intact (`CodexCLI.Invocation.approveConnectorWrites`).
+- **claude:** headless, EVERY connector call is denied unless an allow rule names it (measured 2026-08-23 — auto mode denies them too), so the probes and reads set `Invocation.claudeConnectorReads`, which pre-approves the curated read-only tools (`ClaudeCLI.ConnectorTools`); write tools stay structurally denied on read runs. The executor's fires map `approveConnectorWrites` to a scoped allow.
 - Progress events (`GmailConnect.Progress`, `CalendarConnect.Progress`) map each window onto the same bar and "just processed" card `ProcessingView` shows for on-device items; the Gmail windows arrive in completion order because they run in parallel.
 
 ## Related docs
 
-`Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Proactive/Documentation - Proactive Intelligence.md` (the calendar context and the write channels), `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md` (why the chips lock).
+`Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md` (the claude.ai connectors and the read allow rules), `Proactive/Documentation - Proactive Intelligence.md` (the calendar context and the write channels), `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md` (why the chips lock).

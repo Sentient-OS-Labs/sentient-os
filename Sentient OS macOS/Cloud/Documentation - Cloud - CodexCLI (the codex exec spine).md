@@ -1,10 +1,15 @@
 # CodexCLI: the `codex exec` spine (Cloud/)
 
-`CodexCLI` is the ONLY path to a cloud model in the app. Every cloud feature calls it: the knowledge
-base build and updates, the Gmail/Calendar reads, the gift letter, the proactive judge and research,
-and every computer-use run (Sidekick, the command bar, a card's fire). It runs the user's own Codex CLI
-as a subprocess; their ChatGPT subscription (or their own endpoint, see the BYOM doc) pays. There is no
-Sentient-hosted compute and no API key in the app.
+`CodexCLI` is one of the two frontier harnesses (the other is `ClaudeCLI`, the `claude -p` engine —
+see its doc). Every cloud feature — the knowledge base build and updates, the Gmail/Calendar reads,
+the gift letter, the proactive judge and research, and every computer-use run — calls
+**`FrontierRun`**, the one dispatch switch on `ModelBackend.current`: `.chatgpt` and `.custom` land
+here, `.claude` lands on ClaudeCLI. This file is also the REFERENCE engine: the shared types
+(`Invocation`, `Envelope`, `CLIError`) and the engine-neutral process plumbing (`executeAsync` /
+`executeStreaming` — sanitized env, watchdog, cancellation, line streaming) live here and ClaudeCLI
+reuses them verbatim. It runs the user's own Codex CLI as a subprocess; their ChatGPT subscription
+(or their own endpoint, see the BYOM doc) pays. There is no Sentient-hosted compute and no API key in
+the app.
 
 ## Files
 
@@ -12,7 +17,7 @@ Sentient-hosted compute and no API key in the app.
 |---|---|
 | `CodexCLI.swift` | The actor: binary discovery, install, login, validation, `run()` (structured JSONL runs) and `runAgentCommand()` (computer use), argument building, JSONL parsing, process plumbing, failure diagnostics. |
 | `AgentStatus.swift` | Parses the `STATUS: DONE` / `STATUS: COULD_NOT` sentinel every app-authored wrapper prompt demands, shared by the executor and Sidekick. |
-| `ComputerUseSpeed.swift` | The Speed vs Intelligence slider value (Settings → Proactive & Sidekick): Faster / Medium / Smarter → reasoning effort low / medium / high for every computer-use run. |
+| `ComputerUseSpeed.swift` | The Speed vs Intelligence slider value (Settings → Proactive & Sidekick): Faster / Medium / Smarter → reasoning effort low / medium / high for every computer-use run on codex; on the Claude engine the tier picks model + effort (see the ClaudeCLI doc). |
 
 ## The two run paths
 
@@ -59,6 +64,7 @@ this.
 | `resumeSessionID` | | continue a prior thread (usage-limit recovery) |
 | `timeout` | 3600 s | watchdog |
 | `feature`, `diag` | | diagnostics tags only (which caller; structured extras) |
+| `claudeModel`, `claudeConnectorReads` | `nil`, `false` | Claude-engine knobs, ignored here (the Invocation is the ONE shape both engines speak): the Opus override for the heavy legs, and the hosted-connector read allows — see the ClaudeCLI doc |
 
 Two curated `configOverrides` presets:
 
@@ -123,4 +129,4 @@ to the scoreboard.
 
 ## Related docs
 
-`Cloud/Documentation - Cloud - Codex Setup.md`, `Driver/Documentation - Driver (cua-driver).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Proactive/Documentation - Proactive Intelligence.md`, `Notch Magic/Documentation - Sidekick - General.md`.
+`Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md` (the sibling engine and the dispatch), `Cloud/Documentation - Cloud - Codex Setup.md`, `Driver/Documentation - Driver (cua-driver).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Proactive/Documentation - Proactive Intelligence.md`, `Notch Magic/Documentation - Sidekick - General.md`.

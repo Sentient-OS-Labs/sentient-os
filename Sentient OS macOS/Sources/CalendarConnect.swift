@@ -38,7 +38,14 @@ enum CalendarConnect {
     static let bucketKey = "calendar"
 
     /// OpenAI's hosted Google Calendar connector page — opened from CloudConnectSheet's "Connect Calendar".
-    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+    /// Where the user links Google — engine-aware (decided 2026-08-23): OpenAI's hosted
+    /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
+    /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
+    static var connectorURL: URL {
+        ModelBackend.current == .claude
+            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/google-calendar-calendarmcp")!
+            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+    }
 
     /// Newest-N events per read window (a busy month rarely exceeds this; a guard against a runaway list).
     private static let eventCap = 200
@@ -75,9 +82,13 @@ enum CalendarConnect {
         inv.sandbox = .readOnly
         inv.webSearch = false
         inv.timeout = 120
+        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools —
+                                             // nothing else approves a connector call headless,
+                                             // and a denied read would read as NO even when the
+                                             // connector is linked (measured 2026-08-23)
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
-            let env = try await CodexTrigger.$current.withValue(.probe) { try await CodexCLI.shared.run(inv) }
+            let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
             let answer = env.result.uppercased()
             let yes = answer.contains("YES") && !answer.contains("NO")
             Log("CalendarConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
@@ -177,8 +188,9 @@ enum CalendarConnect {
         inv.webSearch = false
         inv.outputSchema = proactiveSchema
         inv.timeout = 300
+        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools
         do {
-            let env = try await CodexCLI.shared.run(inv)
+            let env = try await FrontierRun.run(inv)
             guard let span = jsonSpan(env.result),
                   let data = span.data(using: .utf8),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -207,7 +219,8 @@ enum CalendarConnect {
         inv.webSearch = false                // the calendar is the only source this needs
         inv.outputSchema = readSchema
         inv.timeout = 600
-        let env = try await CodexCLI.shared.run(inv)
+        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools
+        let env = try await FrontierRun.run(inv)
         return parse(env.result)
     }
 

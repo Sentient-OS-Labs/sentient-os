@@ -101,6 +101,9 @@ enum Uninstall {
         progress(.keychain)
         MirrorClient.destroyKeychainIdentity()
         CustomProvider.destroy()   // the frontier-model choice + its endpoint API key
+        ClaudeAuth.destroy()       // OUR cached Claude identity only — ~/.claude, the Keychain
+                                   // login, and the claude binary are the user's own Claude
+                                   // Code and stay untouched (the same posture as ~/.codex)
         await beat()
 
         progress(.knowledge)

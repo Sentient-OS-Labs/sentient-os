@@ -3,8 +3,10 @@
 //  Sentient OS macOS
 //
 //  The Gmail / Google Calendar connect popup — ONE sheet for both cloud sources (they are exact
-//  twins: same OpenAI connector page flow, same codex probe, same storage shape). Flow:
-//    Connect …  → opens OpenAI's hosted connector page (the user links Google there).
+//  twins: same connector page flow, same YES/NO probe, same storage shape), engine-aware: the
+//  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
+//  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
+//    Connect …  → opens the engine's connector page (the user links Google there).
 //    Done       → settles 1s, then the `codex exec` YES/NO probe (a green fill sweeps the button
 //                 while it runs — decelerating, ~95% by 17s, snapping full on the answer). YES →
 //                 persists connected + selected, shows the green beat, and auto-dismisses. NO → a
@@ -28,10 +30,13 @@ struct CloudConnectSheet: View {
         var title: String { self == .gmail ? "Connect Gmail" : "Connect Google Calendar" }
         var connectTitle: String { self == .gmail ? "Connect Gmail" : "Connect Calendar" }
         var bullets: [(icon: String, text: String)] {
-            [("icloud.slash", self == .gmail ? "Your ChatGPT reads your email, never our servers"
-                                             : "Your ChatGPT reads your calendar, never our servers"),
-             ("link", "Link your Google account on OpenAI's page"),
-             ("lock", "Sentient never sees your password")]
+            let claude = ModelBackend.current == .claude
+            let reader = claude ? "Your Claude" : "Your ChatGPT"
+            let page = claude ? "Claude's page" : "OpenAI's page"
+            return [("icloud.slash", self == .gmail ? "\(reader) reads your email, never our servers"
+                                                    : "\(reader) reads your calendar, never our servers"),
+                    ("link", "Link your Google account on \(page)"),
+                    ("lock", "Sentient never sees your password")]
         }
         var connectedLine: String { self == .gmail ? "Gmail connected" : "Calendar connected" }
         var failedLine: String {

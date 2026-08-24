@@ -5,13 +5,14 @@ AI): one self-contained binary that clicks, types, scrolls, reads accessibility 
 per-window screenshots IN THE BACKGROUND — per-window input with no cursor warp and no focus steal,
 plus a typed route into Chromium pages over CDP and a visible agent-cursor overlay so the user can see
 where their agent is working. Sentient runs it as its own long-lived daemon and lets each computer-use
-codex run drive it. The frontier model is the brain; this folder is the body.
+run drive it — codex or claude, whichever engine is live (FrontierRun dispatches; the daemon, socket,
+shim, and skill are identical for both). The frontier model is the brain; this folder is the body.
 
 ## Files
 
 | File | Job |
 |---|---|
-| `CuaDriver.swift` | The driver as Sentient sees it: the pinned release (version, tarball URL, SHA-256, signing team), the install location, the MCP tool subset (`mcpTools`), the codex `-c` overrides, the CLI shim + screenshot paths, and the full tool allowlist (`enabledTools`). |
+| `CuaDriver.swift` | The driver as Sentient sees it: the pinned release (version, tarball URL, SHA-256, signing team), the install location, the MCP tool subset (`mcpTools`), the per-engine wiring (codex `-c` overrides · claude `--mcp-config` JSON + the named deny list), the CLI shim + screenshot paths, and the full tool allowlist (`enabledTools`). |
 | `CuaDriverHost.swift` | The daemon's lifecycle: spawn, readiness, liveness, replacement on permission changes, teardown. Also writes the per-generation CLI shim and screenshot drop-box. |
 | `CuaDriverSetup.swift` | Puts the pinned binary on disk: download → SHA-256 → extract → codesign verify → smoke run → atomic install. |
 | `CuaDriverSkill.swift` | The operating manual spliced into every computer-use prompt — the model's teaching for the whole tool surface. |
@@ -51,7 +52,11 @@ A computer-use codex run reaches the daemon over two channels against the same s
   call with the screenshot arriving inline as a real image, and the schema cost is ~3k tokens —
   the expensive schemas belong to the action tools, which never load. The proxy executes nothing
   itself; `required=true` fails the run rather than leaving the model blind, and the tool timeout is
-  raised to 120 s (a big window's snapshot outlives codex's 60 s default).
+  raised to 120 s (a big window's snapshot outlives codex's 60 s default). The Claude engine
+  registers the SAME proxy via `CuaDriver.claudeMcpConfig` (`--mcp-config` + `--strict-mcp-config`);
+  Claude Code has no per-server `enabled_tools` filter, so the trim is
+  `claudeDisallowedMcpTools` — every non-vision MCP tool denied by name, version-pinned like the
+  skill — and the timeouts ride env vars (`MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT`).
 - **The hands ride the CLI.** Every action and the entire browser family run as one-shot shell calls,
   `<shim> <tool> '<json>'` — upstream's own default transport — at zero schema cost. The shim lives
   at a deliberately SPACE-FREE path under the app's caches dir (the real binary sits under
@@ -126,7 +131,8 @@ silent download (see the Permission Gate doc).
 
 ## Related docs
 
-`Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md` (the run that drives this),
+`Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md` and
+`Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md` (the runs that drive this),
 `Cloud/Documentation - Cloud - Codex Setup.md` (the setup flow this is step 3 of),
 `Views/Permissions/Documentation - Permission Gate & Guide.md` (how the two grants are acquired),
 `System/Documentation - System (Permissions, Health, Uninstall).md` (probes, health, teardown),

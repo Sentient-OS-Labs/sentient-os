@@ -89,9 +89,12 @@ nonisolated enum CodexFailureReason: String, Sendable {
 
         // Our own wall clock, not codex's.
         if has("timed out after", "timeoutours") { return .timeoutOurs }
-        // Quota first — its wording overlaps "limit"/"plan".
+        // Quota first — its wording overlaps "limit"/"plan". The "hit your …" family is Claude's
+        // subscription-window wording ("You've hit your session limit · resets 3:45pm").
         if has("usage limit", "rate limit", "limit reached", "limit resets", "quota",
-               "too many requests", "out of extra usage", "plan limit") || code(429) { return .usageLimit }
+               "too many requests", "out of extra usage", "plan limit",
+               "hit your session limit", "hit your weekly limit", "hit your opus limit",
+               "out of credits", "credit balance") || code(429) { return .usageLimit }
         // Login state.
         if has("token expired", "token has expired", "expired token", "access token expired",
                "token_expired", "jwt expired") { return .tokenExpired }

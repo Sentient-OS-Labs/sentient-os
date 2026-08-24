@@ -4,8 +4,10 @@ Sentient reads the user's ChatGPT plan from their own codex login and adapts. Fr
 a tiny monthly codex quota (the first knowledge-base build alone eats most of it) and no ChatGPT
 connectors, so instead of a broken full experience they get an honest fork at onboarding and a scoped
 **knowledge-base-only mode**: the knowledge base, the Knowledge window, the MCP mirror, and the gift
-letter, with proactive cards, Sidekick, nightly runs, and Gmail/Calendar gated behind Plus. A custom
-frontier model (the BYOM doc) bypasses the whole gate.
+letter, with proactive cards, Sidekick, nightly runs, and Gmail/Calendar gated behind Plus. A
+non-ChatGPT backend bypasses the whole gate: the Claude engine gates itself (Claude Code has no free
+tier, so logged-in IS the plan — ClaudeAuth in the ClaudeCLI doc), and a custom endpoint is the
+user's own compute (the BYOM doc).
 
 ## File
 
@@ -38,7 +40,7 @@ respected, so focus-return re-checks can never hammer the endpoint. A non-OK sta
 
 ## The two flags
 
-- **`knowledgeBaseOnly`** (`plan.kbOnly`): the user's CHOICE at the crossroads to continue with just the knowledge base. This is the gate every limited-mode surface checks. The getter reads false whenever a custom frontier model is active (their own endpoint powers everything a paid plan would); the stored value is preserved so switching back to ChatGPT restores the free/go experience.
+- **`knowledgeBaseOnly`** (`plan.kbOnly`): the user's CHOICE at the crossroads to continue with just the knowledge base. This is the gate every limited-mode surface checks. The getter reads false whenever a non-ChatGPT backend is active (the free/go limitation is a ChatGPT-plan fact; Claude and custom engines gate themselves); the stored value is preserved so switching back to ChatGPT restores the free/go experience.
 - **`assertedPlus`** (`plan.assertedPlus`): the user told us they upgraded and we believed them (the crossroads' "I've upgraded to ChatGPT Plus" plus a native confirm). Needed because a just-paid upgrade can read free/go on disk for a while (the claim lags, the refresh can be throttled), and OpenAI's server is the real enforcement point anyway. Sticky; makes `isLimited()` false everywhere (chiefly so `CodexCLI.backendTuned` stops downshifting them off `gpt-5.6-sol`). Reset clears it.
 
 `connectorsLocked` (free/go OR a custom backend) and `connectorLockedTip` are the one predicate and the
@@ -48,7 +50,7 @@ one wording every Gmail/Calendar chip uses.
 
 | Surface | Behavior |
 |---|---|
-| Onboarding | The plan crossroads (`OnboardingPlanView`) appears right after the frontier-model step, for free/go only; full plans and custom engines skip it before it renders. Choices: upgrade on ChatGPT (opens the pricing page, then the screen quietly re-checks on foreground via `refreshPlan`), "I've upgraded" (the trust path), or continue with just the knowledge base. |
+| Onboarding | The plan crossroads (`OnboardingPlanView`) appears right after the frontier-model step, for free/go ChatGPT only; full plans, the Claude engine, and custom engines skip it before it renders. Choices: upgrade on ChatGPT (opens the pricing page, then the screen quietly re-checks on foreground via `refreshPlan`), "I've upgraded" (the trust path), or continue with just the knowledge base. |
 | `OvernightScheduler.maybeAutoEnable()` | Returns early: no 14h auto-enable, no 3 AM runs. Not latched, so an upgrade plus reset starts the clock fresh. |
 | `ProactiveCycle` | Skips decide and research (saves an empty ready list so stale cards never linger). Knowledge base, mirror push, gift letter, and the wipe still run. |
 | Sidekick | The hotkey stays armed for everyone, but a press, a notch click, or a command-bar submit is answered instantly with a 2 s aside ("get ChatGPT Plus to wake Sidekick") and the run never fires. Checked live per press. |

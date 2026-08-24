@@ -147,10 +147,14 @@ actor ProactiveResearch {
                                             // exist in this run — reads untouched
         inv.outputSchema = Self.schema
         inv.timeout = 1_800                 // agentic verify + prepare (Gmail + web + vault) over ≤5 items runs long
+        inv.claudeModel = .opus             // the Claude engine's heavy leg: research earns Opus
+                                            // (on Claude, the strip preset above maps to the curated
+                                            // connector READ allows — Gmail reads flow, writes stay
+                                            // structurally impossible, same posture as codex's strip)
 
         Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, Gmail MCP + web, never fire)…")
         do {
-            let env = try await CodexCLI.shared.run(inv, onLine: onLine)
+            let env = try await FrontierRun.run(inv, onLine: onLine)
             let parsed = Self.parse(env.jsonResult)
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
             let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)

@@ -165,6 +165,8 @@ actor VaultGenerator {
     func runCodexInStaging(_ invocation: CodexCLI.Invocation, staging: URL,
                            onProgress: @Sendable @escaping (Progress) -> Void = { _ in },
                            onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
+        var invocation = invocation
+        invocation.claudeModel = .opus     // the Claude engine's heavy leg: vault work earns Opus
         onProgress(.calling)
         let poller = Task.detached {
             while !Task.isCancelled {
@@ -175,7 +177,7 @@ actor VaultGenerator {
         }
         defer { poller.cancel() }
         do {
-            return try await CodexCLI.shared.run(invocation, onLine: onLine)
+            return try await FrontierRun.run(invocation, onLine: onLine)
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
             Log("VaultGenerator: ⚠️ usage limit (thread \(sessionID ?? "nil")); staging kept for resume")

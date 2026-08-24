@@ -203,9 +203,10 @@ struct OnboardingView: View {
 
     private func goBack() {
         var target = step - 1
-        // The crossroads only exists for free/go ChatGPT accounts — never strand a full plan
-        // or a custom engine on an auto-advancing screen (back would visibly bounce forward).
-        if target == 2 && (!CodexAuth.isLimited() || ModelBackend.current == .custom) { target -= 1 }
+        // The crossroads only exists for free/go ChatGPT accounts — never strand a full plan,
+        // a Claude engine, or a custom engine on an auto-advancing screen (back would visibly
+        // bounce forward).
+        if target == 2 && (!CodexAuth.isLimited() || ModelBackend.current != .chatgpt) { target -= 1 }
         withAnimation(.easeInOut(duration: 0.25)) { step = max(0, target) }
     }
 

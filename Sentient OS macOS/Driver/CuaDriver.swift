@@ -160,6 +160,57 @@ enum CuaDriver {
         ]
     }
 
+    // MARK: The Claude wiring (the same eyes, in `--mcp-config` dialect)
+
+    /// The `--mcp-config` JSON that registers the eyes with ONE `claude -p` run — the
+    /// codexOverrides twin (same proxy command, same socket, same telemetry/update kill
+    /// switches). Passed with `--strict-mcp-config`, so this is the ONLY MCP server the run
+    /// sees. Timeouts ride env vars on the Claude side (MCP_TIMEOUT / MCP_TOOL_TIMEOUT —
+    /// ClaudeCLI sets both); the enabled_tools trim rides `claudeDisallowedMcpTools` below.
+    static func claudeMcpConfig(socketPath: String) -> String {
+        let config: [String: Any] = ["mcpServers": ["cua_driver": [
+            "type": "stdio",
+            "command": binaryURL.path,
+            "args": ["mcp", "--embedded", "--socket", socketPath],
+            "env": ["CUA_DRIVER_EMBEDDED": "1",
+                    "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
+                    "CUA_TELEMETRY_ENABLED": "false",
+                    "CUA_DRIVER_RS_UPDATE_CHECK": "false"],
+        ]]]
+        guard let data = try? JSONSerialization.data(withJSONObject: config,
+                                                     options: [.withoutEscapingSlashes]),
+              let json = String(data: data, encoding: .utf8) else {
+            return #"{"mcpServers":{}}"#   // unreachable (the dict is static-shaped); fail closed
+        }
+        return json
+    }
+
+    /// The full tool surface the daemon serves over MCP for the PINNED version — captured from
+    /// `cua-driver list-tools` (56 tools, verified 2026-08-21 on 0.20.0). Claude Code has no
+    /// per-server enabled_tools filter, so the trim is a DENY list: everything except the four
+    /// eyes, each denied by its `mcp__cua_driver__<name>` rule, which removes the tool from the
+    /// model's context entirely. Version-pinned like the skill: bump `version`, re-capture this.
+    private static let allMcpServedTools = [
+        "bring_to_front", "browser_click", "browser_dialog", "browser_download",
+        "browser_navigate", "browser_pointer", "browser_prepare", "browser_set_input_files",
+        "browser_type", "check_for_update", "check_permissions", "click", "clipboard_read",
+        "clipboard_write", "double_click", "drag", "end_session", "escalate_session",
+        "get_accessibility_tree", "get_agent_cursor_state", "get_browser_state", "get_config",
+        "get_cursor_position", "get_desktop_state", "get_recording_state", "get_screen_size",
+        "get_session", "get_session_state", "get_window_state", "health_report", "hotkey",
+        "install_ffmpeg", "invoke_menu", "kill_app", "launch_app", "list_apps", "list_sessions",
+        "list_windows", "move_cursor", "page", "press_key", "replay_trajectory", "right_click",
+        "scroll", "set_agent_cursor_enabled", "set_agent_cursor_motion", "set_agent_cursor_theme",
+        "set_config", "set_value", "set_window_frame", "start_recording", "start_session",
+        "stop_recording", "type_text", "verify_state", "zoom",
+    ]
+
+    /// The deny list a Claude computer-use run passes to `--disallowedTools`: every daemon MCP
+    /// tool that is NOT one of the four eyes. Actions stay CLI-only (the hybrid transport's
+    /// whole point), and the deliberately-out tools (page, kill_app, …) are genuinely absent.
+    static let claudeDisallowedMcpTools: [String] =
+        allMcpServedTools.filter { !mcpTools.contains($0) }.map { "mcp__cua_driver__\($0)" }
+
     // MARK: The CLI shim (how a codex run reaches the daemon)
 
     /// The one-line launcher a computer-use run invokes as `<shim> <tool> '<json>'`. It lives at a

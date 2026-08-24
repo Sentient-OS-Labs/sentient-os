@@ -12,7 +12,7 @@ Full Disk Access requires resumes exactly where the user left off.
 |---|---|
 | `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, the DEBUG "SKIP TO HOME" handle, and the two-minutes-in cua-driver download. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
 | `OnboardingFilmView.swift` | Step 0: the website's film in a `WKWebView`. |
-| `OnboardingFrontierModelView.swift` · `OnboardingCodexSteps.swift` | Step 1: the engine picker with the codex login as the ChatGPT panel; the install kick, the `codex --help` confirmation poll, the manual-install panel; the shared onboarding bits (`OnboardingWhisper`, `OnboardingDoneLine`, `MonoWaitLine`, `OnboardingStatusText`). |
+| `OnboardingFrontierModelView.swift` · `OnboardingCodexSteps.swift` | Step 1: the engine picker with the codex login as the ChatGPT panel; the lazy install-on-commitment kicks, the `codex --help` confirmation poll (skipped until a codex install exists), the manual-install panel; the shared onboarding bits (`OnboardingWhisper`, `OnboardingDoneLine`, `MonoWaitLine`, `OnboardingStatusText`). |
 | `OnboardingPlanView.swift` | Step 2: the plan crossroads. |
 | `OnboardingPermissionsView.swift` | Step 3: overnight wake → launch at login → Full Disk Access, unlocking sequentially. |
 | `OnboardingReadyView.swift` | Step 4: the source tiles and the big Start Analysis glow. |
@@ -35,17 +35,21 @@ film's scroll timeline and must be re-derived if the website re-paces the film. 
 points the step at a local dev server.
 
 **1 · Choose your frontier model.** The shared `FrontierEnginePicker` in a single centered row over
-the per-engine panels, with `OnboardingCodexLoginPanel` as the ChatGPT panel: one "Log in with ChatGPT"
-button (greyed until the step's `codex --help` poll confirms the background CLI install landed; the CLI
-is the engine room even for custom endpoints, since the vision probe runs through `codex exec`), then
-the panel notices the finished browser sign-in on its own (a 2 s `codex login status` poll plus a
-foreground re-check). If the automatic install gave up (no network, a reset connection, a region where
-Codex is unavailable), `CodexInstallFailedPanel` links the official install guide and suggests a VPN;
-the poll picks the CLI up the moment it lands. Continue gates on the ACTIVE engine being healthy:
-ChatGPT logged in, or a custom endpoint that passed Test & Select.
+the per-engine panels, with `OnboardingCodexLoginPanel` as the ChatGPT panel and the picker's own
+self-contained Claude panel. **Installs are lazy** (decided 2026-08-21): nothing downloads at launch
+or on screen appear — "Log in with ChatGPT" is the codex download moment (mid-install the button
+greys and the streamed progress narrates; the sign-in follows on its own the moment the install
+lands), "Sign in with Claude" is Claude Code's, and a custom tab's Test & Select installs codex
+before probing (the CLI is the engine room even for custom endpoints). Both login panels notice the
+finished browser sign-in on their own (a 2 s status poll plus a foreground re-check). If an
+automatic install gave up (no network, a reset connection, a region block), the panels show the
+manual-install fallback (`CodexInstallFailedPanel` links the official guide and suggests a VPN; the
+Claude panel shows the one-line Terminal command); the polls pick a CLI up the moment it lands.
+Continue gates on the ACTIVE engine being healthy: ChatGPT logged in, Claude signed in, or a custom
+endpoint that passed Test & Select.
 
-**2 · The plan crossroads.** Only free/go ChatGPT accounts see it; full plans and custom engines
-auto-advance before a pixel renders (Back knows to skip over it for them). "We noticed you're not on
+**2 · The plan crossroads.** Only free/go ChatGPT accounts see it; full plans, the Claude engine,
+and custom engines auto-advance before a pixel renders (Back knows to skip over it for them). "We noticed you're not on
 ChatGPT Plus." with the three feature rows, then Upgrade on ChatGPT (opens the pricing page and waits,
 quietly re-checking via `CodexAuth.refreshPlan` on foreground), "I've upgraded to ChatGPT Plus" (a
 native confirm, then we take their word: `assertedPlus`), or "Continue with just the knowledge base"

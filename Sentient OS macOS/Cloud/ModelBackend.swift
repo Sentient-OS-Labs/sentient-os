@@ -3,9 +3,9 @@
 //  Sentient OS macOS
 //
 //  The ONE source of truth for the user's frontier-model choice (Settings → Frontier Model
-//  Choice): their ChatGPT subscription (the default), or a custom OpenAI-Responses-compatible
-//  endpoint (OpenRouter, a local server, any base URL + model name + key). A Claude-plan backend
-//  (`claude -p` as the harness) is planned; it gets its enum case when it's real.
+//  Choice): their ChatGPT subscription (the default), their Claude subscription (`claude -p`
+//  as the harness — see ClaudeCLI), or a custom OpenAI-Responses-compatible endpoint
+//  (OpenRouter, a local server, any base URL + model name + key).
 //
 //  Key surface:
 //   - ModelBackend.current            → .chatgpt | .custom (read fresh; Settings is live, no restart)
@@ -30,6 +30,7 @@ import AppKit
 /// Which frontier engine powers the cloud ~10% of Sentient (the on-device model does the rest).
 enum ModelBackend: String, Sendable {
     case chatgpt   // the user's own ChatGPT subscription through their codex login (default)
+    case claude    // the user's own Claude subscription through their Claude Code login (ClaudeCLI)
     case custom    // a user-supplied OpenAI-Responses-compatible endpoint
 
     static let key = "model.backend"
@@ -39,9 +40,11 @@ enum ModelBackend: String, Sendable {
         ModelBackend(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .chatgpt
     }
 
-    /// Hosted Gmail/Calendar connectors ride ChatGPT-account auth inside codex — they don't exist
-    /// on a custom endpoint. (Everything else — vault, proactive, Sidekick/computer use — does.)
-    static var connectorsAvailable: Bool { current == .chatgpt }
+    /// Hosted Gmail/Calendar connectors ride ACCOUNT auth inside a subscription harness — codex's
+    /// ChatGPT connectors, or claude.ai connectors on the Claude engine (connected by the user at
+    /// claude.ai → Settings → Connectors). A custom endpoint has neither. (Everything else —
+    /// vault, proactive, Sidekick/computer use — works on all three.)
+    static var connectorsAvailable: Bool { current != .custom }
 }
 
 /// The saved custom endpoint. All fields live in UserDefaults except the API key (Keychain).

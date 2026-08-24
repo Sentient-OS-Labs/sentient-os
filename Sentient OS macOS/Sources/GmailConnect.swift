@@ -33,7 +33,14 @@ enum GmailConnect {
     static let bucketKey = "gmail"
 
     /// OpenAI's hosted Gmail connector page — opened from CloudConnectSheet's "Connect Gmail".
-    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
+    /// Where the user links Google — engine-aware (decided 2026-08-23): OpenAI's hosted
+    /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
+    /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
+    static var connectorURL: URL {
+        ModelBackend.current == .claude
+            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/gmail-gmailmcp")!
+            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
+    }
 
     /// Newest-N threads per read (the connector-limits doc's cap; a heavy week exceeds it).
     private static let threadCap = 300
@@ -85,9 +92,13 @@ enum GmailConnect {
         inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
         inv.sandbox = .readOnly
         inv.timeout = 120
+        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools —
+                                             // nothing else approves a connector call headless,
+                                             // and a denied read would read as NO even when the
+                                             // connector is linked (measured 2026-08-23)
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
-            let env = try await CodexTrigger.$current.withValue(.probe) { try await CodexCLI.shared.run(inv) }
+            let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
             let answer = env.result.uppercased()
             let yes = answer.contains("YES") && !answer.contains("NO")
             Log("GmailConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
@@ -203,7 +214,8 @@ enum GmailConnect {
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long
-        let env = try await CodexCLI.shared.run(inv)
+        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools
+        let env = try await FrontierRun.run(inv)
         return parse(env.result)
     }
 

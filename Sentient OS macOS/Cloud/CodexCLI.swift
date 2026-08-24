@@ -120,6 +120,16 @@ actor CodexCLI {
                                                // strings ONLY — never paths, UUIDs, or free text (the
                                                // Sentry scrubber [Filtered]s those into uselessness).
 
+        // Claude-engine fields (ignored by CodexCLI; read only when ModelBackend is .claude —
+        // the Invocation is the ONE shape both engines speak, so the two engine-specific knobs
+        // live here rather than forking the type):
+        var claudeModel: ClaudeCLI.Model? = nil       // override the tier map (heavy legs pin .opus)
+        var claudeConnectorReads = false              // hosted-connector READ run: pre-approve the
+                                                      // curated read tools (ClaudeCLI.ConnectorTools;
+                                                      // writes stay denied — measured 2026-08-23:
+                                                      // nothing short of an allow rule approves a
+                                                      // connector tool headless, auto mode included)
+
         init(prompt: String) { self.prompt = prompt }
 
         /// Pre-approves hosted-connector WRITE tools (Gmail `send_email`, Calendar create) for one
@@ -203,14 +213,23 @@ actor CodexCLI {
         case staleClient(autoUpdating: Bool)
 
         var description: String {
+            // BOTH engines throw this type (ClaudeCLI reuses it), and these lines reach
+            // user-visible surfaces (the notch's failure line, the takeover) — so the engine is
+            // named at render time from the live backend. staleClient stays codex-worded: only
+            // the codex spine ever throws it.
+            let claude = ModelBackend.current == .claude
+            let engine = claude ? "Claude Code" : "Codex"
+            let binary = claude ? "claude" : "codex"
             switch self {
-            case .notAvailable(let a):            return "Codex unavailable: \(a)"
-            case .launchFailed(let m):            return "Failed to launch codex: \(m)"
-            case .timedOut(let t):                return "codex exec timed out after \(Int(t))s"
-            case .exitFailure(let code, let m):   return "codex exited \(code): \(m.prefix(300))"
-            case .badEnvelope(let m):             return "Unparseable codex output: \(m.prefix(300))"
-            case .usageLimit(let m, _):           return "Codex usage limit: \(m.prefix(200))"
-            case .inputTooLarge(let c):           return "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
+            case .notAvailable(let a):            return "\(engine) unavailable: \(a)"
+            case .launchFailed(let m):            return "Failed to launch \(binary): \(m)"
+            case .timedOut(let t):                return "\(claude ? "claude -p" : "codex exec") timed out after \(Int(t))s"
+            case .exitFailure(let code, let m):   return "\(binary) exited \(code): \(m.prefix(300))"
+            case .badEnvelope(let m):             return "Unparseable \(binary) output: \(m.prefix(300))"
+            case .usageLimit(let m, _):           return "\(engine) usage limit: \(m.prefix(200))"
+            case .inputTooLarge(let c):           return claude
+                ? "Prompt too large for Claude Code: \(c) chars"
+                : "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
             case .staleClient(let auto):
                 return auto ? "Codex was out of date. Updating it now; try again in a moment."
                             : "Codex is out of date and can't read its newer files. Update it, then try again."
@@ -267,8 +286,9 @@ actor CodexCLI {
     /// `zsh -lic` (INTERACTIVE login shell — `-lc` never sources .zshrc, where nvm/asdf/volta
     /// init). Interactive shells print theme noise, so the output is scanned line-by-line for
     /// something that is actually an executable path. Watchdog-bounded; can't hang.
-    private static func whichViaLoginShell() -> String? {
-        guard let out = try? execute(binary: "/bin/zsh", args: ["-lic", "which codex"],
+    /// Internal (not private): ClaudeCLI's discovery runs the same probe for its own binary.
+    static func whichViaLoginShell(_ command: String = "which codex") -> String? {
+        guard let out = try? execute(binary: "/bin/zsh", args: ["-lic", command],
                                      stdinText: nil, cwd: nil, timeout: 5) else { return nil }
         let fm = FileManager.default
         return (out.stdout + "\n" + out.stderr)
@@ -1068,8 +1088,8 @@ actor CodexCLI {
     /// and session vars (the cua daemon's socket and the shim's screenshot drop-box resolve against
     /// the real per-user temp and caches paths); `codex login` needs the same so the browser launch
     /// works. The binary's own dir leads PATH (npm shims `#!/usr/bin/env node` right next to
-    /// themselves).
-    private static func richEnvironment(binDir: String) -> [String: String] {
+    /// themselves). Internal (not private): ClaudeCLI's login + agent runs need the same context.
+    static func richEnvironment(binDir: String) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         let home = env["HOME"] ?? NSHomeDirectory()
         let richPath = [binDir,
@@ -1092,16 +1112,21 @@ actor CodexCLI {
         var text: String { lock.lock(); defer { lock.unlock() }; return String(data: buf, encoding: .utf8) ?? "" }
     }
 
-    private static func executeAsync(binary: String, args: [String], stdinText: String?,
-                                     cwd: String?, timeout: TimeInterval,
-                                     onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
+    /// Internal (not private): this and `executeStreaming` are the engine-neutral process plumbing
+    /// (sanitized env, watchdog, cancellation, multibyte-safe line streaming) that ClaudeCLI — the
+    /// parallel `claude -p` engine — reuses verbatim rather than duplicating. `extraEnv` lets an
+    /// engine add its own variables (Claude: updater/telemetry kill switches) without forking this.
+    static func executeAsync(binary: String, args: [String], stdinText: String?,
+                             cwd: String?, timeout: TimeInterval,
+                             extraEnv: [String: String] = [:],
+                             onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
         let holder = ProcHolder()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
                     do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
-                                                            cwd: cwd, timeout: timeout,
+                                                            cwd: cwd, timeout: timeout, extraEnv: extraEnv,
                                                             onStdoutLine: onStdoutLine, procHolder: holder)) }
                     catch { cont.resume(throwing: error) }
                 }
@@ -1114,6 +1139,7 @@ actor CodexCLI {
     /// ~/.codex (resolved via HOME), no TTY needed (measured — receipts in the CodexCLI doc).
     private static func execute(binary: String, args: [String], stdinText: String?,
                                 cwd: String?, timeout: TimeInterval,
+                                extraEnv: [String: String] = [:],
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,
                                 procHolder: ProcHolder? = nil) throws -> ExecResult {
         let proc = Process()
@@ -1133,6 +1159,7 @@ actor CodexCLI {
         // still the active backend. (codex hard-errors on an unset/empty env_key var; a value
         // here also blocks the ChatGPT-token fallthrough on keyless local servers.)
         env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
+        env.merge(extraEnv) { _, new in new }
         proc.environment = env
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
@@ -1223,8 +1250,10 @@ actor CodexCLI {
     /// codex's play-by-play live — while accumulating the full text. No stdin (the prompt rides in
     /// argv). Byte-level line splitting so multibyte UTF-8 across a read boundary never garbles.
     /// Honors Task cancellation: cancelling the awaiting Task terminates codex (the STOP button).
-    private static func executeStreaming(binary: String, args: [String], timeout: TimeInterval,
-                                         onLine: @escaping @Sendable (String) -> Void) async throws -> ExecResult {
+    /// Internal (not private): ClaudeCLI's agent runs ride the same streaming plumbing.
+    static func executeStreaming(binary: String, args: [String], timeout: TimeInterval,
+                                 extraEnv: [String: String] = [:],
+                                 onLine: @escaping @Sendable (String) -> Void) async throws -> ExecResult {
         let holder = ProcHolder()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
@@ -1235,7 +1264,9 @@ actor CodexCLI {
                 // Full inherited env + rich PATH (see richEnvironment): computer use needs the real
                 // $TMPDIR + GUI session vars (the cua daemon's socket lives under the per-user temp
                 // dir), and so does `codex login`'s browser launch — the bare env won't do.
-                proc.environment = richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
+                var env = richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
+                env.merge(extraEnv) { _, new in new }
+                proc.environment = env
 
                 let outPipe = Pipe(), errPipe = Pipe()
                 proc.standardInput = FileHandle.nullDevice

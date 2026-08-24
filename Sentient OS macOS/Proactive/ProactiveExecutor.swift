@@ -190,7 +190,7 @@ actor ProactiveExecutor {
     private func runConnector(_ inv: CodexCLI.Invocation, channel: String,
                               progress: @escaping @Sendable (String) -> Void) async -> FireResult {
         do {
-            let env = try await CodexCLI.shared.run(inv) { progress($0) }   // live play-by-play
+            let env = try await FrontierRun.run(inv) { progress($0) }   // live play-by-play
             Log("ProactiveExecutor/\(channel): ✓ (\(env.result.count) chars)")   // B7: length, not content
             switch AgentStatus.parse(env.result) {
             case .couldNot(let reason):
@@ -230,7 +230,7 @@ actor ProactiveExecutor {
         progress("Working on your Mac…")
         Log("ProactiveExecutor/computer: firing one computer-use task via codex (runAgentCommand)…")
         do {
-            let out = try await CodexCLI.shared.runAgentCommand(Self.computerWrapper(routing: routing, content: content),
+            let out = try await FrontierRun.runAgentCommand(Self.computerWrapper(routing: routing, content: content),
                                                                 timeout: 900) { line in progress(line) }
             let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let final = lines.last ?? "Done on your Mac."
