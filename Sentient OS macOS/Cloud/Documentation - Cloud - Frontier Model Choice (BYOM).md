@@ -54,7 +54,7 @@ every codex spawn (a dummy value when no key is saved). Rules that were each lea
 - **Responses API only.** codex removed the Chat Completions wire; chat-only endpoints cannot be supported.
 - **`features.apps = false`.** Hosted-connector tool schemas attach via `auth.json`, not config, so on a ChatGPT-logged-in Mac every custom run would drag hundreds of KB of connector schemas along (and some strict validators reject them). Connectors are ChatGPT-only anyway.
 - **`--output-schema` is unreliable off-OpenAI**, so custom runs fold the schema into the prompt and decode through `Envelope.jsonResult`; consumers keep their fail-closed decoding.
-- **One free-form reasoning level for everything** (`CustomProvider.reasoning`: `low`, `none`, `xhigh`, `adaptive`, whatever the model speaks, sanitized to a bare token). Providers have hard, opposite quirks (Claude-class breaks with reasoning on, Gemini rejects off, Kimi wants low), so per-call effort tuning and the Speed slider are ChatGPT's alone; the slider dims on a custom backend.
+- **One free-form reasoning level for everything** (`CustomProvider.reasoning`: `low`, `none`, `xhigh`, `adaptive`, whatever the model speaks, sanitized to a bare token). Providers have hard, opposite quirks (Claude-class breaks with reasoning on, Gemini rejects off, Kimi wants low), so per-call effort tuning and the Speed slider belong to the subscription engines (ChatGPT and Claude); the slider dims on a custom backend.
 - Corpus slicing shrinks to the endpoint's tier: 280 KB parts remote, 130 KB local (`corpusSliceBudget`), against 700 KB on ChatGPT.
 
 ## The vision gate: Test & Select

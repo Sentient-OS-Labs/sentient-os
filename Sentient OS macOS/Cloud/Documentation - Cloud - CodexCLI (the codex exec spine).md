@@ -17,7 +17,7 @@ the app.
 |---|---|
 | `CodexCLI.swift` | The actor: binary discovery, install, login, validation, `run()` (structured JSONL runs) and `runAgentCommand()` (computer use), argument building, JSONL parsing, process plumbing, failure diagnostics. |
 | `AgentStatus.swift` | Parses the `STATUS: DONE` / `STATUS: COULD_NOT` sentinel every app-authored wrapper prompt demands, shared by the executor and Sidekick. |
-| `ComputerUseSpeed.swift` | The Speed vs Intelligence slider value (Settings → Proactive & Sidekick): Faster / Medium / Smarter → reasoning effort low / medium / high for every computer-use run. |
+| `ComputerUseSpeed.swift` | The Speed vs Intelligence slider value (Settings → Proactive & Sidekick): Faster / Medium / Smarter → reasoning effort low / medium / high for every computer-use run on codex; on the Claude engine the tier picks model + effort (see the ClaudeCLI doc). |
 
 ## The two run paths
 

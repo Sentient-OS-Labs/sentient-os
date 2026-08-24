@@ -45,7 +45,7 @@ both proactive prompts), the Sidekick key (right ⌘ / right ⌥; toggling posts
 and re-keys the live monitor), the standing Sidekick context (`sidekick.context`, fed to the command
 prompt), and the **Speed vs Intelligence** slider (`ComputerUseSpeed`, read fresh per computer-use
 run: on codex, Faster / Medium / Smarter → low / medium / high effort; on the Claude engine the tier
-picks the model too — sonnet·low / opus·low / opus·medium, with the honest model named in the readout;
+picks the model too — sonnet·low / sonnet·medium / opus·medium, with the honest model named in the readout;
 dimmed with a hover explanation on a custom backend, where the model's single reasoning level lives in
 Frontier Model Choice). All live,
 no restart; the two keys live in `CustomInstructions` so producer and consumers cannot drift.

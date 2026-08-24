@@ -4,7 +4,7 @@
 //
 //  Settings → Proactive & Sidekick: the user's standing instructions for the proactive
 //  suggestion writer, Sidekick's shortcut key + standing context, and the speed-vs-intelligence
-//  slider (ComputerUseSpeed — how hard gpt-5.6-sol thinks on EVERY computer-use run). The strings
+//  slider (ComputerUseSpeed — the model/effort EVERY computer-use run rides, per engine). The strings
 //  persist and autosave. The hotkey choice (right ⌘ / right ⌥) is LIVE — toggling it posts
 //  `.sidekickHotkeyChanged`, which re-keys the running SidekickHotkeyMonitor with no restart. The
 //  two text fields are LIVE too: `proactive.instructions` feeds the proactive prompts
@@ -20,12 +20,13 @@ struct ProactivePane: View {
     @AppStorage("sidekick.hotkey") private var sidekickHotkey = "rightCommand"
     @AppStorage(CustomInstructions.sidekickKey) private var sidekickContext = ""
     @AppStorage(ComputerUseSpeed.key) private var speedRaw = ComputerUseSpeed.faster.rawValue
-    /// The slider is ChatGPT-only: a custom frontier model carries ONE reasoning level set in
-    /// Frontier Model Choice (provider quirks make per-run tuning unsafe there).
+    /// The slider drives the subscription engines (ChatGPT and Claude); a custom frontier model
+    /// carries ONE reasoning level set in Frontier Model Choice (provider quirks make per-run
+    /// tuning unsafe there), so only .custom locks it.
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
     @State private var speedHover = false
 
-    private var onChatGPT: Bool { (ModelBackend(rawValue: backendRaw) ?? .chatgpt) == .chatgpt }
+    private var sliderLive: Bool { (ModelBackend(rawValue: backendRaw) ?? .chatgpt) != .custom }
 
     var body: some View {
         SettingsPane(title: "Proactive & Sidekick",
@@ -66,16 +67,16 @@ struct ProactivePane: View {
                             get: { ComputerUseSpeed(rawValue: speedRaw) ?? .faster },
                             set: { speedRaw = $0.rawValue }))
                     }
-                    // ChatGPT-only: a custom frontier model rides ONE reasoning level (set in
+                    // Locked only on a custom backend: it rides ONE reasoning level (set in
                     // Frontier Model Choice) — the dimmed slider + hover tip say so honestly.
-                    .opacity(onChatGPT ? 1 : 0.4)
-                    .allowsHitTesting(onChatGPT)
+                    .opacity(sliderLive ? 1 : 0.4)
+                    .allowsHitTesting(sliderLive)
                     .contentShape(Rectangle())
                     .onHover { hovering in
-                        if !onChatGPT { speedHover = hovering } else { speedHover = false }
+                        if !sliderLive { speedHover = hovering } else { speedHover = false }
                     }
                     .overlay(alignment: .topLeading) {
-                        if !onChatGPT && speedHover { speedLockedTip.offset(y: -34) }
+                        if !sliderLive && speedHover { speedLockedTip.offset(y: -34) }
                     }
                     .animation(.easeInOut(duration: 0.15), value: speedHover)
                 }
@@ -88,7 +89,7 @@ extension ProactivePane {
     /// The instant hover notice on the dimmed slider (custom backend active) — the same quiet
     /// capsule voice as LockedChipTip, sized for a sentence.
     private var speedLockedTip: some View {
-        Text("Only for ChatGPT subscription logins through Codex. Your model's reasoning lives in Frontier Model Choice.")
+        Text("Only for ChatGPT and Claude subscription logins. Your model's reasoning lives in Frontier Model Choice.")
             .font(.system(size: 10.5, weight: .medium))
             .foregroundStyle(.white.opacity(0.88))
             .padding(.horizontal, 10).padding(.vertical, 6)

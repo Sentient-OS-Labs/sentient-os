@@ -59,7 +59,7 @@ The tier map (`tuned(for:)`, the backendTuned twin): `gpt56sol`/`gpt56terra` →
 `runCodexInStaging`, and proactive research). On a **Pro** plan every Opus pick downshifts to Sonnet
 (`ClaudeAuth.isPro` — Pro's Opus window is tiny; the terra-downshift twin; unknown plans fail open).
 The Speed slider's Claude mapping (`ComputerUseSpeed.claudeModelAndEffort`): Faster = sonnet·low,
-Medium = opus·low, Smarter = opus·medium.
+Medium = sonnet·medium, Smarter = opus·medium.
 
 ## The hosted connectors (claude.ai Gmail / Google Calendar)
 
