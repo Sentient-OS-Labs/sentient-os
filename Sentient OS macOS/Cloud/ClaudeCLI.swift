@@ -99,6 +99,27 @@ actor ClaudeCLI {
         /// What a connector-READ run pre-approves. Both families ride along on either source's
         /// runs — harmless, they're read-only.
         static var readAllowRules: [String] { gmailReads + calendarReads }
+
+        /// The Gmail complement: every connector tool that MUTATES (send/reply/forward/draft/
+        /// label/spam/trash territory) — the DENY list for Sidekick's computer-use runs, where
+        /// `--dangerously-skip-permissions` auto-approves connector tools (measured 2026-08-23;
+        /// the allow-rule gate above applies only to normal permission modes). A denied tool is
+        /// stripped from the model's context entirely, bypass mode included. Unlike the read
+        /// allows this is fail-OPEN — a write tool Anthropic adds is live until curated here —
+        /// so re-verify the surface when the managed CLI updates. The two filter tools ride
+        /// along preemptively: the connector's claude.ai directory page lists them though the
+        /// live capture didn't serve them.
+        static let gmailWriteDenies = ["apply_sensitive_message_label",
+                                       "apply_sensitive_thread_label", "create_draft",
+                                       "create_filter", "create_label", "delete_filter",
+                                       "delete_label", "forward", "label_message",
+                                       "label_thread", "mark_message_spam", "mark_thread_spam",
+                                       "reply", "send_message", "trash_message", "trash_thread",
+                                       "unlabel_message", "unlabel_thread",
+                                       "unmark_message_spam", "unmark_thread_spam",
+                                       "untrash_message", "untrash_thread", "update_draft",
+                                       "update_label", "update_message_labels"]
+            .map { "mcp__claude_ai_Gmail__\($0)" }
     }
 
     // MARK: Environment
@@ -106,15 +127,18 @@ actor ClaudeCLI {
     /// Kill switches for EVERY claude spawn: their auto-updater (ours runs the updates) and
     /// their telemetry and error reporting (never on a Sentient user's machine on our behalf).
     /// Merged over the sanitized/rich env by the shared plumbing.
-    /// ⚠️ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC must NEVER join this list: Claude Code
-    /// counts the claude.ai CONNECTOR FETCH as non-essential traffic, so the flag starts every
-    /// run connector-blind and the Gmail/Calendar probes read an honest-but-wrong NO
-    /// [FIELD-FOUND 2026-08-23, the first live connector link]. Hermetic runs don't need it
-    /// anyway — `--strict-mcp-config` is the real wall there.
+    /// ⚠️ CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC must NEVER be "1" here: Claude Code counts
+    /// the claude.ai CONNECTOR FETCH as non-essential traffic, so the flag starts every run
+    /// connector-blind and the Gmail/Calendar probes read an honest-but-wrong NO [FIELD-FOUND
+    /// 2026-08-23, the first live connector link]. It's pinned to "" instead: the spawn env
+    /// inherits the app's, so a parent Claude Code session exporting =1 (dev shells,
+    /// self-tests) would otherwise blind every child run the same way. Empty reads as unset;
+    /// any non-empty value, even "0", reads as set (both measured 2026-08-23).
     static let baseEnv: [String: String] = [
         "DISABLE_AUTOUPDATER": "1",
         "DISABLE_TELEMETRY": "1",
         "DISABLE_ERROR_REPORTING": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "",
     ]
 
     // MARK: Discovery
@@ -423,7 +447,8 @@ actor ClaudeCLI {
     /// The runAgentCommand twin: computer use on the cua driver, through `claude -p`. The hybrid
     /// transport is IDENTICAL to codex's — the daemon, the socket, the CLI shim, and the
     /// CuaDriverSkill manual are all engine-neutral; only the wiring dialect changes:
-    /// `--mcp-config` registers the eyes (with `--strict-mcp-config` so nothing else loads),
+    /// `--mcp-config` registers the eyes (walled by `--strict-mcp-config`, or with Gmail linked
+    /// by the server allowlist that also admits the Gmail connector read-only — see the args),
     /// `--dangerously-skip-permissions` is the bypass twin (headless has no one to answer a
     /// prompt, and every action is a one-shot shell call), and the driver's 52 non-vision MCP
     /// tools are denied by name (Claude Code has no per-server enabled_tools filter).
@@ -461,20 +486,36 @@ actor ClaudeCLI {
             // "Input must be provided either through stdin or as a prompt argument"
             // [FIELD-FOUND 2026-08-21, the first live Sidekick fire]. Same trap as codex's `-i`
             // variadic, dodged the same way: no positional ever follows a variadic flag.
+            // Email as live context: with Gmail linked, the claude.ai Gmail connector joins the
+            // run READ-ONLY — the strict wall would block the connector fetch, so those runs
+            // swap it for a server ALLOWLIST (only the cua driver by name and the Gmail
+            // connector by its Google-hosted URL may load; personal MCP servers and every other
+            // connector are blocked before their tools reach the model) and add the write-tool
+            // denies. `--settings` applies even under `--setting-sources ""` (measured
+            // 2026-08-23). Without Gmail the shipped strict wall rides unchanged — smallest
+            // blast radius, since the allowlist is settings machinery a CLI update could
+            // reshape.
+            let withGmail = UserDefaults.standard.bool(forKey: "dbg.gmail.connected")
+            let mcpWall = withGmail
+                ? ["--settings", #"{"allowedMcpServers":[{"serverName":"cua_driver"},"#
+                               + #"{"serverUrl":"https://gmailmcp.googleapis.com/*"}]}"#]
+                : ["--strict-mcp-config"]
+            let disallowed = CuaDriver.claudeDisallowedMcpTools
+                + (withGmail ? ConnectorTools.gmailWriteDenies : [])
             let args = ["-p", fullPrompt,
                         "--output-format", "stream-json", "--verbose",
                         "--model", modelID,
                         "--effort", effortArg,
                         "--dangerously-skip-permissions",
                         "--setting-sources", "",
-                        "--disable-slash-commands",
-                        "--strict-mcp-config",
-                        "--mcp-config", CuaDriver.claudeMcpConfig(socketPath: socket),
-                        // Bash = the shim's one-shot action calls; Read = the screenshots. Nothing
-                        // else from the built-in surface (a file the task needs written goes
-                        // through the shell, same as on codex).
-                        "--tools", "Bash,Read",
-                        "--disallowedTools", CuaDriver.claudeDisallowedMcpTools.joined(separator: ",")]
+                        "--disable-slash-commands"]
+                + mcpWall
+                + ["--mcp-config", CuaDriver.claudeMcpConfig(socketPath: socket),
+                   // Bash = the shim's one-shot action calls; Read = the screenshots. Nothing
+                   // else from the built-in surface (a file the task needs written goes
+                   // through the shell, same as on codex).
+                   "--tools", "Bash,Read",
+                   "--disallowedTools", disallowed.joined(separator: ",")]
 
             var env = Self.baseEnv
             // Screenshot-bearing MCP results are big (the default 25k-token cap would truncate a
@@ -483,7 +524,7 @@ actor ClaudeCLI {
             env["MCP_TIMEOUT"] = "30000"          // server connect budget (codex: startup_timeout_sec=30)
             env["MCP_TOOL_TIMEOUT"] = "120000"    // per-call budget (codex: tool_timeout_sec=120)
 
-            Log("claude exec: start feature=computer cua=\(CuaDriver.version) model=\(modelID) effort=\(effortArg) resume=false mode=bypass prompt_kb=\(fullPrompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
+            Log("claude exec: start feature=computer cua=\(CuaDriver.version) model=\(modelID) effort=\(effortArg) resume=false mode=bypass gmail=\(withGmail) prompt_kb=\(fullPrompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await CodexCLI.executeStreaming(binary: bin, args: args, timeout: timeout,
                                                           extraEnv: env) { raw in
                 // stderr rides through as-is (already prefixed by the plumbing); stdout is
