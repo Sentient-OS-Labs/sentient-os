@@ -16,7 +16,10 @@
 //  sleeps → re-arms for the next day. There is NO scheduler-specific processing path: source
 //  detection goes through the SAME `SourceSelection.current(...)`, the read leg is the SAME
 //  `IterativeRun`, and the tail is the SAME `ProactiveCycle` — so a 3am run and a hand-pressed
-//  Analyze Now do byte-for-byte the same work. Everything lands in ~/Library/Logs/SentientOS/scheduler.log.
+//  Analyze Now do byte-for-byte the same work. Every night races a STALL WATCHDOG (`runNight`):
+//  a run that is alive and heartbeating but silently wedged — no error, no timeout — is ended
+//  after `stallSeconds` without progress, sleep restored, and the morning caution recorded.
+//  Everything lands in ~/Library/Logs/SentientOS/scheduler.log.
 //
 
 import Foundation
@@ -42,6 +45,13 @@ final class OvernightScheduler {
     static let enabledKey = "dbg.scheduler.enabled"        // DEV toggle
     static let prodEnabledKey = "scheduler.enabled"         // PRODUCTION flag (auto-enable / Settings)
     static let minutesKey = "dbg.scheduler.minutes"        // minutes since midnight
+    static let allowBatteryKey = "scheduler.allowBattery"  // opt-in: battery nights above the charge floor
+                                                          // (the home's Analysis dropdown owns the toggle)
+
+    /// The stall watchdog's silence budget: 70 minutes deliberately sits just past the longest
+    /// single CLI timeout (1 h, the structured vault runs), so the watchdog can never kill a
+    /// healthy call that is about to finish or time out cleanly on its own.
+    static let stallSeconds: TimeInterval = 4200
     static let defaultMinutes = 3 * 60                     // 3:00 AM — the production overnight time (the dev
                                                           // UI can override `minutesKey` for testing)
 
@@ -247,20 +257,62 @@ final class OvernightScheduler {
             if Task.isCancelled { break }
 
             statusLine = "running…"
-            await runProcessing(log: log)
+            await runNight(log: log)
             statusLine = "armed (next \(Self.clock(Self.nextOccurrence(minutesSinceMidnight: minutes))))"
         }
     }
 
-    /// The actual run: keep awake → read the selected connectors with `.auto` (+ Gmail/Calendar) →
-    /// run the shared `ProactiveCycle` tail (knowledge base → mirror → proactive → wipe) → release.
-    private func runProcessing(log: SchedulerLog) async {
-        // Every codex call under this run reports trigger=overnight (task-local, inherited by the
-        // child tasks the legs spawn) — the 3 AM failure population gets its own fingerprint.
-        await CodexTrigger.$current.withValue(.overnight) { await runProcessingBody(log: log) }
+    /// One night, raced against the stall watchdog. The run rides its own Task so a silent wedge
+    /// (the app alive and heartbeating, no error thrown, no timeout fired — just nothing moving)
+    /// can't pin the loop: after `stallSeconds` without a progress pulse we cancel the run, restore
+    /// sleep ourselves, and record the morning caution; the loop then re-arms tomorrow's wake as
+    /// usual. A healthy night wins the race and none of this is visible.
+    private func runNight(log: SchedulerLog) async {
+        let pulse = NightPulse()
+        let run = Task { await self.runProcessing(log: log, pulse: pulse) }
+        let stalled = await withTaskGroup(of: Bool.self) { group in
+            group.addTask { await run.value; return false }
+            group.addTask {
+                while true {
+                    try? await Task.sleep(for: .seconds(60))
+                    if Task.isCancelled {   // the scheduler was turned off mid-run — propagate, so the
+                        run.cancel()        // run bails at its next leg boundary (its own exit restores sleep)
+                        return false
+                    }
+                    if pulse.secondsSinceProgress > Self.stallSeconds { return true }
+                }
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
+        }
+        guard stalled, !Task.isCancelled else { return }
+
+        // The silent-wedge net. Latch FIRST so every exit path the cancelled run might later thaw
+        // into knows sleep is already handled and leaves the helper alone (by then a NEXT night
+        // could legitimately be holding the Mac awake).
+        pulse.markSleepRestored()
+        run.cancel()
+        log.line("STALLED — no progress for \(Int(Self.stallSeconds / 60)) min; ending the night, restoring sleep.")
+        OvernightCaution.record(.stalled)
+        // A stall is defect-shaped (unlike the weather kinds), so Sentry hears about it too — structure only.
+        CrashReporting.captureEvent("overnight.stalled", level: .warning,
+                                    tags: ["trigger": "overnight"],
+                                    extra: ["stall_minutes": String(Int(Self.stallSeconds / 60))],
+                                    fingerprint: ["overnight", "stalled"])
+        let ended = await WakeHelperClient.shared.endAwake()
+        log.line("watchdog endAwake: \(ended ? "OK" : "FAILED — the helper's deadman/ceiling still net it")")
     }
 
-    private func runProcessingBody(log: SchedulerLog) async {
+    /// The actual run: keep awake → read the selected connectors with `.auto` (+ Gmail/Calendar) →
+    /// run the shared `ProactiveCycle` tail (knowledge base → mirror → proactive → wipe) → release.
+    private func runProcessing(log: SchedulerLog, pulse: NightPulse) async {
+        // Every codex call under this run reports trigger=overnight (task-local, inherited by the
+        // child tasks the legs spawn) — the 3 AM failure population gets its own fingerprint.
+        await CodexTrigger.$current.withValue(.overnight) { await runProcessingBody(log: log, pulse: pulse) }
+    }
+
+    private func runProcessingBody(log: SchedulerLog, pulse: NightPulse) async {
         let woke = Date()
         log.line("WOKE at \(woke) — beginning the run.")
         Analytics.signal("Scheduler.overnightStarted")   // the 3am wake fired and we're processing
@@ -280,10 +332,13 @@ final class OvernightScheduler {
         if !connectors.isEmpty && modelPath == nil { log.line("model not found — skipping run."); return }
 
         // B6: go/no-go gate — a lid-shut 3am run holds the Mac fully awake + hammers the GPU, so only
-        // when it's safe (on AC, not Low Power, not thermally critical). Skip otherwise; the wake is
-        // already re-armed for tomorrow by the loop, so we just try again next night.
-        log.line("power: ac=\(PowerState.onACPower()) lowPower=\(PowerState.lowPowerMode) thermal=\(PowerState.thermalLabel)")
-        if let blocked = PowerState.overnightBlockReason() {
+        // when it's safe: on AC (not Low Power, not thermally critical), or on battery above the
+        // charge floor when the user opted in (the home's Analysis dropdown). Skip otherwise; the
+        // wake is already re-armed for tomorrow by the loop, so we just try again next night.
+        let allowBattery = ud(Self.allowBatteryKey)
+        let battery = PowerState.batteryPercent().map { "\($0)%" } ?? "n/a"
+        log.line("power: ac=\(PowerState.onACPower()) battery=\(battery) allowBattery=\(allowBattery) lowPower=\(PowerState.lowPowerMode) thermal=\(PowerState.thermalLabel)")
+        if let blocked = PowerState.overnightBlockReason(allowBattery: allowBattery) {
             log.line("GATED — \(blocked); skipping this run (retry next night).")
             // Telemetry, not a defect — TelemetryDeck counts it; Sentry stays quiet (2026-07-12).
             Analytics.signal("Scheduler.gated", parameters: ["reason": blocked])
@@ -315,9 +370,15 @@ final class OvernightScheduler {
         await ClaudeSetup.shared.updateIfDue(trigger: "overnight")   // self-guards: Claude backend only
         if ModelBackend.current == .claude, let v = ClaudeSetup.shared.version { log.line("claude CLI \(v)") }
 
-        /// Let the Mac sleep again — the one exit every path takes (normal end, or the disk-full stop).
+        /// Let the Mac sleep again — the one exit every path takes (normal end, the disk-full stop,
+        /// or a cancellation bail). If the stall watchdog already restored sleep, leave the helper
+        /// alone: by the time a wedged run thaws, a NEXT night could be legitimately holding awake.
         func releaseAwake() async {
             heart.cancel()
+            if pulse.sleepWasRestored {
+                log.line("night was ended by the watchdog — sleep already restored; leaving the helper alone.")
+                return
+            }
             let ended = await WakeHelperClient.shared.endAwake()
             log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
         }
@@ -326,6 +387,7 @@ final class OvernightScheduler {
             log.line("IterativeRun .auto over \(connectors.count) connector(s)…")
             let throttle = LogThrottle()
             let p = await IterativeRun(modelPath: modelPath).run(connectors, mode: .auto) { pr in
+                pulse.touch()
                 throttle.maybe { log.line("  … \(pr.done)/\(pr.total)  kept=\(pr.survivors) junk=\(pr.junk) failed=\(pr.failed)") }
             }
             log.line("device DONE: \(p.survivors) kept · \(p.junk) junk · \(p.failed) failed of \(p.total)")
@@ -341,14 +403,19 @@ final class OvernightScheduler {
                 return
             }
         }
+        // Leg boundaries double as cancellation bails: a run the watchdog (or a mid-run stop)
+        // cancelled must not thaw hours later and start fresh cloud legs into someone's morning.
+        if Task.isCancelled { await releaseAwake(); return }
         if runGmail {
             firstCloudCallAt = firstCloudCallAt ?? Date()
-            legs["gmail"] = await cloudLeg("Gmail", log: log) { try await GmailConnect.runIterative { _ in } }
+            legs["gmail"] = await cloudLeg("Gmail", log: log, pulse: pulse) { try await GmailConnect.runIterative { _ in pulse.touch() } }
         }
+        if Task.isCancelled { await releaseAwake(); return }
         if runCalendar {
             firstCloudCallAt = firstCloudCallAt ?? Date()
-            legs["calendar"] = await cloudLeg("Calendar", log: log) { try await CalendarConnect.runIterative { _ in } }
+            legs["calendar"] = await cloudLeg("Calendar", log: log, pulse: pulse) { try await CalendarConnect.runIterative { _ in pulse.touch() } }
         }
+        if Task.isCancelled { await releaseAwake(); return }
         firstCloudCallAt = firstCloudCallAt ?? Date()   // the ProactiveCycle tail is a cloud call too
         if CodexAuth.knowledgeBaseOnly == false { legs["proactive"] = "ok" }   // provisional; a failure below overrides
 
@@ -358,6 +425,7 @@ final class OvernightScheduler {
         // For-You cards too — there is no scheduler-specific knowledge-base path. Still held awake +
         // heartbeating throughout (proactive uses codex, same as the KB step already does).
         if let failure = await ProactiveCycle.shared.run(scheduled: true, progress: { phase in
+            pulse.touch()
             Task { @MainActor in
                 switch phase {
                 case .knowledgeBase(let s): log.line("proactive: \(s)")
@@ -412,10 +480,14 @@ final class OvernightScheduler {
     }
 
     /// Runs one cloud leg and returns "ok" or the closed-vocabulary reason it failed with.
-    private func cloudLeg(_ name: String, log: SchedulerLog, _ body: () async throws -> Void) async -> String {
+    /// Leg start and end both count as progress for the stall watchdog (so a night of several
+    /// quick legs never reads as silence between them).
+    private func cloudLeg(_ name: String, log: SchedulerLog, pulse: NightPulse, _ body: () async throws -> Void) async -> String {
+        pulse.touch()
         log.line("\(name) leg…")
-        do { try await body(); log.line("\(name) DONE"); return "ok" }
+        do { try await body(); pulse.touch(); log.line("\(name) DONE"); return "ok" }
         catch {
+            pulse.touch()
             let reason = CodexFailureReason.classify(error)
             log.line("\(name) FAILED: \(ErrorLabel(error)) — \(reason.rawValue)")
             return reason.rawValue
@@ -435,6 +507,21 @@ final class OvernightScheduler {
     static func clock(_ d: Date) -> String { let f = DateFormatter(); f.dateFormat = "h:mm a"; return f.string(from: d) }
 
     private func ud(_ key: String) -> Bool { UserDefaults.standard.bool(forKey: key) }
+}
+
+/// The night's progress pulse — shared between the run body (which touches it on every sign of
+/// life: device items, leg starts/ends, proactive phases) and the loop's stall watchdog (which
+/// reads it once a minute). Lock-guarded: touches arrive from whatever context the legs run in.
+/// Also carries the one-way "sleep already restored" latch the watchdog sets before cancelling a
+/// stalled run, so any exit path the wedged run later thaws into leaves the helper alone.
+private final class NightPulse: @unchecked Sendable {
+    private let lock = NSLock()
+    private var last = Date()
+    private var restored = false
+    func touch() { lock.lock(); last = Date(); lock.unlock() }
+    var secondsSinceProgress: TimeInterval { lock.lock(); defer { lock.unlock() }; return Date().timeIntervalSince(last) }
+    func markSleepRestored() { lock.lock(); restored = true; lock.unlock() }
+    var sleepWasRestored: Bool { lock.lock(); defer { lock.unlock() }; return restored }
 }
 
 /// Throttles progress logging to ~once every 20s so a long run leaves a readable trail without spam.

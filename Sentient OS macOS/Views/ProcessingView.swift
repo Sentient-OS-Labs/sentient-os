@@ -549,6 +549,7 @@ struct ProcessingView: View {
         case .noInternet:     "No internet connection"
         case .inputTooLarge:  "This batch was too big to send"
         case .diskFull:       "Your Mac's disk is full"
+        case .stalled:        "Processing got stuck"   // recorded only by the 3 AM watchdog; here for exhaustiveness
         case nil:             "Processing failed"
         }
     }
@@ -567,6 +568,7 @@ struct ProcessingView: View {
             ? "Sentient tried to send Claude more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
             : "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
         case .diskFull:       "I can't save what I read until there's room on this Mac. Free up some space (a few GB is plenty), then hit Retry; everything so far is saved and I'll pick up right where we stopped."
+        case .stalled:        "The work stopped making progress, so I ended it. Everything so far is saved; hit Retry and I'll pick up right where we stopped."
         case nil:             message
         }
     }

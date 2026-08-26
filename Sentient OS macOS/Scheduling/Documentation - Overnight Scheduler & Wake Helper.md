@@ -11,13 +11,13 @@ same `IterativeRun`, and the same `ProactiveCycle` as a hand-pressed Analyze Now
 
 | File | Job |
 |---|---|
-| `OvernightScheduler.swift` | The in-app scheduler (owned by `AppState`): the arm-wait-run loop, the 14 h auto-enable state machine, `runProcessing`, and `SchedulerLog`. |
-| `WakeHelper.swift` | The root side: the LaunchDaemon (the app binary relaunched with `--wake-helper`), its six XPC ops, the deadman timer, the code-signing gate. |
+| `OvernightScheduler.swift` | The in-app scheduler (owned by `AppState`): the arm-wait-run loop, the 14 h auto-enable state machine, the night's stall watchdog (`runNight` + `NightPulse`), `runProcessing`, and `SchedulerLog`. |
+| `WakeHelper.swift` | The root side: the LaunchDaemon (the app binary relaunched with `--wake-helper`), its six XPC ops, the deadman timer and the absolute awake ceiling, the code-signing gate. |
 | `WakeHelperProtocol.swift` | The XPC contract and the shared names (`WakeHelperConfig`). |
 | `WakeHelperClient.swift` | The app side: the XPC calls (each reply/error/timeout-guarded), liveness probing (`isReachable`, `healthProbe`), and the SMAppService plumbing the dev cockpit uses. |
 | `WakeHelperInstaller.swift` | The production installer: one native password prompt writes the daemon plist into `/Library/LaunchDaemons` and bootstraps it. Also the uninstaller. |
-| `OvernightCaution.swift` | Cycle-failure classification (codex signed out · no internet · usage limit · input too large) and the persisted morning-after caution. |
-| `PowerState.swift` | The go/no-go gates: on AC, not Low Power Mode, not thermally critical. |
+| `OvernightCaution.swift` | Cycle-failure classification (signed out · no internet · usage limit · input too large · disk full · stalled) and the persisted morning-after caution. |
+| `PowerState.swift` | The go/no-go gates: on AC (or on battery above a 40% charge floor when the user opted in), not Low Power Mode, not thermally critical. Also the battery charge read. |
 | `LoginItem.swift` | Launch at login via `SMAppService.mainApp`. |
 
 Logs: `~/Library/Logs/SentientOS/scheduler.log` (the app; flushed per line, the black box for an empty
@@ -41,6 +41,7 @@ idempotent per time; the armed spec is persisted so a restarted helper can still
 `cancelWake`, `cancelAllWakes`.
 
 - **The deadman timer** lives in the helper, outside the app: if the app crashes mid-run and stops heartbeating, the helper restores normal sleep itself, so a bug can never leave a Mac awake all day. The helper also resets `disablesleep` defensively at launch.
+- **The awake ceiling** is the deadman's sibling for the opposite failure: armed once per `beginAwake` for `WakeHelperConfig.maxAwakeSeconds` (6 hours) and deliberately never fed by heartbeats. The deadman catches a dead app (heartbeats stopped); the ceiling catches an alive but stuck one (still heartbeating, making no progress): when it fires, the helper restores normal sleep unconditionally. A successful `endAwake` stands both down together, and either one firing cancels the other.
 - **Stale-wake hygiene:** when the app's XPC connection drops (quit, crash, force-quit) the helper cancels the armed wake, so a Mac with Sentient closed never wakes on a stale schedule; the loop wipes all wakes before arming exactly one.
 - **The client gate:** `setCodeSigningRequirement` with the daemon's OWN designated requirement ("signed exactly like me"; the app and the daemon are one binary), enforced by the system on every message in every build configuration. Signer-agnostic, so it holds for the Developer ID release, a dev's Apple Development build, and an OSS self-build alike. A static identifier + anchor requirement is the fallback if self-inspection fails.
 
@@ -77,11 +78,31 @@ helper's record stays fresh → run → re-arm for tomorrow.
 
 `runProcessing`: read the selected sources through the shared `SourceSelection.current` (persistent
 custom folders included) and the Gmail/Calendar flags (ChatGPT backend only) → skip if nothing is
-enabled or the model is missing → **the go/no-go gates** (`PowerState.overnightBlockReason`: on
-battery, Low Power Mode, or thermally critical → log, `Scheduler.gated`, try again tomorrow; thermal is
-a start condition only) → `beginAwake(1800)` + a 60 s heartbeat task → `IterativeRun(.auto)` over the
-connectors → the Gmail and Calendar iterative legs → **`ProactiveCycle.run(scheduled: true)`** → cancel
-the heartbeat → `endAwake` → the Mac idle-sleeps.
+enabled or the model is missing → **the go/no-go gates** (`PowerState.overnightBlockReason`: on battery
+without the opt-in, on battery below the 40% charge floor with it, Low Power Mode on AC, or thermally
+critical → log, `Scheduler.gated`, try again tomorrow; thermal is a start condition only) →
+`beginAwake(1800)` + a 60 s heartbeat task → `IterativeRun(.auto)` over the connectors → the Gmail and
+Calendar iterative legs → **`ProactiveCycle.run(scheduled: true)`** → cancel the heartbeat → `endAwake`
+→ the Mac idle-sleeps.
+
+**Battery nights are an opt-in.** The default is AC-only. The home's Analysis dropdown carries a quiet
+"Run on battery too" switch (`scheduler.allowBattery`; hidden on desktop Macs). With it on, a night
+starts on battery when the charge is at or above `PowerState.batteryFloorPercent` (40%: a heavy night
+can drain 15 to 30 percent, and the floor keeps the morning Mac usable). An opted-in battery night also
+ignores Low Power Mode, which is commonly set to "Only on Battery" and would otherwise silently block
+every battery night; the run just goes slower. The power log line records the charge either way.
+
+**Every night races a stall watchdog** (`runNight`). The run rides its own Task and touches a shared
+`NightPulse` on every sign of progress (each device item, each leg start and end, every proactive
+phase); the watchdog reads the pulse once a minute. After 70 minutes with no progress (the one failure
+no error, timeout, or crash covers: the app alive and heartbeating, but nothing moving) the watchdog
+cancels the run, restores sleep itself, records the `.stalled` morning caution, and sends a
+structure-only Sentry warning; the loop then re-arms tomorrow's wake as usual. The 70 minutes sits
+deliberately just past the longest single CLI timeout (1 hour), so the watchdog can never end a healthy
+call that is about to finish or time out cleanly on its own. Before cancelling, the watchdog latches
+"sleep already restored" on the pulse; every leg boundary checks for cancellation and exits through a
+latch-aware `releaseAwake`, so a stuck run that thaws hours later neither starts fresh cloud legs into
+the user's morning nor touches the helper while a later night may be holding the Mac awake.
 
 Full Disk Access can read false when the app is launched from Terminal (TCC attribution), which silently
 excludes the database sources; the run's log lines surface it.
@@ -107,7 +128,9 @@ testing the toggle never burns the one-shot.
 the typed usage-limit errors from every cloud stage → `usageLimit`; the typed `inputTooLarge` canary;
 on the ChatGPT backend a 401/unauthorized marker in codex's own output (a token invalidated server-side
 still reads logged-in locally) or a failing local `codex login status` → `loggedOut`; a failing network
-snapshot → `noInternet`; anything else → nil (the UI only ever states what was verified). The scheduled
+snapshot → `noInternet`; anything else → nil (the UI only ever states what was verified). Two kinds are
+recorded directly rather than classified: `.diskFull` (the device stage halted on a full disk) and
+`.stalled` (the watchdog ended a night that made no progress). The scheduled
 run persists the kind (`overnight.caution`, `Scheduler.caution` analytics) and the home shows a quiet
 amber capsule with a first-person message; a later fully successful cycle, or the banner's ✕, clears it.
 The watched takeover shows the same kind live on its failed screen instead.
@@ -118,6 +141,8 @@ The watched takeover shows the same kind live on its failed screen instead.
 - The helper's surface must stay tiny; nothing else may run as root.
 - Every XPC call must stay reply/error/timeout-guarded so nothing can hang at 3 AM.
 - Change the daemon plist only through the installer; both `WakeHelper.clientRequirement` and the plist's codesign requirement derive from the same designated requirement.
+- The awake ceiling must never be fed by heartbeats; feeding it would turn it back into the deadman and reopen the alive-but-stuck hole it exists to close.
+- Once the watchdog has restored sleep for a night, no exit path of that night may call `endAwake` again (the `NightPulse` latch enforces this): a later night could legitimately be holding the Mac awake.
 
 ## Related docs
 

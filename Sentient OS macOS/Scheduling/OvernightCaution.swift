@@ -4,10 +4,11 @@
 //
 //  Cycle-failure classification + the morning-after caution. `classify(_:)` turns a cycle failure
 //  into one of the reasons a user can actually act on or should simply know about — codex signed
-//  out · no internet · usage limit · a full disk — and serves BOTH failure surfaces: the UNATTENDED
-//  3am run persists it via `record(_:)` (at ProactiveCycle's catch sites, the one choke point every
-//  codex call already funnels typed errors through, plus the scheduler's own device-stage halt for
-//  a full disk) and the home renders it as a quiet amber capsule (HomeView.cautionBanner); the
+//  out · no internet · usage limit · a full disk · a stalled night — and serves BOTH failure
+//  surfaces: the UNATTENDED 3am run persists it via `record(_:)` (at ProactiveCycle's catch sites,
+//  the one choke point every codex call already funnels typed errors through, plus the scheduler's
+//  own device-stage halt for a full disk and its stall watchdog for a silent wedge) and the home
+//  renders it as a quiet amber capsule (HomeView.cautionBanner); the
 //  WATCHED processing takeover shows the same kind live on its failed screen
 //  (ProcessingView.failedView — "Codex isn't logged in" + a login button, "Your Mac's disk is
 //  full" + a storage button). Any later fully successful cycle clears the caution; so does the
@@ -30,6 +31,8 @@ enum OvernightCaution {
                             // slicing budgets every prompt path, so this should never fire)
         case diskFull       // the Mac's disk is full: the device stage stopped (nothing it read
                             // could be saved) or the knowledge-base staging copy couldn't be written
+        case stalled        // the night made no progress for over an hour (no error, no timeout —
+                            // just silence), so the scheduler's watchdog ended it and restored sleep
 
         /// The banner line — quiet, first-person, honest about what happens next. Engine-aware
         /// at RENDER time (the record persists only overnight, so the live backend names the
@@ -48,6 +51,7 @@ enum OvernightCaution {
                 ? "Last night's batch was more than Claude accepts at once. Your analysis is saved; I'll try again tonight."
                 : "Last night's batch was more than ChatGPT accepts at once. Your analysis is saved; I'll try again tonight."
             case .diskFull:   return "Your Mac's disk is full, so I couldn't save last night's work. Free up some space and I'll catch up tonight."
+            case .stalled:    return "Last night's work got stuck partway, so I stopped and let your Mac sleep. Everything's saved; I'll try again tonight."
             }
         }
     }

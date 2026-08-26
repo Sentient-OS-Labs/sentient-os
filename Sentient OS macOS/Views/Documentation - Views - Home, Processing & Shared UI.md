@@ -20,7 +20,7 @@ serif italic display, no borrowed brand hues.
 | `HomeView.swift` | THE home: chrome, the caution banner slot, the card scatter, the empty state, the free-plan preview state, the dock, the expanded letter (`LetterView`), and `ForYouModel` (deal · run · dismiss). |
 | `Briefing.swift` | The card model (`Briefing`, `BriefingDeck`), built from a `PreparedAction`, from the gift markdown, or from the two hard-coded demo decks. |
 | `BriefingCard.swift` | One card through its four lives (sealed envelope → offer → working → done), `OfferButton`, the envelope. |
-| `HomePopovers.swift` | The Analysis popover (things understood, vault counts, Analyze Now, source chips) and the Give AIs Knowledge popover. `SourceChip`, `HomeStats`. |
+| `HomePopovers.swift` | The Analysis popover (things understood, vault counts, Analyze Now, the run footer, the overnight-on-battery switch, source chips) and the Give AIs Knowledge popover. `SourceChip`, `HomeStats`. |
 | `PromptBar.swift` | The command bar ("Tell me what you want me to DO"): computer use only; STOP while running. |
 | `ProcessingView.swift` | The one analysis takeover, shared by the home, onboarding, and the dev buttons; `RunSource` and `RunSource.connectors(from:)`. |
 | `CautionCapsule.swift` | The banner capsule (amber / red / green) and the self-contained `UpdateNoticeCapsule`. |
@@ -98,8 +98,10 @@ name; the flap swings open in 3D) → `offer` (the whole face tap-expands the le
 ## The popovers (`HomePopovers`)
 
 **Analysis:** things understood, the real on-disk vault counts, the Analyze Now button (armed only when
-sources are selected and the model is present), Last run / Next run ("Tonight at 3 AM, if your Mac's
-plugged in and Sentient's open in the menu bar"), and the source chips on the same `dbg.*` keys as
+sources are selected and the model is present), Last run / Next run (the Next run line states the real
+conditions and rewords itself live when the battery opt-in is on), the quiet "Run on battery too" switch
+(writes `scheduler.allowBattery`, the same key the 3 AM gate reads; shown only when sources are armed and
+the Mac has a battery, so desktops never see it), and the source chips on the same `dbg.*` keys as
 Settings (folder chips toggle; WhatsApp/iMessage open the `ChatPicker`; Gmail/Calendar open the connect
 sheet or render locked). **Give AIs Knowledge:** the pitch and the glowing "Set up in 2 minutes" /
 "Configure" CTA that opens `ConnectAIsView`; deliberately no controls of its own.

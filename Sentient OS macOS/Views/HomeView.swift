@@ -236,7 +236,7 @@ struct HomeView: View {
         switch kind {
         case .loggedOut: return ("Open Settings", openHealthSettings)
         case .diskFull:  return ("Manage Storage", { DiskSpace.openStorageSettings() })
-        case .noInternet, .usageLimit, .inputTooLarge: return nil
+        case .noInternet, .usageLimit, .inputTooLarge, .stalled: return nil
         }
     }
 
