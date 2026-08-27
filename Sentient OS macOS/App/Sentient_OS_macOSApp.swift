@@ -27,6 +27,11 @@ struct SentientOSApp: App {
 
     // To add a headless self-test, restore the one-line hook here — see
     // Documentation - General - Self-Testing (Eval Harness).md (the `Self Tests - Temp/` folder is kept empty).
+    init() {
+        #if DEBUG
+        SelfTest.runIfRequested()
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup(id: Self.homeWindowID) {

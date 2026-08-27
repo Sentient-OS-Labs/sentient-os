@@ -1,0 +1,349 @@
+//
+//  ConnectorCensus.swift
+//  Sentient OS macOS
+//
+//  Zero-prompt detection of the hosted account connectors the user has ALREADY linked on
+//  whichever frontier engine is live (Google Drive, Notion, Slack, …). No model call in the
+//  ordinary path, because the two engines answer in completely different ways:
+//   - Claude  → run `claude mcp list` and parse the `claude.ai <Name>: <url> - <status>` lines.
+//   - codex   → pure disk read of the plugins cache; there is NO codex command that lists
+//               hosted connectors (`codex mcp list` shows local config servers only). That
+//               cache is rewritten ONLY when codex itself runs, hence the warm run below.
+//  Gmail and Google Calendar are excluded from every result: they keep their own dedicated
+//  chips in Settings (GmailConnect / CalendarConnect).
+//
+//  Key methods:
+//   - list()             → the CURRENT backend's connectors (cheap enough for every pane open)
+//   - refresh()          → the same, preceded by the codex warm run (freshness on demand)
+//   - cached(for:)       → the last persisted list, no subprocess
+//   - listClaude() / listCodex() → the engine-explicit listers. The lab calls these directly so
+//                          testing one engine never mutates the user's live backend setting.
+//   - parseClaudeList()  → pure (String) -> [DetectedConnector]: the ONE place the unversioned
+//                          `claude mcp list` output format is understood.
+//
+//  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
+//
+
+import Foundation
+
+nonisolated enum ConnectorCensus {
+
+    // MARK: The detected connector
+
+    /// One hosted connector the user has linked, as seen by ONE engine. `slug` is the canonical
+    /// cross-engine identity ("Google Drive" on Claude and the `google-drive` cache directory on
+    /// codex both normalize to `google-drive`, verified live 2026-08-27) — every later key hangs
+    /// off it, so normalization must stay exact.
+    struct DetectedConnector: Codable, Sendable, Equatable, Identifiable {
+        let slug: String
+        let displayName: String
+        let engine: ModelBackend
+        /// Claude only: the connector's MCP endpoint, as `claude mcp list` reports it.
+        let serverURL: String?
+        /// codex only: the global marketplace catalog id (`connector_<32 hex>`), the key the
+        /// per-connector `-c` tool strips are addressed by.
+        let catalogID: String?
+        /// codex only: an absolute path to the connector's logo shipped inside its plugin cache.
+        let iconPath: String?
+        let healthy: Bool
+        let lastSeen: Date
+
+        var id: String { "\(engine.rawValue):\(slug)" }
+    }
+
+    // MARK: Identity rules
+
+    /// Kept out of every result: both have dedicated chips and their own read pipelines.
+    /// A small static set is right for detection; the registry (1.2) owns identity properly.
+    static let excludedSlugs: Set<String> = ["gmail", "google-calendar"]
+
+    /// OpenAI's own plumbing entries in the curated cache — not user connectors. There is no
+    /// structural way to spot them: `deep-research-work` is a real linked app that also carries
+    /// a `connector_openai_*` id, so the id prefix cannot be the discriminator (measured
+    /// 2026-08-27). The slug list stays hand-maintained and fail-closed.
+    static let codexSystemSlugs: Set<String> = ["openai-templates", "plugin-management"]
+
+    /// The prefix `claude mcp list` puts on every claude.ai connector. Filtering on it drops the
+    /// per-run cua-driver entry and any local MCP server the user configured themselves.
+    private static let claudePrefix = "claude.ai "
+
+    /// Canonical slug: strip the claude.ai prefix, lowercase, and collapse every run of
+    /// non-alphanumeric characters into a single hyphen. "Google Drive" → `google-drive`,
+    /// which is byte-identical to codex's own cache directory name for the same connector.
+    static func slugify(_ raw: String) -> String {
+        var name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if name.lowercased().hasPrefix(claudePrefix.lowercased()) {
+            name = String(name.dropFirst(claudePrefix.count))
+        }
+        var slug = ""
+        var pendingSeparator = false
+        for character in name.lowercased() {
+            guard character.isLetter || character.isNumber else { pendingSeparator = true; continue }
+            if pendingSeparator && !slug.isEmpty { slug.append("-") }
+            pendingSeparator = false
+            slug.append(character)
+        }
+        return slug
+    }
+
+    /// The fallback display name when an engine gives us nothing better: `google-drive` →
+    /// "Google Drive". Deliberately dumb; the registry (1.2) overrides with curated names.
+    static func titleCased(_ slug: String) -> String {
+        slug.split(separator: "-")
+            .map { $0.prefix(1).uppercased() + $0.dropFirst() }
+            .joined(separator: " ")
+    }
+
+    // MARK: Public API
+
+    /// The live connectors for the CURRENT backend, persisted on the way out. Cheap: one ~2-5 s
+    /// subprocess on Claude, microseconds of file reads on codex. Custom endpoints have no
+    /// account to carry connectors, so they always answer empty (ModelBackend.connectorsAvailable).
+    static func list() async -> [DetectedConnector] {
+        switch ModelBackend.current {
+        case .claude:  return persist(await listClaude(), for: .claude)
+        case .chatgpt: return persist(listCodex(), for: .chatgpt)
+        case .custom:  return []
+        }
+    }
+
+    /// `list()` with freshness forced. On codex that means the warm run first: the plugins cache
+    /// is rewritten only as a side effect of codex running, so a connector linked seconds ago is
+    /// invisible to a pure disk read until something makes codex start (measured end to end
+    /// 2026-08-27: linked Google Drive stayed absent, then appeared after one 4 s warm run).
+    /// Claude needs no equivalent — `claude mcp list` does its own live fetch every invocation.
+    static func refresh() async -> [DetectedConnector] {
+        if ModelBackend.current == .chatgpt { await refreshCodexCache() }
+        return await list()
+    }
+
+    /// The last persisted list for an engine — no subprocess, no disk scan. What the UI paints
+    /// with immediately while a live `list()` runs behind it.
+    static func cached(for backend: ModelBackend) -> [DetectedConnector] {
+        guard let key = storageKey(for: backend),
+              let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([DetectedConnector].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    // MARK: Persistence
+
+    /// Production keys (the dbg.* law: never renamed without a migration).
+    private static func storageKey(for backend: ModelBackend) -> String? {
+        switch backend {
+        case .claude:  return "mcp.connectors.claude"
+        case .chatgpt: return "mcp.connectors.chatgpt"
+        case .custom:  return nil
+        }
+    }
+
+    @discardableResult
+    private static func persist(_ connectors: [DetectedConnector],
+                                for backend: ModelBackend) -> [DetectedConnector] {
+        guard let key = storageKey(for: backend),
+              let data = try? JSONEncoder().encode(connectors) else { return connectors }
+        UserDefaults.standard.set(data, forKey: key)
+        return connectors
+    }
+
+    // MARK: Claude — `claude mcp list`
+
+    /// Run `claude mcp list` and parse its stdout. The command health-checks every server live,
+    /// so it is the slow lister (seconds, and the timeout is generous for a bad network).
+    /// stderr carries schema-warning noise on some CLI versions: never parsed, never logged.
+    static func listClaude() async -> [DetectedConnector] {
+        guard let binary = ClaudeCLI.locateBinary() else {
+            Log("ConnectorCensus.claude: no claude binary")
+            return []
+        }
+        // The sanitized env this plumbing builds carries only HOME/USER/PATH, so a dev shell
+        // exporting CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 can't reach the child — but the
+        // empty-string pin in baseEnv is what guarantees it, and that flag suppresses the
+        // claude.ai connector fetch entirely (every probe would read an honest-but-wrong empty).
+        guard let out = try? await CodexCLI.executeAsync(binary: binary, args: ["mcp", "list"],
+                                                         stdinText: nil, cwd: nil, timeout: 60,
+                                                         extraEnv: ClaudeCLI.baseEnv) else {
+            Log("ConnectorCensus.claude: mcp list failed to run")
+            return []
+        }
+        return parseClaudeList(out.stdout)
+    }
+
+    /// The ONE place `claude mcp list`'s output format is understood — pure, so the lab can
+    /// exercise it against canned strings. Anything that is not a `claude.ai …` line (the
+    /// "Checking MCP server health…" banner, blank lines, the per-run cua-driver entry, local
+    /// servers) is ignored. A malformed line is skipped, never thrown: the CLI's output is
+    /// unversioned, so a drift must degrade to "fewer connectors", never to a crash.
+    static func parseClaudeList(_ stdout: String) -> [DetectedConnector] {
+        let now = Date()
+        var connectors: [DetectedConnector] = []
+        var candidates = 0
+
+        for rawLine in stdout.split(separator: "\n", omittingEmptySubsequences: true) {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            guard line.hasPrefix(claudePrefix) else { continue }
+            candidates += 1
+
+            // "<Name>: <url> - <status>"; the name can't contain ": " but the URL contains "://",
+            // so the name ends at the FIRST ": " and the status begins at the LAST " - ".
+            let body = String(line.dropFirst(claudePrefix.count))
+            guard let nameEnd = body.range(of: ": ") else { continue }
+            let name = String(body[body.startIndex..<nameEnd.lowerBound])
+                .trimmingCharacters(in: .whitespaces)
+            let remainder = String(body[nameEnd.upperBound...])
+            let url: String
+            let status: String
+            if let statusStart = remainder.range(of: " - ", options: .backwards) {
+                url = String(remainder[remainder.startIndex..<statusStart.lowerBound])
+                    .trimmingCharacters(in: .whitespaces)
+                status = String(remainder[statusStart.upperBound...])
+                    .trimmingCharacters(in: .whitespaces)
+            } else {
+                url = remainder.trimmingCharacters(in: .whitespaces)
+                status = ""
+            }
+
+            let slug = slugify(name)
+            guard !slug.isEmpty, !excludedSlugs.contains(slug) else { continue }
+            connectors.append(DetectedConnector(slug: slug,
+                                                displayName: name,
+                                                engine: .claude,
+                                                serverURL: url.isEmpty ? nil : url,
+                                                catalogID: nil,
+                                                iconPath: nil,
+                                                healthy: isConnected(status),
+                                                lastSeen: now))
+        }
+
+        let excluded = candidates - connectors.count
+        if excluded > excludedSlugs.count {
+            // More claude.ai lines were dropped than the two dedicated chips explain — the
+            // output format may have drifted. Report the shape, never the content.
+            Log("ConnectorCensus.claude: parsed \(connectors.count) of \(candidates) claude.ai lines")
+        }
+        return connectors
+    }
+
+    /// Read the health word, not the whole status: "✔ Connected" is healthy while "✘ Disconnected"
+    /// must not be (a naive `contains("connected")` reads both as YES).
+    private static func isConnected(_ status: String) -> Bool {
+        status.drop(while: { !$0.isLetter }).lowercased().hasPrefix("connected")
+    }
+
+    // MARK: codex — the plugins cache on disk
+
+    /// Where codex records the account's linked apps. The sibling `created-by-me-remote/` holds
+    /// the user's own custom apps and is skipped entirely (hidden in v1).
+    private static var codexCacheRoot: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/plugins/cache/openai-curated-remote")
+    }
+
+    /// Scan the plugins cache. Presence IS the verdict — codex has no health probe — so every
+    /// connector found reads healthy. Pure disk reads: no subprocess, no model, microseconds.
+    static func listCodex() -> [DetectedConnector] {
+        let fm = FileManager.default
+        guard let slugs = try? fm.contentsOfDirectory(atPath: codexCacheRoot.path) else { return [] }
+        let now = Date()
+        var connectors: [DetectedConnector] = []
+
+        for slug in slugs.sorted() where !slug.hasPrefix(".") {
+            guard !codexSystemSlugs.contains(slug), !excludedSlugs.contains(slug) else { continue }
+            let slugDir = codexCacheRoot.appendingPathComponent(slug)
+            guard let versionDir = newestVersionDirectory(in: slugDir),
+                  let catalogID = catalogID(in: versionDir, slug: slug) else { continue }
+            let card = infoCard(in: versionDir)
+            connectors.append(DetectedConnector(slug: slug,
+                                                displayName: card.displayName ?? titleCased(slug),
+                                                engine: .chatgpt,
+                                                serverURL: nil,
+                                                catalogID: catalogID,
+                                                iconPath: card.iconPath,
+                                                healthy: true,
+                                                lastSeen: now))
+        }
+        return connectors
+    }
+
+    /// The newest version directory, compared NUMERICALLY per component: a string sort reads
+    /// `0.1.9` as newer than `0.1.15`, and both shapes are live in the cache today.
+    private static func newestVersionDirectory(in slugDir: URL) -> URL? {
+        let fm = FileManager.default
+        guard let versions = try? fm.contentsOfDirectory(atPath: slugDir.path) else { return nil }
+        let newest = versions.filter { !$0.hasPrefix(".") }
+            .max { versionComponents($0).lexicographicallyPrecedes(versionComponents($1)) }
+        return newest.map { slugDir.appendingPathComponent($0) }
+    }
+
+    /// "0.1.15" → [0, 1, 15]. Non-numeric junk in a component reads as 0 rather than failing.
+    private static func versionComponents(_ version: String) -> [Int] {
+        version.split(separator: ".").map { Int($0.prefix(while: \.isNumber)) ?? 0 }
+    }
+
+    /// `.app.json` → `apps.<slug>.id`. Keyed by the directory slug first; when that key is
+    /// absent and the file describes exactly one app, that app is taken instead (the two system
+    /// entries name their app differently from their directory, so a strict lookup would only
+    /// filter them by accident — the explicit skip list above is what actually does it).
+    private static func catalogID(in versionDir: URL, slug: String) -> String? {
+        let url = versionDir.appendingPathComponent(".app.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let apps = root["apps"] as? [String: Any] else { return nil }
+        var entry = apps[slug].flatMap { $0 as? [String: Any] }
+        if entry == nil, apps.count == 1 {
+            entry = apps.values.first.flatMap { $0 as? [String: Any] }
+        }
+        guard let id = entry?["id"] as? String, !id.isEmpty else { return nil }
+        return id
+    }
+
+    /// What the connector calls itself, and where its logo sits — read from the plugin's own
+    /// `.codex-plugin/plugin.json`. Only `displayName` and the logo are taken: the card's
+    /// `capabilities` field is decorative and must never inform tool policy (Google Drive
+    /// declares "Write" and omits "Read" while being almost entirely read tools, measured
+    /// 2026-08-27), and the classifier (1.2) is the only real answer to what a tool does.
+    private static func infoCard(in versionDir: URL) -> (displayName: String?, iconPath: String?) {
+        let url = versionDir.appendingPathComponent(".codex-plugin/plugin.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let interface = root["interface"] as? [String: Any] else { return (nil, nil) }
+
+        let name = (interface["displayName"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        var iconPath: String?
+        for key in ["logo", "composerIcon"] {
+            guard let relative = interface[key] as? String, !relative.isEmpty else { continue }
+            let cleaned = relative.hasPrefix("./") ? String(relative.dropFirst(2)) : relative
+            let candidate = versionDir.appendingPathComponent(cleaned)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                iconPath = candidate.path
+                break
+            }
+        }
+        return (name?.isEmpty == false ? name : nil, iconPath)
+    }
+
+    /// Force the plugins cache to be current. codex rewrites it as a side effect of running, and
+    /// nothing else does, so one throwaway turn on the cheapest tier is the whole mechanism
+    /// (measured 4 s; it carries ~13k input tokens of connector tool schemas, mostly cached, so
+    /// callers that poll should do so sparingly). Failures are logged and swallowed: a warm run
+    /// that could not happen just means the following read may be stale, never an error the user
+    /// should see. Runs as `trigger=probe` so a failure is never filed as an analysis failure.
+    static func refreshCodexCache() async {
+        var invocation = CodexCLI.Invocation(prompt: "Reply with exactly: OK")
+        invocation.feature = "census"
+        invocation.model = .gpt56luna
+        invocation.effort = .low
+        invocation.sandbox = .readOnly
+        invocation.webSearch = false
+        invocation.timeout = 120
+        do {
+            _ = try await CodexTrigger.$current.withValue(.probe) {
+                try await FrontierRun.run(invocation)
+            }
+        } catch {
+            Log("ConnectorCensus.warm: \(ErrorLabel(error))")
+        }
+    }
+}
