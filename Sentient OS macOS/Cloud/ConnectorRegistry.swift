@@ -1,0 +1,232 @@
+//
+//  ConnectorRegistry.swift
+//  Sentient OS macOS
+//
+//  The identity and policy layer over ConnectorCensus: which detected connector is which
+//  (curated packs for the named connectors, synthesized identity for everything else), what its
+//  tools are allowed to do (hand-curated read lists where they exist, the classifier's cache
+//  everywhere else), and the per-connector "Use for knowledge base" toggle. Gmail and Google
+//  Calendar live here as identity-only packs: they keep their dedicated chips and never join
+//  the Connectors UI, but chip-filtering and the classifier eval need their identities.
+//
+//  Key surface:
+//   - packs / pack(for:)                  → the curated packs and the detected→pack match
+//   - claudeIdentity(slug:)               → name + server URL + tool prefix (the classifier's input)
+//   - readToolNames / destructiveToolNames / allKnownToolNames → full tool names, per policy
+//   - isKBEnabled / setKBEnabled / kbEnabledConnectors → the `mcp.<slug>.kb` toggle
+//   - classification(for:) / saveClassification        → the `mcp.classified.<slug>` cache
+//
+//  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
+//
+
+import Foundation
+
+nonisolated enum ConnectorRegistry {
+
+    // MARK: The curated pack shape
+
+    /// How the KB read engine (task 1.8) windows a connector's history. Placeholder shape —
+    /// the Step 3 chats enrich per connector.
+    enum KBAdapter: String, Sendable {
+        case windowedWeekly    // gmail-style: the last month as weekly windows, then since-mark
+        case windowedMonthly   // calendar-style: the last year as monthly windows, then since-mark
+        case generic           // one budgeted "what's new" read (the uncurated default)
+    }
+
+    /// One hand-curated connector: identity on both engines plus the verified read surface.
+    /// Step D adds a direct MCP URL field here (granola and notion curate against the direct
+    /// tier — `mcp.granola.ai/mcp`, `mcp.notion.com/mcp`); do not invent a second home for it.
+    struct CuratedConnector: Sendable {
+        var slug: String
+        var displayName: String
+        // Per-engine identity (nil = not yet captured; the Step 3 chats fill these).
+        var claudeName: String? = nil        // as `claude mcp list` prints it, minus "claude.ai "
+        var claudeServerURL: String? = nil
+        var claudeToolPrefix: String? = nil  // e.g. "mcp__claude_ai_Google_Drive__"
+        var codexSlug: String? = nil         // the plugins-cache directory name
+        var codexCatalogID: String? = nil    // the global marketplace id (census supplies it live
+                                             // for detected connectors; pinned here only for the
+                                             // two chip connectors the census excludes)
+        /// BARE tool names (engine-neutral; the query layer prefixes them per engine).
+        /// nil = not yet curated → reads come from the classifier cache only.
+        var readTools: [String]? = nil
+        var kbAdapter: KBAdapter = .generic
+        /// True while the read list is a captured-but-unverified surface — the Step 3 chats
+        /// mark fresh captures with it until their live re-verify confirms them.
+        var capturedProvisional = false
+    }
+
+    /// Strip a curated full-name list back to bare names — the ConnectorTools REFERENCE, not a
+    /// copy: `readToolNames` re-prefixes these, so the round trip returns those arrays verbatim
+    /// and the one source of truth stays `ClaudeCLI.ConnectorTools`.
+    private static func bare(_ fullNames: [String], prefix: String) -> [String] {
+        fullNames.map { String($0.dropFirst(prefix.count)) }
+    }
+
+    /// The curated packs. gmail + google-calendar are identity-only (dedicated chips; excluded
+    /// from every census result); google-drive is fully curated and live-verified; the other
+    /// six are named-but-empty until their Step 3 chats.
+    static let packs: [CuratedConnector] = [
+        CuratedConnector(slug: "gmail", displayName: "Gmail",
+                         claudeName: "Gmail",
+                         claudeServerURL: "https://gmailmcp.googleapis.com/mcp/v1",
+                         claudeToolPrefix: "mcp__claude_ai_Gmail__",
+                         codexSlug: "gmail",
+                         codexCatalogID: CodexCLI.Invocation.gmailCatalogID,
+                         readTools: bare(ClaudeCLI.ConnectorTools.gmailReads,
+                                         prefix: "mcp__claude_ai_Gmail__"),
+                         kbAdapter: .windowedWeekly),
+        CuratedConnector(slug: "google-calendar", displayName: "Google Calendar",
+                         claudeName: "Google Calendar",
+                         claudeServerURL: "https://calendarmcp.googleapis.com/mcp/v1",
+                         claudeToolPrefix: "mcp__claude_ai_Google_Calendar__",
+                         codexSlug: "google-calendar",
+                         codexCatalogID: CodexCLI.Invocation.calendarCatalogID,
+                         readTools: bare(ClaudeCLI.ConnectorTools.calendarReads,
+                                         prefix: "mcp__claude_ai_Google_Calendar__"),
+                         kbAdapter: .windowedMonthly),
+        // Drive's read list was captured live 2026-08-26 and re-verified 2026-08-29 (the
+        // classifier eval): the 8-tool surface matches this capture exactly.
+        CuratedConnector(slug: "google-drive", displayName: "Google Drive",
+                         claudeName: "Google Drive",
+                         claudeServerURL: "https://drivemcp.googleapis.com/mcp/v1",
+                         claudeToolPrefix: "mcp__claude_ai_Google_Drive__",
+                         codexSlug: "google-drive",
+                         readTools: ["search_files", "read_file_content", "download_file_content",
+                                     "get_file_metadata", "get_file_permissions",
+                                     "list_recent_files"]),
+        CuratedConnector(slug: "slack", displayName: "Slack"),
+        CuratedConnector(slug: "notion", displayName: "Notion"),
+        CuratedConnector(slug: "granola", displayName: "Granola"),
+        CuratedConnector(slug: "outlook-mail", displayName: "Outlook Mail"),
+        CuratedConnector(slug: "outlook-calendar", displayName: "Outlook Calendar"),
+        CuratedConnector(slug: "teams", displayName: "Teams"),
+    ]
+
+    // MARK: Identity
+
+    static func pack(forSlug slug: String) -> CuratedConnector? {
+        packs.first { $0.slug == slug }
+    }
+
+    /// Match a detected connector to its curated pack. Census slugs ARE the canonical identity
+    /// (slugify makes a pack's claudeName and its codex cache directory converge on the same
+    /// slug, verified live 2026-08-27), so slug equality is the whole match; the per-engine
+    /// fields exist for building walls and prefixes, not for matching. nil = uncurated.
+    static func pack(for connector: ConnectorCensus.DetectedConnector) -> CuratedConnector? {
+        pack(forSlug: connector.slug)
+    }
+
+    /// The Claude-side identity the classifier needs to wall a connector in alone: display
+    /// name, server URL, and tool prefix. Curated packs pin all three; anything else comes from
+    /// the Claude census record. nil = no known claude.ai endpoint (unclassifiable until seen).
+    static func claudeIdentity(slug: String) -> (name: String, serverURL: String, toolPrefix: String)? {
+        let pack = pack(forSlug: slug)
+        let detected = ConnectorCensus.cached(for: .claude).first { $0.slug == slug }
+        guard let name = pack?.claudeName ?? detected?.displayName,
+              let url = pack?.claudeServerURL ?? detected?.serverURL else { return nil }
+        return (name, url, pack?.claudeToolPrefix ?? derivedClaudePrefix(from: name))
+    }
+
+    /// `mcp__claude_ai_<Name>__` with every non-alphanumeric character in the name replaced by
+    /// an underscore — the shape Claude Code gives claude.ai connector tools ("Google Calendar"
+    /// → `mcp__claude_ai_Google_Calendar__`). Curated packs pin their prefix instead; for a new
+    /// connector, the lab's `tools` dump is how the derivation gets verified.
+    static func derivedClaudePrefix(from claudeName: String) -> String {
+        let cleaned = claudeName.map { $0.isLetter || $0.isNumber ? String($0) : "_" }.joined()
+        return "mcp__claude_ai_\(cleaned)__"
+    }
+
+    // MARK: Detection convenience
+
+    /// The census's persisted list for the live backend (always empty on `.custom`, which has
+    /// no account to carry connectors).
+    static func detectedForCurrentBackend() -> [ConnectorCensus.DetectedConnector] {
+        guard let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
+        else { return [] }
+        return ConnectorCensus.cached(for: origin)
+    }
+
+    // MARK: The KB toggle (production keys)
+
+    static func kbKey(_ slug: String) -> String { "mcp.\(slug).kb" }
+
+    static func isKBEnabled(_ slug: String) -> Bool {
+        UserDefaults.standard.bool(forKey: kbKey(slug))
+    }
+
+    static func setKBEnabled(_ slug: String, _ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: kbKey(slug))
+    }
+
+    /// The detected connectors whose KB toggle is on — the nightly read list (task 1.8) and the
+    /// proactive-research attachment (task 1.7).
+    static func kbEnabledConnectors() -> [ConnectorCensus.DetectedConnector] {
+        detectedForCurrentBackend().filter { isKBEnabled($0.slug) }
+    }
+
+    // MARK: The classifier cache (production keys)
+
+    enum ToolCategory: String, Codable, Sendable {
+        case read          // cannot change anything anywhere
+        case write         // creates, sends, shares, moves, or modifies
+        case destructive   // deletes, trashes, cancels, revokes, or overwrites
+    }
+
+    struct ClassifiedTool: Codable, Sendable, Equatable {
+        let name: String          // the FULL engine tool name, as classified
+        let category: ToolCategory
+    }
+
+    /// One connector's classified inventory. `cliVersion` is the managed CLI at capture time:
+    /// tool surfaces drift with CLI updates, so a version mismatch forces a re-classification
+    /// (the known fail-open window between captures — the existing house posture).
+    struct Classification: Codable, Sendable {
+        let tools: [ClassifiedTool]
+        let cliVersion: String
+        let capturedAt: Date
+    }
+
+    static func classificationKey(_ slug: String) -> String { "mcp.classified.\(slug)" }
+
+    static func classification(for slug: String) -> Classification? {
+        guard let data = UserDefaults.standard.data(forKey: classificationKey(slug)) else { return nil }
+        return try? JSONDecoder().decode(Classification.self, from: data)
+    }
+
+    static func saveClassification(_ classification: Classification, for slug: String) {
+        guard let data = try? JSONEncoder().encode(classification) else { return }
+        UserDefaults.standard.set(data, forKey: classificationKey(slug))
+    }
+
+    static func isClassified(_ slug: String) -> Bool { classification(for: slug) != nil }
+
+    // MARK: Tool queries (full engine tool names out)
+
+    /// The tools a READ run may pre-approve: the curated list when the pack has one (prefixed
+    /// back to full names — for gmail/google-calendar that round-trips to the ConnectorTools
+    /// arrays verbatim), else the classifier's reads. Empty = unclassified = NO read allows
+    /// anywhere: fail closed.
+    static func readToolNames(slug: String) -> [String] {
+        if let pack = pack(forSlug: slug), let reads = pack.readTools,
+           let prefix = pack.claudeToolPrefix {
+            return reads.map { prefix + $0 }
+        }
+        return classification(for: slug)?.tools.filter { $0.category == .read }.map(\.name) ?? []
+    }
+
+    /// The deny list for user-fired runs — always the classifier's verdict, curated or not:
+    /// curation covers reads, but the destructive denies need the full live inventory.
+    static func destructiveToolNames(slug: String) -> [String] {
+        classification(for: slug)?.tools.filter { $0.category == .destructive }.map(\.name) ?? []
+    }
+
+    /// The full known inventory: the classified surface when there is one, else the curated
+    /// reads as the floor, else nothing.
+    static func allKnownToolNames(slug: String) -> [String] {
+        if let tools = classification(for: slug)?.tools, !tools.isEmpty {
+            return tools.map(\.name)
+        }
+        return readToolNames(slug: slug)
+    }
+}

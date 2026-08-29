@@ -28,8 +28,7 @@ import Foundation
 import AppKit
 
 /// Which frontier engine powers the cloud ~10% of Sentient (the on-device model does the rest).
-/// Codable so engine-scoped records can persist it directly (ConnectorCensus.DetectedConnector).
-enum ModelBackend: String, Sendable, Codable {
+enum ModelBackend: String, Sendable {
     case chatgpt   // the user's own ChatGPT subscription through their codex login (default)
     case claude    // the user's own Claude subscription through their Claude Code login (ClaudeCLI)
     case custom    // a user-supplied OpenAI-Responses-compatible endpoint

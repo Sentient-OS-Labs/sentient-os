@@ -383,6 +383,13 @@ actor ClaudeCLI {
         if let sid = inv.resumeSessionID { args += ["--resume", sid] }
         if !inv.includeUserConfig {
             args += ["--strict-mcp-config", "--mcp-config", #"{"mcpServers":{}}"#]
+        } else if let server = inv.claudeMcpServerAllow {
+            // The one-connector wall (the classifier's run): ONLY this server may load — the
+            // user's own MCP servers and every other connector are blocked before their tools
+            // reach the model. `--settings` applies even under `--setting-sources ""` (measured
+            // 2026-08-23, the shipped Sidekick Gmail wall). Deliberately minimal — task 1.4
+            // generalizes this into the full run recipes.
+            args += ["--settings", Self.mcpServerAllowSettings(server)]
         }
 
         var allowed: [String] = []
@@ -440,6 +447,24 @@ actor ClaudeCLI {
         if !disallowed.isEmpty { args += ["--disallowedTools", disallowed.joined(separator: ",")] }
         if let schema = inv.outputSchema { args += ["--json-schema", schema] }
         return args
+    }
+
+    /// `{"allowedMcpServers":[{"serverUrl":"https://host/*"}]}` — the origin glob (scheme +
+    /// host), matching the shipped Gmail wall's shape: an exact-URL entry would not match the
+    /// endpoint's subpaths. A string that won't parse as a URL rides through as-is; a JSON
+    /// serialization failure walls out EVERYTHING (empty allowlist) — never fail open.
+    static func mcpServerAllowSettings(_ serverURL: String) -> String {
+        var glob = serverURL
+        if let url = URL(string: serverURL), let scheme = url.scheme, let host = url.host {
+            glob = "\(scheme)://\(host)/*"
+        }
+        let settings: [String: Any] = ["allowedMcpServers": [["serverUrl": glob]]]
+        guard let data = try? JSONSerialization.data(withJSONObject: settings,
+                                                     options: [.withoutEscapingSlashes]),
+              let json = String(data: data, encoding: .utf8) else {
+            return #"{"allowedMcpServers":[]}"#
+        }
+        return json
     }
 
     // MARK: Computer use (the agent spine)

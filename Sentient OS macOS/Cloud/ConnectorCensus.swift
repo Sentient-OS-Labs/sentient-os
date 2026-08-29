@@ -30,14 +30,35 @@ nonisolated enum ConnectorCensus {
 
     // MARK: The detected connector
 
-    /// One hosted connector the user has linked, as seen by ONE engine. `slug` is the canonical
-    /// cross-engine identity ("Google Drive" on Claude and the `google-drive` cache directory on
+    /// One hosted connector the user has linked, as seen by ONE origin. `slug` is the canonical
+    /// cross-origin identity ("Google Drive" on Claude and the `google-drive` cache directory on
     /// codex both normalize to `google-drive`, verified live 2026-08-27) — every later key hangs
     /// off it, so normalization must stay exact.
     struct DetectedConnector: Codable, Sendable, Equatable, Identifiable {
+
+        /// Where a connector record comes from. Deliberately NOT ModelBackend: Step D adds
+        /// direct MCP servers (Sentient-owned OAuth), which have no frontier engine behind
+        /// them, and the engine-dispatch enum must never grow a non-engine case. `direct` is
+        /// dormant in Step 1 — no code path produces it; the type is shaped for it.
+        enum Origin: String, Codable, Sendable {
+            case claude    // a claude.ai account connector (`claude mcp list`)
+            case chatgpt   // a ChatGPT account connector (the codex plugins cache)
+            case direct    // Step D: a spec-compliant remote MCP server, Sentient-owned OAuth
+
+            /// The origin an engine's census produces — a custom endpoint has no account to
+            /// carry connectors, so it maps to none.
+            init?(backend: ModelBackend) {
+                switch backend {
+                case .claude:  self = .claude
+                case .chatgpt: self = .chatgpt
+                case .custom:  return nil
+                }
+            }
+        }
+
         let slug: String
         let displayName: String
-        let engine: ModelBackend
+        let origin: Origin
         /// Claude only: the connector's MCP endpoint, as `claude mcp list` reports it.
         let serverURL: String?
         /// codex only: the global marketplace catalog id (`connector_<32 hex>`), the key the
@@ -48,7 +69,7 @@ nonisolated enum ConnectorCensus {
         let healthy: Bool
         let lastSeen: Date
 
-        var id: String { "\(engine.rawValue):\(slug)" }
+        var id: String { "\(origin.rawValue):\(slug)" }
     }
 
     // MARK: Identity rules
@@ -117,10 +138,12 @@ nonisolated enum ConnectorCensus {
         return await list()
     }
 
-    /// The last persisted list for an engine — no subprocess, no disk scan. What the UI paints
-    /// with immediately while a live `list()` runs behind it.
-    static func cached(for backend: ModelBackend) -> [DetectedConnector] {
-        guard let key = storageKey(for: backend),
+    /// The last persisted list for an origin — no subprocess, no disk scan. What the UI paints
+    /// with immediately while a live `list()` runs behind it. (Blobs persisted before the
+    /// origin field existed fail decode and read as empty — dev machines only, nothing shipped;
+    /// the next `list()` rewrites them.)
+    static func cached(for origin: DetectedConnector.Origin) -> [DetectedConnector] {
+        guard let key = storageKey(for: origin),
               let data = UserDefaults.standard.data(forKey: key),
               let decoded = try? JSONDecoder().decode([DetectedConnector].self, from: data)
         else { return [] }
@@ -130,18 +153,18 @@ nonisolated enum ConnectorCensus {
     // MARK: Persistence
 
     /// Production keys (the dbg.* law: never renamed without a migration).
-    private static func storageKey(for backend: ModelBackend) -> String? {
-        switch backend {
+    private static func storageKey(for origin: DetectedConnector.Origin) -> String? {
+        switch origin {
         case .claude:  return "mcp.connectors.claude"
         case .chatgpt: return "mcp.connectors.chatgpt"
-        case .custom:  return nil
+        case .direct:  return nil   // Step D names its key when the direct tier is built
         }
     }
 
     @discardableResult
     private static func persist(_ connectors: [DetectedConnector],
-                                for backend: ModelBackend) -> [DetectedConnector] {
-        guard let key = storageKey(for: backend),
+                                for origin: DetectedConnector.Origin) -> [DetectedConnector] {
+        guard let key = storageKey(for: origin),
               let data = try? JSONEncoder().encode(connectors) else { return connectors }
         UserDefaults.standard.set(data, forKey: key)
         return connectors
@@ -208,7 +231,7 @@ nonisolated enum ConnectorCensus {
             guard !slug.isEmpty, !excludedSlugs.contains(slug) else { continue }
             connectors.append(DetectedConnector(slug: slug,
                                                 displayName: name,
-                                                engine: .claude,
+                                                origin: .claude,
                                                 serverURL: url.isEmpty ? nil : url,
                                                 catalogID: nil,
                                                 iconPath: nil,
@@ -256,7 +279,7 @@ nonisolated enum ConnectorCensus {
             let card = infoCard(in: versionDir)
             connectors.append(DetectedConnector(slug: slug,
                                                 displayName: card.displayName ?? titleCased(slug),
-                                                engine: .chatgpt,
+                                                origin: .chatgpt,
                                                 serverURL: nil,
                                                 catalogID: catalogID,
                                                 iconPath: card.iconPath,

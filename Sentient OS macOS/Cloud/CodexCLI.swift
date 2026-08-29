@@ -129,6 +129,12 @@ actor CodexCLI {
                                                       // writes stay denied — measured 2026-08-23:
                                                       // nothing short of an allow rule approves a
                                                       // connector tool headless, auto mode included)
+        var claudeMcpServerAllow: String? = nil       // load ONLY this one MCP server (a connector's
+                                                      // URL) via a --settings allowedMcpServers wall;
+                                                      // needs includeUserConfig=true (the strict wall
+                                                      // blocks the connector fetch entirely). The
+                                                      // classifier's minimal seam — 1.4 generalizes
+                                                      // it into the routed-spine recipes.
 
         init(prompt: String) { self.prompt = prompt }
 
@@ -148,17 +154,22 @@ actor CodexCLI {
         /// fire" becomes the tools not existing — on top of the prompt rule and the headless
         /// auto-cancel of unapproved writes. Verified live 2026-07-18: Gmail search completes
         /// while a send attempt fails with "is not a function" — the tool is genuinely absent.
+        /// The global marketplace catalog ids for the two dedicated-chip connectors — the SAME
+        /// for every user (see OpenAI's public `openai/plugins` repo, or
+        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). One source of
+        /// truth: the strip preset below and ConnectorRegistry's packs both read these.
+        static let gmailCatalogID = "connector_2128aebfecb84f64a069897515042a44"
+        static let calendarCatalogID = "connector_947e0d954944416db111db556030eea6"
+
         /// The keys MUST be the LONG global catalog connector ids: friendly slugs ("gmail") are
         /// silent no-ops for hosted connectors, and the app-wide `apps._default` variant strips
-        /// the READ tools too (both measured, codexperms self-test). The ids are global marketplace
-        /// constants (same for every user — see OpenAI's public `openai/plugins` repo, or
-        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). If one ever
-        /// rotated, this strip degrades to a harmless no-op and the other two layers still hold.
+        /// the READ tools too (both measured, codexperms self-test). If one ever rotated, this
+        /// strip degrades to a harmless no-op and the other two layers still hold.
         static let stripConnectorActionTools = [
-            "apps.connector_2128aebfecb84f64a069897515042a44.open_world_enabled=false",    // gmail
-            "apps.connector_2128aebfecb84f64a069897515042a44.destructive_enabled=false",   // gmail
-            "apps.connector_947e0d954944416db111db556030eea6.open_world_enabled=false",    // google-calendar
-            "apps.connector_947e0d954944416db111db556030eea6.destructive_enabled=false",   // google-calendar
+            "apps.\(gmailCatalogID).open_world_enabled=false",
+            "apps.\(gmailCatalogID).destructive_enabled=false",
+            "apps.\(calendarCatalogID).open_world_enabled=false",
+            "apps.\(calendarCatalogID).destructive_enabled=false",
         ]
     }
 
