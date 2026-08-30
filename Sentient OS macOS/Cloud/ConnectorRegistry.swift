@@ -11,7 +11,11 @@
 //
 //  Key surface:
 //   - packs / pack(for:)                  → the curated packs and the detected→pack match
+//   - server(for:)                        → the ONE slug → per-engine server resolution seam
+//                                           (every recipe builder resolves through it; Step D
+//                                           extends it with the direct tier)
 //   - claudeIdentity(slug:)               → name + server URL + tool prefix (the classifier's input)
+//   - computerUseAttachable()             → what a widened computer-use run may attach (1.6)
 //   - readToolNames / destructiveToolNames / allKnownToolNames → full tool names, per policy
 //   - isKBEnabled / setKBEnabled / kbEnabledConnectors → the `mcp.<slug>.kb` toggle
 //   - classification(for:) / saveClassification        → the `mcp.classified.<slug>` cache
@@ -117,15 +121,62 @@ nonisolated enum ConnectorRegistry {
         pack(forSlug: connector.slug)
     }
 
-    /// The Claude-side identity the classifier needs to wall a connector in alone: display
-    /// name, server URL, and tool prefix. Curated packs pin all three; anything else comes from
-    /// the Claude census record. nil = no known claude.ai endpoint (unclassifiable until seen).
-    static func claudeIdentity(slug: String) -> (name: String, serverURL: String, toolPrefix: String)? {
+    /// One connector as the run recipes address it on each engine. Every field is optional
+    /// because a connector can exist on one engine only (drive was Claude-only for a while).
+    /// Step D extends THIS shape with the direct tier's server URL + Keychain credential
+    /// reference — the resolver below stays the one seam, never a parallel path.
+    struct ResolvedServer: Sendable {
+        let slug: String
+        let claudeName: String?
+        let claudeServerURL: String?
+        let claudeToolPrefix: String?
+        let codexCatalogID: String?
+    }
+
+    /// The ONE slug → server resolution seam. Every recipe builder (ClaudeCLI / CodexCLI
+    /// argument construction) resolves a slug through here and nowhere else. Pack fields win
+    /// (gmail/google-calendar are census-EXCLUDED, so their pinned identities are the only
+    /// source); the census fills in whatever the packs don't pin (a detected connector's live
+    /// URL or catalog id). nil = the slug matches no pack and no census record.
+    static func server(for slug: String) -> ResolvedServer? {
         let pack = pack(forSlug: slug)
-        let detected = ConnectorCensus.cached(for: .claude).first { $0.slug == slug }
-        guard let name = pack?.claudeName ?? detected?.displayName,
-              let url = pack?.claudeServerURL ?? detected?.serverURL else { return nil }
-        return (name, url, pack?.claudeToolPrefix ?? derivedClaudePrefix(from: name))
+        let claude = ConnectorCensus.cached(for: .claude).first { $0.slug == slug }
+        let codex = ConnectorCensus.cached(for: .chatgpt).first { $0.slug == slug }
+        guard pack != nil || claude != nil || codex != nil else { return nil }
+        let name = pack?.claudeName ?? claude?.displayName
+        return ResolvedServer(slug: slug,
+                              claudeName: name,
+                              claudeServerURL: pack?.claudeServerURL ?? claude?.serverURL,
+                              claudeToolPrefix: pack?.claudeToolPrefix
+                                  ?? name.map(derivedClaudePrefix(from:)),
+                              codexCatalogID: pack?.codexCatalogID ?? codex?.catalogID)
+    }
+
+    /// The Claude-side identity the classifier needs to wall a connector in alone: display
+    /// name, server URL, and tool prefix. A convenience view over `server(for:)` — nil when
+    /// there is no known claude.ai endpoint (unclassifiable until seen).
+    static func claudeIdentity(slug: String) -> (name: String, serverURL: String, toolPrefix: String)? {
+        guard let resolved = server(for: slug),
+              let name = resolved.claudeName,
+              let url = resolved.claudeServerURL,
+              let prefix = resolved.claudeToolPrefix else { return nil }
+        return (name, url, prefix)
+    }
+
+    /// The connectors a widened computer-use run may attach on the Claude engine (task 1.6
+    /// flips the attachment on; 1.4 builds it dormant): every detected claude-origin connector
+    /// that is curated or classified (unclassified = excluded, fail-closed), PLUS the two
+    /// dedicated-chip connectors when their chips are connected (the census excludes them, so
+    /// the general mechanism must union them in — gmail riding into computer use is shipped
+    /// behavior this must preserve). Order: chips first, then detected, so argv stays stable.
+    static func computerUseAttachable() -> [ResolvedServer] {
+        var slugs: [String] = []
+        if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }
+        if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { slugs.append("google-calendar") }
+        slugs += ConnectorCensus.cached(for: .claude)
+            .filter { pack(for: $0)?.readTools != nil || isClassified($0.slug) }
+            .map(\.slug)
+        return slugs.compactMap { server(for: $0) }
     }
 
     /// `mcp__claude_ai_<Name>__` with every non-alphanumeric character in the name replaced by

@@ -235,9 +235,12 @@ nonisolated enum ConnectorCensus {
         }
     }
 
+    /// Internal (not private): the lab's census command persists the engine-explicit listers'
+    /// results through the same seam `list()` uses, so the per-origin caches stay honest on a
+    /// machine whose live backend never runs one of the engines.
     @discardableResult
-    private static func persist(_ connectors: [DetectedConnector],
-                                for origin: DetectedConnector.Origin) -> [DetectedConnector] {
+    static func persist(_ connectors: [DetectedConnector],
+                        for origin: DetectedConnector.Origin) -> [DetectedConnector] {
         guard let key = storageKey(for: origin),
               let data = try? JSONEncoder().encode(connectors) else { return connectors }
         UserDefaults.standard.set(data, forKey: key)

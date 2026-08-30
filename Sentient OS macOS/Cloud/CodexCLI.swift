@@ -120,21 +120,42 @@ actor CodexCLI {
                                                // strings ONLY — never paths, UUIDs, or free text (the
                                                // Sentry scrubber [Filtered]s those into uselessness).
 
-        // Claude-engine fields (ignored by CodexCLI; read only when ModelBackend is .claude —
-        // the Invocation is the ONE shape both engines speak, so the two engine-specific knobs
-        // live here rather than forking the type):
+        // The connector run recipes (see the recipe tables in each engine's argument builder).
+        // Slugs are ConnectorRegistry's canonical identities, resolved to per-engine server
+        // definitions through the ONE seam `ConnectorRegistry.server(for:)`. All three are
+        // inert when unset, on the custom backend, and never combine with each other or with
+        // `bypassApprovals` (the sandboxed recipes never bypass):
+        var mcpActionServer: String? = nil     // FIRED CONNECTOR TASK: user-fired, one connector.
+                                               // Claude: dontAsk + allow that server's tools, a
+                                               // one-server allowedMcpServers wall, destructive
+                                               // tools denied by name (requires a classification —
+                                               // fail-closed). Codex: per-id approve mode (else
+                                               // the shipped id-free `apps._default` preset) +
+                                               // the destructive strip; sandbox stays ON.
+        var mcpReadConnectors: [String] = []   // UNATTENDED READ (KB reads, probes, research):
+                                               // Claude: dontAsk + allow exactly the registry's
+                                               // read tools per slug, wall = those servers only
+                                               // (a slug with no read list throws — fail-closed;
+                                               // measured 2026-08-23: nothing short of an allow
+                                               // rule approves a connector tool headless).
+                                               // Codex: read-only sandbox + destructive strips.
+        var mcpAttachServer: String? = nil     // wall ONE server in with ZERO allow rules — the
+                                               // classifier's inventory read (the run calls no
+                                               // tools; listing your own tools needs no approval).
+                                               // Claude-only in effect; needs includeUserConfig
+                                               // (the strict wall blocks the connector fetch).
+
+        var imagePaths: [String] = []          // screenshots for run(): codex attaches `-i <paths>`
+                                               // (the variadic is terminated by the flag that
+                                               // always follows); claude appends the screenshots
+                                               // block to the prompt and Reads them (no -i flag
+                                               // exists there). runAgentCommand keeps its own
+                                               // parameter — this field is run()'s.
+
+        // Claude-engine field (ignored by CodexCLI; read only when ModelBackend is .claude —
+        // the Invocation is the ONE shape both engines speak, so the engine-specific knob
+        // lives here rather than forking the type):
         var claudeModel: ClaudeCLI.Model? = nil       // override the tier map (heavy legs pin .opus)
-        var claudeConnectorReads = false              // hosted-connector READ run: pre-approve the
-                                                      // curated read tools (ClaudeCLI.ConnectorTools;
-                                                      // writes stay denied — measured 2026-08-23:
-                                                      // nothing short of an allow rule approves a
-                                                      // connector tool headless, auto mode included)
-        var claudeMcpServerAllow: String? = nil       // load ONLY this one MCP server (a connector's
-                                                      // URL) via a --settings allowedMcpServers wall;
-                                                      // needs includeUserConfig=true (the strict wall
-                                                      // blocks the connector fetch entirely). The
-                                                      // classifier's minimal seam — 1.4 generalizes
-                                                      // it into the routed-spine recipes.
 
         init(prompt: String) { self.prompt = prompt }
 
@@ -726,7 +747,36 @@ actor CodexCLI {
     /// path passes one per display; the proactive executor passes none). They're placed right before
     /// `--skip-git-repo-check` so the flag terminates `-i`'s variadic `<FILE>...` and the prompt is
     /// never mistaken for another image.
+    /// The computer-use argv — extracted so the connector lab can print the recipe without
+    /// spawning, and so the wall widening below is one readable place. `attachConnectors`
+    /// (default OFF; task 1.6 flips it) adds `apps.<id>.destructive_enabled=false` for every
+    /// known catalog id — the two pinned chip connectors plus everything the census detected —
+    /// so a user-fired computer-use run keeps constructive connector writes (send, create)
+    /// while delete/trash-class tools are stripped from the surface entirely. OFF = argv
+    /// byte-identical to shipped.
+    static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
+                               effortArg: String, socketPath: String,
+                               attachConnectors: Bool) -> [String] {
+        var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
+                    "-m", modelID,
+                    "-c", "model_reasoning_effort=\"\(effortArg)\"",
+                    "--ignore-user-config"]
+        for override in CuaDriver.codexOverrides(socketPath: socketPath) { args += ["-c", override] }
+        if attachConnectors, ModelBackend.current == .chatgpt {
+            var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
+            ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
+            for id in ids { args += ["-c", "apps.\(id).destructive_enabled=false"] }
+        }
+        if ModelBackend.current == .custom {
+            for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
+        }
+        if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
+        args += ["--skip-git-repo-check", prompt]
+        return args
+    }
+
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
+                         attachConnectors: Bool = false,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
@@ -768,16 +818,10 @@ actor CodexCLI {
             // SURVIVE a hermetic run on codex 0.148+ (their curated-remote plugins load outside
             // the user config): measured 2026-08-19 — skills advertised AND a real hermetic
             // `gmail.search_emails` completed — so an "email X" task keeps the connector route.
-            var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                        "-m", modelID,
-                        "-c", "model_reasoning_effort=\"\(effortArg)\"",
-                        "--ignore-user-config"]
-            for override in CuaDriver.codexOverrides(socketPath: socket) { args += ["-c", override] }
-            if ModelBackend.current == .custom {
-                for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
-            }
-            if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
-            args += ["--skip-git-repo-check", prompt]
+            let args = Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
+                                           modelID: modelID, effortArg: effortArg,
+                                           socketPath: socket,
+                                           attachConnectors: attachConnectors)
             let modelTag = ModelBackend.current == .custom ? "custom" : modelID
             Log("codex exec: start feature=computer cua=\(CuaDriver.version) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
@@ -900,14 +944,45 @@ actor CodexCLI {
     /// [MEASURED] A resumed session's workspace root is the PROCESS cwd (not the remembered
     /// one), so `execute`'s cwd is load-bearing there, and the sandbox rides the
     /// `sandbox_mode` config key instead of `-s`.
-    private static func arguments(for inv: Invocation, modelID: String, effortArg: String,
-                                  schemaFile: String?) -> [String] {
+    ///
+    /// The connector run recipes, codex column (the README table in the Step 1 plan; the
+    /// Claude column lives in ClaudeCLI.arguments):
+    ///  ┌─────────────────┬────────────────────────────────────────────────────────────────┐
+    ///  │ UNATTENDED READ │ read-only sandbox as always (reads pass; writes approval-gated │
+    ///  │ mcpReadConnectors│ headless and auto-cancel) + `apps.<id>.destructive_enabled=   │
+    ///  │                 │ false` per resolvable catalog id (unresolvable = harmless      │
+    ///  │                 │ no-op, the existing strip posture).                            │
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ FIRED TASK      │ `apps.<id>.default_tools_approval_mode="approve"` when the id  │
+    ///  │ mcpActionServer │ resolves (server-scoped write approval), else the shipped      │
+    ///  │                 │ id-free `apps._default` preset; + the destructive strip for    │
+    ///  │                 │ that id. Sandbox stays ON (a real Gmail send worked under      │
+    ///  │                 │ `-s read-only`, measured 2026-07-18).                          │
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ COMPUTER USE    │ agentArguments below: the shipped hermetic bypass run + (when  │
+    ///  │ (runAgentCommand)│ widened) destructive strips for every known catalog id.       │
+    ///  └─────────────────┴────────────────────────────────────────────────────────────────┘
+    /// Internal (not private) so the connector lab's argv command can print recipes without
+    /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
+    static func arguments(for inv: Invocation, modelID: String, effortArg: String,
+                          schemaFile: String?) -> [String] {
+        assert([inv.mcpActionServer != nil, !inv.mcpReadConnectors.isEmpty,
+                inv.mcpAttachServer != nil].filter { $0 }.count <= 1,
+               "the connector recipe fields are mutually exclusive")
+        assert(!(inv.bypassApprovals && (inv.mcpActionServer != nil || !inv.mcpReadConnectors.isEmpty)),
+               "the sandboxed connector recipes never bypass approvals")
+        assert(inv.mcpReadConnectors.isEmpty || inv.sandbox == .readOnly,
+               "an unattended read is read-only by definition")
         var args = ["exec"]
         if let sid = inv.resumeSessionID { args += ["resume", sid] }
         args += ["--json",
                  "--skip-git-repo-check",      // staging dirs and the vault aren't git repos
                  "-m", modelID,
                  "-c", "model_reasoning_effort=\"\(effortArg)\""]
+        // Screenshots (run()'s optional eyes). Placed HERE because `-i` is variadic and every
+        // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
+        // which terminates it — the same dodge as probeCustomEndpoint's probe image.
+        if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
         if !inv.includeUserConfig {
             args += ["--ignore-user-config"]   // explicit hermetic opt-out only — includeUserConfig
         }                                      // defaults TRUE, so by default we DON'T pass this and
@@ -935,6 +1010,25 @@ actor CodexCLI {
             }
         }
         for override in inv.configOverrides { args += ["-c", override] }
+        // The connector recipes (table above). ChatGPT backend only: hosted connectors ride
+        // ChatGPT-account auth, so on a custom endpoint (hermetic anyway) the fields are inert.
+        if ModelBackend.current == .chatgpt {
+            if let slug = inv.mcpActionServer {
+                if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
+                    args += ["-c", "apps.\(id).default_tools_approval_mode=\"approve\"",
+                             "-c", "apps.\(id).destructive_enabled=false"]
+                } else {
+                    // No known id → the shipped id-free preset (approves every connector's
+                    // writes for this one app-authored, single-declared-action run).
+                    for override in Invocation.approveConnectorWrites { args += ["-c", override] }
+                }
+            }
+            for slug in inv.mcpReadConnectors {
+                if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
+                    args += ["-c", "apps.\(id).destructive_enabled=false"]
+                }
+            }
+        }
         if inv.webSearch { args += ["-c", "tools.web_search=true"] }
         if let schemaFile { args += ["--output-schema", schemaFile] }
         args.append("-")                       // the prompt arrives on stdin

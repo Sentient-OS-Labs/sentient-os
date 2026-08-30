@@ -120,8 +120,7 @@ nonisolated enum ConnectorClassifier {
         Include every connector tool exactly once; exclude built-ins and other
         connectors' tools.
         """
-        let envelope = try await run(prompt: prompt, schema: classifySchema,
-                                     serverURL: identity.serverURL)
+        let envelope = try await run(prompt: prompt, schema: classifySchema, slug: slug)
         return try parse(envelope.jsonResult, prefix: identity.toolPrefix)
     }
 
@@ -140,8 +139,7 @@ nonisolated enum ConnectorClassifier {
         Include every connector tool's full name exactly once; exclude built-ins and
         other connectors' tools.
         """
-        let envelope = try await run(prompt: prompt, schema: listSchema,
-                                     serverURL: identity.serverURL)
+        let envelope = try await run(prompt: prompt, schema: listSchema, slug: slug)
         struct Reply: Codable { let tools: [String] }
         guard let data = envelope.jsonResult.data(using: .utf8),
               let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
@@ -151,7 +149,7 @@ nonisolated enum ConnectorClassifier {
     }
 
     private static func run(prompt: String, schema: String,
-                            serverURL: String) async throws -> CodexCLI.Envelope {
+                            slug: String) async throws -> CodexCLI.Envelope {
         var invocation = CodexCLI.Invocation(prompt: prompt)
         invocation.feature = "classify"
         invocation.model = .gpt56luna          // → haiku on the Claude tier map
@@ -159,7 +157,7 @@ nonisolated enum ConnectorClassifier {
         invocation.sandbox = .readOnly
         invocation.webSearch = false
         invocation.timeout = 300
-        invocation.claudeMcpServerAllow = serverURL
+        invocation.mcpAttachServer = slug      // the ATTACH recipe: walled in alone, zero allows
         invocation.outputSchema = schema
         // trigger=probe: a failed classification is a quiet retry-later, never filed as an
         // analysis failure (the census warm run's posture).

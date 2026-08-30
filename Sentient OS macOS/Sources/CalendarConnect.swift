@@ -82,10 +82,12 @@ enum CalendarConnect {
         inv.sandbox = .readOnly
         inv.webSearch = false
         inv.timeout = 120
-        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools —
-                                             // nothing else approves a connector call headless,
-                                             // and a denied read would read as NO even when the
-                                             // connector is linked (measured 2026-08-23)
+        inv.mcpReadConnectors = ["google-calendar"]   // Claude engine: the unattended-read
+                                             // recipe — Calendar's curated read tools
+                                             // pre-approved, walled in alone. Nothing else
+                                             // approves a connector call headless, and a denied
+                                             // read would read as NO even when linked
+                                             // (measured 2026-08-23).
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
             let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
@@ -188,7 +190,7 @@ enum CalendarConnect {
         inv.webSearch = false
         inv.outputSchema = proactiveSchema
         inv.timeout = 300
-        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools
+        inv.mcpReadConnectors = ["google-calendar"]   // Claude engine: the unattended-read recipe
         do {
             let env = try await FrontierRun.run(inv)
             guard let span = jsonSpan(env.result),
@@ -219,7 +221,7 @@ enum CalendarConnect {
         inv.webSearch = false                // the calendar is the only source this needs
         inv.outputSchema = readSchema
         inv.timeout = 600
-        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools
+        inv.mcpReadConnectors = ["google-calendar"]   // Claude engine: the unattended-read recipe
         let env = try await FrontierRun.run(inv)
         return parse(env.result)
     }

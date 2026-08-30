@@ -92,10 +92,11 @@ enum GmailConnect {
         inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
         inv.sandbox = .readOnly
         inv.timeout = 120
-        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools —
-                                             // nothing else approves a connector call headless,
-                                             // and a denied read would read as NO even when the
-                                             // connector is linked (measured 2026-08-23)
+        inv.mcpReadConnectors = ["gmail"]    // Claude engine: the unattended-read recipe —
+                                             // Gmail's curated read tools pre-approved, walled
+                                             // in alone. Nothing else approves a connector call
+                                             // headless, and a denied read would read as NO
+                                             // even when linked (measured 2026-08-23).
         do {
             // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
             let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
@@ -214,7 +215,7 @@ enum GmailConnect {
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long
-        inv.claudeConnectorReads = true      // Claude engine: pre-approve the curated read tools
+        inv.mcpReadConnectors = ["gmail"]    // Claude engine: the unattended-read recipe
         let env = try await FrontierRun.run(inv)
         return parse(env.result)
     }

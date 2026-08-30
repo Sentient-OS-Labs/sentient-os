@@ -96,8 +96,10 @@ actor ClaudeCLI {
                                     "search_events", "suggest_time"]
             .map { "mcp__claude_ai_Google_Calendar__\($0)" }
 
-        /// What a connector-READ run pre-approves. Both families ride along on either source's
-        /// runs — harmless, they're read-only.
+        /// The combined read allows proactive research rides (the stripConnectorActionTools
+        /// branch in `arguments(for:)`, until task 1.7 migrates it to `mcpReadConnectors`).
+        /// The per-source reads now ride the unattended-read recipe, scoped per slug through
+        /// ConnectorRegistry (which references these same arrays — never copies).
         static var readAllowRules: [String] { gmailReads + calendarReads }
 
         /// The Gmail complement: every connector tool that MUTATES (send/reply/forward/draft/
@@ -108,7 +110,10 @@ actor ClaudeCLI {
         /// allows this is fail-OPEN — a write tool Anthropic adds is live until curated here —
         /// so re-verify the surface when the managed CLI updates. The two filter tools ride
         /// along preemptively: the connector's claude.ai directory page lists them though the
-        /// live capture didn't serve them.
+        /// live capture didn't serve them. Consumed by the SHIPPED computer-use wall (the
+        /// attachConnectors-off path in agentArguments) and by the connector lab's classifier
+        /// ground-truth eval; the widened wall replaces it with the registry's destructive
+        /// verdicts (writes go live — README decision #13).
         static let gmailWriteDenies = ["apply_sensitive_message_label",
                                        "apply_sensitive_thread_label", "create_draft",
                                        "create_filter", "create_label", "delete_filter",
@@ -338,6 +343,13 @@ actor ClaudeCLI {
 
     private func runInner(_ invocation: CodexCLI.Invocation, modelID: String, effortArg: String,
                           onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
+        var invocation = invocation
+        // Screenshots on run(): no `-i` flag exists on claude — the paths join the prompt and
+        // the model Reads them. Read is on every run() tool surface (the readOnly tool list
+        // names it; the other paths keep the default surface), so no tool change is needed.
+        if !invocation.imagePaths.isEmpty {
+            invocation.prompt += Self.screenshotsBlock(invocation.imagePaths)
+        }
         // Same pre-spawn guard as codex (piped stdin caps at 10 MB on claude, but every prompt
         // path is byte-budgeted to the shared 950 KB anyway — a throw here is the same canary).
         if invocation.prompt.utf8.count > CodexCLI.promptByteCap {
@@ -354,9 +366,9 @@ actor ClaudeCLI {
             { @Sendable raw in for s in Self.humanLines(fromStreamJSON: raw) { sink(s) } }
         }
         let out = try await CodexCLI.executeAsync(binary: bin,
-                                                  args: Self.arguments(for: invocation,
-                                                                       modelID: modelID,
-                                                                       effortArg: effortArg),
+                                                  args: try Self.arguments(for: invocation,
+                                                                           modelID: modelID,
+                                                                           effortArg: effortArg),
                                                   stdinText: invocation.prompt,
                                                   cwd: invocation.cwd,
                                                   timeout: invocation.timeout,
@@ -372,8 +384,84 @@ actor ClaudeCLI {
     /// (`--setting-sources ""` skips their settings and hooks; `--disable-slash-commands` keeps
     /// skills from expanding inside OUR prompts); `includeUserConfig=false` additionally seals
     /// off ALL MCP servers (theirs and claude.ai connectors) with `--strict-mcp-config`.
-    private static func arguments(for inv: CodexCLI.Invocation, modelID: String,
-                                  effortArg: String) -> [String] {
+    ///
+    /// The connector run recipes, Claude column (the README table in the Step 1 plan; the
+    /// codex column lives in CodexCLI.arguments). Ground truth for all three: headless
+    /// connector calls are approved by allow rules and NOTHING else (`auto` denies them too),
+    /// and the `allowedMcpServers` wall applies even under `--setting-sources ""` (both
+    /// measured 2026-08-23):
+    ///  ┌─────────────────┬────────────────────────────────────────────────────────────────┐
+    ///  │ UNATTENDED READ │ dontAsk + allow EXACTLY the registry's read tools per slug     │
+    ///  │ mcpReadConnectors│ (curated list where one exists, else the classifier's reads); │
+    ///  │                 │ wall = those servers' URLs only. A slug with no read list or   │
+    ///  │                 │ no known URL throws — fail-closed, never a silent wider run.   │
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ FIRED TASK      │ dontAsk + allow `<prefix>*` for the ONE routed server; wall =  │
+    ///  │ mcpActionServer │ that server's URL only; its destructive tools denied by name.  │
+    ///  │                 │ Requires a classification (the deny list needs the inventory); │
+    ///  │                 │ unclassified throws, and 1.5's narrated fallback to computer   │
+    ///  │                 │ use absorbs the refusal. Constructive writes are LIVE: these   │
+    ///  │                 │ runs are user-fired, one declared task (README decision #13).  │
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ ATTACH          │ wall only, ZERO allow rules — the classifier's inventory read  │
+    ///  │ mcpAttachServer │ (the run calls no tools; listing your own needs no approval).  │
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ COMPUTER USE    │ agentArguments below (the bypass spine; deny lists, not        │
+    ///  │ (runAgentCommand)│ allows, because bypass auto-approves everything).             │
+    ///  └─────────────────┴────────────────────────────────────────────────────────────────┘
+    /// Internal (not private) so the connector lab's argv command can print recipes without
+    /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
+    static func arguments(for inv: CodexCLI.Invocation, modelID: String,
+                          effortArg: String) throws -> [String] {
+        assert([inv.mcpActionServer != nil, !inv.mcpReadConnectors.isEmpty,
+                inv.mcpAttachServer != nil].filter { $0 }.count <= 1,
+               "the connector recipe fields are mutually exclusive")
+        assert(!(inv.bypassApprovals && (inv.mcpActionServer != nil || !inv.mcpReadConnectors.isEmpty)),
+               "the sandboxed connector recipes never bypass approvals")
+        assert((inv.mcpActionServer == nil && inv.mcpReadConnectors.isEmpty && inv.mcpAttachServer == nil)
+               || inv.includeUserConfig,
+               "the recipes need includeUserConfig: the strict wall blocks the connector fetch")
+        assert((inv.mcpActionServer == nil && inv.mcpReadConnectors.isEmpty)
+               || inv.sandbox == .readOnly,
+               "connector recipe runs are read-only sandboxed (connector tools ride MCP, not files)")
+
+        // Resolve and validate the recipe fields ONCE, fail-closed, before any argv exists.
+        var recipeWallURLs: [String] = []
+        var recipeAllows: [String] = []
+        var recipeDenies: [String] = []
+        if let slug = inv.mcpAttachServer {
+            guard let url = ConnectorRegistry.server(for: slug)?.claudeServerURL else {
+                throw CodexCLI.CLIError.notAvailable(
+                    .notWorking("connector \(slug) has no known claude.ai server"))
+            }
+            recipeWallURLs = [url]
+        } else if let slug = inv.mcpActionServer {
+            guard let resolved = ConnectorRegistry.server(for: slug),
+                  let url = resolved.claudeServerURL,
+                  let prefix = resolved.claudeToolPrefix else {
+                throw CodexCLI.CLIError.notAvailable(
+                    .notWorking("connector \(slug) has no known claude.ai server"))
+            }
+            guard ConnectorRegistry.isClassified(slug) else {
+                throw CodexCLI.CLIError.notAvailable(
+                    .notWorking("connector \(slug) is not classified yet"))
+            }
+            recipeWallURLs = [url]
+            recipeAllows = [prefix + "*"]
+            recipeDenies = ConnectorRegistry.destructiveToolNames(slug: slug)
+        } else {
+            for slug in inv.mcpReadConnectors {
+                let reads = ConnectorRegistry.readToolNames(slug: slug)
+                guard !reads.isEmpty,
+                      let url = ConnectorRegistry.server(for: slug)?.claudeServerURL else {
+                    throw CodexCLI.CLIError.notAvailable(
+                        .notWorking("connector \(slug) has no read allow-list"))
+                }
+                recipeWallURLs.append(url)
+                recipeAllows += reads
+            }
+        }
+
         var args = ["-p",
                     "--output-format", "stream-json", "--verbose",
                     "--model", modelID,
@@ -383,29 +471,26 @@ actor ClaudeCLI {
         if let sid = inv.resumeSessionID { args += ["--resume", sid] }
         if !inv.includeUserConfig {
             args += ["--strict-mcp-config", "--mcp-config", #"{"mcpServers":{}}"#]
-        } else if let server = inv.claudeMcpServerAllow {
-            // The one-connector wall (the classifier's run): ONLY this server may load — the
-            // user's own MCP servers and every other connector are blocked before their tools
-            // reach the model. `--settings` applies even under `--setting-sources ""` (measured
-            // 2026-08-23, the shipped Sidekick Gmail wall). Deliberately minimal — task 1.4
-            // generalizes this into the full run recipes.
-            args += ["--settings", Self.mcpServerAllowSettings(server)]
+        } else if !recipeWallURLs.isEmpty {
+            // The recipe wall: ONLY the recipe's server(s) may load — the user's own MCP
+            // servers and every other connector are blocked before their tools reach the model.
+            args += ["--settings", Self.mcpServerAllowSettings(serverURLs: recipeWallURLs)]
         }
 
-        var allowed: [String] = []
-        var disallowed: [String] = []
+        var allowed = recipeAllows
+        var disallowed = recipeDenies
 
         // The permission recipe — codex's Seatbelt tiers in Claude Code's dialect:
         //  · readOnly        → dontAsk (auto-deny anything not pre-approved) + read-only tools.
         //  · workspaceWrite  → acceptEdits, cwd = the staging dir (edits auto-approved there).
         //  · approveConnectorWrites (the executor's gmail/calendar fire) → dontAsk + every MCP
         //    tool pre-approved for this ONE app-authored, single-declared-action run — the same
-        //    scope codex's `apps._default` approve carried.
-        //  · claudeConnectorReads (probes + the Gmail/Calendar reads) → the curated read-tool
-        //    allow rules (ConnectorTools); writes stay denied by dontAsk. Measured 2026-08-23:
-        //    connector tools headless are approved by allow rules ONLY — auto mode denies them.
-        //  · stripConnectorActionTools (proactive research) → the same read-only allows: reads
-        //    flow, and "never fire" stays structural because no write rule exists in the run.
+        //    scope codex's `apps._default` approve carried. (Task 1.7 migrates these fires to
+        //    mcpActionServer's server-scoped approval.)
+        //  · the recipe fields → the table above (allows/denies merged in via recipeAllows).
+        //  · stripConnectorActionTools (proactive research, until task 1.7) → the curated
+        //    gmail/calendar read allows: reads flow, and "never fire" stays structural because
+        //    no write rule exists in the run.
         var skippedPermissions = false
         if inv.bypassApprovals {
             // The codex bypass twin (the executor's connector self-heal retry rides this in
@@ -423,8 +508,7 @@ actor ClaudeCLI {
                 case .readOnly: mode = "dontAsk"
                 case .workspaceWrite: mode = "acceptEdits"
                 }
-                if inv.claudeConnectorReads
-                    || inv.configOverrides == CodexCLI.Invocation.stripConnectorActionTools {
+                if inv.configOverrides == CodexCLI.Invocation.stripConnectorActionTools {
                     allowed += ConnectorTools.readAllowRules
                 }
             }
@@ -449,16 +533,22 @@ actor ClaudeCLI {
         return args
     }
 
-    /// `{"allowedMcpServers":[{"serverUrl":"https://host/*"}]}` — the origin glob (scheme +
-    /// host), matching the shipped Gmail wall's shape: an exact-URL entry would not match the
-    /// endpoint's subpaths. A string that won't parse as a URL rides through as-is; a JSON
-    /// serialization failure walls out EVERYTHING (empty allowlist) — never fail open.
-    static func mcpServerAllowSettings(_ serverURL: String) -> String {
-        var glob = serverURL
-        if let url = URL(string: serverURL), let scheme = url.scheme, let host = url.host {
-            glob = "\(scheme)://\(host)/*"
+    /// `{"allowedMcpServers":[{"serverName":"cua_driver"},{"serverUrl":"https://host/*"},…]}` —
+    /// named entries first (the cua daemon on computer-use runs), then one origin glob
+    /// (scheme + host) per URL, matching the shipped Gmail wall's shape: an exact-URL entry
+    /// would not match the endpoint's subpaths. A string that won't parse as a URL rides
+    /// through as-is; a JSON serialization failure walls out EVERYTHING (empty allowlist) —
+    /// never fail open.
+    static func mcpServerAllowSettings(serverURLs: [String], serverNames: [String] = []) -> String {
+        var entries: [[String: String]] = serverNames.map { ["serverName": $0] }
+        for serverURL in serverURLs {
+            var glob = serverURL
+            if let url = URL(string: serverURL), let scheme = url.scheme, let host = url.host {
+                glob = "\(scheme)://\(host)/*"
+            }
+            entries.append(["serverUrl": glob])
         }
-        let settings: [String: Any] = ["allowedMcpServers": [["serverUrl": glob]]]
+        let settings: [String: Any] = ["allowedMcpServers": entries]
         guard let data = try? JSONSerialization.data(withJSONObject: settings,
                                                      options: [.withoutEscapingSlashes]),
               let json = String(data: data, encoding: .utf8) else {
@@ -479,7 +569,82 @@ actor ClaudeCLI {
     /// tools are denied by name (Claude Code has no per-server enabled_tools filter).
     /// Screenshots: no `-i` flag exists — paths are appended to the prompt and the model Reads
     /// them (Claude Code's Read tool ingests images natively).
+    /// The screenshots block both run paths append to the prompt (Claude Code has no `-i`
+    /// flag; the Read tool ingests images natively).
+    static func screenshotsBlock(_ paths: [String]) -> String {
+        "\n\nSCREENSHOTS — what the user sees right now (main display first). "
+            + "Read each file with the Read tool BEFORE acting:\n"
+            + paths.map { "- \($0)" }.joined(separator: "\n")
+    }
+
+    /// The computer-use argv (the third recipe row in `arguments(for:)`'s table) — extracted
+    /// so the connector lab can print it without spawning and the wall construction is one
+    /// readable place.
+    ///
+    /// ⚠️ The prompt sits DIRECTLY after -p (the documented `claude -p "query"` form),
+    /// never trailing the flag list: claude's tool flags are VARIADIC (--allowedTools /
+    /// --disallowedTools / --mcp-config each keep consuming space-separated values), so a
+    /// bare positional after one gets eaten as another value and the run dies with
+    /// "Input must be provided either through stdin or as a prompt argument"
+    /// [FIELD-FOUND 2026-08-21, the first live Sidekick fire]. Same trap as codex's `-i`
+    /// variadic, dodged the same way: no positional ever follows a variadic flag.
+    ///
+    /// `attachConnectors` OFF (the default; argv byte-identical to shipped): with Gmail linked
+    /// the strict wall is swapped for a server ALLOWLIST (only the cua driver by name and the
+    /// Gmail connector by its Google-hosted URL may load) and the Gmail write denies ride
+    /// along, so email joins the run READ-ONLY; without Gmail the strict wall rides unchanged.
+    /// `--settings` applies even under `--setting-sources ""` (measured 2026-08-23).
+    ///
+    /// ON (task 1.6 flips it): the wall admits the cua driver + every attachable connector
+    /// (`ConnectorRegistry.computerUseAttachable` — curated or classified only; unclassified
+    /// connectors are excluded, fail-closed), and the deny list is cua's non-vision tools +
+    /// every attached connector's DESTRUCTIVE tools. Constructive connector writes are LIVE —
+    /// the deliberate posture change (README decision #13): a user-fired computer-use run
+    /// could already send that email by driving a mail app, so denying the tool changed the
+    /// path, not the power; safety rides one-declared-task + live streaming + STOP.
+    static func agentArguments(prompt: String, modelID: String, effortArg: String,
+                               socketPath: String, attachConnectors: Bool) -> [String] {
+        let mcpWall: [String]
+        var disallowed = CuaDriver.claudeDisallowedMcpTools
+        if attachConnectors {
+            let attached = ConnectorRegistry.computerUseAttachable()
+                .filter { $0.claudeServerURL != nil }
+            if attached.isEmpty {
+                mcpWall = ["--strict-mcp-config"]
+            } else {
+                mcpWall = ["--settings",
+                           mcpServerAllowSettings(serverURLs: attached.compactMap(\.claudeServerURL),
+                                                  serverNames: ["cua_driver"])]
+                for server in attached {
+                    disallowed += ConnectorRegistry.destructiveToolNames(slug: server.slug)
+                }
+            }
+            Log("claude agent: wall widened, \(attached.count) connector(s) attached")
+        } else if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") {
+            mcpWall = ["--settings", #"{"allowedMcpServers":[{"serverName":"cua_driver"},"#
+                                   + #"{"serverUrl":"https://gmailmcp.googleapis.com/*"}]}"#]
+            disallowed += ConnectorTools.gmailWriteDenies
+        } else {
+            mcpWall = ["--strict-mcp-config"]
+        }
+        return ["-p", prompt,
+                "--output-format", "stream-json", "--verbose",
+                "--model", modelID,
+                "--effort", effortArg,
+                "--dangerously-skip-permissions",
+                "--setting-sources", "",
+                "--disable-slash-commands"]
+            + mcpWall
+            + ["--mcp-config", CuaDriver.claudeMcpConfig(socketPath: socketPath),
+               // Bash = the shim's one-shot action calls; Read = the screenshots. Nothing
+               // else from the built-in surface (a file the task needs written goes
+               // through the shell, same as on codex).
+               "--tools", "Bash,Read",
+               "--disallowedTools", disallowed.joined(separator: ",")]
+    }
+
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
+                         attachConnectors: Bool = false,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         let (modelID, effortArg) = Self.agentTuned()
@@ -498,49 +663,12 @@ actor ClaudeCLI {
             }
 
             var fullPrompt = prompt
-            if !imagePaths.isEmpty {
-                fullPrompt += "\n\nSCREENSHOTS — what the user sees right now (main display first). "
-                    + "Read each file with the Read tool BEFORE acting:\n"
-                    + imagePaths.map { "- \($0)" }.joined(separator: "\n")
-            }
+            if !imagePaths.isEmpty { fullPrompt += Self.screenshotsBlock(imagePaths) }
 
-            // ⚠️ The prompt sits DIRECTLY after -p (the documented `claude -p "query"` form),
-            // never trailing the flag list: claude's tool flags are VARIADIC (--allowedTools /
-            // --disallowedTools / --mcp-config each keep consuming space-separated values), so a
-            // bare positional after one gets eaten as another value and the run dies with
-            // "Input must be provided either through stdin or as a prompt argument"
-            // [FIELD-FOUND 2026-08-21, the first live Sidekick fire]. Same trap as codex's `-i`
-            // variadic, dodged the same way: no positional ever follows a variadic flag.
-            // Email as live context: with Gmail linked, the claude.ai Gmail connector joins the
-            // run READ-ONLY — the strict wall would block the connector fetch, so those runs
-            // swap it for a server ALLOWLIST (only the cua driver by name and the Gmail
-            // connector by its Google-hosted URL may load; personal MCP servers and every other
-            // connector are blocked before their tools reach the model) and add the write-tool
-            // denies. `--settings` applies even under `--setting-sources ""` (measured
-            // 2026-08-23). Without Gmail the shipped strict wall rides unchanged — smallest
-            // blast radius, since the allowlist is settings machinery a CLI update could
-            // reshape.
             let withGmail = UserDefaults.standard.bool(forKey: "dbg.gmail.connected")
-            let mcpWall = withGmail
-                ? ["--settings", #"{"allowedMcpServers":[{"serverName":"cua_driver"},"#
-                               + #"{"serverUrl":"https://gmailmcp.googleapis.com/*"}]}"#]
-                : ["--strict-mcp-config"]
-            let disallowed = CuaDriver.claudeDisallowedMcpTools
-                + (withGmail ? ConnectorTools.gmailWriteDenies : [])
-            let args = ["-p", fullPrompt,
-                        "--output-format", "stream-json", "--verbose",
-                        "--model", modelID,
-                        "--effort", effortArg,
-                        "--dangerously-skip-permissions",
-                        "--setting-sources", "",
-                        "--disable-slash-commands"]
-                + mcpWall
-                + ["--mcp-config", CuaDriver.claudeMcpConfig(socketPath: socket),
-                   // Bash = the shim's one-shot action calls; Read = the screenshots. Nothing
-                   // else from the built-in surface (a file the task needs written goes
-                   // through the shell, same as on codex).
-                   "--tools", "Bash,Read",
-                   "--disallowedTools", disallowed.joined(separator: ",")]
+            let args = Self.agentArguments(prompt: fullPrompt, modelID: modelID,
+                                           effortArg: effortArg, socketPath: socket,
+                                           attachConnectors: attachConnectors)
 
             var env = Self.baseEnv
             // Screenshot-bearing MCP results are big (the default 25k-token cap would truncate a

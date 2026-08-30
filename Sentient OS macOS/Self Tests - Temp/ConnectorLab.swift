@@ -10,6 +10,9 @@
 //  Commands: census (both engines, explicitly) · parse (canned strings) · warm (the codex warm
 //  run) · registry (pure pack/query checks) · tools (inventory dump, LAB_SLUG) · classify (the
 //  three-way run + ground-truth eval, LAB_SLUG + LAB_RUNS) · cache (hit / version-bump / re-run)
+//  · read / act / denycheck (the 1.4 run recipes against a real connector: LAB_SLUG + optional
+//  LAB_PROMPT; LAB_ENGINE=claude|codex calls that engine directly, else the live backend rides
+//  FrontierRun) · argv (pure: print every recipe's argv per engine, no runs)
 //
 //  Both listers are called BY NAME rather than through ConnectorCensus.list(), so testing an
 //  engine never mutates the user's live `model.backend` setting (self-tests share the real
@@ -34,8 +37,14 @@ enum ConnectorLab {
         case "tools":    await tools()
         case "classify": await classify()
         case "cache":    await cache()
+        case "read":     await readRecipe()
+        case "act":      await actRecipe()
+        case "denycheck": await denycheck()
+        case "argv":     argv()
+        case "probes":   await probes()
         default:
-            Log("unknown LAB_CMD '\(command)' (census | parse | warm | registry | tools | classify | cache)")
+            Log("unknown LAB_CMD '\(command)' (census | parse | warm | registry | tools | classify"
+                + " | cache | read | act | denycheck | argv | probes)")
         }
     }
 
@@ -64,10 +73,12 @@ enum ConnectorLab {
         Log("\n-- claude (`claude mcp list`) --")
         let claude = await ConnectorCensus.listClaude()
         dump(claude)
+        ConnectorCensus.persist(claude, for: .claude)     // keep the per-origin cache honest
 
         Log("\n-- codex (plugins cache on disk) --")
         let codex = ConnectorCensus.listCodex()
         dump(codex)
+        ConnectorCensus.persist(codex, for: .chatgpt)
 
         Log("\n-- list() for the live backend, then the persisted re-read --")
         let live = await ConnectorCensus.list()
@@ -382,5 +393,200 @@ enum ConnectorLab {
         let versionRestored = (after?.cliVersion ?? "0.0.0") != "0.0.0"
         Log("\(reran && versionRestored && rerunSeconds > 5 ? "PASS" : "FAIL")  version bump forced "
             + "a re-run: ok=\(reran) in \(Int(rerunSeconds))s, stored cli=\(after?.cliVersion ?? "none")")
+    }
+
+    // MARK: The 1.4 run recipes (read / act / denycheck — real runs on the LIVE backend)
+
+    /// The recipe commands ride FrontierRun by default, exercising whichever engine is live.
+    /// LAB_ENGINE=claude|codex calls that engine's actor DIRECTLY instead — the same pattern
+    /// as the census listers being called by name: testing an engine never mutates the user's
+    /// live `model.backend` setting (an app mid-session would move engines with it). The
+    /// direct call runs the identical recipe code; only FrontierRun's 3-line switch is skipped.
+    /// ⚠️ codex-side recipe overrides emit on the chatgpt backend only (the BYOM-inertness
+    /// gate), so LAB_ENGINE=codex is honest only while the live backend IS chatgpt.
+    private static var labEngine: String? {
+        ProcessInfo.processInfo.environment["LAB_ENGINE"]
+    }
+
+    private static func requireConnectorBackend(_ what: String) -> Bool {
+        guard labEngine == nil else { return true }   // engine-explicit: no backend requirement
+        guard ModelBackend.current != .custom else {
+            Log("skipped: \(what) rides FrontierRun on hosted-account connectors — a custom "
+                + "endpoint has none. Switch to the Claude or ChatGPT engine "
+                + "(currently \(ModelBackend.current.rawValue)) or set LAB_ENGINE.")
+            return false
+        }
+        return true
+    }
+
+    private static var labPrompt: String? {
+        ProcessInfo.processInfo.environment["LAB_PROMPT"]
+    }
+
+    /// An unattended-read Invocation on the recipe, shared by read and denycheck.
+    private static func readInvocation(slug: String, prompt: String) -> CodexCLI.Invocation {
+        var inv = CodexCLI.Invocation(prompt: prompt)
+        inv.feature = "connector-lab"
+        inv.model = .gpt56luna
+        inv.effort = .medium
+        inv.sandbox = .readOnly
+        inv.webSearch = false
+        inv.timeout = 300
+        inv.mcpReadConnectors = [slug]
+        return inv
+    }
+
+    private static func runAndPrint(_ inv: CodexCLI.Invocation, label: String) async -> String? {
+        do {
+            let started = Date()
+            let env = try await CodexTrigger.$current.withValue(.probe) {
+                switch labEngine {
+                case "claude": try await ClaudeCLI.shared.run(inv)
+                case "codex":  try await CodexCLI.shared.run(inv)
+                default:       try await FrontierRun.run(inv)
+                }
+            }
+            Log("\(label): completed in \(Int(Date().timeIntervalSince(started)))s, "
+                + "\(env.result.count) chars")
+            for line in env.result.split(separator: "\n") { Log("  | \(line)") }
+            return env.result
+        } catch {
+            Log("\(label) FAILED: \(ErrorLabel(error))")
+            return nil
+        }
+    }
+
+    /// `LAB_CMD=read`: the unattended-read recipe, for real. Default prompt is Drive-shaped;
+    /// pass LAB_PROMPT for any other slug (e.g. github on the codex backend).
+    private static func readRecipe() async {
+        guard requireConnectorBackend("the read recipe") else { return }
+        let slug = labSlug
+        let prompt = labPrompt
+            ?? "List the file names of the 5 newest files in my Google Drive. Reply with just the names."
+        _ = await runAndPrint(readInvocation(slug: slug, prompt: prompt), label: "read \(slug)")
+    }
+
+    /// `LAB_CMD=act`: the fired-connector-task recipe, for real, sentinel-honest. Default
+    /// prompt creates one harmless, deletable file. A second run with
+    /// LAB_PROMPT="...create X and then delete sentient-connector-lab-test.txt" must fail the
+    /// delete (destructive tools absent) while still reporting via the sentinel.
+    private static func actRecipe() async {
+        guard requireConnectorBackend("the act recipe") else { return }
+        let slug = labSlug
+        let name = ConnectorRegistry.server(for: slug)?.claudeName
+            ?? ConnectorCensus.titleCased(slug)
+        let ask = labPrompt
+            ?? "Create a new text file named sentient-connector-lab-test.txt in my Google Drive, "
+             + "containing the single line: connector lab was here."
+        let prompt = """
+        Do exactly this, using your "\(name)" connector tools: \(ask)
+
+        When finished, reply with exactly one final line:
+        STATUS: DONE - one line on what you did
+        or, if you could not do it:
+        STATUS: COULD_NOT - one line on why
+        """
+        var inv = CodexCLI.Invocation(prompt: prompt)
+        inv.feature = "connector-lab"
+        inv.effort = .medium
+        inv.sandbox = .readOnly
+        inv.webSearch = false
+        inv.timeout = 600
+        inv.mcpActionServer = slug
+        guard let reply = await runAndPrint(inv, label: "act \(slug)") else { return }
+        switch AgentStatus.parse(reply) {
+        case .done:                 Log("sentinel: DONE")
+        case .couldNot(let reason): Log("sentinel: COULD_NOT (\(reason))")
+        case .none:                 Log("sentinel: MISSING — the wrapper demanded one")
+        }
+    }
+
+    /// `LAB_CMD=denycheck`: an unattended-read run whose prompt TRIES a write. It must fail
+    /// structurally (Claude: not in the allow rules → denied; codex: approval-gated headless →
+    /// auto-cancel). For Drive, a follow-up read proves no file appeared.
+    private static func denycheck() async {
+        guard requireConnectorBackend("the deny check") else { return }
+        let slug = labSlug
+        let prompt = labPrompt
+            ?? "Create a new text file named sentient-connector-denycheck.txt in my Google Drive. "
+             + "If you cannot, say exactly why (which tool was unavailable or denied)."
+        _ = await runAndPrint(readInvocation(slug: slug, prompt: prompt), label: "denycheck \(slug)")
+        guard slug == "google-drive" else {
+            Log("(no follow-up verification for \(slug) — read the reply above)")
+            return
+        }
+        let verify = readInvocation(slug: slug,
+            prompt: "Is there a file named sentient-connector-denycheck.txt anywhere in my "
+                  + "Google Drive? Reply with exactly YES or NO.")
+        guard let answer = await runAndPrint(verify, label: "denycheck verify") else { return }
+        let upper = answer.uppercased()
+        let clean = upper.contains("NO") && !upper.contains("YES")
+        Log("\(clean ? "PASS" : "FAIL")  the denied write left no file behind")
+    }
+
+    /// `LAB_CMD=probes`: the REAL Gmail/Calendar connection probes, unchanged production code
+    /// on the live backend — the 1.4 regression check that the migrated read recipe still
+    /// answers YES on a linked account.
+    private static func probes() async {
+        guard requireConnectorBackend("the probes") else { return }
+        let gmail = await GmailConnect.probeConnected()
+        Log("GmailConnect.probeConnected → \(gmail)")
+        let calendar = await CalendarConnect.probeConnected()
+        Log("CalendarConnect.probeConnected → \(calendar)")
+    }
+
+    // MARK: argv (pure — print every recipe's argv per engine, no model runs)
+
+    /// The recipe-inertness and wall-widening proof: builds canned Invocations and prints the
+    /// exact argv each engine would spawn, including the computer-use argv with the widening
+    /// parameter off and on. DEBUG-lab only output; the agent argv carries a placeholder
+    /// prompt, never real content. Claude resolves slugs through the live registry/census
+    /// caches, so run `classify` first for a slug that needs one.
+    private static func argv() {
+        let slug = labSlug
+        func show(_ label: String, _ args: [String]) {
+            Log("\(label):\n    " + args.map { "'\($0)'" }.joined(separator: " "))
+        }
+        func showClaude(_ label: String, _ inv: CodexCLI.Invocation) {
+            do { show(label, try ClaudeCLI.arguments(for: inv, modelID: "sonnet", effortArg: "medium")) }
+            catch { Log("\(label): THROWS \(ErrorLabel(error)) (fail-closed refusal)") }
+        }
+
+        var plain = CodexCLI.Invocation(prompt: "P")
+        plain.feature = "lab"
+        var readInv = plain; readInv.mcpReadConnectors = [slug]
+        var actInv = plain; actInv.mcpActionServer = slug
+        var attachInv = plain; attachInv.mcpAttachServer = slug
+
+        Log("-- run() argv, codex column (recipe -c overrides emit on the chatgpt backend only; "
+            + "live backend: \(ModelBackend.current.rawValue)) --")
+        show("codex plain", CodexCLI.arguments(for: plain, modelID: "gpt-5.6-sol",
+                                               effortArg: "high", schemaFile: nil))
+        show("codex read", CodexCLI.arguments(for: readInv, modelID: "gpt-5.6-luna",
+                                              effortArg: "medium", schemaFile: nil))
+        show("codex act", CodexCLI.arguments(for: actInv, modelID: "gpt-5.6-sol",
+                                             effortArg: "medium", schemaFile: nil))
+
+        Log("-- run() argv, claude column --")
+        showClaude("claude plain", plain)
+        showClaude("claude read", readInv)
+        showClaude("claude act", actInv)
+        showClaude("claude attach (classifier)", attachInv)
+
+        Log("-- computer-use argv (placeholder prompt/socket) --")
+        show("claude agent, wall OFF (shipped)",
+             ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
+                                      socketPath: "/tmp/lab.sock", attachConnectors: false))
+        show("claude agent, wall ON (1.6 flips)",
+             ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
+                                      socketPath: "/tmp/lab.sock", attachConnectors: true))
+        show("codex agent, strips OFF (shipped)",
+             CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-5.6-sol",
+                                     effortArg: "low", socketPath: "/tmp/lab.sock",
+                                     attachConnectors: false))
+        show("codex agent, strips ON (1.6 flips)",
+             CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-5.6-sol",
+                                     effortArg: "low", socketPath: "/tmp/lab.sock",
+                                     attachConnectors: true))
     }
 }
