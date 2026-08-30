@@ -138,7 +138,9 @@ actor CodexCLI {
                                                // (a slug with no read list throws — fail-closed;
                                                // measured 2026-08-23: nothing short of an allow
                                                // rule approves a connector tool headless).
-                                               // Codex: read-only sandbox + destructive strips.
+                                               // Codex: read-only sandbox + open-world AND
+                                               // destructive strips per id (send/destroy tools
+                                               // absent from the run entirely).
         var mcpAttachServer: String? = nil     // wall ONE server in with ZERO allow rules — the
                                                // classifier's inventory read (the run calls no
                                                // tools; listing your own tools needs no approval).
@@ -169,29 +171,13 @@ actor CodexCLI {
             #"apps._default.default_tools_approval_mode="approve""#,
         ]
 
-        /// Removes the connector tools that transmit externally (`open_world_hint` — e.g. Gmail
-        /// send) or destroy data (`destructive_hint` — trash/delete) from the run's tool surface
-        /// entirely; read tools are untouched. For read-only phases (proactive research): "never
-        /// fire" becomes the tools not existing — on top of the prompt rule and the headless
-        /// auto-cancel of unapproved writes. Verified live 2026-07-18: Gmail search completes
-        /// while a send attempt fails with "is not a function" — the tool is genuinely absent.
         /// The global marketplace catalog ids for the two dedicated-chip connectors — the SAME
         /// for every user (see OpenAI's public `openai/plugins` repo, or
         /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). One source of
-        /// truth: the strip preset below and ConnectorRegistry's packs both read these.
+        /// truth: ConnectorRegistry's packs read these, and every recipe strip resolves through
+        /// the registry back to them.
         static let gmailCatalogID = "connector_2128aebfecb84f64a069897515042a44"
         static let calendarCatalogID = "connector_947e0d954944416db111db556030eea6"
-
-        /// The keys MUST be the LONG global catalog connector ids: friendly slugs ("gmail") are
-        /// silent no-ops for hosted connectors, and the app-wide `apps._default` variant strips
-        /// the READ tools too (both measured, codexperms self-test). If one ever rotated, this
-        /// strip degrades to a harmless no-op and the other two layers still hold.
-        static let stripConnectorActionTools = [
-            "apps.\(gmailCatalogID).open_world_enabled=false",
-            "apps.\(gmailCatalogID).destructive_enabled=false",
-            "apps.\(calendarCatalogID).open_world_enabled=false",
-            "apps.\(calendarCatalogID).destructive_enabled=false",
-        ]
     }
 
     /// The `--json` JSONL stream, reduced to an envelope.
@@ -946,9 +932,10 @@ actor CodexCLI {
     /// Claude column lives in ClaudeCLI.arguments):
     ///  ┌─────────────────┬────────────────────────────────────────────────────────────────┐
     ///  │ UNATTENDED READ │ read-only sandbox as always (reads pass; writes approval-gated │
-    ///  │ mcpReadConnectors│ headless and auto-cancel) + `apps.<id>.destructive_enabled=   │
-    ///  │                 │ false` per resolvable catalog id (unresolvable = harmless      │
-    ///  │                 │ no-op, the existing strip posture).                            │
+    ///  │ mcpReadConnectors│ headless and auto-cancel) + `apps.<id>.open_world_enabled=    │
+    ///  │                 │ false` AND `.destructive_enabled=false` per resolvable catalog │
+    ///  │                 │ id — the send/destroy tools don't exist in a read run at all   │
+    ///  │                 │ (unresolvable id = harmless no-op, the existing strip posture).│
     ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
     ///  │ FIRED TASK      │ `apps.<id>.default_tools_approval_mode="approve"` when the id  │
     ///  │ mcpActionServer │ resolves (server-scoped write approval), else the shipped      │
@@ -1021,8 +1008,18 @@ actor CodexCLI {
                 }
             }
             for slug in inv.mcpReadConnectors {
+                // Both strips per connector: `open_world_enabled=false` removes the tools that
+                // transmit externally (e.g. Gmail send) and `destructive_enabled=false` the
+                // trash/delete family — a read run's "never fire" is the tools NOT EXISTING, on
+                // top of the read-only sandbox's headless auto-cancel and the prompt rule.
+                // Verified live 2026-07-18: Gmail search completes under exactly these strips
+                // while a send attempt fails with "is not a function". The keys MUST be the LONG
+                // catalog ids (friendly slugs are silent no-ops; the app-wide `apps._default`
+                // variant strips READ tools too — both measured, codexperms self-test). An
+                // unresolvable id = harmless no-op; the other layers still hold.
                 if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
-                    args += ["-c", "apps.\(id).destructive_enabled=false"]
+                    args += ["-c", "apps.\(id).open_world_enabled=false",
+                             "-c", "apps.\(id).destructive_enabled=false"]
                 }
             }
         }

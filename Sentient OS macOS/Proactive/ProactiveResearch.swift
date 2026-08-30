@@ -17,8 +17,10 @@
 //    • Accuracy: receipts-only, never fabricate; "couldn't confirm" → `unverified` is a valid outcome.
 //    • Never fire: it stages but NEVER sends/submits/pays/RSVPs. Three independent layers: the
 //      prompt rule · `bypassApprovals = false` + sandbox (a connector WRITE auto-cancels headless) ·
-//      `stripConnectorActionTools` (the sending/destructive connector tools are absent from the
-//      run's tool surface entirely — an injected instruction has nothing to call).
+//      the unattended-read recipe (`mcpReadConnectors`: on codex the sending/destructive connector
+//      tools are stripped from the run's tool surface entirely, so an injected instruction has
+//      nothing to call; on Claude only the curated/classified READ tools are allowed and nothing
+//      else approves headless — same structural posture, per engine).
 //
 //  Output: ready-to-fire `PreparedAction`s (carrying the verify verdict + the prepared draft + a
 //  deterministic `execution_recipe` — the routing contract PART 3's executor runs)
@@ -41,6 +43,13 @@ struct PreparedAction: Sendable, Identifiable, Codable {
     let method: Method             // the ONE channel PART 3 fires this through (model-picked)
     let target: String             // the app/site this acts in, for the card kicker ("LinkedIn",
                                    // "Notion"); "" for gmail/calendar/research (the method names itself)
+    var methodTarget: String? = nil // .mcp ONLY: the canonical slug of the connected service the
+                                   // executor fires through ("google-drive"); nil for every other
+                                   // method. Optional + defaulted so stored 1.x cards decode
+                                   // (decodeIfPresent → nil) and memberwise call sites keep
+                                   // compiling — but copies MUST carry it through explicitly
+                                   // (see HomeView.replacing), or an edited mcp card loses its
+                                   // routing and its fire button.
     let urgency: ActionItem.Urgency
     let dueDate: String?
     let status: Status             // the verify verdict (confirmed / updated / unverified)
@@ -73,6 +82,8 @@ struct PreparedAction: Sendable, Identifiable, Codable {
                         // AND logged-in website tasks (register/RSVP/buy/fill a form) via the real browser
         case gmail      // the user's Gmail MCP via codex
         case calendar   // the user's Calendar MCP via codex
+        case mcp        // any OTHER connected service's hosted connector (`methodTarget` = its slug);
+                        // taught to the model only when connectors are actually detected
         case research   // informational briefing — nothing to fire
     }
     var id: String { title }
@@ -134,25 +145,43 @@ actor ProactiveResearch {
         let vault = VaultGenerator.vaultRoot
         guard FileManager.default.fileExists(atPath: vault.path) else { throw ResError.noVault }
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, recent: recent, now: now, calendarContext: calendarContext))
+        // The card channels this run may teach (the .mcp method): the live detected connectors.
+        // Zero detected = the shipped four methods and the shipped schema, byte-identical.
+        let channels = ConnectorRegistry.cardChannels()
+
+        // The read-only connector attachment: the two chips always (the shipped posture — inert
+        // when unlinked), plus every KB-enabled connector that actually has a read surface. The
+        // filter is load-bearing: the Claude builder throws per slug with no read allow-list, and
+        // one stale toggle must never fail-close the whole overnight research run.
+        let kbEnabled = ConnectorRegistry.kbEnabledConnectors().map(\.slug)
+        let kbReads = kbEnabled.filter { slug in
+            ModelBackend.current != .claude || !ConnectorRegistry.readToolNames(slug: slug).isEmpty
+        }
+        if kbReads.count != kbEnabled.count {
+            Log("ProactiveResearch: \(kbEnabled.count - kbReads.count) KB connector(s) excluded from the read attachment (no read allow-list yet)")
+        }
+
+        var inv = CodexCLI.Invocation(prompt: Self.prompt(items: items, recent: recent, now: now,
+                                                          calendarContext: calendarContext,
+                                                          channels: channels,
+                                                          readNames: kbReads.map { ConnectorRegistry.displayName(slug: $0) }))
         inv.feature = "proactive-research"
         inv.effort = .high                  // gpt-5.6-sol → high (accuracy + the prepared draft are the product)
         inv.sandbox = .readOnly             // verifies + stages — never sends, drafts into a provider, or acts
         inv.cwd = vault.path                // working dir = the knowledge base (a research surface + the voice)
         inv.webSearch = true                // ground external facts (on-sale/event dates, deadlines, form fields)
-        inv.includeUserConfig = true        // load the user's MCP servers — the Gmail MCP (read-only)
+        inv.includeUserConfig = true        // the recipes need the connector fetch (walled to the listed servers on Claude)
         inv.bypassApprovals = false         // ⚠️ load-bearing: NO fire — a connector write auto-cancels
-        inv.configOverrides = CodexCLI.Invocation.stripConnectorActionTools
-                                            // ⚠️ and the send/destroy connector tools don't even
-                                            // exist in this run — reads untouched
-        inv.outputSchema = Self.schema
+        inv.mcpReadConnectors = ["gmail", "google-calendar"] + kbReads
+                                            // ⚠️ the unattended-read recipe: Gmail/Calendar +
+                                            // KB-enabled connectors readable, and the send/destroy
+                                            // tools structurally out of reach (stripped per id on
+                                            // codex; unlisted on Claude's allow rules)
+        inv.outputSchema = Self.schema(channels: channels)
         inv.timeout = 1_800                 // agentic verify + prepare (Gmail + web + vault) over ≤5 items runs long
         inv.claudeModel = .opus             // the Claude engine's heavy leg: research earns Opus
-                                            // (on Claude, the strip preset above maps to the curated
-                                            // connector READ allows — Gmail reads flow, writes stay
-                                            // structurally impossible, same posture as codex's strip)
 
-        Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, Gmail MCP + web, never fire)…")
+        Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, connectors read-only + web, never fire; \(channels.count) mcp channel(s))…")
         do {
             let env = try await FrontierRun.run(inv, onLine: onLine)
             let parsed = Self.parse(env.jsonResult)
@@ -162,7 +191,7 @@ actor ProactiveResearch {
             #if DEBUG   // B7: the per-item detail carries preparedContent/titles/recipes (the user's life) —
                         // DEBUG-only so it can NEVER become a Release breadcrumb (Sentry is Release-only).
             for (i, a) in result.ready.enumerated() {
-                Log("  READY #\(i + 1) [\(a.method.rawValue)\(a.target.isEmpty ? "" : " · \(a.target)") · \(a.status.rawValue)\(a.dueDate.map { " · due \($0)" } ?? "")] \(a.title)\n      button: \(a.buttonText.isEmpty ? "(none)" : a.buttonText) · link: \(a.detailLabel)\n      card: \(a.cardSummary)\n      checked: \(a.verification)\n      content: \(a.preparedContent)\n      recipe: \(a.executionRecipe)\n      review: \(a.reviewNote.isEmpty ? "(none — fully ready)" : a.reviewNote)\n      src: \(a.sources.joined(separator: " | "))")
+                Log("  READY #\(i + 1) [\(a.method.rawValue)\(a.methodTarget.map { "→\($0)" } ?? "")\(a.target.isEmpty ? "" : " · \(a.target)") · \(a.status.rawValue)\(a.dueDate.map { " · due \($0)" } ?? "")] \(a.title)\n      button: \(a.buttonText.isEmpty ? "(none)" : a.buttonText) · link: \(a.detailLabel)\n      card: \(a.cardSummary)\n      checked: \(a.verification)\n      content: \(a.preparedContent)\n      recipe: \(a.executionRecipe)\n      review: \(a.reviewNote.isEmpty ? "(none — fully ready)" : a.reviewNote)\n      src: \(a.sources.joined(separator: " | "))")
             }
             for d in result.dropped {
                 Log("  DROP \(d.title) — \(d.reason)")
@@ -201,31 +230,45 @@ actor ProactiveResearch {
 
     // MARK: Output schema (the `--output-schema` contract)
 
-    private static let schema = """
-    {"type":"object","additionalProperties":false,"properties":{\
-    "ready":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
-    "title":{"type":"string"},\
-    "method":{"type":"string","enum":["computer","gmail","calendar","research"]},\
-    "target":{"type":"string"},\
-    "urgency":{"type":"string","enum":["high","medium","low"]},\
-    "due_date":{"type":"string"},\
-    "status":{"type":"string","enum":["confirmed","updated","unverified"]},\
-    "verification":{"type":"string"},\
-    "card_summary":{"type":"string"},\
-    "prepared_content":{"type":"string"},\
-    "execution_recipe":{"type":"string"},\
-    "recipient":{"type":"string"},\
-    "button_text":{"type":"string"},\
-    "detail_label":{"type":"string"},\
-    "sources":{"type":"array","items":{"type":"string"}},\
-    "review_note":{"type":"string"}},\
-    "required":["title","method","target","urgency","due_date","status","verification","card_summary","prepared_content","execution_recipe","recipient","button_text","detail_label","sources","review_note"]}},\
-    "dropped":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
-    "title":{"type":"string"},\
-    "reason":{"type":"string"}},\
-    "required":["title","reason"]}}},\
-    "required":["ready","dropped"]}
-    """
+    /// Built per run: with card channels detected, `method` gains "mcp" and a `method_target`
+    /// string rides along (strict-schema rules — `additionalProperties: false`, EVERY property
+    /// required — so "" means none and decode normalizes). Zero channels = the shipped
+    /// four-method schema, byte-identical: never teach a method that cannot fire.
+    /// Internal (not private) so the connector lab's decodecheck can verify both variants
+    /// (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
+    static func schema(channels: [ConnectorRegistry.CardChannel]) -> String {
+        let mcp = !channels.isEmpty
+        let methodEnum = mcp ? #""computer","gmail","calendar","mcp","research""#
+                             : #""computer","gmail","calendar","research""#
+        let targetProp = mcp ? #""method_target":{"type":"string"},"# : ""
+        let targetReq  = mcp ? #""method_target","# : ""
+        return """
+        {"type":"object","additionalProperties":false,"properties":{\
+        "ready":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
+        "title":{"type":"string"},\
+        "method":{"type":"string","enum":[\(methodEnum)]},\
+        \(targetProp)\
+        "target":{"type":"string"},\
+        "urgency":{"type":"string","enum":["high","medium","low"]},\
+        "due_date":{"type":"string"},\
+        "status":{"type":"string","enum":["confirmed","updated","unverified"]},\
+        "verification":{"type":"string"},\
+        "card_summary":{"type":"string"},\
+        "prepared_content":{"type":"string"},\
+        "execution_recipe":{"type":"string"},\
+        "recipient":{"type":"string"},\
+        "button_text":{"type":"string"},\
+        "detail_label":{"type":"string"},\
+        "sources":{"type":"array","items":{"type":"string"}},\
+        "review_note":{"type":"string"}},\
+        "required":["title","method",\(targetReq)"target","urgency","due_date","status","verification","card_summary","prepared_content","execution_recipe","recipient","button_text","detail_label","sources","review_note"]}},\
+        "dropped":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
+        "title":{"type":"string"},\
+        "reason":{"type":"string"}},\
+        "required":["title","reason"]}}},\
+        "required":["ready","dropped"]}
+        """
+    }
 
     // MARK: Tolerant parse (output-schema makes `result` the JSON; still fence-safe)
 
@@ -242,10 +285,17 @@ actor ProactiveResearch {
             guard let title = (d["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !title.isEmpty else { return nil }
             let due = (d["due_date"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let method = PreparedAction.Method(rawValue: (d["method"] as? String)?.lowercased() ?? "research") ?? .research
+            // Normalize the mcp slug: trimmed + lowercased, "" → nil, and nil for every other
+            // method. A missing/unknown target never crashes — the card just isn't fireable
+            // (ProactiveExecutor.isFireable answers false with an honest reason on fire).
+            let slug = ((d["method_target"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             return PreparedAction(
                 title: title,
-                method: PreparedAction.Method(rawValue: (d["method"] as? String)?.lowercased() ?? "research") ?? .research,
+                method: method,
                 target: ((d["target"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                methodTarget: (method == .mcp && !slug.isEmpty) ? slug : nil,
                 urgency: ActionItem.Urgency(rawValue: (d["urgency"] as? String)?.lowercased() ?? "medium") ?? .medium,
                 dueDate: (due?.isEmpty == false) ? due : nil,
                 status: PreparedAction.Status(rawValue: (d["status"] as? String)?.lowercased() ?? "unverified") ?? .unverified,
@@ -269,7 +319,11 @@ actor ProactiveResearch {
 
     // MARK: The prompt — verify THEN prepare, accuracy-obsessed, never fires
 
-    private static func prompt(items: [ActionItem], recent: [CloudNote], now: Date, calendarContext: String?) -> String {
+    /// `channels` = the detected connectors the model may declare as an `mcp` fire channel (empty
+    /// = the shipped four-method prompt, verbatim). `readNames` = the KB-enabled connectors this
+    /// run may additionally READ (beyond Gmail/Calendar), taught as read-only surfaces.
+    private static func prompt(items: [ActionItem], recent: [CloudNote], now: Date, calendarContext: String?,
+                               channels: [ConnectorRegistry.CardChannel], readNames: [String]) -> String {
         let today = Proactive.todayString(now)   // date + clock time + tz (shared with PART 1)
         var lines: [String] = []
         lines.reserveCapacity(items.count)
@@ -318,6 +372,32 @@ actor ProactiveResearch {
             \(Proactive.summaryLines(recent))
             """
         }()
+
+        // The mcp channel teaching (only when connectors are detected — a zero-connector run keeps
+        // the shipped four-method prompt verbatim): the method bullet + the live channel list.
+        let mcpBullet: String = channels.isEmpty ? "" : """
+
+        - **mcp** - the task is completed start to finish by ONE of the user's connected services \
+        below. Set method_target to its slug. Prefer it over computer when the task clearly \
+        belongs to that service. gmail and calendar stay their own methods for Gmail and Google \
+        Calendar; mcp is for the others. `prepared_content` = the exact artifact the service \
+        sends or creates (plain, verbatim); `execution_recipe` = routing only (which item, space, \
+        or thread it applies to).
+        """
+        let channelLines = channels.map { c in
+            c.description.map { "- \(c.slug): \(c.name) (\($0))" } ?? "- \(c.slug): \(c.name)"
+        }.joined(separator: "\n")
+        let mcpChannels: String = channels.isEmpty ? "" : """
+
+
+        CONNECTED SERVICES AVAILABLE AS CHANNELS:
+        \(channelLines)
+        """
+        let mcpTargetBullet: String = channels.isEmpty ? "" : """
+        - **method_target** — for **mcp** only: the connected service's slug, exactly as listed \
+        above; "" for every other method.
+
+        """
 
         return """
         You are the **Research & Prepare** step of Sentient OS's Proactive Intelligence — PART 2 of 3, \
@@ -373,6 +453,7 @@ actor ProactiveResearch {
         3. **Web search** — ground external facts (on-sale/event dates, deadlines, hours, price, a \
         form's required fields, what a registration page asks for), identity-matched. **Look up only — \
         never submit/pay/confirm.**
+        \(readNames.isEmpty ? "" : "You may also READ the user's \(readNames.joined(separator: ", ")) connector\(readNames.count == 1 ? "" : "s") to verify facts; they are read-only in this run.\n")\
         If a tool you'd need isn't available, go as far as you can and say in `review_note`/the recipe \
         what the fire step will have to handle.
 
@@ -407,7 +488,7 @@ actor ProactiveResearch {
         You work ONLY the items handed to you below. **Never invent a brand-new action item** — \
         discovery already happened in PART 1.
 
-        ## THE FOUR METHODS (set `method`) — pick the ONE channel that fires this action
+        ## THE \(channels.isEmpty ? "FOUR" : "FIVE") METHODS (set `method`) — pick the ONE channel that fires this action
         You decide HOW Sentient carries out each action. Pick exactly one method:
         - **gmail** — anything in the user's email (a reply or a brand-new message). \
         `prepared_content` = the full draft (subject + body); `execution_recipe` = recipient(s) + the \
@@ -427,7 +508,7 @@ actor ProactiveResearch {
         as written — so every step must be unambiguous and doable with clicks and typing. \
         `execution_recipe` = routing ONLY (which app or URL to start in; which chat for a message) — \
         never restate the steps or the message there. (The fire step NEVER uses AppleScript/Terminal — \
-        only computer use.)
+        only computer use.)\(mcpBullet)
         - **research** — informational only: write the briefing the user wanted (a trip plan, a \
         comparison, prepped notes for a call). Nothing fires — `execution_recipe` = "none", \
         `button_text` = "". Typeset the briefing in the letter's light Markdown so it renders \
@@ -435,11 +516,11 @@ actor ProactiveResearch {
         skimmable points, `**bold**` on the load-bearing facts, short plain paragraphs otherwise. \
         Never a `# ` H1 (the card's title is the headline); no tables, code blocks, or nested \
         lists. This light Markdown is for research briefings ONLY — every other method's \
-        `prepared_content` fires verbatim, so it stays plain text.
+        `prepared_content` fires verbatim, so it stays plain text.\(mcpChannels)
 
         **Which method:** email → **gmail**; calendar events → **calendar**; everything Sentient ACTS \
         on for the user — a native Mac app, a chat message (WhatsApp/iMessage via Messages), or a \
-        logged-in website — → **computer**. A real task only the user can do by hand with nothing to \
+        logged-in website — → **computer**.\(channels.isEmpty ? "" : " A task that ONE of the connected services above completes start to finish → **mcp**.") A real task only the user can do by hand with nothing to \
         automate (e.g. a phone call) → **research** (surface it; don't drop it).
 
         ## ACCURACY & VOICE (this will go out under the user's name)
@@ -455,9 +536,10 @@ actor ProactiveResearch {
         Return ONLY the structured object defined by the schema — no prose around it.
         `ready` — the survivors, each staged to fire. For each:
         - **title** — short, specific headline (≤ ~8 words).
-        - **method** — one of the four above (the single channel that fires this).
+        - **method** — one of the \(channels.isEmpty ? "four" : "five") above (the single channel that fires this).
+        \(mcpTargetBullet)\
         - **target** — the app or website this acts in, as a short brand name for the card label \
-        ("LinkedIn", "Notion", "Amazon"). REQUIRED for **computer**; leave "" for \
+        ("LinkedIn", "Notion", "Amazon"). REQUIRED for **computer**\(channels.isEmpty ? "" : "; for **mcp** the service's short name (\"Google Drive\")"); leave "" for \
         gmail / calendar / research (the method names itself).
         - **urgency** — "high" / "medium" / "low".
         - **due_date** — the real VERIFIED date in plain words, or "" if none / unverified.

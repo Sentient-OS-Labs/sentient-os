@@ -308,6 +308,35 @@ nonisolated enum ConnectorRegistry {
         return "mcp__claude_ai_\(cleaned)__"
     }
 
+    // MARK: The proactive card channels (task 1.7)
+
+    /// One connector as proactive research may teach it: an `mcp` fire channel for a morning
+    /// card. `description` = the curated router line (uncurated connectors ride name-only).
+    struct CardChannel: Sendable {
+        let slug: String
+        let name: String
+        let description: String?
+    }
+
+    /// The connectors research may declare as a card's fire channel: every detected connector
+    /// for the live backend — on the Claude engine only CLASSIFIED ones, because the fired-task
+    /// recipe refuses an unclassified slug and a card fire has no narrated fallback (the
+    /// idle-tick classifier sweep makes exclusions a minutes-long transient). gmail and
+    /// google-calendar never appear (census-excluded; they are their own methods). Empty =
+    /// the shipped four-method research prompt and schema, untouched.
+    static func cardChannels() -> [CardChannel] {
+        let detected = detectedForCurrentBackend()
+        let usable = ModelBackend.current == .claude
+            ? detected.filter { isClassified($0.slug) }
+            : detected
+        if usable.count != detected.count {
+            Log("cardChannels: \(detected.count - usable.count) unclassified connector(s) not offered as channels yet")
+        }
+        return usable.map { CardChannel(slug: $0.slug,
+                                        name: displayName(slug: $0.slug),
+                                        description: pack(forSlug: $0.slug)?.routerDescription) }
+    }
+
     // MARK: Detection convenience
 
     /// The census's persisted list for the live backend (always empty on `.custom`, which has

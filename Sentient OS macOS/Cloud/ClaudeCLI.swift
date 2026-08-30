@@ -96,12 +96,6 @@ actor ClaudeCLI {
                                     "search_events", "suggest_time"]
             .map { "mcp__claude_ai_Google_Calendar__\($0)" }
 
-        /// The combined read allows proactive research rides (the stripConnectorActionTools
-        /// branch in `arguments(for:)`, until task 1.7 migrates it to `mcpReadConnectors`).
-        /// The per-source reads now ride the unattended-read recipe, scoped per slug through
-        /// ConnectorRegistry (which references these same arrays — never copies).
-        static var readAllowRules: [String] { gmailReads + calendarReads }
-
         /// The Gmail complement: every connector tool that MUTATES (send/reply/forward/draft/
         /// label/spam/trash territory) — a DENY list for computer-use runs, where
         /// `--dangerously-skip-permissions` auto-approves connector tools (measured 2026-08-23;
@@ -483,14 +477,15 @@ actor ClaudeCLI {
         // The permission recipe — codex's Seatbelt tiers in Claude Code's dialect:
         //  · readOnly        → dontAsk (auto-deny anything not pre-approved) + read-only tools.
         //  · workspaceWrite  → acceptEdits, cwd = the staging dir (edits auto-approved there).
-        //  · approveConnectorWrites (the executor's gmail/calendar fire) → dontAsk + every MCP
-        //    tool pre-approved for this ONE app-authored, single-declared-action run — the same
-        //    scope codex's `apps._default` approve carried. (Task 1.7 migrates these fires to
-        //    mcpActionServer's server-scoped approval.)
+        //  · approveConnectorWrites → dontAsk + every MCP tool pre-approved for this ONE
+        //    app-authored, single-declared-action run — the same scope codex's `apps._default`
+        //    approve carried. Since task 1.7 this survives only as the executor's fallback for
+        //    an UNCLASSIFIED chip fire (gmail/calendar in the minutes after an update, before
+        //    the classifier sweep lands) — byte-identical to the shipped fire posture;
+        //    classified fires ride mcpActionServer's server-scoped approval instead.
         //  · the recipe fields → the table above (allows/denies merged in via recipeAllows).
-        //  · stripConnectorActionTools (proactive research, until task 1.7) → the curated
-        //    gmail/calendar read allows: reads flow, and "never fire" stays structural because
-        //    no write rule exists in the run.
+        //    (Proactive research rides mcpReadConnectors since 1.7 — the curated/classified
+        //    read allows; no write rule exists in the run, so "never fire" stays structural.)
         var skippedPermissions = false
         if inv.bypassApprovals {
             // The codex bypass twin (the executor's connector self-heal retry rides this in
@@ -507,9 +502,6 @@ actor ClaudeCLI {
                 switch inv.sandbox {
                 case .readOnly: mode = "dontAsk"
                 case .workspaceWrite: mode = "acceptEdits"
-                }
-                if inv.configOverrides == CodexCLI.Invocation.stripConnectorActionTools {
-                    allowed += ConnectorTools.readAllowRules
                 }
             }
             args += ["--permission-mode", mode]

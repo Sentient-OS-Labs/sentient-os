@@ -4,7 +4,7 @@
 //
 //  The connector-lab harness: exercises the real ConnectorCensus, ConnectorRegistry, and
 //  ConnectorClassifier against the real machine, headless. Grows across tasks 1.2 / 1.4 / 1.5
-//  (tool dumps, classification, trial runs) and is deleted at Step 4.
+//  / 1.7 (tool dumps, classification, trial runs, card fires) and is deleted at Step 4.
 //
 //  Run:  SENTIENT_SELFTEST=connectorlab LAB_CMD=census  "<Debug>/Sentient OS.app/Contents/MacOS/Sentient OS"
 //  Commands: census (both engines, explicitly) · parse (canned strings) · warm (the codex warm
@@ -14,6 +14,8 @@
 //  LAB_PROMPT; LAB_ENGINE=claude|codex calls that engine directly, else the live backend rides
 //  FrontierRun) · argv (pure: print every recipe's argv per engine, no runs) · routereval (the
 //  1.5 router eval: canned commands through the live CommandRouter, scorecard vs the bar)
+//  · seedcard / firecard (the 1.7 mcp card channel: plant + fire a canned .mcp card through
+//  the real executor) · decodecheck (pure: 1.x stored-card decode compatibility)
 //
 //  Both listers are called BY NAME rather than through ConnectorCensus.list(), so testing an
 //  engine never mutates the user's live `model.backend` setting (self-tests share the real
@@ -44,9 +46,14 @@ enum ConnectorLab {
         case "argv":     argv()
         case "probes":   await probes()
         case "routereval": await routereval()
+        case "seedcard": seedcard()
+        case "firecard": await firecard()
+        case "decodecheck": decodecheck()
+        case "research": await research()
         default:
             Log("unknown LAB_CMD '\(command)' (census | parse | warm | registry | tools | classify"
-                + " | cache | read | act | denycheck | argv | probes | routereval)")
+                + " | cache | read | act | denycheck | argv | probes | routereval"
+                + " | seedcard | firecard | decodecheck | research)")
         }
     }
 
@@ -203,10 +210,13 @@ enum ConnectorLab {
             && driveReads.allSatisfy { $0.hasPrefix("mcp__claude_ai_Google_Drive__") }
         Log("\(drivePrefixOK ? "PASS" : "FAIL")  drive pack: \(driveReads.count) reads, prefixed")
 
-        // Catalog id constants (the hoisted single source of truth).
-        let stripOK = CodexCLI.Invocation.stripConnectorActionTools
-            .contains("apps.\(CodexCLI.Invocation.gmailCatalogID).open_world_enabled=false")
-        Log("\(stripOK ? "PASS" : "FAIL")  strip preset built from the hoisted catalog ids")
+        // Catalog id constants (the hoisted single source of truth) resolve through the
+        // registry seam — the read/fired recipes build their strips from server(for:).
+        let idsOK = ConnectorRegistry.server(for: "gmail")?.codexCatalogID
+                == CodexCLI.Invocation.gmailCatalogID
+            && ConnectorRegistry.server(for: "google-calendar")?.codexCatalogID
+                == CodexCLI.Invocation.calendarCatalogID
+        Log("\(idsOK ? "PASS" : "FAIL")  chip catalog ids resolve through the registry")
 
         // KB toggle round trip (restored afterwards — this is the real UserDefaults).
         let slug = "google-drive"
@@ -662,6 +672,11 @@ enum ConnectorLab {
         var readInv = plain; readInv.mcpReadConnectors = [slug]
         var actInv = plain; actInv.mcpActionServer = slug
         var attachInv = plain; attachInv.mcpAttachServer = slug
+        // The research read attachment, exactly as ProactiveResearch builds it (1.7): the two
+        // chips + every KB-enabled connector.
+        var researchInv = plain
+        researchInv.mcpReadConnectors = ["gmail", "google-calendar"]
+            + ConnectorRegistry.kbEnabledConnectors().map(\.slug)
 
         Log("-- run() argv, codex column (recipe -c overrides emit on the chatgpt backend only; "
             + "live backend: \(ModelBackend.current.rawValue)) --")
@@ -671,12 +686,15 @@ enum ConnectorLab {
                                               effortArg: "medium", schemaFile: nil))
         show("codex act", CodexCLI.arguments(for: actInv, modelID: "gpt-5.6-sol",
                                              effortArg: "medium", schemaFile: nil))
+        show("codex research read", CodexCLI.arguments(for: researchInv, modelID: "gpt-5.6-sol",
+                                                       effortArg: "high", schemaFile: nil))
 
         Log("-- run() argv, claude column --")
         showClaude("claude plain", plain)
         showClaude("claude read", readInv)
         showClaude("claude act", actInv)
         showClaude("claude attach (classifier)", attachInv)
+        showClaude("claude research read", researchInv)
 
         Log("-- computer-use argv (placeholder prompt/socket; the 1.6 wall is live) --")
         show("claude agent",
@@ -689,5 +707,162 @@ enum ConnectorLab {
         Log("-- connected services block (live backend: \(ModelBackend.current.rawValue)) --")
         let block = ConnectorRegistry.connectedServicesBlock()
         Log(block.isEmpty ? "(empty: nothing attaches)" : block)
+    }
+
+    // MARK: seedcard / firecard (the 1.7 mcp card channel, end to end)
+
+    /// `LAB_CMD=seedcard`: plant one canned card into the real `proactive.latestReady` deck, so
+    /// PART 3 can fire it — from the DEV TOOLS "PROACTIVE · EXECUTE" window (notch adoption
+    /// included) or headless via `firecard`. Default: an `.mcp` card (LAB_SLUG, default
+    /// google-drive). `LAB_METHOD=calendar`: a `.calendar` card instead — the chip-channel
+    /// regression proof through the migrated fireConnector plumbing (one private, deletable
+    /// test event; no attendees, nothing outward). Harmless and constructive either way.
+    private static func seedcard() {
+        if ProcessInfo.processInfo.environment["LAB_METHOD"] == "calendar" {
+            let event = PreparedAction(
+                title: "Connector lab: calendar regression event",
+                method: .calendar,
+                target: "",
+                urgency: .low,
+                dueDate: nil,
+                status: .confirmed,
+                verification: "Lab-seeded card; no live verification ran.",
+                cardSummary: "Creates one private 15 minute test event tomorrow afternoon; delete it afterwards.",
+                preparedContent: "Title: Sentient connector lab test event\nWhen: tomorrow, 3:00 PM to 3:15 PM (local time)\nAttendees: none\nNotes: Lab regression event. Safe to delete.",
+                executionRecipe: "Create ONE event on the user's primary Google Calendar exactly as described in CONTENT: tomorrow 3:00 PM to 3:15 PM local time, no attendees, no invitations. Nothing else.",
+                recipient: "",
+                buttonText: "Add the test event?",
+                detailLabel: "read the event",
+                sources: ["Connector lab"],
+                reviewNote: "")
+            store(event)
+            return
+        }
+        let slug = labSlug
+        let action = PreparedAction(
+            title: "Connector lab: create a Drive test file",
+            method: .mcp,
+            target: ConnectorRegistry.displayName(slug: slug),
+            methodTarget: slug,
+            urgency: .low,
+            dueDate: nil,
+            status: .confirmed,
+            verification: "Lab-seeded card; no live verification ran.",
+            cardSummary: "Creates one small test file through your \(ConnectorRegistry.displayName(slug: slug)) connector; safe to delete afterwards.",
+            preparedContent: "A Sentient connector-lab test file. Safe to delete.",
+            executionRecipe: "Create ONE new file named sentient-connector-lab-card in the user's Google Drive (a Google Doc is fine). Use the CONTENT block as its body if the connector supports body content; if it does not (codex Drive creates empty Docs only), creating the correctly named file alone completes the task. Nothing else.",
+            recipient: "",
+            buttonText: "Create the test file?",
+            detailLabel: "read the file",
+            sources: ["Connector lab"],
+            reviewNote: "")
+        store(action)
+    }
+
+    /// The seedcard persist tail: merge the card into the real deck (replacing a same-id
+    /// leftover) and say where to fire it from.
+    private static func store(_ action: PreparedAction) {
+        let existing = ProactiveResearch.latest()
+        let ready = (existing?.ready.filter { $0.id != action.id } ?? []) + [action]
+        ProactiveResearch.saveLatest(ReadyResult(ready: ready, dropped: existing?.dropped ?? []))
+        Log("seeded 1 \(action.method.rawValue)\(action.methodTarget.map { "/\($0)" } ?? "") card into proactive.latestReady (deck now \(ready.count) ready)")
+        Log("fire it from DEV TOOLS → PROACTIVE · EXECUTE (or the home), or LAB_CMD=firecard")
+    }
+
+    /// `LAB_CMD=firecard`: fire the deck's newest lab card (the last `.mcp` card, or with
+    /// LAB_METHOD=calendar the last `.calendar` card) through the REAL executor —
+    /// fireConnector on the fired-task recipe, sentinel-parsed, scoreboard-recorded.
+    private static func firecard() async {
+        let method: PreparedAction.Method =
+            ProcessInfo.processInfo.environment["LAB_METHOD"] == "calendar" ? .calendar : .mcp
+        guard let action = ProactiveResearch.latest()?.ready.last(where: { $0.method == method }) else {
+            Log("no \(method.rawValue) card in proactive.latestReady — run LAB_CMD=seedcard first")
+            return
+        }
+        Log("firing [\(action.method.rawValue)\(action.methodTarget.map { "→\($0)" } ?? "")] \(action.title)")
+        Log("isFireable: \(ProactiveExecutor.isFireable(action))")
+        let outcome = await ProactiveExecutor.shared.fire(action) { Log("  │ \($0)") }
+        switch outcome {
+        case .fired(let m):       Log("FIRED: \(m.prefix(300))")
+        case .notFireable(let m): Log("NOT FIREABLE: \(m)")
+        case .failed(let m):      Log("FAILED: \(m)")
+        }
+    }
+
+    // MARK: decodecheck (stored-card compatibility, pure)
+
+    /// `LAB_CMD=decodecheck`: a canned 1.x `ReadyResult` (exactly as JSONEncoder persisted it
+    /// before `methodTarget` existed) must decode; mcp fireability and the round trip must hold.
+    private static func decodecheck() {
+        let legacy = """
+        {"ready":[{"title":"Reply to Dana","method":"gmail","target":"","urgency":"high",\
+        "dueDate":"tomorrow","status":"confirmed","verification":"checked the thread",\
+        "cardSummary":"s","preparedContent":"c","executionRecipe":"r","recipient":"Dana",\
+        "buttonText":"Send it?","detailLabel":"read the draft","sources":["Gmail"],\
+        "reviewNote":""}],"dropped":[]}
+        """
+        if let data = legacy.data(using: .utf8),
+           let decoded = try? JSONDecoder().decode(ReadyResult.self, from: data),
+           let card = decoded.ready.first {
+            Log("PASS  1.x JSON decodes (\(decoded.ready.count) ready)")
+            Log("\(card.methodTarget == nil ? "PASS" : "FAIL")  legacy card's methodTarget is nil")
+            Log("\(ProactiveExecutor.isFireable(card) ? "PASS" : "FAIL")  legacy gmail card still fireable")
+        } else {
+            Log("FAIL  1.x JSON did not decode")
+        }
+
+        // An mcp card without routing: never a crash, never a live fire button.
+        let orphan = PreparedAction(title: "orphan", method: .mcp, target: "", urgency: .medium,
+                                    dueDate: nil, status: .unverified, verification: "",
+                                    cardSummary: "", preparedContent: "c", executionRecipe: "r",
+                                    buttonText: "b", detailLabel: "d", sources: [], reviewNote: "")
+        Log("\(ProactiveExecutor.isFireable(orphan) ? "FAIL" : "PASS")  targetless mcp card is not fireable")
+
+        // The round trip: methodTarget survives encode → decode.
+        let mcp = PreparedAction(title: "t", method: .mcp, target: "Google Drive",
+                                 methodTarget: "google-drive", urgency: .low, dueDate: nil,
+                                 status: .confirmed, verification: "", cardSummary: "",
+                                 preparedContent: "c", executionRecipe: "r", buttonText: "b",
+                                 detailLabel: "d", sources: [], reviewNote: "")
+        let trip = (try? JSONEncoder().encode(ReadyResult(ready: [mcp], dropped: [])))
+            .flatMap { try? JSONDecoder().decode(ReadyResult.self, from: $0) }?.ready.first
+        Log("\(trip?.methodTarget == "google-drive" ? "PASS" : "FAIL")  methodTarget round-trips")
+
+        // The research schema, both variants: zero channels = the shipped four (no mcp anywhere);
+        // with a channel = mcp + method_target, still valid JSON.
+        func validJSON(_ s: String) -> Bool {
+            s.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } != nil
+        }
+        let bare = ProactiveResearch.schema(channels: [])
+        let armed = ProactiveResearch.schema(channels:
+            [.init(slug: "google-drive", name: "Google Drive", description: nil)])
+        Log("\(!bare.contains("mcp") && !bare.contains("method_target") && validJSON(bare) ? "PASS" : "FAIL")  zero-channel schema = shipped four methods, valid JSON")
+        Log("\(armed.contains(#""mcp""#) && armed.contains("method_target") && validJSON(armed) ? "PASS" : "FAIL")  channel schema teaches mcp + method_target, valid JSON")
+    }
+
+    // MARK: research (the 1.7 research channels, live — one canned Drive-shaped item)
+
+    /// `LAB_CMD=research`: run the REAL PART 2 over one lab-seeded, Drive-shaped action item.
+    /// Exercises the migrated read attachment (gmail + gcal + KB-enabled connectors) and, when
+    /// Drive is detected, should yield an `mcp`/google-drive card with a sane fire button
+    /// (persisted to `proactive.latestReady` — inspect via the dev EXECUTE window or firecard).
+    /// A real multi-minute frontier run on the live backend.
+    private static func research() async {
+        let item = ActionItem(
+            title: "Stage the connector brief in Google Drive",
+            action: "Create a small text file in the user's Google Drive named 'Sentient connector brief' with a two-line summary of what Sentient's connector feature does",
+            importance: "The user asked to keep a short brief of the connector feature in their Drive (lab-seeded item for the channel test)",
+            dueDate: nil,
+            sources: ["Connector lab"],
+            urgency: .low)
+        do {
+            let result = try await ProactiveResearch.shared.researchAndPrepare(items: [item]) { Log("  │ \($0)") }
+            for a in result.ready {
+                Log("READY [\(a.method.rawValue)\(a.methodTarget.map { "→\($0)" } ?? "")] \(a.title) · button: \(a.buttonText)")
+            }
+            for d in result.dropped { Log("DROPPED \(d.title) — \(d.reason)") }
+        } catch {
+            Log("research failed: \(ErrorLabel(error))")
+        }
     }
 }
