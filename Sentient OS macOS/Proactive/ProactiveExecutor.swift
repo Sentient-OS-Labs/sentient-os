@@ -297,7 +297,11 @@ actor ProactiveExecutor {
     }
 
     static func computerWrapper(routing: String, content: String) -> String {
-        """
+        // The CONNECTED SERVICES teaching (task 1.6), same splice as Sidekick's command prompt:
+        // the live attached-connector list + prefer-the-tool-over-the-UI. "" when nothing attaches.
+        let services = ConnectorRegistry.connectedServicesBlock()
+        let servicesLine = services.isEmpty ? "" : "\(services)\n\n"
+        return """
         You are firing ONE pre-approved task on the user's own Mac using COMPUTER USE (you control the \
         Mac directly — open apps, click, type). <ROUTING> says WHERE this one task happens (the app or \
         URL to start in; the chat for a message send). <CONTENT> is the user-approved artifact: for an \
@@ -315,7 +319,7 @@ actor ProactiveExecutor {
         task with computer use, STOP and reply with `STATUS: COULD_NOT — <reason>`.
 
         \(CuaDriverSkill.rules)\(CustomProvider.computerUsePromptRules)
-        <<<CONTENT
+        \(servicesLine)<<<CONTENT
         \(content)
         CONTENT>>>
 

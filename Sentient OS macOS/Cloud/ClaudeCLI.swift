@@ -103,17 +103,17 @@ actor ClaudeCLI {
         static var readAllowRules: [String] { gmailReads + calendarReads }
 
         /// The Gmail complement: every connector tool that MUTATES (send/reply/forward/draft/
-        /// label/spam/trash territory) — the DENY list for Sidekick's computer-use runs, where
+        /// label/spam/trash territory) — a DENY list for computer-use runs, where
         /// `--dangerously-skip-permissions` auto-approves connector tools (measured 2026-08-23;
         /// the allow-rule gate above applies only to normal permission modes). A denied tool is
         /// stripped from the model's context entirely, bypass mode included. Unlike the read
         /// allows this is fail-OPEN — a write tool Anthropic adds is live until curated here —
         /// so re-verify the surface when the managed CLI updates. The two filter tools ride
         /// along preemptively: the connector's claude.ai directory page lists them though the
-        /// live capture didn't serve them. Consumed by the SHIPPED computer-use wall (the
-        /// attachConnectors-off path in agentArguments) and by the connector lab's classifier
-        /// ground-truth eval; the widened wall replaces it with the registry's destructive
-        /// verdicts (writes go live — README decision #13).
+        /// live capture didn't serve them. Consumed as the UNCLASSIFIED-gmail fallback in
+        /// ConnectorRegistry.computerUseAttachments (gmail rides read-only until the classifier
+        /// sweep runs; once classified, only the destructive verdicts stay denied and writes go
+        /// live — README decision #13) and by the connector lab's classifier ground-truth eval.
         static let gmailWriteDenies = ["apply_sensitive_message_label",
                                        "apply_sensitive_thread_label", "create_draft",
                                        "create_filter", "create_label", "delete_filter",
@@ -562,8 +562,8 @@ actor ClaudeCLI {
     /// The runAgentCommand twin: computer use on the cua driver, through `claude -p`. The hybrid
     /// transport is IDENTICAL to codex's — the daemon, the socket, the CLI shim, and the
     /// CuaDriverSkill manual are all engine-neutral; only the wiring dialect changes:
-    /// `--mcp-config` registers the eyes (walled by `--strict-mcp-config`, or with Gmail linked
-    /// by the server allowlist that also admits the Gmail connector read-only — see the args),
+    /// `--mcp-config` registers the eyes (walled by `--strict-mcp-config`, or with connectors
+    /// attached by the server allowlist that also admits them — see agentArguments),
     /// `--dangerously-skip-permissions` is the bypass twin (headless has no one to answer a
     /// prompt, and every action is a one-shot shell call), and the driver's 52 non-vision MCP
     /// tools are denied by name (Claude Code has no per-server enabled_tools filter).
@@ -589,44 +589,31 @@ actor ClaudeCLI {
     /// [FIELD-FOUND 2026-08-21, the first live Sidekick fire]. Same trap as codex's `-i`
     /// variadic, dodged the same way: no positional ever follows a variadic flag.
     ///
-    /// `attachConnectors` OFF (the default; argv byte-identical to shipped): with Gmail linked
-    /// the strict wall is swapped for a server ALLOWLIST (only the cua driver by name and the
-    /// Gmail connector by its Google-hosted URL may load) and the Gmail write denies ride
-    /// along, so email joins the run READ-ONLY; without Gmail the strict wall rides unchanged.
-    /// `--settings` applies even under `--setting-sources ""` (measured 2026-08-23).
-    ///
-    /// ON (task 1.6 flips it): the wall admits the cua driver + every attachable connector
-    /// (`ConnectorRegistry.computerUseAttachable` — curated or classified only; unclassified
-    /// connectors are excluded, fail-closed), and the deny list is cua's non-vision tools +
+    /// The wall admits the cua driver + every attachable connector
+    /// (`ConnectorRegistry.computerUseAttachments` — fail-closed: a connector only attaches
+    /// when a REAL deny list exists for it), and the deny list is cua's non-vision tools +
     /// every attached connector's DESTRUCTIVE tools. Constructive connector writes are LIVE —
-    /// the deliberate posture change (README decision #13): a user-fired computer-use run
-    /// could already send that email by driving a mail app, so denying the tool changed the
+    /// the deliberate posture change (README decision #13, task 1.6): a user-fired computer-use
+    /// run could already send that email by driving a mail app, so denying the tool changed the
     /// path, not the power; safety rides one-declared-task + live streaming + STOP.
+    /// Unclassified gmail attaches with its curated write-deny fallback (read-only, exactly the
+    /// shipped posture); every other unclassified connector waits for the classifier sweep.
+    /// Zero attachable connectors = the strict wall, byte-identical to shipped.
+    /// `--settings` applies even under `--setting-sources ""` (measured 2026-08-23).
     static func agentArguments(prompt: String, modelID: String, effortArg: String,
-                               socketPath: String, attachConnectors: Bool) -> [String] {
+                               socketPath: String) -> [String] {
         let mcpWall: [String]
         var disallowed = CuaDriver.claudeDisallowedMcpTools
-        if attachConnectors {
-            let attached = ConnectorRegistry.computerUseAttachable()
-                .filter { $0.claudeServerURL != nil }
-            if attached.isEmpty {
-                mcpWall = ["--strict-mcp-config"]
-            } else {
-                mcpWall = ["--settings",
-                           mcpServerAllowSettings(serverURLs: attached.compactMap(\.claudeServerURL),
-                                                  serverNames: ["cua_driver"])]
-                for server in attached {
-                    disallowed += ConnectorRegistry.destructiveToolNames(slug: server.slug)
-                }
-            }
-            Log("claude agent: wall widened, \(attached.count) connector(s) attached")
-        } else if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") {
-            mcpWall = ["--settings", #"{"allowedMcpServers":[{"serverName":"cua_driver"},"#
-                                   + #"{"serverUrl":"https://gmailmcp.googleapis.com/*"}]}"#]
-            disallowed += ConnectorTools.gmailWriteDenies
-        } else {
+        let (attached, excluded) = ConnectorRegistry.computerUseAttachments()
+        if attached.isEmpty {
             mcpWall = ["--strict-mcp-config"]
+        } else {
+            mcpWall = ["--settings",
+                       mcpServerAllowSettings(serverURLs: attached.compactMap(\.server.claudeServerURL),
+                                              serverNames: ["cua_driver"])]
+            for attachment in attached { disallowed += attachment.denies }
         }
+        Log("claude agent: connectors attached=\(attached.count) excluded=\(excluded)")
         return ["-p", prompt,
                 "--output-format", "stream-json", "--verbose",
                 "--model", modelID,
@@ -644,7 +631,6 @@ actor ClaudeCLI {
     }
 
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
-                         attachConnectors: Bool = false,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         let (modelID, effortArg) = Self.agentTuned()
@@ -665,10 +651,8 @@ actor ClaudeCLI {
             var fullPrompt = prompt
             if !imagePaths.isEmpty { fullPrompt += Self.screenshotsBlock(imagePaths) }
 
-            let withGmail = UserDefaults.standard.bool(forKey: "dbg.gmail.connected")
             let args = Self.agentArguments(prompt: fullPrompt, modelID: modelID,
-                                           effortArg: effortArg, socketPath: socket,
-                                           attachConnectors: attachConnectors)
+                                           effortArg: effortArg, socketPath: socket)
 
             var env = Self.baseEnv
             // Screenshot-bearing MCP results are big (the default 25k-token cap would truncate a
@@ -677,7 +661,7 @@ actor ClaudeCLI {
             env["MCP_TIMEOUT"] = "30000"          // server connect budget (codex: startup_timeout_sec=30)
             env["MCP_TOOL_TIMEOUT"] = "120000"    // per-call budget (codex: tool_timeout_sec=120)
 
-            Log("claude exec: start feature=computer cua=\(CuaDriver.version) model=\(modelID) effort=\(effortArg) resume=false mode=bypass gmail=\(withGmail) prompt_kb=\(fullPrompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
+            Log("claude exec: start feature=computer cua=\(CuaDriver.version) model=\(modelID) effort=\(effortArg) resume=false mode=bypass prompt_kb=\(fullPrompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await CodexCLI.executeStreaming(binary: bin, args: args, timeout: timeout,
                                                           extraEnv: env) { raw in
                 // stderr rides through as-is (already prefixed by the plumbing); stdout is
@@ -806,6 +790,17 @@ actor ClaudeCLI {
                     if let cmd = input?["command"] as? String, !cmd.isEmpty { lines.append("$ \(cmd)") }
                 } else if name.hasPrefix("mcp__cua_driver__") {
                     lines.append("→ cua.\(name.dropFirst("mcp__cua_driver__".count))")
+                } else if name.hasPrefix("mcp__claude_ai_") {
+                    // Hosted-connector calls read as "→ Gmail.send_message" — the harness
+                    // prefix is chrome, and the server's underscores are claude's mangling of
+                    // its display name ("Google_Drive" was "Google Drive").
+                    let rest = name.dropFirst("mcp__claude_ai_".count)
+                    if let sep = rest.range(of: "__") {
+                        let server = rest[..<sep.lowerBound].replacingOccurrences(of: "_", with: " ")
+                        lines.append("→ \(server).\(rest[sep.upperBound...])")
+                    } else {
+                        lines.append("→ \(rest)")
+                    }
                 } else if name.hasPrefix("mcp__") {
                     lines.append("→ \(name.dropFirst("mcp__".count).replacingOccurrences(of: "__", with: "."))")
                 } else if name == "WebSearch" {

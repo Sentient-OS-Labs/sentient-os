@@ -245,6 +245,10 @@ final class CodexSetup {
         // The one idle tick keeps EVERY managed engine CLI current — ClaudeSetup self-guards
         // (only while Claude is the backend, only the managed binary, once a day).
         Task { await ClaudeSetup.shared.updateIfDue(trigger: "idle") }
+        // …and keeps the computer-use attach set classified (task 1.6): the chips + every
+        // detected connector. Self-guards (Claude backend only) and cache hits are free, so
+        // this is one-time work per CLI version, done while the user is away.
+        Task { await ConnectorClassifier.sweepComputerUseAttachables() }
     }
 
     /// A codex run just failed on the stale-client signature (CodexCLI classified it). Flag it for

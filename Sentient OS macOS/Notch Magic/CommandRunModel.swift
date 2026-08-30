@@ -365,17 +365,21 @@ final class CommandRunModel {
         // like one, so it never shows. The DEBUG log keeps the raw line.
         if t.contains("blocked by enterprise policy") { return }
 
-        // Gmail reads surface as raw tool-call lines (claude renders "→ claude_ai_Gmail.<tool>",
-        // codex "→ gmail.<tool>" — the Aug 19 field log's shape); the bar speaks them as ONE
-        // clean beat instead. Deduped so back-to-back calls (search, then get_thread) don't
-        // stack the same line twice.
-        if t.hasPrefix("→ claude_ai_Gmail.") || t.hasPrefix("→ gmail.") {
-            if recent.last != "Reading Gmail" {
-                recent.append("Reading Gmail")
-                if recent.count > 2 { recent.removeFirst() }
-                statusLine = recent.joined(separator: "\n")
+        // Gmail READS surface as raw tool-call lines (claude renders "→ Gmail.<tool>", codex
+        // "→ gmail.<tool>"); the bar speaks them as ONE clean beat, deduped so back-to-back
+        // calls (search, then get_thread) don't stack the same line twice. ONLY read-shaped
+        // tools collapse: with connector writes live inside computer use (task 1.6), a send
+        // must show its honest "→ Gmail.send_message" line, never a "Reading" label.
+        if t.hasPrefix("→ Gmail.") || t.hasPrefix("→ gmail.") {
+            let tool = t.split(separator: ".", maxSplits: 1).last.map(String.init) ?? ""
+            if ["get_", "list_", "search_"].contains(where: { tool.hasPrefix($0) }) {
+                if recent.last != "Reading Gmail" {
+                    recent.append("Reading Gmail")
+                    if recent.count > 2 { recent.removeFirst() }
+                    statusLine = recent.joined(separator: "\n")
+                }
+                return
             }
-            return
         }
 
         // The confirmation-policy dump's tail lingers — show a clean status for that whole loading beat.
@@ -597,16 +601,21 @@ final class CommandRunModel {
             ? "\nThe task above was spoken by me and transcribed with speech-to-text. Use common sense for anything that may have been mis-transcribed; but if picking the wrong reading could have a non-trivial outcome, don't act on a guess.\n"
             : ""
         let screenLine = Self.screenshotsLine(count: screenshots)
+        // The CONNECTED SERVICES teaching (task 1.6): the live attached-connector list + the
+        // standing prefer-the-tool-over-the-UI instruction. "" when nothing attaches.
+        let services = ConnectorRegistry.connectedServicesBlock()
+        let servicesLine = services.isEmpty ? "" : "\(services)\n\n"
         // The user's standing Sidekick context (Settings → Proactive & Sidekick) — preferred apps,
         // browser, norms. Empty string when they've set none, so the prompt is unchanged by default.
         let context = CustomInstructions.sidekick
         let contextLine = context.isEmpty ? ""
             : "\nStanding preferences I've set for you (apply them wherever they're relevant to this task): \(context)\n"
         // Email as a second context source — only when the user's Gmail is linked AND the engine
-        // has connectors (ChatGPT: the hosted connector already rides the hermetic run, see
-        // CodexCLI.runAgentCommand; Claude: the run admits it read-only, see
-        // ClaudeCLI.runAgentCommand; BYOM has neither). Without the link the line would send the
-        // agent hunting for tools that don't exist.
+        // has connectors (ChatGPT: the hosted connector rides the hermetic run, see
+        // CodexCLI.runAgentCommand; Claude: the wall admits it, see ClaudeCLI.agentArguments;
+        // BYOM has neither). Without the link the line would send the agent hunting for tools
+        // that don't exist. Complements the CONNECTED SERVICES block: this teaches WHEN to read
+        // email for grounding; the block lists what's attached and prefers tools over UI.
         let gmailLine = (ModelBackend.connectorsAvailable
                          && UserDefaults.standard.bool(forKey: "dbg.gmail.connected"))
             ? "\nMy email is also available to you through the Gmail tools. Reach for it when you're missing context — the task mentions a person, company, order, booking, or thread you don't recognize from my screens or my knowledge base — and read just enough to ground yourself before acting. Don't send, label, or modify anything in Gmail unless the task itself asks for that.\n"
@@ -617,7 +626,7 @@ final class CommandRunModel {
         Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate) through the cua tools described below. Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
 
         \(CuaDriverSkill.rules)\(CustomProvider.computerUsePromptRules)
-        \(Self.injectionGuard)
+        \(servicesLine)\(Self.injectionGuard)
 
         You will not be able to ask me follow-up questions to clarify: in this harness, the moment you stop responding I see the task attempt as completed. So don't stop to ask trivial follow-up questions. Either do the task, or if it's genuinely way too ambiguous to act on (like in case of critical TTS fumble), just stop. No follow-up questions are possible.
         \(contextLine)\(history.isEmpty ? "" : "\n\(history)\n")

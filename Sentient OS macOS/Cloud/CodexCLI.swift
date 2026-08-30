@@ -748,21 +748,20 @@ actor CodexCLI {
     /// `--skip-git-repo-check` so the flag terminates `-i`'s variadic `<FILE>...` and the prompt is
     /// never mistaken for another image.
     /// The computer-use argv — extracted so the connector lab can print the recipe without
-    /// spawning, and so the wall widening below is one readable place. `attachConnectors`
-    /// (default OFF; task 1.6 flips it) adds `apps.<id>.destructive_enabled=false` for every
-    /// known catalog id — the two pinned chip connectors plus everything the census detected —
-    /// so a user-fired computer-use run keeps constructive connector writes (send, create)
-    /// while delete/trash-class tools are stripped from the surface entirely. OFF = argv
-    /// byte-identical to shipped.
+    /// spawning, and so the destructive strips are one readable place. On the ChatGPT backend
+    /// every known catalog id — the two pinned chip connectors plus everything the census
+    /// detected — gets `apps.<id>.destructive_enabled=false` (task 1.6), so a user-fired
+    /// computer-use run keeps constructive connector writes (send, create) while
+    /// delete/trash-class tools are stripped from the surface entirely. An id the account
+    /// doesn't carry makes the strip an inert no-op (measured), so unlinked chips cost nothing.
     static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
-                               effortArg: String, socketPath: String,
-                               attachConnectors: Bool) -> [String] {
+                               effortArg: String, socketPath: String) -> [String] {
         var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config"]
         for override in CuaDriver.codexOverrides(socketPath: socketPath) { args += ["-c", override] }
-        if attachConnectors, ModelBackend.current == .chatgpt {
+        if ModelBackend.current == .chatgpt {
             var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
             ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
             for id in ids { args += ["-c", "apps.\(id).destructive_enabled=false"] }
@@ -776,7 +775,6 @@ actor CodexCLI {
     }
 
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
-                         attachConnectors: Bool = false,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
@@ -820,8 +818,7 @@ actor CodexCLI {
             // `gmail.search_emails` completed — so an "email X" task keeps the connector route.
             let args = Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
                                            modelID: modelID, effortArg: effortArg,
-                                           socketPath: socket,
-                                           attachConnectors: attachConnectors)
+                                           socketPath: socket)
             let modelTag = ModelBackend.current == .custom ? "custom" : modelID
             Log("codex exec: start feature=computer cua=\(CuaDriver.version) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)

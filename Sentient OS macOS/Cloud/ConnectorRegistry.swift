@@ -15,7 +15,9 @@
 //                                           (every recipe builder resolves through it; Step D
 //                                           extends it with the direct tier)
 //   - claudeIdentity(slug:)               → name + server URL + tool prefix (the classifier's input)
-//   - computerUseAttachable()             → what a widened computer-use run may attach (1.6)
+//   - computerUseAttachable()             → the candidate list a computer-use run may attach
+//   - computerUseAttachments()            → the FINAL attach set + deny lists (fail-closed)
+//   - connectedServicesBlock()            → the prompt teaching both computer-use wrappers splice
 //   - readToolNames / destructiveToolNames / allKnownToolNames → full tool names, per policy
 //   - isKBEnabled / setKBEnabled / kbEnabledConnectors → the `mcp.<slug>.kb` toggle
 //   - classification(for:) / saveClassification        → the `mcp.classified.<slug>` cache
@@ -183,6 +185,118 @@ nonisolated enum ConnectorRegistry {
             .filter { pack(for: $0)?.readTools != nil || isClassified($0.slug) }
             .map(\.slug)
         return slugs.compactMap { server(for: $0) }
+    }
+
+    /// One connector as a computer-use run actually attaches it: the resolved server, the deny
+    /// list its bypass run carries, and whether it rides read-only (the unclassified-gmail
+    /// fallback described on computerUseAttachments).
+    struct ComputerUseAttachment: Sendable {
+        let server: ResolvedServer
+        let denies: [String]
+        let readOnly: Bool
+    }
+
+    /// The FINAL attach set for a computer-use run (task 1.6): computerUseAttachable() gated
+    /// fail-closed through the one deny-list rule. A bypass run auto-approves every tool it can
+    /// see, so a connector may only attach when a REAL deny list can be built for it:
+    ///  · classified → its destructive verdicts are denied and constructive writes stay LIVE
+    ///    (the deliberate posture change, README decision #13);
+    ///  · unclassified gmail → the hand-curated write-deny complement
+    ///    (ClaudeCLI.ConnectorTools.gmailWriteDenies): gmail keeps riding in read-only, exactly
+    ///    the shipped posture, until the classifier sweep catches up;
+    ///  · anything else unclassified → NOT attached, counted in `excluded` (transient: the
+    ///    idle-tick sweep, ConnectorClassifier.sweepComputerUseAttachables, classifies the whole
+    ///    candidate list within minutes of launch).
+    /// Both consumers — the Claude wall in agentArguments and the CONNECTED SERVICES prompt
+    /// block — read THIS function, so the prompt can never promise a server the wall excluded.
+    static func computerUseAttachments() -> (attached: [ComputerUseAttachment], excluded: Int) {
+        var attached: [ComputerUseAttachment] = []
+        var excluded = 0
+        for server in computerUseAttachable() {
+            guard server.claudeServerURL != nil else { excluded += 1; continue }
+            if isClassified(server.slug) {
+                attached.append(.init(server: server,
+                                      denies: destructiveToolNames(slug: server.slug),
+                                      readOnly: false))
+            } else if server.slug == "gmail" {
+                attached.append(.init(server: server,
+                                      denies: ClaudeCLI.ConnectorTools.gmailWriteDenies,
+                                      readOnly: true))
+            } else {
+                excluded += 1
+            }
+        }
+        return (attached, excluded)
+    }
+
+    /// A connector's user-facing name: the curated pack's, else the census's, else the slug
+    /// title-cased.
+    static func displayName(slug: String) -> String {
+        if let pack = pack(forSlug: slug) { return pack.displayName }
+        return (ConnectorCensus.cached(for: .claude) + ConnectorCensus.cached(for: .chatgpt))
+            .first { $0.slug == slug }?.displayName ?? ConnectorCensus.titleCased(slug)
+    }
+
+    // MARK: The CONNECTED SERVICES prompt block (task 1.6)
+
+    /// The teaching both computer-use wrappers splice in: which services' tools are REALLY in
+    /// this run, and the standing instruction to prefer them over driving an app's UI. Built
+    /// per run from the live attach set, per engine:
+    ///  · claude → computerUseAttachments() (the exact set the wall admits, so the prompt and
+    ///    the argv can never disagree; a read-only fallback entry says so on its line, and the
+    ///    send-email example only appears when gmail's writes are actually live);
+    ///  · chatgpt → the chips when connected + every census codex-origin connector (hosted
+    ///    connectors ride hermetic codex runs whole; only destructive tools are stripped);
+    ///  · custom → "" (BYOM has no account to carry connectors).
+    /// "" when nothing attaches, so callers splice nothing. Schema cost is ~1.5k tokens per
+    /// connector on Claude (measured 2026-08-27); a 10+-connector account is Step 4's problem.
+    static func connectedServicesBlock() -> String {
+        struct Entry { let slug: String; let name: String; let note: String? }
+        var entries: [Entry] = []
+        var gmailWritesLive = false
+        switch ModelBackend.current {
+        case .custom:
+            return ""
+        case .claude:
+            for attachment in computerUseAttachments().attached {
+                let slug = attachment.server.slug
+                if slug == "gmail", !attachment.readOnly { gmailWritesLive = true }
+                entries.append(Entry(slug: slug, name: displayName(slug: slug),
+                                     note: attachment.readOnly
+                                         ? "read-only in this run"
+                                         : pack(forSlug: slug)?.routerDescription))
+            }
+        case .chatgpt:
+            var slugs: [String] = []
+            if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }
+            if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { slugs.append("google-calendar") }
+            slugs += ConnectorCensus.cached(for: .chatgpt).map(\.slug)
+            gmailWritesLive = slugs.contains("gmail")
+            entries = slugs.map { Entry(slug: $0, name: displayName(slug: $0),
+                                        note: pack(forSlug: $0)?.routerDescription) }
+        }
+        guard !entries.isEmpty else { return "" }
+        let list = entries.map { entry in
+            entry.note.map { "- \(entry.slug): \(entry.name) (\($0))" }
+                ?? "- \(entry.slug): \(entry.name)"
+        }.joined(separator: "\n")
+        let example = gmailWritesLive
+            ? " (send email through the Gmail tools, never by driving a mail app's window)."
+            : "."
+        let block = """
+        CONNECTED SERVICES (real tools available in this run):
+        \(list)
+
+        Whenever a step of the task can be completed by one of these services' tools, use the tool instead of driving an app's UI; it is faster and more reliable\(example)
+        - Sending, creating, or updating through a service is allowed ONLY as part of what the user asked for.
+        - Destructive tools do not exist in this run.
+        - If a service's tools cannot finish a step, fall back to the screen and do it there.
+        """
+        Log("connected services: \(entries.count) service(s) in the prompt block")
+        #if DEBUG
+        Log("connected services block: +\(block.utf8.count) bytes")
+        #endif
+        return block
     }
 
     /// `mcp__claude_ai_<Name>__` with every non-alphanumeric character in the name replaced by

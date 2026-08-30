@@ -642,11 +642,11 @@ enum ConnectorLab {
 
     // MARK: argv (pure — print every recipe's argv per engine, no model runs)
 
-    /// The recipe-inertness and wall-widening proof: builds canned Invocations and prints the
-    /// exact argv each engine would spawn, including the computer-use argv with the widening
-    /// parameter off and on. DEBUG-lab only output; the agent argv carries a placeholder
-    /// prompt, never real content. Claude resolves slugs through the live registry/census
-    /// caches, so run `classify` first for a slug that needs one.
+    /// The recipe-inertness and wall proof: builds canned Invocations and prints the exact
+    /// argv each engine would spawn, including the live computer-use argv (the 1.6 wall) and
+    /// the CONNECTED SERVICES prompt block. DEBUG-lab only output; the agent argv carries a
+    /// placeholder prompt, never real content. Claude resolves slugs through the live
+    /// registry/census caches, so run `classify` first for a slug that needs one.
     private static func argv() {
         let slug = labSlug
         func show(_ label: String, _ args: [String]) {
@@ -678,20 +678,16 @@ enum ConnectorLab {
         showClaude("claude act", actInv)
         showClaude("claude attach (classifier)", attachInv)
 
-        Log("-- computer-use argv (placeholder prompt/socket) --")
-        show("claude agent, wall OFF (shipped)",
+        Log("-- computer-use argv (placeholder prompt/socket; the 1.6 wall is live) --")
+        show("claude agent",
              ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
-                                      socketPath: "/tmp/lab.sock", attachConnectors: false))
-        show("claude agent, wall ON (1.6 flips)",
-             ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
-                                      socketPath: "/tmp/lab.sock", attachConnectors: true))
-        show("codex agent, strips OFF (shipped)",
+                                      socketPath: "/tmp/lab.sock"))
+        show("codex agent",
              CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-5.6-sol",
-                                     effortArg: "low", socketPath: "/tmp/lab.sock",
-                                     attachConnectors: false))
-        show("codex agent, strips ON (1.6 flips)",
-             CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-5.6-sol",
-                                     effortArg: "low", socketPath: "/tmp/lab.sock",
-                                     attachConnectors: true))
+                                     effortArg: "low", socketPath: "/tmp/lab.sock"))
+
+        Log("-- connected services block (live backend: \(ModelBackend.current.rawValue)) --")
+        let block = ConnectorRegistry.connectedServicesBlock()
+        Log(block.isEmpty ? "(empty: nothing attaches)" : block)
     }
 }
