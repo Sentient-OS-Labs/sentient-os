@@ -16,6 +16,9 @@
 //   - list()             → the CURRENT backend's connectors (cheap enough for every pane open)
 //   - refresh()          → the same, preceded by the codex warm run (freshness on demand)
 //   - cached(for:)       → the last persisted list, no subprocess
+//   - startWatching(onChange:) / stopWatching() → the bounded connect-polling window behind
+//                          "+ Connect Apps" (runs inside the pane's .task, so closing the pane
+//                          cancels it); directoryURL is the engine's connector page it pairs with
 //   - listClaude() / listCodex() → the engine-explicit listers. The lab calls these directly so
 //                          testing one engine never mutates the user's live backend setting.
 //   - parseClaudeList()  → pure (String) -> [DetectedConnector]: the ONE place the unversioned
@@ -25,6 +28,7 @@
 //
 
 import Foundation
+import os
 
 nonisolated enum ConnectorCensus {
 
@@ -148,6 +152,76 @@ nonisolated enum ConnectorCensus {
               let decoded = try? JSONDecoder().decode([DetectedConnector].self, from: data)
         else { return [] }
         return decoded
+    }
+
+    // MARK: Watch mode (the "+ Connect Apps" polling window)
+
+    /// The engine's connector directory page — where "+ Connect Apps" sends the user to link a
+    /// new app (GmailConnect.connectorURL's engine-switch pattern; the chatgpt anchor is the
+    /// same settings route ConnectAIsView already uses). Custom backends never reach here: the
+    /// Connectors section renders locked there.
+    static var directoryURL: URL {
+        ModelBackend.current == .claude
+            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory")!
+            : URL(string: "https://chatgpt.com/plugins#settings/Connectors")!
+    }
+
+    /// One watch window at a time: starting (or an explicit stop) bumps the generation, and any
+    /// older loop exits at its next check.
+    private static let watchGeneration = OSAllocatedUnfairLock(initialState: 0)
+
+    /// Poll the live engine until a NEW connector appears, so its pill can arrive on its own the
+    /// moment the user finishes linking on the website. Designed to run inside the pane's
+    /// `.task(id:)`: cancellation is the leak-proofing, so a closed pane stops the polling with
+    /// no cleanup call, and a 10 minute ceiling stops it regardless — it never runs outside an
+    /// explicit start. Claude re-lists every ~5 s (each list is its own live fetch); codex needs
+    /// the warm run to rewrite its cache, so it cycles every ~25 s (the warm run carries ~13k
+    /// input tokens, mostly cached — measured 2026-08-27 — which is why the interval stays
+    /// coarse). `onChange` fires on EVERY visible change (health flips and removals render live
+    /// too); a slug that was absent at watch start is what ends the window.
+    static func startWatching(onChange: @escaping @MainActor ([DetectedConnector]) -> Void) async {
+        guard let origin = DetectedConnector.Origin(backend: ModelBackend.current) else { return }
+        let generation = watchGeneration.withLock { $0 += 1; return $0 }
+        let deadline = Date().addingTimeInterval(10 * 60)
+        let baseline = Set(cached(for: origin).map(\.slug))
+        var lastDelivered = fingerprint(cached(for: origin))
+        Log("ConnectorCensus.watch: started (\(origin.rawValue), \(baseline.count) known)")
+
+        while true {
+            if Task.isCancelled {
+                Log("ConnectorCensus.watch: stopped (cancelled)"); return
+            }
+            if watchGeneration.withLock({ $0 }) != generation {
+                Log("ConnectorCensus.watch: stopped (superseded)"); return
+            }
+            if Date() >= deadline {
+                Log("ConnectorCensus.watch: stopped (timeout)"); return
+            }
+            guard DetectedConnector.Origin(backend: ModelBackend.current) == origin else {
+                Log("ConnectorCensus.watch: stopped (backend changed)"); return
+            }
+
+            let connectors = origin == .claude ? await list() : await refresh()
+            if fingerprint(connectors) != lastDelivered, !Task.isCancelled {
+                lastDelivered = fingerprint(connectors)
+                await onChange(connectors)
+            }
+            if connectors.contains(where: { !baseline.contains($0.slug) }) {
+                Log("ConnectorCensus.watch: stopped (new connector)"); return
+            }
+            try? await Task.sleep(for: .seconds(origin == .claude ? 5 : 25))
+        }
+    }
+
+    /// End any active watch window from outside the owning task.
+    static func stopWatching() {
+        watchGeneration.withLock { $0 += 1 }
+    }
+
+    /// What "changed" means to the watcher: identity, name, and health — never `lastSeen`,
+    /// which every listing rewrites (comparing it would fire onChange on every tick).
+    private static func fingerprint(_ connectors: [DetectedConnector]) -> [String] {
+        connectors.map { "\($0.id)|\($0.displayName)|\($0.healthy)" }
     }
 
     // MARK: Persistence

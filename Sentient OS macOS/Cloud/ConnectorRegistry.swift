@@ -165,6 +165,17 @@ nonisolated enum ConnectorRegistry {
         detectedForCurrentBackend().filter { isKBEnabled($0.slug) }
     }
 
+    /// Whether the KB toggle must classify before it may switch ON. Claude origin only: headless
+    /// Claude reads are approved by allow rules and nothing else, so an uncurated, unclassified
+    /// connector has no read list to allow (fail closed — the toggle refuses instead). On codex,
+    /// safety is structural (read-only sandbox + catalog-id strips) and the classifier is a
+    /// designed no-op, so nothing gates the toggle there.
+    static func kbRequiresClassification(_ connector: ConnectorCensus.DetectedConnector) -> Bool {
+        connector.origin == .claude
+            && pack(for: connector)?.readTools == nil
+            && !isClassified(connector.slug)
+    }
+
     // MARK: The classifier cache (production keys)
 
     enum ToolCategory: String, Codable, Sendable {
