@@ -12,7 +12,8 @@
 //  three-way run + ground-truth eval, LAB_SLUG + LAB_RUNS) · cache (hit / version-bump / re-run)
 //  · read / act / denycheck (the 1.4 run recipes against a real connector: LAB_SLUG + optional
 //  LAB_PROMPT; LAB_ENGINE=claude|codex calls that engine directly, else the live backend rides
-//  FrontierRun) · argv (pure: print every recipe's argv per engine, no runs)
+//  FrontierRun) · argv (pure: print every recipe's argv per engine, no runs) · routereval (the
+//  1.5 router eval: canned commands through the live CommandRouter, scorecard vs the bar)
 //
 //  Both listers are called BY NAME rather than through ConnectorCensus.list(), so testing an
 //  engine never mutates the user's live `model.backend` setting (self-tests share the real
@@ -42,9 +43,10 @@ enum ConnectorLab {
         case "denycheck": await denycheck()
         case "argv":     argv()
         case "probes":   await probes()
+        case "routereval": await routereval()
         default:
             Log("unknown LAB_CMD '\(command)' (census | parse | warm | registry | tools | classify"
-                + " | cache | read | act | denycheck | argv | probes)")
+                + " | cache | read | act | denycheck | argv | probes | routereval)")
         }
     }
 
@@ -533,6 +535,109 @@ enum ConnectorLab {
         Log("GmailConnect.probeConnected → \(gmail)")
         let calendar = await CalendarConnect.probeConnected()
         Log("CalendarConnect.probeConnected → \(calendar)")
+    }
+
+    // MARK: routereval (the 1.5 router eval — canned commands through the LIVE router)
+
+    /// What a canned command should route to. The 1.5 bar judges two counters: pure-screen
+    /// commands routed to a connector (must be ZERO — that run would fall back, costing a
+    /// narration) and pure-connector commands routed to computer (at most TWO — those still
+    /// succeed, just on the slower spine). Either-pass rows never count against either.
+    private enum ExpectedRoute {
+        case connector(String)   // pure connector: must route to this slug
+        case screen              // pure screen: connector = HARD FAIL
+        case computer            // multi-service / oddball: computer expected
+        case either(String)      // connector(slug) is better; computer also passes
+    }
+
+    private static func routereval() async {
+        guard requireConnectorBackend("the router eval") else { return }
+        guard CommandRouter.isActive else {
+            Log("skipped: no detected connectors — the router is structurally skipped. Run "
+                + "LAB_CMD=census first (or link a connector), then re-run.")
+            return
+        }
+        let routable = CommandRouter.routableServices().map(\.slug)
+        Log("routable services: \(routable.joined(separator: ", "))")
+
+        let deck: [(String, ExpectedRoute)] = [
+            // Pure connector — the whole task fits one service's tools.
+            ("what's on my calendar Friday",                          .connector("google-calendar")),
+            ("what are the newest files in my Drive",                 .connector("google-drive")),
+            ("did anyone email me about the lease",                   .connector("gmail")),
+            ("send an email to Jesai saying the build is green",      .connector("gmail")),
+            ("do I have any meetings tomorrow morning",               .connector("google-calendar")),
+            ("search my drive for the pitch deck and tell me who has access to it",
+                                                                      .connector("google-drive")),
+            ("when is my next flight? it should be in my email",      .connector("gmail")),
+            // Pure screen — any connector pick here is a hard fail.
+            ("click send on this form",                               .screen),
+            ("resize this window",                                    .screen),
+            ("what's on my screen",                                   .screen),
+            ("close all my Chrome tabs",                              .screen),
+            ("open Spotify and play my liked songs",                  .screen),
+            ("scroll down and screenshot the pricing table",          .screen),
+            // Screen-pointing but connector-doable — either passes; connector is better.
+            ("reply to this email saying yes",                        .either("gmail")),
+            ("add this event to my calendar",                         .either("google-calendar")),
+            ("delete my last email",                                  .either("gmail")),
+            // Multi-service and zero-context oddballs — computer.
+            ("check my email and put the meeting on my calendar",     .computer),
+            ("download the contract from Drive and print it",         .computer),
+            ("do the thing we talked about",                          .computer),
+            ("help",                                                  .computer),
+            ("what time is it in Tokyo",                              .computer),
+        ]
+
+        var screenToConnector = 0, connectorToComputer = 0, otherMisses = 0, eitherComputer = 0
+        var ran = 0, totalMS = 0
+        for (command, expected) in deck {
+            // A row whose expected slug isn't routable on this machine can't be judged fairly.
+            if case .connector(let slug) = expected, !routable.contains(slug) {
+                Log("  n/a   \"\(command)\" (expected \(slug) is not routable here)"); continue
+            }
+            if case .either(let slug) = expected, !routable.contains(slug) {
+                Log("  n/a   \"\(command)\" (either-slug \(slug) is not routable here)"); continue
+            }
+            let t0 = Date()
+            let route = await CommandRouter.route(command)
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            ran += 1; totalMS += ms
+            let got: String
+            switch route {
+            case .computer:                  got = "computer"
+            case .connector(let slug, _):    got = "connector(\(slug))"
+            }
+            let verdict: String
+            switch (expected, route) {
+            case (.connector(let want), .connector(let slug, _)):
+                if slug == want { verdict = "PASS " } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
+            case (.connector, .computer):
+                connectorToComputer += 1; verdict = "miss  (→ computer, counts vs the ≤2 budget)"
+            case (.screen, .computer):
+                verdict = "PASS "
+            case (.screen, .connector):
+                screenToConnector += 1; verdict = "HARD FAIL (screen task → connector)"
+            case (.computer, .computer):
+                verdict = "PASS "
+            case (.computer, .connector):
+                otherMisses += 1; verdict = "FAIL  (multi/oddball → connector)"
+            case (.either(let want), .connector(let slug, _)):
+                if slug == want { verdict = "PASS  (the better route)" } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
+            case (.either, .computer):
+                eitherComputer += 1; verdict = "PASS  (acceptable)"
+            }
+            Log("  \(verdict) \"\(command)\" → \(got) in \(ms)ms")
+        }
+
+        Log("\n== scorecard (\(ran) command(s)) ==")
+        Log("  screen → connector: \(screenToConnector) (bar: 0)")
+        Log("  pure-connector → computer: \(connectorToComputer) (bar: ≤2)")
+        Log("  other misroutes: \(otherMisses)")
+        Log("  either-pass rows answered computer: \(eitherComputer) (acceptable)")
+        Log("  mean router latency: \(ran == 0 ? 0 : totalMS / ran)ms")
+        let pass = screenToConnector == 0 && connectorToComputer <= 2 && otherMisses == 0
+        Log("== \(pass ? "PASS" : "FAIL"): the 1.5 bar \(pass ? "holds" : "does not hold") ==")
     }
 
     // MARK: argv (pure — print every recipe's argv per engine, no model runs)

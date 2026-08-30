@@ -43,6 +43,9 @@ nonisolated enum ConnectorRegistry {
     struct CuratedConnector: Sendable {
         var slug: String
         var displayName: String
+        /// One line for the command router's CONNECTED SERVICES list (task 1.5): short and
+        /// factual, tuned only against the router eval. nil (uncurated) = name rides alone.
+        var routerDescription: String? = nil
         // Per-engine identity (nil = not yet captured; the Step 3 chats fill these).
         var claudeName: String? = nil        // as `claude mcp list` prints it, minus "claude.ai "
         var claudeServerURL: String? = nil
@@ -72,6 +75,7 @@ nonisolated enum ConnectorRegistry {
     /// six are named-but-empty until their Step 3 chats.
     static let packs: [CuratedConnector] = [
         CuratedConnector(slug: "gmail", displayName: "Gmail",
+                         routerDescription: "read, search, and send the user's email; drafts and labels",
                          claudeName: "Gmail",
                          claudeServerURL: "https://gmailmcp.googleapis.com/mcp/v1",
                          claudeToolPrefix: "mcp__claude_ai_Gmail__",
@@ -81,6 +85,7 @@ nonisolated enum ConnectorRegistry {
                                          prefix: "mcp__claude_ai_Gmail__"),
                          kbAdapter: .windowedWeekly),
         CuratedConnector(slug: "google-calendar", displayName: "Google Calendar",
+                         routerDescription: "read the user's calendars and events; create, update, and RSVP",
                          claudeName: "Google Calendar",
                          claudeServerURL: "https://calendarmcp.googleapis.com/mcp/v1",
                          claudeToolPrefix: "mcp__claude_ai_Google_Calendar__",
@@ -92,6 +97,7 @@ nonisolated enum ConnectorRegistry {
         // Drive's read list was captured live 2026-08-26 and re-verified 2026-08-29 (the
         // classifier eval): the 8-tool surface matches this capture exactly.
         CuratedConnector(slug: "google-drive", displayName: "Google Drive",
+                         routerDescription: "search, read, and create files in the user's Google Drive",
                          claudeName: "Google Drive",
                          claudeServerURL: "https://drivemcp.googleapis.com/mcp/v1",
                          claudeToolPrefix: "mcp__claude_ai_Google_Drive__",
