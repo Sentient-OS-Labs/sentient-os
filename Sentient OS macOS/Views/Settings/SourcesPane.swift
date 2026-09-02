@@ -236,8 +236,9 @@ struct SourcesPane: View {
 // MARK: - The Connectors section (pure render; SourcesPane owns the state and the polling)
 
 /// The hosted apps already linked to the user's ChatGPT/Claude account, as pills. Pills are
-/// NOT source toggles: presence + health + a popover, so they never join the four-selection
-/// guard (the KB toggle starts counting toward the minimum only when nightly reads land).
+/// NOT source toggles: presence + health + a popover. The popover's KB toggle is what counts
+/// toward the four-source minimum (SourceSelection reads `mcp.<slug>.kb`); turning it OFF is
+/// deliberately un-guarded, matching the Gmail sheet's "Stop reading" precedent.
 private struct ConnectorsSection: View {
     let connectors: [ConnectorCensus.DetectedConnector]
     let locked: Bool
@@ -337,6 +338,10 @@ private struct ConnectorPill: View {
 /// may switch on (fail closed: no read list, no toggle); that runs inline behind a spinner and
 /// reverts quietly on failure. The key persists as true only AFTER a successful classification,
 /// so dismissing the popover mid-run can never leave an unclassified connector enabled.
+/// Landing ON also kicks off the first read (MCPReadActivity — dismissible, the read continues;
+/// skipped when the bucket was already read or a pipeline run is active). OFF just stops
+/// future reads: bucket and summaries remain, deletion is FactoryReset's job (the Gmail
+/// disconnect precedent).
 private struct ConnectorPopover: View {
     let connector: ConnectorCensus.DetectedConnector
 
@@ -376,6 +381,24 @@ private struct ConnectorPopover: View {
                     Text("Couldn't inspect this app's tools. Try again in a moment.")
                         .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
                 }
+                // The moment-of-connection read (kicked off when the toggle lands ON) — the
+                // shared activity object keeps this line honest across dismiss/reopen.
+                switch MCPReadActivity.shared.phase(for: connector.slug) {
+                case .reading:
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.mini)
+                        MonoCaps("Reading now · keeps going if you close this", size: 8,
+                                 tracking: 1.6, color: .white.opacity(0.5))
+                    }
+                case .done:
+                    MonoCaps("First read done", size: 8, tracking: 1.6,
+                             color: Theme.Ink.green.opacity(0.85))
+                case .failed:
+                    Text("Couldn't read it just now. I'll try again tonight.")
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
+                case nil:
+                    EmptyView()
+                }
             }
         }
         .padding(16)
@@ -383,6 +406,7 @@ private struct ConnectorPopover: View {
         .onAppear { kbOn = ConnectorRegistry.isKBEnabled(connector.slug) }
         .animation(.easeInOut(duration: 0.2), value: classifying)
         .animation(.easeInOut(duration: 0.2), value: classifyFailed)
+        .animation(.easeInOut(duration: 0.2), value: MCPReadActivity.shared.phase(for: connector.slug))
     }
 
     private var kbBinding: Binding<Bool> {
@@ -399,6 +423,7 @@ private struct ConnectorPopover: View {
         guard ConnectorRegistry.kbRequiresClassification(connector) else {
             kbOn = true
             ConnectorRegistry.setKBEnabled(connector.slug, true)
+            MCPReadActivity.shared.beginInitialIfNeeded(slug: connector.slug)
             return
         }
         classifying = true
@@ -408,6 +433,7 @@ private struct ConnectorPopover: View {
             if ok {
                 kbOn = true
                 ConnectorRegistry.setKBEnabled(connector.slug, true)
+                MCPReadActivity.shared.beginInitialIfNeeded(slug: connector.slug)
             } else {
                 kbOn = false
                 classifyFailed = true

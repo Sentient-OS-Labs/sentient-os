@@ -89,6 +89,7 @@ struct RootView: View {
                                mode: .auto,
                                runGmail: ModelBackend.connectorsAvailable && gmailConnected && runGmail,
                                runCalendar: ModelBackend.connectorsAvailable && calendarConnected && runCalendar,
+                               mcpSlugs: MCPSource.kbSlugs(),
                                fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
                     appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 14h clock

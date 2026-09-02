@@ -62,6 +62,7 @@ struct ProcessingView: View {
     let mode: IterativeRun.Mode       // home → .auto · dev INITIAL/ITERATIVE buttons → .initial/.iterative
     let runGmail: Bool                // append the cloud Gmail leg (shown in this same takeover)
     let runCalendar: Bool             // append the cloud Google Calendar leg (same takeover)
+    let mcpSlugs: [String]            // KB-toggled connectors to read (the generic MCP legs, same takeover)
     let showPrompt: Bool              // dev: add the left-side prompt pane
     let fullCycle: Bool               // real-mode Analyze Now: after the read, run ProactiveCycle (KB + proactive + wipe)
     let pausable: Bool                // onboarding: the footer button is Pause/Resume (freeze in place) instead of Stop (exit)
@@ -69,11 +70,12 @@ struct ProcessingView: View {
     var onDone: () -> Void
 
     init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode,
-         runGmail: Bool = false, runCalendar: Bool = false, showPrompt: Bool = false,
-         fullCycle: Bool = false, pausable: Bool = false, onExitEarly: (() -> Void)? = nil,
-         onDone: @escaping () -> Void) {
+         runGmail: Bool = false, runCalendar: Bool = false, mcpSlugs: [String] = [],
+         showPrompt: Bool = false, fullCycle: Bool = false, pausable: Bool = false,
+         onExitEarly: (() -> Void)? = nil, onDone: @escaping () -> Void) {
         self.modelPath = modelPath; self.connectors = connectors; self.mode = mode
-        self.runGmail = runGmail; self.runCalendar = runCalendar; self.showPrompt = showPrompt
+        self.runGmail = runGmail; self.runCalendar = runCalendar; self.mcpSlugs = mcpSlugs
+        self.showPrompt = showPrompt
         self.fullCycle = fullCycle; self.pausable = pausable; self.onExitEarly = onExitEarly
         self.onDone = onDone
     }
@@ -719,6 +721,9 @@ struct ProcessingView: View {
             if runCalendar {
                 p = await runCalendarLeg(base: p) { continuation.yield($0) }
             }
+            if !mcpSlugs.isEmpty {
+                p = await runMCPLeg(base: p) { continuation.yield($0) }
+            }
             return p
         }
         runTask = task
@@ -867,6 +872,56 @@ struct ProcessingView: View {
             yield(p)
             Log("ProcessingView.calendar: ✗ \(ErrorLabel(error))")
         }
+        return box.value
+    }
+
+    /// The generic connector KB legs (KB-toggled connectors, via MCPSource.runAll — always
+    /// iterative-with-fallback, same as the 3am run). The bar gets ONE slot per connector; each
+    /// window's label/summary rides the same card, and a per-connector failure renders exactly
+    /// like the Gmail leg's catch (runAll's `.failed` event; the run continues past it).
+    private func runMCPLeg(base: RunProgress,
+                           yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
+        let box = ProgressBox(base)
+        let baseTotal = base.total, baseDone = base.done
+        let onEvent: @Sendable (String, Int, Int, MCPSource.Progress) -> Void = { slug, index, total, ev in
+            let name = ConnectorRegistry.displayName(slug: slug)
+            switch ev {
+            case let .windowStart(_, _, label, prompt):
+                var p = box.value
+                p.total = baseTotal + total
+                p.lastPrompt = prompt
+                p.lastPath = "\(name) · \(label)"
+                box.value = p
+                yield(p)
+            case let .windowDone(step, windows, label, summary, items, _):
+                var p = box.value
+                p.total = baseTotal + total
+                // The connector's final window completes its bar slot; inner windows (the Step 3
+                // windowed adapters) just refresh the card.
+                if step == windows { p.done = baseDone + index + 1 }
+                if summary != nil { p.survivors += 1 } else { p.junk += 1 }
+                p.lastTitle   = "\(name) · \(label)"
+                p.lastSummary = summary
+                p.lastVerdict = summary == nil ? .junk : .survivor
+                p.lastFilePath = nil
+                p.lastPath    = "\(name) · \(label)" + (items > 0 ? " · \(items) items" : "")
+                p.lastSeconds = nil
+                box.value = p
+                yield(p)
+            case let .failed(label, message):
+                var p = box.value
+                p.total = baseTotal + total
+                p.done = baseDone + index + 1
+                p.lastTitle = "\(label) failed"
+                p.lastSummary = message
+                p.lastVerdict = .junk
+                p.lastFilePath = nil
+                box.value = p
+                yield(p)
+            }
+        }
+        let (_, limited) = await MCPSource.runAll(onEvent: onEvent)
+        if limited { Log("ProcessingView.mcp: usage limit — remaining connector reads skipped") }
         return box.value
     }
 }

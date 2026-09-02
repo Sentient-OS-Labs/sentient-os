@@ -93,6 +93,7 @@ struct OnboardingView: View {
                                    mode: .auto,
                                    runGmail: gmailConnected && runGmail,
                                    runCalendar: calendarConnected && runCalendar,
+                                   mcpSlugs: MCPSource.kbSlugs(),
                                    fullCycle: BriefingDeck(rawValue: deckRaw) == .real,
                                    pausable: true,
                                    onExitEarly: { withAnimation(.easeInOut(duration: 0.3)) { analyzing = false } },

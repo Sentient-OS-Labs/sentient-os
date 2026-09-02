@@ -15,7 +15,9 @@
 //  FrontierRun) · argv (pure: print every recipe's argv per engine, no runs) · routereval (the
 //  1.5 router eval: canned commands through the live CommandRouter, scorecard vs the bar)
 //  · seedcard / firecard (the 1.7 mcp card channel: plant + fire a canned .mcp card through
-//  the real executor) · decodecheck (pure: 1.x stored-card decode compatibility)
+//  the real executor) · decodecheck (pure: 1.x stored-card decode compatibility) · kbread
+//  (the 1.8 generic KB read: LAB_SLUG + LAB_MODE=initial|iterative through the REAL MCPSource,
+//  then a bucket dump)
 //
 //  Both listers are called BY NAME rather than through ConnectorCensus.list(), so testing an
 //  engine never mutates the user's live `model.backend` setting (self-tests share the real
@@ -50,10 +52,11 @@ enum ConnectorLab {
         case "firecard": await firecard()
         case "decodecheck": decodecheck()
         case "research": await research()
+        case "kbread":   await kbread()
         default:
             Log("unknown LAB_CMD '\(command)' (census | parse | warm | registry | tools | classify"
                 + " | cache | read | act | denycheck | argv | probes | routereval"
-                + " | seedcard | firecard | decodecheck | research)")
+                + " | seedcard | firecard | decodecheck | research | kbread)")
         }
     }
 
@@ -864,5 +867,45 @@ enum ConnectorLab {
         } catch {
             Log("research failed: \(ErrorLabel(error))")
         }
+    }
+
+    // MARK: kbread (the 1.8 generic KB read engine, live)
+
+    /// `LAB_CMD=kbread LAB_SLUG=google-drive [LAB_MODE=initial|iterative]`: one REAL read
+    /// through MCPSource on the live backend (the exact unattended-read recipe the nightly
+    /// chain uses), then a dump of the bucket's pointer and note(s). `iterative` (the default)
+    /// falls back to initial when the bucket has never been read — the chain's behavior.
+    private static func kbread() async {
+        let slug = labSlug
+        let mode = ProcessInfo.processInfo.environment["LAB_MODE"] ?? "iterative"
+        Log("kbread: \(mode) read of \(slug) on the \(ModelBackend.current.rawValue) backend")
+        let logProgress: @Sendable (MCPSource.Progress) -> Void = { ev in
+            switch ev {
+            case let .windowStart(step, total, label, prompt):
+                Log("  │ window \(step)/\(total) START · \(label) · prompt \(prompt.count) chars")
+            case let .windowDone(step, total, label, summary, items, kept):
+                Log("  │ window \(step)/\(total) DONE · \(label) · \(summary == nil ? "quiet" : "notable") · \(items) items · kept=\(kept)")
+            case let .failed(label, message):
+                Log("  │ FAILED · \(label) · \(message)")
+            }
+        }
+        do {
+            let kept = mode == "initial"
+                ? try await MCPSource.runInitial(slug: slug, onProgress: logProgress)
+                : try await MCPSource.runIterative(slug: slug, onProgress: logProgress)
+            Log("kbread: ✅ \(kept) summary(ies) recorded")
+        } catch {
+            Log("kbread: ✗ \(ErrorLabel(error))")
+        }
+        let bucket = MCPSource.bucketKey(slug)
+        let pointer = await CycleStore.shared.pointer(bucket)
+        let notes = await CycleStore.shared.notes().filter { $0.bucketKey == bucket }
+        Log("kbread: bucket \(bucket) · mark=\(pointer.map { Date(timeIntervalSince1970: $0.order).description } ?? "nil") · \(notes.count) note(s)")
+        #if DEBUG
+        for n in notes {
+            Log("kbread: — \(n.title ?? "?") · \(n.text.count) chars · action_items=\(n.reminderFlagged)")
+            Log("kbread:   \(n.text.prefix(500))")
+        }
+        #endif
     }
 }
