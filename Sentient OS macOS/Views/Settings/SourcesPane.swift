@@ -362,6 +362,12 @@ private struct ConnectorPopover: View {
                 Text(connector.healthy ? "Connected" : "Not responding")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.statusInk)
             }
+            // Claude's listing health-checks live, so an amber pill there has one honest fix.
+            // Codex pills are structurally always healthy (presence = linked; no health probe).
+            if !connector.healthy && connector.origin == .claude {
+                Text("Sign in again on claude.ai to reconnect.")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
+            }
             SettingsHairline()
             HStack(spacing: 12) {
                 Text("Use for knowledge base")

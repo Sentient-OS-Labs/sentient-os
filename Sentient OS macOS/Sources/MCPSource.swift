@@ -43,12 +43,24 @@ enum MCPSource {
         /// The slug resolves to no server, or (Claude) has neither curated nor classified read
         /// tools — the unattended-read recipe would refuse it, so refuse cleanly up front.
         case noReadSurface(slug: String)
+        /// The model reported the connector's own tools refusing auth (`tool_failure: "auth"`).
+        /// The one reliable detector for a dead OAuth token: an expired connector doesn't THROW —
+        /// its tools just refuse (or never attach), and without this the night reads as falsely
+        /// quiet while `claude mcp list` still says Connected. Becomes the amber morning caution.
+        case connectorAuth(slug: String)
+        /// The model reported the tools breaking for any other reason (`tool_failure: "other"`).
+        /// Mark stays unset; next night retries. Never a caution — could be transient.
+        case toolFailure(slug: String)
         case dateMath
 
         var errorDescription: String? {
             switch self {
             case .noReadSurface(let slug):
                 return "The \(ConnectorRegistry.displayName(slug: slug)) connector has no verified read tools yet."
+            case .connectorAuth(let slug):
+                return "The \(ConnectorRegistry.displayName(slug: slug)) connection needs a fresh sign-in."
+            case .toolFailure(let slug):
+                return "\(ConnectorRegistry.displayName(slug: slug))'s tools didn't work this time."
             case .dateMath:
                 return "Connector read date math failed."
             }
@@ -92,29 +104,78 @@ enum MCPSource {
         onEvent: @Sendable @escaping (String, Int, Int, Progress) -> Void = { _, _, _, _ in }
     ) async -> (outcomes: [LegOutcome], hitUsageLimit: Bool) {
         let slugs = kbSlugs()
+        logVanishedToggles()
         var outcomes: [LegOutcome] = []
         var hitUsageLimit = false
         for (index, slug) in slugs.enumerated() {
             if hitUsageLimit {
                 outcomes.append(LegOutcome(slug: slug, result: "skipped"))
+                signalRead(slug: slug, outcome: "skipped", started: Date())
                 continue
             }
+            let legStart = Date()
             do {
-                _ = try await runIterative(slug: slug) { event in
+                let recorded = try await runIterative(slug: slug) { event in
                     onEvent(slug, index, slugs.count, event)
                 }
                 outcomes.append(LegOutcome(slug: slug, result: "ok"))
+                // "quiet" (nothing notable, mark advanced) vs "ok" is telemetry-only detail;
+                // the leg outcome stays "ok" for the scheduler's failed-leg scan.
+                signalRead(slug: slug, outcome: recorded == 0 ? "quiet" : "ok", started: legStart)
             } catch {
                 if case CodexCLI.CLIError.usageLimit = error { hitUsageLimit = true }
-                let reason = CodexFailureReason.classify(error).rawValue
+                let reason: String
+                if case MCPError.connectorAuth = error {
+                    reason = "connector_auth"   // the scheduler turns this into the amber caution
+                } else {
+                    reason = CodexFailureReason.classify(error).rawValue
+                }
                 Log("MCPSource.runAll(\(slug)): ✗ \(ErrorLabel(error)) — \(reason)")
                 outcomes.append(LegOutcome(slug: slug, result: reason))
+                signalRead(slug: slug, outcome: reason, started: legStart)
+                CrashReporting.captureEvent("mcp.read.failed", level: .warning,
+                    tags: ["slug": ConnectorRegistry.telemetrySlug(slug), "reason": reason],
+                    extra: ["seconds": String(Int(Date().timeIntervalSince(legStart)))],
+                    fingerprint: ["mcp", "read", reason])
                 onEvent(slug, index, slugs.count,
                         .failed(label: ConnectorRegistry.displayName(slug: slug),
                                 message: (error as? LocalizedError)?.errorDescription ?? "The read failed."))
             }
         }
         return (outcomes, hitUsageLimit)
+    }
+
+    /// One TelemetryDeck row per connector per night: outcome (ok / quiet / skipped / the
+    /// classified failure reason), duration, token totals. Curated slug or "other" — never a
+    /// user-authored name. Extended tier; a no-op in DEBUG and when analytics are opted out.
+    private static func signalRead(slug: String, outcome: String, started: Date) {
+        let tokens = meter.withLock { $0.removeValue(forKey: slug) } ?? (0, 0)
+        // inCount/outCount are model token totals — named around the diagnostics vocabulary
+        // rule (a key containing "token" is redacted by Sentry's server-side scrubbing; the
+        // lint build phase enforces the same vocabulary everywhere).
+        Analytics.signal("Connector.readCompleted", parameters: [
+            "target": ConnectorRegistry.telemetrySlug(slug),
+            "outcome": outcome,
+            "seconds": String(Int(Date().timeIntervalSince(started))),
+            "inCount": String(tokens.tokensIn),
+            "outCount": String(tokens.tokensOut)])
+    }
+
+    /// A KB toggle whose app is no longer linked anywhere is the user's own act (they unlinked
+    /// it on the website): one quiet count line, never a caution, never an error. A connector
+    /// merely absent from the LIVE backend but linked on the other engine is not "vanished" —
+    /// it simply doesn't run tonight.
+    private static func logVanishedToggles() {
+        let known = Set((ConnectorCensus.cached(for: .claude)
+                         + ConnectorCensus.cached(for: .chatgpt)).map(\.slug))
+        let vanished = UserDefaults.standard.dictionaryRepresentation()
+            .filter { $0.key.hasPrefix("mcp.") && $0.key.hasSuffix(".kb")
+                      && ($0.value as? Bool) == true }
+            .map { String($0.key.dropFirst("mcp.".count).dropLast(".kb".count)) }
+            .filter { !known.contains($0) }
+        if !vanished.isEmpty {
+            Log("MCPSource.runAll: \(vanished.count) KB toggle(s) for apps no longer linked — skipped")
+        }
     }
 
     // MARK: - Initial read (windowed per the pack's KBAdapter)
@@ -314,11 +375,19 @@ enum MCPSource {
                 let env = try await FrontierRun.run(inv)
                 Log("MCPSource.read(\(slug)): \(env.result.count) chars in \(Int(Date().timeIntervalSince(started)))s"
                     + " · tokens in=\(env.inputTokens ?? 0) cached=\(env.cachedInputTokens ?? 0) out=\(env.outputTokens ?? 0)")
-                return parse(env.result, slug: slug)
+                meter.withLock { m in
+                    var t = m[slug] ?? (0, 0)
+                    t.tokensIn += env.inputTokens ?? 0
+                    t.tokensOut += env.outputTokens ?? 0
+                    m[slug] = t
+                }
+                return try parse(env.result, slug: slug)
             } catch {
                 // A usage limit won't resolve within the night and a recipe refusal is
                 // deterministic — propagate both. Anything else gets ONE retry: the session's
-                // first spawn occasionally never attaches the connector (field-found 2026-08-30).
+                // first spawn occasionally never attaches the connector (field-found 2026-08-30),
+                // which the model can only report as a tool_failure — so those retry too, and a
+                // REAL dead connector simply fails the same way twice before propagating.
                 if case CodexCLI.CLIError.usageLimit = error { throw error }
                 if case CodexCLI.CLIError.notAvailable = error { throw error }
                 lastError = error
@@ -353,6 +422,12 @@ enum MCPSource {
 
     private static let busy = OSAllocatedUnfairLock(initialState: Set<String>())
 
+    /// Per-slug token totals, summed across a leg's windows by `read()` and drained by
+    /// `runAll`'s per-leg signal (keyed by slug, so a concurrent toggle-time read on another
+    /// connector never cross-talks; same-slug overlap is already impossible via `busy`).
+    private static let meter = OSAllocatedUnfairLock(
+        initialState: [String: (tokensIn: Int, tokensOut: Int)]())
+
     private static func claim(_ slug: String) -> Bool {
         busy.withLock { $0.insert(slug).inserted }
     }
@@ -364,14 +439,20 @@ enum MCPSource {
     // MARK: - Parse (tolerant; mirrors the Gmail/Calendar shape-mismatch discipline)
 
     /// SHAPE MISMATCH (no JSON, or the required `notable` key absent despite the output schema)
-    /// is an engine/schema regression → event, slug as a tag. A QUIET period (`notable: false` /
-    /// empty summary) is normal → silent nil.
-    private static func parse(_ result: String, slug: String) -> ReadResult? {
+    /// is an engine/schema regression → event, curated slug or "other" as the tag. A QUIET
+    /// period (`notable: false` / empty summary) is normal → silent nil. A reported
+    /// `tool_failure` THROWS: the read didn't happen, so it must not advance the mark or pass
+    /// as quiet (auth → the caution; other → retry next night).
+    private static func parse(_ result: String, slug: String) throws -> ReadResult? {
         guard let span = jsonSpan(result),
               let data = span.data(using: .utf8),
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             shapeMismatch(slug: slug, missing: "json", len: result.count)
             return nil
+        }
+        if let failure = obj["tool_failure"] as? String, !failure.isEmpty {
+            throw failure == "auth" ? MCPError.connectorAuth(slug: slug)
+                                    : MCPError.toolFailure(slug: slug)
         }
         guard let notable = obj["notable"] as? Bool else {
             shapeMismatch(slug: slug, missing: "notable", len: result.count)   // key names only — never values
@@ -385,8 +466,10 @@ enum MCPSource {
     }
 
     private static func shapeMismatch(slug: String, missing: String, len: Int) {
+        // Closed vocabulary: uncurated slugs can be user-authored connector names, so telemetry
+        // masks them to "other" (the curated packs name themselves).
         CrashReporting.captureEvent("mcp.parse.shape_mismatch", level: .warning,
-            tags: ["source": "mcp", "slug": slug],
+            tags: ["source": "mcp", "slug": ConnectorRegistry.telemetrySlug(slug)],
             extra: ["missing": missing, "result_len": String(len)],
             fingerprint: ["mcp", "parse", "shape_mismatch"])
     }
@@ -415,13 +498,16 @@ enum MCPSource {
     // MARK: - Prompt + schema
 
     /// The structured reply contract — one dense summary plus the flags Sentient keys on.
+    /// `tool_failure` is the connector-health tri-state: "" = tools worked, "auth" = they
+    /// demanded a sign-in (→ the amber morning caution), "other" = any other tool breakage.
     private static let readSchema = """
     {"type":"object","additionalProperties":false,"properties":{\
     "item_count":{"type":"integer"},\
     "notable":{"type":"boolean"},\
     "has_action_items":{"type":"boolean"},\
-    "summary":{"type":"string"}},\
-    "required":["item_count","notable","has_action_items","summary"]}
+    "summary":{"type":"string"},\
+    "tool_failure":{"type":"string","enum":["","auth","other"]}},\
+    "required":["item_count","notable","has_action_items","summary","tool_failure"]}
     """
 
     /// The generic read prompt. `window` is the one seam the iterative read and the Step 3
@@ -446,7 +532,14 @@ enum MCPSource {
 
         Reply with JSON matching the schema:
         {"item_count": <items considered>, "notable": true|false,
-         "has_action_items": true|false, "summary": "<empty when notable is false>"}
+         "has_action_items": true|false, "summary": "<empty when notable is false>",
+         "tool_failure": ""|"auth"|"other"}
+
+        Set tool_failure ONLY when the \(name) tools themselves failed you: "auth" when \
+        they demand a sign-in, report an expired connection, or refuse authorization; \
+        "other" for any other tool breakage, including no \(name) tools being available \
+        at all. When the tools worked, even on a quiet period, use "". When tool_failure \
+        is set, notable must be false.
         """
     }
 }

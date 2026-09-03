@@ -357,6 +357,14 @@ final class OvernightScheduler {
             let (outcomes, limited) = await MCPSource.runAll()
             for o in outcomes { log.line("  \(o.slug): \(o.result)") }
             legs["mcp"] = outcomes.first(where: { $0.result != "ok" })?.result ?? "ok"
+            if let auth = outcomes.first(where: { $0.result == "connector_auth" }) {
+                // The connector's own sign-in expired account-side (the engine login is fine) —
+                // the amber caution names it. Recorded BEFORE any usage-limit caution below, so
+                // a night with both keeps the broader story.
+                log.line("connector sign-in needed (\(auth.slug)) — caution recorded")
+                OvernightCaution.record(.connectorAuth,
+                                        detail: ConnectorRegistry.displayName(slug: auth.slug))
+            }
             if limited {
                 // The reads run the light tier, so their limit can trip while the heavier tail
                 // still succeeds — record the morning caution here rather than hoping the tail

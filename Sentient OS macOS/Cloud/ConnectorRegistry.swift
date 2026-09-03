@@ -97,7 +97,10 @@ nonisolated enum ConnectorRegistry {
                                          prefix: "mcp__claude_ai_Google_Calendar__"),
                          kbAdapter: .windowedMonthly),
         // Drive's read list was captured live 2026-08-26 and re-verified 2026-08-29 (the
-        // classifier eval): the 8-tool surface matches this capture exactly.
+        // classifier eval). The live surface has since GROWN server-side (new write/destructive
+        // tools appeared within days — why the classifier cache carries a weekly TTL); the six
+        // curated reads below remain the verified read surface, and the destructive denies
+        // always come from the live classifier cache, never from this pack.
         CuratedConnector(slug: "google-drive", displayName: "Google Drive",
                          routerDescription: "search, read, and create files in the user's Google Drive",
                          claudeName: "Google Drive",
@@ -235,6 +238,14 @@ nonisolated enum ConnectorRegistry {
         if let pack = pack(forSlug: slug) { return pack.displayName }
         return (ConnectorCensus.cached(for: .claude) + ConnectorCensus.cached(for: .chatgpt))
             .first { $0.slug == slug }?.displayName ?? ConnectorCensus.titleCased(slug)
+    }
+
+    /// The closed-vocabulary telemetry label for a slug: curated slugs name themselves; every
+    /// uncurated connector reports the literal "other". Uncurated names can be user-authored
+    /// (custom connectors), and telemetry carries structure only — every telemetry sink that
+    /// tags a slug goes through here (the executor's channel label, the router, the KB reads).
+    static func telemetrySlug(_ slug: String) -> String {
+        pack(forSlug: slug) != nil ? slug : "other"
     }
 
     // MARK: The CONNECTED SERVICES prompt block (task 1.6)

@@ -243,7 +243,14 @@ nonisolated enum ConnectorCensus {
                         for origin: DetectedConnector.Origin) -> [DetectedConnector] {
         guard let key = storageKey(for: origin),
               let data = try? JSONEncoder().encode(connectors) else { return connectors }
+        let previous = cached(for: origin).count
         UserDefaults.standard.set(data, forKey: key)
+        // Telemetry: the detected count per engine, ints only, and only when the count actually
+        // changed (a steady watch tick or pane open stays silent — this fires on link/unlink).
+        if connectors.count != previous {
+            Analytics.signal("Connector.census", parameters: [
+                "origin": origin.rawValue, "count": String(connectors.count)])
+        }
         return connectors
     }
 

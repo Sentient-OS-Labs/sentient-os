@@ -100,12 +100,25 @@ final class CommandRunModel {
                 // is computer use. Skipped (no run, no latency) with zero detected connectors.
                 // Runs INSIDE the one owned Task, so STOP and `isRunning` behave identically on
                 // every leg; card fires never pass through here (beginExternalRun skips start()).
+                let routerRan = CommandRouter.isActive   // skipped → no telemetry row either
+                let routerStart = Date()
                 if case .connector(let slug, let name) = await CommandRouter.route(task0) {
+                    let routerMs = Int(Date().timeIntervalSince(routerStart) * 1000)
                     try Task.checkCancellation()   // a STOP during routing must never keep going
                     if try await self?.connectorLeg(task0, slug: slug, name: name,
                                                     screenshots: shots, kbContext: kb,
-                                                    started: started) != false { return }
+                                                    started: started) != false {
+                        CommandRouter.recordOutcome(route: "connector", slug: slug,
+                                                    ms: routerMs, fellBack: false)
+                        return
+                    }
                     try Task.checkCancellation()   // a STOP mid-leg must never fall through
+                    CommandRouter.recordOutcome(route: "connector", slug: slug,
+                                                ms: routerMs, fellBack: true)
+                } else if routerRan {
+                    CommandRouter.recordOutcome(route: "computer", slug: nil,
+                                                ms: Int(Date().timeIntervalSince(routerStart) * 1000),
+                                                fellBack: false)
                 }
                 let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
                                                 spoken: source == "voice", kbContext: kb, history: history)

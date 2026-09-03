@@ -551,6 +551,7 @@ struct ProcessingView: View {
         case .noInternet:     "No internet connection"
         case .inputTooLarge:  "This batch was too big to send"
         case .diskFull:       "Your Mac's disk is full"
+        case .connectorAuth:  "A connected app needs a fresh sign-in"
         case nil:             "Processing failed"
         }
     }
@@ -569,6 +570,9 @@ struct ProcessingView: View {
             ? "Sentient tried to send Claude more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
             : "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
         case .diskFull:       "I can't save what I read until there's room on this Mac. Free up some space (a few GB is plenty), then hit Retry; everything so far is saved and I'll pick up right where we stopped."
+        case .connectorAuth:  claude
+            ? "One of your connected apps has stopped accepting its sign-in. Reconnect it on claude.ai, then hit Retry; everything so far is saved."
+            : "One of your connected apps has stopped accepting its sign-in. Reconnect it on chatgpt.com, then hit Retry; everything so far is saved."
         case nil:             message
         }
     }

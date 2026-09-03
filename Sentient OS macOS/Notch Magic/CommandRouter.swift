@@ -99,6 +99,23 @@ enum CommandRouter {
         }
     }
 
+    // MARK: Telemetry (called by CommandRunModel once the run's outcome is known)
+
+    /// One row per routed submission: the decision, the curated slug or "other", the router's
+    /// decision time, and whether a routed connector leg fell back to computer use. Never the
+    /// command text. The fallback is also the one defect-shaped router signal, so it lands in
+    /// Sentry too (structure only; the underlying error already reported through the spine).
+    static func recordOutcome(route: String, slug: String?, ms: Int, fellBack: Bool) {
+        let target = slug.map(ConnectorRegistry.telemetrySlug) ?? ""
+        Analytics.signal("Connector.routed", parameters: [
+            "route": route, "target": target, "ms": String(ms), "fallback": String(fellBack)])
+        if fellBack {
+            CrashReporting.captureEvent("mcp.route.fallback", level: .warning,
+                                        tags: ["slug": target],
+                                        fingerprint: ["mcp", "route", "fallback"])
+        }
+    }
+
     // MARK: The prompt (tune ONLY against the lab's routereval)
 
     private static func prompt(command: String, services: [Service]) -> String {

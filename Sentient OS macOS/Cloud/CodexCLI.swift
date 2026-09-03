@@ -933,8 +933,9 @@ actor CodexCLI {
     ///  ┌─────────────────┬────────────────────────────────────────────────────────────────┐
     ///  │ UNATTENDED READ │ read-only sandbox as always (reads pass; writes approval-gated │
     ///  │ mcpReadConnectors│ headless and auto-cancel) + `apps.<id>.open_world_enabled=    │
-    ///  │                 │ false` AND `.destructive_enabled=false` per resolvable catalog │
-    ///  │                 │ id — the send/destroy tools don't exist in a read run at all   │
+    ///  │                 │ false` AND `.destructive_enabled=false` for every resolvable   │
+    ///  │                 │ listed id PLUS every detected census id — the send/destroy     │
+    ///  │                 │ tools don't exist in a read run at all, for ANY linked app     │
     ///  │                 │ (unresolvable id = harmless no-op, the existing strip posture).│
     ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
     ///  │ FIRED TASK      │ `apps.<id>.default_tools_approval_mode="approve"` when the id  │
@@ -1007,7 +1008,7 @@ actor CodexCLI {
                     for override in Invocation.approveConnectorWrites { args += ["-c", override] }
                 }
             }
-            for slug in inv.mcpReadConnectors {
+            if !inv.mcpReadConnectors.isEmpty {
                 // Both strips per connector: `open_world_enabled=false` removes the tools that
                 // transmit externally (e.g. Gmail send) and `destructive_enabled=false` the
                 // trash/delete family — a read run's "never fire" is the tools NOT EXISTING, on
@@ -1017,9 +1018,25 @@ actor CodexCLI {
                 // catalog ids (friendly slugs are silent no-ops; the app-wide `apps._default`
                 // variant strips READ tools too — both measured, codexperms self-test). An
                 // unresolvable id = harmless no-op; the other layers still hold.
-                if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
-                    args += ["-c", "apps.\(id).open_world_enabled=false",
-                             "-c", "apps.\(id).destructive_enabled=false"]
+                var stripped = Set<String>()
+                for slug in inv.mcpReadConnectors {
+                    if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
+                       stripped.insert(id).inserted {
+                        args += ["-c", "apps.\(id).open_world_enabled=false",
+                                 "-c", "apps.\(id).destructive_enabled=false"]
+                    }
+                }
+                // Defense in depth: every OTHER detected connector still rides the codex spawn
+                // whole (its reads flow; its writes are only approval-gated), so an unattended
+                // read strips the send/destroy tools of EVERY linked app, listed or not. Sorted
+                // for argv stability; zero detected connectors = zero extra flags, so the
+                // recipe's recorded zero-connector shape is untouched.
+                for connector in ConnectorCensus.cached(for: .chatgpt)
+                    .sorted(by: { $0.slug < $1.slug }) {
+                    if let id = connector.catalogID, stripped.insert(id).inserted {
+                        args += ["-c", "apps.\(id).open_world_enabled=false",
+                                 "-c", "apps.\(id).destructive_enabled=false"]
+                    }
                 }
             }
         }

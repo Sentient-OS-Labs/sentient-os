@@ -157,8 +157,7 @@ actor ProactiveExecutor {
     /// curated slug ("google-drive", "slack", …) or the literal "other" for uncurated connectors.
     private static func telemetryMethod(_ action: PreparedAction) -> String {
         guard action.method == .mcp else { return action.method.rawValue }
-        guard let slug = action.methodTarget, ConnectorRegistry.pack(forSlug: slug) != nil else { return "other" }
-        return slug
+        return ConnectorRegistry.telemetrySlug(action.methodTarget ?? "")
     }
 
     /// Internal fire result — the public `Outcome` for the UI PLUS the finer scoreboard fields.

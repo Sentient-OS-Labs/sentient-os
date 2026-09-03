@@ -211,7 +211,7 @@ struct HomeView: View {
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
-                CautionCapsule(message: caution.kind.message,
+                CautionCapsule(message: caution.message,
                                actionTitle: cautionAction(caution.kind)?.title,
                                onAction: cautionAction(caution.kind)?.run ?? {},
                                onDismiss: {
@@ -236,6 +236,8 @@ struct HomeView: View {
         switch kind {
         case .loggedOut: return ("Open Settings", openHealthSettings)
         case .diskFull:  return ("Manage Storage", { DiskSpace.openStorageSettings() })
+        case .connectorAuth:   // the fix lives on the engine's own connectors page
+            return ("Sign In Again", { NSWorkspace.shared.open(ConnectorCensus.directoryURL) })
         case .noInternet, .usageLimit, .inputTooLarge: return nil
         }
     }

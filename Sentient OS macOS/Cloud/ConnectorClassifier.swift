@@ -9,7 +9,8 @@
 //
 //  Key methods:
 //   - ensureClassified(_:)  → the production entry: no-op off the Claude backend, cache-fresh
-//                             check against the managed CLI version, else classify + persist.
+//                             check against the managed CLI version AND a weekly TTL (server-
+//                             side surfaces drift on their own), else classify + persist.
 //   - sweepComputerUseAttachables() → the idle-tick sweep over chips + detected connectors,
 //                             so the computer-use attach set is classified on real machines.
 //   - classify(slug:)       → one model run: the connector walled in alone, zero tool calls,
@@ -63,10 +64,19 @@ nonisolated enum ConnectorClassifier {
     /// updater performs — the same posture as ClaudeCLI's cachedVersion.
     private static let cliVersion = Task { await ClaudeCLI.installedVersion() }
 
+    /// How long a capture is trusted. Tool surfaces drift SERVER-side too, independent of any
+    /// CLI update (a hosted connector can grow tools between one night and the next — measured
+    /// live on Google Drive, 2026-09), and the destructive denies are complements of the
+    /// captured inventory, so an aged capture is a fail-open window. A weekly re-classification
+    /// bounds it; the idle-tick sweep makes the re-runs free to callers (one haiku run per
+    /// connector per week, steady state otherwise zero).
+    private static let captureTTL: TimeInterval = 7 * 24 * 3600
+
     // MARK: The production entry
 
-    /// Classify a connector when there is no cache, or when the cached capture's CLI version
-    /// differs from the installed managed CLI. Claude engine only — codex and custom backends
+    /// Classify a connector when there is no cache, when the cached capture's CLI version
+    /// differs from the installed managed CLI, or when the capture has outlived the weekly
+    /// TTL. Claude engine only — codex and custom backends
     /// are a clean no-op (structural safety differs there; see the recipes table). A failed or
     /// unparseable run leaves the connector unclassified: no read allows, excluded from
     /// computer-use attachment (task 1.6's rule). Never fail open.
@@ -80,9 +90,14 @@ nonisolated enum ConnectorClassifier {
     static func ensureClassified(slug: String) async -> Bool {
         guard ModelBackend.current == .claude else { return false }
         let version = await cliVersion.value ?? "unknown"
-        if let cached = ConnectorRegistry.classification(for: slug), cached.cliVersion == version {
+        if let cached = ConnectorRegistry.classification(for: slug), cached.cliVersion == version,
+           Date().timeIntervalSince(cached.capturedAt) < captureTTL {
             return true
         }
+        // Past here the cache is missing, from another CLI version, or older than the TTL. A
+        // failed re-run below deliberately KEEPS a stale capture in place (the existing
+        // version-mismatch posture): stale denies bound the drift window; dropping a working
+        // connector to unclassified over one haiku flake would cost the user real capability.
         // Two attempts: the connector's first attach to a fresh run is occasionally transient
         // (field-observed 2026-08-29: a short reply naming no connector tools, gone on the next
         // spawn). One retry is cheap on the haiku tier; failing both leaves the connector
