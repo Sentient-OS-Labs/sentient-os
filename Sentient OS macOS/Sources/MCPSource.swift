@@ -18,7 +18,6 @@
 //                            (ProcessingView + OvernightScheduler) share; a usage limit skips
 //                            the remaining connectors
 //   - kbSlugs()            → the enabled slugs (the chain's detect step)
-//   - MCPReadActivity      → the toggle-ON moment-of-connection read (SourcesPane popover)
 //
 //  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
 //
@@ -418,13 +417,13 @@ enum MCPSource {
         }
     }
 
-    // MARK: - In-flight guard (a toggle-time read and a chain read must never overlap on one slug)
+    // MARK: - In-flight guard (two reads must never overlap on one slug)
 
     private static let busy = OSAllocatedUnfairLock(initialState: Set<String>())
 
     /// Per-slug token totals, summed across a leg's windows by `read()` and drained by
-    /// `runAll`'s per-leg signal (keyed by slug, so a concurrent toggle-time read on another
-    /// connector never cross-talks; same-slug overlap is already impossible via `busy`).
+    /// `runAll`'s per-leg signal (keyed by slug, so concurrent reads on different connectors
+    /// never cross-talk; same-slug overlap is already impossible via `busy`).
     private static let meter = OSAllocatedUnfairLock(
         initialState: [String: (tokensIn: Int, tokensOut: Int)]())
 
@@ -541,46 +540,5 @@ enum MCPSource {
         at all. When the tools worked, even on a quiet period, use "". When tool_failure \
         is set, notable must be false.
         """
-    }
-}
-
-// MARK: - The toggle-ON read (the SourcesPane popover's moment-of-connection read)
-
-/// Owns the first read a just-enabled KB toggle kicks off, so the popover can be dismissed and
-/// reopened without losing the progress line (the read itself continues either way). Skips when
-/// the bucket was already read once (a re-toggle never re-reads; the nightly iterative covers
-/// it) or while a pipeline run is active (a mid-cycle note could be wiped by the cycle's tail
-/// after the mark advanced — the next chain's `.auto` fallback reads it safely instead).
-@MainActor
-@Observable
-final class MCPReadActivity {
-    static let shared = MCPReadActivity()
-    private init() {}
-
-    enum Phase: Equatable { case reading, done, failed }
-    private(set) var phases: [String: Phase] = [:]
-
-    func phase(for slug: String) -> Phase? { phases[slug] }
-
-    func beginInitialIfNeeded(slug: String) {
-        guard phases[slug] != .reading else { return }
-        guard !PipelineActivity.shared.isRunning else {
-            Log("MCPReadActivity(\(slug)): pipeline mid-run — the next analysis reads it")
-            return
-        }
-        phases[slug] = .reading
-        Task {
-            if await CycleStore.shared.pointer(MCPSource.bucketKey(slug)) != nil {
-                phases[slug] = nil          // already read once — nothing to do
-                return
-            }
-            do {
-                _ = try await MCPSource.runInitial(slug: slug)
-                phases[slug] = .done
-            } catch {
-                Log("MCPReadActivity(\(slug)): ✗ \(ErrorLabel(error)) — the nightly read retries")
-                phases[slug] = .failed
-            }
-        }
     }
 }

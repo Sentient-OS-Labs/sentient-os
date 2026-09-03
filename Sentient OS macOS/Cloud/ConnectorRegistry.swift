@@ -4,8 +4,9 @@
 //
 //  The identity and policy layer over ConnectorCensus: which detected connector is which
 //  (curated packs for the named connectors, synthesized identity for everything else), what its
-//  tools are allowed to do (hand-curated read lists where they exist, the classifier's cache
-//  everywhere else), and the per-connector "Use for knowledge base" toggle. Gmail and Google
+//  tools are allowed to do (hand-curated read lists for the knowledge base, the classifier's
+//  cache for action policy), and the per-connector "Use for knowledge base" toggle, which
+//  exists ONLY for curated connectors — everything else is task-use only. Gmail and Google
 //  Calendar live here as identity-only packs: they keep their dedicated chips and never join
 //  the Connectors UI, but chip-filtering and the classifier eval need their identities.
 //
@@ -19,7 +20,7 @@
 //   - computerUseAttachments()            → the FINAL attach set + deny lists (fail-closed)
 //   - connectedServicesBlock()            → the prompt teaching both computer-use wrappers splice
 //   - readToolNames / destructiveToolNames / allKnownToolNames → full tool names, per policy
-//   - isKBEnabled / setKBEnabled / kbEnabledConnectors → the `mcp.<slug>.kb` toggle
+//   - kbEligible / isKBEnabled / setKBEnabled / kbEnabledConnectors → the `mcp.<slug>.kb` toggle
 //   - classification(for:) / saveClassification        → the `mcp.classified.<slug>` cache
 //
 //  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
@@ -36,7 +37,7 @@ nonisolated enum ConnectorRegistry {
     enum KBAdapter: String, Sendable {
         case windowedWeekly    // gmail-style: the last month as weekly windows, then since-mark
         case windowedMonthly   // calendar-style: the last year as monthly windows, then since-mark
-        case generic           // one budgeted "what's new" read (the uncurated default)
+        case generic           // one budgeted "what's new" read (the default until a Step 3 chat tunes the pack)
     }
 
     /// One hand-curated connector: identity on both engines plus the verified read surface.
@@ -57,7 +58,7 @@ nonisolated enum ConnectorRegistry {
                                              // for detected connectors; pinned here only for the
                                              // two chip connectors the census excludes)
         /// BARE tool names (engine-neutral; the query layer prefixes them per engine).
-        /// nil = not yet curated → reads come from the classifier cache only.
+        /// nil = not yet curated → kbEligible is false: no KB toggle, no KB reads.
         var readTools: [String]? = nil
         var kbAdapter: KBAdapter = .generic
         /// True while the read list is a captured-but-unverified surface — the Step 3 chats
@@ -371,20 +372,19 @@ nonisolated enum ConnectorRegistry {
     }
 
     /// The detected connectors whose KB toggle is on — the nightly read list (task 1.8) and the
-    /// proactive-research attachment (task 1.7).
+    /// proactive-research attachment (task 1.7). Gated through kbEligible, so a toggle
+    /// persisted before the curated-only rule landed can never read.
     static func kbEnabledConnectors() -> [ConnectorCensus.DetectedConnector] {
-        detectedForCurrentBackend().filter { isKBEnabled($0.slug) }
+        detectedForCurrentBackend().filter { kbEligible($0.slug) && isKBEnabled($0.slug) }
     }
 
-    /// Whether the KB toggle must classify before it may switch ON. Claude origin only: headless
-    /// Claude reads are approved by allow rules and nothing else, so an uncurated, unclassified
-    /// connector has no read list to allow (fail closed — the toggle refuses instead). On codex,
-    /// safety is structural (read-only sandbox + catalog-id strips) and the classifier is a
-    /// designed no-op, so nothing gates the toggle there.
-    static func kbRequiresClassification(_ connector: ConnectorCensus.DetectedConnector) -> Bool {
-        connector.origin == .claude
-            && pack(for: connector)?.readTools == nil
-            && !isClassified(connector.slug)
+    /// Whether a connector may feed the knowledge base at all: only curated packs with a
+    /// hand-verified read surface qualify, on both engines (Aditya's call, 2026-09-03,
+    /// amending the original design where any connector could earn the toggle through the
+    /// auto-classifier). An ineligible connector has no KB toggle anywhere; it stays fully
+    /// task-usable (Sidekick, cards, computer use), which needs no toggle by ledger #2.
+    static func kbEligible(_ slug: String) -> Bool {
+        pack(forSlug: slug)?.readTools != nil
     }
 
     // MARK: The classifier cache (production keys)
@@ -427,8 +427,9 @@ nonisolated enum ConnectorRegistry {
 
     /// The tools a READ run may pre-approve: the curated list when the pack has one (prefixed
     /// back to full names — for gmail/google-calendar that round-trips to the ConnectorTools
-    /// arrays verbatim), else the classifier's reads. Empty = unclassified = NO read allows
-    /// anywhere: fail closed.
+    /// arrays verbatim), else the classifier's reads (production KB reads are curated-only via
+    /// kbEligible; the classifier fallback serves the lab's trial reads). Empty = NO read
+    /// allows anywhere: fail closed.
     static func readToolNames(slug: String) -> [String] {
         if let pack = pack(forSlug: slug), let reads = pack.readTools,
            let prefix = pack.claudeToolPrefix {

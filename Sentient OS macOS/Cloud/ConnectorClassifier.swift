@@ -3,8 +3,9 @@
 //  Sentient OS macOS
 //
 //  The three-way tool classifier (read / write / destructive) for detected connectors — the
-//  safety inventory every run recipe consumes (read allows for KB reads, destructive denies for
-//  user-fired runs). Claude engine only: on codex, safety is structural (catalog-id strips + the
+//  safety inventory the ACTION recipes consume (destructive denies for user-fired and
+//  computer-use runs, the fired-task gate; KB reads are curated-only and never ride the
+//  classifier). Claude engine only: on codex, safety is structural (catalog-id strips + the
 //  read-only sandbox), so classification is unnecessary there and this is a clean no-op.
 //
 //  Key methods:

@@ -333,21 +333,17 @@ private struct ConnectorPill: View {
     }
 }
 
-/// The pill's popover: identity, health, and the ONE toggle — "Use for knowledge base"
-/// (`mcp.<slug>.kb`). On the Claude engine an uncurated connector must be classified before it
-/// may switch on (fail closed: no read list, no toggle); that runs inline behind a spinner and
-/// reverts quietly on failure. The key persists as true only AFTER a successful classification,
-/// so dismissing the popover mid-run can never leave an unclassified connector enabled.
-/// Landing ON also kicks off the first read (MCPReadActivity — dismissible, the read continues;
-/// skipped when the bucket was already read or a pipeline run is active). OFF just stops
-/// future reads: bucket and summaries remain, deletion is FactoryReset's job (the Gmail
-/// disconnect precedent).
+/// The pill's popover: identity, health, and — for curated connectors only — the ONE toggle,
+/// "Use for knowledge base" (`mcp.<slug>.kb`). The knowledge base reads only hand-tuned apps
+/// (ConnectorRegistry.kbEligible), so an uncurated connector carries no toggle at all; its
+/// popover says what the pill is for instead: tasks.
+/// Toggling ON only records the choice — the first read happens in the next analysis
+/// (overnight or Analyze Now), same as every source. OFF just stops future reads: bucket
+/// and summaries remain, deletion is FactoryReset's job (the Gmail disconnect precedent).
 private struct ConnectorPopover: View {
     let connector: ConnectorCensus.DetectedConnector
 
     @State private var kbOn = false
-    @State private var classifying = false
-    @State private var classifyFailed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
@@ -369,82 +365,35 @@ private struct ConnectorPopover: View {
                     .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
             }
             SettingsHairline()
-            HStack(spacing: 12) {
-                Text("Use for knowledge base")
-                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
-                Spacer(minLength: 12)
-                if classifying {
-                    ProgressView().controlSize(.small)
-                } else {
+            if ConnectorRegistry.kbEligible(connector.slug) {
+                HStack(spacing: 12) {
+                    Text("Use for knowledge base")
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
+                    Spacer(minLength: 12)
                     Toggle("", isOn: kbBinding)
                         .labelsHidden().toggleStyle(.switch).tint(Theme.Ink.green)
                 }
-            }
-            VStack(alignment: .leading, spacing: 5) {
                 MonoCaps("Reads nightly · read-only", size: 8, tracking: 1.6,
                          color: .white.opacity(0.5))
-                if classifyFailed {
-                    Text("Couldn't inspect this app's tools. Try again in a moment.")
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Ready for tasks")
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
+                    Text("Sidekick and your morning cards can use its tools whenever a task calls for them.")
                         .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
-                }
-                // The moment-of-connection read (kicked off when the toggle lands ON) — the
-                // shared activity object keeps this line honest across dismiss/reopen.
-                switch MCPReadActivity.shared.phase(for: connector.slug) {
-                case .reading:
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.mini)
-                        MonoCaps("Reading now · keeps going if you close this", size: 8,
-                                 tracking: 1.6, color: .white.opacity(0.5))
-                    }
-                case .done:
-                    MonoCaps("First read done", size: 8, tracking: 1.6,
-                             color: Theme.Ink.green.opacity(0.85))
-                case .failed:
-                    Text("Couldn't read it just now. I'll try again tonight.")
-                        .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
-                case nil:
-                    EmptyView()
                 }
             }
         }
         .padding(16)
         .frame(width: 270, alignment: .leading)
         .onAppear { kbOn = ConnectorRegistry.isKBEnabled(connector.slug) }
-        .animation(.easeInOut(duration: 0.2), value: classifying)
-        .animation(.easeInOut(duration: 0.2), value: classifyFailed)
-        .animation(.easeInOut(duration: 0.2), value: MCPReadActivity.shared.phase(for: connector.slug))
     }
 
     private var kbBinding: Binding<Bool> {
-        Binding(get: { kbOn }, set: { setKB($0) })
-    }
-
-    private func setKB(_ on: Bool) {
-        classifyFailed = false
-        guard on else {
-            kbOn = false
-            ConnectorRegistry.setKBEnabled(connector.slug, false)
-            return
-        }
-        guard ConnectorRegistry.kbRequiresClassification(connector) else {
-            kbOn = true
-            ConnectorRegistry.setKBEnabled(connector.slug, true)
-            MCPReadActivity.shared.beginInitialIfNeeded(slug: connector.slug)
-            return
-        }
-        classifying = true
-        Task {
-            let ok = await ConnectorClassifier.ensureClassified(slug: connector.slug)
-            classifying = false
-            if ok {
-                kbOn = true
-                ConnectorRegistry.setKBEnabled(connector.slug, true)
-                MCPReadActivity.shared.beginInitialIfNeeded(slug: connector.slug)
-            } else {
-                kbOn = false
-                classifyFailed = true
-            }
-        }
+        Binding(get: { kbOn }, set: { on in
+            kbOn = on
+            ConnectorRegistry.setKBEnabled(connector.slug, on)
+        })
     }
 }
 
@@ -498,8 +447,13 @@ private extension ConnectorCensus.DetectedConnector {
         .padding(38).frame(width: 640).background(Theme.bg)
 }
 
-#Preview("Connector popover") {
+#Preview("Connector popover · curated (KB toggle)") {
     ConnectorPopover(connector: .mock("google-drive"))
+        .background(Theme.bg)
+}
+
+#Preview("Connector popover · uncurated (tasks only)") {
+    ConnectorPopover(connector: .mock("linear"))
         .background(Theme.bg)
 }
 #endif
