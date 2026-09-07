@@ -46,9 +46,19 @@ enum FactoryReset {
         d.removeObject(forKey: OvernightScheduler.firstCycleAtKey)
         d.removeObject(forKey: OvernightScheduler.autoEnableFiredKey)
         d.removeObject(forKey: OvernightScheduler.prodEnabledKey)
+        // Connectors: one namespaced sweep for the whole `mcp.` key family — the detected lists
+        // (`mcp.connectors.*`), every per-connector KB toggle (`mcp.<slug>.kb`), and every
+        // classifier cache (`mcp.classified.<slug>`), present and future. The rebuild re-detects
+        // and re-classifies from scratch. ⚠️ `mcp.mirror.*` shares the prefix but belongs to the
+        // MCP MIRROR, whose opt-in + last-push state deliberately SURVIVE reset (the share URL in
+        // the user's connectors must keep working; see the header note) — hence the carve-out.
+        for key in d.dictionaryRepresentation().keys
+            where key.hasPrefix("mcp.") && !key.hasPrefix("mcp.mirror.") {
+            d.removeObject(forKey: key)
+        }
         appState?.scheduler.needsSchedulerSetup = false
         appState?.scheduler.reevaluate()                // prod flag is gone → stops the loop + cancels the armed wake
         appState?.hasCompletedOnboarding = false        // live flip (didSet re-persists false)
-        Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy + scheduler state · rewound to onboarding")
+        Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy + scheduler state + connector state · rewound to onboarding")
     }
 }

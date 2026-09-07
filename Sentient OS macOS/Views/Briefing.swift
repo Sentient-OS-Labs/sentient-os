@@ -109,10 +109,15 @@ struct Briefing: Identifiable {
         let isResearch = a.method == .research
         let content = a.preparedContent.trimmingCharacters(in: .whitespacesAndNewlines)
         let hasContent = !content.isEmpty
+        // An mcp card's kicker names the service; when the model left `target` empty, resolve
+        // the display name from the routing slug so the whisper never reads bare "CONNECTOR".
+        let kickerTarget = (a.method == .mcp && a.target.isEmpty)
+            ? (a.methodTarget.map { ConnectorRegistry.displayName(slug: $0) } ?? "")
+            : a.target
         self.init(
             id: a.title,                                                   // stable; == PreparedAction.id
             kind: .plan,                                                   // placeholder; `accent` drives color
-            kicker: Self.kickerLine(method: a.method, target: a.target),
+            kicker: Self.kickerLine(method: a.method, target: kickerTarget),
             title: a.title,
             body: a.cardSummary,
             letter: isResearch && hasContent ? content : nil,             // research: the briefing IS the letter
@@ -155,19 +160,21 @@ struct Briefing: Identifiable {
             doneTitle: "", doneBody: "")
     }
 
-    /// The clean mono-caps kicker: `METHOD · TARGET` (gmail/calendar/research name themselves).
+    /// The clean mono-caps kicker: `METHOD · TARGET` (gmail/calendar/research name themselves;
+    /// an mcp card's kicker IS the service's name).
     static func kickerLine(method: PreparedAction.Method, target: String) -> String {
         let t = target.trimmingCharacters(in: .whitespaces).uppercased()
         switch method {
         case .gmail:    return "GMAIL MCP"
         case .calendar: return "CALENDAR"
         case .computer: return t.isEmpty ? "COMPUTER USE" : "COMPUTER USE · \(t)"
+        case .mcp:      return t.isEmpty ? "CONNECTOR" : t
         case .research: return "RESEARCHED"
         }
     }
 
     /// The method's accent — a color FAMILY per method (greens = computer, reds = gmail, blues =
-    /// research, cobalt = calendar), with `variant` cycling the family's shades by the card's
+    /// research, cobalt = calendar, golds = mcp/connector), with `variant` cycling the family's shades by the card's
     /// order among its method-mates. Real decks often cluster on ONE method; shade siblings keep
     /// such a deck alive while the family still names the method at a glance (jewelry rule:
     /// one quiet color per card).
@@ -188,6 +195,12 @@ struct Briefing: Identifiable {
                       Color(red: 0.60, green: 0.92, blue: 0.70),   // seafoam
                       Color(red: 0.20, green: 0.79, blue: 0.53),   // emerald
                       Color(red: 0.75, green: 0.88, blue: 0.42)]   // pistachio
+        case .mcp:
+            // Golds = a connected service acting for you — distinct from every family above,
+            // and deliberately brighter/yellower than Claude's terracotta (no borrowed hues).
+            family = [Color(red: 1.00, green: 0.72, blue: 0.30),   // marigold
+                      Color(red: 0.95, green: 0.81, blue: 0.45),   // honey
+                      Color(red: 0.98, green: 0.64, blue: 0.24)]   // saffron
         case .research:
             family = [Color(red: 0.44, green: 0.71, blue: 1.00),   // sky
                       Color(red: 0.56, green: 0.65, blue: 1.00),   // periwinkle (Knowledge's Starlight kin)
@@ -203,6 +216,7 @@ struct Briefing: Identifiable {
         case .gmail:    return "Draft email"
         case .calendar: return "Event"
         case .computer: return messageSend ? "Draft message" : "What I'll do"
+        case .mcp:      return messageSend ? "Draft message" : "What I'll do"
         case .research: return "Briefing"
         }
     }

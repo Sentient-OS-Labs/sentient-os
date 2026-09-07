@@ -120,15 +120,44 @@ actor CodexCLI {
                                                // strings ONLY — never paths, UUIDs, or free text (the
                                                // Sentry scrubber [Filtered]s those into uselessness).
 
-        // Claude-engine fields (ignored by CodexCLI; read only when ModelBackend is .claude —
-        // the Invocation is the ONE shape both engines speak, so the two engine-specific knobs
-        // live here rather than forking the type):
+        // The connector run recipes (see the recipe tables in each engine's argument builder).
+        // Slugs are ConnectorRegistry's canonical identities, resolved to per-engine server
+        // definitions through the ONE seam `ConnectorRegistry.server(for:)`. All three are
+        // inert when unset, on the custom backend, and never combine with each other or with
+        // `bypassApprovals` (the sandboxed recipes never bypass):
+        var mcpActionServer: String? = nil     // FIRED CONNECTOR TASK: user-fired, one connector.
+                                               // Claude: dontAsk + allow that server's tools, a
+                                               // one-server allowedMcpServers wall, destructive
+                                               // tools denied by name (requires a classification —
+                                               // fail-closed). Codex: per-id approve mode (else
+                                               // the shipped id-free `apps._default` preset) +
+                                               // the destructive strip; sandbox stays ON.
+        var mcpReadConnectors: [String] = []   // UNATTENDED READ (KB reads, probes, research):
+                                               // Claude: dontAsk + allow exactly the registry's
+                                               // read tools per slug, wall = those servers only
+                                               // (a slug with no read list throws — fail-closed;
+                                               // measured 2026-08-23: nothing short of an allow
+                                               // rule approves a connector tool headless).
+                                               // Codex: read-only sandbox + open-world AND
+                                               // destructive strips per id (send/destroy tools
+                                               // absent from the run entirely).
+        var mcpAttachServer: String? = nil     // wall ONE server in with ZERO allow rules — the
+                                               // classifier's inventory read (the run calls no
+                                               // tools; listing your own tools needs no approval).
+                                               // Claude-only in effect; needs includeUserConfig
+                                               // (the strict wall blocks the connector fetch).
+
+        var imagePaths: [String] = []          // screenshots for run(): codex attaches `-i <paths>`
+                                               // (the variadic is terminated by the flag that
+                                               // always follows); claude appends the screenshots
+                                               // block to the prompt and Reads them (no -i flag
+                                               // exists there). runAgentCommand keeps its own
+                                               // parameter — this field is run()'s.
+
+        // Claude-engine field (ignored by CodexCLI; read only when ModelBackend is .claude —
+        // the Invocation is the ONE shape both engines speak, so the engine-specific knob
+        // lives here rather than forking the type):
         var claudeModel: ClaudeCLI.Model? = nil       // override the tier map (heavy legs pin .opus)
-        var claudeConnectorReads = false              // hosted-connector READ run: pre-approve the
-                                                      // curated read tools (ClaudeCLI.ConnectorTools;
-                                                      // writes stay denied — measured 2026-08-23:
-                                                      // nothing short of an allow rule approves a
-                                                      // connector tool headless, auto mode included)
 
         init(prompt: String) { self.prompt = prompt }
 
@@ -142,24 +171,13 @@ actor CodexCLI {
             #"apps._default.default_tools_approval_mode="approve""#,
         ]
 
-        /// Removes the connector tools that transmit externally (`open_world_hint` — e.g. Gmail
-        /// send) or destroy data (`destructive_hint` — trash/delete) from the run's tool surface
-        /// entirely; read tools are untouched. For read-only phases (proactive research): "never
-        /// fire" becomes the tools not existing — on top of the prompt rule and the headless
-        /// auto-cancel of unapproved writes. Verified live 2026-07-18: Gmail search completes
-        /// while a send attempt fails with "is not a function" — the tool is genuinely absent.
-        /// The keys MUST be the LONG global catalog connector ids: friendly slugs ("gmail") are
-        /// silent no-ops for hosted connectors, and the app-wide `apps._default` variant strips
-        /// the READ tools too (both measured, codexperms self-test). The ids are global marketplace
-        /// constants (same for every user — see OpenAI's public `openai/plugins` repo, or
-        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). If one ever
-        /// rotated, this strip degrades to a harmless no-op and the other two layers still hold.
-        static let stripConnectorActionTools = [
-            "apps.connector_2128aebfecb84f64a069897515042a44.open_world_enabled=false",    // gmail
-            "apps.connector_2128aebfecb84f64a069897515042a44.destructive_enabled=false",   // gmail
-            "apps.connector_947e0d954944416db111db556030eea6.open_world_enabled=false",    // google-calendar
-            "apps.connector_947e0d954944416db111db556030eea6.destructive_enabled=false",   // google-calendar
-        ]
+        /// The global marketplace catalog ids for the two dedicated-chip connectors — the SAME
+        /// for every user (see OpenAI's public `openai/plugins` repo, or
+        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). One source of
+        /// truth: ConnectorRegistry's packs read these, and every recipe strip resolves through
+        /// the registry back to them.
+        static let gmailCatalogID = "connector_2128aebfecb84f64a069897515042a44"
+        static let calendarCatalogID = "connector_947e0d954944416db111db556030eea6"
     }
 
     /// The `--json` JSONL stream, reduced to an envelope.
@@ -715,6 +733,33 @@ actor CodexCLI {
     /// path passes one per display; the proactive executor passes none). They're placed right before
     /// `--skip-git-repo-check` so the flag terminates `-i`'s variadic `<FILE>...` and the prompt is
     /// never mistaken for another image.
+    /// The computer-use argv — extracted so the connector lab can print the recipe without
+    /// spawning, and so the destructive strips are one readable place. On the ChatGPT backend
+    /// every known catalog id — the two pinned chip connectors plus everything the census
+    /// detected — gets `apps.<id>.destructive_enabled=false` (task 1.6), so a user-fired
+    /// computer-use run keeps constructive connector writes (send, create) while
+    /// delete/trash-class tools are stripped from the surface entirely. An id the account
+    /// doesn't carry makes the strip an inert no-op (measured), so unlinked chips cost nothing.
+    static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
+                               effortArg: String, socketPath: String) -> [String] {
+        var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
+                    "-m", modelID,
+                    "-c", "model_reasoning_effort=\"\(effortArg)\"",
+                    "--ignore-user-config"]
+        for override in CuaDriver.codexOverrides(socketPath: socketPath) { args += ["-c", override] }
+        if ModelBackend.current == .chatgpt {
+            var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
+            ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
+            for id in ids { args += ["-c", "apps.\(id).destructive_enabled=false"] }
+        }
+        if ModelBackend.current == .custom {
+            for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
+        }
+        if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
+        args += ["--skip-git-repo-check", prompt]
+        return args
+    }
+
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
@@ -757,16 +802,9 @@ actor CodexCLI {
             // SURVIVE a hermetic run on codex 0.148+ (their curated-remote plugins load outside
             // the user config): measured 2026-08-19 — skills advertised AND a real hermetic
             // `gmail.search_emails` completed — so an "email X" task keeps the connector route.
-            var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                        "-m", modelID,
-                        "-c", "model_reasoning_effort=\"\(effortArg)\"",
-                        "--ignore-user-config"]
-            for override in CuaDriver.codexOverrides(socketPath: socket) { args += ["-c", override] }
-            if ModelBackend.current == .custom {
-                for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
-            }
-            if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
-            args += ["--skip-git-repo-check", prompt]
+            let args = Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
+                                           modelID: modelID, effortArg: effortArg,
+                                           socketPath: socket)
             let modelTag = ModelBackend.current == .custom ? "custom" : modelID
             Log("codex exec: start feature=computer cua=\(CuaDriver.version) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
@@ -889,14 +927,47 @@ actor CodexCLI {
     /// [MEASURED] A resumed session's workspace root is the PROCESS cwd (not the remembered
     /// one), so `execute`'s cwd is load-bearing there, and the sandbox rides the
     /// `sandbox_mode` config key instead of `-s`.
-    private static func arguments(for inv: Invocation, modelID: String, effortArg: String,
-                                  schemaFile: String?) -> [String] {
+    ///
+    /// The connector run recipes, codex column (the README table in the Step 1 plan; the
+    /// Claude column lives in ClaudeCLI.arguments):
+    ///  ┌─────────────────┬────────────────────────────────────────────────────────────────┐
+    ///  │ UNATTENDED READ │ read-only sandbox as always (reads pass; writes approval-gated │
+    ///  │ mcpReadConnectors│ headless and auto-cancel) + `apps.<id>.open_world_enabled=    │
+    ///  │                 │ false` AND `.destructive_enabled=false` for every resolvable   │
+    ///  │                 │ listed id PLUS every detected census id — the send/destroy     │
+    ///  │                 │ tools don't exist in a read run at all, for ANY linked app     │
+    ///  │                 │ (unresolvable id = harmless no-op, the existing strip posture).│
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ FIRED TASK      │ `apps.<id>.default_tools_approval_mode="approve"` when the id  │
+    ///  │ mcpActionServer │ resolves (server-scoped write approval), else the shipped      │
+    ///  │                 │ id-free `apps._default` preset; + the destructive strip for    │
+    ///  │                 │ that id. Sandbox stays ON (a real Gmail send worked under      │
+    ///  │                 │ `-s read-only`, measured 2026-07-18).                          │
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ COMPUTER USE    │ agentArguments below: the shipped hermetic bypass run + (when  │
+    ///  │ (runAgentCommand)│ widened) destructive strips for every known catalog id.       │
+    ///  └─────────────────┴────────────────────────────────────────────────────────────────┘
+    /// Internal (not private) so the connector lab's argv command can print recipes without
+    /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
+    static func arguments(for inv: Invocation, modelID: String, effortArg: String,
+                          schemaFile: String?) -> [String] {
+        assert([inv.mcpActionServer != nil, !inv.mcpReadConnectors.isEmpty,
+                inv.mcpAttachServer != nil].filter { $0 }.count <= 1,
+               "the connector recipe fields are mutually exclusive")
+        assert(!(inv.bypassApprovals && (inv.mcpActionServer != nil || !inv.mcpReadConnectors.isEmpty)),
+               "the sandboxed connector recipes never bypass approvals")
+        assert(inv.mcpReadConnectors.isEmpty || inv.sandbox == .readOnly,
+               "an unattended read is read-only by definition")
         var args = ["exec"]
         if let sid = inv.resumeSessionID { args += ["resume", sid] }
         args += ["--json",
                  "--skip-git-repo-check",      // staging dirs and the vault aren't git repos
                  "-m", modelID,
                  "-c", "model_reasoning_effort=\"\(effortArg)\""]
+        // Screenshots (run()'s optional eyes). Placed HERE because `-i` is variadic and every
+        // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
+        // which terminates it — the same dodge as probeCustomEndpoint's probe image.
+        if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
         if !inv.includeUserConfig {
             args += ["--ignore-user-config"]   // explicit hermetic opt-out only — includeUserConfig
         }                                      // defaults TRUE, so by default we DON'T pass this and
@@ -924,6 +995,51 @@ actor CodexCLI {
             }
         }
         for override in inv.configOverrides { args += ["-c", override] }
+        // The connector recipes (table above). ChatGPT backend only: hosted connectors ride
+        // ChatGPT-account auth, so on a custom endpoint (hermetic anyway) the fields are inert.
+        if ModelBackend.current == .chatgpt {
+            if let slug = inv.mcpActionServer {
+                if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
+                    args += ["-c", "apps.\(id).default_tools_approval_mode=\"approve\"",
+                             "-c", "apps.\(id).destructive_enabled=false"]
+                } else {
+                    // No known id → the shipped id-free preset (approves every connector's
+                    // writes for this one app-authored, single-declared-action run).
+                    for override in Invocation.approveConnectorWrites { args += ["-c", override] }
+                }
+            }
+            if !inv.mcpReadConnectors.isEmpty {
+                // Both strips per connector: `open_world_enabled=false` removes the tools that
+                // transmit externally (e.g. Gmail send) and `destructive_enabled=false` the
+                // trash/delete family — a read run's "never fire" is the tools NOT EXISTING, on
+                // top of the read-only sandbox's headless auto-cancel and the prompt rule.
+                // Verified live 2026-07-18: Gmail search completes under exactly these strips
+                // while a send attempt fails with "is not a function". The keys MUST be the LONG
+                // catalog ids (friendly slugs are silent no-ops; the app-wide `apps._default`
+                // variant strips READ tools too — both measured, codexperms self-test). An
+                // unresolvable id = harmless no-op; the other layers still hold.
+                var stripped = Set<String>()
+                for slug in inv.mcpReadConnectors {
+                    if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
+                       stripped.insert(id).inserted {
+                        args += ["-c", "apps.\(id).open_world_enabled=false",
+                                 "-c", "apps.\(id).destructive_enabled=false"]
+                    }
+                }
+                // Defense in depth: every OTHER detected connector still rides the codex spawn
+                // whole (its reads flow; its writes are only approval-gated), so an unattended
+                // read strips the send/destroy tools of EVERY linked app, listed or not. Sorted
+                // for argv stability; zero detected connectors = zero extra flags, so the
+                // recipe's recorded zero-connector shape is untouched.
+                for connector in ConnectorCensus.cached(for: .chatgpt)
+                    .sorted(by: { $0.slug < $1.slug }) {
+                    if let id = connector.catalogID, stripped.insert(id).inserted {
+                        args += ["-c", "apps.\(id).open_world_enabled=false",
+                                 "-c", "apps.\(id).destructive_enabled=false"]
+                    }
+                }
+            }
+        }
         if inv.webSearch { args += ["-c", "tools.web_search=true"] }
         if let schemaFile { args += ["--output-schema", schemaFile] }
         args.append("-")                       // the prompt arrives on stdin

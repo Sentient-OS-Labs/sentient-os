@@ -211,7 +211,7 @@ struct HomeView: View {
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
-                CautionCapsule(message: caution.kind.message,
+                CautionCapsule(message: caution.message,
                                actionTitle: cautionAction(caution.kind)?.title,
                                onAction: cautionAction(caution.kind)?.run ?? {},
                                onDismiss: {
@@ -236,6 +236,8 @@ struct HomeView: View {
         switch kind {
         case .loggedOut: return ("Open Settings", openHealthSettings)
         case .diskFull:  return ("Manage Storage", { DiskSpace.openStorageSettings() })
+        case .connectorAuth:   // the fix lives on the engine's own connectors page
+            return ("Sign In Again", { NSWorkspace.shared.open(ConnectorCensus.directoryURL) })
         case .noInternet, .usageLimit, .inputTooLarge: return nil
         }
     }
@@ -328,7 +330,7 @@ struct HomeView: View {
                     slot: slots[min(item.offset, slots.count - 1)],
                     dealFrom: CGPoint(x: geo.size.width / 2, y: -160),
                     fireDimmed: appState.commandCoordinator.run.isRunning
-                        && item.element.action.map { ProactiveExecutor.isFireable($0.method) } == true,
+                        && item.element.action.map { ProactiveExecutor.isFireable($0) } == true,
                     onOffer: { model.run(item.element.id) },
                     onDetail: { openLetter(item.element.b) },
                     onOpenEnvelope: {
@@ -524,7 +526,7 @@ struct HomeView: View {
                            liveDraft: model.entry(b.id)?.action?.preparedContent ?? b.draft ?? "",
                            liveRecipient: model.entry(b.id)?.action?.recipient ?? "",
                            fireDimmed: appState.commandCoordinator.run.isRunning
-                               && model.entry(b.id)?.action.map { ProactiveExecutor.isFireable($0.method) } == true,
+                               && model.entry(b.id)?.action.map { ProactiveExecutor.isFireable($0) } == true,
                            onCommitEdit: { model.applyEdit(b.id, content: $0, recipient: $1) },
                            onOffer: {
                                closeLetter()
@@ -670,7 +672,7 @@ final class ForYouModel {
             // Sidekick/command-bar run or another card — a new fire can't start (the CTA is
             // dimmed; this is the backstop for a click that lands anyway). Only research is
             // exempt (nothing fires).
-            if ProactiveExecutor.isFireable(action.method), coordinator?.run.isRunning == true {
+            if ProactiveExecutor.isFireable(action), coordinator?.run.isRunning == true {
                 Log("card fire blocked — a task is already running (one at a time)")
                 return
             }
@@ -710,11 +712,12 @@ final class ForYouModel {
     /// started.
     private func runReal(_ id: String, _ action: PreparedAction) {
         let v = visit
-        let external = ProactiveExecutor.isFireable(action.method)
+        let external = ProactiveExecutor.isFireable(action)
         if external {
             let fallback: String = switch action.method {
             case .gmail:    "Sending your email…"
             case .calendar: "Updating your calendar…"
+            case .mcp:      "Working through your \(action.methodTarget.map { ConnectorRegistry.displayName(slug: $0) } ?? "connected service") connector…"
             default:        "Working on your Mac…"
             }
             guard let coordinator,
@@ -801,8 +804,11 @@ final class ForYouModel {
     }
 
     /// A copy of a PreparedAction with new `preparedContent` + `recipient` (the rest unchanged).
+    /// ⚠️ `methodTarget` must ride through explicitly (it has a memberwise default of nil, so
+    /// omitting it would silently strip an mcp card's routing — and its fire button — on edit).
     private static func replacing(_ a: PreparedAction, content: String, recipient: String) -> PreparedAction {
-        PreparedAction(title: a.title, method: a.method, target: a.target, urgency: a.urgency,
+        PreparedAction(title: a.title, method: a.method, target: a.target,
+                       methodTarget: a.methodTarget, urgency: a.urgency,
                        dueDate: a.dueDate, status: a.status, verification: a.verification,
                        cardSummary: a.cardSummary, preparedContent: content, executionRecipe: a.executionRecipe,
                        recipient: recipient,

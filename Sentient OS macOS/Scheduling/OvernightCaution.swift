@@ -4,7 +4,8 @@
 //
 //  Cycle-failure classification + the morning-after caution. `classify(_:)` turns a cycle failure
 //  into one of the reasons a user can actually act on or should simply know about — codex signed
-//  out · no internet · usage limit · a full disk — and serves BOTH failure surfaces: the UNATTENDED
+//  out · no internet · usage limit · a full disk · a connector needing a fresh sign-in (recorded
+//  directly by the scheduler's connector legs, not via classify) — and serves BOTH failure surfaces: the UNATTENDED
 //  3am run persists it via `record(_:)` (at ProactiveCycle's catch sites, the one choke point every
 //  codex call already funnels typed errors through, plus the scheduler's own device-stage halt for
 //  a full disk) and the home renders it as a quiet amber capsule (HomeView.cautionBanner); the
@@ -30,6 +31,9 @@ enum OvernightCaution {
                             // slicing budgets every prompt path, so this should never fire)
         case diskFull       // the Mac's disk is full: the device stage stopped (nothing it read
                             // could be saved) or the knowledge-base staging copy couldn't be written
+        case connectorAuth  // a KB-enabled connector's own sign-in expired account-side, so its
+                            // nightly read couldn't run (the engine login itself was fine); the
+                            // record's `detail` carries the connector's display name
 
         /// The banner line — quiet, first-person, honest about what happens next. Engine-aware
         /// at RENDER time (the record persists only overnight, so the live backend names the
@@ -48,6 +52,9 @@ enum OvernightCaution {
                 ? "Last night's batch was more than Claude accepts at once. Your analysis is saved; I'll try again tonight."
                 : "Last night's batch was more than ChatGPT accepts at once. Your analysis is saved; I'll try again tonight."
             case .diskFull:   return "Your Mac's disk is full, so I couldn't save last night's work. Free up some space and I'll catch up tonight."
+            case .connectorAuth: return claude
+                ? "I couldn't read one of your connected apps last night. Sign in to it again on claude.ai and I'll catch up tonight."
+                : "I couldn't read one of your connected apps last night. Sign in to it again on chatgpt.com and I'll catch up tonight."
             }
         }
     }
@@ -55,6 +62,19 @@ enum OvernightCaution {
     struct Record: Codable {
         let kind: Kind
         let date: Date
+        /// Kind-specific context for the banner line — today only `.connectorAuth` uses it (the
+        /// connector's display name). Optional so records persisted before the field decode fine.
+        var detail: String?
+
+        /// The banner line the home renders: personalized when the record carries a connector
+        /// name, else the kind's generic message (engine-aware at render time, like the kinds).
+        var message: String {
+            if kind == .connectorAuth, let detail, !detail.isEmpty {
+                let place = ModelBackend.current == .claude ? "claude.ai" : "chatgpt.com"
+                return "I couldn't read your \(detail) last night. Sign in to it again on \(place) and I'll catch up tonight."
+            }
+            return kind.message
+        }
     }
 
     private static let key = "overnight.caution"
@@ -118,10 +138,12 @@ enum OvernightCaution {
         return nil
     }
 
-    /// Persist a classified kind as the morning-after caution (3am runs only; nil records nothing).
-    static func record(_ kind: Kind?) {
+    /// Persist a classified kind as the morning-after caution (3am runs only; nil records
+    /// nothing). `detail` is kind-specific banner context (a connector's display name for
+    /// `.connectorAuth`) — user-facing only, never telemetry.
+    static func record(_ kind: Kind?, detail: String? = nil) {
         guard let kind else { return }
-        if let data = try? JSONEncoder().encode(Record(kind: kind, date: Date())) {
+        if let data = try? JSONEncoder().encode(Record(kind: kind, date: Date(), detail: detail)) {
             UserDefaults.standard.set(data, forKey: key)
         }
         Log("OvernightCaution: recorded .\(kind.rawValue)")

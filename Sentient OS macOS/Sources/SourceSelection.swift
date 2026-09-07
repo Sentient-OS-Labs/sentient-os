@@ -78,6 +78,10 @@ enum SourceSelection {
         if ModelBackend.connectorsAvailable {
             if bool("dbg.gmail.connected", default: false) && bool("dbg.run.gmail", default: false) { n += 1 }
             if bool("dbg.calendar.connected", default: false) && bool("dbg.run.calendar", default: false) { n += 1 }
+            // KB-toggled connectors (mcp.<slug>.kb) each count as one — the registry list is
+            // backend-scoped and detection-filtered, so a stale toggle for an app the user
+            // unlinked account-side never counts (and never reads).
+            n += ConnectorRegistry.kbEnabledConnectors().count
         }
         return n
     }

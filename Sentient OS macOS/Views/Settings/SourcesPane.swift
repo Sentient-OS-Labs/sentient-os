@@ -7,6 +7,10 @@
 //  custom roots add/remove (persistent), WhatsApp & iMessage open the shared ChatPicker,
 //  Gmail & Calendar open their connect sheets. Enforces the four-selection minimum on direct
 //  toggles, and surfaces a fix-it line when Full Disk Access is missing.
+//  Below the cloud chips sits the Connectors section (ConnectorsSection · ConnectorPill ·
+//  ConnectorPopover): the hosted apps already linked to the user's engine account, detected by
+//  ConnectorCensus, with the "+ Connect Apps" polling window and the per-connector
+//  "Use for knowledge base" toggle (`mcp.<slug>.kb`).
 //
 
 import SwiftUI
@@ -27,8 +31,14 @@ struct SourcesPane: View {
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
+    // Re-renders the pane live when the engine changes (the cloud group's header and the
+    // Connectors list both follow it), and keys the census reload below.
+    @AppStorage(ModelBackend.key) private var backendRaw = ""
 
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
+    @State private var connectors: [ConnectorCensus.DetectedConnector] = []
+    @State private var watchStartedAt: Date?          // non-nil = the connect window is polling
+    @State private var refreshingConnectors = false
     @State private var showWhatsAppPicker = false
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
@@ -58,9 +68,23 @@ struct SourcesPane: View {
                 foldersGroup
                 chatsGroup
                 cloudGroup
+                connectorsGroup
             }
         }
         .task { fdaGranted = Permissions.hasFullDiskAccess() }
+        // Paint the persisted census instantly, then confirm live (cheap path: one subprocess
+        // on Claude, a disk read on codex, nothing on custom — never a model call).
+        .task(id: backendRaw) {
+            connectors = ConnectorRegistry.detectedForCurrentBackend()
+            connectors = await ConnectorCensus.list()
+        }
+        // The connect window. Owning it here means leaving the pane cancels the polling
+        // (structured concurrency, no cleanup call); census logs the stop reason.
+        .task(id: watchStartedAt) {
+            guard watchStartedAt != nil else { return }
+            await ConnectorCensus.startWatching { connectors = $0 }
+            watchStartedAt = nil
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             fdaGranted = Permissions.hasFullDiskAccess()   // may have changed in System Settings
         }
@@ -143,6 +167,43 @@ struct SourcesPane: View {
         }
     }
 
+    // MARK: - Connectors (the hosted apps linked to the engine account)
+
+    private var connectorsGroup: some View {
+        ConnectorsSection(connectors: connectors,
+                          locked: CodexAuth.connectorsLocked,
+                          watching: watchStartedAt != nil,
+                          refreshing: refreshingConnectors,
+                          engineWord: engineWord,
+                          onConnect: connectApps,
+                          onRefresh: refreshConnectors)
+    }
+
+    private var engineWord: String {
+        switch ModelBackend.current {
+        case .claude:  return "Claude"
+        case .chatgpt: return "ChatGPT"
+        case .custom:  return "ChatGPT or Claude"   // the section is locked there; matches the tip
+        }
+    }
+
+    /// Open the engine's connector directory and start the bounded polling window, so the new
+    /// pill appears on its own once the user finishes linking. A re-press restarts the window.
+    private func connectApps() {
+        NSWorkspace.shared.open(ConnectorCensus.directoryURL)
+        watchStartedAt = Date()
+    }
+
+    /// The header's Refresh — the one pane path that warm-runs codex for cache freshness.
+    private func refreshConnectors() {
+        guard !refreshingConnectors else { return }
+        Task {
+            refreshingConnectors = true
+            connectors = await ConnectorCensus.refresh()
+            refreshingConnectors = false
+        }
+    }
+
     // MARK: - Toggle guards (the four-selection minimum)
 
     /// The guard fires only on the 4 → 3 drop: onboarding guarantees users start at four or
@@ -172,8 +233,227 @@ struct SourcesPane: View {
     }
 }
 
+// MARK: - The Connectors section (pure render; SourcesPane owns the state and the polling)
+
+/// The hosted apps already linked to the user's ChatGPT/Claude account, as pills. Pills are
+/// NOT source toggles: presence + health + a popover. The popover's KB toggle is what counts
+/// toward the four-source minimum (SourceSelection reads `mcp.<slug>.kb`); turning it OFF is
+/// deliberately un-guarded, matching the Gmail sheet's "Stop reading" precedent.
+private struct ConnectorsSection: View {
+    let connectors: [ConnectorCensus.DetectedConnector]
+    let locked: Bool
+    let watching: Bool
+    let refreshing: Bool
+    let engineWord: String
+    let onConnect: () -> Void
+    let onRefresh: () -> Void
+
+    var body: some View {
+        SettingsGroup(label: "Connectors") {
+            VStack(alignment: .leading, spacing: 12) {
+                if connectors.isEmpty {
+                    SettingsProse("Nothing connected yet. Link apps to your \(engineWord) and they appear here.")
+                }
+                ChipFlow {
+                    ForEach(connectors) { connector in
+                        ConnectorPill(connector: connector, locked: locked)
+                            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                    }
+                    SettingsChip(label: "+ Connect Apps", on: false, isAction: true,
+                                 locked: locked) { onConnect() }
+                }
+                if watching {
+                    MonoCaps("Watching for new apps", size: 8.5, tracking: 1.6,
+                             color: .white.opacity(0.45))
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeInOut(duration: 0.35), value: connectors)
+            .animation(.easeInOut(duration: 0.25), value: watching)
+        } trailing: {
+            Button(action: onRefresh) {
+                if refreshing {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    MonoCaps("Refresh", size: 8.5, tracking: 1.6, color: .white.opacity(0.55))
+                }
+            }
+            .buttonStyle(PressScaleStyle())
+            .disabled(refreshing)
+        }
+    }
+}
+
+/// One detected connector: display name behind a live health LED. Deliberately NOT a
+/// SettingsChip — a chip's green wash means "this source is selected", while a pill carries
+/// presence + health and opens its popover — but the capsule geometry, type size, and press
+/// behavior match SettingsChip exactly so the two rows read as one family.
+private struct ConnectorPill: View {
+    let connector: ConnectorCensus.DetectedConnector
+    let locked: Bool
+
+    @State private var showPopover = false
+    @State private var lockHover = false
+
+    @ViewBuilder var body: some View {
+        if locked {
+            pill
+                .onHover { lockHover = $0 }
+                .overlay(alignment: .top) {
+                    if lockHover { LockedChipTip().offset(y: -32) }
+                }
+                .animation(.easeInOut(duration: 0.15), value: lockHover)
+        } else {
+            pill
+                .popover(isPresented: $showPopover, arrowEdge: .bottom) {
+                    ConnectorPopover(connector: connector)
+                }
+        }
+    }
+
+    private var pill: some View {
+        Button { if !locked { showPopover = true } } label: {
+            HStack(spacing: 7) {
+                if locked {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.white.opacity(0.4))
+                } else {
+                    HealthDot(color: connector.healthy ? Theme.Ink.green : HealthDot.warnAmber)
+                }
+                Text(ConnectorRegistry.pack(for: connector)?.displayName ?? connector.displayName)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(locked ? 0.55 : 1))
+            }
+            .padding(.horizontal, 13).padding(.vertical, 7)
+            .overlay(Capsule().strokeBorder(Color.white.opacity(locked ? 0.10 : 0.16), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(PressScaleStyle())
+    }
+}
+
+/// The pill's popover: identity, health, and — for curated connectors only — the ONE toggle,
+/// "Use for knowledge base" (`mcp.<slug>.kb`). The knowledge base reads only hand-tuned apps
+/// (ConnectorRegistry.kbEligible), so an uncurated connector carries no toggle at all; its
+/// popover says what the pill is for instead: tasks.
+/// Toggling ON only records the choice — the first read happens in the next analysis
+/// (overnight or Analyze Now), same as every source. OFF just stops future reads: bucket
+/// and summaries remain, deletion is FactoryReset's job (the Gmail disconnect precedent).
+private struct ConnectorPopover: View {
+    let connector: ConnectorCensus.DetectedConnector
+
+    @State private var kbOn = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 11) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(ConnectorRegistry.pack(for: connector)?.displayName ?? connector.displayName)
+                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                Text(connector.origin == .claude ? "Through your Claude" : "Through your ChatGPT")
+                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+            }
+            HStack(spacing: 7) {
+                HealthDot(color: connector.healthy ? Theme.Ink.green : HealthDot.warnAmber)
+                Text(connector.healthy ? "Connected" : "Not responding")
+                    .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.statusInk)
+            }
+            // Claude's listing health-checks live, so an amber pill there has one honest fix.
+            // Codex pills are structurally always healthy (presence = linked; no health probe).
+            if !connector.healthy && connector.origin == .claude {
+                Text("Sign in again on claude.ai to reconnect.")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
+            }
+            SettingsHairline()
+            if ConnectorRegistry.kbEligible(connector.slug) {
+                HStack(spacing: 12) {
+                    Text("Use for knowledge base")
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
+                    Spacer(minLength: 12)
+                    Toggle("", isOn: kbBinding)
+                        .labelsHidden().toggleStyle(.switch).tint(Theme.Ink.green)
+                }
+                MonoCaps("Reads nightly · read-only", size: 8, tracking: 1.6,
+                         color: .white.opacity(0.5))
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Ready for tasks")
+                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
+                    Text("Sidekick and your morning cards can use its tools whenever a task calls for them.")
+                        .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 270, alignment: .leading)
+        .onAppear { kbOn = ConnectorRegistry.isKBEnabled(connector.slug) }
+    }
+
+    private var kbBinding: Binding<Bool> {
+        Binding(get: { kbOn }, set: { on in
+            kbOn = on
+            ConnectorRegistry.setKBEnabled(connector.slug, on)
+        })
+    }
+}
+
 #Preview("Knowledge Sources pane") {
     SourcesPane()
         .background(Theme.bg)
         .frame(width: 720, height: 640)
 }
+
+#if DEBUG
+private extension ConnectorCensus.DetectedConnector {
+    /// Preview fixture. DEBUG-only, so every preview using it sits inside #if DEBUG too
+    /// (the release-preview trap in the dev rules).
+    static func mock(_ slug: String, origin: Origin = .claude, healthy: Bool = true) -> Self {
+        .init(slug: slug,
+              displayName: ConnectorCensus.titleCased(slug),
+              origin: origin,
+              serverURL: origin == .claude ? "https://example.googleapis.com/mcp/v1" : nil,
+              catalogID: origin == .chatgpt ? "connector_0123456789abcdef0123456789abcdef" : nil,
+              iconPath: nil,
+              healthy: healthy,
+              lastSeen: Date())
+    }
+}
+
+#Preview("Connectors · three healthy") {
+    ConnectorsSection(connectors: [.mock("google-drive"), .mock("notion"), .mock("slack")],
+                      locked: false, watching: false, refreshing: false, engineWord: "Claude",
+                      onConnect: {}, onRefresh: {})
+        .padding(38).frame(width: 640).background(Theme.bg)
+}
+
+#Preview("Connectors · empty") {
+    ConnectorsSection(connectors: [], locked: false, watching: false, refreshing: false,
+                      engineWord: "Claude", onConnect: {}, onRefresh: {})
+        .padding(38).frame(width: 640).background(Theme.bg)
+}
+
+#Preview("Connectors · one unhealthy, watching") {
+    ConnectorsSection(connectors: [.mock("google-drive"), .mock("notion", healthy: false)],
+                      locked: false, watching: true, refreshing: false, engineWord: "Claude",
+                      onConnect: {}, onRefresh: {})
+        .padding(38).frame(width: 640).background(Theme.bg)
+}
+
+#Preview("Connectors · locked") {
+    ConnectorsSection(connectors: [.mock("finances", origin: .chatgpt),
+                                   .mock("google-drive", origin: .chatgpt)],
+                      locked: true, watching: false, refreshing: false, engineWord: "ChatGPT",
+                      onConnect: {}, onRefresh: {})
+        .padding(38).frame(width: 640).background(Theme.bg)
+}
+
+#Preview("Connector popover · curated (KB toggle)") {
+    ConnectorPopover(connector: .mock("google-drive"))
+        .background(Theme.bg)
+}
+
+#Preview("Connector popover · uncurated (tasks only)") {
+    ConnectorPopover(connector: .mock("linear"))
+        .background(Theme.bg)
+}
+#endif

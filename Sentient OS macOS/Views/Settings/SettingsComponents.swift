@@ -42,10 +42,23 @@ struct SettingsPane<Content: View>: View {
 }
 
 /// A labelled group — the mono-caps whisper above whatever form the group's content takes.
-struct SettingsGroup<Content: View>: View {
+/// `trailing` is the optional far end of the header row (the Connectors group's quiet Refresh);
+/// groups without one keep their exact previous rendering (the header only stretches when a
+/// trailing view exists).
+struct SettingsGroup<Content: View, Trailing: View>: View {
     let label: String
-    var badge: String? = nil          // e.g. "coming soon" on a not-yet-wired group
+    let badge: String?                // e.g. "coming soon" on a not-yet-wired group
     @ViewBuilder var content: Content
+    @ViewBuilder var trailing: Trailing
+
+    init(label: String, badge: String? = nil,
+         @ViewBuilder content: () -> Content,
+         @ViewBuilder trailing: () -> Trailing) {
+        self.label = label
+        self.badge = badge
+        self.content = content()
+        self.trailing = trailing()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
@@ -54,9 +67,19 @@ struct SettingsGroup<Content: View>: View {
                 if let badge {
                     MonoCaps("· \(badge)", size: 8, tracking: 1.6, color: .white.opacity(0.5))
                 }
+                if Trailing.self != EmptyView.self {
+                    Spacer(minLength: 12)
+                    trailing
+                }
             }
             content
         }
+    }
+}
+
+extension SettingsGroup where Trailing == EmptyView {
+    init(label: String, badge: String? = nil, @ViewBuilder content: () -> Content) {
+        self.init(label: label, badge: badge, content: content, trailing: { EmptyView() })
     }
 }
 
@@ -234,8 +257,11 @@ struct LockedChipTip: View {
 }
 
 /// A lit status LED: bright core + double soft glow (tight halo, wide bloom). Shared by
-/// StatusLine and the collapsed codex summary.
+/// StatusLine, the connector pills, and the collapsed codex summary.
 struct HealthDot: View {
+    /// The punchy warn amber every status LED shares — brighter than the ink amber on purpose.
+    static let warnAmber = Color(red: 1.0, green: 0.72, blue: 0.30)
+
     let color: Color
 
     var body: some View {
@@ -312,11 +338,10 @@ struct StatusLine: View {
     var fixTitle: String = "Fix…"
     var fix: (() -> Void)? = nil
 
-    /// Status-LED colors — warn stays punchier than the ink amber on purpose.
     private var dot: Color {
         switch health {
         case .ok:   return Theme.Ink.green
-        case .warn: return Color(red: 1.0, green: 0.72, blue: 0.30)
+        case .warn: return HealthDot.warnAmber
         case .bad:  return Theme.Ink.red
         }
     }

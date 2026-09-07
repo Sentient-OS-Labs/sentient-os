@@ -47,6 +47,7 @@ struct DeviceJob: Identifiable {
     let mode: IterativeRun.Mode
     let runGmail: Bool
     let runCalendar: Bool
+    let mcpSlugs: [String]
 }
 
 struct DevToolsView: View {
@@ -322,7 +323,8 @@ struct DevToolsView: View {
         .sheet(item: $deviceJob) { job in
             // Same takeover + same engine as the home "Analyze Now" — dev just gets the prompt pane.
             ProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors,
-                           mode: job.mode, runGmail: job.runGmail, runCalendar: job.runCalendar, showPrompt: true) {
+                           mode: job.mode, runGmail: job.runGmail, runCalendar: job.runCalendar,
+                           mcpSlugs: job.mcpSlugs, showPrompt: true) {
                 deviceJob = nil
             }
             .frame(minWidth: 600, minHeight: 680)
@@ -516,7 +518,8 @@ struct DevToolsView: View {
             run.status[id] = "✗ model not found"; return
         }
         run.status[id] = nil
-        deviceJob = DeviceJob(connectors: connectors, mode: mode, runGmail: gmailRun, runCalendar: calendarRun)
+        deviceJob = DeviceJob(connectors: connectors, mode: mode, runGmail: gmailRun,
+                              runCalendar: calendarRun, mcpSlugs: MCPSource.kbSlugs())
     }
 
     private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {

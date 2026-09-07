@@ -274,8 +274,10 @@ final class OvernightScheduler {
         // Connectors ride ChatGPT auth inside codex — a custom frontier backend has none.
         let runGmail = ModelBackend.connectorsAvailable && ud("dbg.gmail.connected") && ud("dbg.run.gmail")
         let runCalendar = ModelBackend.connectorsAvailable && ud("dbg.calendar.connected") && ud("dbg.run.calendar")
-        log.line("FDA=\(fda) · detected: \(sources.isEmpty ? "none" : sources.map(\.label).joined(separator: ", ")) · gmail=\(runGmail) calendar=\(runCalendar)")
-        guard !connectors.isEmpty || runGmail || runCalendar else { log.line("nothing enabled — skipping run."); return }
+        // KB-toggled connectors (the generic nightly reads) — backend-scoped like the chips.
+        let mcpSlugs = MCPSource.kbSlugs()
+        log.line("FDA=\(fda) · detected: \(sources.isEmpty ? "none" : sources.map(\.label).joined(separator: ", ")) · gmail=\(runGmail) calendar=\(runCalendar) · connectors=\(mcpSlugs.count)")
+        guard !connectors.isEmpty || runGmail || runCalendar || !mcpSlugs.isEmpty else { log.line("nothing enabled — skipping run."); return }
         let modelPath = ModelLocator.resolve()
         if !connectors.isEmpty && modelPath == nil { log.line("model not found — skipping run."); return }
 
@@ -300,7 +302,7 @@ final class OvernightScheduler {
         log.line("network: \(netAtStart.status)/\(netAtStart.interface) \(Int(Date().timeIntervalSince(woke)))s since wake")
         let signin = CodexAuthSnapshot.read()
         log.line(signin.logLine)
-        var legs: [String: String] = ["gmail": "skipped", "calendar": "skipped", "vault": "ok", "proactive": "skipped"]
+        var legs: [String: String] = ["gmail": "skipped", "calendar": "skipped", "mcp": "skipped", "vault": "ok", "proactive": "skipped"]
         var firstCloudCallAt: Date?
         var deviceItems = 0, deviceKept = 0, deviceFailed = 0, deviceSeconds = 0
         let heart = Task {
@@ -349,6 +351,28 @@ final class OvernightScheduler {
             firstCloudCallAt = firstCloudCallAt ?? Date()
             legs["calendar"] = await cloudLeg("Calendar", log: log) { try await CalendarConnect.runIterative { _ in } }
         }
+        if !mcpSlugs.isEmpty {
+            firstCloudCallAt = firstCloudCallAt ?? Date()
+            log.line("Connector KB legs (\(mcpSlugs.count))…")
+            let (outcomes, limited) = await MCPSource.runAll()
+            for o in outcomes { log.line("  \(o.slug): \(o.result)") }
+            legs["mcp"] = outcomes.first(where: { $0.result != "ok" })?.result ?? "ok"
+            if let auth = outcomes.first(where: { $0.result == "connector_auth" }) {
+                // The connector's own sign-in expired account-side (the engine login is fine) —
+                // the amber caution names it. Recorded BEFORE any usage-limit caution below, so
+                // a night with both keeps the broader story.
+                log.line("connector sign-in needed (\(auth.slug)) — caution recorded")
+                OvernightCaution.record(.connectorAuth,
+                                        detail: ConnectorRegistry.displayName(slug: auth.slug))
+            }
+            if limited {
+                // The reads run the light tier, so their limit can trip while the heavier tail
+                // still succeeds — record the morning caution here rather than hoping the tail
+                // fails too. Marks didn't advance, so next night's iterative covers the gap.
+                log.line("usage limit during connector reads — remaining skipped, caution recorded")
+                OvernightCaution.record(.usageLimit)
+            }
+        }
         firstCloudCallAt = firstCloudCallAt ?? Date()   // the ProactiveCycle tail is a cloud call too
         if CodexAuth.knowledgeBaseOnly == false { legs["proactive"] = "ok" }   // provisional; a failure below overrides
 
@@ -393,7 +417,7 @@ final class OvernightScheduler {
         else { outcome = "failed" }
         var tags: [String: String] = [
             "trigger": "overnight", "outcome": outcome,
-            "gmail": legs["gmail"]!, "calendar": legs["calendar"]!,
+            "gmail": legs["gmail"]!, "calendar": legs["calendar"]!, "mcp": legs["mcp"]!,
             "vault": legs["vault"]!, "proactive": legs["proactive"]!,
             "network_at_start": netAtStart.status, "interface_at_start": netAtStart.interface,
             "codex_version": diag.version ?? "unknown",
@@ -402,6 +426,7 @@ final class OvernightScheduler {
         var extra: [String: String] = [
             "device_items": String(deviceItems), "device_kept": String(deviceKept),
             "device_failed": String(deviceFailed), "secs_device_stage": String(deviceSeconds),
+            "mcp_connectors": String(mcpSlugs.count),
             "pings": String(diag.pings), "ping_ms_first": diag.firstPingMS.map(String.init) ?? "n/a",
             "secs_wake_to_first_cloud_call": String(Int((firstCloudCallAt ?? Date()).timeIntervalSince(woke))),
         ]
