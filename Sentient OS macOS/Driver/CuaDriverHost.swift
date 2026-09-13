@@ -16,14 +16,17 @@
 //
 //  The lifeline: the daemon's stdin is a pipe THIS process holds. `--parent-liveness-stdio` makes it
 //  exit on EOF when Sentient quits or is killed. Its stderr goes to /dev/null so shutdown logging
-//  remains writable after Sentient exits and the daemon can finish its cleanup.
+//  remains writable after Sentient exits. Additional lifecycle backstops cover a daemon whose
+//  AppKit runloop outlives its server: sweepOrphans() reaps orphaned daemons at launch, and an
+//  atexit hook SIGTERMs the live owned daemon on normal quit.
 //
-//  Key methods: ensureRunning() · stop() · restart() · socketPath
+//  Key methods: ensureRunning() · stop() · restart() · sweepOrphans() · socketPath
 //
 //  Doc: Driver/Documentation - Driver (cua-driver).md
 //
 
 import Foundation
+import Synchronization
 
 /// Owns at most ONE daemon for the app's lifetime. An actor because `ensureRunning()` is called from
 /// every fire path (Sidekick, the command bar, a card) and two commands racing must not spawn two
@@ -47,6 +50,11 @@ actor CuaDriverHost {
 
     /// The live daemon's socket, or nil when nothing is running.
     var socketPath: String? { socket?.path }
+
+    /// The live daemon's pid, mirrored outside the actor for the synchronous atexit hook.
+    /// 0 = no daemon. See armExitBackstop().
+    private static let exitPID = Atomic<pid_t>(0)
+    private static let exitHookInstalled = Atomic<Bool>(false)
 
     // MARK: Lifecycle
 
@@ -127,6 +135,7 @@ actor CuaDriverHost {
         process = p
         lifeline = stdinPipe.fileHandleForWriting
         socket = endpoint
+        armExitBackstop(for: p.processIdentifier)
 
         // The socket appearing is the honest readiness signal (upstream binds it, then chmods 0600).
         // Poll rather than sleep, so a fast Mac isn't taxed and a slow one isn't cut short.
@@ -171,6 +180,112 @@ actor CuaDriverHost {
         _ = await ensureRunning()
     }
 
+    // MARK: The two backstops (see the header: the lifeline alone is not enough)
+
+    /// Reap daemons leaked by previous app lives. Called once per launch (AppState's startup task):
+    /// every process running OUR embedded daemon binary carries its spawning Sentient's pid in its
+    /// socket name — if that host is no longer a live Sentient process, the daemon is an orphan.
+    /// SIGTERM, a short grace, SIGKILL for anything still standing, then the socket file. Spared on
+    /// purpose: daemons of OTHER live Sentient instances (host pid alive and a Sentient binary),
+    /// and any standalone CuaDriver.app a user installed themselves (wrong binary path). Also clears
+    /// stale `sentient-cua-*.sock` files whose host is gone, so a fresh daemon can never collide
+    /// with a dead generation's leftovers.
+    nonisolated static func sweepOrphans() async {
+        // One process snapshot: pid + full command line (`ww` = never truncate).
+        let ps = Process()
+        ps.executableURL = URL(fileURLWithPath: "/bin/ps")
+        ps.arguments = ["-axww", "-o", "pid=,args="]
+        let out = Pipe()
+        ps.standardOutput = out
+        ps.standardError = FileHandle.nullDevice
+        do { try ps.run() } catch {
+            Log("CuaDriverHost: orphan sweep could not snapshot processes — \(ErrorLabel(error))")
+            return
+        }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        ps.waitUntilExit()
+
+        let installPrefix = CuaDriver.installRoot.path
+        var orphans: [(pid: pid_t, socket: String?)] = []
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            let entry = line.trimmingCharacters(in: .whitespaces)
+            guard let gap = entry.firstIndex(of: " "), let pid = pid_t(entry[..<gap]) else { continue }
+            let command = String(entry[entry.index(after: gap)...])
+            // argv[0] IS the binary path (ensureRunning always spawns by full path), so a prefix
+            // match hits exactly our daemons — never a shell line that merely quotes one.
+            guard command.hasPrefix(installPrefix), command.contains(" serve ") else { continue }
+            guard let host = hostPID(in: command), !isLiveSentient(host) else { continue }
+            orphans.append((pid, socketPath(in: command)))
+        }
+
+        if !orphans.isEmpty {
+            for orphan in orphans { kill(orphan.pid, SIGTERM) }
+            for _ in 0..<20 {   // ~2s of grace before the hard kill
+                guard orphans.contains(where: { kill($0.pid, 0) == 0 }) else { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            for orphan in orphans where kill(orphan.pid, 0) == 0 { kill(orphan.pid, SIGKILL) }
+            for orphan in orphans {
+                if let socket = orphan.socket { try? FileManager.default.removeItem(atPath: socket) }
+            }
+            Log("CuaDriverHost: swept \(orphans.count) orphaned daemon(s) left by previous app lives")
+        }
+
+        let tmp = NSTemporaryDirectory()
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: tmp)) ?? []
+        where name.hasPrefix("sentient-cua-") && name.hasSuffix(".sock") {
+            guard let host = hostPID(in: name), !isLiveSentient(host) else { continue }
+            try? FileManager.default.removeItem(atPath: tmp + name)
+        }
+    }
+
+    /// Mirror the daemon's pid where the atexit hook can see it, and install that hook once. The
+    /// hook is the backstop for a NORMAL quit: process exit closes the lifeline anyway, but a
+    /// daemon that has run a session can miss the EOF (see the header), so the exit path also
+    /// sends a plain SIGTERM — after re-proving the pid still names our daemon, so a pid recycled
+    /// since the daemon died on its own can never catch a stray signal.
+    private func armExitBackstop(for pid: pid_t) {
+        Self.exitPID.store(pid, ordering: .relaxed)
+        guard !Self.exitHookInstalled.exchange(true, ordering: .relaxed) else { return }
+        atexit {
+            let pid = CuaDriverHost.exitPID.load(ordering: .relaxed)
+            guard pid > 0, CuaDriverHost.binaryPath(of: pid).hasPrefix(CuaDriver.installRoot.path)
+            else { return }
+            kill(pid, SIGTERM)
+        }
+    }
+
+    /// The Sentient pid baked into a daemon's socket name (`sentient-cua-<pid>-<nonce>.sock`),
+    /// findable in a command line and a bare file name alike.
+    nonisolated private static func hostPID(in text: String) -> pid_t? {
+        guard let mark = text.range(of: "sentient-cua-") else { return nil }
+        return pid_t(text[mark.upperBound...].prefix(while: \.isNumber))
+    }
+
+    /// The `--socket` value in a daemon's command line (a temp-dir path — never has spaces).
+    nonisolated private static func socketPath(in command: String) -> String? {
+        guard let flag = command.range(of: "--socket ") else { return nil }
+        let path = command[flag.upperBound...].prefix(while: { $0 != " " })
+        return path.isEmpty ? nil : String(path)
+    }
+
+    /// Is this pid a live Sentient process? Compared by executable NAME, not path, so a daemon
+    /// spawned by a Debug build is recognized by the Release app and vice versa.
+    nonisolated private static func isLiveSentient(_ pid: pid_t) -> Bool {
+        let path = binaryPath(of: pid)
+        guard !path.isEmpty else { return false }
+        return URL(fileURLWithPath: path).lastPathComponent
+            == (Bundle.main.executableURL?.lastPathComponent ?? "Sentient OS")
+    }
+
+    /// The executable behind a pid, or "" when it can't be read (dead pid, or another user's
+    /// process — both read as "not ours", which is the safe answer for every caller here).
+    nonisolated private static func binaryPath(of pid: pid_t) -> String {
+        var buf = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return "" }
+        return String(cString: buf)
+    }
+
     // MARK: Internals
 
     /// Is the daemon actually answering? `status` speaks the real protocol, so a wedged daemon that
@@ -195,6 +310,7 @@ actor CuaDriverHost {
         process = nil
         lifeline = nil
         socket = nil
+        Self.exitPID.store(0, ordering: .relaxed)
     }
 
     /// Write the CLI shim for this daemon generation — the space-free launcher the model's shell
