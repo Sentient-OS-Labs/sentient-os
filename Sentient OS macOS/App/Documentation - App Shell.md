@@ -30,7 +30,7 @@ this is the wiring.
 2. Return before launch side effects when `SENTIENT_SELFTEST` is set. The DEBUG initializer in the app declaration dispatches the existing connector lab.
 3. Prepare `ComputerUseUpgrade` before mounting regular scenes or starting Sidekick. A previously ready, onboarded Mac missing the pinned driver enters persistent setup; an existing pending upgrade resumes even after installation. Fresh onboarding and already-configured users retain their normal startup.
 4. Start the scheduler as before. `startInterfaceIfReady()` starts the Sidekick coordinator and notch once, immediately on a normal launch or after setup releases the interface. During setup there are no Sidekick hotkey monitors or notch startup.
-5. Start Dock policy, Sparkle, update notices, diagnostics, notification checks, and managed CLI maintenance. These services retain their own guards; the setup window does not pause background scheduling or connector classification maintenance.
+5. Start Dock policy, Sparkle, update notices, diagnostics, notification checks, and managed CLI maintenance. The detached startup task also sweeps orphaned managed computer-use daemons, preserving daemons whose Sentient host is still alive. These services retain their own guards; the setup window does not pause background scheduling or connector classification maintenance.
 6. During onboarding, the existing FDA-dependent model download remains available. Engine CLIs install lazily at the user's engine commitment, never simply because the app launched.
 
 ## Exclusive computer-use setup

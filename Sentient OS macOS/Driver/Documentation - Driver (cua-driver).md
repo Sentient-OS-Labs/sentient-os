@@ -43,6 +43,18 @@ Daemon shape (one per app lifetime, an actor so racing fires can't spawn two):
   socket (a wedged daemon that still holds a pid must read as dead). When the user's grants change,
   the daemon is REPLACED, not re-probed — macOS caches TCC answers per process.
 
+## Shutdown and orphan cleanup
+
+The stdin lifeline remains the primary shutdown signal; stderr stays attached to the null device so
+shutdown logging can finish after the parent exits. Two additional backstops handle a daemon whose
+AppKit runloop outlives its server. A normal process exit sends SIGTERM to the last owned daemon after
+checking its executable path. Launch-time `sweepOrphans()` recognizes managed daemon commands and the
+host PID in their socket names, spares live Sentient hosts and standalone CuaDriver installations,
+and removes orphan processes and stale sockets. The sweep uses TERM, a short grace, then KILL.
+
+This startup work stays behind `SENTIENT_SELFTEST`. Lifecycle tests must use an isolated install root,
+temporary directory, and owned process receipts; never exercise a global sweep against user processes.
+
 ## The hybrid transport: MCP eyes, CLI hands
 
 A computer-use codex run reaches the daemon over two channels against the same socket:

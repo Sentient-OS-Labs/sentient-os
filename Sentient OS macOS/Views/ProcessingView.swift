@@ -552,6 +552,7 @@ struct ProcessingView: View {
         case .inputTooLarge:  "This batch was too big to send"
         case .diskFull:       "Your Mac's disk is full"
         case .connectorAuth:  "A connected app needs a fresh sign-in"
+        case .stalled:        "Processing got stuck"   // recorded only by the 3 AM watchdog; here for exhaustiveness
         case nil:             "Processing failed"
         }
     }
@@ -573,6 +574,7 @@ struct ProcessingView: View {
         case .connectorAuth:  claude
             ? "One of your connected apps has stopped accepting its sign-in. Reconnect it on claude.ai, then hit Retry; everything so far is saved."
             : "One of your connected apps has stopped accepting its sign-in. Reconnect it on chatgpt.com, then hit Retry; everything so far is saved."
+        case .stalled:        "The work stopped making progress, so I ended it. Everything so far is saved; hit Retry and I'll pick up right where we stopped."
         case nil:             message
         }
     }
