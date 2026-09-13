@@ -51,14 +51,14 @@ actor ClaudeCLI {
     }
 
     /// The ONE model-resolution choke point for the Claude engine — the backendTuned twin.
-    /// Tier map: sol/terra → sonnet, luna → haiku; a caller that earns Opus says so explicitly
+    /// Tier map: astra/sol/terra → sonnet, luna → haiku; a caller that earns Opus says so explicitly
     /// (Invocation.claudeModel — the vault and research legs). Pro plans downshift opus → sonnet
     /// (Pro's Opus window is tiny; the terra-downshift twin). Effort rides through 1:1 — codex's
     /// low/medium/high/xhigh are exactly Claude Code's `--effort` values.
     static func tuned(for inv: CodexCLI.Invocation) -> (modelID: String, effortArg: String) {
         var model: Model = inv.claudeModel ?? {
             switch inv.model {
-            case .gpt56sol, .gpt56terra: return .sonnet
+            case .gpt6astra, .gpt56sol, .gpt56terra: return .sonnet
             case .gpt56luna: return .haiku
             }
         }()

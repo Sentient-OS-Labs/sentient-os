@@ -77,7 +77,7 @@ proactive traces (`ProactiveCycle.resetAll`), the lifetime counters, and the clo
 an offline reset still succeeds and the mirror's 30-day lease is the backstop). Then it rewinds to the
 start of onboarding: clears the onboarding step and flag, the plan-mode flags (`plan.kbOnly`,
 `plan.assertedPlus`), the permission-gate "offered" flags, the computer-use health latch, and the
-scheduler's first-cycle / auto-enable / production-enabled state, and stops the scheduler loop.
+scheduler's first-cycle / auto-enable / production-enabled state, and stops the scheduler loop. It also clears MCP connector state while preserving `mcp.mirror.*`. After the live onboarding rewind, `ComputerUseUpgrade.reset()` removes pending migration state, releases hidden windows, removes enforcement observers, and invalidates late installer results without cancelling the shared download.
 
 Deliberately kept: the mirror password and opt-in (the share URL pasted into the user's AIs must
 survive; the next push recreates the copy), the source selections, the frontier-model choice, and the

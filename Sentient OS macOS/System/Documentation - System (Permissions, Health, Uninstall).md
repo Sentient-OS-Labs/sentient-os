@@ -78,7 +78,7 @@ the dialog).
 
 ## Uninstall (`Uninstall.run`)
 
-FactoryReset's strict superset, driven by `UninstallView`. Stages, in order, each with a whisper for
+FactoryReset also clears the persistent computer-use upgrade and its live coordination state after rewinding onboarding. Its MCP connector-state sweep excludes `mcp.mirror.*`; mirror settings remain intact. Uninstall is FactoryReset's strict superset, driven by `UninstallView`. Stages, in order, each with a whisper for
 the sheet: the wake helper FIRST (the only stage that can be declined at its password prompt, so a
 cancel aborts before anything irreversible; Try Again / Skip / Cancel), then the cloud copy (while the
 Keychain password still exists to authorize the DELETE), the Keychain identity + the frontier-model

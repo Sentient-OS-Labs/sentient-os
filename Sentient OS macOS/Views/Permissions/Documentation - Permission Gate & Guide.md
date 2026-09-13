@@ -17,7 +17,8 @@ onboarding step (the lazy-grant policy). Three pieces:
 |---|---|
 | `ComputerUseGate.swift` | The interception (`intercept`, `interceptBeforeStart`, `presentVoiceFixIfDenied`), the grant probes, the AppKit-owned floating window, Continue. |
 | `ComputerUseGateView.swift` | The window's face: the grants as `StatusLine` rows in two groups (`SentientPermissionRows` is shared with the upgrade window). |
-| `ComputerUseUpgrade.swift` | The update-migration window: the driver download with live narration, then the same grant rows. |
+| `ComputerUseUpgrade.swift` | Persistent upgrade coordination, native setup window, installation, readiness, release, and reset. |
+| `ComputerUseWindowGuard.swift` | Excludes regular scene content during setup and registers its AppKit window for hiding. |
 | `PermissionGuide.swift` | `guide(pane, dragging:)`: open the pane and raise the panel; drag vs instruction mode; close. |
 | `PermissionDragPanel.swift` | The borderless, non-activating panel that flies from the pressed button to just below the Settings window and follows it; the Finder-shaped drag source. |
 | `SettingsWindowTracker.swift` | Follows the System Settings window: a 30 Hz zero-permission `CGWindowList` poll plus AX observers when available; 12 misses = Settings closed → the panel dismisses. |
@@ -70,16 +71,39 @@ Analytics: `PermissionGate.shown` / `.continued`.
 
 ## The upgrade window (`ComputerUseUpgrade`)
 
-Macs updating from the 1.x codex-helper era had computer use working (the `everReady` latch) but carry
-none of what the cua driver needs: the pinned binary isn't on disk, and Sentient's own Accessibility
-was never asked for. Rather than a silent background download, the update gets its own moment: the
-first home open after updating raises this window — "Computer use just got better", one glowing CTA,
-the live install narration (the same streamed lines `CodexSetup.setupCuaDriver` produces), then the two
-required grant rows. Not closable before the driver is installed (the download IS the migration);
-after it, Done enables when both grants are green and a quiet "Finish later" hands enforcement back to
-the first-fire gate. The trigger (everReady latch + binary missing) is self-extinguishing — once the
-driver is on disk the window can never appear again, so no flag is persisted. Fresh installs never see
-it.
+This is a migration gate, prepared by `AppState` before regular scenes and Sidekick start. Eligibility
+requires completed onboarding and either a pending upgrade or the legacy `computerUse.everReady`
+latch with the pinned driver missing. An already-configured user with no pending flag sees normal
+startup. Fresh installs retain onboarding; this is not a release announcement for every user and does
+not continuously relock the app when the driver disappears mid-session.
+
+`computerUse.upgradePending` is recorded before presentation and survives relaunches, including the
+period after installation but before Done. The flow is pitch → installing → grants. Failure returns
+to a retryable pitch; close/reopen retains phase and progress and awaits the shared installer.
+Completion re-probes and requires the installed driver, Accessibility, Screen Recording, and an
+explicit Done press. There is no Finish later bypass. Optional voice prompting remains independent.
+
+The native, normal-level window has close, minimize, resize/fullscreen controls, a unified dark title
+bar, and a 560-point content column. Its pitch reads “Sentient's computer use is now way faster and
+smarter”. This window has no privacy footer; the app's other trust surfaces retain theirs. Long
+installation status and error messages wrap instead of truncating.
+
+`ComputerUseWindowGuard` excludes regular scene content and registers each scene's `NSWindow` for
+hiding. Enforcement applies only to registered regular windows, leaving permission prompts and the
+floating guide usable. Close and minimize never release the gate. Activation can reopen a closed
+setup but does not undo minimization; an explicit Dock/menu Open request restores it. Window-order
+notifications hide regular windows without refocusing setup, preventing focus loops.
+
+Done clears pending state, removes enforcement observers, closes setup, restores the requested hidden
+windows, starts Sidekick/notch once, and focuses or creates home. The menu-bar label supplies home
+creation even on a launch with no regular scenes. Factory Reset uses `ComputerUseUpgrade.reset()`
+after the onboarding rewind to clear both persisted and live migration state. A late installer result
+cannot revive a reset session; the shared download itself is not cancelled.
+
+For DEBUG visual checks, `--preview-computer-use-upgrade` forces pitch for an onboarded user without
+writing or clearing the pending flag. Release ignores it. The preview does not mock installation,
+permissions, or other AppState services; use fixtures for destructive or missing-grant scenarios and
+never commit the flag to the shared scheme.
 
 ## The guide (`PermissionGuide`)
 
@@ -96,8 +120,8 @@ back to front.
 ## Where it is wired
 
 `CommandCoordinator.submit` (the bar, Sidekick, notch typing), the hotkey press and notch click
-(`interceptBeforeStart`), `ForYouModel.run` (real cards), `RootView`'s first home open
-(`ComputerUseUpgrade.maybePresent`), onboarding's permissions step (FDA drag, Login Items
+(`interceptBeforeStart`), `ForYouModel.run` (real cards), `AppState` and all regular app scenes
+(`ComputerUseUpgrade` plus `ComputerUseWindowGuard`), onboarding's permissions step (FDA drag, Login Items
 instruction), and Settings → Health (FDA, Accessibility, Screen Recording).
 
 ## Related docs

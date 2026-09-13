@@ -60,7 +60,7 @@ struct SystemPane: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Your Sentient works the night shift.")
                     .font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
-                SettingsProse("Every night at 3 AM, Sentient wakes your Mac to read what's new in your life, update your knowledge base, and prepare your morning suggestions. It only happens while your Mac is plugged in, and only if Sentient is still running in your menu bar. This quiet, on-device work is what keeps your Sentient alive and helpful.")
+                SettingsProse("Every night at 3 AM, Sentient wakes your Mac to read what's new in your life, update your knowledge base, and prepare your morning suggestions. It only happens while your Mac is plugged in (or on battery, if you've allowed that in the home's Analysis menu), and only if Sentient is still running in your menu bar. This quiet, on-device work is what keeps your Sentient alive and helpful.")
                 Text("Runs while your Mac rests.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.Ink.deepMuted)

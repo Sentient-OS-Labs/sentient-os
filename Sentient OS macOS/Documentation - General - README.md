@@ -36,7 +36,7 @@ disk join the target automatically, and the docs are stripped from the shipped b
 | `Views/Settings/` | The Settings window and its six panes, the uninstall sheet, the privacy policy | `Views/Settings/Documentation - Settings.md` |
 | `Views/Knowledge/` | The Knowledge window: the Constellation View, the reader, the editor | `Views/Knowledge/Documentation - Knowledge Window (Constellation & Reader).md` |
 | `Views/Onboarding/` | First launch, step by step | `Views/Onboarding/Documentation - Onboarding.md` |
-| `Views/Permissions/` | The first-use permission gate and the floating drag-into-Settings guide | `Views/Permissions/Documentation - Permission Gate & Guide.md` |
+| `Views/Permissions/` | The first-use permission gate, persistent upgrade coordinator and scene guard, and floating drag-into-Settings guide | `Views/Permissions/Documentation - Permission Gate & Guide.md` |
 | `Views/Dev/` | The dev cockpit (DEBUG only) | `Views/Dev/Documentation - Dev Tools.md` |
 | `Media/` | The bundled tutorial clips for the Connect your AIs window | (in the Views doc) |
 | `Self Tests - Temp/` | Kept EMPTY; self-tests are scaffolding, recreated on demand | `Documentation - General - Self-Testing (Eval Harness).md` |

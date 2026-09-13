@@ -238,7 +238,7 @@ struct HomeView: View {
         case .diskFull:  return ("Manage Storage", { DiskSpace.openStorageSettings() })
         case .connectorAuth:   // the fix lives on the engine's own connectors page
             return ("Sign In Again", { NSWorkspace.shared.open(ConnectorCensus.directoryURL) })
-        case .noInternet, .usageLimit, .inputTooLarge: return nil
+        case .noInternet, .usageLimit, .inputTooLarge, .stalled: return nil
         }
     }
 

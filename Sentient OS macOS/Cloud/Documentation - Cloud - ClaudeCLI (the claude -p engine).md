@@ -54,31 +54,27 @@ terminates the child), and both paths reuse `CodexCLI.executeAsync` / `executeSt
 
 ## Models and effort
 
-The tier map (`tuned(for:)`, the backendTuned twin): `gpt56sol`/`gpt56terra` → `sonnet`, `gpt56luna` →
+The tier map (`tuned(for:)`, the backendTuned twin): `gpt6astra`/`gpt56sol`/`gpt56terra` → `sonnet`, `gpt56luna` →
 `haiku`; a caller that earns Opus says so with `Invocation.claudeModel = .opus` (the vault legs via
 `runCodexInStaging`, and proactive research). On a **Pro** plan every Opus pick downshifts to Sonnet
 (`ClaudeAuth.isPro` — Pro's Opus window is tiny; the terra-downshift twin; unknown plans fail open).
 The Speed slider's Claude mapping (`ComputerUseSpeed.claudeModelAndEffort`): Faster = sonnet·low,
 Medium = sonnet·medium, Smarter = opus·medium.
 
-## The hosted connectors (claude.ai Gmail / Google Calendar)
+## Hosted connectors and MCP recipes
 
-On the Claude backend, Gmail and Calendar ride the user's **claude.ai connectors** (linked once at
-claude.ai's connector directory; the connect sheet opens the right page per engine — see the Sources
-Cloud doc). Everything below was measured live on the first linked account (2026-08-23):
+The registry/census layer supplies per-engine identities and classified tool policy. Both the
+structured builder and the computer-use builder remain available to the connector lab. The Astra
+mapping changes only model resolution; these recipes remain independent of the Codex speed tiers.
 
-- Connectors are fetched automatically in headless runs when the claude.ai subscription login is the
-  active credential — but **`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` suppresses the fetch**, which
-  is why that variable must never join `baseEnv` (it once did; every run started connector-blind and
-  the probes read an honest-but-wrong NO).
-- Headless, a connector tool call is approved by an **allow rule and nothing else** — `auto` mode's
-  classifier denies them too. So `Invocation.claudeConnectorReads` (the probes and the Gmail/Calendar
-  reads) pre-approves `ConnectorTools.readAllowRules`: the five read-only Gmail tools and the five
-  read-only Calendar tools, by name, fail-closed — a tool Anthropic adds or renames stays denied
-  until curated here. The `stripConnectorActionTools` preset maps to the same read-only allows, so
-  proactive research keeps its Gmail reads while "never fire" stays structural (no write rule exists
-  in the run). The `approveConnectorWrites` preset maps to `dontAsk` + an `mcp__*` allow for the
-  executor's one-declared-action fires.
+- `mcpReadConnectors` keeps `dontAsk`, allows only each registry read list, and walls attachment to those servers. Missing read lists refuse the run.
+- `mcpActionServer` requires a classified connector, walls attachment to that server, allows its tools, and denies destructive tools by name. The sandboxed recipe never bypasses permissions.
+- `mcpAttachServer` walls in one server with zero tool allows for classifier inventory.
+- Computer use retains the cua vision server plus the registry's permitted connector attachments and destructive deny lists. With no attachments it uses the strict cua-only wall. Screenshot paths remain in the prompt's Read instructions.
+
+The existing unclassified Gmail/Calendar card fallback still uses its shipped approval preset.
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` must remain absent because it suppresses claude.ai connector
+fetches. Codex's `service_tier` override is not passed to Claude processes.
 
 ## Availability, login, plan
 
