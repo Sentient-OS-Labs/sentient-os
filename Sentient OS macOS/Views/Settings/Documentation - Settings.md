@@ -44,11 +44,11 @@ commitment actions, never on tab browsing. See the BYOM and ClaudeCLI docs.
 both proactive prompts), the Sidekick key (right ⌘ / right ⌥; toggling posts `.sidekickHotkeyChanged`
 and re-keys the live monitor), the standing Sidekick context (`sidekick.context`, fed to the command
 prompt), and the **Speed vs Intelligence** slider (`ComputerUseSpeed`, read fresh per computer-use
-run: on codex, Faster / Medium / Smarter → low / medium / high effort; on the Claude engine the tier
+run: on Codex, Faster / Medium / Smarter → GPT-5.6 Sol low / GPT-6 Astra low / GPT-6 Astra medium; on the Claude engine the tier
 picks the model too — sonnet·low / sonnet·medium / opus·medium, with the honest model named in the readout;
 dimmed with a hover explanation on a custom backend, where the model's single reasoning level lives in
 Frontier Model Choice). All live,
-no restart; the two keys live in `CustomInstructions` so producer and consumers cannot drift.
+no restart; `sidekick.speed` and its existing stored values remain stable. The slider controls computer-use runs, including a routed task's computer-use fallback; successful MCP-only tasks retain their existing model policy. The standing-instruction keys live in `CustomInstructions`.
 
 **Give AIs Knowledge** (pane title "ChatGPT & Claude"). The value blurb and four privacy pillars
 (local-first, zero-access encryption, no account + the 30-day self-delete, open-source backend), the

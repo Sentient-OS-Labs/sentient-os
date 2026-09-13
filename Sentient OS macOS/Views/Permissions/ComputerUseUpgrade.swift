@@ -6,21 +6,18 @@
 //  use. Those Macs had computer use working (HealthCaution's everReady latch) but carry none of
 //  what the cua driver needs: the pinned binary isn't on disk, and Sentient's own Accessibility
 //  was never asked for. Rather than a silent background download, the update gets its own moment:
-//  the first home open after updating raises this window — "Computer use just got better", one
+//  the first window open after updating raises this window — "Computer use just got better", one
 //  glowing CTA, the live install narration (download → verify → install, the same streamed lines
 //  CodexSetup.setupCuaDriver produces), then the two grant rows the first-fire gate would
 //  otherwise show (SentientPermissionRows, shared with ComputerUseGateView).
 //
-//  Deliberately NOT closable before the driver is installed (no close button, and Cmd-W has
-//  nothing to perform): the download is the migration, and every fallback after it exists
-//  (fire-time self-heal, the Health fix). After the install, the grants are a strong nudge, not a
-//  hostage: Done enables when both are green, and a quiet "Finish later" hands enforcement back
-//  to the first-fire gate. The trigger condition (everReady latch + binary missing) is
-//  self-extinguishing — once the driver is on disk, this window can never appear again, so no
-//  flag is persisted. Fresh installs never see it (onboarding fetches the driver itself and the
-//  latch only sets once computer use has been seen working).
+//  During the upgrade, every regular Sentient window stays hidden and Sidekick stays unarmed.
+//  Native close/minimize controls never unlock the app. The pending flag survives relaunches,
+//  including an installed driver whose permissions are still missing. Done releases the UI only
+//  after the driver and both required grants are ready. Fresh installs use onboarding instead.
 //
-//  Key members: maybePresent() (RootView, first home open) · install() · finish()
+//  Key members: prepareForLaunch() · register(window:openHome:) · maybePresent() · install() · finish()
+//  Doc: Documentation - Permission Gate & Guide.md
 //
 
 import AppKit
@@ -33,6 +30,15 @@ final class ComputerUseUpgrade {
     static let shared = ComputerUseUpgrade()
     private init() {}
 
+    private static let pendingKey = "computerUse.upgradePending"
+
+    #if DEBUG
+    /// Forces the pitch without changing pending state. Installer and permission actions are real.
+    private let isPreview = CommandLine.arguments.contains("--preview-computer-use-upgrade")
+    #else
+    private let isPreview = false
+    #endif
+
     enum Phase {
         case pitch        // the announcement + CTA (and, after a failed attempt, the retry)
         case installing   // setupCuaDriver running; the streamed line narrates
@@ -44,31 +50,140 @@ final class ComputerUseUpgrade {
     private(set) var failureLine: String?
 
     private var window: NSWindow?
+    private var closeObserver: NSObjectProtocol?
+    private var windowObservers: [NSObjectProtocol] = []
+    private var hiddenWindows: [NSWindow] = []
+    private var openHome: (@MainActor () -> Void)?
+    private var onSetupFinished: (@MainActor () -> Void)?
+    private var needsHome = false
+    private var installGeneration = UUID()
+    private var windowSweepScheduled = false
+
+    /// Independent of window visibility: closing the announcement never releases the interface.
+    private(set) var isBlockingInterface = false
 
     /// True while the window is up — HealthCaution's driver-missing rung defers to it, so the
     /// home never shows the red "needs setting up again" banner behind this window's own fix.
     var isPresenting: Bool { window != nil }
 
-    /// First home open after an update (RootView.onAppear, post-onboarding only). Shows ONLY on
-    /// the migration Mac: computer use once worked here, and the pinned driver isn't on disk.
-    /// A Mac that already self-healed (a Sidekick fire before the home ever opened) skips it.
-    func maybePresent() {
-        guard UserDefaults.standard.bool(forKey: HealthCaution.computerUseEverReadyKey),
-              !CuaDriver.isInstalled,
-              window == nil else { return }
-        phase = .pitch
-        failureLine = nil
+    /// Called before any scene or Sidekick starts, so the home cannot flash behind the setup UI.
+    func prepareForLaunch(onSetupFinished: @escaping @MainActor () -> Void) {
+        guard !isBlockingInterface else { return }
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: AppState.onboardingKey),
+              isPreview || defaults.bool(forKey: Self.pendingKey)
+                || (defaults.bool(forKey: HealthCaution.computerUseEverReadyKey) && !CuaDriver.isInstalled)
+        else { return }
+
+        self.onSetupFinished = onSetupFinished
+        isBlockingInterface = true
+        if !isPreview { defaults.set(true, forKey: Self.pendingKey) }
+        phase = CuaDriver.isInstalled && !isPreview ? .grants : .pitch
+
+        let nc = NotificationCenter.default
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification,
+                     NSWindow.didChangeOcclusionStateNotification] {
+            windowObservers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let self, self.isBlockingInterface, let candidate = note.object as? NSWindow,
+                          self.hiddenWindows.contains(where: { $0 === candidate }),
+                          candidate.isVisible || candidate.isMiniaturized else { return }
+                    self.hide(candidate)
+                    self.hideRegisteredWindowsAfterOrdering()
+                    // Hiding a regular window must not steal focus from a permission prompt,
+                    // reopen a just-closed setup window, or undo the user's minimize action.
+                }
+            })
+        }
+        windowObservers.append(nc.addObserver(forName: NSWindow.willCloseNotification, object: nil,
+                                              queue: .main) { [weak self] note in
+            MainActor.assumeIsolated {
+                guard let self, let closing = note.object as? NSWindow,
+                      self.hiddenWindows.contains(where: { $0 === closing }) else { return }
+                self.hiddenWindows.removeAll { $0 === closing }
+            }
+        })
+        windowObservers.append(nc.addObserver(forName: NSApplication.didBecomeActiveNotification,
+                                              object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.window?.isMiniaturized != true else { return }
+                self.maybePresent(activate: false)
+            }
+        })
+    }
+
+    /// The menu-bar label registers this even on a windowless launch. Scene registration is a
+    /// second source; a late registration also fulfills a completion that had no home yet.
+    func registerHomeOpener(_ action: @escaping @MainActor () -> Void) {
+        openHome = action
+        if needsHome {
+            needsHome = false
+            action()
+        }
+    }
+
+    /// The scene guard calls this before its hosting window is shown. Only this app's registered
+    /// scenes are hidden; macOS permission prompts and the setup's permission guide remain usable.
+    func register(window: NSWindow, openHome: @escaping @MainActor () -> Void) {
+        guard isBlockingInterface else { return }
+        registerHomeOpener(openHome)
+        let isNewWindow = !hiddenWindows.contains(where: { $0 === window })
+        if isNewWindow { hiddenWindows.append(window) }
+        hide(window)
+        hideRegisteredWindowsAfterOrdering()
+        if isNewWindow {
+            Task { @MainActor [weak self] in self?.maybePresent() }
+        }
+    }
+
+    private func hide(_ window: NSWindow) {
+        if window.alphaValue != 0 { window.alphaValue = 0 }
+        if window.isVisible || window.isMiniaturized { window.orderOut(nil) }
+    }
+
+    /// AppKit can finish an order-front operation after delivering its key-window notification.
+    /// Alpha hides it immediately; a coalesced next-turn sweep finishes ordering it out, without
+    /// refocusing setup or recursively fighting the Window menu.
+    private func hideRegisteredWindowsAfterOrdering() {
+        guard !windowSweepScheduled else { return }
+        windowSweepScheduled = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.windowSweepScheduled = false
+            guard self.isBlockingInterface else { return }
+            for window in self.hiddenWindows { self.hide(window) }
+        }
+    }
+
+    /// Open/reopen only the setup window while the upgrade is pending.
+    func maybePresent(activate: Bool = true) {
+        guard isBlockingInterface else { return }
+        if let window {
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
+            if activate, !NSApp.isActive { NSApp.activate() }
+            return
+        }
         ComputerUseGate.shared.refresh()
         let hosting = NSHostingController(rootView: ComputerUseUpgradeView(model: self))
         let w = NSWindow(contentViewController: hosting)
-        w.styleMask = [.titled, .fullSizeContentView]   // deliberately NO .closable — see header
+        w.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        w.identifier = NSUserInterfaceItemIdentifier("computer-use-upgrade")
+        w.title = "Computer Use"
+        w.toolbar = NSToolbar(identifier: "ComputerUseUpgrade")
+        w.toolbarStyle = .unified
         w.titlebarAppearsTransparent = true
         w.titleVisibility = .hidden
+        w.appearance = NSAppearance(named: .darkAqua)
         w.backgroundColor = .black
         w.isReleasedWhenClosed = false
-        w.level = .floating
         w.isMovableByWindowBackground = true
         window = w
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: w, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.windowClosed() }
+        }
         // Lay the SwiftUI content out BEFORE centering: `center()` reads the window's current
         // frame, and against the pre-layout size the content then grows the window from that
         // origin — landing it visibly off-center (field-found on the first migration test).
@@ -76,9 +191,9 @@ final class ComputerUseUpgrade {
         w.setContentSize(hosting.view.fittingSize)
         w.center()
         w.makeKeyAndOrderFront(nil)
-        NSApp.activate()
+        if activate, !NSApp.isActive { NSApp.activate() }
         Analytics.signal("ComputerUseUpgrade.shown")
-        Log("ComputerUseUpgrade: window up (updated Mac, driver missing)")
+        Log("ComputerUseUpgrade: setup window up; main interface hidden")
     }
 
     /// The CTA — run the shared setup engine and narrate it. `ensureCuaDriver` (not a bare setup
@@ -86,11 +201,15 @@ final class ComputerUseUpgrade {
     /// is awaited rather than misread as a failure. Success flows into the grant rows; failure
     /// returns to the pitch with the ✗ line and the CTA as the retry.
     func install() {
-        guard phase != .installing else { return }
+        guard isBlockingInterface, phase == .pitch else { return }
         phase = .installing
         failureLine = nil
+        let generation = installGeneration
         Task {
-            if await CodexSetup.shared.ensureCuaDriver() {
+            let installed = await CodexSetup.shared.ensureCuaDriver()
+            // Factory Reset may have returned to onboarding while the shared download ran.
+            guard isBlockingInterface, generation == installGeneration else { return }
+            if installed {
                 ComputerUseGate.shared.refresh()
                 phase = .grants
                 Analytics.signal("ComputerUseUpgrade.installed")
@@ -101,13 +220,68 @@ final class ComputerUseUpgrade {
         }
     }
 
-    /// Done / Finish later — only reachable once the driver is installed, so closing is safe:
-    /// anything still missing (a red grant) is the first-fire gate's job from here.
+    /// Recheck readiness at the click; neither closing the window nor finishing the download
+    /// alone can reveal the app while a required permission is still missing.
     func finish() {
+        ComputerUseGate.shared.refresh()
+        guard isBlockingInterface, phase == .grants, CuaDriver.isInstalled,
+              ComputerUseGate.shared.allRequiredGranted else { return }
         Analytics.signal("ComputerUseUpgrade.finished",
-                         parameters: ["all_granted": String(ComputerUseGate.shared.allRequiredGranted)])
+                         parameters: ["all_granted": "true"])
+        completeSetup()
+    }
+
+    private func completeSetup() {
+        if !isPreview { UserDefaults.standard.removeObject(forKey: Self.pendingKey) }
+        releaseInterface()
+        Log("ComputerUseUpgrade: setup complete; main interface revealed")
+    }
+
+    /// Factory Reset owns the onboarding rewind. Clear the migration too, including an in-flight
+    /// window session, without cancelling the shared installer or marking optional grants offered.
+    func reset() {
+        UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+        installGeneration = UUID()
+        phase = .pitch
+        failureLine = nil
+        if isBlockingInterface { releaseInterface() }
+    }
+
+    private func releaseInterface() {
+        isBlockingInterface = false
+        for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
+        windowObservers.removeAll()
         window?.close()
+
+        let windows = hiddenWindows
+        hiddenWindows.removeAll()
+        for hidden in windows {
+            hidden.alphaValue = 1
+            if hidden.isMiniaturized { hidden.deminiaturize(nil) }
+            hidden.orderFront(nil)
+        }
+        let finished = onSetupFinished
+        onSetupFinished = nil
+        finished?()
+        if let home = windows.first(where: SentientOSApp.isHomeWindow) {
+            home.makeKeyAndOrderFront(nil)
+        } else {
+            if let openHome {
+                openHome()
+            } else {
+                needsHome = true
+            }
+        }
+        NSApp.activate()
+    }
+
+    /// Native close and the completion buttons share the same presentation cleanup.
+    private func windowClosed() {
         window = nil
+        if let closeObserver {
+            NotificationCenter.default.removeObserver(closeObserver)
+            self.closeObserver = nil
+        }
     }
 }
 
@@ -151,26 +325,13 @@ struct ComputerUseUpgradeView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 32)
-                Button("Finish later") { model.finish() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.faint)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 12)
             }
-
-            HStack(spacing: 8) {
-                Image(systemName: "shield").font(.system(size: 10)).foregroundStyle(Theme.Ink.label)
-                Text("Private by design. Your files never leave this Mac.")
-                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 18)
         }
         .padding(.horizontal, 44)
         .padding(.top, 34)
         .padding(.bottom, 24)
         .frame(width: 560)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.3), value: model.phase)
@@ -182,7 +343,7 @@ struct ComputerUseUpgradeView: View {
     private var subtitle: String {
         switch model.phase {
         case .pitch, .installing:
-            "Sentient now acts inside the window it's working on, quietly in the background. Your cursor stays yours, and you keep working while it works."
+            "Sentient's computer use is now way faster and smarter"
         case .grants:
             "The new computer use acts as Sentient itself, so it needs these two grants, once. You will not be asked again."
         }
@@ -206,12 +367,14 @@ struct ComputerUseUpgradeView: View {
                     Text(codexSetup.cuaDriverStatus ?? "Starting…")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else if let line = model.failureLine {
                 Text(line)
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.red.opacity(0.85))
                     .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text("A one-time 40 MB download, verified on this Mac.")
                     .font(.system(size: 11))

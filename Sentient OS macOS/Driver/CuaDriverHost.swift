@@ -15,8 +15,8 @@
 //  at all. The daemon also keeps the runtime warm across commands instead of paying startup per fire.
 //
 //  The lifeline: the daemon's stdin is a pipe THIS process holds. `--parent-liveness-stdio` makes it
-//  exit on EOF, so if Sentient crashes the daemon dies with it — no orphan left holding the user's
-//  Accessibility grant. (Verified 2026-08-19: cutting the pipe reaps the daemon and its socket.)
+//  exit on EOF when Sentient quits or is killed. Its stderr goes to /dev/null so shutdown logging
+//  remains writable after Sentient exits and the daemon can finish its cleanup.
 //
 //  Key methods: ensureRunning() · stop() · restart() · socketPath
 //
@@ -47,9 +47,6 @@ actor CuaDriverHost {
 
     /// The live daemon's socket, or nil when nothing is running.
     var socketPath: String? { socket?.path }
-
-    /// The daemon's own log (its stderr), for the dev cockpit and failure diagnosis.
-    private(set) var lastLines: [String] = []
 
     // MARK: Lifecycle
 
@@ -117,10 +114,11 @@ actor CuaDriverHost {
         ]
 
         let stdinPipe = Pipe()
-        let stderrPipe = Pipe()
         p.standardInput = stdinPipe
         p.standardOutput = FileHandle.nullDevice
-        p.standardError = stderrPipe
+        // The driver logs during its EOF shutdown. This destination must remain writable after
+        // Sentient exits, so closing the host's descriptors cannot interrupt that cleanup.
+        p.standardError = FileHandle.nullDevice
 
         do { try p.run() } catch {
             Log("CuaDriverHost: failed to launch the daemon — \(ErrorLabel(error))")
@@ -129,7 +127,6 @@ actor CuaDriverHost {
         process = p
         lifeline = stdinPipe.fileHandleForWriting
         socket = endpoint
-        drain(stderrPipe)
 
         // The socket appearing is the honest readiness signal (upstream binds it, then chmods 0600).
         // Poll rather than sleep, so a fast Mac isn't taxed and a slow one isn't cut short.
@@ -227,24 +224,5 @@ actor CuaDriverHost {
             // first call can't find it, and the run's own failure line says why.
             Log("CuaDriverHost: could not write the CLI shim — \(ErrorLabel(error))")
         }
-    }
-
-    /// Keep the daemon's stderr moving (a full pipe would stall it) and hold the last few lines for
-    /// the dev cockpit. Content-free: these are the daemon's own status lines, never task text.
-    private func drain(_ pipe: Pipe) {
-        pipe.fileHandleForReading.readabilityHandler = { handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            let lines = text.split(separator: "\n").map(String.init).filter { !$0.isEmpty }
-            guard !lines.isEmpty else { return }
-            Task { await CuaDriverHost.shared.note(lines) }
-        }
-    }
-
-    fileprivate func note(_ lines: [String]) {
-        lastLines = (lastLines + lines).suffix(40)
-        #if DEBUG
-        for line in lines { Log("[cua-daemon] \(line)") }
-        #endif
     }
 }

@@ -40,6 +40,7 @@ final class AppState {
 
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
+    private var hasStartedInterface = false
 
     /// Drops the Dock icon whenever the home window is closed (the icon belongs to home;
     /// the menu bar item is the anchor then).
@@ -68,12 +69,14 @@ final class AppState {
         // very real admin-password dialog. Same convention as Notify.swift's self-test silence.
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
 
+        ComputerUseUpgrade.shared.prepareForLaunch { [weak self] in
+            self?.startInterfaceIfReady()
+        }
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
         scheduler.maybeAutoEnable()   // 14h after initial: flip the overnight scheduler on (or arm the timer)
         // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
         // the coordinator: the notch experience still plays, the codex run just never fires.
-        commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
-        notch.start()                // raise the notch overlay window
+        startInterfaceIfReady()      // the upgrade must finish before Sidekick or its notch can appear
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
         UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
@@ -105,10 +108,7 @@ final class AppState {
             }
         }
 
-        // (A Mac updating from the codex-helper era gets the driver through the one-time
-        // ComputerUseUpgrade window at its first home open — an announced moment, deliberately
-        // NOT a silent background download. The fire-time self-heal covers a Sidekick fire that
-        // beats the home to it.)
+        // Updated Macs complete the computer-use upgrade before their regular UI is available.
 
         // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
         // grants quiet Notification Center delivery and lists us in Settings → Notifications (the
@@ -151,5 +151,12 @@ final class AppState {
         // CodexSetup.ensureInstalled / ClaudeSetup.ensureInstalled. A user who chooses Claude
         // never downloads codex, and vice versa; a user with a real setup already on disk skips
         // the download entirely (ensureInstalled is detection-first).
+    }
+
+    private func startInterfaceIfReady() {
+        guard !hasStartedInterface, !ComputerUseUpgrade.shared.isBlockingInterface else { return }
+        hasStartedInterface = true
+        commandCoordinator.start()
+        notch.start()
     }
 }

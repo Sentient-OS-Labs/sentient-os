@@ -36,6 +36,7 @@ Daemon shape (one per app lifetime, an actor so racing fires can't spawn two):
   420 ms cursor glide so the overlay reads as motion.
 - `--parent-liveness-stdio` + a held stdin pipe: if Sentient dies, the daemon dies with it — no orphan
   ever left holding the user's grants.
+- stdout and stderr both use `FileHandle.nullDevice`. Shutdown logging stays writable after the parent exits, so EOF cleanup can finish. There is no parent-owned stderr drain or recent-lines buffer; host lifecycle logs remain, raw daemon stderr is discarded.
 - The environment pins the driver's product telemetry and its daily update check OFF. Not optional:
   neither belongs on a user's machine on our behalf.
 - The socket appearing on disk is the readiness signal; liveness is a real `status` probe over the

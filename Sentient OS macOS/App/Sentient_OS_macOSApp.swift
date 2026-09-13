@@ -13,6 +13,7 @@ import AppKit
 
 // Entry point is main.swift (the binary doubles as the root wake helper) — so no @main here.
 struct SentientOSApp: App {
+    @NSApplicationDelegateAdaptor(SentientAppDelegate.self) private var appDelegate
     @State private var appState = AppState()
 
     /// Scene id for the primary home window, so the menu bar's "Open Sentient OS" can reopen/focus it.
@@ -39,6 +40,7 @@ struct SentientOSApp: App {
                 .environment(appState)
                 .preferredColorScheme(.dark)   // Sentient OS is dark-only — no light mode
                 .task { await VaultCloud.pushIfDirty() }   // catch up a mirror sync deferred by an earlier quit/failure
+                .modifier(ComputerUseWindowGuard())
         }
         .windowStyle(.hiddenTitleBar)            // OLED black runs edge-to-edge; no gray trim
         .windowResizability(.contentMinSize)
@@ -64,6 +66,7 @@ struct SentientOSApp: App {
             ProactiveExecuteView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
+                .modifier(ComputerUseWindowGuard())
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 760, height: 820)
@@ -77,6 +80,7 @@ struct SentientOSApp: App {
             KnowledgeView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
+                .modifier(ComputerUseWindowGuard())
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1100, height: 720)
@@ -88,6 +92,7 @@ struct SentientOSApp: App {
             SettingsView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
+                .modifier(ComputerUseWindowGuard())
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 940, height: 660)
@@ -99,6 +104,7 @@ struct SentientOSApp: App {
             ConnectAIsView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
+                .modifier(ComputerUseWindowGuard())
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1120, height: 900)
@@ -110,6 +116,7 @@ struct SentientOSApp: App {
             OvernightDevView()
                 .environment(appState)
                 .preferredColorScheme(.dark)
+                .modifier(ComputerUseWindowGuard())
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 780)
@@ -120,8 +127,17 @@ struct SentientOSApp: App {
                 .environment(appState)
                 .preferredColorScheme(.dark)
         } label: {
-            Image(nsImage: OrbMark.menuBarIcon)   // the home's ring+dot mark, as a template
-                .accessibilityLabel("Sentient OS")
+            MenuBarIcon()
         }
+    }
+}
+
+/// Dock reopen is an explicit request to resume setup, including while the app is already active
+/// or setup is minimized. Ordinary activation leaves a minimized setup alone.
+final class SentientAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard ComputerUseUpgrade.shared.isBlockingInterface else { return true }
+        ComputerUseUpgrade.shared.maybePresent()
+        return false
     }
 }

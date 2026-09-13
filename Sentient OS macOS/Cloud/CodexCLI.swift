@@ -46,11 +46,12 @@ actor CodexCLI {
         case xhigh
     }
 
-    /// The model id passed to `codex exec -m`. The gpt-5.6 lineup (sol = flagship · terra = mid ·
-    /// luna = light) rides ChatGPT-account auth like 5.5/5.4-mini did.
+    /// The model id passed to `codex exec -m`. Astra powers the upper computer-use tiers;
+    /// Sol handles the fastest tier and background work, Terra the free/go fallback, Luna reads.
     /// (Old lesson still applies: some SKUs are API-key-only — verify a model answers through
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
+        case gpt6astra = "gpt-6-astra"  // computer use: Medium / Smarter
         case gpt56sol = "gpt-5.6-sol"    // knowledge-base work + everything else (paid plans)
         case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
         case gpt56luna = "gpt-5.6-luna"  // Gmail connect-check + processing
@@ -66,15 +67,17 @@ actor CodexCLI {
     ///    connectors are ChatGPT-only.
     ///  - ChatGPT backend: free/go accounts lost access to gpt-5.6-sol (it stopped answering
     ///    through `codex exec` on those plans, 2026-07-19) — so on a POSITIVE free/go plan
-    ///    read, any sol call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep sol
-    ///    (CodexAuth's fail-open policy), and the luna tier is untouched.
+    ///    read, any sol/astra call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep
+    ///    the requested model (CodexAuth's fail-open policy), and the luna tier is untouched.
     /// Living here at the spine means every caller — and any future one — is covered without
     /// per-call-site checks.
     private static func backendTuned(model: Model, effort: Effort) -> (modelID: String, effortArg: String) {
         if ModelBackend.current == .custom {
             return (CustomProvider.current.modelName, CustomProvider.reasoning)
         }
-        guard model == .gpt56sol, CodexAuth.isLimited() else { return (model.rawValue, effort.rawValue) }
+        guard model == .gpt56sol || model == .gpt6astra, CodexAuth.isLimited() else {
+            return (model.rawValue, effort.rawValue)
+        }
         return (Model.gpt56terra.rawValue, Effort.medium.rawValue)
     }
 
@@ -560,7 +563,7 @@ actor CodexCLI {
     private static func ping(forceCustom: Bool = false) async -> Availability {
         guard let bin = locateBinary() else { return .notInstalled }
         let custom = forceCustom || ModelBackend.current == .custom
-        var args = ["exec", "--json", "--ignore-user-config", "-s", Sandbox.readOnly.rawValue]
+        var args = execArguments() + ["--json", "--ignore-user-config", "-s", Sandbox.readOnly.rawValue]
         var timeout: TimeInterval = 30
         var prompt = "Reply with exactly: PIGGYBACK_OK"
         var probeImage: (url: URL, code: String)?
@@ -716,9 +719,10 @@ actor CodexCLI {
     /// host writes (`<shim> <tool> '<json>'`, zero schema cost); the operating manual is
     /// CuaDriverSkill.rules, spliced into the prompt by the caller. Runs a raw
     /// `codex exec` with the prompt passed as ARGV:
-    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -c model_reasoning_effort=<the
-    /// user's ComputerUseSpeed slider; default low> --ignore-user-config
-    /// --skip-git-repo-check`, NO `--json` (human-readable output, not JSONL). The bypass flag is
+    /// `-c service_tier="fast" --dangerously-bypass-approvals-and-sandbox -m <model>
+    /// -c model_reasoning_effort=<effort> --ignore-user-config` (model and effort from the
+    /// user's ComputerUseSpeed slider; default Sol low), followed by
+    /// `--skip-git-repo-check`, NO `--json` (human-readable output, not JSONL). The bypass flag is
     /// REQUIRED here — a headless run has no one to answer an approval, and the agent's every cua
     /// action is now a shell call, where any Seatbelt profile would stall it (a sandboxed shell also
     /// can't connect to the daemon's socket). Safety rides the layers that fit a GUI agent: the
@@ -742,7 +746,7 @@ actor CodexCLI {
     /// doesn't carry makes the strip an inert no-op (measured), so unlinked chips cost nothing.
     static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
                                effortArg: String, socketPath: String) -> [String] {
-        var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
+        var args = execArguments() + ["--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config"]
@@ -768,8 +772,8 @@ actor CodexCLI {
         // custom backend the user's endpoint model + its ONE reasoning level drive computer use
         // (verified end-to-end via OpenRouter 2026-07-24); on ChatGPT, computer use is Plus-gated
         // but dev tools can still reach this on a free account — same downshift.
-        let (modelID, effortArg) = Self.backendTuned(model: .gpt56sol,
-                                                     effort: ComputerUseSpeed.current.effort)
+        let (model, effort) = ComputerUseSpeed.current.codexModelAndEffort
+        let (modelID, effortArg) = Self.backendTuned(model: model, effort: effort)
         do {
             // Same pre-spawn guard as `run` — this spine passes the prompt as ARGV, where an
             // oversized prompt dies even earlier (ARG_MAX) with an unhelpful spawn error.
@@ -923,6 +927,15 @@ actor CodexCLI {
             fingerprint: ["codex", feature, caseName, reason.rawValue, trigger.rawValue])
     }
 
+    /// Fast mode applies to every Exec path, including probes and resumed sessions.
+    /// This is a per-run override; the user's Codex configuration is never changed.
+    private static func execArguments(resumeSessionID: String? = nil) -> [String] {
+        var args = ["exec"]
+        if let resumeSessionID { args += ["resume", resumeSessionID] }
+        args += ["-c", #"service_tier="fast""#]
+        return args
+    }
+
     /// `exec resume` accepts only a subset of `exec`'s flags — no `-s`/`--cd`/`--add-dir`.
     /// [MEASURED] A resumed session's workspace root is the PROCESS cwd (not the remembered
     /// one), so `execute`'s cwd is load-bearing there, and the sandbox rides the
@@ -958,8 +971,7 @@ actor CodexCLI {
                "the sandboxed connector recipes never bypass approvals")
         assert(inv.mcpReadConnectors.isEmpty || inv.sandbox == .readOnly,
                "an unattended read is read-only by definition")
-        var args = ["exec"]
-        if let sid = inv.resumeSessionID { args += ["resume", sid] }
+        var args = execArguments(resumeSessionID: inv.resumeSessionID)
         args += ["--json",
                  "--skip-git-repo-check",      // staging dirs and the vault aren't git repos
                  "-m", modelID,

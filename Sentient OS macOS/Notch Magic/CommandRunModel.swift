@@ -122,7 +122,7 @@ final class CommandRunModel {
                 }
                 let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
                                                 spoken: source == "voice", kbContext: kb, history: history)
-                Log("CMD: launching codex exec (gpt-5.6-sol · \(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
+                Log("CMD: launching agent command (\(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
                 #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
                             // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
                 Log("CMD: prompt ↓\n\(prompt)")

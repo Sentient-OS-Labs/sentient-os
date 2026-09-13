@@ -17,7 +17,7 @@ the app.
 |---|---|
 | `CodexCLI.swift` | The actor: binary discovery, install, login, validation, `run()` (structured JSONL runs) and `runAgentCommand()` (computer use), argument building, JSONL parsing, process plumbing, failure diagnostics. |
 | `AgentStatus.swift` | Parses the `STATUS: DONE` / `STATUS: COULD_NOT` sentinel every app-authored wrapper prompt demands, shared by the executor and Sidekick. |
-| `ComputerUseSpeed.swift` | The Speed vs Intelligence slider value (Settings → Proactive & Sidekick): Faster / Medium / Smarter → reasoning effort low / medium / high for every computer-use run on codex; on the Claude engine the tier picks model + effort (see the ClaudeCLI doc). |
+| `ComputerUseSpeed.swift` | The Speed vs Intelligence slider value (Settings → Proactive & Sidekick): Faster / Medium / Smarter → Sol low / Astra low / Astra medium for computer-use runs on Codex; on the Claude engine the tier picks model + effort (see the ClaudeCLI doc). |
 
 ## The two run paths
 
@@ -39,7 +39,7 @@ hermetic run, so an "email X" task keeps its connector route) and registers exac
 per-run `-c` overrides: the driver's four vision tools (`CuaDriver.codexOverrides` — see the Driver
 doc for the hybrid transport). Flags: `--dangerously-bypass-approvals-and-sandbox` (required: a
 headless run has no one to answer approvals, and a Seatbelt profile would block both the agent's
-one-shot CLI calls and the daemon's Unix socket), `-m` + the Speed slider's effort, optional
+one-shot CLI calls and the daemon's Unix socket), `-m` + the Speed slider's model and effort, optional
 `-i <screenshots>` (Sidekick's per-display stills; a following flag terminates the variadic),
 `--skip-git-repo-check`.
 
@@ -52,7 +52,7 @@ this.
 | Field | Default | Meaning |
 |---|---|---|
 | `prompt` | | over stdin |
-| `model` | `.gpt56sol` | `gpt-5.6-sol` (everything), `.gpt56luna` (the Gmail/Calendar tier), `.gpt56terra` (the free/go stand-in for sol) |
+| `model` | `.gpt56sol` | Sol remains the structured default; `.gpt6astra` is the upper computer-use tier, `.gpt56luna` the light tier, and `.gpt56terra` the limited-plan fallback |
 | `effort` | `.high` | reasoning effort; the connector reads use `.medium`; nothing uses `.xhigh` |
 | `sandbox` | `.readOnly` | Seatbelt profile: `read-only` or `workspace-write` (writes confined to `cwd` + `addDirs`) |
 | `cwd`, `addDirs` | | the agent's working root and extra writable roots |
@@ -64,12 +64,20 @@ this.
 | `resumeSessionID` | | continue a prior thread (usage-limit recovery) |
 | `timeout` | 3600 s | watchdog |
 | `feature`, `diag` | | diagnostics tags only (which caller; structured extras) |
-| `claudeModel`, `claudeConnectorReads` | `nil`, `false` | Claude-engine knobs, ignored here (the Invocation is the ONE shape both engines speak): the Opus override for the heavy legs, and the hosted-connector read allows — see the ClaudeCLI doc |
+| `claudeModel` | `nil` | Claude model override, ignored by Codex; the heavy legs can select Opus. Connector access uses the MCP recipe fields below. |
 
-Two curated `configOverrides` presets:
+The MCP recipe fields are mutually exclusive: `mcpReadConnectors` for unattended reads,
+`mcpActionServer` for a user-fired connector task, and `mcpAttachServer` for classifier inventory
+(the latter changes Claude attachment only). `imagePaths` adds optional structured-run screenshots.
+Both engines retain internal argument builders so the connector lab can inspect recipes without runs.
 
-- **`approveConnectorWrites`**: `apps._default.default_tools_approval_mode="approve"`. Pre-approves the hosted connector WRITE tools (Gmail send, Calendar create) for ONE run while the sandbox stays on. Id-free, so it works for every user. Used by the executor's gmail and calendar channels.
-- **`stripConnectorActionTools`**: per-connector `open_world_enabled=false` + `destructive_enabled=false`, keyed by the long global connector catalog ids (Gmail and Google Calendar). Removes the sending/destructive tools from a run's tool surface entirely while reads keep working. Used by proactive research so "never fire" is enforced by the tools not existing. Friendly slugs are silent no-ops and the `_default` variant strips reads too, so keep the long ids.
+- Unattended reads keep the read-only sandbox and strip both action and destructive tools from requested connectors and every other detected ChatGPT connector, using catalog IDs.
+- Fired connector tasks keep the sandbox and approve the selected server's tools per invocation, with its destructive tools stripped. An unresolved ID retains the existing id-free `approveConnectorWrites` fallback.
+- Computer use keeps its extracted `agentArguments` builder, cua registration, bypass posture, and destructive-tool strips for pinned and detected connectors. Custom-provider overrides still apply afterward.
+- Classifier attachment keeps its existing engine-specific restrictions. No fast-tier or model change broadens any recipe's permissions.
+
+The older `approveConnectorWrites` and `stripConnectorActionTools` presets remain available for their
+existing callers. Never replace a server-scoped recipe with a global approval as part of model tuning.
 
 ## Model resolution: `backendTuned`
 
@@ -77,10 +85,16 @@ Both run paths resolve the model string and the effort string through one functi
 spawning:
 
 - **Custom backend** (Settings → Frontier Model Choice): the user's endpoint model rides EVERY call and their single free-form reasoning level replaces the caller's effort. `run()` also injects the provider overrides, turns web search off, forces a hermetic run (`includeUserConfig = false`, since hosted-connector schemas would bloat every prompt), and turns `--output-schema` into a prompt instruction (naive endpoints ignore the schema); consumers then decode from `Envelope.jsonResult`.
-- **ChatGPT backend:** on a positive free/go plan read (`CodexAuth.isLimited()`), a `gpt-5.6-sol` call downshifts to `gpt-5.6-terra` at medium (free/go accounts cannot run sol through `codex exec`). Unknown plans keep sol; the luna tier is untouched. Re-read per run.
+- **ChatGPT backend:** on a positive free/go plan read (`CodexAuth.isLimited()`), a Sol or Astra call downshifts to Terra at medium. Unknown plans retain the requested model, asserted Plus preserves the existing override, and Luna is untouched. Re-read per run.
 
-Any NEW model must be verified to answer through `codex exec` on a ChatGPT plan before adoption; some
-SKUs are API-key-only.
+The computer-use slider reads `sidekick.speed` at each run: `faster` selects `gpt-5.6-sol`/low,
+`medium` selects `gpt-6-astra`/low, and `smarter` selects `gpt-6-astra`/medium. Stored values and the
+Faster default are unchanged. Custom model/reasoning settings override that tuple.
+
+MCP-only tasks retain their caller policy: routed Sidekick uses structured Sol/medium, connector
+cards use Sol/high, and the router uses Luna/low. A connector failure that falls back to computer use
+gets the current slider tuple on that fallback leg. Knowledge, research, and ingestion keep their own
+model choices. Requested model IDs do not imply measured latency or account availability.
 
 ## Discovery, install, login, validation
 
@@ -91,13 +105,23 @@ SKUs are API-key-only.
 
 ## Arguments (`arguments(for:)`) and resume
 
-`exec [resume <sid>] --json --skip-git-repo-check -m <model> -c model_reasoning_effort=… [--ignore-user-config]`,
+`exec [resume <sid>] -c service_tier="fast" --json --skip-git-repo-check -m <model> -c model_reasoning_effort=… [--ignore-user-config]`,
 then either the bypass flag (+ `--cd`), or `-c approval_policy="never"` + `-s <sandbox>` + `--cd` +
 `--add-dir`s, then the config overrides, `-c tools.web_search=true`, `--output-schema`, and `-` (stdin).
 
 `codex exec resume` accepts only a subset of flags (no `-s`, `--cd`, `--add-dir`): a resumed session's
 workspace root is the PROCESS cwd (so `Process.currentDirectoryURL` is set from `Invocation.cwd`), and
 the sandbox rides `-c sandbox_mode=…` instead. Verified live.
+
+Every Codex exec builder starts with `execArguments`: probes, fresh/resumed structured runs, and
+computer use. Fast service tier is a per-invocation configuration override, never a global config edit.
+The resume ID precedes the fast override. Caller/provider overrides, sandbox differences, and the
+flag terminating the variadic image list retain their ordering.
+
+The override also reaches custom-provider invocations. A localhost Responses fixture with managed
+Codex 0.154.0 accepted it, kept the selected custom model/reasoning and provider credential, and omitted
+`service_tier` from the custom-provider wire request. Endpoint support and actual service speed are
+separate from accepting the CLI configuration; no provider-side acceleration is promised.
 
 ## Failures
 
@@ -122,7 +146,7 @@ to the scoreboard.
 
 ## Rules
 
-- `bypassApprovals` is for computer use ONLY. Connector writes ride `approveConnectorWrites` with the sandbox on.
+- `bypassApprovals` is for computer use ONLY. Connector writes retain their server-scoped recipe (or existing unresolved-ID fallback) with the sandbox on.
 - Never cache a failed availability verdict.
 - Every prompt path must be byte-budgeted under `promptByteCap`.
 - Never log codex output or stderr in a Release breadcrumb; log `ErrorLabel(error)` and lengths.

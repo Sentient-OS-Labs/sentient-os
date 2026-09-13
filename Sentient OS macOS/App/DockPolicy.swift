@@ -7,6 +7,7 @@
 //  like a menu-bar app's panels, with the menu bar item as the ever-present anchor. Flips
 //  NSApp between .regular (home is up) and .accessory (it isn't), driven by NSWindow
 //  open/close notifications. `start()` once from AppState; `reevaluate()` does the check.
+//  Pending computer-use setup keeps the Dock entry available even while the home is hidden.
 //
 
 import AppKit
@@ -41,7 +42,9 @@ final class DockPolicy {
                 && SentientOSApp.isHomeWindow(window)
                 && (window.isVisible || window.isMiniaturized)
         }
-        let target: NSApplication.ActivationPolicy = homeIsUp ? .regular : .accessory
+        // Keep a Dock entry while setup is pending, even when its window was closed/minimized.
+        let target: NSApplication.ActivationPolicy = homeIsUp || ComputerUseUpgrade.shared.isBlockingInterface
+            ? .regular : .accessory
         guard NSApp.activationPolicy() != target else { return }
         NSApp.setActivationPolicy(target)
     }

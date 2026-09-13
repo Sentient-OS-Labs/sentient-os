@@ -110,11 +110,6 @@ struct RootView: View {
             let sinceBoot = Date().timeIntervalSince(Analytics.bootTime)
             Analytics.signal("Home.opened",
                              parameters: ["trigger": sinceBoot < 5 ? "launch" : "reopen"], tier: .core)
-            // A Mac updating from the 1.x codex-helper era gets its one-time "computer use just
-            // got better" moment here — the first time someone actually looks at the updated app
-            // (a silent Sparkle relaunch is windowless; a popup then would play to an empty room).
-            // Self-extinguishing: it can never appear once the driver is on disk.
-            ComputerUseUpgrade.shared.maybePresent()
         }
         // The bottom-left whispers — screen-agnostic on purpose, both keyed to live shared engine
         // state so they ride the bottom of WHATEVER screen is up:

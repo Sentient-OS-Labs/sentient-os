@@ -3,7 +3,7 @@
 Sidekick is the global way to tell Sentient to DO something, and the universal status surface while it
 works. Hold the Sidekick key (right ⌘ by default, or right ⌥) anywhere on the Mac and talk; tap it to
 type; click the notch itself; or type in the home's command bar. Every door reaches the same backend
-(computer use through the user's own codex, grounded in the knowledge base) and the same living notch.
+(connector tools or computer use through the selected frontier engine, grounded in the knowledge base) and the same living notch.
 A proactive card's fire adopts the same run, so the notch, the command bar, and the card are three
 views of one task, and there is exactly ONE task at a time app-wide.
 
@@ -16,19 +16,19 @@ screen stills, and the prompt. The window, the click-through mechanics, and the 
 | File | Job |
 |---|---|
 | `CommandCoordinator.swift` | The app-lifetime brain: owns the one shared run, the hotkey, and voice; drives `phase` (`NotchPhase`), the press → voice or type flow, `submit()`, STOP and cancel, adopted card runs, the notch-as-a-button seams, the onboarding notch demo, and the display anchor. |
-| `CommandRunModel.swift` | Runs ONE task through `CodexCLI.runAgentCommand`, cleans codex's raw stream into the status line and the "Remembering" state, and holds the adoption seams for card fires. `isRunning` is the app-wide lock. Builds the command prompt. |
+| `CommandRunModel.swift` | Routes ONE task through the connector leg or `FrontierRun.runAgentCommand`, cleans codex's raw stream into the status line and the "Remembering" state, and holds the adoption seams for card fires. `isRunning` is the app-wide lock. Builds the command prompt. |
 | `SidekickHotkeyMonitor.swift` | The zero-permission global hotkey: NSEvent `flagsChanged` monitors (global + local) reading the right-key device bit. Press / hold-confirmed / release. |
 | `VoiceCapture.swift` · `QuickTranscriptionEngine.swift` · `SpeechAnalyzerEngine.swift` · `SFSpeechRecognizerEngine.swift` | Voice: permissions, engine selection (SpeechAnalyzer on macOS 26+, SFSpeechRecognizer on 15), start / stop-and-transcribe / cancel. |
 | `ScreenCapture.swift` | A still of EVERY display at fire time (main first), attached to the codex run so "finish this" resolves against real pixels. |
 | `NotchWindowController.swift` · `NotchView.swift` · `NotchShape.swift` · `NotchSpace.swift` · `SpinningLogo.swift` | The window and visual (the other doc). |
 
-`AppState` owns one `CommandCoordinator` and one `NotchWindowController` and starts both at launch.
+`AppState` owns one `CommandCoordinator` and one `NotchWindowController`. It starts both once at normal launch, or defers both until an eligible pending computer-use upgrade finishes. Closing/minimizing setup cannot start them.
 
 ## The doors, and where they meet
 
 ```
 hotkey hold / tap ─► SidekickHotkeyMonitor ─┐
-notch click ────────────────────────────────┤─► CommandCoordinator ─► CommandRunModel ─► CodexCLI.runAgentCommand
+notch click ────────────────────────────────┤─► CommandCoordinator ─► CommandRunModel ─► router / connector leg / FrontierRun.runAgentCommand
 home PromptBar ─────────────────────────────┘        │ owns phase (NotchPhase) + VoiceCapture
 card fire ──► coordinator.beginExternalRun ──────────┤   (adopts the run; the work stays in the card's Task)
                                                      ▼
@@ -83,11 +83,21 @@ newer phase.
 
 ## The run model (`CommandRunModel`)
 
-`start(text, mode, source)`: snap the screens (`ScreenCapture.grab()`, deleted the moment the run
-ends), build `commandPrompt`, `runAgentCommand(prompt, imagePaths:)` with every line pushed through the
-cleaner, then `AgentStatus.parse` → `complete()`: an `ExecutorScoreboard` record (`fired` /
-`refused` / `failed`; user STOPs record nothing) and a `ComputerUse.finished` analytics signal (agent
-seconds), then the shared `finish` epilogue (the final line lingers 2.5 s / 6 s failed / 4.5 s stopped).
+`start(text, mode, source)` owns one Task through routing, connector execution, any computer-use
+fallback, cancellation, and completion. Screen stills and knowledge/history context feed that same
+lifecycle. With no detected connectors, routing is skipped. A task entirely covered by one connector
+uses the structured connector leg (Sol/medium on ChatGPT); otherwise it builds the computer-use prompt
+after routing and invokes `FrontierRun.runAgentCommand`. STOP checks remain around routing and fallback,
+and routing outcome telemetry records the executed route.
+
+Computer use reads the current speed preference at fire time: Codex Sol/low, Astra/low, or Astra/medium,
+then plan/custom-provider tuning. Claude keeps Sonnet/low, Sonnet/medium, or Opus/medium with its Pro
+downshift. MCP-only tasks and connector cards retain their existing structured model choices. The
+agent-launch log is generic and remains after routing; prompt construction and DEBUG content logs occur
+only once in the computer-use leg.
+
+Completion parses `AgentStatus`, records the existing scoreboard and analytics outcome, and reaches
+the shared finish epilogue. Card runs continue to use the same adoption and STOP mechanisms.
 
 The stream cleaner (`push`): strip the `stderr:` channel tag; track codex's bare section headers
 (`user` / `codex` / `exec` / `thinking` / `tokens used`) and never show them; in the `exec` section
