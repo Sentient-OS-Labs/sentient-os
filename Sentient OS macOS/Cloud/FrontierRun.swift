@@ -20,9 +20,23 @@ enum FrontierRun {
     /// The structured spine — vault, judge, research, connectors, gift letter.
     static func run(_ invocation: CodexCLI.Invocation,
                     onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
-        switch ModelBackend.current {
-        case .claude:           return try await ClaudeCLI.shared.run(invocation, onLine: onLine)
-        case .chatgpt, .custom: return try await CodexCLI.shared.run(invocation, onLine: onLine)
+        var invocation = invocation
+        let workspace = invocation.connectorOnlyRead
+            ? FileManager.default.temporaryDirectory.appending(path: "sentient-connector-read-\(UUID().uuidString)") : nil
+        if let workspace {
+            try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false,
+                                                    attributes: [.posixPermissions: 0o700])
+            invocation.cwd = workspace.path
+        }
+        defer { if let workspace { try? FileManager.default.removeItem(at: workspace) } }
+        let prepared = invocation
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            if backend == .claude { await ConnectorClassifier.refreshCLIVersion() }
+            switch backend {
+            case .claude:           return try await ClaudeCLI.shared.run(prepared, onLine: onLine)
+            case .chatgpt, .custom: return try await CodexCLI.shared.run(prepared, onLine: onLine)
+            }
         }
     }
 
@@ -30,13 +44,17 @@ enum FrontierRun {
     static func runAgentCommand(_ prompt: String, imagePaths: [String] = [],
                                 timeout: TimeInterval = 1_800,
                                 onLine: @escaping @Sendable (String) -> Void) async throws -> String {
-        switch ModelBackend.current {
-        case .claude:
-            return try await ClaudeCLI.shared.runAgentCommand(prompt, imagePaths: imagePaths,
-                                                              timeout: timeout, onLine: onLine)
-        case .chatgpt, .custom:
-            return try await CodexCLI.shared.runAgentCommand(prompt, imagePaths: imagePaths,
-                                                             timeout: timeout, onLine: onLine)
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            if backend == .claude { await ConnectorClassifier.refreshCLIVersion() }
+            switch backend {
+            case .claude:
+                return try await ClaudeCLI.shared.runAgentCommand(prompt, imagePaths: imagePaths,
+                                                                  timeout: timeout, onLine: onLine)
+            case .chatgpt, .custom:
+                return try await CodexCLI.shared.runAgentCommand(prompt, imagePaths: imagePaths,
+                                                                 timeout: timeout, onLine: onLine)
+            }
         }
     }
 

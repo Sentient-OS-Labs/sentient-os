@@ -135,6 +135,11 @@ actor CodexCLI {
                                                // fail-closed). Codex: per-id approve mode (else
                                                // the shipped id-free `apps._default` preset) +
                                                // the destructive strip; sandbox stays ON.
+        /// Source ingestion/inventory needs connector tools only; research keeps its vault/web access.
+        var connectorOnlyRead = false
+        /// Optional narrowing for a single connector, using the current engine's bare names.
+        /// Every name must already be curated; a cross-engine mismatch refuses the run.
+        var mcpReadToolNames: [String]? = nil
         var mcpReadConnectors: [String] = []   // UNATTENDED READ (KB reads, probes, research):
                                                // Claude: dontAsk + allow exactly the registry's
                                                // read tools per slug, wall = those servers only
@@ -962,6 +967,15 @@ actor CodexCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: Invocation, modelID: String, effortArg: String,
                           schemaFile: String?) throws -> [String] {
+        if inv.mcpReadToolNames != nil, inv.mcpReadConnectors.count != 1 {
+            throw CLIError.notAvailable(.notWorking("read-tool narrowing requires one connector"))
+        }
+        if inv.connectorOnlyRead {
+            guard !inv.bypassApprovals, inv.sandbox == .readOnly, !inv.webSearch,
+                  inv.mcpActionServer == nil, !inv.mcpReadConnectors.isEmpty else {
+                throw CLIError.notAvailable(.notWorking("invalid connector-only read configuration"))
+            }
+        }
         let connectorRead = ModelBackend.current == .chatgpt && !inv.mcpReadConnectors.isEmpty
         if connectorRead {
             guard inv.sandbox == .readOnly, !inv.bypassApprovals,
@@ -1012,6 +1026,14 @@ actor CodexCLI {
             }
         }
         for override in inv.configOverrides { args += ["-c", override] }
+        if inv.connectorOnlyRead {
+            for override in ["project_doc_max_bytes=0", "features.shell_tool=false", "features.view_image=false",
+                             "features.browser_use=false", "features.computer_use=false", "features.multi_agent=false",
+                             "features.code_mode=false", "features.image_generation=false", "features.goals=false",
+                             "features.skill_search=false", "web_search=\"disabled\""] {
+                args += ["-c", override]
+            }
+        }
         // The connector recipes (table above). ChatGPT backend only: hosted connectors ride
         // ChatGPT-account auth, so on a custom endpoint (hermetic anyway) the fields are inert.
         if ModelBackend.current == .chatgpt {
@@ -1026,7 +1048,7 @@ actor CodexCLI {
                 }
             }
             if connectorRead {
-                args += ["-c", try connectorReadPolicy(slugs: inv.mcpReadConnectors)]
+                args += ["-c", try connectorReadPolicy(slugs: inv.mcpReadConnectors, subset: inv.mcpReadToolNames)]
             }
         }
         if inv.webSearch { args += ["-c", "tools.web_search=true"] }
@@ -1039,7 +1061,7 @@ actor CodexCLI {
     /// keys live INSIDE the TOML value: CLI dotted paths cannot safely address dotted names.
     /// New apps/tools remain disabled. `writes` additionally refuses an allowed tool if its
     /// read-only annotation disappears or changes. No classifier fallback on unattended runs.
-    private static func connectorReadPolicy(slugs: [String]) throws -> String {
+    private static func connectorReadPolicy(slugs: [String], subset: [String]? = nil) throws -> String {
         var entries = ["_default = { enabled = false }"]
         var ids = Set<String>()
         for slug in Set(slugs).sorted() {
@@ -1052,7 +1074,11 @@ actor CodexCLI {
                                               options: .regularExpression) != nil }) else {
                 throw CLIError.notAvailable(.notWorking("connector \(slug) has no verified Codex read policy"))
             }
-            let tools = Set(reads).sorted().map {
+            let selected = subset ?? reads
+            guard !selected.isEmpty, Set(selected).isSubset(of: Set(reads)) else {
+                throw CLIError.notAvailable(.notWorking("read-tool narrowing cannot widen the curated policy"))
+            }
+            let tools = Set(selected).sorted().map {
                 "\"\($0)\" = { enabled = true, approval_mode = \"writes\" }"
             }.joined(separator: ", ")
             entries.append("\(id) = { enabled = true, default_tools_enabled = false, "

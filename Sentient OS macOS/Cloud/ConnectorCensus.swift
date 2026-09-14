@@ -243,7 +243,16 @@ nonisolated enum ConnectorCensus {
                         for origin: DetectedConnector.Origin) -> [DetectedConnector] {
         guard let key = storageKey(for: origin),
               let data = try? JSONEncoder().encode(connectors) else { return connectors }
-        let previous = cached(for: origin).count
+        let old = cached(for: origin)
+        let previous = old.count
+        // A detected disappearance/reappearance invalidates incremental provenance without
+        // deleting pending notes. False-negative census results only cause a safe backfill.
+        let changed = Set(old.map(\.slug)).symmetricDifference(Set(connectors.map(\.slug)))
+        for slug in changed where ConnectorRegistry.pack(forSlug: slug) != nil {
+            let generationKey = ConnectorRegistry.readGenerationKey(slug, origin.rawValue)
+            UserDefaults.standard.set(UserDefaults.standard.integer(forKey: generationKey) + 1,
+                                      forKey: generationKey)
+        }
         UserDefaults.standard.set(data, forKey: key)
         // Telemetry: the detected count per engine, ints only, and only when the count actually
         // changed (a steady watch tick or pane open stays silent — this fires on link/unlink).

@@ -407,6 +407,15 @@ actor ClaudeCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: CodexCLI.Invocation, modelID: String,
                           effortArg: String) throws -> [String] {
+        if inv.mcpReadToolNames != nil, inv.mcpReadConnectors.count != 1 {
+            throw CodexCLI.CLIError.notAvailable(.notWorking("read-tool narrowing requires one connector"))
+        }
+        if inv.connectorOnlyRead {
+            guard !inv.bypassApprovals, inv.sandbox == .readOnly, !inv.webSearch,
+                  inv.mcpActionServer == nil, !inv.mcpReadConnectors.isEmpty || inv.mcpAttachServer != nil else {
+                throw CodexCLI.CLIError.notAvailable(.notWorking("invalid connector-only read configuration"))
+            }
+        }
         assert([inv.mcpActionServer != nil, !inv.mcpReadConnectors.isEmpty,
                 inv.mcpAttachServer != nil].filter { $0 }.count <= 1,
                "the connector recipe fields are mutually exclusive")
@@ -445,7 +454,12 @@ actor ClaudeCLI {
             recipeDenies = ConnectorRegistry.destructiveToolNames(slug: slug)
         } else {
             for slug in inv.mcpReadConnectors {
-                let reads = ConnectorRegistry.readToolNames(slug: slug)
+                let available = ConnectorRegistry.readToolNames(slug: slug)
+                let prefix = ConnectorRegistry.server(for: slug)?.claudeToolPrefix ?? ""
+                let reads = inv.mcpReadToolNames.map { names in names.map { prefix + $0 } } ?? available
+                guard Set(reads).isSubset(of: Set(available)) else {
+                    throw CodexCLI.CLIError.notAvailable(.notWorking("read-tool narrowing cannot widen the curated policy"))
+                }
                 guard !reads.isEmpty,
                       let url = ConnectorRegistry.server(for: slug)?.claudeServerURL else {
                     throw CodexCLI.CLIError.notAvailable(
@@ -510,7 +524,7 @@ actor ClaudeCLI {
         if inv.sandbox == .readOnly, !skippedPermissions {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
-            var tools = ["Bash", "Glob", "Grep", "Read"]
+            var tools = inv.connectorOnlyRead ? [] : ["Bash", "Glob", "Grep", "Read"]
             if inv.webSearch { tools += ["WebSearch", "WebFetch"] }
             args += ["--tools", tools.joined(separator: ",")]
         }
@@ -748,12 +762,18 @@ actor ClaudeCLI {
         }
 
         let usage = resultObj?["usage"] as? [String: Any]
+        // Claude reports uncached input separately from cache creation/read. Normalize to
+        // Envelope's total-input convention so both engines' costs are comparable.
+        let totalInput = (usage?["input_tokens"] as? Int).map {
+            $0 + (usage?["cache_creation_input_tokens"] as? Int ?? 0)
+                + (usage?["cache_read_input_tokens"] as? Int ?? 0)
+        }
         return CodexCLI.Envelope(
             result: text,
             sessionID: (resultObj?["session_id"] as? String) ?? sessionID,
             numTurns: resultObj?["num_turns"] as? Int,
             durationMS: durationMS,
-            inputTokens: usage?["input_tokens"] as? Int,
+            inputTokens: totalInput,
             cachedInputTokens: usage?["cache_read_input_tokens"] as? Int,
             outputTokens: usage?["output_tokens"] as? Int,
             raw: out.stdout

@@ -28,6 +28,7 @@
 //
 
 import Foundation
+import os
 
 nonisolated enum ConnectorClassifier {
 
@@ -60,18 +61,92 @@ nonisolated enum ConnectorClassifier {
     {"type":"array","items":{"type":"string"}}}}
     """
 
-    /// The managed CLI version, fetched once per launch (`claude --version` is a subprocess).
-    /// Launch-level freshness is right: drift arrives with CLI updates, which our own daily
-    /// updater performs — the same posture as ClaudeCLI's cachedVersion.
-    private static let cliVersion = Task { await ClaudeCLI.installedVersion() }
+    /// Synchronous policy queries only trust a version observed for the current executable.
+    /// A replaced binary invalidates the stamp immediately, before the next idle refresh.
+    private static let versionStamp = OSAllocatedUnfairLock(initialState: (signature: "", version: Optional<String>.none))
+    static let captureTTL: TimeInterval = 7 * 24 * 3600
 
-    /// How long a capture is trusted. Tool surfaces drift SERVER-side too, independent of any
-    /// CLI update (a hosted connector can grow tools between one night and the next — measured
-    /// live on Google Drive, 2026-09), and the destructive denies are complements of the
-    /// captured inventory, so an aged capture is a fail-open window. A weekly re-classification
-    /// bounds it; the idle-tick sweep makes the re-runs free to callers (one haiku run per
-    /// connector per week, steady state otherwise zero).
-    private static let captureTTL: TimeInterval = 7 * 24 * 3600
+    private static func binarySignature() -> String? {
+        guard let path = ClaudeCLI.locateBinary() else { return nil }
+        let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+              let modified = values.contentModificationDate, let size = values.fileSize else { return nil }
+        return "\(url.path):\(modified.timeIntervalSince1970):\(size)"
+    }
+
+    static var currentCLIVersion: String? {
+        guard let signature = binarySignature() else { return nil }
+        return versionStamp.withLock { $0.signature == signature ? $0.version : nil }
+    }
+
+    @discardableResult
+    static func refreshCLIVersion() async -> String? {
+        if let version = currentCLIVersion { return version }
+        guard let signature = binarySignature(), let version = await ClaudeCLI.installedVersion(),
+              binarySignature() == signature else { return nil }
+        versionStamp.withLock { $0 = (signature, version) }
+        return version
+    }
+
+    static func isFresh(_ capture: ConnectorRegistry.Classification, slug: String,
+                        version: String, now: Date = Date()) -> Bool {
+        let age = now.timeIntervalSince(capture.capturedAt)
+        guard let inventory = capture.verifiedInventory else { return false }
+        return capture.cliVersion == version && age >= 0 && age < captureTTL
+            && (try? validate(capture.tools, slug: slug, inventory: inventory)) != nil
+    }
+
+    /// Known reviewed categories validate captures; runtime denies still come exclusively
+    /// from the full classified inventory. Drive's reviewed eleven-tool surface is required;
+    /// additions or removals need another review before its action policy can activate.
+    static func validate(_ tools: [ConnectorRegistry.ClassifiedTool], slug: String,
+                         inventory: [String]? = nil) throws {
+        guard let identity = ConnectorRegistry.claudeIdentity(slug: slug), !tools.isEmpty,
+              tools.allSatisfy({ normalizedName($0.name, prefix: identity.toolPrefix) == $0.name }),
+              Set(tools.map(\.name)).count == tools.count else {
+            throw CodexCLI.CLIError.badEnvelope("classification has an invalid or duplicate inventory")
+        }
+        if let inventory {
+            guard !inventory.isEmpty, Set(inventory).count == inventory.count,
+                  Set(inventory) == Set(tools.map(\.name)) else {
+                throw CodexCLI.CLIError.badEnvelope("classification does not match the observed inventory")
+            }
+        }
+        let prefix = identity.toolPrefix
+        let reads = Set(ConnectorRegistry.pack(forSlug: slug)?.readTools ?? [])
+        let names = Set(tools.map { String($0.name.dropFirst(prefix.count)) })
+        guard reads.isSubset(of: names) else {
+            throw CodexCLI.CLIError.badEnvelope("classification omitted a curated read tool")
+        }
+        let knownDestructive: Set<String>
+        switch slug {
+        case "google-drive": knownDestructive = ["trash_file", "delete_file"]
+        case "gmail": knownDestructive = ["trash_message", "trash_thread", "delete_label", "delete_filter",
+                                          "mark_message_spam", "mark_thread_spam"]
+        case "google-calendar": knownDestructive = ["delete_event"]
+        default: knownDestructive = []
+        }
+        for tool in tools where knownDestructive.contains(String(tool.name.dropFirst(prefix.count))) {
+            guard tool.category == .destructive else {
+                throw CodexCLI.CLIError.badEnvelope("classification did not deny a reviewed destructive tool")
+            }
+        }
+        guard slug == "google-drive" else { return }
+        let required = reads.union(["copy_file", "create_file", "share_file", "update_file", "trash_file"])
+        guard required.isSubset(of: names) else {
+            throw CodexCLI.CLIError.badEnvelope("classification omitted a reviewed Drive tool")
+        }
+        for tool in tools {
+            let name = String(tool.name.dropFirst(prefix.count))
+            if reads.contains(name) {
+                guard tool.category == .read else {
+                    throw CodexCLI.CLIError.badEnvelope("classification disagrees with a reviewed Drive read")
+                }
+            } else if tool.category == .read {
+                throw CodexCLI.CLIError.badEnvelope("classification contains an unreviewed Drive read")
+            }
+        }
+    }
 
     // MARK: The production entry
 
@@ -90,28 +165,25 @@ nonisolated enum ConnectorClassifier {
     @discardableResult
     static func ensureClassified(slug: String) async -> Bool {
         guard ModelBackend.current == .claude else { return false }
-        let version = await cliVersion.value ?? "unknown"
-        if let cached = ConnectorRegistry.classification(for: slug), cached.cliVersion == version,
-           Date().timeIntervalSince(cached.capturedAt) < captureTTL {
+        guard let version = await refreshCLIVersion() else { return false }
+        if let cached = ConnectorRegistry.classification(for: slug), isFresh(cached, slug: slug, version: version) {
             return true
         }
-        // Past here the cache is missing, from another CLI version, or older than the TTL. A
-        // failed re-run below deliberately KEEPS a stale capture in place (the existing
-        // version-mismatch posture): stale denies bound the drift window; dropping a working
-        // connector to unclassified over one haiku flake would cost the user real capability.
-        // Two attempts: the connector's first attach to a fresh run is occasionally transient
-        // (field-observed 2026-08-29: a short reply naming no connector tools, gone on the next
-        // spawn). One retry is cheap on the haiku tier; failing both leaves the connector
-        // unclassified — the fail-closed contract holds either way.
+        // Retain an older record for diagnostics, but isClassified excludes it from actions.
+        // One retry handles transient first-attach failures without accepting a partial surface.
         for attempt in 1...2 {
             do {
+                try Task.checkCancellation()
+                let inventory = try await listTools(slug: slug)
                 let tools = try await classify(slug: slug)
+                try validate(tools, slug: slug, inventory: inventory)
                 ConnectorRegistry.saveClassification(
-                    .init(tools: tools, cliVersion: version, capturedAt: Date()), for: slug)
+                    .init(tools: tools, cliVersion: version, capturedAt: Date(), verifiedInventory: inventory), for: slug)
                 logCounts(slug: slug, tools: tools)
                 return true
             } catch {
-                Log("classifier: \(slug) attempt \(attempt) \(ErrorLabel(error))")
+                if Task.isCancelled || error is CancellationError { return false }
+                Log("classifier: \(ConnectorRegistry.telemetrySlug(slug)) attempt \(attempt) \(ErrorLabel(error))")
                 if attempt == 1 { try? await Task.sleep(for: .seconds(2)) }
             }
         }
@@ -158,7 +230,9 @@ nonisolated enum ConnectorClassifier {
         connectors' tools.
         """
         let envelope = try await run(prompt: prompt, schema: classifySchema, slug: slug)
-        return try parse(envelope.jsonResult, prefix: identity.toolPrefix)
+        let tools = try parse(envelope.jsonResult, prefix: identity.toolPrefix)
+        try validate(tools, slug: slug)
+        return tools
     }
 
     /// The lab's inventory probe: the identical recipe, but only LISTS names — independent of
@@ -182,7 +256,9 @@ nonisolated enum ConnectorClassifier {
               let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
             throw CodexCLI.CLIError.badEnvelope("tool list did not parse")
         }
-        return reply.tools.filter { $0.hasPrefix(identity.toolPrefix) }
+        let names = Set(reply.tools.compactMap { normalizedName($0, prefix: identity.toolPrefix) }).sorted()
+        guard !names.isEmpty else { throw CodexCLI.CLIError.badEnvelope("tool list has no matching names") }
+        return names
     }
 
     private static func run(prompt: String, schema: String,
@@ -195,6 +271,7 @@ nonisolated enum ConnectorClassifier {
         invocation.webSearch = false
         invocation.timeout = 300
         invocation.mcpAttachServer = slug      // the ATTACH recipe: walled in alone, zero allows
+        invocation.connectorOnlyRead = true
         invocation.outputSchema = schema
         // trigger=probe: a failed classification is a quiet retry-later, never filed as an
         // analysis failure (the census warm run's posture).
@@ -205,8 +282,8 @@ nonisolated enum ConnectorClassifier {
 
     // MARK: Validation (fail-closed)
 
-    /// Decode, keep only names carrying the connector's prefix (built-ins and other connectors'
-    /// tools excluded), dedupe on name (the first verdict wins), refuse an empty result.
+    /// Normalize scoped/bare MCP names, exclude other namespaces and builtins, and reject
+    /// conflicting duplicate verdicts. Validation then checks the independent inventory.
     static func parse(_ json: String,
                       prefix: String) throws -> [ConnectorRegistry.ClassifiedTool] {
         struct Reply: Codable { let tools: [ConnectorRegistry.ClassifiedTool] }
@@ -214,15 +291,29 @@ nonisolated enum ConnectorClassifier {
               let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
             throw CodexCLI.CLIError.badEnvelope("classification did not parse")
         }
-        var seen = Set<String>()
-        let tools = reply.tools.filter { $0.name.hasPrefix(prefix) && seen.insert($0.name).inserted }
-        guard !tools.isEmpty else {
-            // Counts only (structural): distinguishes an empty reply (the connector never
-            // attached to the run) from unprefixed names (the model answered with bare names).
-            throw CodexCLI.CLIError.badEnvelope(
-                "classification kept 0 of \(reply.tools.count) returned tools")
+        var known: [String: ConnectorRegistry.ToolCategory] = [:]
+        for tool in reply.tools {
+            guard let name = normalizedName(tool.name, prefix: prefix) else { continue }
+            if let previous = known[name], previous != tool.category {
+                throw CodexCLI.CLIError.badEnvelope("classification contains conflicting duplicate verdicts")
+            }
+            known[name] = tool.category
         }
+        let tools = known.keys.sorted().map { ConnectorRegistry.ClassifiedTool(name: $0, category: known[$0]!) }
+        guard !tools.isEmpty else { throw CodexCLI.CLIError.badEnvelope("classification has no matching names") }
         return tools
+    }
+
+    private static func normalizedName(_ name: String, prefix: String) -> String? {
+        if name.hasPrefix(prefix) {
+            let bare = String(name.dropFirst(prefix.count))
+            return bare.range(of: "^[A-Za-z_][A-Za-z0-9_./-]*\\z", options: .regularExpression) == nil ? nil : name
+        }
+        // MCP's server supplies bare snake-case names. Qualifying those with the pinned
+        // server prefix is lossless; never rewrite a name already in another namespace.
+        guard !name.hasPrefix("mcp__"),
+              name.range(of: "^[a-z][a-z0-9_]*\\z", options: .regularExpression) != nil else { return nil }
+        return prefix + name
     }
 
     /// Counts and category totals only — never tool descriptions or reasoning.
@@ -230,6 +321,6 @@ nonisolated enum ConnectorClassifier {
         let reads = tools.count(where: { $0.category == .read })
         let writes = tools.count(where: { $0.category == .write })
         let destructive = tools.count(where: { $0.category == .destructive })
-        Log("classifier: \(slug) ok tools=\(tools.count) reads=\(reads) writes=\(writes) destructive=\(destructive)")
+        Log("classifier: \(ConnectorRegistry.telemetrySlug(slug)) ok tools=\(tools.count) reads=\(reads) writes=\(writes) destructive=\(destructive)")
     }
 }
