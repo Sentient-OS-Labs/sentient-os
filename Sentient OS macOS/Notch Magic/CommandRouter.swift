@@ -32,7 +32,13 @@ enum CommandRouter {
     static var isActive: Bool { !ConnectorRegistry.detectedForCurrentBackend().isEmpty }
 
     /// One routable service, as the router prompt lists it.
-    struct Service { let slug: String; let name: String; let description: String }
+    struct Service: Sendable {
+        let slug: String
+        let name: String
+        let description: String
+        var providerSlug: String? = nil
+        var accountLabel: String? = nil
+    }
 
     /// Chips first (when connected), then every detected connector — stable order, deduped.
     /// Curated packs supply the display name + one-line description; uncurated connectors
@@ -40,13 +46,16 @@ enum CommandRouter {
     static func routableServices() -> [Service] {
         var services: [Service] = []
         func add(_ slug: String, _ fallbackName: String?) {
-            let slug = DirectMCPStore.connection(slug)?.taskTarget ?? slug
+            let connection = DirectMCPStore.connection(slug)
+            let slug = connection?.taskTarget ?? slug
             guard !services.contains(where: { $0.slug == slug }) else { return }
             let pack = ConnectorRegistry.pack(forSlug: slug)
             services.append(Service(slug: slug,
-                                    name: DirectMCPStore.connection(slug)?.displayName ?? pack?.displayName ?? fallbackName
+                                    name: connection?.displayName ?? pack?.displayName ?? fallbackName
                                         ?? ConnectorCensus.titleCased(slug),
-                                    description: pack?.routerDescription ?? ""))
+                                    description: pack?.routerDescription ?? "",
+                                    providerSlug: pack?.slug ?? connection?.providerSlug,
+                                    accountLabel: connection?.label))
         }
         if ModelBackend.connectorsAvailable {
             if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { add("gmail", nil) }
@@ -66,7 +75,12 @@ enum CommandRouter {
             Log("router: skipped (no connectors)")
             return .computer
         }
-        let services = routableServices()
+        return await route(command, services: routableServices())
+    }
+
+    /// The same router with explicit services lets the lab test account ambiguity without
+    /// disclosing any connected account's labels or content.
+    static func route(_ command: String, services: [Service]) async -> Route {
         let t0 = Date()
         var inv = CodexCLI.Invocation(prompt: prompt(command: command, services: services))
         inv.model = .gpt56luna          // → haiku on the Claude tier map
@@ -75,6 +89,7 @@ enum CommandRouter {
         inv.webSearch = false
         inv.includeUserConfig = false   // hermetic: the service list is IN the prompt — no
                                         // connector schemas need to load, which keeps it fast
+        inv.toolsDisabled = true       // choosing a route never needs files, a shell, or MCP
         inv.timeout = 30
         inv.feature = "router"
         inv.outputSchema = schema
@@ -92,6 +107,12 @@ enum CommandRouter {
                 Log("router: computer in \(ms)ms")
                 return .computer
             }
+            if let provider = hit.providerSlug,
+               services.count(where: { $0.providerSlug == provider }) > 1,
+               accountScope(command, services: services.filter { $0.providerSlug == provider })?.contains(slug) != true {
+                Log("router: computer (account target is not explicit)")
+                return .computer
+            }
             Log("router: connector slug=\(slug) in \(ms)ms")
             return .connector(slug: slug, name: hit.name)
         } catch {
@@ -100,6 +121,27 @@ enum CommandRouter {
             }
             return .computer
         }
+    }
+
+    /// Explicit references to two accounts can never become a one-account task. A service
+    /// with multiple accounts also needs an unambiguous label before taking the light route.
+    static func accountScope(_ command: String, services: [Service]) -> Set<String>? {
+        func mentions(_ text: String) -> Bool {
+            guard !text.isEmpty else { return false }
+            let pattern = #"(?<![\p{L}\p{N}_])"# + NSRegularExpression.escapedPattern(for: text) + #"(?![\p{L}\p{N}_])"#
+            return command.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
+        }
+        let groups = Dictionary(grouping: services.filter { $0.providerSlug != nil }, by: { $0.providerSlug! })
+        var targets = Set<String>()
+        for (provider, accounts) in groups where accounts.count > 1 {
+            let name = ConnectorRegistry.pack(forSlug: provider)?.displayName ?? provider
+            guard mentions(name) else { continue }
+            let named = accounts.filter { $0.accountLabel.map(mentions) ?? false }
+            guard named.count == 1 else { return [] }
+            targets.insert(named[0].slug)
+        }
+        if targets.count > 1 { return [] }
+        return targets.isEmpty ? nil : targets
     }
 
     // MARK: Telemetry (called by CommandRunModel once the run's outcome is known)
@@ -144,6 +186,11 @@ enum CommandRouter {
         \(list)
 
         RULES:
+        - Service descriptions state the available capabilities. Do not infer additional
+          capabilities from an app's brand name. An unavailable existing-page edit needs computer.
+        - The same service may have separate accounts. Choose one only when the command or its
+          explicit context identifies the account, or exactly one matching account is listed.
+          If the destination account is ambiguous, choose computer so it can be clarified.
         - When in doubt, choose "computer".
         - "connector" is right ONLY when EVERY step of the command fits that ONE
           service's tools. If any step needs a second service (listed or not), a
@@ -154,6 +201,12 @@ enum CommandRouter {
         - The command may point at the screen ("this", "reply to this"). Screenshots
           ride both routes, so that alone never forces "computer".
         - Never output a slug that is not listed above.
+
+        FINAL CHECK:
+        Identify every requested action and which service performs it. A connector route must
+        complete all of those actions through that one account. Reading email and placing the
+        meeting on a calendar requires two services, so choose computer. Several actions within
+        the same Notion account can still use connector when all are listed capabilities.
 
         Reply with JSON only: {"route":"computer","target":""} or {"route":"connector","target":"<slug>"}
         """

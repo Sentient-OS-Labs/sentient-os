@@ -111,9 +111,9 @@ enum MCPSource {
         let label: String
     }
 
-    typealias Reader = @Sendable (String, String) async throws -> ReadOutcome
+    typealias Reader = @Sendable (String, String, ReadMode, Window) async throws -> ReadOutcome
     typealias IdentityReader = @Sendable (String) async throws -> String?
-    typealias ReceiptObserver = @Sendable (CodexCLI.Envelope?, ReadOutcome?, Int, String, String) -> Void
+    typealias ReceiptObserver = @Sendable (CodexCLI.Envelope?, ReadOutcome?, Int, String, String, [String: Int]) -> Void
 
     /// Structured progress for the processing UI — CalendarConnect's sequential shape (one
     /// window STARTING then FINISHING), plus `.failed`, which `runAll` emits so the takeover
@@ -248,7 +248,7 @@ enum MCPSource {
     /// The lab supplies an isolated store and fixture reader to exercise this same orchestration.
     /// No source marker or previous note changes until every window is validated and saved.
     static func run(slug: String, mode: ReadMode, store: CycleStore, now: Date = Date(),
-                    reader: @escaping Reader = { try await read(slug: $0, prompt: $1) },
+                    reader: @escaping Reader = { try await read(slug: $0, prompt: $1, mode: $2, window: $3) },
                     identityReader: IdentityReader? = nil,
                     onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         let backend = ModelBackend.current
@@ -280,7 +280,7 @@ enum MCPSource {
                     for i in windows.indices {
                         onProgress(.windowStart(step: i + 1, total: windows.count,
                                                 label: windows[i].label, prompt: prompts[i]))
-                        group.addTask { (i, try await reader(slug, prompts[i])) }
+                        group.addTask { (i, try await reader(slug, prompts[i], mode, windows[i])) }
                     }
                     for try await (i, result) in group { results[i] = result }
                 }
@@ -289,7 +289,7 @@ enum MCPSource {
                     try Task.checkCancellation()
                     onProgress(.windowStart(step: i + 1, total: windows.count,
                                             label: windows[i].label, prompt: prompts[i]))
-                    results[i] = try await reader(slug, prompts[i])
+                    results[i] = try await reader(slug, prompts[i], mode, windows[i])
                 }
             }
             try Task.checkCancellation()
@@ -348,9 +348,20 @@ enum MCPSource {
 
     // MARK: - The actual read (bounded retry, strict parse before observation)
 
-    static func read(slug: String, prompt: String,
+    static func read(slug: String, prompt: String, mode: ReadMode = .initial, window: Window? = nil,
                      claudeModel: ClaudeCLI.Model? = nil,
                      onReceipt: ReceiptObserver? = nil) async throws -> ReadOutcome {
+        if let connection = DirectMCPStore.connection(slug), connection.providerSlug == "notion" {
+            guard let window else { throw MCPError.invalidResponse(slug: slug, rule: "window") }
+            do {
+                return try await NotionSource.read(connection: connection, prompt: prompt, mode: mode,
+                    window: window, claudeModel: claudeModel, onReceipt: onReceipt)
+            } catch DirectMCPError.reconnectRequired {
+                throw MCPError.connectorAuth(slug: slug)
+            } catch DirectMCPError.registrationExpired {
+                throw MCPError.connectorAuth(slug: slug)
+            }
+        }
         var lastError: Error = MCPError.noReadSurface(slug: slug)
         var attemptPrompt = prompt
         for attempt in 1...2 {
@@ -383,10 +394,10 @@ enum MCPSource {
                 }
                 Log("MCPSource.read(\(slug)): \(Int(Date().timeIntervalSince(started)))s"
                     + " · tokens in=\(env.inputTokens ?? 0) cached=\(env.cachedInputTokens ?? 0) out=\(env.outputTokens ?? 0)")
-                onReceipt?(env, outcome, attempt, attemptPrompt, "content")
+                onReceipt?(env, outcome, attempt, attemptPrompt, "content", [:])
                 return outcome
             } catch {
-                onReceipt?(attemptedEnvelope, nil, attempt, attemptPrompt, "content")
+                onReceipt?(attemptedEnvelope, nil, attempt, attemptPrompt, "content", [:])
                 try Task.checkCancellation()
                 if error is CancellationError { throw error }
                 if case CodexCLI.CLIError.usageLimit = error { throw error }
@@ -500,7 +511,7 @@ enum MCPSource {
             return title == "ACTION ITEMS" || title.hasPrefix("ACTION ITEMS:")
         }
         guard reply.has_action_items == actionHeading else { throw MCPError.invalidResponse(slug: slug, rule: "action_section") }
-        if slug == "google-drive" {
+        if slug == "google-drive" || ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" {
             // Validate explicit output requirements instead of silently retaining a reply that
             // ignored them. This currency check is a narrow format backstop, not a PII detector.
             let currency = #"(?:[$€£¥]\s*\d|\b(?:USD|EUR|GBP|INR)\s*\d|\b\d[\d,.]*\s*(?:[KMB]\s*)?(?:dollars|euros|pounds|rupees)\b)"#

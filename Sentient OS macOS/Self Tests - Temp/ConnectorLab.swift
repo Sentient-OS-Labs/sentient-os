@@ -58,6 +58,16 @@ enum ConnectorLab {
         case "directprotocol": await DirectMCPTests.protocolFixture()
         case "directcleanup": DirectMCPTests.cleanupFixture()
         case "directinspect": await DirectMCPTests.inspectConnection()
+        case "notiondiscovery": await DirectMCPTests.notionDiscovery()
+        case "notioncheck": await NotionCurationTests.run()
+        case "notionroutereval": await NotionCurationTests.router()
+        case "notionmodelfixtures": await NotionCurationTests.modelFixtures()
+        case "notionkbtrial":
+            guard NotionSource.isNotion(labSlug), ProcessInfo.processInfo.environment["LAB_USE_LIVE_STORE"] != "1" else {
+                Log("REFUSED: Notion curation trials require an isolated review store")
+                exit(1)
+            }
+            await ConnectorReadAudit.read()
         case "directread": await DirectMCPTests.readConnection()
         case "directrefresh": await DirectMCPTests.refreshConnection()
         case "directrender": await DirectMCPTests.renderConnectView()
@@ -124,6 +134,8 @@ enum ConnectorLab {
         let codex = ConnectorCensus.listCodex()
         dump(codex)
         ConnectorCensus.persist(codex, for: .chatgpt)
+        Log("\n-- direct accounts (saved metadata; connection not rechecked) --")
+        dump(DirectMCPStore.connections().map(\.detected))
 
         Log("\n-- list() for the live backend, then the persisted re-read --")
         let live = await ConnectorCensus.list()
@@ -281,6 +293,17 @@ enum ConnectorLab {
     // MARK: tools (the inventory probe)
 
     private static func tools() async {
+        if let connection = DirectMCPStore.connection(labSlug) {
+            do {
+                let tools = try await DirectMCPProbe.tools(connection: connection)
+                let output = try ConnectorReadAudit.outputDirectory()
+                let definitions = tools.compactMap { try? JSONSerialization.jsonObject(with: $0.definition) }
+                try DirectMCPHTTP.json(definitions).write(to: output.appending(path: "tool-definitions.json"), options: .atomic)
+                for tool in tools { Log("  \(tool.name)") }
+                Log("Direct inventory: \(tools.count) definitions saved privately at \(output.path)")
+            } catch { Log("Direct inventory failed: \(ErrorLabel(error))"); exit(1) }
+            return
+        }
         guard requireClaudeBackend("the tool dump") else { return }
         let slug = labSlug
         do {
@@ -295,6 +318,10 @@ enum ConnectorLab {
     // MARK: classify (the three-way run + the ground-truth eval)
 
     private static func classify() async {
+        if let connection = DirectMCPStore.connection(labSlug), connection.providerSlug == "notion" {
+            await NotionCurationTests.classify(connection)
+            return
+        }
         guard requireClaudeBackend("classification") else { return }
         let slug = labSlug
         let runs = Int(ProcessInfo.processInfo.environment["LAB_RUNS"] ?? "1") ?? 1
@@ -378,6 +405,9 @@ enum ConnectorLab {
                 Log("  eval: FAIL (\(ErrorLabel(error)))")
                 return false
             }
+        case "notion":
+            Log("  NOT VERIFIED: hosted Notion needs its own captured ground truth")
+            return false
         default:
             Log("  (no ground truth for \(slug); buckets above are the whole output)")
             return true
@@ -525,7 +555,8 @@ enum ConnectorLab {
         let slug = labSlug
         let name = ConnectorRegistry.server(for: slug)?.claudeName
             ?? ConnectorCensus.titleCased(slug)
-        let artifact = "sentient-drive-act-\(ModelBackend.current.rawValue)-\(UUID().uuidString.lowercased())"
+        let provider = ConnectorRegistry.pack(forSlug: slug)?.slug ?? "connector"
+        let artifact = "sentient-\(provider)-act-\(ModelBackend.current.rawValue)-\(UUID().uuidString.lowercased())"
         let ask = labPrompt?.replacingOccurrences(of: "{{artifact_name}}", with: artifact)
             ?? "Create a new text file named \(artifact).txt in my Google Drive, "
              + "containing the single line: connector lab was here."
@@ -540,6 +571,11 @@ enum ConnectorLab {
         """
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "connector-lab"
+        let scratch = FileManager.default.temporaryDirectory.appending(path: "sentient-act-fixture-\(UUID().uuidString)")
+        do { try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700]) }
+        catch { Log("act scratch setup failed"); return }
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        inv.cwd = scratch.path
         inv.effort = .medium
         inv.sandbox = .readOnly
         inv.webSearch = false
@@ -725,12 +761,17 @@ enum ConnectorLab {
 
     private static func routereval() async {
         guard requireConnectorBackend("the router eval") else { return }
-        guard CommandRouter.isActive else {
+        let fixtures = ProcessInfo.processInfo.environment["LAB_ROUTER_FIXTURES"] == "1"
+        guard fixtures || CommandRouter.isActive else {
             Log("skipped: no detected connectors — the router is structurally skipped. Run "
                 + "LAB_CMD=census first (or link a connector), then re-run.")
             return
         }
-        let routable = CommandRouter.routableServices().map(\.slug)
+        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion"].compactMap { slug -> CommandRouter.Service? in
+            guard let pack = ConnectorRegistry.pack(forSlug: slug) else { return nil }
+            return .init(slug: slug, name: pack.displayName, description: pack.routerDescription ?? "")
+        } : CommandRouter.routableServices()
+        let routable = services.map(\.slug)
         Log("routable services: \(routable.joined(separator: ", "))")
 
         let deck: [(String, ExpectedRoute)] = [
@@ -773,7 +814,7 @@ enum ConnectorLab {
                 Log("  n/a   \"\(command)\" (either-slug \(slug) is not routable here)"); continue
             }
             let t0 = Date()
-            let route = await CommandRouter.route(command)
+            let route = await CommandRouter.route(command, services: services)
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
             ran += 1; totalMS += ms
             let got: String
@@ -821,6 +862,10 @@ enum ConnectorLab {
     /// placeholder prompt, never real content. Claude resolves slugs through the live
     /// registry/census caches, so run `classify` first for a slug that needs one.
     private static func argv() {
+        if let connection = DirectMCPStore.connection(labSlug) {
+            NotionCurationTests.arguments(connection)
+            return
+        }
         let slug = labSlug
         func show(_ label: String, _ args: [String]) {
             Log("\(label):\n    " + args.map { "'\($0)'" }.joined(separator: " "))

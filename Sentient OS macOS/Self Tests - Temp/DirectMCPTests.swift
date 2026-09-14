@@ -235,6 +235,13 @@ enum DirectMCPTests {
             }
             // Two accounts can expose identical bare tool names. Exercise the real CLI
             // namespaces and separate credential helpers in one read-only invocation.
+            let summary = NotionSource.modelInvocation(prompt: "Synthetic evidence", schema: MCPSource.readSchema, claudeModel: nil)
+            payload["codex_summary"] = try ModelBackend.$runOverride.withValue(.chatgpt) {
+                try CodexCLI.arguments(for: summary, modelID: "fixture", effortArg: "low", schemaFile: nil)
+            }
+            payload["claude_summary"] = try ModelBackend.$runOverride.withValue(.claude) {
+                try ClaudeCLI.arguments(for: summary, modelID: "haiku", effortArg: "low")
+            }
             let secondID = UUID(), secondGeneration = UUID()
             var second = DirectMCPConnection(id: secondID, providerSlug: "fixture", label: "Synthetic second",
                 generation: secondGeneration, state: .ready)
@@ -339,6 +346,18 @@ enum DirectMCPTests {
             if let data = snapshot.account {
                 let object = try JSONSerialization.jsonObject(with: data)
                 Log("DIRECT INSPECT: \(String(decoding: try DirectMCPHTTP.json(shape(object)), as: UTF8.self))")
+                // Capability statuses only; do not print the connected user/workspace fields.
+                if connection.providerSlug == "notion", let result = object as? [String: Any] {
+                    for block in result["content"] as? [[String: Any]] ?? [] {
+                        if let text = block["text"] as? String, let bytes = text.data(using: .utf8),
+                           let value = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+                           let account = value["self"] as? [String: Any],
+                           let access = account["current_tool_access"] as? [String: Any] {
+                            let statuses = access.mapValues { ($0 as? [String: Any])?["status"] as? String ?? "unknown" }
+                            Log("DIRECT CAPABILITIES: \(String(decoding: try DirectMCPHTTP.json(statuses), as: UTF8.self))")
+                        }
+                    }
+                }
             }
         } catch { Log("DIRECT INSPECT: failed \(ErrorLabel(error))"); exit(1) }
     }
@@ -363,6 +382,37 @@ enum DirectMCPTests {
             }
             Log("DIRECT READ: PASS provider=\(connection.providerSlug) backend=\(ModelBackend.current.rawValue)")
         } catch { Log("DIRECT READ: failed \(ErrorLabel(error))"); exit(1) }
+    }
+
+    static func notionDiscovery() async {
+        guard let connection = selectedConnection, connection.providerSlug == "notion" else { exit(1) }
+        do {
+            let session = try await DirectMCPSession.open(connection)
+            defer { Task { await session.close() } }
+            let format = ISO8601DateFormatter(); format.formatOptions = [.withFullDate]
+            let start = format.string(from: Date().addingTimeInterval(-30 * 86_400))
+            let end = format.string(from: Date().addingTimeInterval(86_400))
+            let output = try ConnectorReadAudit.outputDirectory()
+            let queries: [(String, [String: Any], String)] = [
+                ("notion-search", ["query": "", "page_size": 5, "max_highlight_length": 0,
+                    "filters": ["created_date_range": ["start_date": start, "end_date": end]]], "created"),
+                ("notion-list-recent-pages", ["limit": 5], "recent")]
+            for (offset, query) in queries.enumerated() {
+                let result = try await session.call(query.0, arguments: query.1, id: 2 + offset, limit: 150_000)
+                try DirectMCPHTTP.json(result).write(to: output.appending(path: query.2 + ".json"), options: .atomic)
+                Log("NOTION DISCOVERY: \(query.2) saved privately, error=\(result["isError"] as? Bool == true)")
+                if query.2 == "recent", let block = (result["content"] as? [[String: Any]])?.first,
+                   let text = block["text"] as? String, let data = text.data(using: .utf8),
+                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let first = (object["results"] as? [[String: Any]])?.first,
+                   let url = first["url"] as? String {
+                    let page = try await session.call("notion-fetch", arguments: ["id": url, "include_transcript": false,
+                        "include_discussions": false], id: 10, limit: 400_000)
+                    try DirectMCPHTTP.json(page).write(to: output.appending(path: "page-shape.json"), options: .atomic)
+                    Log("NOTION DISCOVERY: one page fetched, error=\(page["isError"] as? Bool == true)")
+                }
+            }
+        } catch { Log("NOTION DISCOVERY: failed \(ErrorLabel(error))"); exit(1) }
     }
 
     static func refreshConnection() async {

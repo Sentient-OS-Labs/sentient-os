@@ -23,7 +23,7 @@ nonisolated enum DirectMCPAuth {
     static func discover(_ provider: DirectMCPProvider) async throws -> Discovery {
         let probe = try await DirectMCPHTTP.request(provider.endpoint, provider: provider, method: "POST",
             headers: ["Content-Type": "application/json", "Accept": "application/json, text/event-stream"],
-            body: DirectMCPHTTP.json(DirectMCPProbe.initializeBody(id: 1)))
+            body: DirectMCPHTTP.json(DirectMCPSession.initializeBody(id: 1)))
         guard probe.status == 401 else { throw DirectMCPError.unsupportedRegistration }
         let challenge = try challengeParameters(probe.headers["www-authenticate"] ?? "")
         var candidates: [URL] = []

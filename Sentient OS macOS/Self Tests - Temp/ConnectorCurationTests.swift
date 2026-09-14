@@ -120,7 +120,7 @@ enum ConnectorCurationTests {
                 replaceNotes: true) == .saved, "baseline note and origin are committed together")
             let notable = try MCPSource.parse(good, slug: slug)
             let observed = OSAllocatedUnfairLock(initialState: [String]())
-            let reader: MCPSource.Reader = { _, prompt in
+            let reader: MCPSource.Reader = { _, prompt, _, _ in
                 observed.withLock { $0.append(prompt) }
                 return notable
             }
@@ -130,7 +130,7 @@ enum ConnectorCurationTests {
             check(try await store.mcpCheckpoint(bucket)?.mark.order == now.timeIntervalSince1970, "daily read advances to its captured end")
             check(observed.withLock { $0.last?.contains("DAILY READ") == true }, "matching origin uses the daily prompt")
 
-            let failureReader: MCPSource.Reader = { _, _ in throw MCPSource.MCPError.invalidResponse(slug: "google-drive") }
+            let failureReader: MCPSource.Reader = { _, _, _, _ in throw MCPSource.MCPError.invalidResponse(slug: "google-drive") }
             do {
                 _ = try await MCPSource.run(slug: slug, mode: .initial, store: store,
                                            now: now.addingTimeInterval(10), reader: failureReader)
@@ -153,7 +153,7 @@ enum ConnectorCurationTests {
             _ = try await MCPSource.run(slug: slug, mode: .initial, store: store,
                                        now: now.addingTimeInterval(30), reader: reader)
             check((await store.notes()).count == 1, "successful explicit initial read replaces previous notes")
-            let quietReader: MCPSource.Reader = { _, _ in .quiet(itemCount: 2) }
+            let quietReader: MCPSource.Reader = { _, _, _, _ in .quiet(itemCount: 2) }
             _ = try await MCPSource.run(slug: slug, mode: .iterative, store: store,
                                        now: now.addingTimeInterval(40), reader: quietReader)
             let afterQuiet = try await store.mcpCheckpoint(bucket)
@@ -171,7 +171,7 @@ enum ConnectorCurationTests {
             let legacyBucket = MCPSource.bucketKey("gmail")
             _ = await store.setPointer(legacyBucket, ItemKey(order: oldTime.timeIntervalSince1970, tiebreak: ""))
             check(try await store.mcpCheckpoint(legacyBucket)?.origin == nil, "legacy checkpoints retain unknown provenance")
-            let cancellationReader: MCPSource.Reader = { _, _ in throw CancellationError() }
+            let cancellationReader: MCPSource.Reader = { _, _, _, _ in throw CancellationError() }
             do {
                 _ = try await MCPSource.run(slug: slug, mode: .initial, store: store,
                                            now: now.addingTimeInterval(60), reader: cancellationReader)

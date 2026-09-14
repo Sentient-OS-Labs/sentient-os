@@ -281,11 +281,22 @@ def main():
             run(engine, "action", "surprise_write", [])
             run(engine, "read", "read_item", ["read_item"], renewal=True)
             run(engine, "multiple", "read_item", ["first:read_item", "second:read_item"])
+            run(engine, "summary", "create_item", [])
         if options.engine != "codex":
             run("claude", "action", "create_item", ["create_item"], bypass=True)
             run("claude", "action", "surprise_write", [], bypass=True)
             run("claude", "action", "create_item", [], bypass=True, missing_hook=True)
         # Multiple helper processes must serialize rotation instead of replaying one refresh.
+        inherited = subprocess.run(recipes["helper"], shell=True,
+            env=dict(env, SENTIENT_SELFTEST="connectorlab", LAB_CMD="notioncheck"),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        try:
+            inherited_headers = json.loads(inherited.stdout)
+            passed = inherited.returncode == 0 and isinstance(inherited_headers.get("Authorization"), str)
+        except (ValueError, AttributeError):
+            passed = False
+        results.append({"name": "helper-ignores-inherited-lab-mode", "passed": passed})
+        print(f"{'PASS' if passed else 'FAIL'} helper-ignores-inherited-lab-mode", flush=True)
         def helper():
             return subprocess.run(recipes["helper"], shell=True, env=env, stdout=subprocess.PIPE,
                                   stderr=subprocess.PIPE, timeout=30)
