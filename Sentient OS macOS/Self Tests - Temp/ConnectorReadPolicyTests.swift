@@ -1,3 +1,4 @@
+#if DEBUG
 //
 //  ConnectorReadPolicyTests.swift
 //  Pure connector policy and denial-verification regression checks. `run()` exercises the
@@ -9,6 +10,10 @@ import Foundation
 
 enum ConnectorReadPolicyTests {
     static func run() {
+        ModelBackend.$runOverride.withValue(nil) { runChecks() }
+    }
+
+    private static func runChecks() {
         let defaults = UserDefaults.standard
         let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
         defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
@@ -66,6 +71,24 @@ enum ConnectorReadPolicyTests {
             let gmail = try args(invocation(["gmail"]))
             let calendar = try args(invocation(["google-calendar"]))
             let research = try args(invocation(["gmail", "google-calendar", "google-drive"]))
+            let sourceInvocation = MCPSource.readInvocation(slug: "google-drive", prompt: "Synthetic source check")
+            let source = try args(sourceInvocation)
+            check(source.contains("project_doc_max_bytes=0") && source.contains("features.shell_tool=false")
+                  && source.contains("web_search=\"disabled\""), "source ingestion excludes project instructions, shell and web")
+            check(!research.contains("features.shell_tool=false"), "research retains its local vault tools")
+            let claudeSourceInvocation = ModelBackend.$runOverride.withValue(.claude) {
+                MCPSource.readInvocation(slug: "google-drive", prompt: "Synthetic source check")
+            }
+            let sourceClaude = try ClaudeCLI.arguments(for: claudeSourceInvocation, modelID: "haiku", effortArg: "medium")
+            let toolIndex = sourceClaude.firstIndex(of: "--tools")!
+            check(sourceClaude[toolIndex + 1].isEmpty, "Claude source ingestion has no filesystem builtins")
+            var identity = sourceInvocation; identity.mcpReadToolNames = ["get_profile"]
+            let identityArgs = try args(identity)
+            check(policy(identityArgs).contains("get_profile") && !policy(identityArgs).contains("\"search\""), "identity read exposes only the verified profile tool")
+            identity.mcpReadToolNames = ["create_file"]
+            check(refuses(identity), "read-tool subset cannot enable a write")
+            identity.mcpReadToolNames = []
+            check(refuses(identity), "empty read-tool subset refuses the run")
             check(drive.contains("--ignore-user-config"), "read ignores inherited MCP servers and approvals")
             check(policy(drive).contains("_default = { enabled = false }"), "unrequested and unidentified apps default off")
             check(policy(drive).contains("default_tools_enabled = false"), "new tools default off")
@@ -102,7 +125,8 @@ enum ConnectorReadPolicyTests {
 
             if let path = ProcessInfo.processInfo.environment["LAB_POLICY_OUTPUT"] {
                 let fixture = ["drive": drive, "gmail": gmail, "calendar": calendar,
-                               "research": research, "action": action, "inherited": inheritedArgs]
+                               "research": research, "action": action, "inherited": inheritedArgs,
+                               "source": source, "identity": identityArgs]
                 try JSONSerialization.data(withJSONObject: fixture, options: [.prettyPrinted, .sortedKeys])
                     .write(to: URL(fileURLWithPath: path))
             }
@@ -141,3 +165,5 @@ enum ConnectorReadPolicyTests {
         if failures > 0 { exit(1) }
     }
 }
+
+#endif

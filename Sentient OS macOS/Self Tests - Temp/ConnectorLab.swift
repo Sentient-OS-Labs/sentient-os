@@ -1,3 +1,4 @@
+#if DEBUG
 //
 //  ConnectorLab.swift
 //  Sentient OS macOS
@@ -35,6 +36,19 @@ import Foundation
 enum ConnectorLab {
 
     static func run() async {
+        let requested = ProcessInfo.processInfo.environment["LAB_ENGINE"]
+        guard requested == nil || requested == "claude" || requested == "codex" else {
+            Log("REFUSED: LAB_ENGINE must be claude or codex")
+            return
+        }
+        let backend = requested.map { $0 == "claude" ? ModelBackend.claude : .chatgpt } ?? ModelBackend.current
+        await ModelBackend.$runOverride.withValue(backend) {
+            await ConnectorClassifier.refreshCLIVersion()
+            await runCommand()
+        }
+    }
+
+    private static func runCommand() async {
         let command = ProcessInfo.processInfo.environment["LAB_CMD"] ?? "census"
         Log("=== connector-lab: \(command) ===")
         switch command {
@@ -50,13 +64,15 @@ enum ConnectorLab {
         case "denycheck": await denycheck()
         case "argv":     argv()
         case "policycheck": ConnectorReadPolicyTests.run()
+        case "curationcheck": await ConnectorCurationTests.run()
+        case "prompts": await ConnectorReadAudit.exportPrompts()
         case "probes":   await probes()
         case "routereval": await routereval()
         case "seedcard": seedcard()
         case "firecard": await firecard()
         case "decodecheck": decodecheck()
         case "research": await research()
-        case "kbread":   await kbread()
+        case "kbread":   await ConnectorReadAudit.read()
         default:
             Log("unknown LAB_CMD '\(command)' (census | parse | warm | registry | tools | classify"
                 + " | cache | read | act | denycheck | argv | probes | routereval"
@@ -225,12 +241,16 @@ enum ConnectorLab {
                 == CodexCLI.Invocation.calendarCatalogID
         Log("\(idsOK ? "PASS" : "FAIL")  chip catalog ids resolve through the registry")
 
-        // KB toggle round trip (restored afterwards — this is the real UserDefaults).
+        // Read the production key through a volatile override, leaving saved preferences alone.
         let slug = "google-drive"
+        let defaults = UserDefaults.standard
+        let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
         let before = ConnectorRegistry.isKBEnabled(slug)
-        ConnectorRegistry.setKBEnabled(slug, !before)
+        var fixture = saved; fixture[ConnectorRegistry.kbKey(slug)] = !before
+        defaults.setVolatileDomain(fixture, forName: UserDefaults.argumentDomain)
         let flipped = ConnectorRegistry.isKBEnabled(slug) == !before
-        ConnectorRegistry.setKBEnabled(slug, before)
+        defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain)
         Log("\(flipped ? "PASS" : "FAIL")  KB toggle round trip on \(ConnectorRegistry.kbKey(slug))")
 
         // Derived prefixes for uncurated names.
@@ -267,12 +287,16 @@ enum ConnectorLab {
         let runs = Int(ProcessInfo.processInfo.environment["LAB_RUNS"] ?? "1") ?? 1
         var lastTools: [ConnectorRegistry.ClassifiedTool]?
         var failures = 0
+        let inventory: [String]
+        do { inventory = try await ConnectorClassifier.listTools(slug: slug) }
+        catch { Log("REFUSED: independent inventory unavailable (\(ErrorLabel(error)))"); return }
 
         for run in 1...max(runs, 1) {
             Log("\n-- classify \(slug), run \(run)/\(runs) --")
             do {
                 let started = Date()
                 let tools = try await ConnectorClassifier.classify(slug: slug)
+                try ConnectorClassifier.validate(tools, slug: slug, inventory: inventory)
                 Log("classified \(tools.count) tool(s) in \(Int(Date().timeIntervalSince(started)))s")
                 printBuckets(tools)
                 if !evaluate(slug: slug, tools: tools) { failures += 1 }
@@ -286,10 +310,10 @@ enum ConnectorLab {
         Log("\n== \(failures == 0 ? "PASS" : "FAIL"): \(runs - failures)/\(runs) clean run(s) ==")
         // Persist the last result so `cache`, the registry queries, and later tasks see it —
         // the same write ensureClassified performs.
-        if let tools = lastTools {
-            let version = await ClaudeCLI.installedVersion() ?? "unknown"
+        if failures == 0, let tools = lastTools,
+           let version = await ConnectorClassifier.refreshCLIVersion() {
             ConnectorRegistry.saveClassification(
-                .init(tools: tools, cliVersion: version, capturedAt: Date()), for: slug)
+                .init(tools: tools, cliVersion: version, capturedAt: Date(), verifiedInventory: inventory), for: slug)
             Log("persisted to \(ConnectorRegistry.classificationKey(slug)) (cli \(version))")
         }
     }
@@ -333,22 +357,14 @@ enum ConnectorLab {
             return evaluate(tools, okReads: reads, mustNotRead: writes, curatedReads: reads,
                             wantDestructive: Set([prefix + "delete_event"]))
         case "google-drive":
-            // Re-verifies the provisional pack: the captured reads should classify read, the
-            // two captured writes must NOT, and any surface drift is reported for a pack update.
-            guard let pack = ConnectorRegistry.pack(forSlug: "google-drive"),
-                  let packReads = pack.readTools, let prefix = pack.claudeToolPrefix else {
-                Log("  eval: no drive pack?!"); return false
+            do {
+                try ConnectorClassifier.validate(tools, slug: slug)
+                Log("  eval: PASS (reviewed reads, complete baseline, destructive categories)")
+                return true
+            } catch {
+                Log("  eval: FAIL (\(ErrorLabel(error)))")
+                return false
             }
-            let expectedReads = Set(packReads.map { prefix + $0 })
-            let knownWrites = Set(["copy_file", "create_file"].map { prefix + $0 })
-            let ok = evaluate(tools, okReads: expectedReads, mustNotRead: knownWrites,
-                              curatedReads: expectedReads, wantDestructive: [])
-            let live = Set(tools.map(\.name))
-            let drift = live.symmetricDifference(expectedReads.union(knownWrites))
-            if !drift.isEmpty {
-                Log("  PACK DRIFT vs the captured surface: \(drift.map(shortName).sorted().joined(separator: ", "))")
-            }
-            return ok
         default:
             Log("  (no ground truth for \(slug); buckets above are the whole output)")
             return true
@@ -417,12 +433,8 @@ enum ConnectorLab {
     // MARK: The 1.4 run recipes (read / act / denycheck — real runs on the LIVE backend)
 
     /// The recipe commands ride FrontierRun by default, exercising whichever engine is live.
-    /// LAB_ENGINE=claude|codex calls that engine's actor DIRECTLY instead — the same pattern
-    /// as the census listers being called by name: testing an engine never mutates the user's
-    /// live `model.backend` setting (an app mid-session would move engines with it). The
-    /// direct call runs the identical recipe code; only FrontierRun's 3-line switch is skipped.
-    /// ⚠️ codex-side recipe overrides emit on the chatgpt backend only (the BYOM-inertness
-    /// gate), so LAB_ENGINE=codex is honest only while the live backend IS chatgpt.
+    /// LAB_ENGINE pins ModelBackend for this task through FrontierRun, including every recipe
+    /// builder and KB read, without changing the app's saved backend selection.
     private static var labEngine: String? {
         ProcessInfo.processInfo.environment["LAB_ENGINE"]
     }
@@ -456,6 +468,7 @@ enum ConnectorLab {
         inv.webSearch = false
         inv.timeout = 300
         inv.mcpReadConnectors = [slug]
+        inv.connectorOnlyRead = true
         return inv
     }
 
@@ -463,11 +476,12 @@ enum ConnectorLab {
         do {
             let started = Date()
             let env = try await CodexTrigger.$current.withValue(.probe) {
-                switch labEngine {
-                case "claude": try await ClaudeCLI.shared.run(inv)
-                case "codex":  try await CodexCLI.shared.run(inv)
-                default:       try await FrontierRun.run(inv)
-                }
+                try await FrontierRun.run(inv)
+            }
+            if let path = ProcessInfo.processInfo.environment["LAB_TRACE_OUTPUT"] {
+                // Explicit test-only capture for disposable-artifact verification. Never
+                // enabled on production source reads; caller keeps these traces private.
+                try env.raw.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
             }
             Log("\(label): completed in \(Int(Date().timeIntervalSince(started)))s, "
                 + "\(env.result.count) chars")
@@ -498,9 +512,11 @@ enum ConnectorLab {
         let slug = labSlug
         let name = ConnectorRegistry.server(for: slug)?.claudeName
             ?? ConnectorCensus.titleCased(slug)
-        let ask = labPrompt
-            ?? "Create a new text file named sentient-connector-lab-test.txt in my Google Drive, "
+        let artifact = "sentient-drive-act-\(ModelBackend.current.rawValue)-\(UUID().uuidString.lowercased())"
+        let ask = labPrompt?.replacingOccurrences(of: "{{artifact_name}}", with: artifact)
+            ?? "Create a new text file named \(artifact).txt in my Google Drive, "
              + "containing the single line: connector lab was here."
+        Log("act artifact: \(artifact)")
         let prompt = """
         Do exactly this, using your "\(name)" connector tools: \(ask)
 
@@ -517,7 +533,7 @@ enum ConnectorLab {
         inv.timeout = 600
         inv.mcpActionServer = slug
         guard let reply = await runAndPrint(inv, label: "act \(slug)") else { return }
-        switch AgentStatus.parse(reply.result) {
+        switch AgentStatus.parseConnector(reply.result) {
         case .done:                 Log("sentinel: DONE")
         case .couldNot(let reason): Log("sentinel: COULD_NOT (\(reason))")
         case .none:                 Log("sentinel: MISSING — the wrapper demanded one")
@@ -575,13 +591,14 @@ enum ConnectorLab {
         Search Google Drive for the exact file name \(artifact). Use the connector search tool.
         Only exact name matches count. Return artifact_name unchanged, exists, and the matching
         file_ids from the actual tool result. Never guess IDs or infer absence from a failed
-        search. If search fails or no search tool is available, set tool_failure to the reason.
+        search. When search succeeds, tool_failure must be the empty string "" (never "null").
+        Use "auth" if sign-in is required, or "other" if search fails or no search tool is available.
         Do not create, modify, share or delete anything.
         """)
         inv.outputSchema = """
         {"type":"object","additionalProperties":false,"required":["artifact_name","exists","file_ids","tool_failure"],
         "properties":{"artifact_name":{"type":"string"},"exists":{"type":"boolean"},
-        "file_ids":{"type":"array","items":{"type":"string"}},"tool_failure":{"type":"string"}}}
+        "file_ids":{"type":"array","items":{"type":"string"}},"tool_failure":{"type":"string","enum":["","auth","other"]}}}
         """
         guard let env = await runAndPrint(inv, label: "denycheck exact search"),
               let result = try? JSONDecoder().decode(DriveSnapshot.self, from: Data(env.jsonResult.utf8)),
@@ -627,8 +644,7 @@ enum ConnectorLab {
                   let message = error["message"] as? String else { continue }
             let lower = message.lowercased()
             if lower.contains("mcp tool call requires approval, but approval policy is never")
-                || lower.contains("user cancelled mcp tool call") || lower.contains("permission denied")
-                || lower.contains("tool call denied") { return true }
+                || lower.contains("user cancelled mcp tool call") { return true }
         }
         return false
     }
@@ -1000,43 +1016,6 @@ enum ConnectorLab {
         }
     }
 
-    // MARK: kbread (the 1.8 generic KB read engine, live)
-
-    /// `LAB_CMD=kbread LAB_SLUG=google-drive [LAB_MODE=initial|iterative]`: one REAL read
-    /// through MCPSource on the live backend (the exact unattended-read recipe the nightly
-    /// chain uses), then a dump of the bucket's pointer and note(s). `iterative` (the default)
-    /// falls back to initial when the bucket has never been read — the chain's behavior.
-    private static func kbread() async {
-        let slug = labSlug
-        let mode = ProcessInfo.processInfo.environment["LAB_MODE"] ?? "iterative"
-        Log("kbread: \(mode) read of \(slug) on the \(ModelBackend.current.rawValue) backend")
-        let logProgress: @Sendable (MCPSource.Progress) -> Void = { ev in
-            switch ev {
-            case let .windowStart(step, total, label, prompt):
-                Log("  │ window \(step)/\(total) START · \(label) · prompt \(prompt.count) chars")
-            case let .windowDone(step, total, label, summary, items, kept):
-                Log("  │ window \(step)/\(total) DONE · \(label) · \(summary == nil ? "quiet" : "notable") · \(items) items · kept=\(kept)")
-            case let .failed(label, message):
-                Log("  │ FAILED · \(label) · \(message)")
-            }
-        }
-        do {
-            let kept = mode == "initial"
-                ? try await MCPSource.runInitial(slug: slug, onProgress: logProgress)
-                : try await MCPSource.runIterative(slug: slug, onProgress: logProgress)
-            Log("kbread: ✅ \(kept) summary(ies) recorded")
-        } catch {
-            Log("kbread: ✗ \(ErrorLabel(error))")
-        }
-        let bucket = MCPSource.bucketKey(slug)
-        let pointer = await CycleStore.shared.pointer(bucket)
-        let notes = await CycleStore.shared.notes().filter { $0.bucketKey == bucket }
-        Log("kbread: bucket \(bucket) · mark=\(pointer.map { Date(timeIntervalSince1970: $0.order).description } ?? "nil") · \(notes.count) note(s)")
-        #if DEBUG
-        for n in notes {
-            Log("kbread: — \(n.title ?? "?") · \(n.text.count) chars · action_items=\(n.reminderFlagged)")
-            Log("kbread:   \(n.text.prefix(500))")
-        }
-        #endif
-    }
 }
+
+#endif

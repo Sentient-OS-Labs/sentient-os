@@ -48,6 +48,7 @@ class Fixture:
             tool("gdrive.search", DRIVE, "search", True),
             tool("gdrive.create_file", DRIVE, "create_file"),
             tool("gdrive.new_write", DRIVE, "new_write"),
+            tool("gdrive.get_profile", DRIVE, "get_profile", True),
             tool("gmail.search_emails", GMAIL, "search_emails", True),
             tool("gmail.create_draft", GMAIL, "create_draft"),
             tool("gcal.search_events", CALENDAR, "search_events", True),
@@ -178,6 +179,10 @@ def main():
         if recipe != "action" and not old_policy:
             passed = passed and all("write" not in name and "create" not in name
                                     for tools in surface.values() for name in tools)
+        if recipe == "source" and fixture.requests:
+            prohibited = ("exec_command", "shell", "view_image", "browser", "spawn_agent", "computer")
+            names = [t.get("name", "") for t in fixture.requests[0].get("tools", [])]
+            passed = passed and not any(any(word in name for word in prohibited) for name in names)
         outputs = [v.get("output") for r in fixture.requests for v in r.get("input", [])
                    if v.get("type") == "function_call_output"]
         result = {"name": label, "passed": passed, "exit": process.returncode,
@@ -188,6 +193,12 @@ def main():
     try:
         run("old-policy-permits-create", "drive", "drive", "gdrive_create_file", ["gdrive.create_file"], old_policy=True)
         run("drive-read", "drive", "drive", "gdrive_search", ["gdrive.search"])
+        if "source" in recipes:
+            run("source-read", "source", "drive", "gdrive_search", ["gdrive.search"])
+            run("source-create-denied", "source", "drive", "gdrive_create_file", [])
+        if "identity" in recipes:
+            run("identity-read", "identity", "drive", "gdrive_get_profile", ["gdrive.get_profile"])
+            run("identity-content-denied", "identity", "drive", "gdrive_search", [])
         run("drive-create-denied", "drive", "drive", "gdrive_create_file", [])
         run("new-write-denied", "drive", "drive", "gdrive_new_write", [])
         run("gmail-read", "gmail", "gmail", "_search_emails", ["gmail.search_emails"])
@@ -203,6 +214,8 @@ def main():
         run("missing-identity-denied", "drive", "drive", "gdrive_search", [],
             lambda tools: tools[0].update(_meta={}))
         run("user-fired-create", "action", "drive", "gdrive_create_file", ["gdrive.create_file"])
+        run("action-destructive-denied", "action", "drive", "gdrive_create_file", [],
+            lambda tools: tools[1]["annotations"].update(destructiveHint=True))
     finally:
         server.shutdown()
         server.server_close()
