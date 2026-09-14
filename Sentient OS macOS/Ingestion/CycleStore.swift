@@ -42,6 +42,8 @@ final class BucketPointer {
     var floorOrder: Double?                        // non-nil ⇒ first run in progress (this is the FLOOR)
     var floorTiebreak: String?
     var updatedAt: Date
+    /// Hosted-read provenance. Nil on existing/local buckets; a new origin requires backfill.
+    var mcpReadOrigin: String? = nil
 
     init(bucketKey: String, mark: ItemKey, floor: ItemKey? = nil, updatedAt: Date = Date()) {
         self.bucketKey = bucketKey
@@ -140,10 +142,22 @@ struct NoteDraft: Sendable {
 @ModelActor
 actor CycleStore {
 
+    #if DEBUG
+    /// Narrow fault seam for the real transaction test; never applies to non-MCP commits.
+    private var failNextHostedCommit = false
+    func failNextMCPCommitForTesting() { failNextHostedCommit = true }
+    #endif
+
     // MARK: Pointers (durable)
 
     /// The high-water mark for a bucket, or nil if it's never run.
     func pointer(_ bucketKey: String) -> ItemKey? { row(bucketKey)?.mark }
+
+    /// Unlike the UI convenience fetch, a failed ingestion checkpoint read must propagate.
+    func mcpCheckpoint(_ bucketKey: String) throws -> (mark: ItemKey, origin: String?)? {
+        guard let r = try fetchRow(bucketKey) else { return nil }
+        return (r.mark, r.mcpReadOrigin)
+    }
 
     /// A bucket's full durable state, or nil if it's never run: the high-water mark (or, mid-first-run,
     /// the TOP), plus the FLOOR when a first run is mid-descent. A non-nil floor ⇒ resume that descent
@@ -235,8 +249,10 @@ actor CycleStore {
     /// gets `.diskFull` and stops the run (a run that grinds on burns the whole night's engine time
     /// on results it can't keep, then repeats it the next night; field-found 2026-08-15).
     private func commit(bucketKey: String, note: NoteDraft?,
+                        prepare: (() throws -> Void)? = nil,
                         apply: (BucketPointer) -> Void, make: () -> BucketPointer) -> CommitOutcome {
         func attempt() throws {
+            try prepare?()
             if let note { insertNote(bucketKey: bucketKey, note: note) }
             if let r = try fetchRow(bucketKey) { apply(r) }
             else { modelContext.insert(make()) }
@@ -291,6 +307,37 @@ actor CycleStore {
             r.floorOrder = nil; r.floorTiebreak = nil; r.updatedAt = Date()
         }, make: {
             BucketPointer(bucketKey: bucketKey, mark: mark)
+        })
+    }
+
+    /// Commit a whole hosted read: every accepted window, its boundary and origin together.
+    /// Explicit initial reads replace old notes only inside this successful transaction.
+    /// Automatic backfills preserve pending notes from earlier cycles or origins.
+    func commitMCPRead(bucketKey: String, notes: [NoteDraft], through mark: ItemKey,
+                       origin: String, replaceNotes: Bool) -> CommitOutcome {
+        commit(bucketKey: bucketKey, note: nil, prepare: {
+            if replaceNotes {
+                // Batch delete executes outside the pending object changes. Delete fetched
+                // objects so a failed save can roll back the entire replacement.
+                let previous = try self.modelContext.fetch(FetchDescriptor<CycleNote>(
+                    predicate: #Predicate { $0.bucketKey == bucketKey }))
+                for note in previous { self.modelContext.delete(note) }
+            }
+            for note in notes { self.insertNote(bucketKey: bucketKey, note: note) }
+            #if DEBUG
+            if self.failNextHostedCommit {
+                self.failNextHostedCommit = false
+                throw CocoaError(.fileWriteOutOfSpace)
+            }
+            #endif
+        }, apply: { r in
+            r.order = mark.order; r.tiebreak = mark.tiebreak
+            r.floorOrder = nil; r.floorTiebreak = nil
+            r.mcpReadOrigin = origin; r.updatedAt = Date()
+        }, make: {
+            let r = BucketPointer(bucketKey: bucketKey, mark: mark)
+            r.mcpReadOrigin = origin
+            return r
         })
     }
 
@@ -374,21 +421,18 @@ actor CycleStore {
 
 extension CycleStore {
     /// The app-wide iterative store, backed by its OWN on-disk store ("IterativeCycle.store" under
-    /// the namespaced `SentientOS` root in Application Support). Wipe-and-retry-once on an
-    /// incompatible schema change (dev convenience).
+    /// the namespaced `SentientOS` root in Application Support). A migration/open failure must
+    /// preserve the existing data for recovery, never silently delete the database.
     static let shared: CycleStore = {
         let schema = Schema([BucketPointer.self, CycleNote.self])
         let url = URL.sentientSupport.appending(path: "IterativeCycle.store")
         let config = ModelConfiguration(schema: schema, url: url)
-        if let container = try? ModelContainer(for: schema, configurations: config) {
+        do {
+            let container = try ModelContainer(for: schema, configurations: config)
             return CycleStore(modelContainer: container)
+        } catch {
+            Log("CycleStore: unable to open the existing store (\(ErrorLabel(error))); data preserved")
+            fatalError("CycleStore: unable to open its ModelContainer; existing data was preserved")
         }
-        for sfx in ["", "-shm", "-wal"] {
-            try? FileManager.default.removeItem(at: URL(fileURLWithPath: url.path + sfx))
-        }
-        guard let container = try? ModelContainer(for: schema, configurations: config) else {
-            fatalError("CycleStore: could not create its ModelContainer")
-        }
-        return CycleStore(modelContainer: container)
     }()
 }

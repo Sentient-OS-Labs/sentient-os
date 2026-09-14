@@ -35,9 +35,13 @@ enum ModelBackend: String, Sendable {
 
     static let key = "model.backend"
 
+    /// Pin one invocation to its selected engine, including its model and tool-policy builders.
+    /// The lab uses the same scope to exercise either engine without changing saved preferences.
+    @TaskLocal static var runOverride: ModelBackend?
+
     /// The live choice — read fresh per use so the Settings pane applies to the very next run.
     static var current: ModelBackend {
-        ModelBackend(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .chatgpt
+        runOverride ?? ModelBackend(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .chatgpt
     }
 
     /// Hosted Gmail/Calendar connectors ride ACCOUNT auth inside a subscription harness — codex's

@@ -1,3 +1,4 @@
+#if DEBUG
 //
 //  SelfTest.swift
 //  Sentient OS macOS
@@ -23,3 +24,5 @@ enum SelfTest {
         }
     }
 }
+
+#endif

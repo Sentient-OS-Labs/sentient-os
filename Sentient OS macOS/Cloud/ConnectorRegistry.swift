@@ -122,7 +122,7 @@ nonisolated enum ConnectorRegistry {
                                      "get_file_metadata", "get_file_permissions",
                                      "list_recent_files"],
                          codexReadTools: ["search", "fetch", "recent_documents", "get_file_metadata",
-                                          "list_file_revisions", "fetch_file_revision"]),
+                                          "list_file_revisions", "fetch_file_revision", "get_profile"]),
         CuratedConnector(slug: "slack", displayName: "Slack"),
         CuratedConnector(slug: "notion", displayName: "Notion"),
         CuratedConnector(slug: "granola", displayName: "Granola"),
@@ -395,8 +395,30 @@ nonisolated enum ConnectorRegistry {
     /// amending the original design where any connector could earn the toggle through the
     /// auto-classifier). An ineligible connector has no KB toggle anywhere; it stays fully
     /// task-usable (Sidekick, cards, computer use), which needs no toggle by ledger #2.
-    static func kbEligible(_ slug: String) -> Bool {
-        pack(forSlug: slug)?.readTools != nil
+    static func kbEligible(_ slug: String, backend: ModelBackend = ModelBackend.current) -> Bool {
+        guard let pack = pack(forSlug: slug), !pack.capturedProvisional,
+              let server = server(for: slug) else { return false }
+        switch backend {
+        case .claude:
+            return pack.readTools?.isEmpty == false && server.claudeServerURL != nil
+                && server.claudeToolPrefix != nil
+        case .chatgpt:
+            guard pack.codexReadTools?.isEmpty == false, let id = server.codexCatalogID else { return false }
+            return id.range(of: "^connector_[0-9a-f]{32}\\z", options: .regularExpression) != nil
+        case .custom:
+            return false
+        }
+    }
+
+    /// A service identity is not an account identity. Track the engine and observed relinks;
+    /// silent account changes within a hosted provider cannot be detected by the census.
+    static func readOrigin(slug: String, backend: ModelBackend) -> String {
+        let generation = UserDefaults.standard.integer(forKey: readGenerationKey(slug, backend.rawValue))
+        return "v1:\(backend.rawValue):\(generation)"
+    }
+
+    static func readGenerationKey(_ slug: String, _ origin: String) -> String {
+        "mcp.\(slug).readGeneration.\(origin)"
     }
 
     // MARK: The classifier cache (production keys)
@@ -419,6 +441,8 @@ nonisolated enum ConnectorRegistry {
         let tools: [ClassifiedTool]
         let cliVersion: String
         let capturedAt: Date
+        /// Independent inventory checked before activation. Older captures require refresh.
+        var verifiedInventory: [String]? = nil
     }
 
     static func classificationKey(_ slug: String) -> String { "mcp.classified.\(slug)" }
@@ -433,7 +457,11 @@ nonisolated enum ConnectorRegistry {
         UserDefaults.standard.set(data, forKey: classificationKey(slug))
     }
 
-    static func isClassified(_ slug: String) -> Bool { classification(for: slug) != nil }
+    static func isClassified(_ slug: String) -> Bool {
+        guard let capture = classification(for: slug),
+              let version = ConnectorClassifier.currentCLIVersion else { return false }
+        return ConnectorClassifier.isFresh(capture, slug: slug, version: version)
+    }
 
     // MARK: Tool queries (full engine tool names out)
 
@@ -443,10 +471,12 @@ nonisolated enum ConnectorRegistry {
     /// kbEligible; the classifier fallback serves the lab's trial reads). Empty = NO read
     /// allows anywhere: fail closed.
     static func readToolNames(slug: String) -> [String] {
+        if pack(forSlug: slug)?.capturedProvisional == true { return [] }
         if let pack = pack(forSlug: slug), let reads = pack.readTools,
            let prefix = pack.claudeToolPrefix {
             return reads.map { prefix + $0 }
         }
+        guard isClassified(slug) else { return [] }
         return classification(for: slug)?.tools.filter { $0.category == .read }.map(\.name) ?? []
     }
 

@@ -23,7 +23,6 @@
 //
 
 import Foundation
-import Observation
 import os
 
 enum MCPSource {
@@ -35,8 +34,8 @@ enum MCPSource {
 
     /// The prompt's deep-open budgets: the initial read covers a month, the nightly window is
     /// usually a day, so iterative halves the cap (15/2, floor).
-    private static let initialOpenCap = 15
-    private static let iterativeOpenCap = 7
+    static let initialOpenCap = 15
+    static let iterativeOpenCap = 7
 
     enum MCPError: LocalizedError {
         /// The slug resolves to no server, or (Claude) has neither curated nor classified read
@@ -51,6 +50,11 @@ enum MCPSource {
         /// Mark stays unset; next night retries. Never a caution — could be transient.
         case toolFailure(slug: String)
         case dateMath
+        case invalidResponse(slug: String, rule: String = "schema")
+        case storageFailure
+        case alreadyRunning
+        case clockMovedBackwards
+        case connectionChanged
 
         var errorDescription: String? {
             switch self {
@@ -62,16 +66,54 @@ enum MCPSource {
                 return "\(ConnectorRegistry.displayName(slug: slug))'s tools didn't work this time."
             case .dateMath:
                 return "Connector read date math failed."
+            case .invalidResponse(let slug, _):
+                return "The \(ConnectorRegistry.displayName(slug: slug)) read returned an invalid result."
+            case .storageFailure:
+                return "The read could not be saved. Its progress was preserved for retry."
+            case .alreadyRunning:
+                return "This connector is already being read."
+            case .clockMovedBackwards:
+                return "The saved read time is ahead of this Mac's clock."
+            case .connectionChanged:
+                return "The connection changed during the read. Its progress was preserved for retry."
             }
         }
     }
 
-    /// Parsed read result (from the structured reply).
-    private struct ReadResult: Sendable {
+    /// Only validated, privacy-filtered content can reach progress callbacks or storage.
+    struct ReadResult: Sendable, Equatable {
         let summary: String
         let hasActionItems: Bool
         let itemCount: Int
     }
+
+    enum ReadOutcome: Sendable, Equatable {
+        case quiet(itemCount: Int)
+        case notable(ReadResult)
+
+        var result: ReadResult? {
+            if case .notable(let result) = self { return result }
+            return nil
+        }
+        var itemCount: Int {
+            switch self {
+            case .quiet(let count): count
+            case .notable(let result): result.itemCount
+            }
+        }
+    }
+
+    enum ReadMode: String, Sendable { case initial, iterative }
+
+    struct Window: Sendable {
+        let lower: Date
+        let upper: Date
+        let label: String
+    }
+
+    typealias Reader = @Sendable (String, String) async throws -> ReadOutcome
+    typealias IdentityReader = @Sendable (String) async throws -> String?
+    typealias ReceiptObserver = @Sendable (CodexCLI.Envelope?, ReadOutcome?, Int, String, String) -> Void
 
     /// Structured progress for the processing UI — CalendarConnect's sequential shape (one
     /// window STARTING then FINISHING), plus `.failed`, which `runAll` emits so the takeover
@@ -102,11 +144,17 @@ enum MCPSource {
     static func runAll(
         onEvent: @Sendable @escaping (String, Int, Int, Progress) -> Void = { _, _, _, _ in }
     ) async -> (outcomes: [LegOutcome], hitUsageLimit: Bool) {
+        PipelineActivity.begin()
+        defer { PipelineActivity.end() }
         let slugs = kbSlugs()
         logVanishedToggles()
         var outcomes: [LegOutcome] = []
         var hitUsageLimit = false
         for (index, slug) in slugs.enumerated() {
+            if Task.isCancelled {
+                outcomes += slugs.dropFirst(index).map { LegOutcome(slug: $0, result: "cancelled") }
+                break
+            }
             if hitUsageLimit {
                 outcomes.append(LegOutcome(slug: slug, result: "skipped"))
                 signalRead(slug: slug, outcome: "skipped", started: Date())
@@ -122,6 +170,10 @@ enum MCPSource {
                 // the leg outcome stays "ok" for the scheduler's failed-leg scan.
                 signalRead(slug: slug, outcome: recorded == 0 ? "quiet" : "ok", started: legStart)
             } catch {
+                if Task.isCancelled || error is CancellationError {
+                    outcomes += slugs.dropFirst(index).map { LegOutcome(slug: $0, result: "cancelled") }
+                    break
+                }
                 if case CodexCLI.CLIError.usageLimit = error { hitUsageLimit = true }
                 let reason: String
                 if case MCPError.connectorAuth = error {
@@ -177,242 +229,211 @@ enum MCPSource {
         }
     }
 
-    // MARK: - Initial read (windowed per the pack's KBAdapter)
+    // MARK: - One connector's read and atomic commit
 
-    /// Fresh start: wipe the bucket, read per the adapter, set the mark to run start once ALL
-    /// windows land (any window failing aborts — mark unset, a retry re-runs from scratch).
     @discardableResult
-    static func runInitial(slug: String,
+    static func runInitial(slug: String, store: CycleStore = .shared,
                            onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        try requireReadable(slug)
-        guard claim(slug) else {
-            Log("MCPSource.runInitial(\(slug)): a read is already in flight — skipping")
-            return 0
-        }
-        defer { release(slug) }
-        return try await initialCore(slug: slug, onProgress: onProgress)
+        try await run(slug: slug, mode: .initial, store: store,
+                      identityReader: { try await readIdentity(slug: $0) }, onProgress: onProgress)
     }
 
-    // MARK: - Iterative read (since the high-water mark)
-
-    /// One summary covering everything since the saved mark, then advance the mark. Falls back
-    /// to a full initial read if the connector has never been read on this Mac.
     @discardableResult
-    static func runIterative(slug: String,
+    static func runIterative(slug: String, store: CycleStore = .shared,
                              onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        try requireReadable(slug)
-        guard claim(slug) else {
-            Log("MCPSource.runIterative(\(slug)): a read is already in flight — skipping")
-            return 0
-        }
-        defer { release(slug) }
-        guard let mark = await CycleStore.shared.pointer(bucketKey(slug)) else {
-            return try await initialCore(slug: slug, onProgress: onProgress)   // never read → initial
-        }
-        let since = Date(timeIntervalSince1970: mark.order)
-        let runStart = Date()
-        let name = ConnectorRegistry.displayName(slug: slug)
-        let label = "since \(shortLabel(since))"
-        let prompt = readPrompt(name: name,
-                                window: "everything new or changed since \(fullLabel(since))",
-                                openCap: iterativeOpenCap)
-        onProgress(.windowStart(step: 1, total: 1, label: label, prompt: prompt))
-        var recorded = 0
-        if let r = try await read(slug: slug, prompt: prompt) {
-            await record(r, slug: slug, name: name, itemDate: runStart, label: label)
-            recorded = 1
-            onProgress(.windowDone(step: 1, total: 1, label: label,
-                                   summary: r.summary, items: r.itemCount, keptSoFar: 1))
-        } else {
-            onProgress(.windowDone(step: 1, total: 1, label: label,
-                                   summary: nil, items: 0, keptSoFar: 0))
-        }
-        await CycleStore.shared.setPointer(bucketKey(slug),
-                                           ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
-        Log("MCPSource.runIterative(\(slug)): ✅ \(recorded) summary since \(since); pointer → \(runStart)")
-        return recorded
+        try await run(slug: slug, mode: .iterative, store: store,
+                      identityReader: { try await readIdentity(slug: $0) }, onProgress: onProgress)
     }
 
-    // MARK: - Cores (unclaimed — the public entries above hold the per-slug in-flight lock)
-
-    private static func initialCore(slug: String,
-                                    onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
-        await CycleStore.shared.clearBucket(bucketKey(slug))
-        let runStart = Date()
-        let name = ConnectorRegistry.displayName(slug: slug)
-        let adapter = ConnectorRegistry.pack(forSlug: slug)?.kbAdapter ?? .generic
-        let recorded: Int
-        switch adapter {
-        case .generic:
-            recorded = try await readGenericInitial(slug: slug, name: name,
-                                                    runStart: runStart, onProgress: onProgress)
-        case .windowedWeekly:
-            recorded = try await readWindowed(slug: slug, name: name, runStart: runStart,
-                                              weekly: true, onProgress: onProgress)
-        case .windowedMonthly:
-            recorded = try await readWindowed(slug: slug, name: name, runStart: runStart,
-                                              weekly: false, onProgress: onProgress)
-        }
-        await CycleStore.shared.setPointer(bucketKey(slug),
-                                           ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
-        Log("MCPSource.runInitial(\(slug)): ✅ \(recorded) summary(ies) recorded (\(adapter.rawValue)); pointer → \(runStart)")
-        return recorded
-    }
-
-    /// `.generic` (every connector in Step 1): ONE call, roughly the last month.
-    private static func readGenericInitial(slug: String, name: String, runStart: Date,
-                                           onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
-        let label = "last month"
-        let prompt = readPrompt(name: name,
-                                window: "roughly the last month, newest first",
-                                openCap: initialOpenCap)
-        onProgress(.windowStart(step: 1, total: 1, label: label, prompt: prompt))
-        var recorded = 0
-        if let r = try await read(slug: slug, prompt: prompt) {
-            await record(r, slug: slug, name: name, itemDate: runStart, label: label)
-            recorded = 1
-            onProgress(.windowDone(step: 1, total: 1, label: label,
-                                   summary: r.summary, items: r.itemCount, keptSoFar: 1))
-        } else {
-            onProgress(.windowDone(step: 1, total: 1, label: label,
-                                   summary: nil, items: 0, keptSoFar: 0))
-        }
-        return recorded
-    }
-
-    /// The windowed drivers for Step 3's curated packs — Gmail's math for weekly (4 contiguous
-    /// weeks, fired in PARALLEL, results in completion order) and Calendar's for monthly (12
-    /// months, newest first, sequential). Only `.generic` is exercised in Step 1; the Step 3
-    /// chats supply tuned prompts through `readPrompt`'s window seam.
-    private static func readWindowed(slug: String, name: String, runStart: Date, weekly: Bool,
-                                     onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
-        struct Window: Sendable {
-            let step: Int
-            let label: String
-            let prompt: String
-            let itemDate: Date
-        }
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: runStart)
-        guard let tomorrow = cal.date(byAdding: .day, value: 1, to: today) else { throw MCPError.dateMath }
-        let count = weekly ? 4 : 12
-
-        // Contiguous windows against end-of-today, newest first, no overlap (the Gmail/Calendar
-        // boundary math: [tomorrow − unit·(i+1), tomorrow − unit·i)).
-        var windows: [Window] = []
-        for i in 0..<count {
-            let upper = weekly ? cal.date(byAdding: .day, value: -7 * i, to: tomorrow)
-                               : cal.date(byAdding: .month, value: -i, to: tomorrow)
-            let lower = weekly ? cal.date(byAdding: .day, value: -7 * (i + 1), to: tomorrow)
-                               : cal.date(byAdding: .month, value: -(i + 1), to: tomorrow)
-            guard let upper, let lower,
-                  let upperDay = cal.date(byAdding: .day, value: -1, to: upper) else {
-                throw MCPError.dateMath
+    /// The lab supplies an isolated store and fixture reader to exercise this same orchestration.
+    /// No source marker or previous note changes until every window is validated and saved.
+    static func run(slug: String, mode: ReadMode, store: CycleStore, now: Date = Date(),
+                    reader: @escaping Reader = { try await read(slug: $0, prompt: $1) },
+                    identityReader: IdentityReader? = nil,
+                    onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            try Task.checkCancellation()
+            try requireReadable(slug)
+            guard claim(slug) else { throw MCPError.alreadyRunning }
+            PipelineActivity.begin()
+            defer { PipelineActivity.end(); release(slug) }
+            let checkpoint = try await store.mcpCheckpoint(bucketKey(slug))
+            let connectionOrigin = ConnectorRegistry.readOrigin(slug: slug, backend: backend)
+            let identity: String?
+            if let identityReader { identity = try await identityReader(slug) } else { identity = nil }
+            let origin = checkpointOrigin(backend: backend, fingerprint: identity, fallback: connectionOrigin)
+            let explicitInitial = mode == .initial
+            let initial = mode == .initial || checkpoint == nil || checkpoint?.origin != origin
+            if !initial, let checkpoint, checkpoint.mark.order > now.timeIntervalSince1970 {
+                throw MCPError.clockMovedBackwards
             }
-            windows.append(Window(
-                step: i + 1,
-                label: "\(shortLabel(lower)) – \(shortLabel(upperDay))",
-                prompt: readPrompt(name: name,
-                                   window: "between \(fullLabel(lower)) and \(fullLabel(upperDay)), newest first",
-                                   openCap: initialOpenCap),
-                itemDate: upperDay))
-        }
-
-        var recorded = 0
-        if weekly {
-            // Parallel fan-out (independent windows, independent subprocesses); collect as each
-            // finishes. Any window failing aborts the run — mark unset, a retry re-runs all.
-            for w in windows { onProgress(.windowStart(step: w.step, total: count, label: w.label, prompt: w.prompt)) }
-            var completed = 0
-            try await withThrowingTaskGroup(of: (Window, ReadResult?).self) { group in
-                for w in windows {
-                    group.addTask { (w, try await read(slug: slug, prompt: w.prompt)) }
-                }
-                for try await (w, r) in group {
-                    completed += 1
-                    if let r {
-                        await record(r, slug: slug, name: name, itemDate: w.itemDate, label: w.label)
-                        recorded += 1
+            let mode: ReadMode = initial ? .initial : .iterative
+            let windows = try windows(slug: slug, mode: mode,
+                                      since: checkpoint.map { Date(timeIntervalSince1970: $0.mark.order) }, now: now)
+            let name = ConnectorRegistry.displayName(slug: slug)
+            let prompts = windows.map { prompt(slug: slug, name: name, backend: backend, mode: mode, window: $0) }
+            var results: [Int: ReadOutcome] = [:]
+            let parallel = initial && ConnectorRegistry.pack(forSlug: slug)?.kbAdapter == .windowedWeekly
+            if parallel {
+                try await withThrowingTaskGroup(of: (Int, ReadOutcome).self) { group in
+                    for i in windows.indices {
+                        onProgress(.windowStart(step: i + 1, total: windows.count,
+                                                label: windows[i].label, prompt: prompts[i]))
+                        group.addTask { (i, try await reader(slug, prompts[i])) }
                     }
-                    onProgress(.windowDone(step: completed, total: count, label: w.label,
-                                           summary: r?.summary, items: r?.itemCount ?? 0,
-                                           keptSoFar: recorded))
+                    for try await (i, result) in group { results[i] = result }
+                }
+            } else {
+                for i in windows.indices {
+                    try Task.checkCancellation()
+                    onProgress(.windowStart(step: i + 1, total: windows.count,
+                                            label: windows[i].label, prompt: prompts[i]))
+                    results[i] = try await reader(slug, prompts[i])
                 }
             }
-        } else {
-            for w in windows {
-                onProgress(.windowStart(step: w.step, total: count, label: w.label, prompt: w.prompt))
-                let r = try await read(slug: slug, prompt: w.prompt)
-                if let r {
-                    await record(r, slug: slug, name: name, itemDate: w.itemDate, label: w.label)
-                    recorded += 1
-                }
-                onProgress(.windowDone(step: w.step, total: count, label: w.label,
-                                       summary: r?.summary, items: r?.itemCount ?? 0,
-                                       keptSoFar: recorded))
+            try Task.checkCancellation()
+            guard results.count == windows.count else { throw MCPError.invalidResponse(slug: slug) }
+            guard ConnectorRegistry.readOrigin(slug: slug, backend: backend) == connectionOrigin else {
+                throw MCPError.connectionChanged
             }
+            if let identityReader {
+                guard try await identityReader(slug) == identity else { throw MCPError.connectionChanged }
+            }
+            try Task.checkCancellation()
+            let runID = UUID().uuidString
+            let notes = windows.indices.compactMap { i -> NoteDraft? in
+                guard let result = results[i]?.result else { return nil }
+                return NoteDraft(kind: .mcp, sourceID: "mcp:\(slug):\(runID):\(i)", folder: name,
+                                 itemDate: windows[i].upper, text: result.summary,
+                                 title: "\(name) · \(windows[i].label)", reminderFlagged: result.hasActionItems)
+            }
+            // Origin changes and legacy checkpoints backfill without discarding pending notes.
+            let committed = await store.commitMCPRead(bucketKey: bucketKey(slug), notes: notes,
+                through: ItemKey(order: now.timeIntervalSince1970, tiebreak: ""), origin: origin,
+                replaceNotes: explicitInitial)
+            guard committed == .saved else { throw MCPError.storageFailure }
+            var kept = 0
+            for i in windows.indices {
+                if results[i]?.result != nil { kept += 1 }
+                onProgress(.windowDone(step: i + 1, total: windows.count, label: windows[i].label,
+                    summary: results[i]?.result?.summary, items: results[i]?.itemCount ?? 0, keptSoFar: kept))
+            }
+            Log("MCPSource: \(slug) saved \(notes.count) summary(ies), mode=\(mode.rawValue), engine=\(backend.rawValue)")
+            return notes.count
         }
-        return recorded
     }
 
-    // MARK: - One read (a single frontier call on the unattended-read recipe)
+    /// Exact half-open windows. The generic first read covers 30 local calendar days;
+    /// weekly/monthly adapters retain their four/twelve-window shapes and never read the future.
+    static func windows(slug: String, mode: ReadMode, since: Date?, now: Date) throws -> [Window] {
+        if mode == .iterative, let since {
+            return [Window(lower: since, upper: now, label: "since \(shortLabel(since))")]
+        }
+        let adapter = ConnectorRegistry.pack(forSlug: slug)?.kbAdapter ?? .generic
+        let cal = Calendar.current
+        if adapter == .generic {
+            guard let lower = cal.date(byAdding: .day, value: -30, to: now) else { throw MCPError.dateMath }
+            return [Window(lower: lower, upper: now, label: "last 30 days")]
+        }
+        let count = adapter == .windowedWeekly ? 4 : 12
+        return try (0..<count).map { i in
+            let unit: Calendar.Component = adapter == .windowedWeekly ? .day : .month
+            let stride = adapter == .windowedWeekly ? 7 : 1
+            guard let lower = cal.date(byAdding: unit, value: -(i + 1) * stride, to: now),
+                  let upper = cal.date(byAdding: unit, value: -i * stride, to: now) else { throw MCPError.dateMath }
+            return Window(lower: lower, upper: upper, label: "\(shortLabel(lower)) to \(shortLabel(upper))")
+        }
+    }
 
-    private static func read(slug: String, prompt: String) async throws -> ReadResult? {
+    // MARK: - The actual read (bounded retry, strict parse before observation)
+
+    static func read(slug: String, prompt: String,
+                     claudeModel: ClaudeCLI.Model? = nil,
+                     onReceipt: ReceiptObserver? = nil) async throws -> ReadOutcome {
         var lastError: Error = MCPError.noReadSurface(slug: slug)
+        var attemptPrompt = prompt
         for attempt in 1...2 {
+            try Task.checkCancellation()
+            var attemptedEnvelope: CodexCLI.Envelope?
             do {
-                var inv = CodexCLI.Invocation(prompt: prompt)
-                inv.feature = "mcp-read"
-                inv.model = .gpt56luna               // light tier (haiku on the Claude engine)
-                inv.effort = .medium
-                inv.sandbox = .readOnly
-                inv.webSearch = false                // the connector is the only source this needs
+                var inv = readInvocation(slug: slug, prompt: attemptPrompt)
+                // Drive's mixed drafts and third-party material need stronger attribution.
+                inv.claudeModel = claudeModel ?? (slug == "google-drive" ? .sonnet : nil)
                 inv.outputSchema = readSchema
-                inv.timeout = 600
-                inv.mcpReadConnectors = [slug]       // the unattended-read recipe, this server only
                 let started = Date()
                 let env = try await FrontierRun.run(inv)
-                Log("MCPSource.read(\(slug)): \(env.result.count) chars in \(Int(Date().timeIntervalSince(started)))s"
-                    + " · tokens in=\(env.inputTokens ?? 0) cached=\(env.cachedInputTokens ?? 0) out=\(env.outputTokens ?? 0)")
+                attemptedEnvelope = env
+                try Task.checkCancellation()
                 meter.withLock { m in
                     var t = m[slug] ?? (0, 0)
                     t.tokensIn += env.inputTokens ?? 0
                     t.tokensOut += env.outputTokens ?? 0
                     m[slug] = t
                 }
-                return try parse(env.result, slug: slug)
+                let outcome = try parse(env.result, slug: slug)
+                if slug == "google-drive", !hasDriveReadEvidence(raw: env.raw, backend: ModelBackend.current,
+                                                                  requiresDiscovery: outcome.result == nil) {
+                    throw MCPError.invalidResponse(slug: slug, rule: "read_evidence")
+                }
+                Log("MCPSource.read(\(slug)): \(Int(Date().timeIntervalSince(started)))s"
+                    + " · tokens in=\(env.inputTokens ?? 0) cached=\(env.cachedInputTokens ?? 0) out=\(env.outputTokens ?? 0)")
+                onReceipt?(env, outcome, attempt, attemptPrompt, "content")
+                return outcome
             } catch {
-                // A usage limit won't resolve within the night and a recipe refusal is
-                // deterministic — propagate both. Anything else gets ONE retry: the session's
-                // first spawn occasionally never attaches the connector (field-found 2026-08-30),
-                // which the model can only report as a tool_failure — so those retry too, and a
-                // REAL dead connector simply fails the same way twice before propagating.
+                onReceipt?(attemptedEnvelope, nil, attempt, attemptPrompt, "content")
+                try Task.checkCancellation()
+                if error is CancellationError { throw error }
                 if case CodexCLI.CLIError.usageLimit = error { throw error }
                 if case CodexCLI.CLIError.notAvailable = error { throw error }
-                lastError = error
-                if attempt == 1 {
-                    Log("MCPSource.read(\(slug)): attempt 1 failed (\(ErrorLabel(error))) — one retry")
+                if case MCPError.invalidResponse = error {
+                    attemptPrompt = prompt + """
+
+
+                    OUTPUT VALIDATION RETRY
+                    The previous attempt did not satisfy the required output contract. Check
+                    every required field, the ACTION ITEMS heading/flag agreement, third-person
+                    wording, and the prohibition on exact financial amounts. Return only a valid
+                    result grounded in the permitted Drive reads. Do not repeat an invalid output.
+                    Success requires an actual successful Drive tool call, and a quiet result
+                    requires successful search/list discovery. Discover the permitted tools if
+                    needed; a text-only claim of having checked is not read evidence. If the tools
+                    fail, report tool_failure instead of a successful quiet result.
+                    """
                 }
+                lastError = error
+                if attempt == 1 { Log("MCPSource.read(\(slug)): attempt 1 failed (\(ErrorLabel(error))); one retry") }
             }
         }
         throw lastError
     }
 
-    private static func record(_ r: ReadResult, slug: String, name: String,
-                               itemDate: Date, label: String) async {
-        await CycleStore.shared.recordNote(
-            bucketKey: bucketKey(slug), kind: .mcp,
-            sourceID: "mcp:\(slug):\(Int(itemDate.timeIntervalSince1970))",   // unique per window
-            folder: name, itemDate: itemDate, text: r.summary,
-            title: "\(name) · \(label)", reminderFlagged: r.hasActionItems)
+    static func readInvocation(slug: String, prompt: String) -> CodexCLI.Invocation {
+        var inv = CodexCLI.Invocation(prompt: prompt)
+        inv.feature = "mcp-read"
+        inv.model = .gpt56luna
+        inv.effort = .medium
+        inv.sandbox = .readOnly
+        inv.webSearch = false
+        inv.timeout = 600
+        inv.mcpReadConnectors = [slug]
+        inv.connectorOnlyRead = true
+        if slug == "google-drive", ModelBackend.current == .chatgpt {
+            inv.mcpReadToolNames = ConnectorRegistry.pack(forSlug: slug)?.codexReadTools?.filter { $0 != "get_profile" }
+        }
+        return inv
     }
 
-    /// Fail-closed precondition, engine-symmetric: an unknown slug resolves to no server, and
-    /// on the Claude engine a connector with neither curated nor classified reads has no allow
-    /// list (the recipe builder would throw mid-spawn; refusing here is the clean version).
+    /// Validate the complete engine-specific policy before reading or changing stored state.
     private static func requireReadable(_ slug: String) throws {
-        guard ConnectorRegistry.server(for: slug) != nil else { throw MCPError.noReadSurface(slug: slug) }
-        if ModelBackend.current == .claude, ConnectorRegistry.readToolNames(slug: slug).isEmpty {
+        guard ConnectorRegistry.kbEligible(slug) else { throw MCPError.noReadSurface(slug: slug) }
+        let inv = readInvocation(slug: slug, prompt: "Read-policy validation")
+        switch ModelBackend.current {
+        case .chatgpt:
+            _ = try CodexCLI.arguments(for: inv, modelID: "gpt-5.6-luna", effortArg: "medium", schemaFile: nil)
+        case .claude:
+            _ = try ClaudeCLI.arguments(for: inv, modelID: "haiku", effortArg: "medium")
+        case .custom:
             throw MCPError.noReadSurface(slug: slug)
         }
     }
@@ -424,7 +445,7 @@ enum MCPSource {
     /// Per-slug token totals, summed across a leg's windows by `read()` and drained by
     /// `runAll`'s per-leg signal (keyed by slug, so concurrent reads on different connectors
     /// never cross-talk; same-slug overlap is already impossible via `busy`).
-    private static let meter = OSAllocatedUnfairLock(
+    static let meter = OSAllocatedUnfairLock(
         initialState: [String: (tokensIn: Int, tokensOut: Int)]())
 
     private static func claim(_ slug: String) -> Bool {
@@ -435,33 +456,58 @@ enum MCPSource {
         busy.withLock { _ = $0.remove(slug) }
     }
 
-    // MARK: - Parse (tolerant; mirrors the Gmail/Calendar shape-mismatch discipline)
+    // MARK: - Strict read outcomes
 
-    /// SHAPE MISMATCH (no JSON, or the required `notable` key absent despite the output schema)
-    /// is an engine/schema regression → event, curated slug or "other" as the tag. A QUIET
-    /// period (`notable: false` / empty summary) is normal → silent nil. A reported
-    /// `tool_failure` THROWS: the read didn't happen, so it must not advance the mark or pass
-    /// as quiet (auth → the caution; other → retry next night).
-    private static func parse(_ result: String, slug: String) throws -> ReadResult? {
-        guard let span = jsonSpan(result),
-              let data = span.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            shapeMismatch(slug: slug, missing: "json", len: result.count)
-            return nil
+    /// Invalid data fails the read. Only an explicit, valid quiet result advances without a note.
+    static func parse(_ result: String, slug: String) throws -> ReadOutcome {
+        struct Reply: Decodable {
+            let item_count: Int
+            let notable: Bool
+            let has_action_items: Bool
+            let summary: String
+            let tool_failure: String
         }
-        if let failure = obj["tool_failure"] as? String, !failure.isEmpty {
-            throw failure == "auth" ? MCPError.connectorAuth(slug: slug)
-                                    : MCPError.toolFailure(slug: slug)
+        guard let span = jsonSpan(result), let data = span.data(using: .utf8),
+              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              Set(obj.keys) == Set(["item_count", "notable", "has_action_items", "summary", "tool_failure"]),
+              let reply = try? JSONDecoder().decode(Reply.self, from: data), reply.item_count >= 0,
+              ["", "auth", "other"].contains(reply.tool_failure) else {
+            shapeMismatch(slug: slug, missing: "schema", len: result.count)
+            throw MCPError.invalidResponse(slug: slug)
         }
-        guard let notable = obj["notable"] as? Bool else {
-            shapeMismatch(slug: slug, missing: "notable", len: result.count)   // key names only — never values
-            return nil
+        let summary = reply.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "—", with: "-")
+        guard reply.notable ? (!summary.isEmpty && reply.item_count > 0 && reply.tool_failure.isEmpty)
+                            : (summary.isEmpty && !reply.has_action_items) else {
+            shapeMismatch(slug: slug, missing: "consistency", len: result.count)
+            throw MCPError.invalidResponse(slug: slug)
         }
-        guard notable, let summary = obj["summary"] as? String,
-              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return ReadResult(summary: summary,
-                          hasActionItems: obj["has_action_items"] as? Bool ?? false,
-                          itemCount: obj["item_count"] as? Int ?? 0)
+        if !reply.tool_failure.isEmpty {
+            throw reply.tool_failure == "auth" ? MCPError.connectorAuth(slug: slug)
+                                               : MCPError.toolFailure(slug: slug)
+        }
+        guard reply.notable else { return .quiet(itemCount: reply.item_count) }
+        // Match local triage's zero-trace backstop: rejected text never reaches the store or UI.
+        guard !PIIScan.containsHighRiskPII(summary) else { return .quiet(itemCount: 0) }
+        let actionHeading = summary.split(separator: "\n").contains { line in
+            let title = line.trimmingCharacters(in: CharacterSet(charactersIn: " #*:\t")).uppercased()
+            return title == "ACTION ITEMS" || title.hasPrefix("ACTION ITEMS:")
+        }
+        guard reply.has_action_items == actionHeading else { throw MCPError.invalidResponse(slug: slug, rule: "action_section") }
+        if slug == "google-drive" {
+            // Validate explicit output requirements instead of silently retaining a reply that
+            // ignored them. This currency check is a narrow format backstop, not a PII detector.
+            let currency = #"(?:[$€£¥]\s*\d|\b(?:USD|EUR|GBP|INR)\s*\d|\b\d[\d,.]*\s*(?:[KMB]\s*)?(?:dollars|euros|pounds|rupees)\b)"#
+            guard summary.hasPrefix("The user") else { throw MCPError.invalidResponse(slug: slug, rule: "third_person") }
+            guard summary.range(of: #"\b(?:you|your|yourself)\b"#, options: [.regularExpression, .caseInsensitive]) == nil else {
+                throw MCPError.invalidResponse(slug: slug, rule: "reader_address")
+            }
+            guard summary.range(of: currency, options: [.regularExpression, .caseInsensitive]) == nil else {
+                throw MCPError.invalidResponse(slug: slug, rule: "currency_amount")
+            }
+        }
+        return .notable(ReadResult(summary: summary, hasActionItems: reply.has_action_items,
+                                   itemCount: reply.item_count))
     }
 
     private static func shapeMismatch(slug: String, missing: String, len: Int) {
@@ -486,59 +532,5 @@ enum MCPSource {
     private static func shortLabel(_ d: Date) -> String {     // display: "Jun 8"
         let f = DateFormatter(); f.dateFormat = "MMM d"; f.timeZone = .current
         return f.string(from: d)
-    }
-
-    private static func fullLabel(_ d: Date) -> String {      // prompt boundary: "Jun 8, 2026"
-        let f = DateFormatter(); f.dateFormat = "MMM d, yyyy"; f.timeZone = .current
-        f.locale = Locale(identifier: "en_US_POSIX")
-        return f.string(from: d)
-    }
-
-    // MARK: - Prompt + schema
-
-    /// The structured reply contract — one dense summary plus the flags Sentient keys on.
-    /// `tool_failure` is the connector-health tri-state: "" = tools worked, "auth" = they
-    /// demanded a sign-in (→ the amber morning caution), "other" = any other tool breakage.
-    private static let readSchema = """
-    {"type":"object","additionalProperties":false,"properties":{\
-    "item_count":{"type":"integer"},\
-    "notable":{"type":"boolean"},\
-    "has_action_items":{"type":"boolean"},\
-    "summary":{"type":"string"},\
-    "tool_failure":{"type":"string","enum":["","auth","other"]}},\
-    "required":["item_count","notable","has_action_items","summary","tool_failure"]}
-    """
-
-    /// The generic read prompt. `window` is the one seam the iterative read and the Step 3
-    /// windowed packs vary; `openCap` is the deep-open budget (initial 15, iterative 7).
-    private static func readPrompt(name: String, window: String, openCap: Int) -> String {
-        """
-        You are building a private knowledge base about the user. Using ONLY the \
-        "\(name)" connector's read tools, look at the user's recent and important \
-        content there (\(window)).
-
-        DISCIPLINE (strict):
-        - Search and list first; open at most \(openCap) individual items, only those that \
-        look genuinely significant.
-        - Skip anything automated, promotional, or trivial.
-        - Never call a tool that creates, modifies, sends, or deletes. You are \
-        read-only.
-
-        Summarize what actually matters about the user's life or work as seen through \
-        \(name): projects, commitments, deadlines, relationships, plans. Write in third \
-        person ("the user ..."). Include an ACTION ITEMS section only when something \
-        clearly needs doing. No em dashes.
-
-        Reply with JSON matching the schema:
-        {"item_count": <items considered>, "notable": true|false,
-         "has_action_items": true|false, "summary": "<empty when notable is false>",
-         "tool_failure": ""|"auth"|"other"}
-
-        Set tool_failure ONLY when the \(name) tools themselves failed you: "auth" when \
-        they demand a sign-in, report an expired connection, or refuse authorization; \
-        "other" for any other tool breakage, including no \(name) tools being available \
-        at all. When the tools worked, even on a quiet period, use "". When tool_failure \
-        is set, notable must be false.
-        """
     }
 }
