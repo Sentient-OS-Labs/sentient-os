@@ -58,6 +58,13 @@ enum ConnectorLab {
         case "directprotocol": await DirectMCPTests.protocolFixture()
         case "directcleanup": DirectMCPTests.cleanupFixture()
         case "directinspect": await DirectMCPTests.inspectConnection()
+        case "granoladiscovery": await GranolaCurationTests.discover()
+        case "granolakbtrial": await GranolaCurationTests.trial()
+        case "granolacheck": await GranolaCurationTests.run()
+        case "granolaroutereval": await GranolaCurationTests.router()
+        case "granolamodelfixtures": await GranolaCurationTests.modelFixtures()
+        case "granolaexpiry": GranolaCurationTests.expiry()
+        case "granolatestnote": await GranolaCurationTests.findTestNote()
         case "notiondiscovery": await DirectMCPTests.notionDiscovery()
         case "notioncheck": await NotionCurationTests.run()
         case "notionroutereval": await NotionCurationTests.router()
@@ -73,7 +80,7 @@ enum ConnectorLab {
         case "directrender": await DirectMCPTests.renderConnectView()
         case "directdiscovery": await DirectMCPTests.discoverProviders()
         case "directlegacy": ConnectorReadPolicyTests.run()
-        case "directkbtrial": await DirectMCPTests.knowledgeTrial()
+        case "directkbtrial": await GranolaCurationTests.trial()
         case "directverify": await DirectMCPTests.verifyConnection()
         case "census":   await census()
         case "parse":    parse()
@@ -318,6 +325,10 @@ enum ConnectorLab {
     // MARK: classify (the three-way run + the ground-truth eval)
 
     private static func classify() async {
+        if DirectMCPStore.connection(labSlug)?.providerSlug == "granola" {
+            await GranolaCurationTests.classify()
+            return
+        }
         if let connection = DirectMCPStore.connection(labSlug), connection.providerSlug == "notion" {
             await NotionCurationTests.classify(connection)
             return
@@ -595,6 +606,10 @@ enum ConnectorLab {
     private static func denycheck() async {
         guard requireConnectorBackend("the deny check") else { return }
         let slug = labSlug
+        if DirectMCPStore.connection(slug)?.providerSlug == "granola" {
+            GranolaCurationTests.denialPolicy()
+            return
+        }
         guard slug == "google-drive" else {
             Log("REFUSED: denycheck requires Drive's exact artifact verification; no run started")
             return
@@ -767,7 +782,7 @@ enum ConnectorLab {
                 + "LAB_CMD=census first (or link a connector), then re-run.")
             return
         }
-        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion"].compactMap { slug -> CommandRouter.Service? in
+        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion", "granola"].compactMap { slug -> CommandRouter.Service? in
             guard let pack = ConnectorRegistry.pack(forSlug: slug) else { return nil }
             return .init(slug: slug, name: pack.displayName, description: pack.routerDescription ?? "")
         } : CommandRouter.routableServices()
@@ -852,6 +867,7 @@ enum ConnectorLab {
         Log("  mean router latency: \(ran == 0 ? 0 : totalMS / ran)ms")
         let pass = screenToConnector == 0 && connectorToComputer <= 2 && otherMisses == 0
         Log("== \(pass ? "PASS" : "FAIL"): the 1.5 bar \(pass ? "holds" : "does not hold") ==")
+        if !pass { exit(1) }
     }
 
     // MARK: argv (pure — print every recipe's argv per engine, no model runs)

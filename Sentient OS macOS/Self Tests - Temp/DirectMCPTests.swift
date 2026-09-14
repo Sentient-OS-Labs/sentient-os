@@ -235,7 +235,7 @@ enum DirectMCPTests {
             }
             // Two accounts can expose identical bare tool names. Exercise the real CLI
             // namespaces and separate credential helpers in one read-only invocation.
-            let summary = NotionSource.modelInvocation(prompt: "Synthetic evidence", schema: MCPSource.readSchema, claudeModel: nil)
+            let summary = MCPSource.modelInvocation(prompt: "Synthetic evidence", schema: MCPSource.readSchema, claudeModel: nil)
             payload["codex_summary"] = try ModelBackend.$runOverride.withValue(.chatgpt) {
                 try CodexCLI.arguments(for: summary, modelID: "fixture", effortArg: "low", schemaFile: nil)
             }
@@ -298,6 +298,16 @@ enum DirectMCPTests {
             guard tools.count == 4 else { throw Failure("native MCP inventory") }
             let fresh = try await DirectMCPAuth.accessToken(id: id, generation: grant.generation, refresh: true)
             guard fresh != grant.accessToken else { throw Failure("native refresh") }
+            let session = try await DirectMCPSession.open(connection)
+            var expiring = try DirectMCPStore.readGrant(id)
+            guard expiring.providerSlug == "fixture" else { throw Failure("expiry fixture scope") }
+            expiring.expiresAt = Date().addingTimeInterval(-1)
+            try DirectMCPStore.saveGrant(expiring)
+            let renewedInventory = try await session.request(method: "tools/list", parameters: [:], id: 2)
+            await session.close()
+            guard (renewedInventory["tools"] as? [Any])?.count == 4,
+                  try DirectMCPStore.readGrant(id).accessToken != expiring.accessToken else { throw Failure("native session renewal") }
+            Log("DIRECT PROTOCOL: native read renewed expired synthetic grant")
             var connected = connection
             connected.tools = tools
             connected.policy = Dictionary(uniqueKeysWithValues: tools.map { ($0.name, $0.name == "read_item" ? DirectMCPTool.Category.read : .destructive) })
@@ -334,7 +344,7 @@ enum DirectMCPTests {
     }
 
     static func inspectConnection() async {
-        guard let connection = selectedConnection else { exit(1) }
+        guard let connection = selectedConnection() else { exit(1) }
         do {
             let snapshot = try await DirectMCPProbe.capture(connection: connection, includeAccount: true)
             func shape(_ value: Any) -> Any {
@@ -363,7 +373,7 @@ enum DirectMCPTests {
     }
 
     static func readConnection() async {
-        guard let connection = selectedConnection else { exit(1) }
+        guard let connection = selectedConnection() else { exit(1) }
         do {
             let tool: String, arguments: String
             switch connection.providerSlug {
@@ -385,7 +395,7 @@ enum DirectMCPTests {
     }
 
     static func notionDiscovery() async {
-        guard let connection = selectedConnection, connection.providerSlug == "notion" else { exit(1) }
+        guard let connection = selectedConnection(), connection.providerSlug == "notion" else { exit(1) }
         do {
             let session = try await DirectMCPSession.open(connection)
             defer { Task { await session.close() } }
@@ -416,7 +426,7 @@ enum DirectMCPTests {
     }
 
     static func refreshConnection() async {
-        guard let connection = selectedConnection else { exit(1) }
+        guard let connection = selectedConnection() else { exit(1) }
         do {
             let previous = try DirectMCPStore.readGrant(connection.id)
             let value = try await DirectMCPAuth.accessToken(id: connection.id, generation: connection.generation, refresh: true)
@@ -424,26 +434,6 @@ enum DirectMCPTests {
             guard !value.isEmpty, stored.accessToken == value, stored.generation == previous.generation else { throw Failure("renewal persistence") }
             Log("DIRECT RENEW: PASS rotation=\(stored.refreshToken != previous.refreshToken) expiry=\(stored.expiresAt != nil)")
         } catch { Log("DIRECT RENEW: failed \(ErrorLabel(error))"); exit(1) }
-    }
-
-    /// Explicitly authorized live curation only. One attempt, at most four meeting notes;
-    /// no transcript tools, no writes to CycleStore or the knowledge base, no raw-result logs.
-    static func knowledgeTrial() async {
-        guard let connection = DirectMCPStore.connections().first(where: { $0.providerSlug == "granola" && $0.usable }) else { exit(1) }
-        do {
-            let end = Date()
-            guard let start = Calendar.current.date(byAdding: .day, value: -30, to: end) else { throw Failure("date window") }
-            let window = MCPSource.Window(lower: start, upper: end, label: "last 30 days")
-            let prompt = MCPSource.prompt(slug: connection.slug, name: connection.displayName,
-                                          backend: ModelBackend.current, mode: .iterative, window: window)
-            var inv = MCPSource.readInvocation(slug: connection.slug, prompt: prompt)
-            inv.outputSchema = MCPSource.readSchema
-            let envelope = try await FrontierRun.run(inv)
-            let outcome = try MCPSource.parse(envelope.result, slug: connection.slug)
-            guard MCPSource.hasDirectReadEvidence(raw: envelope.raw, connection: connection, backend: ModelBackend.current,
-                requiredNames: [outcome.result == nil ? "list_meetings" : "get_meetings"]) else { throw Failure("missing live read evidence") }
-            Log("DIRECT KB TRIAL: PASS backend=\(ModelBackend.current.rawValue) items=\(outcome.itemCount) notable=\(outcome.result != nil)")
-        } catch { Log("DIRECT KB TRIAL: failed \(ErrorLabel(error))"); exit(1) }
     }
 
     static func discoverProviders() async {
@@ -456,8 +446,7 @@ enum DirectMCPTests {
     }
 
     static func verifyConnection() async {
-        let slug = ProcessInfo.processInfo.environment["LAB_SLUG"] ?? "granola"
-        guard let connection = DirectMCPStore.connections().first(where: { $0.providerSlug == slug }) else { exit(1) }
+        guard let connection = selectedConnection(requireUsable: false) else { exit(1) }
         do {
             let verified = try await DirectMCPConnections.verify(connection)
             Log("DIRECT VERIFY: PASS provider=\(verified.providerSlug) identity=\(verified.accountFingerprint != nil) tools=\(verified.tools.count)")
@@ -468,10 +457,17 @@ enum DirectMCPTests {
         }
     }
 
-    private static var selectedConnection: DirectMCPConnection? {
-        let slug = ProcessInfo.processInfo.environment["LAB_SLUG"] ?? "granola"
-        let id = ProcessInfo.processInfo.environment["LAB_DIRECT_ID"].flatMap(UUID.init(uuidString:))
-        return DirectMCPStore.connections().first { $0.providerSlug == slug && $0.usable && (id == nil || $0.id == id) }
+    private static func selectedConnection(requireUsable: Bool = true) -> DirectMCPConnection? {
+        let env = ProcessInfo.processInfo.environment
+        let slug = env["LAB_SLUG"] ?? "granola"
+        let id = env["LAB_DIRECT_ID"].flatMap(UUID.init(uuidString:))
+        guard env["LAB_DIRECT_ID"] == nil || id != nil else { return nil }
+        let matches = DirectMCPStore.connections().filter {
+            ($0.providerSlug == slug || $0.slug == slug) && (!requireUsable || $0.usable)
+                && (id == nil || $0.id == id)
+        }
+        guard matches.count == 1 else { return nil }
+        return matches[0]
     }
 
     static func renderConnectView() async {

@@ -28,7 +28,7 @@ nonisolated enum DirectMCPIdentity {
                   !email.contains(where: { $0.isNewline }) else { continue }
             let workspace = account["workspace"] as? [String: Any] ?? account["active_workspace"] as? [String: Any]
             let workspaceID = workspace?["id"] as? String ?? account["workspace_id"] as? String
-            let workspaceName = workspace?["name"] as? String ?? account["workspace_name"] as? String
+            let workspaceName = workspace?["name"] as? String ?? workspace?["display_name"] as? String ?? account["workspace_name"] as? String
             // Require an explicit workspace identity; email alone would miss a workspace switch.
             guard let workspaceID, !workspaceID.isEmpty, workspaceID.count < 256 else { continue }
             let userID = user?["id"] as? String ?? email.lowercased()

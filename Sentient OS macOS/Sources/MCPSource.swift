@@ -253,6 +253,7 @@ enum MCPSource {
                     onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
+            let now = try (GranolaSource.isGranola(slug) ? GranolaSource.canonicalDate(now) : now)
             try Task.checkCancellation()
             try requireReadable(slug)
             guard claim(slug) else { throw MCPError.alreadyRunning }
@@ -351,14 +352,20 @@ enum MCPSource {
     static func read(slug: String, prompt: String, mode: ReadMode = .initial, window: Window? = nil,
                      claudeModel: ClaudeCLI.Model? = nil,
                      onReceipt: ReceiptObserver? = nil) async throws -> ReadOutcome {
-        if let connection = DirectMCPStore.connection(slug), connection.providerSlug == "notion" {
+        if let connection = DirectMCPStore.connection(slug), ["notion", "granola"].contains(connection.providerSlug) {
             guard let window else { throw MCPError.invalidResponse(slug: slug, rule: "window") }
             do {
+                if connection.providerSlug == "granola" {
+                    return try await GranolaSource.read(connection: connection, prompt: prompt, mode: mode,
+                        window: window, claudeModel: claudeModel, onReceipt: onReceipt)
+                }
                 return try await NotionSource.read(connection: connection, prompt: prompt, mode: mode,
                     window: window, claudeModel: claudeModel, onReceipt: onReceipt)
             } catch DirectMCPError.reconnectRequired {
                 throw MCPError.connectorAuth(slug: slug)
             } catch DirectMCPError.registrationExpired {
+                throw MCPError.connectorAuth(slug: slug)
+            } catch DirectMCPError.accountSetupRequired {
                 throw MCPError.connectorAuth(slug: slug)
             }
         }
@@ -442,6 +449,12 @@ enum MCPSource {
 
     /// Validate the complete engine-specific policy before reading or changing stored state.
     private static func requireReadable(_ slug: String) throws {
+        #if DEBUG
+        if GranolaSource.curationTrial, let connection = DirectMCPStore.connection(slug),
+           connection.providerSlug == "granola", connection.kbPolicyReady {
+            return // Only the isolated curation harness sets this task-local flag.
+        }
+        #endif
         guard ConnectorRegistry.kbEligible(slug) else { throw MCPError.noReadSurface(slug: slug) }
         if DirectMCPStore.connection(slug) != nil { return } // native preparation validates live policy before spawn
         let inv = readInvocation(slug: slug, prompt: "Read-policy validation")
@@ -511,7 +524,7 @@ enum MCPSource {
             return title == "ACTION ITEMS" || title.hasPrefix("ACTION ITEMS:")
         }
         guard reply.has_action_items == actionHeading else { throw MCPError.invalidResponse(slug: slug, rule: "action_section") }
-        if slug == "google-drive" || ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" {
+        if slug == "google-drive" || ["notion", "granola"].contains(ConnectorRegistry.pack(forSlug: slug)?.slug ?? "") {
             // Validate explicit output requirements instead of silently retaining a reply that
             // ignored them. This currency check is a narrow format backstop, not a PII detector.
             let currency = #"(?:[$€£¥]\s*\d|\b(?:USD|EUR|GBP|INR)\s*\d|\b\d[\d,.]*\s*(?:[KMB]\s*)?(?:dollars|euros|pounds|rupees)\b)"#

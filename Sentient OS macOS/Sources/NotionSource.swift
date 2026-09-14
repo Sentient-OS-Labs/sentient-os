@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import os
 
 enum NotionSource {
     struct Candidate: Codable, Sendable, Equatable {
@@ -139,7 +138,7 @@ enum NotionSource {
             var envelope: CodexCLI.Envelope?
             let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous output failed validation. Recheck the exact item count, third person, source references, action heading, and privacy rules. Return only valid JSON.")
             do {
-                let result = try await model(prompt: attemptPrompt, schema: MCPSource.readSchema,
+                let result = try await MCPSource.model(prompt: attemptPrompt, schema: MCPSource.readSchema,
                     slug: connection.slug, claudeModel: claudeModel)
                 envelope = result
                 guard let bytes = result.jsonResult.data(using: .utf8),
@@ -201,33 +200,6 @@ enum NotionSource {
         return Content(pages: pages, inspectedCount: selected.count - skipped, skippedCount: skipped)
     }
 
-    static func model(prompt: String, schema: String, slug: String,
-                      claudeModel: ClaudeCLI.Model?) async throws -> CodexCLI.Envelope {
-        let invocation = modelInvocation(prompt: prompt, schema: schema, claudeModel: claudeModel)
-        let result = try await FrontierRun.run(invocation)
-        MCPSource.meter.withLock { values in
-            var total = values[slug] ?? (0, 0)
-            total.tokensIn += result.inputTokens ?? 0; total.tokensOut += result.outputTokens ?? 0
-            values[slug] = total
-        }
-        return result
-    }
-
-    static func modelInvocation(prompt: String, schema: String, claudeModel: ClaudeCLI.Model?) -> CodexCLI.Invocation {
-        var invocation = CodexCLI.Invocation(prompt: prompt)
-        invocation.feature = "mcp-read"
-        invocation.model = .gpt56luna
-        invocation.claudeModel = claudeModel
-        invocation.effort = .medium
-        invocation.sandbox = .readOnly
-        invocation.includeUserConfig = false
-        invocation.toolsDisabled = true
-        invocation.webSearch = false
-        invocation.timeout = 300
-        invocation.outputSchema = schema
-        return invocation
-    }
-
     private static func select(_ candidates: [Candidate], cap: Int, slug: String,
                                claudeModel: ClaudeCLI.Model?, onReceipt: MCPSource.ReceiptObserver?) async throws -> [Candidate] {
         guard candidates.count > cap else { return candidates }
@@ -243,7 +215,7 @@ enum NotionSource {
         \(String(decoding: data, as: UTF8.self))
         """
         let schema = #"{"type":"object","additionalProperties":false,"required":["ids"],"properties":{"ids":{"type":"array","items":{"type":"string"},"maxItems":\#(cap)}}}"#
-        let result = try await model(prompt: prompt, schema: schema, slug: slug, claudeModel: claudeModel)
+        let result = try await MCPSource.model(prompt: prompt, schema: schema, slug: slug, claudeModel: claudeModel)
         let selected: [Candidate]
         do { selected = try selectedCandidates(result.jsonResult, candidates: candidates, cap: cap) }
         catch {

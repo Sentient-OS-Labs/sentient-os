@@ -72,7 +72,7 @@ enum NotionCurationTests {
             read.mcpReadConnectors = [connection.slug]; read.webSearch = false; read.connectorOnlyRead = true
             var action = CodexCLI.Invocation(prompt: "Synthetic action")
             action.mcpActionServer = connection.taskTarget; action.webSearch = false
-            let summary = NotionSource.modelInvocation(prompt: "Synthetic evidence", schema: MCPSource.readSchema, claudeModel: nil)
+            let summary = MCPSource.modelInvocation(prompt: "Synthetic evidence", schema: MCPSource.readSchema, claudeModel: nil)
             let cases: [(String, CodexCLI.Invocation, [DirectMCPRuntime.Attachment])] = [
                 ("read", read, [.init(connection: connection, allowed: reads, deadline: Date().addingTimeInterval(300))]),
                 ("action", action, [.init(connection: connection, allowed: connection.actionNames, deadline: Date().addingTimeInterval(300), target: connection.taskTarget)]),
@@ -151,7 +151,7 @@ enum NotionCurationTests {
             for (name, page, expectedNotable) in [("positive", positive, true), ("template", template, false)] {
                 let prompt = try NotionSource.evidencePrompt(MCPSource.prompt(slug: "notion", name: "Notion", backend: ModelBackend.current,
                     mode: .iterative, window: window), actorID: "fixture-user", actorName: "Alex Rivera", coverage: .editedSample, pages: [page])
-                let result = try await NotionSource.model(prompt: prompt, schema: MCPSource.readSchema, slug: "notion", claudeModel: nil)
+                let result = try await MCPSource.model(prompt: prompt, schema: MCPSource.readSchema, slug: "notion", claudeModel: nil)
                 try result.raw.write(to: output.appending(path: "fixture-\(name)-raw.jsonl"), atomically: true, encoding: .utf8)
                 let outcome = try MCPSource.parse(result.result, slug: "notion")
                 try NotionSource.validateSummary(outcome, pages: [page], mode: .iterative, slug: "notion")
@@ -337,7 +337,7 @@ enum NotionCurationTests {
             DirectMCPRuntime.cancel(connectionID: cancellationID)
             do { _ = try await running.value; check(false, "disconnect must cancel tracked native work") }
             catch is CancellationError { check(true, "disconnect cancels tracked native work") }
-            let inv = NotionSource.modelInvocation(prompt: "Synthetic evidence", schema: MCPSource.readSchema, claudeModel: nil)
+            let inv = MCPSource.modelInvocation(prompt: "Synthetic evidence", schema: MCPSource.readSchema, claudeModel: nil)
             check(inv.toolsDisabled && !inv.includeUserConfig && !inv.webSearch && inv.mcpReadConnectors.isEmpty, "summarizer cannot perform connector reads or writes")
             let codex = try ModelBackend.$runOverride.withValue(.chatgpt) {
                 try CodexCLI.arguments(for: inv, modelID: "fixture", effortArg: "medium", schemaFile: nil)
