@@ -93,7 +93,8 @@ enum ComputerUseSetup {
         //    PURPOSE: its skill drives a node_repl tool current CLIs no longer have, so it
         //    self-migrates to the MCP payload on the next setup pass.
         let pluginRoot = codexHome.appendingPathComponent("plugins/cache/openai-bundled/computer-use")
-        let hasPlugin = (try? fm.contentsOfDirectory(atPath: pluginRoot.path))?.contains {
+        //    A `<version>.staging` dir is a copy dittoReplace never swapped in, so it doesn't count.
+        let hasPlugin = (try? fm.contentsOfDirectory(atPath: pluginRoot.path))?.filter({ !$0.hasSuffix(".staging") }).contains {
             let root = pluginRoot.appendingPathComponent($0)
             return fm.fileExists(atPath: root.appendingPathComponent(".codex-plugin/plugin.json").path)
                 && fm.fileExists(atPath: root.appendingPathComponent(".mcp.json").path)
@@ -116,7 +117,6 @@ enum ComputerUseSetup {
 
         let tmp = fm.temporaryDirectory
         let dmg = tmp.appendingPathComponent("SentientCodex.dmg")
-        let mount = tmp.appendingPathComponent("sentient-codex-mnt-\(UUID().uuidString.prefix(8))")
         defer { try? fm.removeItem(at: dmg) }
 
         // 1) Download (≈535 MB) straight from OpenAI's CDN, with % progress.
@@ -129,13 +129,20 @@ enum ComputerUseSetup {
             }.run(from: dmgURL)
         } catch { throw SetupError.download((error as? LocalizedError)?.errorDescription ?? "\(error)") }
 
-        // 2) Mount read-only.
+        // 2) Mount read-only. Let hdiutil choose the mount point and read it back from `-plist`:
+        //    a caller-forced `-mountpoint` under $TMPDIR can leave ditto unable to resolve the
+        //    mounted source ("Cannot get the real path for source") even though FileManager's
+        //    existence checks pass. See #286.
         onLine("Mounting installer…")
-        try? fm.createDirectory(at: mount, withIntermediateDirectories: true)
         let attach = try await sh("/usr/bin/hdiutil",
-                                  ["attach", dmg.path, "-nobrowse", "-readonly", "-mountpoint", mount.path])
+                                  ["attach", dmg.path, "-nobrowse", "-readonly", "-plist"])
         guard attach.status == 0 else { throw SetupError.mount(attach.out.trimmedTail) }
-        defer { detachQuietly(mount); try? fm.removeItem(at: mount) }
+        let attached = attachedVolume(fromAttachOutput: attach.out)
+        guard let mount = attached.mountPoint else {
+            if let device = attached.device { detachQuietly(URL(fileURLWithPath: device)) }
+            throw SetupError.mount("couldn't read the mount point from hdiutil -plist output")
+        }
+        defer { detachQuietly(mount) }
 
         // 3) Locate the payload + its version.
         let (app, src) = try payloadSource(inMount: mount)
@@ -168,14 +175,44 @@ enum ComputerUseSetup {
 
     /// Replace `dst` with a fresh copy of `src` via /usr/bin/ditto (signature/xattr-preserving;
     /// --noqtn matches the desktop app's own copy — no quarantine rides into ~/.codex).
+    /// The copy lands in a sibling staging path and replaces `dst` only after ditto succeeds, so a
+    /// failed attempt can't wipe a working install (removing `dst` first used to do that). See #286.
     private static func dittoReplace(_ src: URL, _ dst: URL) async throws {
         let fm = FileManager.default
-        try? fm.removeItem(at: dst)
         try? fm.createDirectory(at: dst.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let r = try await sh("/usr/bin/ditto", ["--noqtn", src.path, dst.path])
-        guard r.status == 0, fm.fileExists(atPath: dst.path) else {
+        let staging = dst.appendingPathExtension("staging")
+        try? fm.removeItem(at: staging)
+        let r = try await sh("/usr/bin/ditto", ["--noqtn", src.path, staging.path])
+        guard r.status == 0, fm.fileExists(atPath: staging.path) else {
+            try? fm.removeItem(at: staging)
             throw SetupError.copy("ditto \(src.lastPathComponent): \(r.out.trimmedTail)")
         }
+        try? fm.removeItem(at: dst)
+        do { try fm.moveItem(at: staging, to: dst) }
+        catch {
+            try? fm.removeItem(at: staging)
+            throw SetupError.copy("swap \(dst.lastPathComponent): \(error)")
+        }
+    }
+
+    /// What `hdiutil attach -plist` reported: the mount point it chose, plus the whole-disk device so
+    /// the caller can still detach when there is no usable mount point. `sh` merges stderr into the
+    /// same pipe, so only the plist document itself is parsed. See #286.
+    private static func attachedVolume(fromAttachOutput out: String) -> (mountPoint: URL?, device: String?) {
+        // Fallback device in case the plist itself can't be parsed.
+        let rawDevice = out.range(of: #"/dev/disk[0-9]+"#, options: .regularExpression).map { String(out[$0]) }
+        guard let start = out.range(of: "<?xml"),
+              let end = out.range(of: "</plist>", options: .backwards),
+              start.lowerBound < end.upperBound,
+              let root = try? PropertyListSerialization.propertyList(
+                  from: Data(out[start.lowerBound..<end.upperBound].utf8), format: nil) as? [String: Any],
+              let entities = root["system-entities"] as? [[String: Any]] else {
+            return (nil, rawDevice)
+        }
+        let mount = entities.compactMap { $0["mount-point"] as? String }.first { !$0.isEmpty }
+        // "/dev/diskN" is shorter than its slices ("/dev/diskNs1"); detaching it detaches them all.
+        let device = entities.compactMap { $0["dev-entry"] as? String }.min { $0.count < $1.count } ?? rawDevice
+        return (mount.map { URL(fileURLWithPath: $0) }, device)
     }
 
     /// Pull the plugin version (e.g. "1.0.1000502") out of the plugin's manifest — it names the cache dir.
