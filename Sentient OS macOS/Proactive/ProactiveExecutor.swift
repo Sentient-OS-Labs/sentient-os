@@ -66,7 +66,9 @@ actor ProactiveExecutor {
 
     func fire(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         // trigger=card: every codex call under a card fire reports it (task-local, inherited).
-        await CodexTrigger.$current.withValue(.card) { await fireBody(action, progress: progress) }
+        await ModelBackend.$runOverride.withValue(ModelBackend.current) {
+            await CodexTrigger.$current.withValue(.card) { await fireBody(action, progress: progress) }
+        }
     }
 
     private func fireBody(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
@@ -210,12 +212,8 @@ actor ProactiveExecutor {
 
     /// The shared invocation for every connector fire — the FIRED-TASK recipe: sandbox ON, one
     /// server walled in with its writes approved and its destructive tools denied
-    /// (`mcpActionServer`; README decision #9's server-scoped approval). One deliberate
-    /// exception: on the Claude engine an UNCLASSIFIED chip (gmail/calendar in the minutes after
-    /// an update, before the idle-tick classifier sweep lands) fires on the shipped
-    /// `approveConnectorWrites` path instead — byte-identical to the 1.x posture, so the
-    /// hardening can never cost a user their fire. Other unclassified slugs get no fallback:
-    /// the Claude builder refuses them fail-closed and the card reports an honest failure.
+    /// (`mcpActionServer`). Claude refreshes an unavailable classification first; if it still
+    /// cannot establish current policy, the builder refuses the fire without widening access.
     private func fireConnector(slug: String, channel: String, feature: String, prompt: String,
                                progress: @escaping @Sendable (String) -> Void) async -> FireResult {
         var inv = CodexCLI.Invocation(prompt: prompt)
@@ -225,13 +223,8 @@ actor ProactiveExecutor {
         inv.includeUserConfig = true         // the recipes need the connector fetch
         inv.webSearch = false
         inv.timeout = 300
-        if ModelBackend.current == .claude, !ConnectorRegistry.isClassified(slug),
-           slug == "gmail" || slug == "google-calendar" {
-            inv.configOverrides = CodexCLI.Invocation.approveConnectorWrites
-            Log("ProactiveExecutor/\(channel): \(slug) not classified yet — firing on the shipped pre-approval path")
-        } else {
-            inv.mcpActionServer = slug
-        }
+        if ModelBackend.current == .claude { await ConnectorClassifier.ensureClassified(slug: slug) }
+        inv.mcpActionServer = slug
         return await runConnector(inv, channel: channel, progress: progress)
     }
 
@@ -242,32 +235,16 @@ actor ProactiveExecutor {
         do {
             let env = try await FrontierRun.run(inv) { progress($0) }   // live play-by-play
             Log("ProactiveExecutor/\(channel): ✓ (\(env.result.count) chars)")   // B7: length, not content
-            switch AgentStatus.parse(env.result) {
+            switch AgentStatus.parseConnector(env.result) {
             case .couldNot(let reason):
-                // Self-healing fallback: agent-reported failure + the deterministic auto-cancel
-                // marker in the JSONL = the sandboxed write approval didn't take — the per-id
-                // approve (`mcpActionServer`) or the `approveConnectorWrites` preset — because a
-                // codex update changed the apps config surface / an old CLI. ONE retry on the
-                // legacy bypass path — same fixed app-authored wrapper — so the sandbox hardening
-                // can never cost a user their fire; the event tells us the field regressed.
-                // (The marker is codex's; Claude runs never carry it, so this stays codex-only.)
-                if !inv.bypassApprovals, env.raw.contains("cancelled MCP tool call") {
-                    Log("ProactiveExecutor/\(channel): sandboxed write auto-cancelled — one retry on the bypass path")
-                    CrashReporting.captureEvent("codex.fire_fallback", level: .warning,
-                        tags: ["channel": channel], extra: [:],
-                        fingerprint: ["codex", "fire_fallback", channel])
-                    var retry = inv
-                    retry.bypassApprovals = true
-                    retry.configOverrides = []
-                    retry.mcpActionServer = nil   // the recipes never combine with bypass (asserted
-                                                  // in both engines' builders)
-                    progress("Retrying…")
-                    return await runConnector(retry, channel: channel, progress: progress)
-                }
+                // A run can fail after a successful mutation. Never repeat it automatically
+                // with broader permissions based on a message substring.
                 return FireResult(outcome: .failed(reason.isEmpty ? "The agent reported it couldn't complete this." : reason),
                                   board: .refused, statusPresent: true, errorClass: "refused")
             case .done: return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: true, errorClass: nil)
-            case .none: return FireResult(outcome: .fired(env.result), board: .fired, statusPresent: false, errorClass: nil)
+            case .none:
+                return FireResult(outcome: .failed(AgentStatus.unconfirmedConnectorMessage),
+                                  board: .failed, statusPresent: false, errorClass: "unconfirmed")
             }
         } catch {
             Log("ProactiveExecutor/\(channel): ✗ \(ErrorLabel(error))")
