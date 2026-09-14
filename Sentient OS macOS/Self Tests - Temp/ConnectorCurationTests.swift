@@ -67,6 +67,44 @@ enum ConnectorCurationTests {
             let sensitive = #"{"item_count":1,"notable":true,"has_action_items":false,"summary":"Synthetic card fixture: 4111 1111 1111 1111","tool_failure":""}"#
             check(try MCPSource.parse(sensitive, slug: slug) == .quiet(itemCount: 0), "high-risk text is dropped before observation or storage")
 
+            func codexReadTrace(_ name: String, failed: Bool = false, completed: Bool = true) throws -> String {
+                let value: [String: Any] = ["type": "item.completed", "item": [
+                    "type": "mcp_tool_call", "tool": name, "status": completed ? "completed" : "failed",
+                    "error": NSNull(), "result": ["isError": failed, "content": []]]]
+                return String(data: try JSONSerialization.data(withJSONObject: value), encoding: .utf8)!
+            }
+            func claudeReadTrace(_ name: String, failed: Bool = false, resultID: String = "read1") throws -> String {
+                let call: [String: Any] = ["type": "assistant", "message": ["content": [[
+                    "type": "tool_use", "id": "read1", "name": name]]]]
+                let result: [String: Any] = ["type": "user", "message": ["content": [[
+                    "type": "tool_result", "tool_use_id": resultID, "is_error": failed,
+                    "content": [["type": "text", "text": "{\"files\":[]}"]]]]]]
+                return try [call, result].map { String(data: try JSONSerialization.data(withJSONObject: $0), encoding: .utf8)! }.joined(separator: "\n")
+            }
+            check(!MCPSource.hasDriveReadEvidence(raw: #"{"type":"item.completed","item":{"type":"agent_message","text":"I checked Drive and found nothing"}}"#,
+                backend: .chatgpt, requiresDiscovery: true), "model prose is not evidence for a quiet checkpoint")
+            check(try MCPSource.hasDriveReadEvidence(raw: codexReadTrace("google_drive.search"),
+                backend: .chatgpt, requiresDiscovery: true), "successful empty discovery permits a quiet result")
+            check(try !MCPSource.hasDriveReadEvidence(raw: codexReadTrace("google_drive.search", failed: true),
+                backend: .chatgpt, requiresDiscovery: true), "failed discovery cannot establish quiet success")
+            check(try !MCPSource.hasDriveReadEvidence(raw: codexReadTrace("google_drive.search", completed: false),
+                backend: .chatgpt, requiresDiscovery: true), "incomplete tool calls are not successful reads")
+            check(try !MCPSource.hasDriveReadEvidence(raw: codexReadTrace("google_drive.fetch"),
+                backend: .chatgpt, requiresDiscovery: true), "one fetched file cannot establish a quiet discovery window")
+            check(try MCPSource.hasDriveReadEvidence(raw: codexReadTrace("gdrive.fetch"),
+                backend: .chatgpt, requiresDiscovery: false), "successful content reads can support notable results")
+            check(try !MCPSource.hasDriveReadEvidence(raw: codexReadTrace("gmail.search"),
+                backend: .chatgpt, requiresDiscovery: true), "another connector cannot establish Drive read evidence")
+            let search = "mcp__claude_ai_Google_Drive__search_files"
+            check(try MCPSource.hasDriveReadEvidence(raw: claudeReadTrace(search),
+                backend: .claude, requiresDiscovery: true), "Claude discovery requires a paired successful tool result")
+            check(try !MCPSource.hasDriveReadEvidence(raw: claudeReadTrace(search, failed: true),
+                backend: .claude, requiresDiscovery: true), "Claude permission denials cannot advance a quiet checkpoint")
+            check(try !MCPSource.hasDriveReadEvidence(raw: claudeReadTrace(search, resultID: "unrelated"),
+                backend: .claude, requiresDiscovery: true), "unmatched Claude tool results are not read evidence")
+            check(try !MCPSource.hasDriveReadEvidence(raw: claudeReadTrace("ToolSearch"),
+                backend: .claude, requiresDiscovery: true), "discovering tool names is not reading Drive")
+
             let schema = Schema([BucketPointer.self, CycleNote.self])
             let container = try ModelContainer(for: schema,
                 configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))

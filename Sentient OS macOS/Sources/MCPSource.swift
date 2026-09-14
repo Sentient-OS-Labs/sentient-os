@@ -372,6 +372,10 @@ enum MCPSource {
                     m[slug] = t
                 }
                 let outcome = try parse(env.result, slug: slug)
+                if slug == "google-drive", !hasDriveReadEvidence(raw: env.raw, backend: ModelBackend.current,
+                                                                  requiresDiscovery: outcome.result == nil) {
+                    throw MCPError.invalidResponse(slug: slug, rule: "read_evidence")
+                }
                 Log("MCPSource.read(\(slug)): \(Int(Date().timeIntervalSince(started)))s"
                     + " · tokens in=\(env.inputTokens ?? 0) cached=\(env.cachedInputTokens ?? 0) out=\(env.outputTokens ?? 0)")
                 onReceipt?(env, outcome, attempt, attemptPrompt, "content")
@@ -391,6 +395,10 @@ enum MCPSource {
                     every required field, the ACTION ITEMS heading/flag agreement, third-person
                     wording, and the prohibition on exact financial amounts. Return only a valid
                     result grounded in the permitted Drive reads. Do not repeat an invalid output.
+                    Success requires an actual successful Drive tool call, and a quiet result
+                    requires successful search/list discovery. Discover the permitted tools if
+                    needed; a text-only claim of having checked is not read evidence. If the tools
+                    fail, report tool_failure instead of a successful quiet result.
                     """
                 }
                 lastError = error

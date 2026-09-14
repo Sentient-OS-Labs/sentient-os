@@ -79,15 +79,9 @@ extension MCPSource {
             return nil
         }
         var identities = Set<String?>()
-        for line in raw.split(separator: "\n") {
-            guard let data = line.data(using: .utf8),
-                  let event = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  event["type"] as? String == "item.completed",
-                  let item = event["item"] as? [String: Any], item["type"] as? String == "mcp_tool_call",
-                  ["google_drive.get_profile", "gdrive.get_profile"].contains(item["tool"] as? String ?? ""),
-                  item["status"] as? String == "completed", item["error"] == nil || item["error"] is NSNull,
-                  let result = item["result"] as? [String: Any],
-                  result["isError"] as? Bool != true, result["is_error"] as? Bool != true else { continue }
+        for reply in successfulCodexMCPResults(raw: raw)
+            where ["google_drive.get_profile", "gdrive.get_profile"].contains(reply.tool) {
+            let result = reply.result
             var found = result["structuredContent"].flatMap(profile) ?? result["structured_content"].flatMap(profile)
             if found == nil, let blocks = result["content"] as? [[String: Any]] {
                 for block in blocks {
