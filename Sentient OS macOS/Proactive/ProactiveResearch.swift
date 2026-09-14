@@ -171,12 +171,11 @@ actor ProactiveResearch {
         inv.cwd = vault.path                // working dir = the knowledge base (a research surface + the voice)
         inv.webSearch = true                // ground external facts (on-sale/event dates, deadlines, form fields)
         inv.includeUserConfig = true        // the recipes need the connector fetch (walled to the listed servers on Claude)
-        inv.bypassApprovals = false         // ⚠️ load-bearing: NO fire — a connector write auto-cancels
+        inv.bypassApprovals = false         // unattended: only curated connector reads may execute
         inv.mcpReadConnectors = ["gmail", "google-calendar"] + kbReads
                                             // ⚠️ the unattended-read recipe: Gmail/Calendar +
                                             // KB-enabled connectors readable, and the send/destroy
-                                            // tools structurally out of reach (stripped per id on
-                                            // codex; unlisted on Claude's allow rules)
+                                            // tools out of reach through each engine's read allowlist
         inv.outputSchema = Self.schema(channels: channels)
         inv.timeout = 1_800                 // agentic verify + prepare (Gmail + web + vault) over ≤5 items runs long
         inv.claudeModel = .opus             // the Claude engine's heavy leg: research earns Opus

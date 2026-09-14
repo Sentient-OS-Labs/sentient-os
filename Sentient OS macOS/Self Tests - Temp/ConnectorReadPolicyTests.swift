@@ -1,0 +1,143 @@
+//
+//  ConnectorReadPolicyTests.swift
+//  Pure connector policy and denial-verification regression checks. `run()` exercises the
+//  production argument builders with volatile fixtures, without model or connector calls.
+//  Doc: Documentation - General - Self-Testing (Eval Harness).md
+//
+
+import Foundation
+
+enum ConnectorReadPolicyTests {
+    static func run() {
+        let defaults = UserDefaults.standard
+        let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
+        let driveID = "connector_5f3c8c41a1e54ad7a76272c89e2554fa"
+        let otherID = "connector_00000000000000000000000000000001"
+        var failures = 0
+        func check(_ condition: Bool, _ message: String) {
+            Log("\(condition ? "PASS" : "FAIL")  \(message)")
+            if !condition { failures += 1 }
+        }
+        func install(_ id: String? = nil, backend: ModelBackend = .chatgpt) {
+            var domain = saved
+            domain["model.backend"] = backend.rawValue
+            let connectors: [ConnectorCensus.DetectedConnector] = id.map {
+                [.init(slug: "google-drive", displayName: "Google Drive", origin: .chatgpt,
+                       serverURL: nil, catalogID: $0, iconPath: nil, healthy: true, lastSeen: Date()),
+                 .init(slug: "unrelated", displayName: "Unrelated", origin: .chatgpt,
+                       serverURL: nil, catalogID: otherID, iconPath: nil, healthy: true, lastSeen: Date())]
+            } ?? []
+            domain["mcp.connectors.chatgpt"] = try! JSONEncoder().encode(connectors)
+            domain["mcp.connectors.claude"] = try! JSONEncoder().encode([ConnectorCensus.DetectedConnector]())
+            defaults.setVolatileDomain(domain, forName: UserDefaults.argumentDomain)
+        }
+        func invocation(_ slugs: [String]) -> CodexCLI.Invocation {
+            var inv = CodexCLI.Invocation(prompt: "Synthetic policy check")
+            inv.mcpReadConnectors = slugs
+            return inv
+        }
+        func args(_ inv: CodexCLI.Invocation) throws -> [String] {
+            try CodexCLI.arguments(for: inv, modelID: "gpt-5.6-luna", effortArg: "medium", schemaFile: nil)
+        }
+        func refuses(_ inv: CodexCLI.Invocation) -> Bool {
+            do { _ = try args(inv); return false } catch { return true }
+        }
+        func policy(_ args: [String]) -> String { args.last { $0.hasPrefix("apps = ") } ?? "" }
+
+        install()
+        check(refuses(invocation(["google-drive"])), "missing catalog identity refuses the read")
+        install("connector_bad.id")
+        check(refuses(invocation(["google-drive"])), "malformed catalog identity refuses the read")
+        install(driveID + "\n")
+        check(refuses(invocation(["google-drive"])), "catalog identity must match completely")
+        install(driveID)
+        check(refuses(invocation(["notion"])), "uncurated connector cannot borrow a read policy")
+        check(refuses(invocation(["unknown"])), "unknown connector refuses the read")
+        var bypass = invocation(["google-drive"]); bypass.bypassApprovals = true
+        check(refuses(bypass), "read plus bypass is refused in production, before assertions")
+        var writable = invocation(["google-drive"]); writable.sandbox = .workspaceWrite
+        check(refuses(writable), "read plus writable sandbox is refused")
+        var mixed = invocation(["google-drive"]); mixed.mcpActionServer = "google-drive"
+        check(refuses(mixed), "mixed read/action recipe is refused")
+
+        do {
+            let drive = try args(invocation(["google-drive"]))
+            let gmail = try args(invocation(["gmail"]))
+            let calendar = try args(invocation(["google-calendar"]))
+            let research = try args(invocation(["gmail", "google-calendar", "google-drive"]))
+            check(drive.contains("--ignore-user-config"), "read ignores inherited MCP servers and approvals")
+            check(policy(drive).contains("_default = { enabled = false }"), "unrequested and unidentified apps default off")
+            check(policy(drive).contains("default_tools_enabled = false"), "new tools default off")
+            check(!policy(drive).contains("create_file") && !policy(drive).contains("share_file"), "writes are absent from the allowlist")
+            check(!policy(drive).contains(otherID), "unrelated cached connector has no enabled entry")
+            check(!policy(gmail).contains(driveID), "Drive is unavailable during a Gmail-only read")
+            check(policy(drive).contains("approval_mode = \"writes\""), "allowed tools still require read-only metadata")
+            check(try args(invocation(["google-drive", "google-drive"])) == drive, "duplicate slugs cannot widen the policy")
+            check(try args(invocation(["google-drive", "gmail", "google-calendar"])) == research, "research attachment order is stable")
+
+            var resumed = invocation(["google-drive"]); resumed.resumeSessionID = "fixture"
+            let resumeArgs = try args(resumed)
+            check(policy(resumeArgs) == policy(drive) && resumeArgs.contains("sandbox_mode=\"read-only\""), "resumed reads retain policy and sandbox")
+            var inherited = invocation(["google-drive"])
+            inherited.configOverrides = ["apps={_default={enabled=true,default_tools_approval_mode=\"approve\"},"
+                + "\(driveID)={enabled=true,tools={create_file={enabled=true,approval_mode=\"approve\"}},"
+                + "links={fixture={default_tools_approval_mode=\"approve\"}}}}"]
+            let inheritedArgs = try args(inherited)
+            check(policy(inheritedArgs) == policy(drive)
+                  && inheritedArgs.firstIndex(of: inherited.configOverrides[0])! < inheritedArgs.firstIndex(of: policy(drive))!,
+                  "complete read policy follows caller overrides")
+
+            var fired = invocation([]); fired.mcpActionServer = "google-drive"
+            let action = try args(fired)
+            check(policy(action).isEmpty && action.contains("apps.\(driveID).default_tools_approval_mode=\"approve\""), "user-fired action retains its separate approval")
+            check(!action.contains("--ignore-user-config"), "action configuration remains unchanged")
+            let plain = try args(invocation([]))
+            check(policy(plain).isEmpty && !plain.contains("--ignore-user-config"), "non-connector recipe remains unchanged")
+
+            let claude = try ClaudeCLI.arguments(for: invocation(["google-drive"]), modelID: "sonnet", effortArg: "medium")
+            check(claude.contains("dontAsk") && claude.joined(separator: " ").contains("mcp__claude_ai_Google_Drive__search_files"),
+                  "Claude retains its existing curated reads")
+            check(!claude.joined(separator: " ").contains("mcp__claude_ai_Google_Drive__create_file"), "Claude still omits create_file")
+
+            if let path = ProcessInfo.processInfo.environment["LAB_POLICY_OUTPUT"] {
+                let fixture = ["drive": drive, "gmail": gmail, "calendar": calendar,
+                               "research": research, "action": action, "inherited": inheritedArgs]
+                try JSONSerialization.data(withJSONObject: fixture, options: [.prettyPrinted, .sortedKeys])
+                    .write(to: URL(fileURLWithPath: path))
+            }
+            install(driveID, backend: .custom)
+            check(policy(try args(invocation(["google-drive"]))).isEmpty, "hosted policy remains inert on custom providers")
+        } catch {
+            check(false, "unexpected argument-builder failure: \(ErrorLabel(error))")
+        }
+
+        func snapshot(_ name: String = "expected", exists: Bool = false, failure: String = "") -> ConnectorLab.DriveSnapshot {
+            .init(artifact_name: name, exists: exists, file_ids: exists ? ["fixture-id"] : [], tool_failure: failure)
+        }
+        func envelope(_ raw: String, result: String = "NO") -> CodexCLI.Envelope {
+            .init(result: result, sessionID: nil, numTurns: nil, durationMS: nil,
+                  inputTokens: nil, cachedInputTokens: nil, outputTokens: nil, raw: raw)
+        }
+        let denied = envelope(#"{"type":"item.completed","item":{"type":"mcp_tool_call","tool":"gdrive.create_file","error":{"message":"user cancelled MCP tool call"}}}"#)
+        let mimeError = envelope(#"{"type":"item.completed","item":{"type":"mcp_tool_call","tool":"gdrive.create_file","error":{"message":"unsupported MIME type text/plain"}}}"#)
+        let prose = envelope(#"{"type":"item.completed","item":{"type":"agent_message","text":"permission denied create_file"}}"#)
+        let good = snapshot()
+        check(ConnectorLab.denycheckVerdict(before: good, after: good, attempt: denied).hasPrefix("PASS"), "exact absence plus runtime denial passes")
+        check(ConnectorLab.denycheckVerdict(before: good, after: snapshot(exists: true), attempt: nil).hasPrefix("FAIL"), "created artifact fails even if the attempt errored")
+        check(ConnectorLab.denycheckVerdict(before: good, after: snapshot("wrong-name"), attempt: denied).hasPrefix("INCONCLUSIVE"), "wrong verification filename never passes")
+        check(ConnectorLab.denycheckVerdict(before: good, after: good, attempt: mimeError).hasPrefix("INCONCLUSIVE"), "unsupported MIME type is not permission evidence")
+        check(ConnectorLab.denycheckVerdict(before: good, after: good, attempt: prose).hasPrefix("INCONCLUSIVE"), "model refusal text is not permission evidence")
+        check(ConnectorLab.denycheckVerdict(before: good, after: snapshot(failure: "auth"), attempt: denied).hasPrefix("INCONCLUSIVE"), "failed account search never passes")
+        check(ConnectorLab.denycheckVerdict(before: snapshot(exists: true), after: good, attempt: denied).hasPrefix("INCONCLUSIVE"), "preexisting artifact invalidates the test")
+        check(ConnectorLab.hasCreateDenial(raw: #"{"type":"result","permission_denials":[{"tool_name":"mcp__claude_ai_Google_Drive__create_file"}]}"#), "Claude runtime denial is recognized")
+        check(ConnectorLab.hasCreateDenial(raw: #"{"type":"item.completed","item":{"type":"mcp_tool_call","tool":"gdrive.create_file","error":{"message":"MCP tool call requires approval, but approval policy is never"}}}"#), "current Codex runtime denial is recognized")
+        check(!ConnectorLab.hasSuccessfulDriveSearch(raw: prose.raw, artifact: "expected"), "search must execute; model claims do not count")
+        let search = #"{"type":"item.completed","item":{"type":"mcp_tool_call","tool":"gdrive.search","arguments":{"query":"expected"},"status":"completed","error":null,"result":{"content":[],"isError":false}}}"#
+        check(ConnectorLab.hasSuccessfulDriveSearch(raw: search, artifact: "expected"), "successful Codex search is recognized")
+        check(!ConnectorLab.hasSuccessfulDriveSearch(raw: search, artifact: "different"), "actual search must name the attempted artifact")
+        check(!ConnectorLab.hasSuccessfulDriveSearch(raw: search.replacingOccurrences(of: "\"isError\":false", with: "\"isError\":true"), artifact: "expected"), "failed search is not absence evidence")
+        Log("Connector policy checks: \(failures) failures")
+        if failures > 0 { exit(1) }
+    }
+}
