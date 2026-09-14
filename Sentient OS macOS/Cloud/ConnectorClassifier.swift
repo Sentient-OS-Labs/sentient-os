@@ -36,7 +36,7 @@ nonisolated enum ConnectorClassifier {
 
     /// The rules every input source shares — tuning happens HERE only, against the Gmail
     /// ground-truth eval (zero write-as-read across three consecutive runs).
-    private static let classificationRules = """
+    static let classificationRules = """
     Classify EVERY one of those tools into exactly one category, from its name and
     description:
     - "read": cannot change anything anywhere; only retrieves or computes.
@@ -164,6 +164,7 @@ nonisolated enum ConnectorClassifier {
 
     @discardableResult
     static func ensureClassified(slug: String) async -> Bool {
+        if let direct = DirectMCPStore.connection(slug) { return direct.usable }
         guard ModelBackend.current == .claude else { return false }
         guard let version = await refreshCLIVersion() else { return false }
         if let cached = ConnectorRegistry.classification(for: slug), isFresh(cached, slug: slug, version: version) {

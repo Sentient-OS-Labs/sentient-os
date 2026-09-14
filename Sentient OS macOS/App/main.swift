@@ -11,7 +11,25 @@
 import Foundation
 import SwiftUI
 
-if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
+#if DEBUG
+if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
+   ProcessInfo.processInfo.environment["LAB_CMD"]?.hasPrefix("direct") == true {
+    if ProcessInfo.processInfo.environment["LAB_CMD"] == "directrender" {
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        Task { await ConnectorLab.run(); exit(0) }
+        NSApplication.shared.run()
+        exit(0)
+    }
+    Task { await ConnectorLab.run(); exit(0) }
+    dispatchMain()
+}
+#endif
+
+if CommandLine.arguments.dropFirst().first.map({ ["--direct-mcp-headers", "--direct-mcp-policy"].contains($0) }) == true {
+    let arguments = CommandLine.arguments
+    Task.detached { exit(await DirectMCPRuntime.runHelper(arguments: arguments)) }
+    dispatchMain()
+} else if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
     CrashReporting.start(.wakeHelper)   // crash reporting for the root overnight path
     WakeHelper.run()                    // root LaunchDaemon mode — never returns
 } else {

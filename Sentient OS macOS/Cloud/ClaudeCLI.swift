@@ -407,6 +407,9 @@ actor ClaudeCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: CodexCLI.Invocation, modelID: String,
                           effortArg: String) throws -> [String] {
+        let direct = DirectMCPRuntime.current
+        let requestedDirect = Set((inv.mcpReadConnectors + [inv.mcpActionServer].compactMap { $0 }).filter { $0.hasPrefix("direct-") })
+        guard requestedDirect.isSubset(of: Set(direct.map(\.requestedTarget))) else { throw DirectMCPError.policyUnavailable }
         if inv.mcpReadToolNames != nil, inv.mcpReadConnectors.count != 1 {
             throw CodexCLI.CLIError.notAvailable(.notWorking("read-tool narrowing requires one connector"))
         }
@@ -438,7 +441,7 @@ actor ClaudeCLI {
                     .notWorking("connector \(slug) has no known claude.ai server"))
             }
             recipeWallURLs = [url]
-        } else if let slug = inv.mcpActionServer {
+        } else if let slug = inv.mcpActionServer, !slug.hasPrefix("direct-") {
             guard let resolved = ConnectorRegistry.server(for: slug),
                   let url = resolved.claudeServerURL,
                   let prefix = resolved.claudeToolPrefix else {
@@ -453,7 +456,7 @@ actor ClaudeCLI {
             recipeAllows = [prefix + "*"]
             recipeDenies = ConnectorRegistry.destructiveToolNames(slug: slug)
         } else {
-            for slug in inv.mcpReadConnectors {
+            for slug in inv.mcpReadConnectors where !slug.hasPrefix("direct-") {
                 let available = ConnectorRegistry.readToolNames(slug: slug)
                 let prefix = ConnectorRegistry.server(for: slug)?.claudeToolPrefix ?? ""
                 let reads = inv.mcpReadToolNames.map { names in names.map { prefix + $0 } } ?? available
@@ -469,6 +472,8 @@ actor ClaudeCLI {
                 recipeAllows += reads
             }
         }
+        recipeAllows += direct.flatMap(\.allAllowed)
+        recipeDenies += direct.flatMap(\.denied)
 
         var args = ["-p",
                     "--output-format", "stream-json", "--verbose",
@@ -477,7 +482,11 @@ actor ClaudeCLI {
                     "--setting-sources", "",
                     "--disable-slash-commands"]
         if let sid = inv.resumeSessionID { args += ["--resume", sid] }
-        if !inv.includeUserConfig {
+        if !direct.isEmpty {
+            if recipeWallURLs.isEmpty { args += ["--strict-mcp-config"] }
+            args += ["--mcp-config", try DirectMCPRuntime.claudeConfig(direct),
+                     "--settings", try DirectMCPRuntime.claudeSettings(direct, hostedURLs: recipeWallURLs)]
+        } else if !inv.includeUserConfig || inv.toolsDisabled {
             args += ["--strict-mcp-config", "--mcp-config", #"{"mcpServers":{}}"#]
         } else if !recipeWallURLs.isEmpty {
             // The recipe wall: ONLY the recipe's server(s) may load — the user's own MCP
@@ -524,7 +533,7 @@ actor ClaudeCLI {
         if inv.sandbox == .readOnly, !skippedPermissions {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
-            var tools = inv.connectorOnlyRead ? [] : ["Bash", "Glob", "Grep", "Read"]
+            var tools = inv.connectorOnlyRead || inv.toolsDisabled ? [] : ["Bash", "Glob", "Grep", "Read"]
             if inv.webSearch { tools += ["WebSearch", "WebFetch"] }
             args += ["--tools", tools.joined(separator: ",")]
         }
@@ -550,7 +559,7 @@ actor ClaudeCLI {
         for serverURL in serverURLs {
             var glob = serverURL
             if let url = URL(string: serverURL), let scheme = url.scheme, let host = url.host {
-                glob = "\(scheme)://\(host)/*"
+                glob = "\(scheme)://\(host)\(url.port.map { ":\($0)" } ?? "")/*"
             }
             entries.append(["serverUrl": glob])
         }
@@ -607,11 +616,18 @@ actor ClaudeCLI {
     /// Zero attachable connectors = the strict wall, byte-identical to shipped.
     /// `--settings` applies even under `--setting-sources ""` (measured 2026-08-23).
     static func agentArguments(prompt: String, modelID: String, effortArg: String,
-                               socketPath: String) -> [String] {
+                               socketPath: String) throws -> [String] {
+        let direct = DirectMCPRuntime.current
         let mcpWall: [String]
         var disallowed = CuaDriver.claudeDisallowedMcpTools
         let (attached, excluded) = ConnectorRegistry.computerUseAttachments()
-        if attached.isEmpty {
+        if !direct.isEmpty {
+            let settings = try DirectMCPRuntime.claudeSettings(direct,
+                hostedURLs: attached.compactMap(\.server.claudeServerURL), driver: true, guardBypass: true)
+            mcpWall = (attached.isEmpty ? ["--strict-mcp-config"] : []) + ["--settings", settings]
+            for attachment in attached { disallowed += attachment.denies }
+            disallowed += direct.flatMap(\.denied)
+        } else if attached.isEmpty {
             mcpWall = ["--strict-mcp-config"]
         } else {
             mcpWall = ["--settings",
@@ -628,7 +644,8 @@ actor ClaudeCLI {
                 "--setting-sources", "",
                 "--disable-slash-commands"]
             + mcpWall
-            + ["--mcp-config", CuaDriver.claudeMcpConfig(socketPath: socketPath),
+            + ["--mcp-config", direct.isEmpty ? CuaDriver.claudeMcpConfig(socketPath: socketPath)
+                : try DirectMCPRuntime.claudeConfig(direct, driverJSON: CuaDriver.claudeMcpConfig(socketPath: socketPath)),
                // Bash = the shim's one-shot action calls; Read = the screenshots. Nothing
                // else from the built-in surface (a file the task needs written goes
                // through the shell, same as on codex).
@@ -657,7 +674,7 @@ actor ClaudeCLI {
             var fullPrompt = prompt
             if !imagePaths.isEmpty { fullPrompt += Self.screenshotsBlock(imagePaths) }
 
-            let args = Self.agentArguments(prompt: fullPrompt, modelID: modelID,
+            let args = try Self.agentArguments(prompt: fullPrompt, modelID: modelID,
                                            effortArg: effortArg, socketPath: socket)
 
             var env = Self.baseEnv

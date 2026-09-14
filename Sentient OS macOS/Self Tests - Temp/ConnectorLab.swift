@@ -52,6 +52,19 @@ enum ConnectorLab {
         let command = ProcessInfo.processInfo.environment["LAB_CMD"] ?? "census"
         Log("=== connector-lab: \(command) ===")
         switch command {
+        case "directcheck": await DirectMCPTests.check()
+        case "directauth": await DirectMCPTests.authorize()
+        case "directfixture": await DirectMCPTests.exportFixture()
+        case "directprotocol": await DirectMCPTests.protocolFixture()
+        case "directcleanup": DirectMCPTests.cleanupFixture()
+        case "directinspect": await DirectMCPTests.inspectConnection()
+        case "directread": await DirectMCPTests.readConnection()
+        case "directrefresh": await DirectMCPTests.refreshConnection()
+        case "directrender": await DirectMCPTests.renderConnectView()
+        case "directdiscovery": await DirectMCPTests.discoverProviders()
+        case "directlegacy": ConnectorReadPolicyTests.run()
+        case "directkbtrial": await DirectMCPTests.knowledgeTrial()
+        case "directverify": await DirectMCPTests.verifyConnection()
         case "census":   await census()
         case "parse":    parse()
         case "warm":     await warm()
@@ -848,7 +861,7 @@ enum ConnectorLab {
 
         Log("-- computer-use argv (placeholder prompt/socket; the 1.6 wall is live) --")
         show("claude agent",
-             ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
+             try! ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
                                       socketPath: "/tmp/lab.sock"))
         show("codex agent",
              CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-5.6-sol",

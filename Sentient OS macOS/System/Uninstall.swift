@@ -23,6 +23,7 @@ import Foundation
 import AppKit
 
 enum Uninstall {
+    static var lastFailure: String?
 
     /// The user-facing teardown stages, in run order — the farewell sheet renders each `whisper`
     /// (the mono-caps voice) while its stage runs. The helper goes FIRST: it's the only stage that
@@ -49,13 +50,14 @@ enum Uninstall {
 
     /// The full teardown. `progress` fires on the main actor before each stage so the sheet can
     /// render its whisper; `helperDecision` is asked ONLY when the root admin prompt is declined
-    /// (Try Again / Skip / Cancel). Returns false iff the user cancelled at that prompt — before
-    /// anything irreversible ran, with the scheduler flags restored.
+    /// (Try Again / Skip / Cancel). Returns false on cancellation or an incomplete Keychain
+    /// cleanup. `lastFailure` distinguishes partial cleanup from a canceled admin prompt.
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil,
                     progress: @escaping @MainActor (Stage) -> Void = { _ in },
                     helperDecision: @escaping @MainActor () async -> HelperChoice = { .skip }) async -> Bool {
+        lastFailure = nil
         Analytics.countUninstall()   // fire-and-forget; the teardown never waits on the network
         appState?.isUninstalling = true   // the home clears its cards + won't re-deal off the defaults wipe
 
@@ -99,6 +101,13 @@ enum Uninstall {
         await beat()
 
         progress(.keychain)
+        do { try await DirectMCPConnections.shared.removeAll() }
+        catch {
+            Log("Uninstall: direct-connection Keychain cleanup needs retry")
+            lastFailure = "Uninstall paused because saved app connections couldn't be removed from Keychain. Unlock your Mac and retry to finish removing Sentient."
+            appState?.isUninstalling = false
+            return false
+        }
         MirrorClient.destroyKeychainIdentity()
         CustomProvider.destroy()   // the frontier-model choice + its endpoint API key
         ClaudeAuth.destroy()       // OUR cached Claude identity only — ~/.claude, the Keychain

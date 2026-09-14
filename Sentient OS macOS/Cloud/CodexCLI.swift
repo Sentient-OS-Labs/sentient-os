@@ -137,6 +137,8 @@ actor CodexCLI {
                                                // the destructive strip; sandbox stays ON.
         /// Source ingestion/inventory needs connector tools only; research keeps its vault/web access.
         var connectorOnlyRead = false
+        /// Native tool-inventory classification does not need any model-accessible tools.
+        var toolsDisabled = false
         /// Optional narrowing for a single connector, using the current engine's bare names.
         /// Every name must already be curated; a cross-engine mismatch refuses the run.
         var mcpReadToolNames: [String]? = nil
@@ -756,6 +758,7 @@ actor CodexCLI {
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config"]
         for override in CuaDriver.codexOverrides(socketPath: socketPath) { args += ["-c", override] }
+        for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
             var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
             ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
@@ -976,7 +979,14 @@ actor CodexCLI {
                 throw CLIError.notAvailable(.notWorking("invalid connector-only read configuration"))
             }
         }
-        let connectorRead = ModelBackend.current == .chatgpt && !inv.mcpReadConnectors.isEmpty
+        let direct = DirectMCPRuntime.current
+        let requestedDirect = Set((inv.mcpReadConnectors + [inv.mcpActionServer].compactMap { $0 }).filter { $0.hasPrefix("direct-") })
+        guard requestedDirect.isSubset(of: Set(direct.map(\.requestedTarget))) else { throw DirectMCPError.policyUnavailable }
+        let hostedReads = inv.mcpReadConnectors.filter { !$0.hasPrefix("direct-") }
+        if !direct.isEmpty, ModelBackend.current == .custom, !hostedReads.isEmpty {
+            throw CLIError.notAvailable(.notWorking("hosted connectors are unavailable on a custom backend"))
+        }
+        let connectorRead = !inv.mcpReadConnectors.isEmpty && (ModelBackend.current == .chatgpt || !direct.isEmpty)
         if connectorRead {
             guard inv.sandbox == .readOnly, !inv.bypassApprovals,
                   inv.mcpActionServer == nil, inv.mcpAttachServer == nil else {
@@ -999,7 +1009,7 @@ actor CodexCLI {
         // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
         // which terminates it — the same dodge as probeCustomEndpoint's probe image.
         if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
-        if !inv.includeUserConfig || connectorRead {
+        if !inv.includeUserConfig || connectorRead || !direct.isEmpty || inv.toolsDisabled {
             // Hosted account apps survive hermetic runs. User MCP servers, plugins and
             // per-tool/account approvals must not widen an unattended read's tool policy.
             args += ["--ignore-user-config"]
@@ -1026,7 +1036,7 @@ actor CodexCLI {
             }
         }
         for override in inv.configOverrides { args += ["-c", override] }
-        if inv.connectorOnlyRead {
+        if inv.connectorOnlyRead || inv.toolsDisabled {
             for override in ["project_doc_max_bytes=0", "features.shell_tool=false", "features.view_image=false",
                              "features.browser_use=false", "features.computer_use=false", "features.multi_agent=false",
                              "features.code_mode=false", "features.image_generation=false", "features.goals=false",
@@ -1037,7 +1047,7 @@ actor CodexCLI {
         // The connector recipes (table above). ChatGPT backend only: hosted connectors ride
         // ChatGPT-account auth, so on a custom endpoint (hermetic anyway) the fields are inert.
         if ModelBackend.current == .chatgpt {
-            if let slug = inv.mcpActionServer {
+            if let slug = inv.mcpActionServer, !slug.hasPrefix("direct-") {
                 if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
                     args += ["-c", "apps.\(id).default_tools_approval_mode=\"approve\"",
                              "-c", "apps.\(id).destructive_enabled=false"]
@@ -1048,9 +1058,13 @@ actor CodexCLI {
                 }
             }
             if connectorRead {
-                args += ["-c", try connectorReadPolicy(slugs: inv.mcpReadConnectors, subset: inv.mcpReadToolNames)]
+                args += ["-c", try connectorReadPolicy(slugs: hostedReads, subset: inv.mcpReadToolNames)]
             }
         }
+        if inv.toolsDisabled || (!direct.isEmpty && ModelBackend.current == .custom) || (inv.mcpActionServer?.hasPrefix("direct-") == true) {
+            args += ["-c", "features.apps=false", "-c", "apps._default.enabled=false"]
+        }
+        for override in DirectMCPRuntime.codexOverrides(direct) { args += ["-c", override] }
         if inv.webSearch { args += ["-c", "tools.web_search=true"] }
         if let schemaFile { args += ["--output-schema", schemaFile] }
         args.append("-")                       // the prompt arrives on stdin

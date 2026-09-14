@@ -29,6 +29,29 @@ extension MCPSource {
 
     static func prompt(slug: String, name: String, backend: ModelBackend,
                        mode: ReadMode, window: Window) -> String {
+        if DirectMCPStore.connection(slug)?.providerSlug == "granola" {
+            let cap = mode == .initial ? 6 : 4
+            return genericPrompt(name: name,
+                window: "from \(timestamp(window.lower)) inclusive to \(timestamp(window.upper)) exclusive",
+                openCap: cap) + """
+
+
+            GRANOLA READ PLAN
+            Call list_meetings once with time_range "last_30_days". Use dates returned by the
+            service to select only meetings within the requested window. The tool supports named
+            time ranges, not start/end parameters; do not invent arguments. If returned metadata
+            cannot establish the window, report tool_failure "other" instead of claiming it is quiet.
+            Select at most \(cap) relevant recent meetings and call get_meetings with their exact
+            returned IDs in one batch. Never invent a meeting ID. A notable summary requires an
+            actual successful get_meetings result; a quiet result requires successful list_meetings.
+            Use the private notes and meeting summaries for supported decisions, commitments,
+            unresolved actions and meaningful progress. A participant's statement is not automatically
+            the user's commitment. Attribute only what the source establishes; omit uncertain speaker
+            identities. Do not treat a meeting title as proof of a decision or promised action.
+            Exclude sensitive details and exact financial amounts. Do not retrieve full transcripts.
+            Never claim to have reviewed every meeting or to have taken an action.
+            """
+        }
         guard slug == "google-drive" else {
             return genericPrompt(name: name,
                 window: "from \(timestamp(window.lower)) inclusive to \(timestamp(window.upper)) exclusive, newest first",
