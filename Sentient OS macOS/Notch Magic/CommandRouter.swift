@@ -197,6 +197,10 @@ enum CommandRouter {
           device action (like printing), or anything on screen, choose "computer".
           Example: "find the invoice email and save it to my notes" touches email
           AND notes, so it is "computer".
+        - Information needed FROM another service is a step too, even if only the final action
+          is phrased as a verb. "Schedule a follow-up based on my Granola notes" requires reading
+          Granola and creating a calendar event, so choose computer. Do not assume the notes
+          have already been read or supplied unless the command actually supplies their contents.
         - A general question that no listed service's data would answer is "computer".
         - The command may point at the screen ("this", "reply to this"). Screenshots
           ride both routes, so that alone never forces "computer".

@@ -43,6 +43,7 @@ enum ConnectorReadAudit {
         let storePath: String
         let checkpoint: Double?
         let readOrigin: String?
+        let sourceScope: [String]?
         let receipts: [Receipt]
         let notes: [CycleNoteItem]
     }
@@ -75,7 +76,7 @@ enum ConnectorReadAudit {
         } catch { Log("Prompt export failed: \(ErrorLabel(error))") }
     }
 
-    static func read() async {
+    static func read(slug explicitSlug: String? = nil) async {
         let env = ProcessInfo.processInfo.environment
         guard env["LAB_PROMPT"] == nil else {
             Log("REFUSED: kbread uses the production prompt builder; LAB_PROMPT is unsupported")
@@ -85,7 +86,7 @@ enum ConnectorReadAudit {
             Log("REFUSED: LAB_MODE must be initial or iterative")
             return
         }
-        let slug = env["LAB_SLUG"] ?? "google-drive"
+        let slug = explicitSlug ?? env["LAB_SLUG"] ?? "google-drive"
         let backend = ModelBackend.current
         let modelName = env["LAB_CLAUDE_MODEL"]
         guard modelName == nil || (backend == .claude && ["haiku", "sonnet"].contains(modelName!)) else {
@@ -173,11 +174,13 @@ enum ConnectorReadAudit {
             let notes = await store.notes().filter { $0.bucketKey == MCPSource.bucketKey(slug) }
             let checkpoint = try await store.mcpCheckpoint(MCPSource.bucketKey(slug))
             let version = backend == .claude ? await ClaudeCLI.installedVersion() : await CodexCLI.installedVersion()
-            let report = Report(revision: NotionSource.isNotion(slug) ? MCPSource.notionPromptRevision : MCPSource.promptRevision, slug: slug, engine: backend.rawValue,
-                cliVersion: version, model: backend == .claude ? (modelName ?? (slug == "google-drive" ? "sonnet" : "haiku")) : "gpt-5.6-luna",
+            let report = Report(revision: MCPSource.promptRevision(slug: slug), slug: slug, engine: backend.rawValue,
+                cliVersion: version, model: backend == .claude ? (modelName ?? (GranolaSource.isGranola(slug)
+                    ? GranolaSource.defaultClaudeModel.rawValue : (slug == "google-drive" ? "sonnet" : "haiku"))) : "gpt-5.6-luna",
                 mode: mode.rawValue, seededSince: env["LAB_SINCE"], startedAt: started,
                 durationSeconds: Date().timeIntervalSince(started), succeeded: succeeded, errorKind: errorKind,
                 storePath: storePath, checkpoint: checkpoint?.mark.order, readOrigin: checkpoint?.origin,
+                sourceScope: GranolaSource.curationNoteIDs?.sorted(),
                 receipts: receipts.withLock { $0 }, notes: notes)
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601

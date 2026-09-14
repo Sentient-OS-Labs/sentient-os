@@ -56,8 +56,14 @@ nonisolated struct DirectMCPSession: Sendable {
 
     func request(method: String, parameters: [String: Any], id: Int, limit: Int = 2_000_000) async throws -> [String: Any] {
         try Self.check(connection)
+        // Selection/summarization can outlast the access token used for initialization.
+        // Reuse the current grant (or renew an expiring one) before every native request.
+        let token = try await DirectMCPAuth.accessToken(id: connection.id, generation: connection.generation)
+        try Self.check(connection)
+        var requestHeaders = headers
+        requestHeaders["Authorization"] = "Bearer " + token
         let response = try await DirectMCPHTTP.request(provider.endpoint, provider: provider, method: "POST",
-            headers: headers, body: DirectMCPHTTP.json(["jsonrpc": "2.0", "id": id, "method": method, "params": parameters]),
+            headers: requestHeaders, body: DirectMCPHTTP.json(["jsonrpc": "2.0", "id": id, "method": method, "params": parameters]),
             limit: limit, rpcID: id)
         if response.status == 401 { throw DirectMCPError.reconnectRequired }
         let envelope = try DirectMCPHTTP.object(response)

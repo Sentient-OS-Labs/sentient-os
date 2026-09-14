@@ -61,7 +61,11 @@ nonisolated struct DirectMCPProvider: Sendable, Equatable {
     /// Native knowledge plans can constrain arguments before any result reaches a model.
     /// These names are never added to the general MCP read attachment automatically.
     var nativeKnowledgeReads: Set<String> {
-        slug == "notion" ? ["notion-fetch", "notion-search", "notion-ai-search", "notion-list-recent-pages"] : []
+        switch slug {
+        case "notion": ["notion-fetch", "notion-search", "notion-ai-search", "notion-list-recent-pages"]
+        case "granola": ["get_account_info", "list_meetings", "get_meetings"]
+        default: []
+        }
     }
 
     static let granola = Self(slug: "granola", name: "Granola",
@@ -144,8 +148,16 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
         return policy[tool.name] ?? .destructive
     }
     var kbEligible: Bool {
-        guard usable, provider?.kbVerified == true, let reviewed = provider?.reviewedReads, !reviewed.isEmpty else { return false }
-        let required = providerSlug == "notion" ? reviewed.union(["notion-search"]) : reviewed
+        provider?.kbVerified == true && kbPolicyReady
+    }
+    /// Curation can test this policy in an isolated store before enabling the production reader.
+    var kbPolicyReady: Bool {
+        guard usable, let reviewed = provider?.reviewedReads, !reviewed.isEmpty else { return false }
+        var required = providerSlug == "notion" ? reviewed.union(["notion-search"]) : reviewed
+        if providerSlug == "granola" {
+            guard accountFingerprint != nil else { return false }
+            required.insert("get_account_info")
+        }
         return required.isSubset(of: Set(readNames))
             && tools.filter { required.contains($0.name) }.allSatisfy(\.readOnlyHint)
     }
