@@ -358,7 +358,8 @@ enum MCPSource {
             var attemptedEnvelope: CodexCLI.Envelope?
             do {
                 var inv = readInvocation(slug: slug, prompt: attemptPrompt)
-                inv.claudeModel = claudeModel
+                // Drive's mixed drafts and third-party material need stronger attribution.
+                inv.claudeModel = claudeModel ?? (slug == "google-drive" ? .sonnet : nil)
                 inv.outputSchema = readSchema
                 let started = Date()
                 let env = try await FrontierRun.run(inv)

@@ -8,7 +8,7 @@
 import Foundation
 
 extension MCPSource {
-    static let promptRevision = "drive-v4"
+    static let promptRevision = "drive-v6"
 
     static let readSchema = """
     {"type":"object","additionalProperties":false,"properties":{\
@@ -56,7 +56,7 @@ extension MCPSource {
         \(initial ? "Produce a selective initial summary of the strongest supported findings." : "A quiet result must follow successful discovery. Do not assume the window is quiet before checking it. Inspect a previous revision only when comparison resolves an important uncertainty, within the same content-read budget.")
         Do not imply that you examined the entire Drive or every changed file.
         """
-        return [driveRules, windowBlock, backend == .claude ? claudeDriveTools(initial: initial) : codexDriveTools]
+        return [driveRules, windowBlock, backend == .claude ? claudeDriveTools(initial: initial) : codexDriveTools, driveFinalReview]
             .joined(separator: "\n\n")
     }
 
@@ -84,6 +84,10 @@ extension MCPSource {
     File format or an exported copy does not establish that a draft is finalized, signed, or
     approved. A shared syllabus alone does not establish enrollment or teaching involvement.
     Describe an unsigned recommendation draft as proposed support, not a completed endorsement.
+    A letter written in someone's voice does not establish that they drafted or approved it.
+    An unsigned draft, blank date, or signature placeholder alone does not establish an action
+    assigned to the user. Do not invent a task to finalize, sign, request signatures, or submit it.
+    Likewise, a letter's date does not date historical events that the letter describes.
     Before keeping a consequential fact, obtain readable content or a snippet that explicitly
     supports it. Titles, ownership and modification dates alone are insufficient. File dates
     must never be converted into project deadlines or dates of events described in the file.
@@ -121,8 +125,10 @@ extension MCPSource {
     If has_action_items is true, the summary must include a separate heading exactly
     "ACTION ITEMS", followed by those actions. Otherwise omit that heading and use false.
     Before submitting, remove any exact currency amounts and confirm these output rules.
-    For consequential claims, include a short source title or an observed Drive link when useful
-    for verification. Never invent a source, and omit source titles that reveal sensitive details.
+    For each paragraph of consequential claims, include a short source title or an observed
+    Drive link for verification. Cite the selected evidence without describing folder paths
+    or listing the surrounding files. Never invent a source, and omit source titles that reveal
+    sensitive details.
 
     Return exactly this JSON shape:
     {"item_count": <number of distinct files actually considered>, "notable": true|false,
@@ -184,6 +190,21 @@ extension MCPSource {
     There is no dedicated permissions tool in this run's curated read list. Do not invent one
     or infer a complete access list from incomplete metadata.
     Stop discovery once there is enough evidence to select the highest-value files.
+    """
+
+    private static let driveFinalReview = """
+    FINAL SUMMARY REVIEW
+    Before returning JSON, edit the summary to at most 200 words about the user's meaningful
+    work and life. Lead with the supported activity, not "has access to" or a description of Drive.
+    Retain only a few supported findings and their short source references.
+    Remove folder structure, subfolder names, file-format inventories, and duplicate lists.
+    Remove all mentions of excluded files, test/verification artifacts, empty documents,
+    unrelated syllabuses, and what cannot be inferred from irrelevant files. Skipped material
+    must disappear entirely; never explain that it was skipped or was not meaningful.
+    If a proposal is the useful fact, describe it as a proposal. Do not imply its named speaker
+    wrote it, endorsed it, or signed it. Do not turn a draft's incompleteness into an action item.
+    Use has_action_items=false unless a source explicitly assigns an unresolved action to the user.
+    If nothing useful survives this review, return the successful quiet JSON shape.
     """
 
     private static func genericPrompt(name: String, window: String, openCap: Int) -> String {

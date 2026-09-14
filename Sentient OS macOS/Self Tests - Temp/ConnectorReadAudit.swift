@@ -171,7 +171,7 @@ enum ConnectorReadAudit {
             let checkpoint = try await store.mcpCheckpoint(MCPSource.bucketKey(slug))
             let version = backend == .claude ? await ClaudeCLI.installedVersion() : await CodexCLI.installedVersion()
             let report = Report(revision: MCPSource.promptRevision, slug: slug, engine: backend.rawValue,
-                cliVersion: version, model: backend == .claude ? (modelName ?? "haiku") : "gpt-5.6-luna",
+                cliVersion: version, model: backend == .claude ? (modelName ?? (slug == "google-drive" ? "sonnet" : "haiku")) : "gpt-5.6-luna",
                 mode: mode.rawValue, seededSince: env["LAB_SINCE"], startedAt: started,
                 durationSeconds: Date().timeIntervalSince(started), succeeded: succeeded, errorKind: errorKind,
                 storePath: storePath, checkpoint: checkpoint?.mark.order, readOrigin: checkpoint?.origin,

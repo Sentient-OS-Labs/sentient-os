@@ -17,8 +17,9 @@ extension MCPSource {
     static func readIdentity(slug: String, onReceipt: ReceiptObserver? = nil) async throws -> String? {
         guard slug == "google-drive", ModelBackend.current == .chatgpt else { return nil }
         let prompt = """
-        Call the Google Drive get_profile tool exactly once to verify the connected account.
-        Do not call any other tool. Do not repeat profile data in your reply.
+        Discover Google Drive get_profile using tool search if it is not already visible,
+        then call get_profile exactly once to verify the connected account. Tool discovery
+        is allowed; do not call any other connector tool. Do not repeat profile data in your reply.
         Reply OK if it worked, AUTH if it requires sign-in, or FAILED for any other failure.
         """
         for attempt in 1...2 {
