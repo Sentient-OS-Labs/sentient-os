@@ -141,9 +141,9 @@ actor CodexCLI {
                                                // (a slug with no read list throws — fail-closed;
                                                // measured 2026-08-23: nothing short of an allow
                                                // rule approves a connector tool headless).
-                                               // Codex: read-only sandbox + open-world AND
-                                               // destructive strips per id (send/destroy tools
-                                               // absent from the run entirely).
+                                               // Codex: hermetic, only the named apps enabled,
+                                               // only their separately curated reads enabled.
+                                               // Missing identity or read policy refuses the run.
         var mcpAttachServer: String? = nil     // wall ONE server in with ZERO allow rules — the
                                                // classifier's inventory read (the run calls no
                                                // tools; listing your own tools needs no approval).
@@ -697,7 +697,7 @@ actor CodexCLI {
             { @Sendable raw in if let s = Self.humanLine(fromJSONL: raw) { sink(s) } }
         }
         let out = try await Self.executeAsync(binary: bin,
-                                              args: Self.arguments(for: invocation, modelID: modelID,
+                                              args: try Self.arguments(for: invocation, modelID: modelID,
                                                                    effortArg: effortArg,
                                                                    schemaFile: schemaFile),
                                               stdinText: invocation.prompt,
@@ -944,12 +944,10 @@ actor CodexCLI {
     /// The connector run recipes, codex column (the README table in the Step 1 plan; the
     /// Claude column lives in ClaudeCLI.arguments):
     ///  ┌─────────────────┬────────────────────────────────────────────────────────────────┐
-    ///  │ UNATTENDED READ │ read-only sandbox as always (reads pass; writes approval-gated │
-    ///  │ mcpReadConnectors│ headless and auto-cancel) + `apps.<id>.open_world_enabled=    │
-    ///  │                 │ false` AND `.destructive_enabled=false` for every resolvable   │
-    ///  │                 │ listed id PLUS every detected census id — the send/destroy     │
-    ///  │                 │ tools don't exist in a read run at all, for ANY linked app     │
-    ///  │                 │ (unresolvable id = harmless no-op, the existing strip posture).│
+    ///  │ UNATTENDED READ │ Hermetic config + disabled-by-default apps and tools. Only    │
+    ///  │ mcpReadConnectors│ the requested apps' verified Codex reads are enabled.         │
+    ///  │                 │ Unknown identity/policy refuses the run. Read-only filesystem │
+    ///  │                 │ sandbox remains; connector writes use a separate tool policy. │
     ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
     ///  │ FIRED TASK      │ `apps.<id>.default_tools_approval_mode="approve"` when the id  │
     ///  │ mcpActionServer │ resolves (server-scoped write approval), else the shipped      │
@@ -963,7 +961,14 @@ actor CodexCLI {
     /// Internal (not private) so the connector lab's argv command can print recipes without
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: Invocation, modelID: String, effortArg: String,
-                          schemaFile: String?) -> [String] {
+                          schemaFile: String?) throws -> [String] {
+        let connectorRead = ModelBackend.current == .chatgpt && !inv.mcpReadConnectors.isEmpty
+        if connectorRead {
+            guard inv.sandbox == .readOnly, !inv.bypassApprovals,
+                  inv.mcpActionServer == nil, inv.mcpAttachServer == nil else {
+                throw CLIError.notAvailable(.notWorking("invalid unattended connector configuration"))
+            }
+        }
         assert([inv.mcpActionServer != nil, !inv.mcpReadConnectors.isEmpty,
                 inv.mcpAttachServer != nil].filter { $0 }.count <= 1,
                "the connector recipe fields are mutually exclusive")
@@ -980,16 +985,16 @@ actor CodexCLI {
         // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
         // which terminates it — the same dodge as probeCustomEndpoint's probe image.
         if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
-        if !inv.includeUserConfig {
-            args += ["--ignore-user-config"]   // explicit hermetic opt-out only — includeUserConfig
-        }                                      // defaults TRUE, so by default we DON'T pass this and
-                                               // the user's ~/.codex config + MCP servers ARE loaded.
+        if !inv.includeUserConfig || connectorRead {
+            // Hosted account apps survive hermetic runs. User MCP servers, plugins and
+            // per-tool/account approvals must not widen an unattended read's tool policy.
+            args += ["--ignore-user-config"]
+        }
 
         // Approvals + sandbox. `codex exec` is headless and can't answer an approval prompt:
         //  · default → `approval_policy=never` (don't stall) + the Seatbelt sandbox (`-s`) as the
-        //    real guardrail for shell/file ops. Hosted-connector WRITE tools are approval-gated
-        //    ("user cancelled MCP tool call" headless) — a caller that must fire one keeps this
-        //    sandboxed path and adds `approveConnectorWrites` to `configOverrides` instead.
+        //    guardrail for shell/file ops. Remote connector capabilities are controlled by
+        //    the read/action policies below, independently of the filesystem sandbox.
         //  · bypassApprovals → `--dangerously-bypass-approvals-and-sandbox` (NO approvals, NO
         //    sandbox) — computer use only (its per-app elicitations auto-deny headless under any
         //    Seatbelt profile). Mutually exclusive — codex rejects `-s`/approval_policy with it.
@@ -1020,42 +1025,40 @@ actor CodexCLI {
                     for override in Invocation.approveConnectorWrites { args += ["-c", override] }
                 }
             }
-            if !inv.mcpReadConnectors.isEmpty {
-                // Both strips per connector: `open_world_enabled=false` removes the tools that
-                // transmit externally (e.g. Gmail send) and `destructive_enabled=false` the
-                // trash/delete family — a read run's "never fire" is the tools NOT EXISTING, on
-                // top of the read-only sandbox's headless auto-cancel and the prompt rule.
-                // Verified live 2026-07-18: Gmail search completes under exactly these strips
-                // while a send attempt fails with "is not a function". The keys MUST be the LONG
-                // catalog ids (friendly slugs are silent no-ops; the app-wide `apps._default`
-                // variant strips READ tools too — both measured, codexperms self-test). An
-                // unresolvable id = harmless no-op; the other layers still hold.
-                var stripped = Set<String>()
-                for slug in inv.mcpReadConnectors {
-                    if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
-                       stripped.insert(id).inserted {
-                        args += ["-c", "apps.\(id).open_world_enabled=false",
-                                 "-c", "apps.\(id).destructive_enabled=false"]
-                    }
-                }
-                // Defense in depth: every OTHER detected connector still rides the codex spawn
-                // whole (its reads flow; its writes are only approval-gated), so an unattended
-                // read strips the send/destroy tools of EVERY linked app, listed or not. Sorted
-                // for argv stability; zero detected connectors = zero extra flags, so the
-                // recipe's recorded zero-connector shape is untouched.
-                for connector in ConnectorCensus.cached(for: .chatgpt)
-                    .sorted(by: { $0.slug < $1.slug }) {
-                    if let id = connector.catalogID, stripped.insert(id).inserted {
-                        args += ["-c", "apps.\(id).open_world_enabled=false",
-                                 "-c", "apps.\(id).destructive_enabled=false"]
-                    }
-                }
+            if connectorRead {
+                args += ["-c", try connectorReadPolicy(slugs: inv.mcpReadConnectors)]
             }
         }
         if inv.webSearch { args += ["-c", "tools.web_search=true"] }
         if let schemaFile { args += ["--output-schema", schemaFile] }
         args.append("-")                       // the prompt arrives on stdin
         return args
+    }
+
+    /// One complete override replaces inherited app, account and tool approvals. Quoted tool
+    /// keys live INSIDE the TOML value: CLI dotted paths cannot safely address dotted names.
+    /// New apps/tools remain disabled. `writes` additionally refuses an allowed tool if its
+    /// read-only annotation disappears or changes. No classifier fallback on unattended runs.
+    private static func connectorReadPolicy(slugs: [String]) throws -> String {
+        var entries = ["_default = { enabled = false }"]
+        var ids = Set<String>()
+        for slug in Set(slugs).sorted() {
+            guard let pack = ConnectorRegistry.pack(forSlug: slug), !pack.capturedProvisional,
+                  let reads = pack.codexReadTools, !reads.isEmpty,
+                  let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
+                  id.range(of: "^connector_[0-9a-f]{32}\\z", options: .regularExpression) != nil,
+                  ids.insert(id).inserted,
+                  reads.allSatisfy({ $0.range(of: "^[A-Za-z_][A-Za-z0-9_./-]*\\z",
+                                              options: .regularExpression) != nil }) else {
+                throw CLIError.notAvailable(.notWorking("connector \(slug) has no verified Codex read policy"))
+            }
+            let tools = Set(reads).sorted().map {
+                "\"\($0)\" = { enabled = true, approval_mode = \"writes\" }"
+            }.joined(separator: ", ")
+            entries.append("\(id) = { enabled = true, default_tools_enabled = false, "
+                + "default_tools_approval_mode = \"writes\", tools = { \(tools) } }")
+        }
+        return "apps = { \(entries.joined(separator: ", ")) }"
     }
 
     // MARK: JSONL parsing

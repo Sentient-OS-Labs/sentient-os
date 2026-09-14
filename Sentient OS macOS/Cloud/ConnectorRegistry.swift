@@ -57,9 +57,12 @@ nonisolated enum ConnectorRegistry {
         var codexCatalogID: String? = nil    // the global marketplace id (census supplies it live
                                              // for detected connectors; pinned here only for the
                                              // two chip connectors the census excludes)
-        /// BARE tool names (engine-neutral; the query layer prefixes them per engine).
+        /// BARE Claude tool names; the Claude query layer adds the server prefix.
         /// nil = not yet curated → kbEligible is false: no KB toggle, no KB reads.
         var readTools: [String]? = nil
+        /// Codex tool names/titles, verified separately from Claude's surface. A missing list
+        /// refuses Codex unattended reads; never infer it from the Claude classifier cache.
+        var codexReadTools: [String]? = nil
         var kbAdapter: KBAdapter = .generic
         /// True while the read list is a captured-but-unverified surface — the Step 3 chats
         /// mark fresh captures with it until their live re-verify confirms them.
@@ -74,8 +77,10 @@ nonisolated enum ConnectorRegistry {
     }
 
     /// The curated packs. gmail + google-calendar are identity-only (dedicated chips; excluded
-    /// from every census result); google-drive is fully curated and live-verified; the other
-    /// six are named-but-empty until their Step 3 chats.
+    /// from every census result); Drive has verified read lists, with prompt curation separate.
+    /// Codex lists were checked against hosted descriptions using CLI 0.154.0. Names/titles
+    /// intentionally differ from Claude's; new tools require another manual review.
+    /// The other six are named-but-empty until their Step 3 chats.
     static let packs: [CuratedConnector] = [
         CuratedConnector(slug: "gmail", displayName: "Gmail",
                          routerDescription: "read, search, and send the user's email; drafts and labels",
@@ -86,6 +91,9 @@ nonisolated enum ConnectorRegistry {
                          codexCatalogID: CodexCLI.Invocation.gmailCatalogID,
                          readTools: bare(ClaudeCLI.ConnectorTools.gmailReads,
                                          prefix: "mcp__claude_ai_Gmail__"),
+                         codexReadTools: ["search_email_ids", "search_emails", "read_email",
+                                          "read_email_thread", "batch_read_email",
+                                          "batch_read_email_threads", "list_drafts", "list_labels"],
                          kbAdapter: .windowedWeekly),
         CuratedConnector(slug: "google-calendar", displayName: "Google Calendar",
                          routerDescription: "read the user's calendars and events; create, update, and RSVP",
@@ -96,6 +104,8 @@ nonisolated enum ConnectorRegistry {
                          codexCatalogID: CodexCLI.Invocation.calendarCatalogID,
                          readTools: bare(ClaudeCLI.ConnectorTools.calendarReads,
                                          prefix: "mcp__claude_ai_Google_Calendar__"),
+                         codexReadTools: ["search", "search_events", "fetch", "read_event",
+                                          "batch_read_event", "list_calendars", "get_availability"],
                          kbAdapter: .windowedMonthly),
         // Drive's read list was captured live 2026-08-26 and re-verified 2026-08-29 (the
         // classifier eval). The live surface has since GROWN server-side (new write/destructive
@@ -110,7 +120,9 @@ nonisolated enum ConnectorRegistry {
                          codexSlug: "google-drive",
                          readTools: ["search_files", "read_file_content", "download_file_content",
                                      "get_file_metadata", "get_file_permissions",
-                                     "list_recent_files"]),
+                                     "list_recent_files"],
+                         codexReadTools: ["search", "fetch", "recent_documents", "get_file_metadata",
+                                          "list_file_revisions", "fetch_file_revision"]),
         CuratedConnector(slug: "slack", displayName: "Slack"),
         CuratedConnector(slug: "notion", displayName: "Notion"),
         CuratedConnector(slug: "granola", displayName: "Granola"),
