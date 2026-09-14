@@ -236,6 +236,11 @@ final class CommandRunModel {
                          statusPresent: false)
                 return true
             case .couldNot(let reason):
+                if slug.hasPrefix("direct-") {
+                    complete(.failed, line: reason.isEmpty ? AgentStatus.unconfirmedConnectorMessage : reason,
+                             statusPresent: true)
+                    return true // a remote write may have succeeded; never repeat it on screen
+                }
                 Log("──────── 🤖 ⚠️ \(slug) COULD_NOT after \(secs)s (\(reason.count)-char reason) → falling back to computer use ────────")
                 #if DEBUG
                 Log("CMD: reason → \(reason)")
@@ -244,6 +249,11 @@ final class CommandRunModel {
             }
         } catch {
             try Task.checkCancellation()   // the user's STOP → the caller's honest "stopped"
+            if slug.hasPrefix("direct-") {
+                complete(.failed, line: (error as? DirectMCPError)?.errorDescription ?? AgentStatus.unconfirmedConnectorMessage,
+                         statusPresent: false)
+                return true
+            }
             Log("CMD: connector leg failed (\(ErrorLabel(error))) → falling back to computer use")
             connectorRecoveryContext = Self.recoveryContext("The earlier attempt ended with an error. Its effects are unknown.")
         }

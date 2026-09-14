@@ -14,6 +14,7 @@
 //
 
 import SwiftUI
+import Combine
 import AppKit
 
 struct SourcesPane: View {
@@ -37,6 +38,7 @@ struct SourcesPane: View {
 
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
     @State private var connectors: [ConnectorCensus.DetectedConnector] = []
+    @State private var showDirectConnect = false
     @State private var watchStartedAt: Date?          // non-nil = the connect window is polling
     @State private var refreshingConnectors = false
     @State private var showWhatsAppPicker = false
@@ -75,14 +77,15 @@ struct SourcesPane: View {
         // Paint the persisted census instantly, then confirm live (cheap path: one subprocess
         // on Claude, a disk read on codex, nothing on custom — never a model call).
         .task(id: backendRaw) {
-            connectors = ConnectorRegistry.detectedForCurrentBackend()
-            connectors = await ConnectorCensus.list()
+            updateConnectors()
+            _ = await ConnectorCensus.list()
+            updateConnectors()
         }
         // The connect window. Owning it here means leaving the pane cancels the polling
         // (structured concurrency, no cleanup call); census logs the stop reason.
         .task(id: watchStartedAt) {
             guard watchStartedAt != nil else { return }
-            await ConnectorCensus.startWatching { connectors = $0 }
+            await ConnectorCensus.startWatching { _ in updateConnectors() }
             watchStartedAt = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -102,6 +105,8 @@ struct SourcesPane: View {
         }
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
+        .sheet(isPresented: $showDirectConnect) { DirectMCPConnectView() }
+        .onReceive(NotificationCenter.default.publisher(for: DirectMCPStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }
     }
 
     // MARK: - Full Disk Access fix-it (only when missing)
@@ -176,7 +181,8 @@ struct SourcesPane: View {
                           refreshing: refreshingConnectors,
                           engineWord: engineWord,
                           onConnect: connectApps,
-                          onRefresh: refreshConnectors)
+                          onRefresh: refreshConnectors,
+                          onDirectConnect: { showDirectConnect = true })
     }
 
     private var engineWord: String {
@@ -199,9 +205,18 @@ struct SourcesPane: View {
         guard !refreshingConnectors else { return }
         Task {
             refreshingConnectors = true
-            connectors = await ConnectorCensus.refresh()
+            _ = await ConnectorCensus.refresh()
+            for connection in DirectMCPStore.connections() where connection.state != .reconnect && connection.state != .verifying {
+                _ = try? await DirectMCPConnections.verify(connection)
+            }
+            updateConnectors()
             refreshingConnectors = false
         }
+    }
+
+    private func updateConnectors() {
+        connectors = ConnectorRegistry.detectedForCurrentBackend().filter { $0.origin != .direct }
+            + DirectMCPStore.connections().map(\.detected)
     }
 
     // MARK: - Toggle guards (the four-selection minimum)
@@ -247,20 +262,23 @@ private struct ConnectorsSection: View {
     let engineWord: String
     let onConnect: () -> Void
     let onRefresh: () -> Void
+    var onDirectConnect: () -> Void = {}
 
     var body: some View {
         SettingsGroup(label: "Connectors") {
             VStack(alignment: .leading, spacing: 12) {
                 if connectors.isEmpty {
-                    SettingsProse("Nothing connected yet. Link apps to your \(engineWord) and they appear here.")
+                    SettingsProse("Connect apps to use them in your tasks.")
                 }
                 ChipFlow {
                     ForEach(connectors) { connector in
-                        ConnectorPill(connector: connector, locked: locked)
+                        ConnectorPill(connector: connector, locked: connector.origin == .direct ? CodexAuth.knowledgeBaseOnly : locked)
                             .transition(.opacity.combined(with: .scale(scale: 0.9)))
                     }
                     SettingsChip(label: "+ Connect Apps", on: false, isAction: true,
                                  locked: locked) { onConnect() }
+                    SettingsChip(label: "+ Connect in Sentient", on: false, isAction: true,
+                                 locked: CodexAuth.knowledgeBaseOnly) { onDirectConnect() }
                 }
                 if watching {
                     MonoCaps("Watching for new apps", size: 8.5, tracking: 1.6,
@@ -321,7 +339,7 @@ private struct ConnectorPill: View {
                 } else {
                     HealthDot(color: connector.healthy ? Theme.Ink.green : HealthDot.warnAmber)
                 }
-                Text(ConnectorRegistry.pack(for: connector)?.displayName ?? connector.displayName)
+                Text(connector.origin == .direct ? connector.displayName : ConnectorRegistry.pack(for: connector)?.displayName ?? connector.displayName)
                     .font(.system(size: 12))
                     .foregroundStyle(.white.opacity(locked ? 0.55 : 1))
             }
@@ -344,18 +362,22 @@ private struct ConnectorPopover: View {
     let connector: ConnectorCensus.DetectedConnector
 
     @State private var kbOn = false
+    @State private var showReconnect = false
+    @State private var disconnecting = false
+    @State private var connectionMessage: String?
+    @State private var checking = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(ConnectorRegistry.pack(for: connector)?.displayName ?? connector.displayName)
+                Text(connector.origin == .direct ? connector.displayName : ConnectorRegistry.pack(for: connector)?.displayName ?? connector.displayName)
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
-                Text(connector.origin == .claude ? "Through your Claude" : "Through your ChatGPT")
+                Text(connector.origin == .direct ? "Connected in Sentient" : connector.origin == .claude ? "Through your Claude" : "Through your ChatGPT")
                     .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
             }
             HStack(spacing: 7) {
                 HealthDot(color: connector.healthy ? Theme.Ink.green : HealthDot.warnAmber)
-                Text(connector.healthy ? "Connected" : "Not responding")
+                Text(connector.healthy ? "Connected" : "Needs attention")
                     .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.statusInk)
             }
             // Claude's listing health-checks live, so an amber pill there has one honest fix.
@@ -363,6 +385,40 @@ private struct ConnectorPopover: View {
             if !connector.healthy && connector.origin == .claude {
                 Text("Sign in again on claude.ai to reconnect.")
                     .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
+            }
+            if let direct = DirectMCPStore.connection(connector.slug) {
+                if let account = direct.accountLabel {
+                    Text(account).font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                } else {
+                    Text("Uses the account you approved in the browser.").font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                }
+                if direct.state == .verifying {
+                    Text("Connection setup is in progress.").font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                }
+                HStack(spacing: 15) {
+                    if !direct.usable && direct.state != .reconnect && direct.state != .verifying {
+                        Button(checking ? "Checking…" : "Check connection") {
+                            checking = true; connectionMessage = nil
+                            Task {
+                                do { _ = try await DirectMCPConnections.verify(direct) }
+                                catch { connectionMessage = (error as? DirectMCPError)?.errorDescription ?? "The connection couldn't be verified." }
+                                checking = false
+                            }
+                        }.disabled(checking || disconnecting)
+                    }
+                    Button("Reconnect") { showReconnect = true }.disabled(disconnecting)
+                    Button(disconnecting ? "Disconnecting…" : "Disconnect") {
+                        disconnecting = true
+                        Task {
+                            do { _ = try await DirectMCPConnections.shared.disconnect(direct.id) }
+                            catch { connectionMessage = "Local access couldn't be fully removed. Please try again." }
+                            disconnecting = false
+                        }
+                    }.disabled(disconnecting)
+                }.font(.system(size: 11))
+                Text("Disconnect removes this Mac's saved access and requests revocation when the service supports it.")
+                    .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
+                if let connectionMessage { Text(connectionMessage).font(.system(size: 11)).foregroundStyle(Theme.Ink.amber) }
             }
             SettingsHairline()
             if ConnectorRegistry.kbEligible(connector.slug) {
@@ -377,7 +433,7 @@ private struct ConnectorPopover: View {
                          color: .white.opacity(0.5))
             } else {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Ready for tasks")
+                    Text(connector.healthy ? "Ready for tasks" : "Reconnect to use this account")
                         .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
                     Text("Sidekick and your morning cards can use its tools whenever a task calls for them.")
                         .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
@@ -387,6 +443,9 @@ private struct ConnectorPopover: View {
         .padding(16)
         .frame(width: 270, alignment: .leading)
         .onAppear { kbOn = ConnectorRegistry.isKBEnabled(connector.slug) }
+        .sheet(isPresented: $showReconnect) {
+            if let direct = DirectMCPStore.connection(connector.slug) { DirectMCPConnectView(existing: direct) }
+        }
     }
 
     private var kbBinding: Binding<Bool> {

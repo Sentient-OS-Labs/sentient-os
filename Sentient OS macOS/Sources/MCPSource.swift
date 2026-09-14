@@ -218,7 +218,7 @@ enum MCPSource {
     /// it simply doesn't run tonight.
     private static func logVanishedToggles() {
         let known = Set((ConnectorCensus.cached(for: .claude)
-                         + ConnectorCensus.cached(for: .chatgpt)).map(\.slug))
+                         + ConnectorCensus.cached(for: .chatgpt)).map(\.slug) + DirectMCPStore.connections().map(\.slug))
         let vanished = UserDefaults.standard.dictionaryRepresentation()
             .filter { $0.key.hasPrefix("mcp.") && $0.key.hasSuffix(".kb")
                       && ($0.value as? Bool) == true }
@@ -372,6 +372,11 @@ enum MCPSource {
                     m[slug] = t
                 }
                 let outcome = try parse(env.result, slug: slug)
+                if let direct = DirectMCPStore.connection(slug),
+                   !hasDirectReadEvidence(raw: env.raw, connection: direct, backend: ModelBackend.current,
+                    requiredNames: direct.providerSlug == "granola" ? [outcome.result == nil ? "list_meetings" : "get_meetings"] : nil) {
+                    throw MCPError.invalidResponse(slug: slug, rule: "read_evidence")
+                }
                 if slug == "google-drive", !hasDriveReadEvidence(raw: env.raw, backend: ModelBackend.current,
                                                                   requiresDiscovery: outcome.result == nil) {
                     throw MCPError.invalidResponse(slug: slug, rule: "read_evidence")
@@ -394,8 +399,8 @@ enum MCPSource {
                     The previous attempt did not satisfy the required output contract. Check
                     every required field, the ACTION ITEMS heading/flag agreement, third-person
                     wording, and the prohibition on exact financial amounts. Return only a valid
-                    result grounded in the permitted Drive reads. Do not repeat an invalid output.
-                    Success requires an actual successful Drive tool call, and a quiet result
+                    result grounded in the permitted connector reads. Do not repeat an invalid output.
+                    Success requires an actual successful content-read tool call, and a quiet result
                     requires successful search/list discovery. Discover the permitted tools if
                     needed; a text-only claim of having checked is not read evidence. If the tools
                     fail, report tool_failure instead of a successful quiet result.
@@ -427,6 +432,7 @@ enum MCPSource {
     /// Validate the complete engine-specific policy before reading or changing stored state.
     private static func requireReadable(_ slug: String) throws {
         guard ConnectorRegistry.kbEligible(slug) else { throw MCPError.noReadSurface(slug: slug) }
+        if DirectMCPStore.connection(slug) != nil { return } // native preparation validates live policy before spawn
         let inv = readInvocation(slug: slug, prompt: "Read-policy validation")
         switch ModelBackend.current {
         case .chatgpt:

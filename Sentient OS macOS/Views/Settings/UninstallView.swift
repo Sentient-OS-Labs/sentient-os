@@ -24,6 +24,7 @@ struct UninstallView: View {
     @State private var helperResolver: ((Uninstall.HelperChoice) -> Void)?
     /// Feedback fallback: true briefly after the address was copied because no mail app answered.
     @State private var feedbackCopied = false
+    @State private var failure: String?
 
     init() {}
 
@@ -46,6 +47,9 @@ struct UninstallView: View {
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(phase != .farewell)   // mid-teardown there's no walking away
         .animation(.easeInOut(duration: 0.25), value: phase)
+        .alert("Uninstall needs attention", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("OK") { failure = nil }
+        } message: { Text(failure ?? "") }
     }
 
     // MARK: - Phase 1 · the farewell
@@ -209,6 +213,7 @@ struct UninstallView: View {
                     }
                 })
             phase = finished ? .gone : .farewell   // a cancel backs out with nothing removed
+            failure = Uninstall.lastFailure
         }
     }
 

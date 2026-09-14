@@ -21,7 +21,7 @@ enum FrontierRun {
     static func run(_ invocation: CodexCLI.Invocation,
                     onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
         var invocation = invocation
-        let workspace = invocation.connectorOnlyRead
+        let workspace = invocation.connectorOnlyRead || invocation.toolsDisabled
             ? FileManager.default.temporaryDirectory.appending(path: "sentient-connector-read-\(UUID().uuidString)") : nil
         if let workspace {
             try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: false,
@@ -33,9 +33,21 @@ enum FrontierRun {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
             if backend == .claude { await ConnectorClassifier.refreshCLIVersion() }
-            switch backend {
-            case .claude:           return try await ClaudeCLI.shared.run(prepared, onLine: onLine)
-            case .chatgpt, .custom: return try await CodexCLI.shared.run(prepared, onLine: onLine)
+            let slugs = prepared.mcpActionServer.map { [$0] } ?? prepared.mcpReadConnectors
+            let direct = try await DirectMCPRuntime.prepare(slugs: slugs,
+                mode: prepared.mcpActionServer == nil ? .read : .action,
+                subset: prepared.mcpReadToolNames, timeout: prepared.timeout)
+            return try await DirectMCPRuntime.execute(direct) {
+                let result: CodexCLI.Envelope
+                switch backend {
+                case .claude: result = try await ClaudeCLI.shared.run(prepared, onLine: onLine)
+                case .chatgpt, .custom: result = try await CodexCLI.shared.run(prepared, onLine: onLine)
+                }
+                if prepared.mcpActionServer?.hasPrefix("direct-") == true, let attachment = direct.first,
+                   !DirectMCPRuntime.hasSuccessfulCall(raw: result.raw, backend: backend, attachment: attachment) {
+                    throw DirectMCPError.unconfirmedAction
+                }
+                return result
             }
         }
     }
@@ -47,13 +59,26 @@ enum FrontierRun {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
             if backend == .claude { await ConnectorClassifier.refreshCLIVersion() }
-            switch backend {
-            case .claude:
-                return try await ClaudeCLI.shared.runAgentCommand(prompt, imagePaths: imagePaths,
-                                                                  timeout: timeout, onLine: onLine)
-            case .chatgpt, .custom:
-                return try await CodexCLI.shared.runAgentCommand(prompt, imagePaths: imagePaths,
-                                                                 timeout: timeout, onLine: onLine)
+            var attachments: [DirectMCPRuntime.Attachment] = []
+            for connection in DirectMCPStore.connections().filter(\.usable) {
+                do {
+                    attachments += try await DirectMCPRuntime.prepare(slugs: [connection.slug], mode: .action, timeout: timeout)
+                } catch {
+                    try Task.checkCancellation()
+                    Log("Direct MCP: unavailable connection excluded from computer-use task")
+                }
+            }
+            let services = attachments.map { "- \($0.connection.displayName): \($0.connection.serverName)" }.joined(separator: "\n")
+            let fullPrompt = prompt + (services.isEmpty ? "" : "\n\nDIRECT CONNECTED ACCOUNTS (use these exact accounts):\n\(services)\nPrefer these tools when they fit the requested task. Never repeat an uncertain write without checking whether it already succeeded.")
+            return try await DirectMCPRuntime.execute(attachments) {
+                switch backend {
+                case .claude:
+                    return try await ClaudeCLI.shared.runAgentCommand(fullPrompt, imagePaths: imagePaths,
+                                                                      timeout: timeout, onLine: onLine)
+                case .chatgpt, .custom:
+                    return try await CodexCLI.shared.runAgentCommand(fullPrompt, imagePaths: imagePaths,
+                                                                     timeout: timeout, onLine: onLine)
+                }
             }
         }
     }

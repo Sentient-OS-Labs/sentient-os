@@ -969,7 +969,10 @@ struct DevToolsView: View {
     /// you straight back if you only wanted the data wipe.
     @MainActor
     private func runReset() async {
-        await FactoryReset.run(appState: appState)
+        guard await FactoryReset.run(appState: appState) else {
+            resetResult = "Reset paused. Unlock Keychain and retry to remove saved app connections."
+            return
+        }
         let c = await CycleStore.shared.counts()
         resetResult = "✓ reset — cycle store + knowledge base + proactive cards + cloud copy wiped, rewound to onboarding (notes \(c.notes))"
     }

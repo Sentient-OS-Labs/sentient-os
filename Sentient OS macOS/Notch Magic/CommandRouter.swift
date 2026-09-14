@@ -40,15 +40,18 @@ enum CommandRouter {
     static func routableServices() -> [Service] {
         var services: [Service] = []
         func add(_ slug: String, _ fallbackName: String?) {
+            let slug = DirectMCPStore.connection(slug)?.taskTarget ?? slug
             guard !services.contains(where: { $0.slug == slug }) else { return }
             let pack = ConnectorRegistry.pack(forSlug: slug)
             services.append(Service(slug: slug,
-                                    name: pack?.displayName ?? fallbackName
+                                    name: DirectMCPStore.connection(slug)?.displayName ?? pack?.displayName ?? fallbackName
                                         ?? ConnectorCensus.titleCased(slug),
                                     description: pack?.routerDescription ?? ""))
         }
-        if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { add("gmail", nil) }
-        if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { add("google-calendar", nil) }
+        if ModelBackend.connectorsAvailable {
+            if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { add("gmail", nil) }
+            if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { add("google-calendar", nil) }
+        }
         for connector in ConnectorRegistry.detectedForCurrentBackend() {
             add(connector.slug, connector.displayName)
         }

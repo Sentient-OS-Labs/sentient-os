@@ -21,7 +21,10 @@ enum FactoryReset {
     /// onboarding the moment the wipe finishes; the persisted flags below guarantee the same on
     /// the next launch regardless.
     @MainActor
-    static func run(appState: AppState? = nil) async {
+    @discardableResult
+    static func run(appState: AppState? = nil) async -> Bool {
+        do { try await DirectMCPConnections.shared.removeAll() }
+        catch { Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false }
         await CycleStore.shared.wipeEverything()
         try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
         ProactiveCycle.resetAll()
@@ -61,5 +64,6 @@ enum FactoryReset {
         appState?.hasCompletedOnboarding = false        // live flip (didSet re-persists false)
         ComputerUseUpgrade.shared.reset()              // clear pending migration after the onboarding rewind
         Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy + scheduler state + connector state · rewound to onboarding")
+        return true
     }
 }

@@ -40,9 +40,8 @@ nonisolated enum ConnectorRegistry {
         case generic           // one budgeted "what's new" read (the default until a Step 3 chat tunes the pack)
     }
 
-    /// One hand-curated connector: identity on both engines plus the verified read surface.
-    /// Step D adds a direct MCP URL field here (granola and notion curate against the direct
-    /// tier — `mcp.granola.ai/mcp`, `mcp.notion.com/mcp`); do not invent a second home for it.
+    /// One curated service: hosted identities, verified read surfaces, and an optional native
+    /// OAuth provider. Each direct account resolves through this same service definition.
     struct CuratedConnector: Sendable {
         var slug: String
         var displayName: String
@@ -67,6 +66,7 @@ nonisolated enum ConnectorRegistry {
         /// True while the read list is a captured-but-unverified surface — the Step 3 chats
         /// mark fresh captures with it until their live re-verify confirms them.
         var capturedProvisional = false
+        var directProvider: DirectMCPProvider? = nil
     }
 
     /// Strip a curated full-name list back to bare names — the ConnectorTools REFERENCE, not a
@@ -124,8 +124,9 @@ nonisolated enum ConnectorRegistry {
                          codexReadTools: ["search", "fetch", "recent_documents", "get_file_metadata",
                                           "list_file_revisions", "fetch_file_revision", "get_profile"]),
         CuratedConnector(slug: "slack", displayName: "Slack"),
-        CuratedConnector(slug: "notion", displayName: "Notion"),
-        CuratedConnector(slug: "granola", displayName: "Granola"),
+        CuratedConnector(slug: "notion", displayName: "Notion", directProvider: .notion),
+        CuratedConnector(slug: "granola", displayName: "Granola", directProvider: .granola),
+        CuratedConnector(slug: "linear", displayName: "Linear", directProvider: .linear),
         CuratedConnector(slug: "outlook-mail", displayName: "Outlook Mail"),
         CuratedConnector(slug: "outlook-calendar", displayName: "Outlook Calendar"),
         CuratedConnector(slug: "teams", displayName: "Teams"),
@@ -134,7 +135,8 @@ nonisolated enum ConnectorRegistry {
     // MARK: Identity
 
     static func pack(forSlug slug: String) -> CuratedConnector? {
-        packs.first { $0.slug == slug }
+        let provider = DirectMCPStore.connection(slug)?.providerSlug ?? slug
+        return packs.first { $0.slug == provider }
     }
 
     /// Match a detected connector to its curated pack. Census slugs ARE the canonical identity
@@ -147,14 +149,15 @@ nonisolated enum ConnectorRegistry {
 
     /// One connector as the run recipes address it on each engine. Every field is optional
     /// because a connector can exist on one engine only (drive was Claude-only for a while).
-    /// Step D extends THIS shape with the direct tier's server URL + Keychain credential
-    /// reference — the resolver below stays the one seam, never a parallel path.
+    /// A direct connection supplies its own server identity and Keychain reference through
+    /// this same resolver; it never falls back to a hosted catalog ID.
     struct ResolvedServer: Sendable {
         let slug: String
         let claudeName: String?
         let claudeServerURL: String?
         let claudeToolPrefix: String?
         let codexCatalogID: String?
+        var directConnection: DirectMCPConnection? = nil
     }
 
     /// The ONE slug → server resolution seam. Every recipe builder (ClaudeCLI / CodexCLI
@@ -163,6 +166,11 @@ nonisolated enum ConnectorRegistry {
     /// source); the census fills in whatever the packs don't pin (a detected connector's live
     /// URL or catalog id). nil = the slug matches no pack and no census record.
     static func server(for slug: String) -> ResolvedServer? {
+        if let direct = DirectMCPStore.connection(slug) {
+            return ResolvedServer(slug: slug, claudeName: direct.displayName,
+                claudeServerURL: direct.provider?.endpoint.absoluteString, claudeToolPrefix: direct.toolPrefix,
+                codexCatalogID: nil, directConnection: direct)
+        }
         let pack = pack(forSlug: slug)
         let claude = ConnectorCensus.cached(for: .claude).first { $0.slug == slug }
         let codex = ConnectorCensus.cached(for: .chatgpt).first { $0.slug == slug }
@@ -248,6 +256,7 @@ nonisolated enum ConnectorRegistry {
     /// A connector's user-facing name: the curated pack's, else the census's, else the slug
     /// title-cased.
     static func displayName(slug: String) -> String {
+        if let direct = DirectMCPStore.connection(slug) { return direct.displayName }
         if let pack = pack(forSlug: slug) { return pack.displayName }
         return (ConnectorCensus.cached(for: .claude) + ConnectorCensus.cached(for: .chatgpt))
             .first { $0.slug == slug }?.displayName ?? ConnectorCensus.titleCased(slug)
@@ -258,7 +267,8 @@ nonisolated enum ConnectorRegistry {
     /// (custom connectors), and telemetry carries structure only — every telemetry sink that
     /// tags a slug goes through here (the executor's channel label, the router, the KB reads).
     static func telemetrySlug(_ slug: String) -> String {
-        pack(forSlug: slug) != nil ? slug : "other"
+        if let direct = DirectMCPStore.connection(slug) { return direct.providerSlug }
+        return pack(forSlug: slug) != nil ? slug : "other"
     }
 
     // MARK: The CONNECTED SERVICES prompt block (task 1.6)
@@ -356,19 +366,19 @@ nonisolated enum ConnectorRegistry {
         if usable.count != detected.count {
             Log("cardChannels: \(detected.count - usable.count) unclassified connector(s) not offered as channels yet")
         }
-        return usable.map { CardChannel(slug: $0.slug,
+        return usable.map { CardChannel(slug: DirectMCPStore.connection($0.slug)?.taskTarget ?? $0.slug,
                                         name: displayName(slug: $0.slug),
                                         description: pack(forSlug: $0.slug)?.routerDescription) }
     }
 
     // MARK: Detection convenience
 
-    /// The census's persisted list for the live backend (always empty on `.custom`, which has
-    /// no account to carry connectors).
+    /// Hosted census for the selected backend plus usable direct connections. BYOM receives
+    /// only the direct tier; each account retains its own identity.
     static func detectedForCurrentBackend() -> [ConnectorCensus.DetectedConnector] {
-        guard let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
-        else { return [] }
-        return ConnectorCensus.cached(for: origin)
+        let hosted = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
+            .map { ConnectorCensus.cached(for: $0) } ?? []
+        return hosted + DirectMCPStore.connections().filter(\.usable).map(\.detected)
     }
 
     // MARK: The KB toggle (production keys)
@@ -396,6 +406,10 @@ nonisolated enum ConnectorRegistry {
     /// auto-classifier). An ineligible connector has no KB toggle anywhere; it stays fully
     /// task-usable (Sidekick, cards, computer use), which needs no toggle by ledger #2.
     static func kbEligible(_ slug: String, backend: ModelBackend = ModelBackend.current) -> Bool {
+        if let direct = DirectMCPStore.connection(slug) {
+            if backend == .chatgpt, UserDefaults.standard.bool(forKey: CodexAuth.kbOnlyKey) { return false }
+            return direct.kbEligible
+        }
         guard let pack = pack(forSlug: slug), !pack.capturedProvisional,
               let server = server(for: slug) else { return false }
         switch backend {
@@ -413,6 +427,7 @@ nonisolated enum ConnectorRegistry {
     /// A service identity is not an account identity. Track the engine and observed relinks;
     /// silent account changes within a hosted provider cannot be detected by the census.
     static func readOrigin(slug: String, backend: ModelBackend) -> String {
+        if let direct = DirectMCPStore.connection(slug) { return "direct:\(direct.id):\(direct.generation)" }
         let generation = UserDefaults.standard.integer(forKey: readGenerationKey(slug, backend.rawValue))
         return "v1:\(backend.rawValue):\(generation)"
     }
@@ -458,6 +473,7 @@ nonisolated enum ConnectorRegistry {
     }
 
     static func isClassified(_ slug: String) -> Bool {
+        if let direct = DirectMCPStore.connection(slug) { return direct.usable }
         guard let capture = classification(for: slug),
               let version = ConnectorClassifier.currentCLIVersion else { return false }
         return ConnectorClassifier.isFresh(capture, slug: slug, version: version)
@@ -471,6 +487,10 @@ nonisolated enum ConnectorRegistry {
     /// kbEligible; the classifier fallback serves the lab's trial reads). Empty = NO read
     /// allows anywhere: fail closed.
     static func readToolNames(slug: String) -> [String] {
+        if let direct = DirectMCPStore.connection(slug) {
+            return Array((direct.provider?.reviewedReads ?? []).intersection(Set(direct.readNames)))
+                .sorted().map { direct.toolPrefix + $0 }
+        }
         if pack(forSlug: slug)?.capturedProvisional == true { return [] }
         if let pack = pack(forSlug: slug), let reads = pack.readTools,
            let prefix = pack.claudeToolPrefix {
@@ -483,12 +503,16 @@ nonisolated enum ConnectorRegistry {
     /// The deny list for user-fired runs — always the classifier's verdict, curated or not:
     /// curation covers reads, but the destructive denies need the full live inventory.
     static func destructiveToolNames(slug: String) -> [String] {
-        classification(for: slug)?.tools.filter { $0.category == .destructive }.map(\.name) ?? []
+        if let direct = DirectMCPStore.connection(slug) {
+            return direct.tools.map(\.name).filter { !direct.actionNames.contains($0) }.map { direct.toolPrefix + $0 }
+        }
+        return classification(for: slug)?.tools.filter { $0.category == .destructive }.map(\.name) ?? []
     }
 
     /// The full known inventory: the classified surface when there is one, else the curated
     /// reads as the floor, else nothing.
     static func allKnownToolNames(slug: String) -> [String] {
+        if let direct = DirectMCPStore.connection(slug) { return direct.tools.map { direct.toolPrefix + $0.name } }
         if let tools = classification(for: slug)?.tools, !tools.isEmpty {
             return tools.map(\.name)
         }

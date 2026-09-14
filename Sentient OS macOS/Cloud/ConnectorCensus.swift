@@ -42,8 +42,8 @@ nonisolated enum ConnectorCensus {
 
         /// Where a connector record comes from. Deliberately NOT ModelBackend: Step D adds
         /// direct MCP servers (Sentient-owned OAuth), which have no frontier engine behind
-        /// them, and the engine-dispatch enum must never grow a non-engine case. `direct` is
-        /// dormant in Step 1 — no code path produces it; the type is shaped for it.
+        /// them, and the engine-dispatch enum must never grow a non-engine case. `direct` records come
+        /// from DirectMCPStore and are merged by the registry, separately from CLI census.
         enum Origin: String, Codable, Sendable {
             case claude    // a claude.ai account connector (`claude mcp list`)
             case chatgpt   // a ChatGPT account connector (the codex plugins cache)
@@ -63,7 +63,7 @@ nonisolated enum ConnectorCensus {
         let slug: String
         let displayName: String
         let origin: Origin
-        /// Claude only: the connector's MCP endpoint, as `claude mcp list` reports it.
+        /// Hosted Claude or direct remote MCP endpoint; credentials are stored separately.
         let serverURL: String?
         /// codex only: the global marketplace catalog id (`connector_<32 hex>`), the key the
         /// per-connector `-c` tool strips are addressed by.
@@ -231,7 +231,7 @@ nonisolated enum ConnectorCensus {
         switch origin {
         case .claude:  return "mcp.connectors.claude"
         case .chatgpt: return "mcp.connectors.chatgpt"
-        case .direct:  return nil   // Step D names its key when the direct tier is built
+        case .direct:  return nil   // DirectMCPStore owns this tier; it is not a CLI census.
         }
     }
 
