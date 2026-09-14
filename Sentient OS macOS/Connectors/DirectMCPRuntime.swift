@@ -59,9 +59,8 @@ nonisolated enum DirectMCPRuntime {
     }
     static func execute<T: Sendable>(_ attachments: [Attachment],
                                     operation: @escaping @Sendable () async throws -> T) async throws -> T {
-        guard !attachments.isEmpty else { return try await operation() }
-        let id = UUID()
-        let task = Task {
+        guard !attachments.isEmpty else { return try await $current.withValue([], operation: operation) }
+        return try await track(connectionIDs: Set(attachments.map(\.connection.id))) {
             for attachment in attachments {
                 guard DirectMCPStore.connection(id: attachment.connection.id)?.generation == attachment.connection.generation else {
                     throw DirectMCPError.connectionChanged
@@ -70,8 +69,31 @@ nonisolated enum DirectMCPRuntime {
             try Task.checkCancellation()
             return try await $current.withValue(attachments, operation: operation)
         }
-        active.withLock { $0[id] = (Set(attachments.map(\.connection.id)), { task.cancel() }) }
+    }
+
+    static func executeNative<T: Sendable>(connection: DirectMCPConnection,
+                                           operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try await track(connectionIDs: [connection.id]) {
+            try DirectMCPSession.check(connection)
+            return try await $current.withValue([], operation: operation)
+        }
+    }
+
+    /// Register cancellation before allowing either native or CLI work to start.
+    static func track<T: Sendable>(connectionIDs: Set<UUID>,
+                                  operation: @escaping @Sendable () async throws -> T) async throws -> T {
+        try Task.checkCancellation()
+        let id = UUID()
+        let start = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let task = Task {
+            for await _ in start.stream { break }
+            try Task.checkCancellation()
+            return try await operation()
+        }
+        active.withLock { $0[id] = (connectionIDs, { task.cancel() }) }
         defer { active.withLock { _ = $0.removeValue(forKey: id) } }
+        start.continuation.yield(())
+        start.continuation.finish()
         return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
     static func cancel(connectionID: UUID) {

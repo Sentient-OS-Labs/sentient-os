@@ -52,6 +52,18 @@ nonisolated struct DirectMCPProvider: Sendable, Equatable {
     /// Enable only after the provider's bounded content reader passes its live curation check.
     var kbVerified = false
 
+    /// Operations whose full argument surface cannot be permitted by a name-only policy.
+    var destructiveTools: Set<String> {
+        guard slug == "notion" else { return [] }
+        return ["notion-update-page", "notion-update-data-source", "notion-update-folder",
+                "notion-spawn-session", "notion-send-message-to-session", "notion-stop-session"]
+    }
+    /// Native knowledge plans can constrain arguments before any result reaches a model.
+    /// These names are never added to the general MCP read attachment automatically.
+    var nativeKnowledgeReads: Set<String> {
+        slug == "notion" ? ["notion-fetch", "notion-search", "notion-ai-search", "notion-list-recent-pages"] : []
+    }
+
     static let granola = Self(slug: "granola", name: "Granola",
         endpoint: URL(string: "https://mcp.granola.ai/mcp")!,
         trustedOrigins: ["https://mcp.granola.ai", "https://mcp-auth.granola.ai"],
@@ -59,7 +71,7 @@ nonisolated struct DirectMCPProvider: Sendable, Equatable {
     static let notion = Self(slug: "notion", name: "Notion",
         endpoint: URL(string: "https://mcp.notion.com/mcp")!,
         trustedOrigins: ["https://mcp.notion.com"], offlineScope: nil,
-        reviewedReads: ["notion-fetch", "notion-list-recent-pages"])
+        reviewedReads: ["notion-fetch", "notion-list-recent-pages"], kbVerified: true)
     static let linear = Self(slug: "linear", name: "Linear",
         endpoint: URL(string: "https://mcp.linear.app/mcp")!,
         trustedOrigins: ["https://mcp.linear.app"], offlineScope: nil, reviewedReads: [])
@@ -119,15 +131,23 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
     var usable: Bool { state == .ready && policyValid && !actionNames.isEmpty }
     var readNames: [String] {
         guard policyValid else { return [] }
-        return policy.filter { $0.value == .read }.keys.sorted()
+        return tools.filter { category(for: $0) == .read }.map(\.name).sorted()
     }
     var actionNames: [String] {
         guard policyValid else { return [] }
-        return policy.filter { $0.value != .destructive }.keys.sorted()
+        return tools.filter { category(for: $0) != .destructive }.map(\.name).sorted()
+    }
+    /// Apply reviewed exclusions to old caches as well as freshly classified inventories.
+    /// Vendor hints can narrow a policy, never grant a capability on their own.
+    func category(for tool: DirectMCPTool) -> DirectMCPTool.Category {
+        if provider?.destructiveTools.contains(tool.name) == true || tool.destructiveHint { return .destructive }
+        return policy[tool.name] ?? .destructive
     }
     var kbEligible: Bool {
         guard usable, provider?.kbVerified == true, let reviewed = provider?.reviewedReads, !reviewed.isEmpty else { return false }
-        return reviewed.isSubset(of: Set(readNames))
+        let required = providerSlug == "notion" ? reviewed.union(["notion-search"]) : reviewed
+        return required.isSubset(of: Set(readNames))
+            && tools.filter { required.contains($0.name) }.allSatisfy(\.readOnlyHint)
     }
     var detected: ConnectorCensus.DetectedConnector {
         .init(slug: slug, displayName: displayName, origin: .direct, serverURL: provider?.endpoint.absoluteString,
@@ -141,6 +161,13 @@ nonisolated struct DirectMCPTool: Codable, Sendable, Equatable {
     let description: String
     /// Canonically serialized complete tool metadata, including schema and annotations.
     let definition: Data
+
+    var annotations: [String: Any] {
+        let value = try? JSONSerialization.jsonObject(with: definition) as? [String: Any]
+        return value?["annotations"] as? [String: Any] ?? [:]
+    }
+    var destructiveHint: Bool { annotations["destructiveHint"] as? Bool == true }
+    var readOnlyHint: Bool { annotations["readOnlyHint"] as? Bool == true && !destructiveHint }
 
     static func fingerprint(_ tools: [Self]) -> String {
         let bytes = tools.sorted { $0.name < $1.name }.reduce(into: Data()) { result, tool in

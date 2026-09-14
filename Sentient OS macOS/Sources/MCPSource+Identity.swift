@@ -47,10 +47,10 @@ extension MCPSource {
                     }
                     throw error
                 }
-                onReceipt?(result, nil, attempt, prompt, "identity")
+                onReceipt?(result, nil, attempt, prompt, "identity", [:])
                 return fingerprint
             } catch {
-                onReceipt?(envelope, nil, attempt, prompt, "identity_error")
+                onReceipt?(envelope, nil, attempt, prompt, "identity_error", [:])
                 try Task.checkCancellation()
                 if error is CancellationError { throw error }
                 if case CodexCLI.CLIError.usageLimit = error { throw error }

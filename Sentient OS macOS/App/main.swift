@@ -12,8 +12,9 @@ import Foundation
 import SwiftUI
 
 #if DEBUG
+// Helper/wake invocations must retain their dedicated entry even if a child inherits lab env.
 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
-   ProcessInfo.processInfo.environment["LAB_CMD"]?.hasPrefix("direct") == true {
+   CommandLine.arguments.count == 1 {
     if ProcessInfo.processInfo.environment["LAB_CMD"] == "directrender" {
         NSApplication.shared.setActivationPolicy(.prohibited)
         Task { await ConnectorLab.run(); exit(0) }

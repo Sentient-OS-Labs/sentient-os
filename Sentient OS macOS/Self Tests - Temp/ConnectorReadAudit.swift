@@ -25,6 +25,7 @@ enum ConnectorReadAudit {
         let outputTokens: Int?
         let durationMS: Int?
         let observedToolCalls: [String: Int]
+        let nativeToolCalls: [String: Int]
     }
 
     private struct Report: Codable {
@@ -59,11 +60,12 @@ enum ConnectorReadAudit {
         do {
             let output = try outputDirectory()
             let now = Date()
+            let slug = ProcessInfo.processInfo.environment["LAB_SLUG"] ?? "google-drive"
             for backend in [ModelBackend.claude, .chatgpt] {
                 for mode in [MCPSource.ReadMode.initial, .iterative] {
-                    let windows = try MCPSource.windows(slug: "google-drive", mode: mode,
+                    let windows = try MCPSource.windows(slug: slug, mode: mode,
                                                         since: now.addingTimeInterval(-86_400), now: now)
-                    let prompt = MCPSource.prompt(slug: "google-drive", name: "Google Drive",
+                    let prompt = MCPSource.prompt(slug: slug, name: ConnectorRegistry.displayName(slug: slug),
                                                   backend: backend, mode: mode, window: windows[0])
                     try prompt.write(to: output.appending(path: "\(backend.rawValue)-\(mode.rawValue).txt"),
                                      atomically: true, encoding: .utf8)
@@ -117,15 +119,16 @@ enum ConnectorReadAudit {
                 storePath = url.path
             }
             let receipts = OSAllocatedUnfairLock(initialState: [Receipt]())
-            let observer: MCPSource.ReceiptObserver = { envelope, outcome, attempt, usedPrompt, operation in
+            let observer: MCPSource.ReceiptObserver = { envelope, outcome, attempt, usedPrompt, operation, nativeCalls in
                     receipts.withLock { $0.append(Receipt(prompt: usedPrompt, operation: operation, attempt: attempt,
-                        validResult: outcome != nil || operation == "identity",
+                        validResult: outcome != nil || operation == "identity" || operation == "selection"
+                            || (operation.hasPrefix("native_") && operation != "native_incomplete"),
                         itemCount: outcome?.itemCount, notable: outcome?.result != nil,
                         hasActionItems: outcome?.result?.hasActionItems ?? false,
                         summary: outcome?.result?.summary ?? "", inputTokens: envelope?.inputTokens,
                         cachedInputTokens: envelope?.cachedInputTokens, outputTokens: envelope?.outputTokens,
                         durationMS: envelope?.durationMS,
-                        observedToolCalls: envelope.map { toolCounts($0.raw) } ?? [:])) }
+                        observedToolCalls: envelope.map { toolCounts($0.raw) } ?? [:], nativeToolCalls: nativeCalls)) }
             }
             if let since = env["LAB_SINCE"] {
                 guard env["LAB_USE_LIVE_STORE"] != "1", mode == .iterative,
@@ -146,8 +149,8 @@ enum ConnectorReadAudit {
                     origin: origin, replaceNotes: false)
                 guard saved == .saved else { throw MCPSource.MCPError.storageFailure }
             }
-            let reader: MCPSource.Reader = { slug, prompt in
-                try await MCPSource.read(slug: slug, prompt: prompt, claudeModel: claudeModel, onReceipt: observer)
+            let reader: MCPSource.Reader = { slug, prompt, mode, window in
+                try await MCPSource.read(slug: slug, prompt: prompt, mode: mode, window: window, claudeModel: claudeModel, onReceipt: observer)
             }
             var succeeded = false
             var errorKind: String?
@@ -170,7 +173,7 @@ enum ConnectorReadAudit {
             let notes = await store.notes().filter { $0.bucketKey == MCPSource.bucketKey(slug) }
             let checkpoint = try await store.mcpCheckpoint(MCPSource.bucketKey(slug))
             let version = backend == .claude ? await ClaudeCLI.installedVersion() : await CodexCLI.installedVersion()
-            let report = Report(revision: MCPSource.promptRevision, slug: slug, engine: backend.rawValue,
+            let report = Report(revision: NotionSource.isNotion(slug) ? MCPSource.notionPromptRevision : MCPSource.promptRevision, slug: slug, engine: backend.rawValue,
                 cliVersion: version, model: backend == .claude ? (modelName ?? (slug == "google-drive" ? "sonnet" : "haiku")) : "gpt-5.6-luna",
                 mode: mode.rawValue, seededSince: env["LAB_SINCE"], startedAt: started,
                 durationSeconds: Date().timeIntervalSince(started), succeeded: succeeded, errorKind: errorKind,

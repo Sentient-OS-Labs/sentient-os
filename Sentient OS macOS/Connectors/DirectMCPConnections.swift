@@ -103,16 +103,15 @@ actor DirectMCPConnections {
             updated.tools = tools
             if connection.policyFingerprint != DirectMCPTool.fingerprint(tools) || !connection.policyValid {
                 updated.policy = try await classify(tools, providerName: connection.provider?.name ?? connection.providerSlug)
-                // Curated unattended reads additionally require the live read-only annotation.
-                for tool in tools where connection.provider?.reviewedReads.contains(tool.name) == true {
-                    let definition = try JSONSerialization.jsonObject(with: tool.definition) as? [String: Any]
-                    let annotations = definition?["annotations"] as? [String: Any]
-                    if annotations?["readOnlyHint"] as? Bool != true || annotations?["destructiveHint"] as? Bool == true {
-                        updated.policy[tool.name] = .destructive
-                    }
-                }
                 updated.policyFingerprint = DirectMCPTool.fingerprint(tools)
                 updated.policyRevision = DirectMCPConnection.currentPolicyRevision
+            }
+            // Deterministic safety rules also apply when a cached inventory is unchanged.
+            for tool in tools {
+                if updated.category(for: tool) == .destructive ||
+                    (connection.provider?.reviewedReads.contains(tool.name) == true && !tool.readOnlyHint) {
+                    updated.policy[tool.name] = .destructive
+                }
             }
             try Task.checkCancellation()
             guard DirectMCPStore.connection(id: connection.id)?.generation == connection.generation else { throw DirectMCPError.connectionChanged }
@@ -139,7 +138,8 @@ actor DirectMCPConnections {
         }
     }
 
-    private static func classify(_ tools: [DirectMCPTool], providerName: String) async throws -> [String: DirectMCPTool.Category] {
+    static func classify(_ tools: [DirectMCPTool], providerName: String,
+                         onResult: (@Sendable (CodexCLI.Envelope) -> Void)? = nil) async throws -> [String: DirectMCPTool.Category] {
         let inventory = tools.compactMap { String(data: $0.definition, encoding: .utf8) }.joined(separator: ",\n")
         guard inventory.utf8.count <= 450_000 else { throw DirectMCPError.tooLarge }
         var inv = CodexCLI.Invocation(prompt: """
@@ -148,7 +148,8 @@ actor DirectMCPConnections {
         \(ConnectorClassifier.classificationRules)
         Classify tools that accept arbitrary commands, code, queries or an operation selector as
         destructive unless their entire schema unambiguously excludes mutations.
-        Return every bare tool name exactly once. No additional names.
+        Return {"tools":{"<exact bare tool name>":"read"|"write"|"destructive", ...}}.
+        Every captured tool name is a required object key. Do not omit the last tool or add names.
         Tool definitions:
         [\(inventory)]
         """)
@@ -159,15 +160,25 @@ actor DirectMCPConnections {
         inv.toolsDisabled = true
         inv.webSearch = false
         inv.timeout = 180
-        inv.outputSchema = #"{"type":"object","additionalProperties":false,"required":["tools"],"properties":{"tools":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","category"],"properties":{"name":{"type":"string"},"category":{"type":"string","enum":["read","write","destructive"]}}}}}}"#
+        inv.outputSchema = try classificationSchema(tools)
         let result = try await FrontierRun.run(inv)
-        struct Classified: Decodable { let name: String; let category: DirectMCPTool.Category }
-        struct Reply: Decodable { let tools: [Classified] }
+        onResult?(result)
+        struct Reply: Decodable { let tools: [String: DirectMCPTool.Category] }
         guard let data = result.jsonResult.data(using: .utf8), let reply = try? JSONDecoder().decode(Reply.self, from: data),
-              reply.tools.count == tools.count, Set(reply.tools.map(\.name)) == Set(tools.map(\.name)) else {
+              reply.tools.count == tools.count, Set(reply.tools.keys) == Set(tools.map(\.name)) else {
             throw DirectMCPError.policyUnavailable
         }
-        return Dictionary(uniqueKeysWithValues: reply.tools.map { ($0.name, $0.category) })
+        return reply.tools
+    }
+
+    static func classificationSchema(_ tools: [DirectMCPTool]) throws -> String {
+        let names = tools.map(\.name).sorted()
+        guard !names.isEmpty, Set(names).count == names.count else { throw DirectMCPError.policyUnavailable }
+        let verdict: [String: Any] = ["type": "string", "enum": ["read", "write", "destructive"]]
+        let properties = Dictionary(uniqueKeysWithValues: names.map { ($0, verdict) })
+        return String(decoding: try DirectMCPHTTP.json(["type": "object", "additionalProperties": false,
+            "required": ["tools"], "properties": ["tools": ["type": "object", "additionalProperties": false,
+                "required": names, "properties": properties]]]), as: UTF8.self)
     }
 
     @discardableResult

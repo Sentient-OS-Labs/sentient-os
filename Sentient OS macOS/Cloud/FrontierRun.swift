@@ -21,6 +21,10 @@ enum FrontierRun {
     static func run(_ invocation: CodexCLI.Invocation,
                     onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
         var invocation = invocation
+        if let slug = invocation.mcpActionServer {
+            let guidance = ConnectorRegistry.actionInstructions(slug: slug)
+            if !guidance.isEmpty { invocation.prompt += "\n\n" + guidance }
+        }
         let workspace = invocation.connectorOnlyRead || invocation.toolsDisabled
             ? FileManager.default.temporaryDirectory.appending(path: "sentient-connector-read-\(UUID().uuidString)") : nil
         if let workspace {
@@ -69,7 +73,9 @@ enum FrontierRun {
                 }
             }
             let services = attachments.map { "- \($0.connection.displayName): \($0.connection.serverName)" }.joined(separator: "\n")
+            let guidance = Set(attachments.map { ConnectorRegistry.actionInstructions(slug: $0.connection.slug) }.filter { !$0.isEmpty }).sorted().joined(separator: "\n\n")
             let fullPrompt = prompt + (services.isEmpty ? "" : "\n\nDIRECT CONNECTED ACCOUNTS (use these exact accounts):\n\(services)\nPrefer these tools when they fit the requested task. Never repeat an uncertain write without checking whether it already succeeded.")
+                + (guidance.isEmpty ? "" : "\n\n" + guidance)
             return try await DirectMCPRuntime.execute(attachments) {
                 switch backend {
                 case .claude:
