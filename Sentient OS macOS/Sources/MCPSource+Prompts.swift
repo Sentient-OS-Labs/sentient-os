@@ -13,6 +13,7 @@ extension MCPSource {
 
     static func promptRevision(slug: String) -> String {
         switch ConnectorRegistry.pack(forSlug: slug)?.slug {
+        case OutlookMailConnector.slug: OutlookMailSource.revision
         case "notion": notionPromptRevision
         case "granola": granolaPromptRevision
         case "slack": SlackSource.revision
@@ -103,7 +104,7 @@ extension MCPSource {
     "required":["item_count","notable","has_action_items","summary","tool_failure"]}
     """
 
-    static func timestamp(_ date: Date) -> String {
+    nonisolated static func timestamp(_ date: Date) -> String {
         let format = ISO8601DateFormatter()
         format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         format.timeZone = TimeZone(secondsFromGMT: 0)
@@ -112,6 +113,7 @@ extension MCPSource {
 
     static func prompt(slug: String, name: String, backend: ModelBackend,
                        mode: ReadMode, window: Window) -> String {
+        if slug == OutlookMailConnector.slug { return OutlookMailSource.prompt(backend: backend, mode: mode, window: window) }
         if slug == "slack" { return SlackSource.prompt(mode: mode, window: window) }
         if ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" {
             return notionPrompt(mode: mode, window: window)

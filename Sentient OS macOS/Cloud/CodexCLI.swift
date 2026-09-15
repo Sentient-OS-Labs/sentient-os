@@ -137,6 +137,19 @@ actor CodexCLI {
                                                // the destructive strip; sandbox stays ON.
         var slackOperation: SlackConnector.Operation? = nil
         var slackRunID: UUID? = nil
+        var outlookOperation: OutlookMailConnector.Operation? = nil
+        var outlookRunID: UUID? = nil
+        var outlookReadMode: MCPSource.ReadMode? = nil
+        var outlookReadWindow: MCPSource.Window? = nil
+        var outlookExpectedMessage: String? = nil
+        var outlookExpectedRecipients: [String]? = nil
+        func canonicalConnectorTargets() -> Self {
+            var copy = self
+            copy.mcpActionServer = mcpActionServer.map(ConnectorRegistry.canonicalSlug)
+            copy.mcpAttachServer = mcpAttachServer.map(ConnectorRegistry.canonicalSlug)
+            copy.mcpReadConnectors = mcpReadConnectors.map(ConnectorRegistry.canonicalSlug)
+            return copy
+        }
         var mcpExpectedIdentity: String? = nil
         var slackExpectedMessage: String? = nil
         /// Source ingestion/inventory needs connector tools only; research keeps its vault/web access.
@@ -764,13 +777,21 @@ actor CodexCLI {
         for override in CuaDriver.codexOverrides(socketPath: socketPath) { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
+            var hooks: [HostedToolPolicy.Rule] = []
             var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
             ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
             for id in ids { args += ["-c", "apps.\(id).destructive_enabled=false"] }
             if ConnectorCensus.cached(for: .chatgpt).contains(where: { $0.slug == "slack" }) {
                 if let policy = try? SlackConnector.codexActionPolicy(exclusive: false) { args += ["-c", policy] }
-                args += SlackToolPolicy.codexArguments()
+                hooks.append(SlackToolPolicy.rule(backend: .chatgpt))
             }
+            if ConnectorCensus.cached(for: .chatgpt).contains(where: { $0.slug == OutlookMailConnector.slug }) {
+                if let policy = try? OutlookMailConnector.codexPolicy(operation: .write, exclusive: false) {
+                    args += ["-c", policy]
+                }
+                hooks.append(OutlookToolPolicy.rule(backend: .chatgpt, operation: .write, runID: OutlookToolPolicy.computerRunID ?? UUID()))
+            }
+            args += HostedToolPolicy.codexArguments(hooks)
         }
         if ModelBackend.current == .custom {
             for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
@@ -978,6 +999,7 @@ actor CodexCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: Invocation, modelID: String, effortArg: String,
                           schemaFile: String?) throws -> [String] {
+        let inv = inv.canonicalConnectorTargets()
         if inv.mcpReadToolNames != nil, inv.mcpReadConnectors.count != 1 {
             throw CLIError.notAvailable(.notWorking("read-tool narrowing requires one connector"))
         }
@@ -1017,7 +1039,7 @@ actor CodexCLI {
         // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
         // which terminates it — the same dodge as probeCustomEndpoint's probe image.
         if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
-        if !inv.includeUserConfig || connectorRead || inv.mcpActionServer == "slack" || !direct.isEmpty || inv.toolsDisabled {
+        if !inv.includeUserConfig || connectorRead || ["slack", OutlookMailConnector.slug].contains(inv.mcpActionServer ?? "") || !direct.isEmpty || inv.toolsDisabled {
             // Hosted account apps survive hermetic runs. User MCP servers, plugins and
             // per-tool/account approvals must not widen an unattended read's tool policy.
             args += ["--ignore-user-config"]
@@ -1044,7 +1066,7 @@ actor CodexCLI {
             }
         }
         for override in inv.configOverrides { args += ["-c", override] }
-        if inv.connectorOnlyRead || inv.toolsDisabled {
+        if inv.connectorOnlyRead || inv.toolsDisabled || inv.mcpActionServer == OutlookMailConnector.slug {
             for override in ["project_doc_max_bytes=0", "features.shell_tool=false", "features.view_image=false",
                              "features.browser_use=false", "features.computer_use=false", "features.multi_agent=false",
                              "features.code_mode=false", "features.image_generation=false", "features.goals=false",
@@ -1063,6 +1085,9 @@ actor CodexCLI {
                     args += ["-c", try SlackConnector.codexActionPolicy(operation: inv.slackOperation ?? .write)]
                     args += SlackToolPolicy.codexArguments(operation: inv.slackOperation ?? .write, runID: inv.slackRunID,
                                                           expectedMessage: inv.slackExpectedMessage)
+                } else if slug == OutlookMailConnector.slug {
+                    guard let operation = inv.outlookOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+                    args += ["-c", try OutlookMailConnector.codexPolicy(operation: operation)]
                 } else if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
                     args += ["-c", "apps.\(id).default_tools_approval_mode=\"approve\"",
                              "-c", "apps.\(id).destructive_enabled=false"]
@@ -1074,6 +1099,12 @@ actor CodexCLI {
             }
             if connectorRead {
                 args += ["-c", try connectorReadPolicy(slugs: hostedReads, subset: inv.mcpReadToolNames)]
+            }
+            if inv.mcpActionServer == OutlookMailConnector.slug || hostedReads.contains(OutlookMailConnector.slug) {
+                args += HostedToolPolicy.codexArguments([OutlookToolPolicy.rule(backend: .chatgpt,
+                    operation: inv.mcpActionServer == nil ? .read : (inv.outlookOperation ?? .read), runID: inv.outlookRunID ?? UUID(),
+                    mode: inv.outlookReadMode, window: inv.outlookReadWindow, expectedMessage: inv.outlookExpectedMessage,
+                    expectedRecipients: inv.outlookExpectedRecipients)])
             }
         }
         if inv.toolsDisabled || (!direct.isEmpty && ModelBackend.current == .custom) || (inv.mcpActionServer?.hasPrefix("direct-") == true) {

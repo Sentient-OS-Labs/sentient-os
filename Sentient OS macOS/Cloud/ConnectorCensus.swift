@@ -151,7 +151,20 @@ nonisolated enum ConnectorCensus {
               let data = UserDefaults.standard.data(forKey: key),
               let decoded = try? JSONDecoder().decode([DetectedConnector].self, from: data)
         else { return [] }
-        return decoded
+        return decoded.map(logicalService)
+    }
+
+    /// The observed provider identity remains in the endpoint/catalog fields. Outlook's
+    /// logical mail service owns its own policy and checkpoint; connecting Microsoft's suite
+    /// must not silently enroll Calendar, Teams or files into the mail knowledge source.
+    static func logicalService(_ connector: DetectedConnector) -> DetectedConnector {
+        let isOutlook = connector.origin == .chatgpt && connector.slug == OutlookMailConnector.codexSlug
+            || connector.origin == .claude && connector.displayName == OutlookMailConnector.claudeName
+                && connector.serverURL == OutlookMailConnector.claudeURL
+        guard isOutlook else { return connector }
+        return DetectedConnector(slug: OutlookMailConnector.slug, displayName: "Outlook Mail",
+            origin: connector.origin, serverURL: connector.serverURL, catalogID: connector.catalogID,
+            iconPath: connector.iconPath, healthy: connector.healthy, lastSeen: connector.lastSeen)
     }
 
     // MARK: Watch mode (the "+ Connect Apps" polling window)
@@ -241,6 +254,7 @@ nonisolated enum ConnectorCensus {
     @discardableResult
     static func persist(_ connectors: [DetectedConnector],
                         for origin: DetectedConnector.Origin) -> [DetectedConnector] {
+        let connectors = connectors.map(logicalService)
         guard let key = storageKey(for: origin),
               let data = try? JSONEncoder().encode(connectors) else { return connectors }
         let old = cached(for: origin)
@@ -260,7 +274,7 @@ nonisolated enum ConnectorCensus {
             Analytics.signal("Connector.census", parameters: [
                 "origin": origin.rawValue, "count": String(connectors.count)])
         }
-        return connectors
+        return connectors.map(logicalService)
     }
 
     // MARK: Claude — `claude mcp list`
@@ -338,7 +352,7 @@ nonisolated enum ConnectorCensus {
             // output format may have drifted. Report the shape, never the content.
             Log("ConnectorCensus.claude: parsed \(connectors.count) of \(candidates) claude.ai lines")
         }
-        return connectors
+        return connectors.map(logicalService)
     }
 
     /// Read the health word, not the whole status: "✔ Connected" is healthy while "✘ Disconnected"
@@ -379,7 +393,7 @@ nonisolated enum ConnectorCensus {
                                                 healthy: true,
                                                 lastSeen: now))
         }
-        return connectors
+        return connectors.map(logicalService)
     }
 
     /// The newest version directory, compared NUMERICALLY per component: a string sort reads

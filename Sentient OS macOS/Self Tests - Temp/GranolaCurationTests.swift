@@ -420,7 +420,7 @@ enum GranolaCurationTests {
         for (command, services, expected) in cases {
             let route = await CommandRouter.route(command, services: services)
             let actual: String?
-            switch route { case .computer: actual = nil; case .connector(let slug, _, _): actual = slug }
+            switch route { case .computer: actual = nil; case .connector(let slug, _, _, _): actual = slug }
             let passed = actual == expected
             if !passed { failures += 1 }
             records.append(["command": command, "expected": expected ?? "computer", "actual": actual ?? "computer", "passed": passed])

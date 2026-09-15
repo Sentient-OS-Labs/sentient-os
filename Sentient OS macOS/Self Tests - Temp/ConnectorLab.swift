@@ -69,6 +69,8 @@ enum ConnectorLab {
         case "notioncheck": await NotionCurationTests.run()
         case "notionroutereval": await NotionCurationTests.router()
         case "notionmodelfixtures": await NotionCurationTests.modelFixtures()
+        case "outlookmodelfixtures": await OutlookCurationTests.modelFixtures()
+        case "outlookcleanup": OutlookCurationTests.cleanupCards()
         case "notionkbtrial":
             guard NotionSource.isNotion(labSlug), ProcessInfo.processInfo.environment["LAB_USE_LIVE_STORE"] != "1" else {
                 Log("REFUSED: Notion curation trials require an isolated review store")
@@ -96,6 +98,9 @@ enum ConnectorLab {
         case "policycheck": ConnectorReadPolicyTests.run()
         case "curationcheck": await ConnectorCurationTests.run()
         case "slackcheck": SlackCurationTests.run()
+        case "outlookcheck": await OutlookCurationTests.run()
+        case "outlookreceipt": await OutlookCurationTests.receiptCheck()
+        case "outlooksend": await OutlookCurationTests.sendTest()
         case "slackcontent": await SlackContentFixtures.run()
         case "slackrouter": await SlackCurationTests.router()
         case "slackreceipt":
@@ -123,8 +128,10 @@ enum ConnectorLab {
         case "prompts": await ConnectorReadAudit.exportPrompts()
         case "probes":   await probes()
         case "routereval": await routereval()
-        case "seedcard": seedcard()
-        case "firecard": await firecard()
+        case "seedcard":
+            if OutlookMailConnector.isMail(labSlug) { await OutlookCurationTests.seedCard() } else { seedcard() }
+        case "firecard":
+            if OutlookMailConnector.isMail(labSlug) { await OutlookCurationTests.fireCard() } else { await firecard() }
         case "decodecheck": decodecheck()
         case "research": await research()
         case "kbread":   await ConnectorReadAudit.read()
@@ -453,6 +460,12 @@ enum ConnectorLab {
                 Log("  eval: FAIL (Slack classification disagrees with the reviewed inventory)")
                 return false
             }
+        case OutlookMailConnector.slug:
+            do {
+                try OutlookMailConnector.validateClassification(tools)
+                Log("  eval: PASS (complete Microsoft 365 inventory and reviewed categories)")
+                return true
+            } catch { Log("  eval: FAIL (Microsoft 365 classification differs from the reviewed inventory)"); return false }
         default:
             Log("  (no ground truth for \(slug); buckets above are the whole output)")
             return true
@@ -597,6 +610,7 @@ enum ConnectorLab {
     /// delete (destructive tools absent) while still reporting via the sentinel.
     private static func actRecipe() async {
         guard requireConnectorBackend("the act recipe") else { return }
+        if OutlookMailConnector.isMail(labSlug) { await OutlookCurationTests.act(); return }
         let slug = labSlug
         let name = ConnectorRegistry.server(for: slug)?.claudeName
             ?? ConnectorCensus.titleCased(slug)
@@ -642,6 +656,7 @@ enum ConnectorLab {
         guard requireConnectorBackend("the deny check") else { return }
         let slug = labSlug
         if slug == "slack" { await SlackDenialAudit.run(); return }
+        if OutlookMailConnector.isMail(slug) { await OutlookCurationTests.denialAudit(); return }
         if DirectMCPStore.connection(slug)?.providerSlug == "granola" {
             GranolaCurationTests.denialPolicy()
             return
@@ -818,7 +833,7 @@ enum ConnectorLab {
                 + "LAB_CMD=census first (or link a connector), then re-run.")
             return
         }
-        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion", "granola", "slack"].compactMap { slug -> CommandRouter.Service? in
+        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion", "granola", "slack", "outlook-mail"].compactMap { slug -> CommandRouter.Service? in
             guard let pack = ConnectorRegistry.pack(forSlug: slug) else { return nil }
             return .init(slug: slug, name: pack.displayName, description: pack.routerDescription ?? "")
         } : CommandRouter.routableServices()
@@ -829,12 +844,22 @@ enum ConnectorLab {
             // Pure connector — the whole task fits one service's tools.
             ("what's on my calendar Friday",                          .connector("google-calendar")),
             ("what are the newest files in my Drive",                 .connector("google-drive")),
-            ("did anyone email me about the lease",                   .connector("gmail")),
-            ("send an email to Jesai saying the build is green",      .connector("gmail")),
+            ("search Gmail for email about the lease",                .connector("gmail")),
+            ("send an email through Gmail to Jesai saying the build is green", .connector("gmail")),
             ("do I have any meetings tomorrow morning",               .connector("google-calendar")),
             ("search my drive for the pitch deck and tell me who has access to it",
                                                                       .connector("google-drive")),
-            ("when is my next flight? it should be in my email",      .connector("gmail")),
+            ("when is my next flight? it should be in my Gmail",       .connector("gmail")),
+            ("search Outlook for email about the lease",              .connector("outlook-mail")),
+            ("create one unsent Outlook draft to alex@example.invalid saying the build is green", .connector("outlook-mail")),
+            ("send one Outlook email to alex@example.invalid saying the build is green", .connector("outlook-mail")),
+            ("reply in Outlook to the newest email from alex@example.invalid saying yes", .connector("outlook-mail")),
+            ("forward the newest Outlook email from alex@example.invalid to pat@example.invalid", .connector("outlook-mail")),
+            ("search Outlook and put the meeting on my calendar",      .computer),
+            ("attach the PDF on my Desktop to an Outlook email",        .computer),
+            ("delete the oldest message from Outlook",                .computer),
+            ("search the shared support mailbox in Outlook",           .computer),
+            ("reply to this Outlook message on my screen",              .screen),
             ("find the Slack thread about the release decision",      .connector("slack")),
             ("send Jesai a Slack message saying the build is green",  .connector("slack")),
             ("draft a Slack update without sending it",               .connector("slack")),
@@ -859,9 +884,17 @@ enum ConnectorLab {
             ("what time is it in Tokyo",                              .computer),
         ]
 
+        let mailOperations: [String: OutlookMailConnector.Operation] = [
+            "search Outlook for email about the lease": .read,
+            "create one unsent Outlook draft to alex@example.invalid saying the build is green": .draft,
+            "send one Outlook email to alex@example.invalid saying the build is green": .send,
+            "reply in Outlook to the newest email from alex@example.invalid saying yes": .reply,
+            "forward the newest Outlook email from alex@example.invalid to pat@example.invalid": .forward]
+        let ambiguous: [(String, ExpectedRoute)] = routable.contains("gmail") && routable.contains("outlook-mail")
+            ? [("did anyone email me about the lease", .computer), ("search Gmail and Outlook for the lease", .computer)] : []
         var screenToConnector = 0, connectorToComputer = 0, otherMisses = 0, eitherComputer = 0
         var ran = 0, totalMS = 0
-        for (command, expected) in deck {
+        for (command, expected) in deck + ambiguous {
             // A row whose expected slug isn't routable on this machine can't be judged fairly.
             if case .connector(let slug) = expected, !routable.contains(slug) {
                 Log("  n/a   \"\(command)\" (expected \(slug) is not routable here)"); continue
@@ -871,16 +904,19 @@ enum ConnectorLab {
             }
             let t0 = Date()
             let route = await CommandRouter.route(command, services: services)
+            if let wanted = mailOperations[command], case .connector(_, _, _, let operation) = route, operation != wanted {
+                otherMisses += 1; Log("FAIL Outlook operation: expected \(wanted.rawValue)")
+            }
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
             ran += 1; totalMS += ms
             let got: String
             switch route {
             case .computer:                  got = "computer"
-            case .connector(let slug, _, _):    got = "connector(\(slug))"
+            case .connector(let slug, _, _, _):    got = "connector(\(slug))"
             }
             let verdict: String
             switch (expected, route) {
-            case (.connector(let want), .connector(let slug, _, _)):
+            case (.connector(let want), .connector(let slug, _, _, _)):
                 if slug == want { verdict = "PASS " } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
             case (.connector, .computer):
                 connectorToComputer += 1; verdict = "miss  (→ computer, counts vs the ≤2 budget)"
@@ -892,7 +928,7 @@ enum ConnectorLab {
                 verdict = "PASS "
             case (.computer, .connector):
                 otherMisses += 1; verdict = "FAIL  (multi/oddball → connector)"
-            case (.either(let want), .connector(let slug, _, _)):
+            case (.either(let want), .connector(let slug, _, _, _)):
                 if slug == want { verdict = "PASS  (the better route)" } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
             case (.either, .computer):
                 eitherComputer += 1; verdict = "PASS  (acceptable)"
@@ -938,8 +974,10 @@ enum ConnectorLab {
 
         var plain = CodexCLI.Invocation(prompt: "P")
         plain.feature = "lab"
-        var readInv = plain; readInv.mcpReadConnectors = [slug]
+        var readInv = MCPSource.readInvocation(slug: slug, prompt: "P")
+        readInv.feature = "lab"
         var actInv = plain; actInv.mcpActionServer = slug
+        if OutlookMailConnector.isMail(slug) { actInv.outlookOperation = .draft }
         var attachInv = plain; attachInv.mcpAttachServer = slug
         // The research read attachment, exactly as ProactiveResearch builds it (1.7): the two
         // chips + every KB-enabled connector.
@@ -956,7 +994,8 @@ enum ConnectorLab {
 
         Log("-- run() argv, claude column --")
         showClaude("claude plain", plain)
-        showClaude("claude read", readInv)
+        let claudeRead = ModelBackend.$runOverride.withValue(.claude) { MCPSource.readInvocation(slug: slug, prompt: "P") }
+        showClaude("claude read", claudeRead)
         showClaude("claude act", actInv)
         showClaude("claude attach (classifier)", attachInv)
         showClaude("claude research read", researchInv)

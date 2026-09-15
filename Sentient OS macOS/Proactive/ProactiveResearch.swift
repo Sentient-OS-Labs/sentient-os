@@ -52,6 +52,7 @@ struct PreparedAction: Sendable, Identifiable, Codable {
                                    // routing and its fire button.
     /// App-captured hosted account identity at preparation time. Legacy/non-Slack cards omit it.
     var connectorIdentity: String? = nil
+    var outlookOperation: OutlookMailConnector.Operation? = nil
     let urgency: ActionItem.Urgency
     let dueDate: String?
     let status: Status             // the verify verdict (confirmed / updated / unverified)
@@ -159,6 +160,7 @@ actor ProactiveResearch {
         // Zero detected = the shipped four methods and the shipped schema, byte-identical.
         let channels = ConnectorRegistry.cardChannels()
         let slackIdentity = SlackConnector.cachedIdentity()?.fingerprint
+        let outlookIdentity = OutlookMailConnector.cachedFingerprint()
 
         // The read-only connector attachment: the two chips always (the shipped posture — inert
         // when unlinked), plus every KB-enabled connector that actually has a read surface. The
@@ -194,7 +196,7 @@ actor ProactiveResearch {
         Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, connectors read-only + web, never fire; \(channels.count) mcp channel(s))…")
         do {
             let env = try await FrontierRun.run(inv, onLine: onLine)
-            let parsed = Self.parse(env.jsonResult, slackIdentity: slackIdentity)
+            let parsed = Self.parse(env.jsonResult, slackIdentity: slackIdentity, outlookIdentity: outlookIdentity)
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
             let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)
             Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
@@ -250,8 +252,10 @@ actor ProactiveResearch {
         let mcp = !channels.isEmpty
         let methodEnum = mcp ? #""computer","gmail","calendar","mcp","research""#
                              : #""computer","gmail","calendar","research""#
-        let targetProp = mcp ? #""method_target":{"type":"string"},"# : ""
-        let targetReq  = mcp ? #""method_target","# : ""
+        let outlook = channels.contains { $0.slug == OutlookMailConnector.slug }
+        let targetProp = (mcp ? #""method_target":{"type":"string"},"# : "")
+            + (outlook ? #""outlook_operation":{"type":"string","enum":["none","draft","send","reply","forward"]},"# : "")
+        let targetReq = (mcp ? #""method_target","# : "") + (outlook ? #""outlook_operation","# : "")
         return """
         {"type":"object","additionalProperties":false,"properties":{\
         "ready":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{\
@@ -282,7 +286,7 @@ actor ProactiveResearch {
 
     // MARK: Tolerant parse (output-schema makes `result` the JSON; still fence-safe)
 
-    private static func parse(_ result: String, slackIdentity: String? = nil) -> ReadyResult {
+    private static func parse(_ result: String, slackIdentity: String? = nil, outlookIdentity: String? = nil) -> ReadyResult {
         let span: String
         if let s = result.firstIndex(of: "{"), let e = result.lastIndex(of: "}"), s < e {
             span = String(result[s...e])
@@ -306,7 +310,9 @@ actor ProactiveResearch {
                 method: method,
                 target: ((d["target"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 methodTarget: (method == .mcp && !slug.isEmpty) ? slug : nil,
-                connectorIdentity: method == .mcp && slug == "slack" ? slackIdentity : nil,
+                connectorIdentity: method == .mcp ? (slug == "slack" ? slackIdentity : (slug == OutlookMailConnector.slug ? outlookIdentity : nil)) : nil,
+                outlookOperation: method == .mcp && slug == OutlookMailConnector.slug
+                    ? (d["outlook_operation"] as? String).flatMap(OutlookMailConnector.Operation.init(rawValue:)) : nil,
                 urgency: ActionItem.Urgency(rawValue: (d["urgency"] as? String)?.lowercased() ?? "medium") ?? .medium,
                 dueDate: (due?.isEmpty == false) ? due : nil,
                 status: PreparedAction.Status(rawValue: (d["status"] as? String)?.lowercased() ?? "unverified") ?? .unverified,
@@ -467,6 +473,8 @@ actor ProactiveResearch {
         \(readNames.isEmpty ? "" : "You may also READ the user's \(readNames.joined(separator: ", ")) connector\(readNames.count == 1 ? "" : "s") to verify facts; they are read-only in this run.\n")\
         If a tool you'd need isn't available, go as far as you can and say in `review_note`/the recipe \
         what the fire step will have to handle.
+
+        \(channels.contains(where: { $0.slug == OutlookMailConnector.slug }) ? "OUTLOOK MAIL CARDS: use method=mcp and method_target=outlook-mail. Set outlook_operation to draft (unsent), send (new email), reply (reply to an existing message) or forward. Set none for every other card. Preserve the exact verified mailbox, observed message ID and intended recipients in the routing. Never use Gmail or calendar methods for Outlook mail. The source is only the primary mailbox; no attachments, shared mailbox, deletion or mailbox-setting operations. Draft never means send." : "")
 
         ## PER ITEM: VERIFY → then PREPARE
         Work the items ONE AT A TIME.

@@ -102,6 +102,7 @@ nonisolated enum ConnectorClassifier {
     static func validate(_ tools: [ConnectorRegistry.ClassifiedTool], slug: String,
                          inventory: [String]? = nil) throws {
         if slug == "slack" { try SlackConnector.validateClassification(tools) }
+        if slug == OutlookMailConnector.slug { try OutlookMailConnector.validateClassification(tools) }
         guard let identity = ConnectorRegistry.claudeIdentity(slug: slug), !tools.isEmpty,
               tools.allSatisfy({ normalizedName($0.name, prefix: identity.toolPrefix) == $0.name }),
               Set(tools.map(\.name)).count == tools.count else {
@@ -227,6 +228,7 @@ nonisolated enum ConnectorClassifier {
         \(classificationRules)
 
         \(slug == "slack" ? SlackConnector.classificationGuidance : "")
+        \(slug == OutlookMailConnector.slug ? "Microsoft 365 clarification: outlook_update_draft replaces existing body/content and is destructive. outlook_update_event can remove attendees and send cancellations; outlook_respond_to_event includes decline/removal; sharepoint_upload_file supports replacement. All are destructive. Inspect the complete Microsoft 365 inventory, including non-mail tools." : "")
 
         Reply with JSON only:
         {"tools":[{"name":"<full name>","category":"read"|"write"|"destructive"}, ...]}
@@ -272,7 +274,7 @@ nonisolated enum ConnectorClassifier {
         invocation.model = .gpt56luna          // → haiku on the Claude tier map
         // Slack's mixed-mode tools repeatedly confused the light-tier inventory/classifier.
         // This infrequent policy check uses Sonnet; knowledge reads keep their own model tier.
-        if slug == "slack" { invocation.claudeModel = .sonnet }
+        if ["slack", OutlookMailConnector.slug].contains(slug) { invocation.claudeModel = .sonnet }
         invocation.effort = .low
         invocation.sandbox = .readOnly
         invocation.webSearch = false

@@ -119,7 +119,7 @@ enum NotionCurationTests {
         for (command, services, expected) in cases {
             let result = await CommandRouter.route(command, services: services)
             let target: String?
-            switch result { case .computer: target = nil; case .connector(let slug, _, _): target = slug }
+            switch result { case .computer: target = nil; case .connector(let slug, _, _, _): target = slug }
             let pass = target == expected
             if !pass { failures += 1 }
             results.append(["command": command, "expected": expected ?? "computer", "actual": target ?? "computer", "passed": pass])

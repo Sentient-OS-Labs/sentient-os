@@ -145,7 +145,15 @@ nonisolated enum ConnectorRegistry {
                          routerDescription: "read and search past Granola meeting notes, decisions, commitments and action items; check the connected Granola account; no scheduling or note editing",
                          directProvider: .granola),
         CuratedConnector(slug: "linear", displayName: "Linear", directProvider: .linear),
-        CuratedConnector(slug: "outlook-mail", displayName: "Outlook Mail"),
+        CuratedConnector(slug: "outlook-mail", displayName: "Outlook Mail",
+                         routerDescription: "read and search the connected primary Outlook mailbox; draft, send, reply and forward email; no calendar, shared-mailbox, deletion or mailbox-setting changes",
+                         claudeName: OutlookMailConnector.claudeName,
+                         claudeServerURL: OutlookMailConnector.claudeURL,
+                         claudeToolPrefix: OutlookMailConnector.claudePrefix,
+                         codexSlug: OutlookMailConnector.codexSlug,
+                         readTools: OutlookMailConnector.claudeReads,
+                         codexReadTools: OutlookMailConnector.codexReads,
+                         kbAdapter: .windowedWeekly),
         CuratedConnector(slug: "outlook-calendar", displayName: "Outlook Calendar"),
         CuratedConnector(slug: "teams", displayName: "Teams"),
     ]
@@ -153,8 +161,14 @@ nonisolated enum ConnectorRegistry {
     // MARK: Identity
 
     static func pack(forSlug slug: String) -> CuratedConnector? {
-        let provider = DirectMCPStore.connection(slug)?.providerSlug ?? slug
+        let provider = DirectMCPStore.connection(slug)?.providerSlug ?? canonicalSlug(slug)
         return packs.first { $0.slug == provider }
+    }
+
+    /// Outlook Email is the captured Codex name. Preserve the existing logical mail slug,
+    /// including old task targets; the physical Microsoft 365 connection is mapped by census.
+    static func canonicalSlug(_ slug: String) -> String {
+        slug == OutlookMailConnector.codexSlug ? OutlookMailConnector.slug : slug
     }
 
     /// Match a detected connector to its curated pack. Census slugs ARE the canonical identity
@@ -184,6 +198,7 @@ nonisolated enum ConnectorRegistry {
     /// source); the census fills in whatever the packs don't pin (a detected connector's live
     /// URL or catalog id). nil = the slug matches no pack and no census record.
     static func server(for slug: String) -> ResolvedServer? {
+        let slug = canonicalSlug(slug)
         if let direct = DirectMCPStore.connection(slug) {
             return ResolvedServer(slug: slug, claudeName: direct.displayName,
                 claudeServerURL: direct.provider?.endpoint.absoluteString, claudeToolPrefix: direct.toolPrefix,
@@ -257,8 +272,12 @@ nonisolated enum ConnectorRegistry {
         for server in computerUseAttachable() {
             guard server.claudeServerURL != nil else { excluded += 1; continue }
             if isClassified(server.slug) {
+                let denies = server.slug == OutlookMailConnector.slug
+                    ? OutlookMailConnector.claudeCategories.keys.filter { !OutlookMailConnector.actionTools(.claude, operation: .write).contains($0) }
+                        .map { OutlookMailConnector.claudePrefix + $0 }.sorted()
+                    : destructiveToolNames(slug: server.slug)
                 attached.append(.init(server: server,
-                                      denies: destructiveToolNames(slug: server.slug),
+                                      denies: denies,
                                       readOnly: false))
             } else if server.slug == "gmail" {
                 attached.append(.init(server: server,
@@ -282,6 +301,7 @@ nonisolated enum ConnectorRegistry {
 
     /// Provider-specific completion details for user-fired tasks, separate from router scope.
     static func actionInstructions(slug: String) -> String {
+        if OutlookMailConnector.isMail(slug) { return OutlookMailConnector.actionInstructions }
         if slug == "slack" { return SlackConnector.actionInstructions }
         if pack(forSlug: slug)?.slug == "granola" {
             return """
@@ -324,7 +344,7 @@ nonisolated enum ConnectorRegistry {
     /// tags a slug goes through here (the executor's channel label, the router, the KB reads).
     static func telemetrySlug(_ slug: String) -> String {
         if let direct = DirectMCPStore.connection(slug) { return direct.providerSlug }
-        return pack(forSlug: slug) != nil ? slug : "other"
+        return pack(forSlug: slug)?.slug ?? "other"
     }
 
     // MARK: The CONNECTED SERVICES prompt block (task 1.6)
@@ -383,6 +403,8 @@ nonisolated enum ConnectorRegistry {
         - If a service's tools cannot finish a step, fall back to the screen and do it there.
         """
         + (entries.contains(where: { $0.slug == "slack" }) ? "\n\n" + SlackConnector.actionInstructions : "")
+        + (entries.contains(where: { $0.slug == OutlookMailConnector.slug }) ? "\n\n" + OutlookMailConnector.actionInstructions
+           + "\nWhen Gmail and Outlook are both connected, identify the intended mailbox from the user's request or visible context. If it is unclear, ask which mailbox; never silently default to Gmail." : "")
         Log("connected services: \(entries.count) service(s) in the prompt block")
         #if DEBUG
         Log("connected services block: +\(block.utf8.count) bytes")
@@ -420,7 +442,10 @@ nonisolated enum ConnectorRegistry {
         let classified = ModelBackend.current == .claude
             ? detected.filter { isClassified($0.slug) }
             : detected
-        let usable = classified.filter { $0.slug != "slack" || SlackConnector.cachedIdentity() != nil }
+        let usable = classified.filter {
+            ($0.slug != "slack" || SlackConnector.cachedIdentity() != nil)
+                && ($0.slug != OutlookMailConnector.slug || OutlookMailConnector.cachedFingerprint() != nil)
+        }
         if usable.count != detected.count {
             Log("cardChannels: \(detected.count - usable.count) connector(s) without verified action context not offered yet")
         }

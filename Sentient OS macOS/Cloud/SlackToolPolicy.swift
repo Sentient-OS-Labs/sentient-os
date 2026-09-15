@@ -25,27 +25,18 @@ nonisolated enum SlackToolPolicy {
 
     static func codexArguments(operation: SlackConnector.Operation = .write, runID: UUID? = nil,
                                expectedMessage: String? = nil) -> [String] {
-        let command = DirectMCPRuntime.quoted(Self.command(backend: .chatgpt, operation: operation,
-                                                        runID: runID ?? UUID(), expectedMessage: expectedMessage))
-        let hook = "hooks.PreToolUse=[{matcher=\"\(matcher)\",hooks=[{type=\"command\",command=\(command),timeout=10}]}]"
-        // Only this signed app-authored hook is supplied in a hermetic invocation. Hook trust
-        // is separate from tool approvals; remote approval and sandbox policy remain intact.
-        return ["--dangerously-bypass-hook-trust", "-c", "features.hooks=true", "-c", hook]
+        HostedToolPolicy.codexArguments([rule(backend: .chatgpt, operation: operation, runID: runID ?? UUID(), expectedMessage: expectedMessage)])
+    }
+
+    static func rule(backend: ModelBackend, operation: SlackConnector.Operation = .write,
+                     runID: UUID = UUID(), expectedMessage: String? = nil) -> HostedToolPolicy.Rule {
+        .init(matcher: matcher, command: command(backend: backend, operation: operation, runID: runID, expectedMessage: expectedMessage))
     }
 
     static func claudeSettings(_ base: String, operation: SlackConnector.Operation = .write, runID: UUID? = nil,
                                expectedMessage: String? = nil) throws -> String {
-        guard let data = base.data(using: .utf8),
-              var settings = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw MCPSource.MCPError.noReadSurface(slug: "slack")
-        }
-        var hooks = settings["hooks"] as? [String: Any] ?? [:]
-        var pre = hooks["PreToolUse"] as? [[String: Any]] ?? []
-        pre.append(["matcher": matcher, "hooks": [["type": "command",
-            "command": command(backend: .claude, operation: operation, runID: runID ?? UUID(), expectedMessage: expectedMessage), "timeout": 10]]])
-        hooks["PreToolUse"] = pre
-        settings["hooks"] = hooks
-        return String(data: try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys]), encoding: .utf8)!
+        try HostedToolPolicy.claudeSettings(base, adding: rule(backend: .claude, operation: operation,
+            runID: runID ?? UUID(), expectedMessage: expectedMessage))
     }
 
     static func allowed(name: String, input: [String: Any], backend: ModelBackend,
@@ -77,15 +68,7 @@ nonisolated enum SlackToolPolicy {
               let runID = UUID(uuidString: arguments[4]), arguments[5] == "-"
                 || arguments[5].range(of: "^[0-9a-f]{64}\\z", options: .regularExpression) != nil else { return reject() }
         do {
-            var data = Data()
-            while data.count <= 65_536 {
-                let chunk = try FileHandle.standardInput.read(upToCount: min(4_096, 65_537 - data.count)) ?? Data()
-                if chunk.isEmpty { break }
-                data.append(chunk)
-            }
-            guard data.count <= 65_536, let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  value["hook_event_name"] as? String == "PreToolUse",
-                  let name = value["tool_name"] as? String, let input = value["tool_input"] as? [String: Any] else { return reject() }
+            let (name, input) = try HostedToolPolicy.readInput()
             var allow = allowed(name: name, input: input, backend: backend, operation: operation,
                                 expectedMessageHash: arguments[5] == "-" ? nil : arguments[5])
             if allow, operation == .send, name.hasSuffix("slack_send_message") {
@@ -93,13 +76,7 @@ nonisolated enum SlackToolPolicy {
                 // A single-send task cannot blindly send again in the same model run.
                 allow = claimSend(runID: runID)
             }
-            let output: [String: Any] = ["hookSpecificOutput": ["hookEventName": "PreToolUse",
-                "permissionDecision": allow ? "allow" : "deny",
-                "permissionDecisionReason": allow ? "Reviewed Slack operation." : "This Slack operation is outside the permitted task policy."]]
-            try FileHandle.standardOutput.write(contentsOf: JSONSerialization.data(withJSONObject: output))
-            // A successful hook process returns its JSON decision. Exit 2 is the separate
-            // stderr-based blocking protocol and must never discard the JSON deny decision.
-            return 0
+            return try HostedToolPolicy.respond(allowed: allow, service: "Slack")
         } catch { return reject() }
     }
     private static func reject() -> Int32 {
@@ -110,10 +87,7 @@ nonisolated enum SlackToolPolicy {
         URL(fileURLWithPath: "/private/tmp/sentient-slack-send-\(getuid())-\(runID.uuidString)")
     }
     static func claimSend(runID: UUID) -> Bool {
-        let descriptor = open(marker(runID).path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else { return false }
-        close(descriptor)
-        return true
+        HostedToolPolicy.claim(marker(runID))
     }
     static func cleanup(runID: UUID) { try? FileManager.default.removeItem(at: marker(runID)) }
 }

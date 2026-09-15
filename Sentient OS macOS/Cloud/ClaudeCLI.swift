@@ -143,7 +143,9 @@ actor ClaudeCLI {
     static func environment(for invocation: CodexCLI.Invocation) -> [String: String] {
         var environment = baseEnv
         if invocation.mcpAttachServer == "slack" || invocation.mcpActionServer == "slack"
-            || (invocation.connectorOnlyRead && invocation.mcpReadConnectors == ["slack"]) {
+            || (invocation.connectorOnlyRead && invocation.mcpReadConnectors == ["slack"])
+            || invocation.mcpAttachServer == OutlookMailConnector.slug || invocation.mcpActionServer == OutlookMailConnector.slug
+            || invocation.mcpReadConnectors.contains(OutlookMailConnector.slug) {
             // Inventory must inspect every schema. Source reads expose only their small
             // reviewed subset, so deferred tool search adds cost and can hide that subset.
             environment["ENABLE_TOOL_SEARCH"] = "false"
@@ -418,6 +420,7 @@ actor ClaudeCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: CodexCLI.Invocation, modelID: String,
                           effortArg: String) throws -> [String] {
+        let inv = inv.canonicalConnectorTargets()
         let direct = DirectMCPRuntime.current
         let requestedDirect = Set((inv.mcpReadConnectors + [inv.mcpActionServer].compactMap { $0 }).filter { $0.hasPrefix("direct-") })
         guard requestedDirect.isSubset(of: Set(direct.map(\.requestedTarget))) else { throw DirectMCPError.policyUnavailable }
@@ -468,6 +471,11 @@ actor ClaudeCLI {
                 ? SlackConnector.actionTools(backend: .claude, operation: inv.slackOperation ?? .write).map { prefix + $0 }
                 : [prefix + "*"]
             recipeDenies = ConnectorRegistry.destructiveToolNames(slug: slug)
+            if slug == OutlookMailConnector.slug {
+                guard let operation = inv.outlookOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+                recipeAllows = OutlookMailConnector.actionTools(.claude, operation: operation).map { prefix + $0 }
+                recipeDenies = OutlookMailConnector.claudeCategories.keys.map { prefix + $0 }.filter { !recipeAllows.contains($0) }.sorted()
+            }
             if slug == "slack" {
                 recipeDenies = SlackConnector.categories(backend: .claude).keys.map { prefix + $0 }
                     .filter { !recipeAllows.contains($0) }.sorted()
@@ -487,6 +495,9 @@ actor ClaudeCLI {
                 }
                 recipeWallURLs.append(url)
                 recipeAllows += reads
+                if slug == OutlookMailConnector.slug {
+                    recipeDenies += OutlookMailConnector.claudeCategories.keys.map { prefix + $0 }.filter { !reads.contains($0) }.sorted()
+                }
                 if slug == "slack" {
                     // DontAsk remains the permission boundary. Removing the reviewed complement
                     // also avoids paying for unrelated canvas/list/upload schemas on every read.
@@ -515,9 +526,18 @@ actor ClaudeCLI {
             // The recipe wall: ONLY the recipe's server(s) may load — the user's own MCP
             // servers and every other connector are blocked before their tools reach the model.
             let base = Self.mcpServerAllowSettings(serverURLs: recipeWallURLs)
-            args += ["--settings", inv.mcpActionServer == "slack"
+            let settings = inv.mcpActionServer == "slack"
                 ? try SlackToolPolicy.claudeSettings(base, operation: inv.slackOperation ?? .write,
-                                                     runID: inv.slackRunID, expectedMessage: inv.slackExpectedMessage) : base]
+                                                    runID: inv.slackRunID, expectedMessage: inv.slackExpectedMessage) : base
+            args += ["--settings", settings]
+        }
+
+        if inv.mcpActionServer == OutlookMailConnector.slug || inv.mcpReadConnectors.contains(OutlookMailConnector.slug) {
+            guard let index = args.lastIndex(of: "--settings"), index + 1 < args.count else { throw MCPSource.MCPError.noReadSurface(slug: OutlookMailConnector.slug) }
+            args[index + 1] = try OutlookToolPolicy.claudeSettings(args[index + 1],
+                operation: inv.mcpActionServer == nil ? .read : (inv.outlookOperation ?? .read), runID: inv.outlookRunID ?? UUID(),
+                mode: inv.outlookReadMode, window: inv.outlookReadWindow, expectedMessage: inv.outlookExpectedMessage,
+                expectedRecipients: inv.outlookExpectedRecipients)
         }
 
         var allowed = recipeAllows
@@ -559,8 +579,10 @@ actor ClaudeCLI {
         if inv.sandbox == .readOnly, !skippedPermissions {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
-            var tools = inv.connectorOnlyRead || inv.toolsDisabled ? [] : ["Bash", "Glob", "Grep", "Read"]
-            if inv.mcpAttachServer == "slack" || inv.mcpActionServer == "slack" || inv.mcpReadConnectors.contains("slack") {
+            var tools = inv.connectorOnlyRead || inv.toolsDisabled || inv.mcpActionServer == OutlookMailConnector.slug ? [] : ["Bash", "Glob", "Grep", "Read"]
+            if inv.mcpAttachServer == "slack" || inv.mcpActionServer == "slack" || inv.mcpReadConnectors.contains("slack")
+                || inv.mcpAttachServer == OutlookMailConnector.slug || inv.mcpActionServer == OutlookMailConnector.slug
+                || inv.mcpReadConnectors.contains(OutlookMailConnector.slug) {
                 tools.append("WaitForMcpServers")
                 allowed.append("WaitForMcpServers")
             }
@@ -667,6 +689,10 @@ actor ClaudeCLI {
         }
         if attached.contains(where: { $0.server.slug == "slack" }), let index = mcpWall.firstIndex(of: "--settings") {
             mcpWall[index + 1] = try SlackToolPolicy.claudeSettings(mcpWall[index + 1])
+        }
+        if attached.contains(where: { $0.server.slug == OutlookMailConnector.slug }), let index = mcpWall.firstIndex(of: "--settings") {
+            mcpWall[index + 1] = try OutlookToolPolicy.claudeSettings(mcpWall[index + 1],
+                operation: .write, runID: OutlookToolPolicy.computerRunID ?? UUID())
         }
         Log("claude agent: connectors attached=\(attached.count) excluded=\(excluded)")
         return ["-p", prompt,
