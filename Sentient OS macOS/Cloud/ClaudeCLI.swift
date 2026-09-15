@@ -140,6 +140,17 @@ actor ClaudeCLI {
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "",
     ]
 
+    static func environment(for invocation: CodexCLI.Invocation) -> [String: String] {
+        var environment = baseEnv
+        if invocation.mcpAttachServer == "slack" || invocation.mcpActionServer == "slack"
+            || (invocation.connectorOnlyRead && invocation.mcpReadConnectors == ["slack"]) {
+            // Inventory must inspect every schema. Source reads expose only their small
+            // reviewed subset, so deferred tool search adds cost and can hide that subset.
+            environment["ENABLE_TOOL_SEARCH"] = "false"
+        }
+        return environment
+    }
+
     // MARK: Discovery
 
     private static let pathCacheKey = "claudecli.binaryPath"
@@ -366,7 +377,7 @@ actor ClaudeCLI {
                                                   stdinText: invocation.prompt,
                                                   cwd: invocation.cwd,
                                                   timeout: invocation.timeout,
-                                                  extraEnv: Self.baseEnv,
+                                                  extraEnv: Self.environment(for: invocation),
                                                   onStdoutLine: stdoutLine)
         let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
         Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
@@ -453,8 +464,14 @@ actor ClaudeCLI {
                     .notWorking("connector \(slug) is not classified yet"))
             }
             recipeWallURLs = [url]
-            recipeAllows = [prefix + "*"]
+            recipeAllows = slug == "slack"
+                ? SlackConnector.actionTools(backend: .claude, operation: inv.slackOperation ?? .write).map { prefix + $0 }
+                : [prefix + "*"]
             recipeDenies = ConnectorRegistry.destructiveToolNames(slug: slug)
+            if slug == "slack" {
+                recipeDenies = SlackConnector.categories(backend: .claude).keys.map { prefix + $0 }
+                    .filter { !recipeAllows.contains($0) }.sorted()
+            }
         } else {
             for slug in inv.mcpReadConnectors where !slug.hasPrefix("direct-") {
                 let available = ConnectorRegistry.readToolNames(slug: slug)
@@ -470,6 +487,12 @@ actor ClaudeCLI {
                 }
                 recipeWallURLs.append(url)
                 recipeAllows += reads
+                if slug == "slack" {
+                    // DontAsk remains the permission boundary. Removing the reviewed complement
+                    // also avoids paying for unrelated canvas/list/upload schemas on every read.
+                    recipeDenies += SlackConnector.categories(backend: .claude).keys
+                        .map { prefix + $0 }.filter { !reads.contains($0) }.sorted()
+                }
             }
         }
         recipeAllows += direct.flatMap(\.allAllowed)
@@ -491,7 +514,10 @@ actor ClaudeCLI {
         } else if !recipeWallURLs.isEmpty {
             // The recipe wall: ONLY the recipe's server(s) may load — the user's own MCP
             // servers and every other connector are blocked before their tools reach the model.
-            args += ["--settings", Self.mcpServerAllowSettings(serverURLs: recipeWallURLs)]
+            let base = Self.mcpServerAllowSettings(serverURLs: recipeWallURLs)
+            args += ["--settings", inv.mcpActionServer == "slack"
+                ? try SlackToolPolicy.claudeSettings(base, operation: inv.slackOperation ?? .write,
+                                                     runID: inv.slackRunID, expectedMessage: inv.slackExpectedMessage) : base]
         }
 
         var allowed = recipeAllows
@@ -534,6 +560,10 @@ actor ClaudeCLI {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
             var tools = inv.connectorOnlyRead || inv.toolsDisabled ? [] : ["Bash", "Glob", "Grep", "Read"]
+            if inv.mcpAttachServer == "slack" || inv.mcpActionServer == "slack" || inv.mcpReadConnectors.contains("slack") {
+                tools.append("WaitForMcpServers")
+                allowed.append("WaitForMcpServers")
+            }
             if inv.webSearch { tools += ["WebSearch", "WebFetch"] }
             args += ["--tools", tools.joined(separator: ",")]
         }
@@ -618,7 +648,7 @@ actor ClaudeCLI {
     static func agentArguments(prompt: String, modelID: String, effortArg: String,
                                socketPath: String) throws -> [String] {
         let direct = DirectMCPRuntime.current
-        let mcpWall: [String]
+        var mcpWall: [String]
         var disallowed = CuaDriver.claudeDisallowedMcpTools
         let (attached, excluded) = ConnectorRegistry.computerUseAttachments()
         if !direct.isEmpty {
@@ -635,6 +665,9 @@ actor ClaudeCLI {
                                               serverNames: ["cua_driver"])]
             for attachment in attached { disallowed += attachment.denies }
         }
+        if attached.contains(where: { $0.server.slug == "slack" }), let index = mcpWall.firstIndex(of: "--settings") {
+            mcpWall[index + 1] = try SlackToolPolicy.claudeSettings(mcpWall[index + 1])
+        }
         Log("claude agent: connectors attached=\(attached.count) excluded=\(excluded)")
         return ["-p", prompt,
                 "--output-format", "stream-json", "--verbose",
@@ -649,7 +682,7 @@ actor ClaudeCLI {
                // Bash = the shim's one-shot action calls; Read = the screenshots. Nothing
                // else from the built-in surface (a file the task needs written goes
                // through the shell, same as on codex).
-               "--tools", "Bash,Read",
+               "--tools", attached.contains(where: { $0.server.slug == "slack" }) ? "Bash,Read,ToolSearch" : "Bash,Read",
                "--disallowedTools", disallowed.joined(separator: ",")]
     }
 

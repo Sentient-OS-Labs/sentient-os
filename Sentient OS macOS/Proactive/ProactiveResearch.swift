@@ -50,6 +50,8 @@ struct PreparedAction: Sendable, Identifiable, Codable {
                                    // compiling — but copies MUST carry it through explicitly
                                    // (see HomeView.replacing), or an edited mcp card loses its
                                    // routing and its fire button.
+    /// App-captured hosted account identity at preparation time. Legacy/non-Slack cards omit it.
+    var connectorIdentity: String? = nil
     let urgency: ActionItem.Urgency
     let dueDate: String?
     let status: Status             // the verify verdict (confirmed / updated / unverified)
@@ -137,6 +139,14 @@ actor ProactiveResearch {
     func researchAndPrepare(items: [ActionItem], notes: [CloudNote] = [], now: Date = Date(),
                             calendarContext: String? = nil,
                             onLine: (@Sendable (String) -> Void)? = nil) async throws -> ReadyResult {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            try await researchBody(items: items, notes: notes, now: now, calendarContext: calendarContext, onLine: onLine)
+        }
+    }
+
+    private func researchBody(items: [ActionItem], notes: [CloudNote], now: Date,
+                              calendarContext: String?, onLine: (@Sendable (String) -> Void)?) async throws -> ReadyResult {
         guard !items.isEmpty else { throw ResError.noItems }
         let recent = Proactive.recent(from: notes, now: now)   // the SAME last-week corpus PART 1 saw
 
@@ -148,6 +158,7 @@ actor ProactiveResearch {
         // The card channels this run may teach (the .mcp method): the live detected connectors.
         // Zero detected = the shipped four methods and the shipped schema, byte-identical.
         let channels = ConnectorRegistry.cardChannels()
+        let slackIdentity = SlackConnector.cachedIdentity()?.fingerprint
 
         // The read-only connector attachment: the two chips always (the shipped posture — inert
         // when unlinked), plus every KB-enabled connector that actually has a read surface. The
@@ -183,7 +194,7 @@ actor ProactiveResearch {
         Log("ProactiveResearch: verify + prepare \(items.count) item(s) → Codex (read-only, vault cwd, connectors read-only + web, never fire; \(channels.count) mcp channel(s))…")
         do {
             let env = try await FrontierRun.run(inv, onLine: onLine)
-            let parsed = Self.parse(env.jsonResult)
+            let parsed = Self.parse(env.jsonResult, slackIdentity: slackIdentity)
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
             let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)
             Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
@@ -271,7 +282,7 @@ actor ProactiveResearch {
 
     // MARK: Tolerant parse (output-schema makes `result` the JSON; still fence-safe)
 
-    private static func parse(_ result: String) -> ReadyResult {
+    private static func parse(_ result: String, slackIdentity: String? = nil) -> ReadyResult {
         let span: String
         if let s = result.firstIndex(of: "{"), let e = result.lastIndex(of: "}"), s < e {
             span = String(result[s...e])
@@ -295,6 +306,7 @@ actor ProactiveResearch {
                 method: method,
                 target: ((d["target"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 methodTarget: (method == .mcp && !slug.isEmpty) ? slug : nil,
+                connectorIdentity: method == .mcp && slug == "slack" ? slackIdentity : nil,
                 urgency: ActionItem.Urgency(rawValue: (d["urgency"] as? String)?.lowercased() ?? "medium") ?? .medium,
                 dueDate: (due?.isEmpty == false) ? due : nil,
                 status: PreparedAction.Status(rawValue: (d["status"] as? String)?.lowercased() ?? "unverified") ?? .unverified,

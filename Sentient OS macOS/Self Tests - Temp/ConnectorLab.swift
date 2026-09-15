@@ -95,6 +95,31 @@ enum ConnectorLab {
         case "argv":     argv()
         case "policycheck": ConnectorReadPolicyTests.run()
         case "curationcheck": await ConnectorCurationTests.run()
+        case "slackcheck": SlackCurationTests.run()
+        case "slackcontent": await SlackContentFixtures.run()
+        case "slackrouter": await SlackCurationTests.router()
+        case "slackreceipt":
+            do {
+                guard let path = ProcessInfo.processInfo.environment["LAB_TRACE_INPUT"],
+                      let identity = SlackConnector.cachedIdentity() else { throw SlackActionEvidence.Failure.unconfirmed }
+                let raw = try String(contentsOfFile: path, encoding: .utf8)
+                try SlackActionEvidence.validate(raw: raw, backend: ModelBackend.current, operation: .send, identity: identity)
+                SlackActionEvidence.clearConfirmed(raw: raw, backend: ModelBackend.current, identity: identity)
+                Log("Slack recorded send receipt: PASS")
+            } catch { Log("Slack recorded send receipt: FAIL (\(ErrorLabel(error)))"); exit(1) }
+        case "slackidentity":
+            do {
+                let path = ProcessInfo.processInfo.environment["LAB_TRACE_OUTPUT"]
+                let identity = try await SlackConnector.readIdentity { envelope, _, _, _, _, _ in
+                    if let path, let envelope {
+                        try? envelope.raw.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+                    }
+                }
+                Log("Slack identity verified: actor present, workspace present, stable workspace ID=\(identity.workspaceID != nil)")
+            } catch {
+                if case MCPSource.MCPError.invalidResponse(_, let rule) = error { Log("Slack identity validation: \(rule)") }
+                Log("Slack identity failed: \(ErrorLabel(error))"); exit(1)
+            }
         case "prompts": await ConnectorReadAudit.exportPrompts()
         case "probes":   await probes()
         case "routereval": await routereval()
@@ -419,6 +444,15 @@ enum ConnectorLab {
         case "notion":
             Log("  NOT VERIFIED: hosted Notion needs its own captured ground truth")
             return false
+        case "slack":
+            do {
+                try SlackConnector.validateClassification(tools)
+                Log("  eval: PASS (complete reviewed Slack inventory and exact categories)")
+                return true
+            } catch {
+                Log("  eval: FAIL (Slack classification disagrees with the reviewed inventory)")
+                return false
+            }
         default:
             Log("  (no ground truth for \(slug); buckets above are the whole output)")
             return true
@@ -592,6 +626,7 @@ enum ConnectorLab {
         inv.webSearch = false
         inv.timeout = 600
         inv.mcpActionServer = slug
+        if slug == "slack" { inv.slackOperation = .send }
         guard let reply = await runAndPrint(inv, label: "act \(slug)") else { return }
         switch AgentStatus.parseConnector(reply.result) {
         case .done:                 Log("sentinel: DONE")
@@ -606,6 +641,7 @@ enum ConnectorLab {
     private static func denycheck() async {
         guard requireConnectorBackend("the deny check") else { return }
         let slug = labSlug
+        if slug == "slack" { await SlackDenialAudit.run(); return }
         if DirectMCPStore.connection(slug)?.providerSlug == "granola" {
             GranolaCurationTests.denialPolicy()
             return
@@ -782,7 +818,7 @@ enum ConnectorLab {
                 + "LAB_CMD=census first (or link a connector), then re-run.")
             return
         }
-        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion", "granola"].compactMap { slug -> CommandRouter.Service? in
+        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion", "granola", "slack"].compactMap { slug -> CommandRouter.Service? in
             guard let pack = ConnectorRegistry.pack(forSlug: slug) else { return nil }
             return .init(slug: slug, name: pack.displayName, description: pack.routerDescription ?? "")
         } : CommandRouter.routableServices()
@@ -799,9 +835,13 @@ enum ConnectorLab {
             ("search my drive for the pitch deck and tell me who has access to it",
                                                                       .connector("google-drive")),
             ("when is my next flight? it should be in my email",      .connector("gmail")),
+            ("find the Slack thread about the release decision",      .connector("slack")),
+            ("send Jesai a Slack message saying the build is green",  .connector("slack")),
+            ("draft a Slack update without sending it",               .connector("slack")),
             // Pure screen — any connector pick here is a hard fail.
             ("click send on this form",                               .screen),
             ("resize this window",                                    .screen),
+            ("resize the Slack window",                               .screen),
             ("what's on my screen",                                   .screen),
             ("close all my Chrome tabs",                              .screen),
             ("open Spotify and play my liked songs",                  .screen),
@@ -813,6 +853,7 @@ enum ConnectorLab {
             // Multi-service and zero-context oddballs — computer.
             ("check my email and put the meeting on my calendar",     .computer),
             ("download the contract from Drive and print it",         .computer),
+            ("search Slack for the release decision and create a Notion page about it", .computer),
             ("do the thing we talked about",                          .computer),
             ("help",                                                  .computer),
             ("what time is it in Tokyo",                              .computer),
@@ -835,11 +876,11 @@ enum ConnectorLab {
             let got: String
             switch route {
             case .computer:                  got = "computer"
-            case .connector(let slug, _):    got = "connector(\(slug))"
+            case .connector(let slug, _, _):    got = "connector(\(slug))"
             }
             let verdict: String
             switch (expected, route) {
-            case (.connector(let want), .connector(let slug, _)):
+            case (.connector(let want), .connector(let slug, _, _)):
                 if slug == want { verdict = "PASS " } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
             case (.connector, .computer):
                 connectorToComputer += 1; verdict = "miss  (→ computer, counts vs the ≤2 budget)"
@@ -851,7 +892,7 @@ enum ConnectorLab {
                 verdict = "PASS "
             case (.computer, .connector):
                 otherMisses += 1; verdict = "FAIL  (multi/oddball → connector)"
-            case (.either(let want), .connector(let slug, _)):
+            case (.either(let want), .connector(let slug, _, _)):
                 if slug == want { verdict = "PASS  (the better route)" } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
             case (.either, .computer):
                 eitherComputer += 1; verdict = "PASS  (acceptable)"

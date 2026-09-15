@@ -26,7 +26,9 @@ if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
 }
 #endif
 
-if CommandLine.arguments.dropFirst().first.map({ ["--direct-mcp-headers", "--direct-mcp-policy"].contains($0) }) == true {
+if CommandLine.arguments.dropFirst().first == "--slack-tool-policy" {
+    exit(SlackToolPolicy.runHelper(arguments: CommandLine.arguments))
+} else if CommandLine.arguments.dropFirst().first.map({ ["--direct-mcp-headers", "--direct-mcp-policy"].contains($0) }) == true {
     let arguments = CommandLine.arguments
     Task.detached { exit(await DirectMCPRuntime.runHelper(arguments: arguments)) }
     dispatchMain()

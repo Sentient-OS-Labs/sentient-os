@@ -15,6 +15,7 @@ extension MCPSource {
         switch ConnectorRegistry.pack(forSlug: slug)?.slug {
         case "notion": notionPromptRevision
         case "granola": granolaPromptRevision
+        case "slack": SlackSource.revision
         default: promptRevision
         }
     }
@@ -111,6 +112,7 @@ extension MCPSource {
 
     static func prompt(slug: String, name: String, backend: ModelBackend,
                        mode: ReadMode, window: Window) -> String {
+        if slug == "slack" { return SlackSource.prompt(mode: mode, window: window) }
         if ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" {
             return notionPrompt(mode: mode, window: window)
         }

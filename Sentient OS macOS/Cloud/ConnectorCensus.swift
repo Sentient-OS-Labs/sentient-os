@@ -65,7 +65,7 @@ nonisolated enum ConnectorCensus {
         let origin: Origin
         /// Hosted Claude or direct remote MCP endpoint; credentials are stored separately.
         let serverURL: String?
-        /// codex only: the global marketplace catalog id (`connector_<32 hex>`), the key the
+        /// codex only: the hosted catalog id (`connector_<32 hex>` or `asdk_app_<32 hex>`), the key the
         /// per-connector `-c` tool strips are addressed by.
         let catalogID: String?
         /// codex only: an absolute path to the connector's logo shipped inside its plugin cache.

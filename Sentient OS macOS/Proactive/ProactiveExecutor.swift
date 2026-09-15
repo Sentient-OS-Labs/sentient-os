@@ -57,6 +57,10 @@ actor ProactiveExecutor {
         case .computer, .gmail, .calendar: return true
         case .mcp:
             guard let slug = action.methodTarget, !slug.isEmpty else { return false }
+            if slug == "slack" {
+                guard let expected = action.connectorIdentity,
+                      expected == SlackConnector.cachedIdentity()?.fingerprint else { return false }
+            }
             return ConnectorRegistry.server(for: slug) != nil
         case .research:                    return false   // a briefing to read — nothing to fire
         }
@@ -93,7 +97,7 @@ actor ProactiveExecutor {
                 r = .notFireable("No connector recipe to fire.")
             } else if let slug = action.methodTarget, ConnectorRegistry.server(for: slug) != nil {
                 r = await fireMCP(slug: slug, channel: channel,
-                                  routing: routing, content: content, progress: progress)
+                                  routing: routing, content: content, expectedIdentity: action.connectorIdentity, progress: progress)
             } else {
                 r = .notFireable("This card's connector isn't connected anymore; nothing was fired.")
             }
@@ -201,12 +205,18 @@ actor ProactiveExecutor {
     /// plumbing as gmail/calendar. `channel` is the closed-vocabulary telemetry label (the
     /// curated slug or "other"); logs carry it, never a custom connector name.
     private func fireMCP(slug: String, channel: String, routing: String, content: String,
+                         expectedIdentity: String?,
                          progress: @escaping @Sendable (String) -> Void) async -> FireResult {
+        if slug == "slack", expectedIdentity == nil {
+            return .notFireable("This Slack card needs to be prepared again for the current connection.")
+        }
         let name = ConnectorRegistry.displayName(slug: slug)
         progress("Working through your \(name) connector…")
         Log("ProactiveExecutor/\(channel): firing one connector action (sandboxed, server-scoped approval)…")
         return await fireConnector(slug: slug, channel: channel, feature: "mcp-write",
                                    prompt: Self.mcpWrapper(name: name, routing: routing, content: content),
+                                   expectedIdentity: expectedIdentity,
+                                   expectedMessage: slug == "slack" ? content : nil,
                                    progress: progress)
     }
 
@@ -215,6 +225,8 @@ actor ProactiveExecutor {
     /// (`mcpActionServer`). Claude refreshes an unavailable classification first; if it still
     /// cannot establish current policy, the builder refuses the fire without widening access.
     private func fireConnector(slug: String, channel: String, feature: String, prompt: String,
+                               expectedIdentity: String? = nil,
+                               expectedMessage: String? = nil,
                                progress: @escaping @Sendable (String) -> Void) async -> FireResult {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = feature
@@ -225,6 +237,8 @@ actor ProactiveExecutor {
         inv.timeout = 300
         if ModelBackend.current == .claude { await ConnectorClassifier.ensureClassified(slug: slug) }
         inv.mcpActionServer = slug
+        inv.mcpExpectedIdentity = expectedIdentity
+        if slug == "slack" { inv.slackOperation = .send; inv.slackExpectedMessage = expectedMessage }
         return await runConnector(inv, channel: channel, progress: progress)
     }
 

@@ -123,7 +123,21 @@ nonisolated enum ConnectorRegistry {
                                      "list_recent_files"],
                          codexReadTools: ["search", "fetch", "recent_documents", "get_file_metadata",
                                           "list_file_revisions", "fetch_file_revision", "get_profile"]),
-        CuratedConnector(slug: "slack", displayName: "Slack"),
+        // Hosted Slack, reviewed against both CLI inventories. Knowledge reads use a narrower
+        // per-run subset; these additional reads support research and destination resolution.
+        CuratedConnector(slug: "slack", displayName: "Slack",
+                         routerDescription: "search and read Slack messages and threads; send messages and thread replies in the connected workspace; no deletion or existing-content edits",
+                         claudeName: "Slack",
+                         claudeServerURL: "https://mcp.slack.com/mcp",
+                         claudeToolPrefix: "mcp__claude_ai_Slack__",
+                         codexSlug: "slack",
+                         readTools: ["slack_search_public", "slack_search_public_and_private",
+                                     "slack_read_thread", "slack_read_channel", "slack_read_user_profile",
+                                     "slack_search_users", "slack_search_channels", "slack_list_user_channels"],
+                         codexReadTools: ["slack_search_public", "slack_search_public_and_private",
+                                          "slack_read_thread", "slack_read_channel", "slack_read_user_profile",
+                                          "slack_search_users", "slack_search_channels", "slack_list_user_channels",
+                                          "slack_list_user_conversations", "slack_list_workspaces"]),
         CuratedConnector(slug: "notion", displayName: "Notion",
                          routerDescription: "read Notion pages and databases; create new pages including private drafts and database entries; existing-page edits unavailable",
                          directProvider: .notion),
@@ -268,6 +282,7 @@ nonisolated enum ConnectorRegistry {
 
     /// Provider-specific completion details for user-fired tasks, separate from router scope.
     static func actionInstructions(slug: String) -> String {
+        if slug == "slack" { return SlackConnector.actionInstructions }
         if pack(forSlug: slug)?.slug == "granola" {
             return """
             GRANOLA TASK RULES
@@ -367,6 +382,7 @@ nonisolated enum ConnectorRegistry {
         - Destructive tools do not exist in this run.
         - If a service's tools cannot finish a step, fall back to the screen and do it there.
         """
+        + (entries.contains(where: { $0.slug == "slack" }) ? "\n\n" + SlackConnector.actionInstructions : "")
         Log("connected services: \(entries.count) service(s) in the prompt block")
         #if DEBUG
         Log("connected services block: +\(block.utf8.count) bytes")
@@ -401,11 +417,12 @@ nonisolated enum ConnectorRegistry {
     /// the shipped four-method research prompt and schema, untouched.
     static func cardChannels() -> [CardChannel] {
         let detected = detectedForCurrentBackend()
-        let usable = ModelBackend.current == .claude
+        let classified = ModelBackend.current == .claude
             ? detected.filter { isClassified($0.slug) }
             : detected
+        let usable = classified.filter { $0.slug != "slack" || SlackConnector.cachedIdentity() != nil }
         if usable.count != detected.count {
-            Log("cardChannels: \(detected.count - usable.count) unclassified connector(s) not offered as channels yet")
+            Log("cardChannels: \(detected.count - usable.count) connector(s) without verified action context not offered yet")
         }
         return usable.map { CardChannel(slug: DirectMCPStore.connection($0.slug)?.taskTarget ?? $0.slug,
                                         name: displayName(slug: $0.slug),
@@ -459,10 +476,16 @@ nonisolated enum ConnectorRegistry {
                 && server.claudeToolPrefix != nil
         case .chatgpt:
             guard pack.codexReadTools?.isEmpty == false, let id = server.codexCatalogID else { return false }
-            return id.range(of: "^connector_[0-9a-f]{32}\\z", options: .regularExpression) != nil
+            return isValidCodexCatalogID(id)
         case .custom:
             return false
         }
+    }
+
+    /// Hosted account apps use either legacy connector IDs or Apps SDK IDs. Accept only
+    /// these observed, non-interpretable key forms; eligibility still requires a reviewed pack.
+    static func isValidCodexCatalogID(_ id: String) -> Bool {
+        id.range(of: "^(?:connector_|asdk_app_)[0-9a-f]{32}\\z", options: .regularExpression) != nil
     }
 
     /// A service identity is not an account identity. Track the engine and observed relinks;

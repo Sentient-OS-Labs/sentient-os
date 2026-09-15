@@ -135,6 +135,10 @@ actor CodexCLI {
                                                // fail-closed). Codex: per-id approve mode (else
                                                // the shipped id-free `apps._default` preset) +
                                                // the destructive strip; sandbox stays ON.
+        var slackOperation: SlackConnector.Operation? = nil
+        var slackRunID: UUID? = nil
+        var mcpExpectedIdentity: String? = nil
+        var slackExpectedMessage: String? = nil
         /// Source ingestion/inventory needs connector tools only; research keeps its vault/web access.
         var connectorOnlyRead = false
         /// Native tool-inventory classification does not need any model-accessible tools.
@@ -763,6 +767,10 @@ actor CodexCLI {
             var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
             ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
             for id in ids { args += ["-c", "apps.\(id).destructive_enabled=false"] }
+            if ConnectorCensus.cached(for: .chatgpt).contains(where: { $0.slug == "slack" }) {
+                if let policy = try? SlackConnector.codexActionPolicy(exclusive: false) { args += ["-c", policy] }
+                args += SlackToolPolicy.codexArguments()
+            }
         }
         if ModelBackend.current == .custom {
             for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
@@ -1009,7 +1017,7 @@ actor CodexCLI {
         // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
         // which terminates it — the same dodge as probeCustomEndpoint's probe image.
         if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
-        if !inv.includeUserConfig || connectorRead || !direct.isEmpty || inv.toolsDisabled {
+        if !inv.includeUserConfig || connectorRead || inv.mcpActionServer == "slack" || !direct.isEmpty || inv.toolsDisabled {
             // Hosted account apps survive hermetic runs. User MCP servers, plugins and
             // per-tool/account approvals must not widen an unattended read's tool policy.
             args += ["--ignore-user-config"]
@@ -1044,11 +1052,18 @@ actor CodexCLI {
                 args += ["-c", override]
             }
         }
+        if inv.connectorOnlyRead, inv.mcpReadConnectors == ["slack"] {
+            args += ["-c", "features.tool_search=false"]
+        }
         // The connector recipes (table above). ChatGPT backend only: hosted connectors ride
         // ChatGPT-account auth, so on a custom endpoint (hermetic anyway) the fields are inert.
         if ModelBackend.current == .chatgpt {
             if let slug = inv.mcpActionServer, !slug.hasPrefix("direct-") {
-                if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
+                if slug == "slack" {
+                    args += ["-c", try SlackConnector.codexActionPolicy(operation: inv.slackOperation ?? .write)]
+                    args += SlackToolPolicy.codexArguments(operation: inv.slackOperation ?? .write, runID: inv.slackRunID,
+                                                          expectedMessage: inv.slackExpectedMessage)
+                } else if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
                     args += ["-c", "apps.\(id).default_tools_approval_mode=\"approve\"",
                              "-c", "apps.\(id).destructive_enabled=false"]
                 } else {
@@ -1082,7 +1097,7 @@ actor CodexCLI {
             guard let pack = ConnectorRegistry.pack(forSlug: slug), !pack.capturedProvisional,
                   let reads = pack.codexReadTools, !reads.isEmpty,
                   let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
-                  id.range(of: "^connector_[0-9a-f]{32}\\z", options: .regularExpression) != nil,
+                  ConnectorRegistry.isValidCodexCatalogID(id),
                   ids.insert(id).inserted,
                   reads.allSatisfy({ $0.range(of: "^[A-Za-z_][A-Za-z0-9_./-]*\\z",
                                               options: .regularExpression) != nil }) else {

@@ -19,6 +19,7 @@ enum ConnectorReadPolicyTests {
         defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
         let driveID = "connector_5f3c8c41a1e54ad7a76272c89e2554fa"
         let otherID = "connector_00000000000000000000000000000001"
+        let slackID = "asdk_app_00000000000000000000000000000002"
         var failures = 0
         func check(_ condition: Bool, _ message: String) {
             Log("\(condition ? "PASS" : "FAIL")  \(message)")
@@ -31,10 +32,21 @@ enum ConnectorReadPolicyTests {
                 [.init(slug: "google-drive", displayName: "Google Drive", origin: .chatgpt,
                        serverURL: nil, catalogID: $0, iconPath: nil, healthy: true, lastSeen: Date()),
                  .init(slug: "unrelated", displayName: "Unrelated", origin: .chatgpt,
-                       serverURL: nil, catalogID: otherID, iconPath: nil, healthy: true, lastSeen: Date())]
+                       serverURL: nil, catalogID: otherID, iconPath: nil, healthy: true, lastSeen: Date()),
+                 .init(slug: "slack", displayName: "Slack", origin: .chatgpt,
+                       serverURL: nil, catalogID: slackID, iconPath: nil, healthy: true, lastSeen: Date())]
             } ?? []
             domain["mcp.connectors.chatgpt"] = try! JSONEncoder().encode(connectors)
-            domain["mcp.connectors.claude"] = try! JSONEncoder().encode([ConnectorCensus.DetectedConnector]())
+            domain["mcp.connectors.claude"] = try! JSONEncoder().encode([
+                ConnectorCensus.DetectedConnector(slug: "slack", displayName: "Slack", origin: .claude,
+                    serverURL: "https://mcp.slack.com/mcp", catalogID: nil, iconPath: nil, healthy: true, lastSeen: Date())])
+            let slackTools = SlackConnector.categories(backend: .claude).map {
+                ConnectorRegistry.ClassifiedTool(name: SlackConnector.claudePrefix + $0.key, category: $0.value)
+            }
+            domain[ConnectorRegistry.classificationKey("slack")] = try! JSONEncoder().encode(
+                ConnectorRegistry.Classification(tools: slackTools,
+                    cliVersion: ConnectorClassifier.currentCLIVersion ?? "fixture", capturedAt: Date(),
+                    verifiedInventory: slackTools.map(\.name)))
             defaults.setVolatileDomain(domain, forName: UserDefaults.argumentDomain)
         }
         func invocation(_ slugs: [String]) -> CodexCLI.Invocation {
@@ -124,9 +136,26 @@ enum ConnectorReadPolicyTests {
             check(!claude.joined(separator: " ").contains("mcp__claude_ai_Google_Drive__create_file"), "Claude still omits create_file")
 
             if let path = ProcessInfo.processInfo.environment["LAB_POLICY_OUTPUT"] {
-                let fixture = ["drive": drive, "gmail": gmail, "calendar": calendar,
+                var slackAction = invocation([]); slackAction.mcpActionServer = "slack"; slackAction.slackOperation = .send
+                var slackDraft = slackAction; slackDraft.slackOperation = .draft
+                var slackRead = slackAction; slackRead.slackOperation = .read
+                var slackApproved = slackAction; slackApproved.slackExpectedMessage = "Approved fixture"
+                let slackSource = MCPSource.readInvocation(slug: "slack", prompt: "Synthetic source check")
+                var fixture = ["drive": drive, "gmail": gmail, "calendar": calendar,
                                "research": research, "action": action, "inherited": inheritedArgs,
-                               "source": source, "identity": identityArgs]
+                               "source": source, "identity": identityArgs,
+                               "slack-source": try args(slackSource), "slack-action": try args(slackAction),
+                               "slack-draft": try args(slackDraft), "slack-task-read": try args(slackRead),
+                               "slack-approved": try args(slackApproved)]
+                for (key, invocation) in [("slack-source", slackSource), ("slack-action", slackAction),
+                                          ("slack-draft", slackDraft), ("slack-task-read", slackRead), ("slack-approved", slackApproved)] {
+                    fixture["claude-" + key] = try ModelBackend.$runOverride.withValue(.claude) {
+                        try ClaudeCLI.arguments(for: invocation, modelID: "haiku", effortArg: "low")
+                    }
+                }
+                fixture["claude-slack-computer"] = try ModelBackend.$runOverride.withValue(.claude) {
+                    try ClaudeCLI.agentArguments(prompt: "Synthetic fixture", modelID: "haiku", effortArg: "low", socketPath: "/tmp/fixture.sock")
+                }
                 try JSONSerialization.data(withJSONObject: fixture, options: [.prettyPrinted, .sortedKeys])
                     .write(to: URL(fileURLWithPath: path))
             }

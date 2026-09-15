@@ -15,6 +15,7 @@ extension MCPSource {
     }
 
     static func readIdentity(slug: String, onReceipt: ReceiptObserver? = nil) async throws -> String? {
+        if slug == "slack" { return try await SlackConnector.readIdentity(onReceipt: onReceipt).fingerprint }
         guard slug == "google-drive", ModelBackend.current == .chatgpt else { return nil }
         let prompt = """
         Discover Google Drive get_profile using tool search if it is not already visible,

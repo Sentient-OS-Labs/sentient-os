@@ -101,6 +101,7 @@ nonisolated enum ConnectorClassifier {
     /// additions or removals need another review before its action policy can activate.
     static func validate(_ tools: [ConnectorRegistry.ClassifiedTool], slug: String,
                          inventory: [String]? = nil) throws {
+        if slug == "slack" { try SlackConnector.validateClassification(tools) }
         guard let identity = ConnectorRegistry.claudeIdentity(slug: slug), !tools.isEmpty,
               tools.allSatisfy({ normalizedName($0.name, prefix: identity.toolPrefix) == $0.name }),
               Set(tools.map(\.name)).count == tools.count else {
@@ -221,9 +222,11 @@ nonisolated enum ConnectorClassifier {
         }
         let prompt = """
         You can see tools from the "\(identity.name)" connector in your context (named
-        \(identity.toolPrefix)...). Do not call any tool.
+        \(identity.toolPrefix)...). \(slug == "slack" ? "Do not call any connector tool. If the server is still connecting, you may use WaitForMcpServers before inspecting its tools." : "Do not call any tool.")
 
         \(classificationRules)
+
+        \(slug == "slack" ? SlackConnector.classificationGuidance : "")
 
         Reply with JSON only:
         {"tools":[{"name":"<full name>","category":"read"|"write"|"destructive"}, ...]}
@@ -244,7 +247,7 @@ nonisolated enum ConnectorClassifier {
         }
         let prompt = """
         You can see tools from the "\(identity.name)" connector in your context (named
-        \(identity.toolPrefix)...). Do not call any tool.
+        \(identity.toolPrefix)...). \(slug == "slack" ? "Do not call any connector tool. If the server is still connecting, you may use WaitForMcpServers before inspecting its tools." : "Do not call any tool.")
 
         Reply with JSON only:
         {"tools":["<full name>", ...]}
@@ -267,6 +270,9 @@ nonisolated enum ConnectorClassifier {
         var invocation = CodexCLI.Invocation(prompt: prompt)
         invocation.feature = "classify"
         invocation.model = .gpt56luna          // → haiku on the Claude tier map
+        // Slack's mixed-mode tools repeatedly confused the light-tier inventory/classifier.
+        // This infrequent policy check uses Sonnet; knowledge reads keep their own model tier.
+        if slug == "slack" { invocation.claudeModel = .sonnet }
         invocation.effort = .low
         invocation.sandbox = .readOnly
         invocation.webSearch = false

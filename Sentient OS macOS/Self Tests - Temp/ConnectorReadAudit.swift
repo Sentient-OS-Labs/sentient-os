@@ -121,6 +121,10 @@ enum ConnectorReadAudit {
             }
             let receipts = OSAllocatedUnfairLock(initialState: [Receipt]())
             let observer: MCPSource.ReceiptObserver = { envelope, outcome, attempt, usedPrompt, operation, nativeCalls in
+                    if env["LAB_CAPTURE_RAW"] == "1", let envelope {
+                        try? envelope.raw.write(to: output.appending(path: "trace-\(operation)-\(UUID().uuidString).jsonl"),
+                                                atomically: true, encoding: .utf8)
+                    }
                     receipts.withLock { $0.append(Receipt(prompt: usedPrompt, operation: operation, attempt: attempt,
                         validResult: outcome != nil || operation == "identity" || operation == "selection"
                             || (operation.hasPrefix("native_") && operation != "native_incomplete"),
@@ -176,7 +180,7 @@ enum ConnectorReadAudit {
             let version = backend == .claude ? await ClaudeCLI.installedVersion() : await CodexCLI.installedVersion()
             let report = Report(revision: MCPSource.promptRevision(slug: slug), slug: slug, engine: backend.rawValue,
                 cliVersion: version, model: backend == .claude ? (modelName ?? (GranolaSource.isGranola(slug)
-                    ? GranolaSource.defaultClaudeModel.rawValue : (slug == "google-drive" ? "sonnet" : "haiku"))) : "gpt-5.6-luna",
+                    ? GranolaSource.defaultClaudeModel.rawValue : (["google-drive", "slack"].contains(slug) ? "sonnet" : "haiku"))) : "gpt-5.6-luna",
                 mode: mode.rawValue, seededSince: env["LAB_SINCE"], startedAt: started,
                 durationSeconds: Date().timeIntervalSince(started), succeeded: succeeded, errorKind: errorKind,
                 storePath: storePath, checkpoint: checkpoint?.mark.order, readOrigin: checkpoint?.origin,

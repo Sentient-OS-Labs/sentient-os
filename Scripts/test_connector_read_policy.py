@@ -14,6 +14,8 @@ import json
 import subprocess
 import threading
 import uuid
+import os
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -21,6 +23,7 @@ DRIVE = "connector_5f3c8c41a1e54ad7a76272c89e2554fa"
 GMAIL = "connector_2128aebfecb84f64a069897515042a44"
 CALENDAR = "connector_947e0d954944416db111db556030eea6"
 OTHER = "connector_00000000000000000000000000000001"
+SLACK = "asdk_app_00000000000000000000000000000002"
 
 
 def tool(name, connector, title, read=False):
@@ -30,7 +33,7 @@ def tool(name, connector, title, read=False):
         "annotations": {"readOnlyHint": read, "destructiveHint": False, "openWorldHint": False},
         "_meta": {
             "connector_id": connector,
-            "connector_name": {DRIVE: "Drive", GMAIL: "Gmail", CALENDAR: "Calendar"}.get(connector, "Other"),
+            "connector_name": {DRIVE: "Drive", GMAIL: "Gmail", CALENDAR: "Calendar", SLACK: "Slack"}.get(connector, "Other"),
             "_codex_apps": {"resource_uri": f"connector://{connector}/tools/{name}",
                             "contains_mcp_source": True, "connector_id": connector},
         },
@@ -43,7 +46,9 @@ class Fixture:
 
     def reset(self):
         self.calls, self.requests = [], []
-        self.force, self.sent = None, False
+        self.force, self.sent = None, 0
+        self.force_count = 1
+        self.force_args = {}
         self.tools = [
             tool("gdrive.search", DRIVE, "search", True),
             tool("gdrive.create_file", DRIVE, "create_file"),
@@ -56,10 +61,24 @@ class Fixture:
             tool("orphan.write", None, "write"),
         ]
         self.tools[-1]["_meta"] = {}
+        for name, read in [("slack_search_public_and_private", True), ("slack_read_thread", True),
+                           ("slack_send_message", False), ("slack_send_message_draft", False),
+                           ("slack_delete_message", False), ("slack_future_write", False)]:
+            entry = tool("slack." + name, SLACK, name, read)
+            entry["inputSchema"] = {"type": "object", "properties": {
+                "channel_id": {"type": "string"}, "message": {"type": "string"},
+                "draft_id": {"type": "string"}, "reply_broadcast": {"type": "boolean"}},
+                "additionalProperties": False}
+            if name == "slack_delete_message": entry["annotations"]["destructiveHint"] = True
+            self.tools.append(entry)
 
 
 def make_handler(fixture):
     class Handler(BaseHTTPRequestHandler):
+        def handle(self):
+            try: super().handle()
+            except (BrokenPipeError, ConnectionResetError): pass
+
         def log_message(self, *_):
             pass
 
@@ -106,11 +125,11 @@ def make_handler(fixture):
                 self.reply({})
                 return
             fixture.requests.append(body)
-            if fixture.force and not fixture.sent:
-                fixture.sent = True
+            if fixture.force and fixture.sent < fixture.force_count:
+                fixture.sent += 1
                 namespace, name = fixture.force
-                item = {"type": "function_call", "id": "fc_fixture", "call_id": "call_fixture",
-                        "namespace": namespace, "name": name, "arguments": "{}"}
+                item = {"type": "function_call", "id": "fc_fixture_"+str(fixture.sent), "call_id": "call_fixture_"+str(fixture.sent),
+                        "namespace": namespace, "name": name, "arguments": json.dumps(fixture.force_args)}
             else:
                 item = {"type": "message", "id": "msg_fixture", "role": "assistant", "status": "completed",
                         "content": [{"type": "output_text", "text": "Fixture complete."}]}
@@ -139,6 +158,7 @@ def main():
     parser.add_argument("--recipes", type=Path, required=True)
     parser.add_argument("--codex", default=str(Path.home() / ".local/bin/codex"))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--only-prefix", help="Run only matching case names while investigating a failure")
     options = parser.parse_args()
     options.output.mkdir(parents=True, exist_ok=True)
     recipes = json.loads(options.recipes.read_text())
@@ -148,12 +168,23 @@ def main():
     base = f"http://127.0.0.1:{server.server_port}"
     results = []
 
-    def run(label, recipe, namespace, name, expected_calls, mutate=None, old_policy=False):
+    def run(label, recipe, namespace, name, expected_calls, mutate=None, old_policy=False, arguments=None, repetitions=1):
+        if options.only_prefix and not label.startswith(options.only_prefix): return
         fixture.reset()
         if mutate:
             mutate(fixture.tools)
         fixture.force = ("mcp__codex_apps__" + namespace, name)
+        fixture.force_args = arguments or {}
+        fixture.force_count = repetitions
         args = copy.copy(recipes[recipe][:-1])
+        run_ids = []
+        def fresh_run(_):
+            value = str(uuid.uuid4()).upper()
+            run_ids.append(value)
+            return value
+        for index, value in enumerate(args):
+            if value.startswith("hooks.") or value.startswith("hooks="):
+                args[index] = re.sub(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", fresh_run, value)
         args[args.index("-m") + 1] = "fixture"
         if old_policy:
             index = next(i for i, value in enumerate(args) if value.startswith("apps = "))
@@ -172,11 +203,13 @@ def main():
         with (options.output / f"{label}.stdout.jsonl").open("w") as out, (options.output / f"{label}.stderr.log").open("w") as err:
             process = subprocess.run([options.codex, *args], input="Perform the synthetic fixture operation.",
                                      text=True, stdout=out, stderr=err, cwd=options.output, timeout=40)
-        # Require two actual model requests so an early startup failure cannot pass a deny test.
-        passed = process.returncode == 0 and len(fixture.requests) == 2 and fixture.calls == expected_calls
+        for run_id in run_ids:
+            Path(f"/private/tmp/sentient-slack-send-{os.getuid()}-{run_id}").unlink(missing_ok=True)
+        # Require a response after every forced call so startup failures cannot pass denials.
+        passed = process.returncode == 0 and len(fixture.requests) == repetitions + 1 and fixture.calls == expected_calls
         surface = {t["name"]: [v["name"] for v in t.get("tools", [])]
                    for t in fixture.requests[0].get("tools", []) if t.get("name", "").startswith("mcp__")} if fixture.requests else {}
-        if recipe != "action" and not old_policy:
+        if recipe not in ["action", "slack-action", "slack-draft", "slack-approved"] and not old_policy:
             passed = passed and all("write" not in name and "create" not in name
                                     for tools in surface.values() for name in tools)
         if recipe == "source" and fixture.requests:
@@ -216,6 +249,22 @@ def main():
         run("user-fired-create", "action", "drive", "gdrive_create_file", ["gdrive.create_file"])
         run("action-destructive-denied", "action", "drive", "gdrive_create_file", [],
             lambda tools: tools[1]["annotations"].update(destructiveHint=True))
+        if "slack-source" in recipes:
+            message = {"channel_id": "CFIXTURE", "message": "Synthetic fixture"}
+            run("slack-source-read", "slack-source", "slack", "_slack_search_public_and_private", ["slack.slack_search_public_and_private"])
+            run("slack-source-send-denied", "slack-source", "slack", "_slack_send_message", [], arguments=message)
+            run("slack-task-read-send-denied", "slack-task-read", "slack", "_slack_send_message", [], arguments=message)
+            run("slack-send", "slack-action", "slack", "_slack_send_message", ["slack.slack_send_message"], arguments=message)
+            run("slack-draft", "slack-draft", "slack", "_slack_send_message_draft", ["slack.slack_send_message_draft"], arguments=message)
+            run("slack-draft-send-denied", "slack-draft", "slack", "_slack_send_message", [], arguments=message)
+            run("slack-delete-denied", "slack-action", "slack", "_slack_delete_message", [])
+            run("slack-new-write-denied", "slack-action", "slack", "_slack_future_write", [])
+            run("slack-other-service-denied", "slack-action", "drive", "gdrive_create_file", [])
+            run("slack-draft-consumption-denied", "slack-action", "slack", "_slack_send_message", [], arguments={**message, "draft_id": "existing-fixture"})
+            run("slack-broadcast-denied", "slack-action", "slack", "_slack_send_message", [], arguments={**message, "reply_broadcast": True})
+            run("slack-duplicate-send-denied", "slack-action", "slack", "_slack_send_message", ["slack.slack_send_message"], arguments=message, repetitions=2)
+            run("slack-reviewed-message", "slack-approved", "slack", "_slack_send_message", ["slack.slack_send_message"], arguments={**message, "message": "Approved fixture"})
+            run("slack-altered-message-denied", "slack-approved", "slack", "_slack_send_message", [], arguments={**message, "message": "Altered fixture"})
     finally:
         server.shutdown()
         server.server_close()
