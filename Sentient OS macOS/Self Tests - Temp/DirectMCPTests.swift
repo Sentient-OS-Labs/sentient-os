@@ -471,7 +471,7 @@ enum DirectMCPTests {
     }
 
     static func renderConnectView() async {
-        let view = DirectMCPConnectView().environment(\.colorScheme, .dark)
+        let view = DirectMCPConnectView(provider: .granola).environment(\.colorScheme, .dark)
         let host = NSHostingView(rootView: view)
         let frame = NSRect(x: 0, y: 0, width: 460, height: 540)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)

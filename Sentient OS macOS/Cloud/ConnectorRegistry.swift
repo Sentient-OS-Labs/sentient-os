@@ -7,8 +7,8 @@
 //  tools are allowed to do (hand-curated read lists for the knowledge base, the classifier's
 //  cache for action policy), and the per-connector "Use for knowledge base" toggle, which
 //  exists ONLY for curated connectors — everything else is task-use only. Gmail and Google
-//  Calendar live here as identity-only packs: they keep their dedicated chips and never join
-//  the Connectors UI, but chip-filtering and the classifier eval need their identities.
+//  Calendar live here as identity-only packs: they keep their dedicated source state and connect
+//  sheets outside the generic census, but chip-filtering and the classifier eval need their identities.
 //
 //  Key surface:
 //   - packs / pack(for:)                  → the curated packs and the detected→pack match
@@ -81,7 +81,6 @@ nonisolated enum ConnectorRegistry {
     /// from every census result); Drive has verified read lists, with prompt curation separate.
     /// Codex lists were checked against hosted descriptions using CLI 0.154.0. Names/titles
     /// intentionally differ from Claude's; new tools require another manual review.
-    /// The other six are named-but-empty until their Step 3 chats.
     static let packs: [CuratedConnector] = [
         CuratedConnector(slug: "gmail", displayName: "Gmail",
                          routerDescription: "read, search, and send the user's email; drafts and labels",
@@ -166,7 +165,6 @@ nonisolated enum ConnectorRegistry {
                          codexReadTools: OutlookCalendarConnector.codexReads,
                          kbAdapter: .windowedMonthly,
                          providesCalendarContext: true),
-        CuratedConnector(slug: "teams", displayName: "Teams"),
     ]
 
     // MARK: Identity
@@ -242,14 +240,15 @@ nonisolated enum ConnectorRegistry {
     /// The connectors a widened computer-use run may attach on the Claude engine (task 1.6
     /// flips the attachment on; 1.4 builds it dormant): every detected claude-origin connector
     /// that is curated or classified (unclassified = excluded, fail-closed), PLUS the two
-    /// dedicated-chip connectors when their chips are connected (the census excludes them, so
-    /// the general mechanism must union them in — gmail riding into computer use is shipped
+    /// dedicated-chip connectors when healthy (kept out of the generic attachment list so
+    /// each service attaches once — gmail riding into computer use is shipped
     /// behavior this must preserve). Order: chips first, then detected, so argv stays stable.
     static func computerUseAttachable() -> [ResolvedServer] {
         var slugs: [String] = []
         if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }
         if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { slugs.append("google-calendar") }
         slugs += ConnectorCensus.cached(for: .claude)
+            .filter { !ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) }
             .filter { pack(for: $0)?.readTools != nil || isClassified($0.slug) }
             .map(\.slug)
         return slugs.compactMap { server(for: $0) }
@@ -407,7 +406,8 @@ nonisolated enum ConnectorRegistry {
             var slugs: [String] = []
             if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }
             if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { slugs.append("google-calendar") }
-            slugs += ConnectorCensus.cached(for: .chatgpt).map(\.slug)
+            slugs += ConnectorCensus.cached(for: .chatgpt)
+                .filter { !ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) }.map(\.slug)
             gmailWritesLive = slugs.contains("gmail")
             entries = slugs.map { Entry(slug: $0, name: displayName(slug: $0),
                                         note: $0 == OutlookCalendarConnector.slug ? "read-only in this run" : pack(forSlug: $0)?.routerDescription) }
@@ -469,7 +469,7 @@ nonisolated enum ConnectorRegistry {
     /// for the live backend — on the Claude engine only CLASSIFIED ones, because the fired-task
     /// recipe refuses an unclassified slug and a card fire has no narrated fallback (the
     /// idle-tick classifier sweep makes exclusions a minutes-long transient). gmail and
-    /// google-calendar never appear (census-excluded; they are their own methods). Empty =
+    /// google-calendar never appear (registry-filtered; they are their own methods). Empty =
     /// the shipped four-method research prompt and schema, untouched.
     static func cardChannels() -> [CardChannel] {
         let detected = detectedForCurrentBackend()
@@ -491,11 +491,11 @@ nonisolated enum ConnectorRegistry {
 
     // MARK: Detection convenience
 
-    /// Hosted census for the selected backend plus usable direct connections. BYOM receives
-    /// only the direct tier; each account retains its own identity.
+    /// Additional hosted services plus usable direct connections. Gmail/Calendar retain their
+    /// dedicated source and action paths. BYOM receives only the direct tier.
     static func detectedForCurrentBackend() -> [ConnectorCensus.DetectedConnector] {
         let hosted = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
-            .map { ConnectorCensus.cached(for: $0) } ?? []
+            .map { ConnectorCensus.cached(for: $0).filter { !ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) } } ?? []
         return hosted + DirectMCPStore.connections().filter(\.usable).map(\.detected)
     }
 

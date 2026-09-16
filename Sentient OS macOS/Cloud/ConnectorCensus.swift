@@ -9,8 +9,8 @@
 //   - codex   → pure disk read of the plugins cache; there is NO codex command that lists
 //               hosted connectors (`codex mcp list` shows local config servers only). That
 //               cache is rewritten ONLY when codex itself runs, hence the warm run below.
-//  Gmail and Google Calendar are excluded from every result: they keep their own dedicated
-//  chips in Settings (GmailConnect / CalendarConnect).
+//  Gmail and Google Calendar use this same detection. Their existing source flags mirror the
+//  selected engine's census; dedicated chips and reading preferences remain separate.
 //
 //  Key methods:
 //   - list()             → the CURRENT backend's connectors (cheap enough for every pane open)
@@ -78,9 +78,8 @@ nonisolated enum ConnectorCensus {
 
     // MARK: Identity rules
 
-    /// Kept out of every result: both have dedicated chips and their own read pipelines.
-    /// A small static set is right for detection; the registry (1.2) owns identity properly.
-    static let excludedSlugs: Set<String> = ["gmail", "google-calendar"]
+    /// Detected normally, but keep their dedicated chips, read pipelines and card channels.
+    static let dedicatedSourceSlugs: Set<String> = ["gmail", "google-calendar"]
 
     /// OpenAI's own plumbing entries in the curated cache — not user connectors. There is no
     /// structural way to spot them: `deep-research-work` is a real linked app that also carries
@@ -126,9 +125,14 @@ nonisolated enum ConnectorCensus {
     /// account to carry connectors, so they always answer empty (ModelBackend.connectorsAvailable).
     static func list() async -> [DetectedConnector] {
         switch ModelBackend.current {
-        case .claude:  return persist(await listClaude(), for: .claude)
+        case .claude:
+            let connectors = await listClaude()
+            guard !Task.isCancelled else { return [] }
+            return persist(connectors, for: .claude)
         case .chatgpt: return persist(listCodex(), for: .chatgpt)
-        case .custom:  return []
+        case .custom:
+            syncDedicatedSourceStatus()
+            return []
         }
     }
 
@@ -138,17 +142,44 @@ nonisolated enum ConnectorCensus {
     /// 2026-08-27: linked Google Drive stayed absent, then appeared after one 4 s warm run).
     /// Claude needs no equivalent — `claude mcp list` does its own live fetch every invocation.
     static func refresh() async -> [DetectedConnector] {
-        if ModelBackend.current == .chatgpt { await refreshCodexCache() }
+        let backend = ModelBackend.current
+        if backend == .chatgpt { await refreshCodexCache() }
+        guard !Task.isCancelled, ModelBackend.current == backend else { return [] }
         return await list()
+    }
+
+    /// The dedicated connect sheets use exactly the same refresh and health verdict as other apps.
+    static func checkConnection(slug: String) async -> Bool {
+        let backend = ModelBackend.current
+        guard let origin = DetectedConnector.Origin(backend: backend) else { return false }
+        let connectors = await refresh()
+        return !Task.isCancelled && ModelBackend.current == backend
+            && connectors.contains { $0.origin == origin && $0.slug == slug && $0.healthy }
+    }
+
+    /// Preserve the production keys observed by every source picker and the scheduler. They
+    /// are derived connection status, never permission to start reading: dbg.run.* stays untouched.
+    /// A missing census (including an older cache without these services) starts disconnected
+    /// until the ordinary list completes. Never carry one engine's old YES into another engine.
+    static func syncDedicatedSourceStatus(defaults: UserDefaults = .standard) {
+        // A lab run may override its engine without changing the user's selected engine.
+        let backend = ModelBackend(rawValue: defaults.string(forKey: ModelBackend.key) ?? "") ?? .chatgpt
+        let connectors = DetectedConnector.Origin(backend: backend).map { cached(for: $0, defaults: defaults) } ?? []
+        for (slug, key) in [("gmail", "dbg.gmail.connected"), ("google-calendar", "dbg.calendar.connected")] {
+            let connected = connectors.contains { $0.slug == slug && $0.healthy }
+            if defaults.bool(forKey: key) != connected {
+                defaults.set(connected, forKey: key)
+            }
+        }
     }
 
     /// The last persisted list for an origin — no subprocess, no disk scan. What the UI paints
     /// with immediately while a live `list()` runs behind it. (Blobs persisted before the
     /// origin field existed fail decode and read as empty — dev machines only, nothing shipped;
     /// the next `list()` rewrites them.)
-    static func cached(for origin: DetectedConnector.Origin) -> [DetectedConnector] {
+    static func cached(for origin: DetectedConnector.Origin, defaults: UserDefaults = .standard) -> [DetectedConnector] {
         guard let key = storageKey(for: origin),
-              let data = UserDefaults.standard.data(forKey: key),
+              let data = defaults.data(forKey: key),
               let decoded = try? JSONDecoder().decode([DetectedConnector].self, from: data)
         else { return [] }
         return logicalServices(decoded)
@@ -274,21 +305,22 @@ nonisolated enum ConnectorCensus {
     /// machine whose live backend never runs one of the engines.
     @discardableResult
     static func persist(_ connectors: [DetectedConnector],
-                        for origin: DetectedConnector.Origin) -> [DetectedConnector] {
+                        for origin: DetectedConnector.Origin,
+                        defaults: UserDefaults = .standard) -> [DetectedConnector] {
         let connectors = logicalServices(connectors)
         guard let key = storageKey(for: origin),
               let data = try? JSONEncoder().encode(connectors) else { return connectors }
-        let old = cached(for: origin)
+        let old = cached(for: origin, defaults: defaults)
         let previous = old.count
         // A detected disappearance/reappearance invalidates incremental provenance without
         // deleting pending notes. False-negative census results only cause a safe backfill.
         let changed = Set(old.map(\.slug)).symmetricDifference(Set(connectors.map(\.slug)))
         for slug in changed where ConnectorRegistry.pack(forSlug: slug) != nil {
             let generationKey = ConnectorRegistry.readGenerationKey(slug, origin.rawValue)
-            UserDefaults.standard.set(UserDefaults.standard.integer(forKey: generationKey) + 1,
-                                      forKey: generationKey)
+            defaults.set(defaults.integer(forKey: generationKey) + 1, forKey: generationKey)
         }
-        UserDefaults.standard.set(data, forKey: key)
+        defaults.set(data, forKey: key)
+        syncDedicatedSourceStatus(defaults: defaults)
         // Telemetry: the detected count per engine, ints only, and only when the count actually
         // changed (a steady watch tick or pane open stays silent — this fires on link/unlink).
         if connectors.count != previous {
@@ -356,7 +388,7 @@ nonisolated enum ConnectorCensus {
             }
 
             let slug = slugify(name)
-            guard !slug.isEmpty, !excludedSlugs.contains(slug) else { continue }
+            guard !slug.isEmpty else { continue }
             connectors.append(DetectedConnector(slug: slug,
                                                 displayName: name,
                                                 origin: .claude,
@@ -368,9 +400,9 @@ nonisolated enum ConnectorCensus {
         }
 
         let excluded = candidates - connectors.count
-        if excluded > excludedSlugs.count {
-            // More claude.ai lines were dropped than the two dedicated chips explain — the
-            // output format may have drifted. Report the shape, never the content.
+        if excluded > 0 {
+            // A claude.ai line was dropped: the output format may have drifted.
+            // Report the shape, never the content.
             Log("ConnectorCensus.claude: parsed \(connectors.count) of \(candidates) claude.ai lines")
         }
         return logicalServices(connectors)
@@ -393,15 +425,15 @@ nonisolated enum ConnectorCensus {
 
     /// Scan the plugins cache. Presence IS the verdict — codex has no health probe — so every
     /// connector found reads healthy. Pure disk reads: no subprocess, no model, microseconds.
-    static func listCodex() -> [DetectedConnector] {
+    static func listCodex(cacheRoot: URL = codexCacheRoot) -> [DetectedConnector] {
         let fm = FileManager.default
-        guard let slugs = try? fm.contentsOfDirectory(atPath: codexCacheRoot.path) else { return [] }
+        guard let slugs = try? fm.contentsOfDirectory(atPath: cacheRoot.path) else { return [] }
         let now = Date()
         var connectors: [DetectedConnector] = []
 
         for slug in slugs.sorted() where !slug.hasPrefix(".") {
-            guard !codexSystemSlugs.contains(slug), !excludedSlugs.contains(slug) else { continue }
-            let slugDir = codexCacheRoot.appendingPathComponent(slug)
+            guard !codexSystemSlugs.contains(slug) else { continue }
+            let slugDir = cacheRoot.appendingPathComponent(slug)
             guard let versionDir = newestVersionDirectory(in: slugDir),
                   let catalogID = catalogID(in: versionDir, slug: slug) else { continue }
             let card = infoCard(in: versionDir)
@@ -491,7 +523,9 @@ nonisolated enum ConnectorCensus {
         invocation.timeout = 120
         do {
             _ = try await CodexTrigger.$current.withValue(.probe) {
-                try await FrontierRun.run(invocation)
+                try await ModelBackend.$runOverride.withValue(.chatgpt) {
+                    try await FrontierRun.run(invocation)
+                }
             }
         } catch {
             Log("ConnectorCensus.warm: \(ErrorLabel(error))")

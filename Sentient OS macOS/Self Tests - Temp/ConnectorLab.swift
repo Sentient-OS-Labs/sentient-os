@@ -217,7 +217,7 @@ enum ConnectorLab {
 
     private static func parse() {
         // The README's measured sample: 3 claude.ai lines + the cua-driver entry + the banner.
-        // Gmail and Calendar are excluded by design, so only Google Drive survives.
+        // Gmail and Calendar share discovery; only the local cua-driver entry is excluded.
         check("README sample", """
         Checking MCP server health…
 
@@ -225,7 +225,7 @@ enum ConnectorLab {
         claude.ai Gmail: https://gmailmcp.googleapis.com/mcp/v1 - ✔ Connected
         claude.ai Google Drive: https://drivemcp.googleapis.com/mcp/v1 - ✔ Connected
         cua-driver: cua-driver mcp - ✔ Connected
-        """, expected: ["google-drive"])
+        """, expected: ["google-calendar", "gmail", "google-drive"])
 
         check("empty", "", expected: [])
 

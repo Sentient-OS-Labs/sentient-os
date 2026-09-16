@@ -3,17 +3,15 @@
 //  Sentient OS macOS
 //
 //  The Gmail / Google Calendar connect popup — ONE sheet for both cloud sources (they are exact
-//  twins: same connector page flow, same YES/NO probe, same storage shape), engine-aware: the
+//  twins: same connector page flow, shared connector census, same storage shape), engine-aware: the
 //  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
-//    Done       → settles 1s, then the `codex exec` YES/NO probe (a green fill sweeps the button
-//                 while it runs — decelerating, ~95% by 17s, snapping full on the answer). YES →
-//                 persists connected + selected, shows the green beat, and auto-dismisses. NO → a
-//                 quiet amber retry line.
+//    Done       → refreshes ConnectorCensus (Claude health list / Codex refreshed plugin cache).
+//                 A healthy record selects the source, shows the green beat, and dismisses.
+//                 A missing or unhealthy record shows a quiet amber retry line.
 //    ✕ (top-left) → closes without saving.
-//  Already connected → a whisper "Stop reading …" link disconnects the source entirely (no
-//  in-between state); turning it back on is the full connect flow again, probe included.
+//  Already connected → "Stop reading …" clears selection, not the provider connection.
 //
 //  Presented from Settings → Knowledge Sources, the home's Analysis popover, onboarding's ready
 //  screen, and Dev Tools. See GmailConnect / CalendarConnect for the codex side.
@@ -59,22 +57,26 @@ struct CloudConnectSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage private var connected: Bool
     @AppStorage private var selected: Bool
+    @AppStorage(ModelBackend.key) private var backendRaw = ""
 
     private enum Phase { case idle, checking, connected, failed }
-    @State private var phase: Phase = .idle
+    @State private var phase: Phase
     @State private var checkStart: Date?     // non-nil while the fill sweep runs (and through the green beat)
+    @State private var operation: Task<Void, Never>?
 
     init(_ service: Service) {
         self.service = service
-        _connected = AppStorage(wrappedValue: false, service.connectedKey)
-        _selected  = AppStorage(wrappedValue: false, service.selectedKey)
+        let connection = AppStorage(wrappedValue: false, service.connectedKey)
+        let selection = AppStorage(wrappedValue: false, service.selectedKey)
+        _connected = connection
+        _selected = selection
+        // Resolve the opening state before presentation, so the sheet's initial layout isn't animated.
+        _phase = State(initialValue: connection.wrappedValue && selection.wrappedValue ? .connected : .idle)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            Image(service.logoAsset)
-                .resizable().scaledToFit()
-                .frame(height: 34)
+            ConnectorLogo(asset: service.logoAsset)
 
             Text(service.title)
                 .display(20)
@@ -100,6 +102,7 @@ struct CloudConnectSheet: View {
             statusLine
                 .padding(.top, 14)
                 .frame(minHeight: 42, alignment: .top)
+                .animation(.easeOut(duration: 0.2), value: phase)
 
             if connected && selected && phase != .checking {
                 stopLink.padding(.top, 2)
@@ -109,14 +112,21 @@ struct CloudConnectSheet: View {
         .frame(width: 400)
         .background(Theme.bg)
         .overlay(alignment: .topLeading) { closeButton.padding(12) }
-        .animation(.easeOut(duration: 0.2), value: phase)
-        .onAppear { if connected && selected { phase = .connected } }   // already linked → Done just closes
+        .onChange(of: connected) { _, linked in
+            if !linked && phase != .checking { phase = .idle; checkStart = nil }
+        }
+        .onChange(of: backendRaw) { operation?.cancel(); dismiss() }
+        .onDisappear { operation?.cancel() }
     }
 
     // MARK: - The two buttons (+ the ✕)
 
     private var connectButton: some View {
-        Button { NSWorkspace.shared.open(service.connectorURL) } label: {
+        Button {
+            phase = .idle
+            checkStart = nil
+            NSWorkspace.shared.open(service.connectorURL)
+        } label: {
             HStack(spacing: 7) {
                 Text(service.connectTitle).font(.system(size: 14, weight: .semibold))
                 Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
@@ -127,6 +137,7 @@ struct CloudConnectSheet: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
+        .disabled(phase == .checking)
     }
 
     private var doneButton: some View {
@@ -151,6 +162,7 @@ struct CloudConnectSheet: View {
                             .transition(.opacity)
                         }
                     }
+                    .animation(.easeOut(duration: 0.2), value: phase)
                 }
                 .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
                 .contentShape(Capsule())
@@ -168,8 +180,8 @@ struct CloudConnectSheet: View {
     }
 
     /// The check's fill sweep — deliberately non-linear so it reads as real work, not a timer:
-    /// fast out of the gate, decelerating to ~95% at 17s (the observed probe time), then a slow
-    /// asymptotic crawl. The probe's answer snaps it full (or clears it on failure).
+    /// fast out of the gate, decelerating to ~95% at 17s, then a slow asymptotic crawl.
+    /// The census result snaps it full (or clears it on failure).
     private func checkFillFraction(since start: Date, at now: Date) -> CGFloat {
         let t = now.timeIntervalSince(start)
         let sweep = 0.95 * (1 - pow(1 - min(t / 17.0, 1), 2.2))
@@ -201,11 +213,9 @@ struct CloudConnectSheet: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// The whisper disconnect — text, not a button: present where you'd look for it, never
-    /// competing with the two real buttons. A full disconnect (no in-between state): turning the
-    /// source back on means the whole connect flow again, probe included.
+    /// Reading is an opt-in independent of the detected provider connection.
     private var stopLink: some View {
-        Button(service.stopLine) { connected = false; selected = false; dismiss() }
+        Button(service.stopLine) { selected = false; dismiss() }
             .buttonStyle(.plain)
             .font(.system(size: 11))
             .foregroundStyle(Theme.Ink.deepMuted)
@@ -217,13 +227,14 @@ struct CloudConnectSheet: View {
         if phase == .connected { dismiss(); return }
         phase = .checking
         checkStart = Date()
-        Task {
-            try? await Task.sleep(for: .seconds(1))     // brief settle; the probe's own latency covers the rest
+        let backend = ModelBackend.current
+        let wasConnected = connected
+        operation = Task {
             let ok = await service.probe()
+            guard !Task.isCancelled, ModelBackend.current == backend else { return }
             await MainActor.run {
                 if ok {
-                    if !connected { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
-                    connected = true
+                    if !wasConnected { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
                     selected = true                     // include in INITIAL / ITERATIVE runs
                     phase = .connected
                 } else {
@@ -233,6 +244,7 @@ struct CloudConnectSheet: View {
             }
             if ok {
                 try? await Task.sleep(for: .seconds(1.1))
+                guard !Task.isCancelled, ModelBackend.current == backend else { return }
                 await MainActor.run { dismiss() }
             }
         }
@@ -240,7 +252,7 @@ struct CloudConnectSheet: View {
 }
 
 /// The quiet ✕ — a small glass circle that brightens on hover.
-private struct CloseHoverButton: View {
+struct CloseHoverButton: View {
     let action: () -> Void
     @State private var hover = false
 
@@ -254,6 +266,7 @@ private struct CloseHoverButton: View {
                 .contentShape(Circle())
         }
         .buttonStyle(PressScaleStyle())
+        .accessibilityLabel("Close")
         .onHover { hover = $0 }
         .animation(.easeOut(duration: 0.15), value: hover)
     }
