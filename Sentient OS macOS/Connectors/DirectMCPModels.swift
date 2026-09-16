@@ -75,7 +75,7 @@ nonisolated struct DirectMCPProvider: Sendable, Equatable {
     static let granola = Self(slug: "granola", name: "Granola",
         endpoint: URL(string: "https://mcp.granola.ai/mcp")!,
         trustedOrigins: ["https://mcp.granola.ai", "https://mcp-auth.granola.ai"],
-        offlineScope: "offline_access", reviewedReads: ["list_meetings", "get_meetings"])
+        offlineScope: "offline_access", reviewedReads: ["list_meetings", "get_meetings"], kbVerified: true)
     static let notion = Self(slug: "notion", name: "Notion",
         endpoint: URL(string: "https://mcp.notion.com/mcp")!,
         trustedOrigins: ["https://mcp.notion.com"], offlineScope: nil,

@@ -516,7 +516,16 @@ nonisolated enum ConnectorRegistry {
     /// proactive-research attachment (task 1.7). Gated through kbEligible, so a toggle
     /// persisted before the curated-only rule landed can never read.
     static func kbEnabledConnectors() -> [ConnectorCensus.DetectedConnector] {
-        detectedForCurrentBackend().filter { kbEligible($0.slug) && isKBEnabled($0.slug) }
+        detectedForCurrentBackend().filter {
+            contributesToKnowledgeBase($0, enabled: isKBEnabled($0.slug))
+        }
+    }
+
+    /// The picker and the analysis list share one definition of an included source.
+    /// Being connected alone is never consent to read an app for the knowledge base.
+    static func contributesToKnowledgeBase(_ connector: ConnectorCensus.DetectedConnector,
+                                           enabled: Bool) -> Bool {
+        enabled && connector.healthy && kbEligible(connector.slug)
     }
 
     /// Whether a connector may feed the knowledge base at all: only curated packs with a
@@ -525,8 +534,8 @@ nonisolated enum ConnectorRegistry {
     /// auto-classifier). An ineligible connector has no KB toggle anywhere; it stays fully
     /// task-usable (Sidekick, cards, computer use), which needs no toggle by ledger #2.
     static func kbEligible(_ slug: String, backend: ModelBackend = ModelBackend.current) -> Bool {
+        if backend == .chatgpt, UserDefaults.standard.bool(forKey: CodexAuth.kbOnlyKey) { return false }
         if let direct = DirectMCPStore.connection(slug) {
-            if backend == .chatgpt, UserDefaults.standard.bool(forKey: CodexAuth.kbOnlyKey) { return false }
             return direct.kbEligible
         }
         guard let pack = pack(forSlug: slug), !pack.capturedProvisional,
