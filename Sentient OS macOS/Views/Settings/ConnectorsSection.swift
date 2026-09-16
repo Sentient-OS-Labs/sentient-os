@@ -102,21 +102,55 @@ struct ConnectorsSection: View {
     }
 }
 
-/// Connection health, rather than source selection: neutral when unlinked, green when ready,
-/// amber when attention is needed. Every app opens its connection sheet when unlocked.
+/// Green means included in analysis, just like the folder, chat, and Gmail chips.
+/// A linked account still needs an explicit knowledge opt-in. Task-only apps never look selected.
 /// The parent owns the sheet so discovery cannot dismiss it.
 struct ConnectorPill: View {
     let source: ConnectorSource
     let locked: Bool
     let action: () -> Void
+    @AppStorage private var knowledgeEnabled: Bool
+
+    init(source: ConnectorSource, locked: Bool, action: @escaping () -> Void) {
+        self.source = source
+        self.locked = locked
+        self.action = action
+        _knowledgeEnabled = AppStorage(wrappedValue: false,
+            ConnectorRegistry.kbKey(source.connector?.slug ?? source.serviceSlug))
+    }
+
+    private var selected: Bool {
+        source.connector.map {
+            ConnectorRegistry.contributesToKnowledgeBase($0, enabled: knowledgeEnabled)
+        } ?? false
+    }
+
+    private var detail: String? {
+        guard !locked, let connector = source.connector else { return nil }
+        if !connector.healthy { return "Reconnect" }
+        if !ConnectorRegistry.kbEligible(connector.slug) { return "Tasks only" }
+        return selected ? nil : "Not selected"
+    }
+
+    private var status: String {
+        if locked { return CodexAuth.connectorLockedTip }
+        guard let connector = source.connector else { return "Connect this app to get started." }
+        if !connector.healthy { return "Reconnect this app to use it for analysis." }
+        if !ConnectorRegistry.kbEligible(connector.slug) {
+            return "Available for tasks, but not supported as a knowledge source. Does not count toward analysis."
+        }
+        return selected ? "Selected for analysis and nightly updates."
+            : "Connected, but not selected for analysis. Open this app and turn on Use for knowledge base."
+    }
 
     var body: some View {
-        SettingsChip(label: source.displayName,
-                     on: source.connector?.healthy == true,
+        SettingsChip(label: source.displayName, detail: detail,
+                     on: selected,
                      locked: locked,
                      needsAttention: source.connector?.healthy == false,
                      action: action)
-        .accessibilityValue(locked ? "Locked" : source.connector.map { $0.healthy ? "Connected" : "Needs attention" } ?? "Not connected")
+        .accessibilityValue(status)
+        .help(status)
     }
 }
 

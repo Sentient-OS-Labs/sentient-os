@@ -103,6 +103,17 @@ struct ConnectorConnectSheet: View {
                 .padding(.top, 16)
             }
 
+            if let connector, ConnectorRegistry.kbEligible(connector.slug) {
+                ConnectorKnowledgeControl(slug: connector.slug, healthy: healthy)
+                    .disabled(busy)
+                    .padding(.top, 20)
+            } else if healthy {
+                Text("Available for tasks. This app does not support knowledge-base analysis.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 20)
+            }
+
             actionButton(connectTitle,
                          primary: true, external: !connecting, action: connect)
                 .padding(.top, 26)
@@ -111,12 +122,6 @@ struct ConnectorConnectSheet: View {
                 .padding(.top, 10).disabled(busy || refreshing)
 
             statusLine.padding(.top, 14).frame(minHeight: 42, alignment: .top)
-
-            if let connector, ConnectorRegistry.kbEligible(connector.slug) {
-                ConnectorKnowledgeControl(slug: connector.slug, healthy: healthy)
-                    .disabled(busy)
-                    .padding(.top, 6)
-            }
 
             if direct != nil {
                 Button(disconnecting ? "Disconnecting…" : "Disconnect account", action: disconnect)
@@ -321,8 +326,9 @@ private struct ConnectorKnowledgeControl: View {
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Ink.green)
                     .disabled(!healthy && !enabled)
             }
-            MonoCaps("Reads nightly · read-only", size: 8, tracking: 1.6,
-                     color: .white.opacity(0.5))
+            Text("Include this app in your analysis and nightly updates.")
+                .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
