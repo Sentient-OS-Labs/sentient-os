@@ -8,7 +8,7 @@
 //  `--ignore-user-config` — measured live June 15, no CodexCLI change needed).
 //
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
-//  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
+//  confirm with `probeConnected()` through the shared ConnectorCensus (no AI read probe).
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "gmail"; the existing "tell cloud"
 //  buttons add them to the vault, same as every other source):
@@ -82,32 +82,11 @@ enum GmailConnect {
                         completed: Int, keptSoFar: Int)
     }
 
-    // MARK: - Connection probe (the "I'm done" YES/NO check)
+    // MARK: - Connection detection
 
-    /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
+    /// Refresh the same hosted-connector census used by every other connected app.
     static func probeConnected() async -> Bool {
-        var inv = CodexCLI.Invocation(prompt: probePrompt)
-        inv.feature = "gmail"
-        inv.model = .gpt56luna               // light model for the connect-check
-        inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
-        inv.sandbox = .readOnly
-        inv.timeout = 120
-        inv.mcpReadConnectors = ["gmail"]    // Claude engine: the unattended-read recipe —
-                                             // Gmail's curated read tools pre-approved, walled
-                                             // in alone. Nothing else approves a connector call
-                                             // headless, and a denied read would read as NO
-                                             // even when linked (measured 2026-08-23).
-        do {
-            // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
-            let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
-            let answer = env.result.uppercased()
-            let yes = answer.contains("YES") && !answer.contains("NO")
-            Log("GmailConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
-            return yes
-        } catch {
-            Log("GmailConnect.probe: ⚠️ \(ErrorLabel(error)) — treating as NOT connected")
-            return false
-        }
+        await ConnectorCensus.checkConnection(slug: "gmail")
     }
 
     // MARK: - Initial read (last month → 4 weekly summaries)
@@ -272,12 +251,6 @@ enum GmailConnect {
     }
 
     // MARK: - Prompts
-
-    private static let probePrompt = """
-    Using your Gmail connector tools, check whether you can read this account's Gmail inbox. \
-    Reply with EXACTLY YES if you can, or EXACTLY NO if the Gmail connector is not available. \
-    Output only that one word and nothing else.
-    """
 
     /// The structured reply contract — one dense weekly summary plus the flags Sentient keys on.
     private static let weeklySchema = """

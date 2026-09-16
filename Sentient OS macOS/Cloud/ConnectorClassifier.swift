@@ -196,7 +196,7 @@ nonisolated enum ConnectorClassifier {
     // MARK: The attachables sweep (task 1.6)
 
     /// Classify everything a computer-use run could attach: the connected chip connectors
-    /// (census-excluded, so no other production path ever classifies them) plus every detected
+    /// (their dedicated source paths do not classify them) plus every additional detected
     /// claude-origin connector. Rides CodexSetup's 15-minute idle tick (first fire ~90 s after
     /// launch), so on a real user's Mac the fail-closed exclusions in
     /// ConnectorRegistry.computerUseAttachments are a minutes-long transient, not a resting
@@ -208,7 +208,8 @@ nonisolated enum ConnectorClassifier {
         var slugs: [String] = []
         if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }
         if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { slugs.append("google-calendar") }
-        slugs += ConnectorCensus.cached(for: .claude).map(\.slug)
+        slugs += ConnectorCensus.cached(for: .claude)
+            .filter { !ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) }.map(\.slug)
         for slug in slugs { await ensureClassified(slug: slug) }
     }
 

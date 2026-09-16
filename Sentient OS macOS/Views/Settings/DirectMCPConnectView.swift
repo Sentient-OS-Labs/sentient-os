@@ -1,6 +1,6 @@
 //
 // DirectMCPConnectView.swift
-// Browser-based connection setup for supported services. Account labels remain visible so a
+// Browser-based connection setup for the service selected in a connector popup. Account labels stay visible so a
 // personal connection and a work connection are never silently treated as the same account.
 // Doc: Documentation - Settings.md
 //
@@ -9,8 +9,8 @@ import SwiftUI
 
 struct DirectMCPConnectView: View {
     var existing: DirectMCPConnection? = nil
+    let provider: DirectMCPProvider
     @Environment(\.dismiss) private var dismiss
-    @State private var providerSlug = "granola"
     @State private var label = "Personal"
     @State private var working = false
     @State private var message: String?
@@ -20,17 +20,11 @@ struct DirectMCPConnectView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Text(existing == nil ? "Connect an app" : "Reconnect your account")
+            Text(existing == nil ? "Connect \(provider.name)" : "Reconnect your account")
                 .font(.system(size: 25, weight: .medium)).foregroundStyle(.white)
             Text("Sign in on the app's website. This connection works with either of your AI engines.")
                 .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
                 .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 10) {
-                MonoCaps("App", size: 9, tracking: 1.6, color: .white.opacity(0.5))
-                Picker("App", selection: $providerSlug) {
-                    ForEach(DirectMCPProvider.catalog, id: \.slug) { Text($0.name).tag($0.slug) }
-                }.labelsHidden().pickerStyle(.menu).disabled(working || existing != nil)
-            }
             VStack(alignment: .leading, spacing: 10) {
                 MonoCaps("Account label", size: 9, tracking: 1.6, color: .white.opacity(0.5))
                 TextField("Personal, Work, or a workspace name", text: $label)
@@ -65,7 +59,9 @@ struct DirectMCPConnectView: View {
             }
         }
         .padding(30).frame(width: 460).background(Theme.bg)
-        .onAppear { if let existing { providerSlug = existing.providerSlug; label = existing.label } }
+        .onAppear {
+            if let existing { label = existing.label }
+        }
         .onDisappear {
             operation?.cancel()
             if existing == nil && !completed {
@@ -74,7 +70,6 @@ struct DirectMCPConnectView: View {
         }
     }
     private func connect() {
-        guard let provider = DirectMCPProvider.find(providerSlug) else { return }
         working = true; message = nil
         operation = Task {
             do {
@@ -91,4 +86,4 @@ struct DirectMCPConnectView: View {
     }
 }
 
-#Preview("Connect a direct account") { DirectMCPConnectView() }
+#Preview("Connect a Notion account") { DirectMCPConnectView(provider: .notion) }

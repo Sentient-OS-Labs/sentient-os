@@ -22,8 +22,9 @@ remain separate records, even when they belong to the same service.
 | `DirectMCPConnections.swift` | Interactive attempts, verification, reconnect recovery, disconnect and cleanup. |
 | `DirectMCPRuntime.swift` | Immutable task attachments, engine configuration, helper entry points and active-run cancellation. |
 
-**Connecting.** Settings → Knowledge Sources → Connectors offers **Connect in Sentient**. The user
-chooses a service and an account label, then approves access in their browser. The callback verifies
+**Connecting.** In Settings → Knowledge Sources → Connectors, the user opens a service's pill and
+selects **Connect** in its popup. Setup asks for an account label for that service, then the user
+approves access in their browser. The callback verifies
 state and uses S256 PKCE. Discovery validates the issuer, resource and endpoints; supported scopes
 come from the resource challenge/metadata, with the provider's explicit offline-access requirement.
 Registration information is saved before browser interaction so a retry can reuse it.

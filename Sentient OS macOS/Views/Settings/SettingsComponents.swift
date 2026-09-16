@@ -42,7 +42,7 @@ struct SettingsPane<Content: View>: View {
 }
 
 /// A labelled group — the mono-caps whisper above whatever form the group's content takes.
-/// `trailing` is the optional far end of the header row (the Connectors group's quiet Refresh);
+/// `trailing` is the optional far end of the header row (the cloud sources group's quiet Refresh);
 /// groups without one keep their exact previous rendering (the header only stretches when a
 /// trailing view exists).
 struct SettingsGroup<Content: View, Trailing: View>: View {

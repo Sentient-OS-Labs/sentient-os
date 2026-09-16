@@ -8,7 +8,7 @@
 //  to `codex exec` whether or not `--ignore-user-config` is passed; verified live June 21).
 //
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
-//  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
+//  confirm with `probeConnected()` through the shared ConnectorCensus (no AI read probe).
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "calendar"; the existing "tell cloud"
 //  buttons fold them into the vault, same as every other source):
@@ -71,34 +71,11 @@ enum CalendarConnect {
         case windowDone(step: Int, total: Int, label: String, summary: String?, events: Int, keptSoFar: Int)
     }
 
-    // MARK: - Connection probe (the "I'm done" YES/NO check)
+    // MARK: - Connection detection
 
-    /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
+    /// Refresh the same hosted-connector census used by every other connected app.
     static func probeConnected() async -> Bool {
-        var inv = CodexCLI.Invocation(prompt: probePrompt)
-        inv.feature = "calendar"
-        inv.model = .gpt56luna               // light model for the connect-check
-        inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
-        inv.sandbox = .readOnly
-        inv.webSearch = false
-        inv.timeout = 120
-        inv.mcpReadConnectors = ["google-calendar"]   // Claude engine: the unattended-read
-                                             // recipe — Calendar's curated read tools
-                                             // pre-approved, walled in alone. Nothing else
-                                             // approves a connector call headless, and a denied
-                                             // read would read as NO even when linked
-                                             // (measured 2026-08-23).
-        do {
-            // trigger=probe: a connect-check failure is not an overnight/analysis failure in Sentry.
-            let env = try await CodexTrigger.$current.withValue(.probe) { try await FrontierRun.run(inv) }
-            let answer = env.result.uppercased()
-            let yes = answer.contains("YES") && !answer.contains("NO")
-            Log("CalendarConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
-            return yes
-        } catch {
-            Log("CalendarConnect.probe: ⚠️ \(ErrorLabel(error)) — treating as NOT connected")
-            return false
-        }
+        await ConnectorCensus.checkConnection(slug: "google-calendar")
     }
 
     // MARK: - Initial read (last year → 12 monthly summaries)
@@ -284,12 +261,6 @@ enum CalendarConnect {
     }
 
     // MARK: - Prompts
-
-    private static let probePrompt = """
-    Using your Google Calendar connector tools, check whether you can read this account's Google \
-    Calendar. Reply with EXACTLY YES if you can, or EXACTLY NO if the Google Calendar connector is not \
-    available. Output only that one word and nothing else.
-    """
 
     /// The structured read reply — one dense window summary plus the flags Sentient keys on.
     private static let readSchema = """
