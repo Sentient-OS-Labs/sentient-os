@@ -74,11 +74,11 @@ enum OutlookActionEvidence {
         guard messageID(id), let encoded = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_"))) else { return nil }
         return "mail:///messages/" + encoded
     }
-    static func body(_ message: [String: Any]) -> String? {
+    nonisolated static func body(_ message: [String: Any]) -> String? {
         if let body = message["body"] as? [String: Any] { return body["content"] as? String }
         return message["body"] as? String
     }
-    static func normalizedBody(_ body: String, html: Bool = false) -> String {
+    nonisolated static func normalizedBody(_ body: String, html: Bool = false) -> String {
         (html ? body.replacingOccurrences(of: #"<[^>]*>"#, with: " ", options: .regularExpression) : body)
             .replacingOccurrences(of: "&nbsp;", with: " ").replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">").replacingOccurrences(of: "&quot;", with: "\"")

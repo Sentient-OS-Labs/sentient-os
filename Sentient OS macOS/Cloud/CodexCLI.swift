@@ -139,6 +139,23 @@ actor CodexCLI {
         var slackRunID: UUID? = nil
         var outlookOperation: OutlookMailConnector.Operation? = nil
         var outlookRunID: UUID? = nil
+        var outlookKeepsReadBudget = false
+        var outlookCalendarOperation: OutlookCalendarConnector.Operation? = nil
+        var outlookCalendarReadPurpose: OutlookCalendarConnector.ReadPurpose? = nil
+        var outlookCalendarReadWindow: MCPSource.Window? = nil
+        var outlookCalendarExpectedCreationHash: String? = nil
+        var outlookCalendarAccountFingerprint: String? = nil
+        var outlookCalendarIntentHash: String? = nil
+        var includesOutlookMail: Bool {
+            mcpActionServer == OutlookMailConnector.slug || mcpReadConnectors.contains(OutlookMailConnector.slug)
+        }
+        var calendarPolicy: OutlookCalendarToolPolicy.Context? {
+            guard mcpActionServer == OutlookCalendarConnector.slug || mcpReadConnectors.contains(OutlookCalendarConnector.slug) else { return nil }
+            return .init(operation: mcpActionServer == OutlookCalendarConnector.slug ? (outlookCalendarOperation ?? .read) : .read,
+                         purpose: outlookCalendarReadPurpose, window: outlookCalendarReadWindow,
+                         expectedCreationHash: outlookCalendarExpectedCreationHash,
+                         accountFingerprint: outlookCalendarAccountFingerprint, intentHash: outlookCalendarIntentHash)
+        }
         var outlookReadMode: MCPSource.ReadMode? = nil
         var outlookReadWindow: MCPSource.Window? = nil
         var outlookExpectedMessage: String? = nil
@@ -789,7 +806,16 @@ actor CodexCLI {
                 if let policy = try? OutlookMailConnector.codexPolicy(operation: .write, exclusive: false) {
                     args += ["-c", policy]
                 }
-                hooks.append(OutlookToolPolicy.rule(backend: .chatgpt, operation: .write, runID: OutlookToolPolicy.computerRunID ?? UUID()))
+            }
+            let mail = ConnectorCensus.cached(for: .chatgpt).contains { $0.slug == OutlookMailConnector.slug }
+            let calendar = ConnectorCensus.cached(for: .chatgpt).contains { $0.slug == OutlookCalendarConnector.slug }
+            if calendar, let policy = try? OutlookCalendarConnector.codexPolicy(operation: .read, exclusive: false) {
+                args += ["-c", policy]
+            }
+            if mail || calendar {
+                hooks.append(OutlookToolPolicy.rule(backend: .chatgpt, operation: .write,
+                    runID: OutlookToolPolicy.computerRunID ?? UUID(),
+                    calendar: calendar ? .init(operation: .read) : nil, includesMail: mail))
             }
             args += HostedToolPolicy.codexArguments(hooks)
         }
@@ -1039,7 +1065,7 @@ actor CodexCLI {
         // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
         // which terminates it — the same dodge as probeCustomEndpoint's probe image.
         if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
-        if !inv.includeUserConfig || connectorRead || ["slack", OutlookMailConnector.slug].contains(inv.mcpActionServer ?? "") || !direct.isEmpty || inv.toolsDisabled {
+        if !inv.includeUserConfig || connectorRead || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(inv.mcpActionServer ?? "") || !direct.isEmpty || inv.toolsDisabled {
             // Hosted account apps survive hermetic runs. User MCP servers, plugins and
             // per-tool/account approvals must not widen an unattended read's tool policy.
             args += ["--ignore-user-config"]
@@ -1066,7 +1092,7 @@ actor CodexCLI {
             }
         }
         for override in inv.configOverrides { args += ["-c", override] }
-        if inv.connectorOnlyRead || inv.toolsDisabled || inv.mcpActionServer == OutlookMailConnector.slug {
+        if inv.connectorOnlyRead || inv.toolsDisabled || Microsoft365Connector.contains(inv.mcpActionServer ?? "") {
             for override in ["project_doc_max_bytes=0", "features.shell_tool=false", "features.view_image=false",
                              "features.browser_use=false", "features.computer_use=false", "features.multi_agent=false",
                              "features.code_mode=false", "features.image_generation=false", "features.goals=false",
@@ -1085,6 +1111,9 @@ actor CodexCLI {
                     args += ["-c", try SlackConnector.codexActionPolicy(operation: inv.slackOperation ?? .write)]
                     args += SlackToolPolicy.codexArguments(operation: inv.slackOperation ?? .write, runID: inv.slackRunID,
                                                           expectedMessage: inv.slackExpectedMessage)
+                } else if slug == OutlookCalendarConnector.slug {
+                    guard let operation = inv.outlookCalendarOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+                    args += ["-c", try OutlookCalendarConnector.codexPolicy(operation: operation)]
                 } else if slug == OutlookMailConnector.slug {
                     guard let operation = inv.outlookOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
                     args += ["-c", try OutlookMailConnector.codexPolicy(operation: operation)]
@@ -1100,11 +1129,11 @@ actor CodexCLI {
             if connectorRead {
                 args += ["-c", try connectorReadPolicy(slugs: hostedReads, subset: inv.mcpReadToolNames)]
             }
-            if inv.mcpActionServer == OutlookMailConnector.slug || hostedReads.contains(OutlookMailConnector.slug) {
+            if inv.includesOutlookMail || inv.calendarPolicy != nil {
                 args += HostedToolPolicy.codexArguments([OutlookToolPolicy.rule(backend: .chatgpt,
                     operation: inv.mcpActionServer == nil ? .read : (inv.outlookOperation ?? .read), runID: inv.outlookRunID ?? UUID(),
                     mode: inv.outlookReadMode, window: inv.outlookReadWindow, expectedMessage: inv.outlookExpectedMessage,
-                    expectedRecipients: inv.outlookExpectedRecipients)])
+                    expectedRecipients: inv.outlookExpectedRecipients, calendar: inv.calendarPolicy, includesMail: inv.includesOutlookMail)])
             }
         }
         if inv.toolsDisabled || (!direct.isEmpty && ModelBackend.current == .custom) || (inv.mcpActionServer?.hasPrefix("direct-") == true) {

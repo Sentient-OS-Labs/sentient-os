@@ -15,6 +15,7 @@ extension MCPSource {
     }
 
     static func readIdentity(slug: String, onReceipt: ReceiptObserver? = nil) async throws -> String? {
+        if slug == OutlookCalendarConnector.slug { return try await OutlookCalendarConnector.readIdentity(onReceipt: onReceipt).fingerprint }
         if slug == OutlookMailConnector.slug { return try await OutlookMailConnector.readIdentity(onReceipt: onReceipt).fingerprint }
         if slug == "slack" { return try await SlackConnector.readIdentity(onReceipt: onReceipt).fingerprint }
         guard slug == "google-drive", ModelBackend.current == .chatgpt else { return nil }

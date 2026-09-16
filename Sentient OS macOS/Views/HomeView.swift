@@ -804,17 +804,12 @@ final class ForYouModel {
     }
 
     /// A copy of a PreparedAction with new `preparedContent` + `recipient` (the rest unchanged).
-    /// ⚠️ `methodTarget` must ride through explicitly (it has a memberwise default of nil, so
-    /// omitting it would silently strip an mcp card's routing — and its fire button — on edit).
+    /// Copy the full value so content edits preserve routing, identity and operation metadata.
     private static func replacing(_ a: PreparedAction, content: String, recipient: String) -> PreparedAction {
-        PreparedAction(title: a.title, method: a.method, target: a.target,
-                       methodTarget: a.methodTarget, connectorIdentity: a.connectorIdentity,
-                       outlookOperation: a.outlookOperation, urgency: a.urgency,
-                       dueDate: a.dueDate, status: a.status, verification: a.verification,
-                       cardSummary: a.cardSummary, preparedContent: content, executionRecipe: a.executionRecipe,
-                       recipient: recipient,
-                       buttonText: a.buttonText, detailLabel: a.detailLabel, sources: a.sources,
-                       reviewNote: a.reviewNote)
+        var copy = a
+        copy.preparedContent = content
+        copy.recipient = recipient
+        return copy
     }
 
     /// Send a card flying along `v` (a flick's predicted translation), then reflow the scatter.

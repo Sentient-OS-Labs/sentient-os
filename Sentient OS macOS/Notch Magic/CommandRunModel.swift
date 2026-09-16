@@ -105,10 +105,10 @@ final class CommandRunModel {
                     // every leg; card fires never pass through here (beginExternalRun skips start()).
                     let routerRan = CommandRouter.isActive   // skipped → no telemetry row either
                     let routerStart = Date()
-                    if case .connector(let slug, let name, let operation, let mailOperation) = await CommandRouter.route(task0) {
+                    if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation) = await CommandRouter.route(task0) {
                         let routerMs = Int(Date().timeIntervalSince(routerStart) * 1000)
                         try Task.checkCancellation()   // a STOP during routing must never keep going
-                        if try await self?.connectorLeg(task0, slug: slug, name: name, operation: operation, mailOperation: mailOperation,
+                        if try await self?.connectorLeg(task0, slug: slug, name: name, operation: operation, mailOperation: mailOperation, calendarOperation: calendarOperation,
                                                         screenshots: shots, kbContext: kb,
                                                         started: started) != false {
                             CommandRouter.recordOutcome(route: "connector", slug: slug,
@@ -190,7 +190,7 @@ final class CommandRunModel {
     /// (including the fail-closed unclassified-slug refusal) prints one honest line and the
     /// caller continues the SAME run into computer use, reusing the screenshots already
     /// captured. A user STOP rethrows so the caller's catch keeps its honest "stopped".
-    private func connectorLeg(_ task0: String, slug: String, name: String, operation: SlackConnector.Operation?, mailOperation: OutlookMailConnector.Operation?,
+    private func connectorLeg(_ task0: String, slug: String, name: String, operation: SlackConnector.Operation?, mailOperation: OutlookMailConnector.Operation?, calendarOperation: OutlookCalendarConnector.Operation?,
                               screenshots: [URL], kbContext: String,
                               started: Date) async throws -> Bool {
         executedMethod = "mcp"
@@ -205,6 +205,7 @@ final class CommandRunModel {
         inv.mcpActionServer = slug
         inv.slackOperation = operation
         inv.outlookOperation = mailOperation
+        inv.outlookCalendarOperation = calendarOperation
         inv.imagePaths = screenshots.map(\.path)
         Log("CMD: routed → \(slug) (screen-free connector spine · screenshots: \(screenshots.count))")
         #if DEBUG
@@ -238,7 +239,7 @@ final class CommandRunModel {
                          statusPresent: false)
                 return true
             case .couldNot(let reason):
-                if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug].contains(slug) {
+                if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
                     complete(.failed, line: reason.isEmpty ? AgentStatus.unconfirmedConnectorMessage : reason,
                              statusPresent: true)
                     return true // a remote write may have succeeded; never repeat it on screen
@@ -251,7 +252,7 @@ final class CommandRunModel {
             }
         } catch {
             try Task.checkCancellation()   // the user's STOP → the caller's honest "stopped"
-            if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug].contains(slug) {
+            if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
                 complete(.failed, line: (error as? DirectMCPError)?.errorDescription ?? AgentStatus.unconfirmedConnectorMessage,
                          statusPresent: false)
                 return true

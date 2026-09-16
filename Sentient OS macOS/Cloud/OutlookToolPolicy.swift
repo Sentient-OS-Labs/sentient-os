@@ -17,12 +17,14 @@ nonisolated enum OutlookToolPolicy {
     }
     static func rule(backend: ModelBackend, operation: OutlookMailConnector.Operation, runID: UUID,
                      mode: MCPSource.ReadMode? = nil, window: MCPSource.Window? = nil,
-                     expectedMessage: String? = nil, expectedRecipients: [String]? = nil) -> HostedToolPolicy.Rule {
+                     expectedMessage: String? = nil, expectedRecipients: [String]? = nil,
+                     calendar: OutlookCalendarToolPolicy.Context? = nil, includesMail: Bool = true) -> HostedToolPolicy.Rule {
         let executable = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
-        let args = [backend.rawValue, operation.rawValue, runID.uuidString, mode?.rawValue ?? "-",
+        var args = [backend.rawValue, operation.rawValue, runID.uuidString, mode?.rawValue ?? "-",
                     window.map { String($0.lower.timeIntervalSince1970) } ?? "-",
                     window.map { String($0.upper.timeIntervalSince1970) } ?? "-", expectedMessage.map(hash) ?? "-",
                     expectedRecipients.map(recipientHash) ?? "-"]
+        if let calendar { args += [includesMail ? "1" : "0", calendar.encoded] }
         return .init(matcher: ".*([Oo]utlook|[Mm]icrosoft_365).*",
             command: DirectMCPRuntime.shellQuote(executable) + " --outlook-tool-policy "
                 + args.map(DirectMCPRuntime.shellQuote).joined(separator: " ")
@@ -85,11 +87,12 @@ nonisolated enum OutlookToolPolicy {
     }
     static func claudeSettings(_ base: String, operation: OutlookMailConnector.Operation, runID: UUID,
                                mode: MCPSource.ReadMode? = nil, window: MCPSource.Window? = nil,
-                               expectedMessage: String? = nil, expectedRecipients: [String]? = nil) throws -> String {
+                               expectedMessage: String? = nil, expectedRecipients: [String]? = nil,
+                               calendar: OutlookCalendarToolPolicy.Context? = nil, includesMail: Bool = true) throws -> String {
         let pre = rule(backend: .claude, operation: operation, runID: runID, mode: mode, window: window,
-                       expectedMessage: expectedMessage, expectedRecipients: expectedRecipients)
+                       expectedMessage: expectedMessage, expectedRecipients: expectedRecipients, calendar: calendar, includesMail: includesMail)
         let settings = try HostedToolPolicy.claudeSettings(base, adding: pre)
-        guard operation != .read else { return settings }
+        guard includesMail, operation != .read else { return settings }
         let post = HostedToolPolicy.Rule(matcher: "^mcp__claude_ai_Microsoft_365__outlook_create_(?:reply_(?:all_)?)?draft$", command: pre.command)
         return try HostedToolPolicy.claudeSettings(settings, adding: post, event: "PostToolUse")
     }
@@ -109,12 +112,12 @@ nonisolated enum OutlookToolPolicy {
             && (info.st_mode & S_IFMT) == S_IFREG
     }
     static func claim(runID: UUID, kind: String, limit: Int) -> Bool {
-        guard (1...16).contains(limit), ["send", "draft", "discovery", "open"].contains(kind) else { return false }
+        guard (1...16).contains(limit), ["send", "draft", "discovery", "open", "calendar-create", "calendar-discovery", "calendar-open"].contains(kind) else { return false }
         for index in 0..<limit where HostedToolPolicy.claim(marker(runID, kind: kind, index: index)) { return true }
         return false
     }
     static func cleanup(runID: UUID) {
-        for kind in ["send", "draft", "discovery", "open"] {
+        for kind in ["send", "draft", "discovery", "open", "calendar-create", "calendar-discovery", "calendar-open"] {
             for index in 0..<16 { try? FileManager.default.removeItem(at: marker(runID, kind: kind, index: index)) }
         }
         let prefix = "sentient-outlook-\(getuid())-\(runID.uuidString)-reply-"
@@ -126,11 +129,17 @@ nonisolated enum OutlookToolPolicy {
         }
     }
     static func runHelper(arguments: [String]) -> Int32 {
-        guard arguments.count == 10, let backend = ModelBackend(rawValue: arguments[2]), backend != .custom,
+        guard [10, 12].contains(arguments.count), let backend = ModelBackend(rawValue: arguments[2]), backend != .custom,
               let operation = OutlookMailConnector.Operation(rawValue: arguments[3]),
               let runID = UUID(uuidString: arguments[4]), arguments[8] == "-"
                 || arguments[8].range(of: "^[0-9a-f]{64}\\z", options: .regularExpression) != nil,
               arguments[9] == "-" || arguments[9].range(of: "^[0-9a-f]{64}\\z", options: .regularExpression) != nil else { return reject() }
+        let calendar: OutlookCalendarToolPolicy.Context?
+        let includesMail: Bool
+        if arguments.count == 12 {
+            guard ["0", "1"].contains(arguments[10]), let parsed = OutlookCalendarToolPolicy.Context.decode(arguments[11]) else { return reject() }
+            calendar = parsed; includesMail = arguments[10] == "1"
+        } else { calendar = nil; includesMail = true }
         let mode: MCPSource.ReadMode?
         let window: MCPSource.Window?
         if arguments[5] == "-" {
@@ -146,7 +155,7 @@ nonisolated enum OutlookToolPolicy {
             let envelope = try HostedToolPolicy.readEnvelope()
             guard let name = envelope["tool_name"] as? String, let input = envelope["tool_input"] as? [String: Any] else { return reject() }
             if envelope["hook_event_name"] as? String == "PostToolUse" {
-                guard backend == .claude, ["outlook_create_draft", "outlook_create_reply_draft", "outlook_create_reply_all_draft"].contains(OutlookMailConnector.bareName(name, backend: backend) ?? ""),
+                guard includesMail, backend == .claude, ["outlook_create_draft", "outlook_create_reply_draft", "outlook_create_reply_all_draft"].contains(OutlookMailConnector.bareName(name, backend: backend) ?? ""),
                       allowed(name: name, input: input, backend: backend, operation: operation, expectedHash: arguments[8] == "-" ? nil : arguments[8],
                               expectedRecipientsHash: arguments[9] == "-" ? nil : arguments[9]),
                       let value = envelope["tool_response"] else { return reject() }
@@ -164,7 +173,23 @@ nonisolated enum OutlookToolPolicy {
                 return 0
             }
             guard envelope["hook_event_name"] as? String == "PreToolUse" else { return reject() }
-            var allow = allowed(name: name, input: input, backend: backend, operation: operation,
+            if let calendar, !includesMail || OutlookCalendarToolPolicy.handles(name, input: input, backend: backend) {
+                var allow = OutlookCalendarToolPolicy.allowed(name: name, input: input, backend: backend, context: calendar)
+                if allow, let bare = OutlookCalendarConnector.bareName(name, backend: backend) {
+                    if bare == OutlookCalendarConnector.createTool(backend) {
+                        allow = claim(runID: runID, kind: "calendar-create", limit: 1)
+                        if allow, let creation = OutlookCalendarToolPolicy.Creation(input: input, backend: backend) {
+                            allow = OutlookCalendarToolPolicy.reserve(creation, context: calendar)
+                        } else { allow = false }
+                    } else if calendar.purpose != nil {
+                        let discovery = ["list_events", "outlook_calendar_search"].contains(bare)
+                        allow = claim(runID: runID, kind: discovery ? "calendar-discovery" : "calendar-open",
+                                      limit: discovery ? calendar.discoveryCap : calendar.detailCap)
+                    }
+                }
+                return try HostedToolPolicy.respond(allowed: allow, service: "Outlook Calendar")
+            }
+            var allow = includesMail && allowed(name: name, input: input, backend: backend, operation: operation,
                 mode: mode, window: window, expectedHash: arguments[8] == "-" ? nil : arguments[8],
                 expectedRecipientsHash: arguments[9] == "-" ? nil : arguments[9])
             if allow, let bare = OutlookMailConnector.bareName(name, backend: backend) {

@@ -28,6 +28,7 @@ enum FactoryReset {
         await CycleStore.shared.wipeEverything()
         try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
         ProactiveCycle.resetAll()
+        try? FileManager.default.removeItem(at: OutlookCalendarToolPolicy.pendingDirectory)
         LifetimeStats.reset()
         try? await MirrorClient.shared.deleteRemote()   // best-effort — offline reset still works
         let d = UserDefaults.standard

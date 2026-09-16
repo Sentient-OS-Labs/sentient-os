@@ -13,6 +13,7 @@ extension MCPSource {
 
     static func promptRevision(slug: String) -> String {
         switch ConnectorRegistry.pack(forSlug: slug)?.slug {
+        case OutlookCalendarConnector.slug: OutlookCalendarSource.revision
         case OutlookMailConnector.slug: OutlookMailSource.revision
         case "notion": notionPromptRevision
         case "granola": granolaPromptRevision
@@ -112,7 +113,8 @@ extension MCPSource {
     }
 
     static func prompt(slug: String, name: String, backend: ModelBackend,
-                       mode: ReadMode, window: Window) -> String {
+                       mode: ReadMode, window: Window, now: Date = Date()) -> String {
+        if slug == OutlookCalendarConnector.slug { return OutlookCalendarSource.prompt(backend: backend, mode: mode, window: window, now: now) }
         if slug == OutlookMailConnector.slug { return OutlookMailSource.prompt(backend: backend, mode: mode, window: window) }
         if slug == "slack" { return SlackSource.prompt(mode: mode, window: window) }
         if ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" {

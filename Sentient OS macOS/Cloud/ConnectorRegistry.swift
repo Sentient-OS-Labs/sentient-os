@@ -63,6 +63,7 @@ nonisolated enum ConnectorRegistry {
         /// refuses Codex unattended reads; never infer it from the Claude classifier cache.
         var codexReadTools: [String]? = nil
         var kbAdapter: KBAdapter = .generic
+        var providesCalendarContext = false
         /// True while the read list is a captured-but-unverified surface — the Step 3 chats
         /// mark fresh captures with it until their live re-verify confirms them.
         var capturedProvisional = false
@@ -106,7 +107,8 @@ nonisolated enum ConnectorRegistry {
                                          prefix: "mcp__claude_ai_Google_Calendar__"),
                          codexReadTools: ["search", "search_events", "fetch", "read_event",
                                           "batch_read_event", "list_calendars", "get_availability"],
-                         kbAdapter: .windowedMonthly),
+                         kbAdapter: .windowedMonthly,
+                         providesCalendarContext: true),
         // Drive's read list was captured live 2026-08-26 and re-verified 2026-08-29 (the
         // classifier eval). The live surface has since GROWN server-side (new write/destructive
         // tools appeared within days — why the classifier cache carries a weekly TTL); the six
@@ -154,7 +156,16 @@ nonisolated enum ConnectorRegistry {
                          readTools: OutlookMailConnector.claudeReads,
                          codexReadTools: OutlookMailConnector.codexReads,
                          kbAdapter: .windowedWeekly),
-        CuratedConnector(slug: "outlook-calendar", displayName: "Outlook Calendar"),
+        CuratedConnector(slug: "outlook-calendar", displayName: "Outlook Calendar",
+                         routerDescription: "read the connected primary Outlook calendar and check availability; create events; no calendar deletion, existing-event updates, RSVP or shared calendars",
+                         claudeName: Microsoft365Connector.name,
+                         claudeServerURL: Microsoft365Connector.url,
+                         claudeToolPrefix: Microsoft365Connector.prefix,
+                         codexSlug: "outlook-calendar",
+                         readTools: OutlookCalendarConnector.claudeReads,
+                         codexReadTools: OutlookCalendarConnector.codexReads,
+                         kbAdapter: .windowedMonthly,
+                         providesCalendarContext: true),
         CuratedConnector(slug: "teams", displayName: "Teams"),
     ]
 
@@ -287,6 +298,21 @@ nonisolated enum ConnectorRegistry {
                 excluded += 1
             }
         }
+        // A shared physical server needs one complement of the union of requested services.
+        let suite = attached.filter { Microsoft365Connector.contains($0.server.slug) }
+        if !suite.isEmpty {
+            let allowed = suite.flatMap { attachment in
+                (attachment.server.slug == OutlookMailConnector.slug
+                    ? OutlookMailConnector.actionTools(.claude, operation: .write)
+                    : OutlookCalendarConnector.actionTools(.claude, operation: .read))
+                    .map { Microsoft365Connector.prefix + $0 }
+            }
+            let denied = Microsoft365Connector.denied(except: allowed)
+            attached = attached.map { attachment in
+                guard Microsoft365Connector.contains(attachment.server.slug) else { return attachment }
+                return .init(server: attachment.server, denies: denied, readOnly: attachment.server.slug == OutlookCalendarConnector.slug)
+            }
+        }
         return (attached, excluded)
     }
 
@@ -302,6 +328,7 @@ nonisolated enum ConnectorRegistry {
     /// Provider-specific completion details for user-fired tasks, separate from router scope.
     static func actionInstructions(slug: String) -> String {
         if OutlookMailConnector.isMail(slug) { return OutlookMailConnector.actionInstructions }
+        if slug == OutlookCalendarConnector.slug { return OutlookCalendarConnector.actionInstructions }
         if slug == "slack" { return SlackConnector.actionInstructions }
         if pack(forSlug: slug)?.slug == "granola" {
             return """
@@ -383,7 +410,7 @@ nonisolated enum ConnectorRegistry {
             slugs += ConnectorCensus.cached(for: .chatgpt).map(\.slug)
             gmailWritesLive = slugs.contains("gmail")
             entries = slugs.map { Entry(slug: $0, name: displayName(slug: $0),
-                                        note: pack(forSlug: $0)?.routerDescription) }
+                                        note: $0 == OutlookCalendarConnector.slug ? "read-only in this run" : pack(forSlug: $0)?.routerDescription) }
         }
         guard !entries.isEmpty else { return "" }
         let list = entries.map { entry in
@@ -393,7 +420,7 @@ nonisolated enum ConnectorRegistry {
         let example = gmailWritesLive
             ? " (send email through the Gmail tools, never by driving a mail app's window)."
             : "."
-        let block = """
+        var block = """
         CONNECTED SERVICES (real tools available in this run):
         \(list)
 
@@ -405,6 +432,13 @@ nonisolated enum ConnectorRegistry {
         + (entries.contains(where: { $0.slug == "slack" }) ? "\n\n" + SlackConnector.actionInstructions : "")
         + (entries.contains(where: { $0.slug == OutlookMailConnector.slug }) ? "\n\n" + OutlookMailConnector.actionInstructions
            + "\nWhen Gmail and Outlook are both connected, identify the intended mailbox from the user's request or visible context. If it is unclear, ask which mailbox; never silently default to Gmail." : "")
+        if entries.contains(where: { $0.slug == OutlookCalendarConnector.slug }) {
+            block += "\n\n" + OutlookCalendarConnector.actionInstructions
+                + "\nThis wider run can only read Outlook Calendar. Creation is supported through a dedicated Outlook Calendar task, where the account and created event are independently verified. Do not work around this restriction through the screen."
+            if entries.contains(where: { $0.slug == "google-calendar" }) {
+                block += "\nGoogle and Outlook calendars are both connected. If the intended calendar is unclear, ask which provider; do not silently choose Google. An explicit request to check both may read both."
+            }
+        }
         Log("connected services: \(entries.count) service(s) in the prompt block")
         #if DEBUG
         Log("connected services block: +\(block.utf8.count) bytes")
@@ -445,6 +479,7 @@ nonisolated enum ConnectorRegistry {
         let usable = classified.filter {
             ($0.slug != "slack" || SlackConnector.cachedIdentity() != nil)
                 && ($0.slug != OutlookMailConnector.slug || OutlookMailConnector.cachedFingerprint() != nil)
+                && ($0.slug != OutlookCalendarConnector.slug || OutlookCalendarConnector.cachedFingerprint() != nil)
         }
         if usable.count != detected.count {
             Log("cardChannels: \(detected.count - usable.count) connector(s) without verified action context not offered yet")
@@ -549,7 +584,10 @@ nonisolated enum ConnectorRegistry {
         var verifiedInventory: [String]? = nil
     }
 
-    static func classificationKey(_ slug: String) -> String { "mcp.classified.\(slug)" }
+    // Both logical services classify the same physical suite; preserve the existing Mail key.
+    static func classificationKey(_ slug: String) -> String {
+        "mcp.classified.\(Microsoft365Connector.contains(slug) ? OutlookMailConnector.slug : slug)"
+    }
 
     static func classification(for slug: String) -> Classification? {
         guard let data = UserDefaults.standard.data(forKey: classificationKey(slug)) else { return nil }

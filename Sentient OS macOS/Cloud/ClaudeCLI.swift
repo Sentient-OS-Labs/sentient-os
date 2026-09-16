@@ -144,8 +144,8 @@ actor ClaudeCLI {
         var environment = baseEnv
         if invocation.mcpAttachServer == "slack" || invocation.mcpActionServer == "slack"
             || (invocation.connectorOnlyRead && invocation.mcpReadConnectors == ["slack"])
-            || invocation.mcpAttachServer == OutlookMailConnector.slug || invocation.mcpActionServer == OutlookMailConnector.slug
-            || invocation.mcpReadConnectors.contains(OutlookMailConnector.slug) {
+            || Microsoft365Connector.contains(invocation.mcpAttachServer ?? "") || Microsoft365Connector.contains(invocation.mcpActionServer ?? "")
+            || invocation.mcpReadConnectors.contains(where: Microsoft365Connector.contains) {
             // Inventory must inspect every schema. Source reads expose only their small
             // reviewed subset, so deferred tool search adds cost and can hide that subset.
             environment["ENABLE_TOOL_SEARCH"] = "false"
@@ -476,6 +476,11 @@ actor ClaudeCLI {
                 recipeAllows = OutlookMailConnector.actionTools(.claude, operation: operation).map { prefix + $0 }
                 recipeDenies = OutlookMailConnector.claudeCategories.keys.map { prefix + $0 }.filter { !recipeAllows.contains($0) }.sorted()
             }
+            if slug == OutlookCalendarConnector.slug {
+                guard let operation = inv.outlookCalendarOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+                recipeAllows = OutlookCalendarConnector.actionTools(.claude, operation: operation).map { prefix + $0 }
+                recipeDenies = Microsoft365Connector.denied(except: recipeAllows)
+            }
             if slug == "slack" {
                 recipeDenies = SlackConnector.categories(backend: .claude).keys.map { prefix + $0 }
                     .filter { !recipeAllows.contains($0) }.sorted()
@@ -495,9 +500,6 @@ actor ClaudeCLI {
                 }
                 recipeWallURLs.append(url)
                 recipeAllows += reads
-                if slug == OutlookMailConnector.slug {
-                    recipeDenies += OutlookMailConnector.claudeCategories.keys.map { prefix + $0 }.filter { !reads.contains($0) }.sorted()
-                }
                 if slug == "slack" {
                     // DontAsk remains the permission boundary. Removing the reviewed complement
                     // also avoids paying for unrelated canvas/list/upload schemas on every read.
@@ -505,6 +507,9 @@ actor ClaudeCLI {
                         .map { prefix + $0 }.filter { !reads.contains($0) }.sorted()
                 }
             }
+        }
+        if inv.mcpReadConnectors.contains(where: Microsoft365Connector.contains) {
+            recipeDenies += Microsoft365Connector.denied(except: recipeAllows)
         }
         recipeAllows += direct.flatMap(\.allAllowed)
         recipeDenies += direct.flatMap(\.denied)
@@ -532,12 +537,12 @@ actor ClaudeCLI {
             args += ["--settings", settings]
         }
 
-        if inv.mcpActionServer == OutlookMailConnector.slug || inv.mcpReadConnectors.contains(OutlookMailConnector.slug) {
+        if inv.includesOutlookMail || inv.calendarPolicy != nil {
             guard let index = args.lastIndex(of: "--settings"), index + 1 < args.count else { throw MCPSource.MCPError.noReadSurface(slug: OutlookMailConnector.slug) }
             args[index + 1] = try OutlookToolPolicy.claudeSettings(args[index + 1],
                 operation: inv.mcpActionServer == nil ? .read : (inv.outlookOperation ?? .read), runID: inv.outlookRunID ?? UUID(),
                 mode: inv.outlookReadMode, window: inv.outlookReadWindow, expectedMessage: inv.outlookExpectedMessage,
-                expectedRecipients: inv.outlookExpectedRecipients)
+                expectedRecipients: inv.outlookExpectedRecipients, calendar: inv.calendarPolicy, includesMail: inv.includesOutlookMail)
         }
 
         var allowed = recipeAllows
@@ -579,10 +584,10 @@ actor ClaudeCLI {
         if inv.sandbox == .readOnly, !skippedPermissions {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
-            var tools = inv.connectorOnlyRead || inv.toolsDisabled || inv.mcpActionServer == OutlookMailConnector.slug ? [] : ["Bash", "Glob", "Grep", "Read"]
+            var tools = inv.connectorOnlyRead || inv.toolsDisabled || Microsoft365Connector.contains(inv.mcpActionServer ?? "") ? [] : ["Bash", "Glob", "Grep", "Read"]
             if inv.mcpAttachServer == "slack" || inv.mcpActionServer == "slack" || inv.mcpReadConnectors.contains("slack")
-                || inv.mcpAttachServer == OutlookMailConnector.slug || inv.mcpActionServer == OutlookMailConnector.slug
-                || inv.mcpReadConnectors.contains(OutlookMailConnector.slug) {
+                || Microsoft365Connector.contains(inv.mcpAttachServer ?? "") || Microsoft365Connector.contains(inv.mcpActionServer ?? "")
+                || inv.mcpReadConnectors.contains(where: Microsoft365Connector.contains) {
                 tools.append("WaitForMcpServers")
                 allowed.append("WaitForMcpServers")
             }
@@ -690,9 +695,12 @@ actor ClaudeCLI {
         if attached.contains(where: { $0.server.slug == "slack" }), let index = mcpWall.firstIndex(of: "--settings") {
             mcpWall[index + 1] = try SlackToolPolicy.claudeSettings(mcpWall[index + 1])
         }
-        if attached.contains(where: { $0.server.slug == OutlookMailConnector.slug }), let index = mcpWall.firstIndex(of: "--settings") {
+        let mail = attached.contains { $0.server.slug == OutlookMailConnector.slug }
+        let calendar = attached.contains { $0.server.slug == OutlookCalendarConnector.slug }
+        if mail || calendar, let index = mcpWall.firstIndex(of: "--settings") {
             mcpWall[index + 1] = try OutlookToolPolicy.claudeSettings(mcpWall[index + 1],
-                operation: .write, runID: OutlookToolPolicy.computerRunID ?? UUID())
+                operation: .write, runID: OutlookToolPolicy.computerRunID ?? UUID(),
+                calendar: calendar ? .init(operation: .read) : nil, includesMail: mail)
         }
         Log("claude agent: connectors attached=\(attached.count) excluded=\(excluded)")
         return ["-p", prompt,

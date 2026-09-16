@@ -98,6 +98,14 @@ enum ConnectorLab {
         case "policycheck": ConnectorReadPolicyTests.run()
         case "curationcheck": await ConnectorCurationTests.run()
         case "slackcheck": SlackCurationTests.run()
+        case "calendarjudge": await OutlookCalendarProactiveTests.judge()
+        case "calendarresearch": await OutlookCalendarProactiveTests.research()
+        case "calendarcontent": await OutlookCalendarContentFixtures.run()
+        case "calendarreceipt": await OutlookCalendarCurationTests.receipt()
+        case "calendarpolicy": await OutlookCalendarCurationTests.policy()
+        case "calendarcheck": await OutlookCalendarCurationTests.run()
+        case "calendaract": await OutlookCalendarCurationTests.act()
+        case "calendarcontext": await OutlookCalendarCurationTests.context()
         case "outlookcheck": await OutlookCurationTests.run()
         case "outlookreceipt": await OutlookCurationTests.receiptCheck()
         case "outlooksend": await OutlookCurationTests.sendTest()
@@ -460,7 +468,7 @@ enum ConnectorLab {
                 Log("  eval: FAIL (Slack classification disagrees with the reviewed inventory)")
                 return false
             }
-        case OutlookMailConnector.slug:
+        case OutlookMailConnector.slug, OutlookCalendarConnector.slug:
             do {
                 try OutlookMailConnector.validateClassification(tools)
                 Log("  eval: PASS (complete Microsoft 365 inventory and reviewed categories)")
@@ -833,23 +841,33 @@ enum ConnectorLab {
                 + "LAB_CMD=census first (or link a connector), then re-run.")
             return
         }
-        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion", "granola", "slack", "outlook-mail"].compactMap { slug -> CommandRouter.Service? in
+        let services = fixtures ? ["gmail", "google-calendar", "google-drive", "notion", "granola", "slack", "outlook-mail", "outlook-calendar"].compactMap { slug -> CommandRouter.Service? in
             guard let pack = ConnectorRegistry.pack(forSlug: slug) else { return nil }
             return .init(slug: slug, name: pack.displayName, description: pack.routerDescription ?? "")
         } : CommandRouter.routableServices()
         let routable = services.map(\.slug)
         Log("routable services: \(routable.joined(separator: ", "))")
 
+        let calendarDefault: ExpectedRoute = routable.contains("google-calendar") && routable.contains("outlook-calendar")
+            ? .computer : (routable.contains("outlook-calendar") ? .connector("outlook-calendar") : .connector("google-calendar"))
         let deck: [(String, ExpectedRoute)] = [
             // Pure connector — the whole task fits one service's tools.
-            ("what's on my calendar Friday",                          .connector("google-calendar")),
+            ("what's on my calendar Friday",                          calendarDefault),
             ("what are the newest files in my Drive",                 .connector("google-drive")),
             ("search Gmail for email about the lease",                .connector("gmail")),
             ("send an email through Gmail to Jesai saying the build is green", .connector("gmail")),
-            ("do I have any meetings tomorrow morning",               .connector("google-calendar")),
+            ("do I have any meetings tomorrow morning",               calendarDefault),
             ("search my drive for the pitch deck and tell me who has access to it",
                                                                       .connector("google-drive")),
             ("when is my next flight? it should be in my Gmail",       .connector("gmail")),
+            ("show my Google Calendar events Friday",                 .connector("google-calendar")),
+            ("show my Outlook Calendar events Friday",                .connector("outlook-calendar")),
+            ("find open time on my Outlook calendar tomorrow",         .connector("outlook-calendar")),
+            ("create one Outlook Calendar appointment tomorrow at 3 PM for 15 minutes, no attendees", .connector("outlook-calendar")),
+            ("check both Google Calendar and Outlook Calendar tomorrow", .computer),
+            ("delete my Outlook Calendar event",                      .computer),
+            ("move my Outlook Calendar appointment to Friday",         .computer),
+            ("show events from the shared support calendar in Outlook", .computer),
             ("search Outlook for email about the lease",              .connector("outlook-mail")),
             ("create one unsent Outlook draft to alex@example.invalid saying the build is green", .connector("outlook-mail")),
             ("send one Outlook email to alex@example.invalid saying the build is green", .connector("outlook-mail")),
@@ -890,6 +908,10 @@ enum ConnectorLab {
             "send one Outlook email to alex@example.invalid saying the build is green": .send,
             "reply in Outlook to the newest email from alex@example.invalid saying yes": .reply,
             "forward the newest Outlook email from alex@example.invalid to pat@example.invalid": .forward]
+        let calendarOperations: [String: OutlookCalendarConnector.Operation] = [
+            "show my Outlook Calendar events Friday": .read,
+            "find open time on my Outlook calendar tomorrow": .read,
+            "create one Outlook Calendar appointment tomorrow at 3 PM for 15 minutes, no attendees": .create]
         let ambiguous: [(String, ExpectedRoute)] = routable.contains("gmail") && routable.contains("outlook-mail")
             ? [("did anyone email me about the lease", .computer), ("search Gmail and Outlook for the lease", .computer)] : []
         var screenToConnector = 0, connectorToComputer = 0, otherMisses = 0, eitherComputer = 0
@@ -904,19 +926,22 @@ enum ConnectorLab {
             }
             let t0 = Date()
             let route = await CommandRouter.route(command, services: services)
-            if let wanted = mailOperations[command], case .connector(_, _, _, let operation) = route, operation != wanted {
+            if let wanted = mailOperations[command], case .connector(_, _, _, let operation, _) = route, operation != wanted {
                 otherMisses += 1; Log("FAIL Outlook operation: expected \(wanted.rawValue)")
+            }
+            if let wanted = calendarOperations[command], case .connector(_, _, _, _, let operation) = route, operation != wanted {
+                otherMisses += 1; Log("FAIL Calendar operation: expected \(wanted.rawValue)")
             }
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
             ran += 1; totalMS += ms
             let got: String
             switch route {
             case .computer:                  got = "computer"
-            case .connector(let slug, _, _, _):    got = "connector(\(slug))"
+            case .connector(let slug, _, _, _, _):    got = "connector(\(slug))"
             }
             let verdict: String
             switch (expected, route) {
-            case (.connector(let want), .connector(let slug, _, _, _)):
+            case (.connector(let want), .connector(let slug, _, _, _, _)):
                 if slug == want { verdict = "PASS " } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
             case (.connector, .computer):
                 connectorToComputer += 1; verdict = "miss  (→ computer, counts vs the ≤2 budget)"
@@ -928,7 +953,7 @@ enum ConnectorLab {
                 verdict = "PASS "
             case (.computer, .connector):
                 otherMisses += 1; verdict = "FAIL  (multi/oddball → connector)"
-            case (.either(let want), .connector(let slug, _, _, _)):
+            case (.either(let want), .connector(let slug, _, _, _, _)):
                 if slug == want { verdict = "PASS  (the better route)" } else { otherMisses += 1; verdict = "FAIL  (wrong slug)" }
             case (.either, .computer):
                 eitherComputer += 1; verdict = "PASS  (acceptable)"
@@ -978,6 +1003,7 @@ enum ConnectorLab {
         readInv.feature = "lab"
         var actInv = plain; actInv.mcpActionServer = slug
         if OutlookMailConnector.isMail(slug) { actInv.outlookOperation = .draft }
+        if slug == OutlookCalendarConnector.slug { actInv.outlookCalendarOperation = .create }
         var attachInv = plain; attachInv.mcpAttachServer = slug
         // The research read attachment, exactly as ProactiveResearch builds it (1.7): the two
         // chips + every KB-enabled connector.

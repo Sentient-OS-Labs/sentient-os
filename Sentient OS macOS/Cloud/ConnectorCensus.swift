@@ -151,7 +151,7 @@ nonisolated enum ConnectorCensus {
               let data = UserDefaults.standard.data(forKey: key),
               let decoded = try? JSONDecoder().decode([DetectedConnector].self, from: data)
         else { return [] }
-        return decoded.map(logicalService)
+        return logicalServices(decoded)
     }
 
     /// The observed provider identity remains in the endpoint/catalog fields. Outlook's
@@ -165,6 +165,27 @@ nonisolated enum ConnectorCensus {
         return DetectedConnector(slug: OutlookMailConnector.slug, displayName: "Outlook Mail",
             origin: connector.origin, serverURL: connector.serverURL, catalogID: connector.catalogID,
             iconPath: connector.iconPath, healthy: connector.healthy, lastSeen: connector.lastSeen)
+    }
+
+    /// Project the suite into distinct opt-in sources without duplicating already-normalized
+    /// cache records. The endpoint remains physical; toggles and checkpoints remain logical.
+    static func logicalServices(_ connectors: [DetectedConnector]) -> [DetectedConnector] {
+        var seen = Set<String>()
+        var result: [DetectedConnector] = []
+        for original in connectors {
+            let connector = logicalService(original)
+            let suite = connector.origin == .claude && connector.serverURL == Microsoft365Connector.url
+                && (connector.displayName == Microsoft365Connector.name || Microsoft365Connector.contains(connector.slug))
+            let slugs = suite ? [OutlookMailConnector.slug, "outlook-calendar"] : [connector.slug]
+            for slug in slugs {
+                let record = DetectedConnector(slug: slug,
+                    displayName: suite ? (slug == OutlookMailConnector.slug ? "Outlook Mail" : "Outlook Calendar") : connector.displayName,
+                    origin: connector.origin, serverURL: connector.serverURL, catalogID: connector.catalogID,
+                    iconPath: connector.iconPath, healthy: connector.healthy, lastSeen: connector.lastSeen)
+                if seen.insert(record.id).inserted { result.append(record) }
+            }
+        }
+        return result
     }
 
     // MARK: Watch mode (the "+ Connect Apps" polling window)
@@ -254,7 +275,7 @@ nonisolated enum ConnectorCensus {
     @discardableResult
     static func persist(_ connectors: [DetectedConnector],
                         for origin: DetectedConnector.Origin) -> [DetectedConnector] {
-        let connectors = connectors.map(logicalService)
+        let connectors = logicalServices(connectors)
         guard let key = storageKey(for: origin),
               let data = try? JSONEncoder().encode(connectors) else { return connectors }
         let old = cached(for: origin)
@@ -274,7 +295,7 @@ nonisolated enum ConnectorCensus {
             Analytics.signal("Connector.census", parameters: [
                 "origin": origin.rawValue, "count": String(connectors.count)])
         }
-        return connectors.map(logicalService)
+        return logicalServices(connectors)
     }
 
     // MARK: Claude — `claude mcp list`
@@ -352,7 +373,7 @@ nonisolated enum ConnectorCensus {
             // output format may have drifted. Report the shape, never the content.
             Log("ConnectorCensus.claude: parsed \(connectors.count) of \(candidates) claude.ai lines")
         }
-        return connectors.map(logicalService)
+        return logicalServices(connectors)
     }
 
     /// Read the health word, not the whole status: "✔ Connected" is healthy while "✘ Disconnected"
@@ -393,7 +414,7 @@ nonisolated enum ConnectorCensus {
                                                 healthy: true,
                                                 lastSeen: now))
         }
-        return connectors.map(logicalService)
+        return logicalServices(connectors)
     }
 
     /// The newest version directory, compared NUMERICALLY per component: a string sort reads

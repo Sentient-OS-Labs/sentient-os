@@ -12,9 +12,9 @@ import os
 nonisolated enum OutlookMailConnector {
     static let slug = "outlook-mail"
     static let codexSlug = "outlook-email"
-    static let claudeName = "Microsoft 365"
-    static let claudePrefix = "mcp__claude_ai_Microsoft_365__"
-    static let claudeURL = "https://microsoft365.mcp.claude.com/mcp"
+    static let claudeName = Microsoft365Connector.name
+    static let claudePrefix = Microsoft365Connector.prefix
+    static let claudeURL = Microsoft365Connector.url
     static func isMail(_ slug: String) -> Bool { [Self.slug, codexSlug].contains(slug) }
 
     enum Operation: String, Codable, Sendable { case read, draft, send, reply, forward, write }
@@ -164,9 +164,14 @@ nonisolated enum OutlookMailConnector {
     }
     static func identity(raw: String, backend: ModelBackend) throws -> Identity {
         let calls = MCPCallEvidence.receipts(raw: raw, backend: backend).filter { bareName($0, backend: backend) == profileTool(backend) }
-        guard calls.count == 1, let call = calls.first, object(call.arguments)?.isEmpty == true,
+        guard calls.count == 1, let call = calls.first else { throw MCPSource.MCPError.connectionChanged }
+        return try profileIdentity(call, backend: backend)
+    }
+    static func profileIdentity(_ call: MCPCallEvidence.Receipt, backend: ModelBackend, requiresUUID: Bool = true) throws -> Identity {
+        guard object(call.arguments)?.isEmpty == true,
               payloads(call).count == 1, let profile = payloads(call).first,
-              let id = profile["id"] as? String, UUID(uuidString: id) != nil,
+              let id = profile["id"] as? String, !id.isEmpty, id.utf8.count <= 512,
+              !id.contains(where: \.isWhitespace), (!requiresUUID || UUID(uuidString: id) != nil),
               let email = (profile[backend == .claude ? "mail" : "email"] as? String),
               email.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil else {
             throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "outlook_identity")
@@ -221,66 +226,10 @@ nonisolated enum OutlookMailConnector {
         }
         throw MCPSource.MCPError.toolFailure(slug: slug)
     }
-    /// Complete Microsoft 365 inventory checked against CLI 2.1.270. New names or changed
-    /// verdicts refuse action attachment until reviewed; allowed mail actions remain a subset.
-    static let claudeCategories: [String: ConnectorRegistry.ToolCategory] = [
-        "chat_message_search": .read,
-        "find_meeting_availability": .read,
-        "get_granted_scopes": .read,
-        "get_me": .read,
-        "outlook_batch_delete_messages": .destructive,
-        "outlook_batch_modify_labels": .write,
-        "outlook_calendar_search": .read,
-        "outlook_create_draft": .write,
-        "outlook_create_event": .write,
-        "outlook_create_filter": .write,
-        "outlook_create_label": .write,
-        "outlook_create_reply_all_draft": .write,
-        "outlook_create_reply_draft": .write,
-        "outlook_delete_draft": .destructive,
-        "outlook_delete_event": .destructive,
-        "outlook_delete_filter": .destructive,
-        "outlook_delete_label": .destructive,
-        "outlook_email_search": .read,
-        "outlook_find_available_time": .read,
-        "outlook_forward_mail": .write,
-        "outlook_modify_labels": .write,
-        "outlook_modify_thread_labels": .write,
-        "outlook_respond_to_event": .destructive,
-        "outlook_send_draft": .write,
-        "outlook_send_mail": .write,
-        "outlook_set_vacation": .write,
-        "outlook_trash_thread": .destructive,
-        "outlook_untrash_thread": .write,
-        "outlook_update_draft": .destructive,
-        "outlook_update_event": .destructive,
-        "outlook_update_label": .write,
-        "read_resource": .read,
-        "search_people": .read,
-        "sharepoint_copy_item": .write,
-        "sharepoint_create_folder": .write,
-        "sharepoint_delete_item": .destructive,
-        "sharepoint_folder_search": .read,
-        "sharepoint_move_item": .write,
-        "sharepoint_rename_item": .write,
-        "sharepoint_search": .read,
-        "sharepoint_update_file": .destructive,
-        "sharepoint_upload_file": .destructive,
-        "teams_create_chat": .write,
-        "teams_list_channel_messages": .read,
-        "teams_list_channels": .read,
-        "teams_list_chats": .read,
-        "teams_list_teams": .read,
-        "teams_reply_channel_message": .write,
-        "teams_send_channel_message": .write,
-        "teams_send_chat_message": .write,
-    ]
+    // Preserve the Mail query surface while the physical suite inventory has one owner.
+    static let claudeCategories = Microsoft365Connector.categories
     static func validateClassification(_ tools: [ConnectorRegistry.ClassifiedTool]) throws {
-        let expected = Dictionary(uniqueKeysWithValues: claudeCategories.map { (claudePrefix + $0.key, $0.value) })
-        guard tools.count == expected.count, Set(tools.map(\.name)).count == tools.count,
-              tools.allSatisfy({ expected[$0.name] == $0.category }) else {
-            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "outlook_classification")
-        }
+        try Microsoft365Connector.validateClassification(tools)
     }
 
 }

@@ -34,7 +34,7 @@ enum SlackCurationTests {
             case .computer:
                 if expected != nil { connectorFallbacks += 1 }
                 passed = expected == nil || connectorFallbacks <= 2
-            case .connector(let slug, _, let actual, _): passed = slug == expected && actual == operation
+            case .connector(let slug, _, let actual, _, _): passed = slug == expected && actual == operation
             }
             if !passed { failures += 1 }
             Log("\(passed ? "PASS" : "FAIL") Slack router: \(command)")

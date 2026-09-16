@@ -65,6 +65,11 @@ actor ProactiveExecutor {
                 guard let operation = action.outlookOperation, operation != .read, operation != .write,
                       let expected = action.connectorIdentity, expected == OutlookMailConnector.cachedFingerprint() else { return false }
             }
+            if slug == OutlookCalendarConnector.slug {
+                guard action.calendarOperation == .create, let expected = action.connectorIdentity,
+                      expected == OutlookCalendarConnector.cachedFingerprint(),
+                      OutlookCalendarActionEvidence.creationFromContent(action.preparedContent) != nil else { return false }
+            }
             return ConnectorRegistry.server(for: slug) != nil
         case .research:                    return false   // a briefing to read — nothing to fire
         }
@@ -102,7 +107,8 @@ actor ProactiveExecutor {
             } else if let slug = action.methodTarget, ConnectorRegistry.server(for: slug) != nil {
                 r = await fireMCP(slug: slug, channel: channel,
                                   routing: routing, content: content, expectedIdentity: action.connectorIdentity,
-                                  outlookOperation: action.outlookOperation, progress: progress)
+                                  outlookOperation: action.outlookOperation, calendarOperation: action.calendarOperation,
+                                  calendarIntentHash: OutlookToolPolicy.hash(action.id), progress: progress)
             } else {
                 r = .notFireable("This card's connector isn't connected anymore; nothing was fired.")
             }
@@ -211,13 +217,17 @@ actor ProactiveExecutor {
     /// curated slug or "other"); logs carry it, never a custom connector name.
     private func fireMCP(slug: String, channel: String, routing: String, content: String,
                          expectedIdentity: String?,
-                         outlookOperation: OutlookMailConnector.Operation?,
-                         progress: @escaping @Sendable (String) -> Void) async -> FireResult {
+                         outlookOperation: OutlookMailConnector.Operation?, calendarOperation: OutlookCalendarConnector.Operation?,
+                         calendarIntentHash: String?, progress: @escaping @Sendable (String) -> Void) async -> FireResult {
         if slug == "slack", expectedIdentity == nil {
             return .notFireable("This Slack card needs to be prepared again for the current connection.")
         }
         if OutlookMailConnector.isMail(slug), expectedIdentity == nil || outlookOperation == nil {
             return .notFireable("This Outlook card needs to be prepared again for the current mailbox.")
+        }
+        let creation = slug == OutlookCalendarConnector.slug ? OutlookCalendarActionEvidence.creationFromContent(content) : nil
+        if slug == OutlookCalendarConnector.slug, expectedIdentity == nil || calendarOperation != .create || creation == nil {
+            return .notFireable("This Outlook Calendar card needs valid event fields and a verified connection.")
         }
         let name = ConnectorRegistry.displayName(slug: slug)
         progress("Working through your \(name) connector…")
@@ -226,7 +236,8 @@ actor ProactiveExecutor {
                                    prompt: Self.mcpWrapper(name: name, routing: routing, content: content, outlookOperation: outlookOperation),
                                    expectedIdentity: expectedIdentity,
                                    expectedMessage: slug == "slack" || OutlookMailConnector.isMail(slug) ? content : nil,
-                                   outlookOperation: outlookOperation,
+                                   outlookOperation: outlookOperation, calendarOperation: calendarOperation,
+                                   calendarCreationHash: creation?.signature, calendarIntentHash: calendarIntentHash,
                                    progress: progress)
     }
 
@@ -238,6 +249,9 @@ actor ProactiveExecutor {
                                expectedIdentity: String? = nil,
                                expectedMessage: String? = nil,
                                outlookOperation: OutlookMailConnector.Operation? = nil,
+                               calendarOperation: OutlookCalendarConnector.Operation? = nil,
+                               calendarCreationHash: String? = nil,
+                               calendarIntentHash: String? = nil,
                                progress: @escaping @Sendable (String) -> Void) async -> FireResult {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = feature
@@ -250,6 +264,9 @@ actor ProactiveExecutor {
         inv.mcpActionServer = slug
         inv.mcpExpectedIdentity = expectedIdentity
         inv.outlookOperation = outlookOperation
+        inv.outlookCalendarOperation = calendarOperation
+        inv.outlookCalendarExpectedCreationHash = calendarCreationHash
+        inv.outlookCalendarIntentHash = calendarIntentHash
         if OutlookMailConnector.isMail(slug) { inv.outlookExpectedMessage = expectedMessage }
         if slug == "slack" { inv.slackOperation = .send; inv.slackExpectedMessage = expectedMessage }
         return await runConnector(inv, channel: channel, progress: progress)
