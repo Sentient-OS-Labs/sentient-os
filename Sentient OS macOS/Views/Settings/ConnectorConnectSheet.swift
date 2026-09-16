@@ -1,7 +1,8 @@
 //
 // ConnectorConnectSheet.swift
 // Gmail-style connection popup for catalog apps and all detected accounts. Uses the pane's live
-// discovery state; knowledge selection remains explicit and direct accounts retain their IDs.
+// discovery state and starts direct browser sign-in here. Knowledge selection remains explicit
+// and direct accounts retain their IDs.
 // Doc: Documentation - Settings.md
 //
 
@@ -16,7 +17,9 @@ struct ConnectorConnectSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var boundConnectorID: String?
-    @State private var showDirectSetup = false
+    @State private var connectionPhase: DirectMCPConnectPhase?
+    @State private var newConnectionID: UUID?
+    @State private var connectionCompleted = false
     @State private var checking = false
     @State private var disconnecting = false
     @State private var message: String?
@@ -34,12 +37,17 @@ struct ConnectorConnectSheet: View {
     }
 
     private var connector: ConnectorCensus.DetectedConnector? {
+        if let newConnectionID {
+            let id = DirectMCPStore.connection(id: newConnectionID)?.detected.id
+            return connectors.first { $0.id == id }
+        }
         if let boundConnectorID { return connectors.first { $0.id == boundConnectorID } }
         return connectors.first { ConnectorRegistry.pack(for: $0)?.slug == source.serviceSlug }
     }
 
     private var direct: DirectMCPConnection? {
-        connector.flatMap { DirectMCPStore.connection($0.slug) }
+        if let newConnectionID { return DirectMCPStore.connection(id: newConnectionID) }
+        return connector.flatMap { DirectMCPStore.connection($0.slug) }
     }
 
     private var usesDirect: Bool {
@@ -47,7 +55,16 @@ struct ConnectorConnectSheet: View {
     }
 
     private var healthy: Bool { connector?.healthy == true }
-    private var busy: Bool { checking || disconnecting }
+    private var connecting: Bool { connectionPhase != nil }
+    private var busy: Bool { connecting || checking || disconnecting }
+    private var connectTitle: String {
+        switch connectionPhase {
+        case .openingBrowser: "Opening sign-in…"
+        case .waitingForBrowser: "Waiting for sign-in…"
+        case .verifyingAccount, .checkingTools: "Verifying connection…"
+        case nil: connector == nil ? "Connect \(name)" : "Reconnect \(name)"
+        }
+    }
     private var name: String { ConnectorRegistry.pack(forSlug: source.serviceSlug)?.displayName ?? source.displayName }
     private var origin: ConnectorCensus.DetectedConnector.Origin? {
         (connector ?? source.connector)?.origin ?? .init(backend: ModelBackend.current)
@@ -86,8 +103,8 @@ struct ConnectorConnectSheet: View {
                 .padding(.top, 16)
             }
 
-            actionButton(connector == nil ? "Connect \(name)" : "Reconnect \(name)",
-                         primary: true, external: true, action: connect)
+            actionButton(connectTitle,
+                         primary: true, external: !connecting, action: connect)
                 .padding(.top, 26)
                 .disabled(busy || direct?.state == .verifying)
             actionButton(checking || refreshing ? "Checking…" : "Done", action: done)
@@ -118,13 +135,10 @@ struct ConnectorConnectSheet: View {
             // Once linked, never silently move this popup to another account of the service.
             if boundConnectorID == nil { boundConnectorID = id }
         }
-        .onChange(of: connector) { message = nil }
-        .onDisappear { operation?.cancel() }
-        .sheet(isPresented: $showDirectSetup) {
-            if let provider = direct?.provider ?? source.directProvider {
-                DirectMCPConnectView(existing: direct, provider: provider)
-            }
+        .onChange(of: connector) {
+            if !usesDirect && healthy { message = nil }
         }
+        .onDisappear(perform: cancelOperation)
     }
 
     @ViewBuilder private var serviceIcon: some View {
@@ -147,7 +161,9 @@ struct ConnectorConnectSheet: View {
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                if checking && !primary { ProgressView().controlSize(.mini) }
+                if (connecting && primary) || (checking && !primary) {
+                    ProgressView().controlSize(.mini)
+                }
                 Text(title).font(.system(size: primary ? 14 : 13.5, weight: primary ? .semibold : .medium))
                 if external { Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold)) }
             }
@@ -164,6 +180,17 @@ struct ConnectorConnectSheet: View {
         Group {
             if let message {
                 Text(message).foregroundStyle(Theme.Ink.amber)
+            } else if let connectionPhase {
+                switch connectionPhase {
+                case .openingBrowser:
+                    Text("Opening \(name)'s sign-in page…").foregroundStyle(Theme.Ink.body)
+                case .waitingForBrowser:
+                    Text("Finish signing in in your browser.").foregroundStyle(Theme.Ink.body)
+                case .verifyingAccount:
+                    Text("Signed in. Verifying your account…").foregroundStyle(Theme.Ink.body)
+                case .checkingTools:
+                    Text("Signed in. Checking available tools. This can take a moment.").foregroundStyle(Theme.Ink.body)
+                }
             } else if checking {
                 Text("Checking your connection…").foregroundStyle(Theme.Ink.body)
             } else if healthy {
@@ -184,9 +211,63 @@ struct ConnectorConnectSheet: View {
     }
 
     private func connect() {
+        guard !busy else { return }
         message = nil
-        if usesDirect { showDirectSetup = true }
-        else { onConnect() }
+        guard usesDirect else { onConnect(); return }
+        guard let provider = direct?.provider ?? source.directProvider else { return }
+        let existing = direct
+        let id = existing?.id ?? newConnectionID ?? UUID()
+        let label = existing?.label ?? nextAccountLabel(for: provider)
+        if existing == nil { newConnectionID = id }
+        connectionPhase = .openingBrowser
+        operation = Task {
+            defer { connectionPhase = nil }
+            do {
+                _ = try await DirectMCPConnections.shared.connect(provider: provider, label: label, replacing: id,
+                    onProgress: { phase in
+                        await MainActor.run {
+                            guard !Task.isCancelled else { return }
+                            connectionPhase = phase
+                        }
+                    })
+                guard !Task.isCancelled else { return }
+                connectionCompleted = true
+                if let connection = DirectMCPStore.connection(id: id) {
+                    boundConnectorID = connection.detected.id
+                    connectors.removeAll { $0.id == connection.detected.id }
+                    connectors.append(connection.detected)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                message = (error as? DirectMCPError)?.errorDescription
+                    ?? "The connection couldn't be verified. Please try again."
+            }
+        }
+    }
+
+    private func nextAccountLabel(for provider: DirectMCPProvider) -> String {
+        let accounts = DirectMCPStore.connections().filter { $0.providerSlug == provider.slug }
+        var label = "Account"
+        var number = 2
+        while accounts.contains(where: { $0.label.caseInsensitiveCompare(label) == .orderedSame }) {
+            label = "Account \(number)"
+            number += 1
+        }
+        return label
+    }
+
+    private func cancelOperation() {
+        let pending = operation
+        pending?.cancel()
+        guard let newConnectionID, !connectionCompleted else { return }
+        // Wait for OAuth cancellation to settle before removing this sheet's unfinished account.
+        // Reconnects retain their existing grant through DirectMCPConnections' recovery path.
+        Task {
+            await pending?.value
+            _ = try? await DirectMCPConnections.shared.disconnect(newConnectionID)
+        }
     }
 
     private func done() {

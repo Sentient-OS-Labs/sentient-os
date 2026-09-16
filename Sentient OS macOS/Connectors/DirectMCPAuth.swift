@@ -105,6 +105,7 @@ nonisolated enum DirectMCPAuth {
     }
 
     static func connect(_ connection: DirectMCPConnection,
+                        onProgress: @escaping @Sendable (DirectMCPConnectPhase) async -> Void = { _ in },
                         openBrowser: @escaping @Sendable (URL) async -> Bool = { url in
                             await MainActor.run { NSWorkspace.shared.open(url) }
                         }) async throws -> DirectMCPGrant {
@@ -168,6 +169,7 @@ nonisolated enum DirectMCPAuth {
                 if !discovery.scopes.isEmpty { url.queryItems?.append(.init(name: "scope", value: discovery.scopes.joined(separator: " "))) }
                 guard let authorizeURL = url.url, await openBrowser(authorizeURL) else { throw DirectMCPError.network }
                 await Log("Direct MCP: waiting for browser sign-in")
+                await onProgress(.waitingForBrowser)
                 let code = try await callback.response()
                 await Log("Direct MCP: browser response verified")
                 let reply = try await DirectMCPHTTP.request(discovery.token, provider: provider, method: "POST",
@@ -186,6 +188,7 @@ nonisolated enum DirectMCPAuth {
                 }
                 await Log("Direct MCP: access exchange complete")
                 try Task.checkCancellation()
+                await onProgress(.verifyingAccount)
                 return grant
             }
             group.addTask { try await Task.sleep(for: .seconds(300)); throw DirectMCPError.timedOut }

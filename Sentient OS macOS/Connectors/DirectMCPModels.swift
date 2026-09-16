@@ -40,6 +40,10 @@ nonisolated enum DirectMCPError: Error, LocalizedError {
     }
 }
 
+nonisolated enum DirectMCPConnectPhase: Sendable, Equatable {
+    case openingBrowser, waitingForBrowser, verifyingAccount, checkingTools
+}
+
 nonisolated struct DirectMCPProvider: Sendable, Equatable {
     let slug: String
     let name: String
@@ -76,9 +80,6 @@ nonisolated struct DirectMCPProvider: Sendable, Equatable {
         endpoint: URL(string: "https://mcp.notion.com/mcp")!,
         trustedOrigins: ["https://mcp.notion.com"], offlineScope: nil,
         reviewedReads: ["notion-fetch", "notion-list-recent-pages"], kbVerified: true)
-    static let linear = Self(slug: "linear", name: "Linear",
-        endpoint: URL(string: "https://mcp.linear.app/mcp")!,
-        trustedOrigins: ["https://mcp.linear.app"], offlineScope: nil, reviewedReads: [])
 
     static var catalog: [Self] { ConnectorRegistry.packs.compactMap(\.directProvider) }
     static func find(_ slug: String) -> Self? {
@@ -106,7 +107,7 @@ nonisolated struct DirectMCPProvider: Sendable, Equatable {
 }
 
 nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatable {
-    enum State: String, Codable, Sendable { case verifying, ready, unavailable, reconnect, policyRequired }
+    enum State: String, Codable, Sendable { case verifying, connected, ready, unavailable, reconnect, policyRequired }
     let id: UUID
     let providerSlug: String
     var label: String
@@ -132,6 +133,8 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
             && policyFingerprint == DirectMCPTool.fingerprint(tools)
     }
     static let currentPolicyRevision = 1
+    /// An authenticated account can be selected before its tools are prepared for a task.
+    var connected: Bool { state == .connected || usable }
     var usable: Bool { state == .ready && policyValid && !actionNames.isEmpty }
     var readNames: [String] {
         guard policyValid else { return [] }
@@ -148,7 +151,9 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
         return policy[tool.name] ?? .destructive
     }
     var kbEligible: Bool {
-        provider?.kbVerified == true && kbPolicyReady
+        guard provider?.kbVerified == true else { return false }
+        // Opt-in is available after login; the native reader verifies policy before reading.
+        return (state == .connected && provider?.reviewedReads.isEmpty == false) || kbPolicyReady
     }
     /// Curation can test this policy in an isolated store before enabling the production reader.
     var kbPolicyReady: Bool {
@@ -163,7 +168,7 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
     }
     var detected: ConnectorCensus.DetectedConnector {
         .init(slug: slug, displayName: displayName, origin: .direct, serverURL: provider?.endpoint.absoluteString,
-              catalogID: nil, iconPath: nil, healthy: usable, lastSeen: verifiedAt ?? .distantPast)
+              catalogID: nil, iconPath: nil, healthy: connected, lastSeen: verifiedAt ?? .distantPast)
     }
 }
 

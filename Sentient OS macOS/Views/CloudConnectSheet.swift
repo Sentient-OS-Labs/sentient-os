@@ -8,7 +8,7 @@
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
 //    Done       → refreshes ConnectorCensus (Claude health list / Codex refreshed plugin cache).
-//                 A healthy record selects the source, shows the green beat, and dismisses.
+//                 A healthy record selects the source, shows a success status, and dismisses.
 //                 A missing or unhealthy record shows a quiet amber retry line.
 //    ✕ (top-left) → closes without saving.
 //  Already connected → "Stop reading …" clears selection, not the provider connection.
@@ -61,7 +61,6 @@ struct CloudConnectSheet: View {
 
     private enum Phase { case idle, checking, connected, failed }
     @State private var phase: Phase
-    @State private var checkStart: Date?     // non-nil while the fill sweep runs (and through the green beat)
     @State private var operation: Task<Void, Never>?
 
     init(_ service: Service) {
@@ -113,7 +112,7 @@ struct CloudConnectSheet: View {
         .background(Theme.bg)
         .overlay(alignment: .topLeading) { closeButton.padding(12) }
         .onChange(of: connected) { _, linked in
-            if !linked && phase != .checking { phase = .idle; checkStart = nil }
+            if !linked && phase != .checking { phase = .idle }
         }
         .onChange(of: backendRaw) { operation?.cancel(); dismiss() }
         .onDisappear { operation?.cancel() }
@@ -124,7 +123,6 @@ struct CloudConnectSheet: View {
     private var connectButton: some View {
         Button {
             phase = .idle
-            checkStart = nil
             NSWorkspace.shared.open(service.connectorURL)
         } label: {
             HStack(spacing: 7) {
@@ -142,58 +140,26 @@ struct CloudConnectSheet: View {
 
     private var doneButton: some View {
         Button(action: done) {
-            Text(doneLabel)
-                .font(.system(size: 13.5, weight: .medium))
-                .foregroundStyle(Theme.Ink.bright)
-                .frame(maxWidth: .infinity, minHeight: 40)
-                .background {
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(.white.opacity(0.07))
-                        if let start = checkStart {
-                            GeometryReader { geo in
-                                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
-                                    Rectangle()
-                                        .fill(Theme.Ink.green.opacity(phase == .connected ? 0.3 : 0.22))
-                                        .frame(width: geo.size.width *
-                                               (phase == .connected ? 1 : checkFillFraction(since: start, at: ctx.date)))
-                                }
-                            }
-                            .clipShape(Capsule())
-                            .transition(.opacity)
-                        }
-                    }
-                    .animation(.easeOut(duration: 0.2), value: phase)
-                }
-                .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
-                .contentShape(Capsule())
+            HStack(spacing: 7) {
+                if phase == .checking { ProgressView().controlSize(.mini) }
+                Text(phase == .checking ? "Checking…" : "Done")
+                    .font(.system(size: 13.5, weight: .medium))
+            }
+            .foregroundStyle(Theme.Ink.bright)
+            .frame(maxWidth: .infinity, minHeight: 40)
+            .background(Capsule().fill(.white.opacity(0.07)))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+            .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
         .disabled(phase == .checking)
-    }
-
-    private var doneLabel: String {
-        switch phase {
-        case .checking: return "Checking…"
-        case .connected where checkStart != nil: return "Connected"
-        default: return "Done"
-        }
-    }
-
-    /// The check's fill sweep — deliberately non-linear so it reads as real work, not a timer:
-    /// fast out of the gate, decelerating to ~95% at 17s, then a slow asymptotic crawl.
-    /// The census result snaps it full (or clears it on failure).
-    private func checkFillFraction(since start: Date, at now: Date) -> CGFloat {
-        let t = now.timeIntervalSince(start)
-        let sweep = 0.95 * (1 - pow(1 - min(t / 17.0, 1), 2.2))
-        let crawl = t > 17 ? 0.04 * (1 - exp(-(t - 17) / 8)) : 0
-        return CGFloat(sweep + crawl)
     }
 
     private var closeButton: some View {
         CloseHoverButton { dismiss() }
     }
 
-    // MARK: - The status line (instruction → amber retry → green beat)
+    // MARK: - The status line (instruction → amber retry → success)
 
     private var statusLine: some View {
         Group {
@@ -221,12 +187,11 @@ struct CloudConnectSheet: View {
             .foregroundStyle(Theme.Ink.deepMuted)
     }
 
-    // MARK: - Done: verify, persist, and let the green beat land
+    // MARK: - Done: verify, persist, and briefly show success
 
     private func done() {
         if phase == .connected { dismiss(); return }
         phase = .checking
-        checkStart = Date()
         let backend = ModelBackend.current
         let wasConnected = connected
         operation = Task {
@@ -239,7 +204,6 @@ struct CloudConnectSheet: View {
                     phase = .connected
                 } else {
                     phase = .failed
-                    checkStart = nil          // the fill fades out with the retry line's arrival
                 }
             }
             if ok {

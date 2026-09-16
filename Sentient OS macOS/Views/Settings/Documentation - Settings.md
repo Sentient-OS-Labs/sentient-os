@@ -15,6 +15,7 @@ measure, one green.
 | `SettingsView.swift` | The shell: sidebar + detail, the `Pane` enum, `requestedPane` (a one-shot deep link consumed on appear), the `switchPane` notification (a pane deep-linking to a sibling), the update-gate overlay. |
 | `SettingsComponents.swift` | The shared pieces: `SettingsPane`, `SettingsGroup`, `SettingsProse`, `SettingToggleLine`, `SettingsPillButton`, `ChipFlow`, `SettingsChip`, `StatusLine` + `HealthDot`, `InfoTip`, `SettingsTextBox`, `SettingsHairline`, `LockedChipTip`. |
 | `SourcesPane.swift` | Knowledge Sources. |
+| `ConnectorsSection.swift` · `ConnectorConnectSheet.swift` | Connector catalog and account popups. Notion and Granola connect after browser sign-in and a native account check. Tool classification waits until use, and curated knowledge selection is available immediately. |
 | `FrontierModelPane.swift` | Frontier Model Choice (a thin wrapper over the shared `FrontierEnginePicker`). |
 | `ProactivePane.swift` | Proactive & Sidekick. |
 | `ShareKnowledgePane.swift` | Give AIs Knowledge. |
