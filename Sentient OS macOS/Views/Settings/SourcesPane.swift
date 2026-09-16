@@ -225,7 +225,7 @@ struct SourcesPane: View {
         _ = await ConnectorCensus.refresh()
         for connection in DirectMCPStore.connections() where connection.state != .reconnect && connection.state != .verifying {
             guard !Task.isCancelled else { return }
-            _ = try? await DirectMCPConnections.verify(connection)
+            _ = try? await DirectMCPConnections.verifyAccount(connection)
         }
         guard !Task.isCancelled else { return }
         updateConnectors()

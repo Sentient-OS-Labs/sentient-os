@@ -178,12 +178,14 @@ struct ChipFlow: Layout {
 /// dashed border — an invitation, not a source. `locked` (knowledge-base-only mode's
 /// Gmail/Calendar) is the one deliberate exception to the always-white rule: a lock in place of
 /// the dot, softened ink, no action — unavailable, with the hover tip explaining why.
+/// `needsAttention` uses a flat amber dot for a connector that needs reconnecting.
 struct SettingsChip: View {
     let label: String
     var detail: String? = nil
     let on: Bool
     var isAction: Bool = false
     var locked: Bool = false
+    var needsAttention: Bool = false
     var action: (() -> Void)? = nil
 
     @State private var lockHover = false
@@ -210,7 +212,7 @@ struct SettingsChip: View {
                         .foregroundStyle(.white.opacity(0.4))
                 } else if !isAction {
                     Circle()
-                        .fill(on ? Theme.Ink.green : .white.opacity(0.4))
+                        .fill(needsAttention ? HealthDot.warnAmber : (on ? Theme.Ink.green : .white.opacity(0.4)))
                         .frame(width: 5, height: 5)
                 }
                 Text(label)
@@ -257,7 +259,7 @@ struct LockedChipTip: View {
 }
 
 /// A lit status LED: bright core + double soft glow (tight halo, wide bloom). Shared by
-/// StatusLine, the connector pills, and the collapsed codex summary.
+/// StatusLine and the collapsed codex summary.
 struct HealthDot: View {
     /// The punchy warn amber every status LED shares — brighter than the ink amber on purpose.
     static let warnAmber = Color(red: 1.0, green: 0.72, blue: 0.30)

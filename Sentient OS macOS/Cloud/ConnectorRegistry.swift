@@ -145,7 +145,6 @@ nonisolated enum ConnectorRegistry {
         CuratedConnector(slug: "granola", displayName: "Granola",
                          routerDescription: "read and search past Granola meeting notes, decisions, commitments and action items; check the connected Granola account; no scheduling or note editing",
                          directProvider: .granola),
-        CuratedConnector(slug: "linear", displayName: "Linear", directProvider: .linear),
         CuratedConnector(slug: "outlook-mail", displayName: "Outlook Mail",
                          routerDescription: "read and search the connected primary Outlook mailbox; draft, send, reply and forward email; no calendar, shared-mailbox, deletion or mailbox-setting changes",
                          claudeName: OutlookMailConnector.claudeName,
@@ -466,15 +465,16 @@ nonisolated enum ConnectorRegistry {
     }
 
     /// The connectors research may declare as a card's fire channel: every detected connector
-    /// for the live backend — on the Claude engine only CLASSIFIED ones, because the fired-task
+    /// for the live backend — hosted Claude connectors must be CLASSIFIED, because the fired-task
     /// recipe refuses an unclassified slug and a card fire has no narrated fallback (the
-    /// idle-tick classifier sweep makes exclusions a minutes-long transient). gmail and
+    /// idle-tick classifier sweep makes exclusions a minutes-long transient). Direct accounts
+    /// prepare their policy when the card is fired. gmail and
     /// google-calendar never appear (registry-filtered; they are their own methods). Empty =
     /// the shipped four-method research prompt and schema, untouched.
     static func cardChannels() -> [CardChannel] {
         let detected = detectedForCurrentBackend()
         let classified = ModelBackend.current == .claude
-            ? detected.filter { isClassified($0.slug) }
+            ? detected.filter { $0.origin == .direct || isClassified($0.slug) }
             : detected
         let usable = classified.filter {
             ($0.slug != "slack" || SlackConnector.cachedIdentity() != nil)
@@ -491,12 +491,13 @@ nonisolated enum ConnectorRegistry {
 
     // MARK: Detection convenience
 
-    /// Additional hosted services plus usable direct connections. Gmail/Calendar retain their
+    /// Additional hosted services plus authenticated direct connections. Tool policy is prepared
+    /// when a direct connection is used. Gmail/Calendar retain their
     /// dedicated source and action paths. BYOM receives only the direct tier.
     static func detectedForCurrentBackend() -> [ConnectorCensus.DetectedConnector] {
         let hosted = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
             .map { ConnectorCensus.cached(for: $0).filter { !ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) } } ?? []
-        return hosted + DirectMCPStore.connections().filter(\.usable).map(\.detected)
+        return hosted + DirectMCPStore.connections().filter(\.connected).map(\.detected)
     }
 
     // MARK: The KB toggle (production keys)

@@ -14,6 +14,7 @@ actor DirectMCPConnections {
     private var removingAll = false
 
     func connect(provider: DirectMCPProvider, label: String, replacing id: UUID? = nil,
+                 onProgress: @escaping @Sendable (DirectMCPConnectPhase) async -> Void = { _ in },
                  openBrowser: @escaping @Sendable (URL) async -> Bool = { url in
                      await MainActor.run { NSWorkspace.shared.open(url) }
                  }) async throws -> UUID {
@@ -35,17 +36,27 @@ actor DirectMCPConnections {
             }
             return nil
         }
-        let connection = DirectMCPConnection(id: id, providerSlug: provider.slug, label: clean,
+        var pendingConnection = DirectMCPConnection(id: id, providerSlug: provider.slug, label: clean,
             generation: UUID(), state: .verifying)
+        // A new grant still verifies the live account and inventory. Preserve only the tool
+        // policy; verify() reclassifies if any definition or the policy revision has changed.
+        if let previousConnection, previousConnection.providerSlug == provider.slug, previousConnection.policyValid {
+            pendingConnection.tools = previousConnection.tools
+            pendingConnection.policy = previousConnection.policy
+            pendingConnection.policyFingerprint = previousConnection.policyFingerprint
+            pendingConnection.policyRevision = previousConnection.policyRevision
+        }
+        let connection = pendingConnection
         try DirectMCPStore.save(connection)
         let task = Task {
-            let grant = try await DirectMCPAuth.connect(connection, openBrowser: openBrowser)
+            await onProgress(.openingBrowser)
+            let grant = try await DirectMCPAuth.connect(connection, onProgress: onProgress, openBrowser: openBrowser)
             try await DirectMCPStore.withGrantLock(id) {
                 try Task.checkCancellation()
                 guard DirectMCPStore.connection(id: id)?.generation == connection.generation else { throw DirectMCPError.connectionChanged }
                 try DirectMCPStore.saveGrant(grant)
             }
-            _ = try await Self.verify(connection)
+            _ = try await Self.verifyAccount(connection)
         }
         attempts[id] = (connection.generation, task)
         do {
@@ -89,9 +100,37 @@ actor DirectMCPConnections {
         }
     }
 
-    static func verify(_ connection: DirectMCPConnection) async throws -> DirectMCPConnection {
+    /// Login and Settings refresh check the grant/account without starting the frontier engine.
+    static func verifyAccount(_ connection: DirectMCPConnection) async throws -> DirectMCPConnection {
         do {
+            let account = try await DirectMCPProbe.account(connection: connection)
+            let identity = DirectMCPIdentity.parse(account)
+            if let previous = connection.accountFingerprint, previous != identity?.fingerprint {
+                throw DirectMCPError.connectionChanged
+            }
+            try DirectMCPSession.check(connection)
+            guard var updated = DirectMCPStore.connection(id: connection.id),
+                  updated.generation == connection.generation else { throw DirectMCPError.connectionChanged }
+            updated.accountFingerprint = identity?.fingerprint
+            updated.accountLabel = identity?.label
+            updated.verifiedAt = Date()
+            updated.state = updated.usable ? .ready : .connected
+            try DirectMCPStore.save(updated)
+            return updated
+        } catch {
+            if Task.isCancelled || error is CancellationError { throw CancellationError() }
+            recordFailure(error, connection: connection)
+            throw error
+        }
+    }
+
+    /// The execution gate: refresh inventory and classify before tools become usable.
+    static func verify(_ connection: DirectMCPConnection,
+                       onProgress: @escaping @Sendable (DirectMCPConnectPhase) async -> Void = { _ in }) async throws -> DirectMCPConnection {
+        do {
+            let started = Date()
             let snapshot = try await DirectMCPProbe.capture(connection: connection, includeAccount: true)
+            await Log("Direct MCP: account and inventory fetched in \(Int(Date().timeIntervalSince(started) * 1_000))ms")
             let tools = snapshot.tools
             let identity = DirectMCPIdentity.parse(snapshot.account)
             if let previous = connection.accountFingerprint, previous != identity?.fingerprint {
@@ -102,9 +141,13 @@ actor DirectMCPConnections {
             updated.accountLabel = identity?.label
             updated.tools = tools
             if connection.policyFingerprint != DirectMCPTool.fingerprint(tools) || !connection.policyValid {
+                await onProgress(.checkingTools)
+                try Task.checkCancellation()
                 updated.policy = try await classify(tools, providerName: connection.provider?.name ?? connection.providerSlug)
                 updated.policyFingerprint = DirectMCPTool.fingerprint(tools)
                 updated.policyRevision = DirectMCPConnection.currentPolicyRevision
+            } else {
+                await Log("Direct MCP: verified tool policy reused")
             }
             // Deterministic safety rules also apply when a cached inventory is unchanged.
             for tool in tools {
@@ -126,16 +169,19 @@ actor DirectMCPConnections {
             return updated
         } catch {
             if Task.isCancelled || error is CancellationError { throw CancellationError() }
-            if var current = DirectMCPStore.connection(id: connection.id), current.generation == connection.generation {
-                switch error {
-                case DirectMCPError.reconnectRequired, DirectMCPError.registrationExpired, DirectMCPError.accountSetupRequired: current.state = .reconnect
-                case DirectMCPError.policyUnavailable: current.state = .policyRequired
-                default: current.state = .unavailable
-                }
-                try? DirectMCPStore.save(current)
-            }
+            recordFailure(error, connection: connection)
             throw error
         }
+    }
+
+    private static func recordFailure(_ error: Error, connection: DirectMCPConnection) {
+        guard var current = DirectMCPStore.connection(id: connection.id), current.generation == connection.generation else { return }
+        switch error {
+        case DirectMCPError.reconnectRequired, DirectMCPError.registrationExpired, DirectMCPError.accountSetupRequired: current.state = .reconnect
+        case DirectMCPError.policyUnavailable: current.state = .policyRequired
+        default: current.state = .unavailable
+        }
+        try? DirectMCPStore.save(current)
     }
 
     static func classify(_ tools: [DirectMCPTool], providerName: String,

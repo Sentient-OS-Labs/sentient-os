@@ -137,7 +137,7 @@ enum FrontierRun {
             try await ModelBackend.$runOverride.withValue(backend) {
                 if backend == .claude { await ConnectorClassifier.refreshCLIVersion() }
                 var attachments: [DirectMCPRuntime.Attachment] = []
-                for connection in DirectMCPStore.connections().filter(\.usable) {
+                for connection in DirectMCPStore.connections().filter(\.connected) {
                     do {
                         attachments += try await DirectMCPRuntime.prepare(slugs: [connection.slug], mode: .action, timeout: timeout)
                     } catch {

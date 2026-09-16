@@ -71,7 +71,7 @@ struct ConnectorSource: Identifiable {
     /// Slack: its Codex connector artwork, with only transparent padding removed.
     /// Outlook: Microsoft's vector mark, mirrored at Wikimedia Commons:
     /// https://commons.wikimedia.org/wiki/File:Microsoft_Outlook_Icon_(2025–present).svg
-    /// Granola: https://www.granola.ai/icon.png. Linear: https://linear.app/brand (light logo).
+    /// Granola: https://www.granola.ai/icon.png.
     /// Notion: the sticker logo on https://www.notion.com (CSS black resolved for the asset).
     var logoAsset: String? {
         switch serviceSlug {
@@ -79,7 +79,6 @@ struct ConnectorSource: Identifiable {
         case "slack": "SlackMark"
         case "notion": "NotionMark"
         case "granola": "GranolaMark"
-        case "linear": "LinearMark"
         case "outlook-mail", "outlook-calendar": "OutlookMark"
         default: nil
         }
@@ -110,37 +109,14 @@ struct ConnectorPill: View {
     let source: ConnectorSource
     let locked: Bool
     let action: () -> Void
-    @State private var lockHover = false
 
     var body: some View {
-        Button { if !locked { action() } } label: {
-            label
-        }
-        .buttonStyle(PressScaleStyle())
+        SettingsChip(label: source.displayName,
+                     on: source.connector?.healthy == true,
+                     locked: locked,
+                     needsAttention: source.connector?.healthy == false,
+                     action: action)
         .accessibilityValue(locked ? "Locked" : source.connector.map { $0.healthy ? "Connected" : "Needs attention" } ?? "Not connected")
-        .onHover { lockHover = locked && $0 }
-        .overlay(alignment: .top) {
-            if lockHover { LockedChipTip().offset(y: -32) }
-        }
-        .animation(.easeInOut(duration: 0.15), value: lockHover)
-    }
-
-    private var label: some View {
-        HStack(spacing: 7) {
-            if locked {
-                Image(systemName: "lock.fill")
-                    .font(.system(size: 9)).foregroundStyle(.white.opacity(0.4))
-            } else if let connector = source.connector {
-                HealthDot(color: connector.healthy ? Theme.Ink.green : HealthDot.warnAmber)
-            } else {
-                Circle().fill(.white.opacity(0.35)).frame(width: 5, height: 5)
-            }
-            Text(source.displayName)
-                .font(.system(size: 12)).foregroundStyle(.white.opacity(locked ? 0.55 : 1))
-        }
-        .padding(.horizontal, 13).padding(.vertical, 7)
-        .overlay(Capsule().strokeBorder(Color.white.opacity(locked ? 0.10 : 0.16), lineWidth: 1))
-        .contentShape(Capsule())
     }
 }
 

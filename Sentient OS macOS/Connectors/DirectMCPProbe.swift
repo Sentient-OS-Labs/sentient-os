@@ -13,10 +13,16 @@ nonisolated enum DirectMCPProbe {
     }
     struct Snapshot: Sendable { let tools: [DirectMCPTool]; let account: Data? }
 
+    /// Fixed account-info call only: login never needs the tool inventory or a model.
+    static func account(connection: DirectMCPConnection) async throws -> Data? {
+        let session = try await DirectMCPSession.open(connection)
+        defer { Task { await session.close() } }
+        return try await account(session: session)
+    }
+
     static func capture(connection: DirectMCPConnection, includeAccount: Bool = false) async throws -> Snapshot {
         let session = try await DirectMCPSession.open(connection)
         defer { Task { await session.close() } }
-        guard let provider = connection.provider else { throw DirectMCPError.unsupportedProvider }
         var tools: [DirectMCPTool] = [], cursor: String?, seenCursors = Set<String>(), names = Set<String>()
         for id in 2...33 {
             try DirectMCPSession.check(connection)
@@ -32,25 +38,27 @@ nonisolated enum DirectMCPProbe {
             }
             guard let next = result["nextCursor"] as? String else {
                 guard !tools.isEmpty else { throw DirectMCPError.noTools }
-                var account: Data?
-                let accountCall: (name: String, arguments: [String: String])?
-                switch provider.slug {
-                case "granola": accountCall = ("get_account_info", [:])
-                case "notion": accountCall = ("notion-fetch", ["id": "self"])
-                default: accountCall = nil
-                }
-                if includeAccount, let accountCall, names.contains(accountCall.name) {
-                    try DirectMCPSession.check(connection)
-                    let result = try await session.call(accountCall.name, arguments: accountCall.arguments, id: 34, limit: 64_000)
-                    try validateAccountResult(result)
-                    account = try DirectMCPHTTP.json(result)
-                }
+                let account = includeAccount ? try await account(session: session, availableNames: names) : nil
                 return Snapshot(tools: tools.sorted { $0.name < $1.name }, account: account)
             }
             guard !next.isEmpty, next.utf8.count < 8_192, seenCursors.insert(next).inserted else { throw DirectMCPError.invalidResponse }
             cursor = next
         }
         throw DirectMCPError.tooLarge
+    }
+
+    private static func account(session: DirectMCPSession, availableNames: Set<String>? = nil) async throws -> Data? {
+        let call: (name: String, arguments: [String: String])
+        switch session.connection.providerSlug {
+        case "granola": call = ("get_account_info", [:])
+        case "notion": call = ("notion-fetch", ["id": "self"])
+        default: return nil
+        }
+        if let availableNames, !availableNames.contains(call.name) { return nil }
+        try DirectMCPSession.check(session.connection)
+        let result = try await session.call(call.name, arguments: call.arguments, id: 34, limit: 64_000)
+        try validateAccountResult(result)
+        return try DirectMCPHTTP.json(result)
     }
 
     static func validateAccountResult(_ result: [String: Any]) throws {

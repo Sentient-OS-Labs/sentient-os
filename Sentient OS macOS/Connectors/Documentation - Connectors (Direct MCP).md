@@ -2,8 +2,8 @@
 
 Sentient can own a user's OAuth connection to a supported remote MCP service and use that connection
 through either frontier engine. The provider handles browser sign-in; Sentient stores the grant in
-the Mac's Keychain and supplies access headers to the selected CLI for each run. The initial catalog
-contains Granola, Notion and Linear. Provider definitions live in the existing registry packs.
+the Mac's Keychain and supplies access headers to the selected CLI for each run. The catalog
+contains Granola and Notion. Provider definitions live in the existing registry packs.
 
 Direct connections have independent account identities. Their stable source slug is
 `direct-<connection UUID>`. A routed task or prepared card additionally records the grant generation
@@ -17,25 +17,27 @@ remain separate records, even when they belong to the same service.
 | `DirectMCPCallback.swift` | Bounded loopback HTTP listener that consumes one verified authorization response. |
 | `DirectMCPHTTP.swift` | Cookie-free, bounded requests to the provider's pinned HTTPS origins; redirects are refused. |
 | `DirectMCPStore.swift` | Connection metadata in preferences, complete grants in Keychain, and cross-process refresh locks. |
-| `DirectMCPProbe.swift` | Native MCP initialization and a complete paginated tool inventory. |
+| `DirectMCPProbe.swift` | Lightweight account checks and the complete paginated tool inventory used at execution time. |
 | `DirectMCPIdentity.swift` | Optional account/workspace identity from an actual provider response. |
 | `DirectMCPConnections.swift` | Interactive attempts, verification, reconnect recovery, disconnect and cleanup. |
 | `DirectMCPRuntime.swift` | Immutable task attachments, engine configuration, helper entry points and active-run cancellation. |
 
 **Connecting.** In Settings → Knowledge Sources → Connectors, the user opens a service's pill and
-selects **Connect** in its popup. Setup asks for an account label for that service, then the user
-approves access in their browser. The callback verifies
+selects **Connect** in its popup to start browser sign-in directly. Login saves the OAuth grant and
+checks the account through a fixed native account-info call. It does not fetch the tool inventory,
+check AI availability or run classification. The popup then shows the account as connected.
+Errors stay in that popup. Closing it cancels the attempt and removes an unfinished new connection; reconnects retain
+the existing account's recovery behavior. The callback verifies
 state and uses S256 PKCE. Discovery validates the issuer, resource and endpoints; supported scopes
 come from the resource challenge/metadata, with the provider's explicit offline-access requirement.
 Registration information is saved before browser interaction so a retry can reuse it.
 
-After exchange, Sentient fetches the live tool inventory and classifies it using the existing
-classification rules. The model receives tool definitions as data, with tools disabled and a scratch
-working directory. The result must exactly cover the captured inventory. A fingerprint and policy
-revision prevent stale classifications from activating changed tools. A connection becomes usable
-only when a nonempty permitted tool set remains.
+Authentication and tool readiness are separate states. Connected accounts remain discoverable to
+Sidekick and eligible for their curated knowledge-base opt-in before tool preparation. Settings
+refresh checks the account without starting the frontier engine.
 
-Account labels are user choices. A provider-supplied email/workspace is shown only when an actual,
+New connections receive an unused label such as "Account" or "Account 2" for that service.
+Reconnects preserve the existing label and account ID. A provider-supplied email/workspace is shown only when an actual,
 recognized account-info response establishes it. Granola uses `get_account_info`; Notion uses
 `notion-fetch` with `id: "self"`. Notion's stable user/workspace IDs bind the account independently
 of its display name. Provider account errors leave the connection requiring attention, even if
@@ -47,6 +49,14 @@ connection and label; Sentient does not infer an email or workspace from a model
 prepares direct attachments before dispatch, pins the backend and connection generation, and ties
 the child task to disconnect cancellation. Both engines use per-run configuration. Direct servers
 never enter the hosted catalog-ID fallback.
+
+Before an action, research attachment or native knowledge read uses the connection, Sentient fetches
+its live tool inventory and checks its policy. A missing policy, changed definition fingerprint or
+outdated policy revision triggers classification at that point. The model receives tool definitions
+as data, with tools disabled and a scratch working directory. Its result must cover the complete
+inventory. No tool is attached until verification succeeds and a nonempty permitted set remains.
+Reconnects retain a valid cached policy for this comparison; the new account and grant are still
+checked independently. Unchanged inventories reuse that policy without another model call.
 
 Codex receives `mcp_servers` definitions with explicit `enabled_tools` and scoped approval. Claude
 normal runs use named allows under `dontAsk`. Its computer-use mode additionally uses explicit ask
@@ -83,9 +93,9 @@ revocation are distinct outcomes.
 
 **Knowledge use.** Direct source selection and checkpoints use the existing MCP source pipeline.
 The checkpoint origin includes the connection generation. BYOM can use direct connections while
-hosted account connectors retain their existing gates. KB eligibility additionally requires a
-provider's `kbVerified` flag and reviewed read tools. That flag remains off for the initial providers
-until their live reader curation is completed. Granola's candidate surface is restricted to
+hosted account connectors retain their existing gates. The opt-in requires a connected account,
+the provider's `kbVerified` flag and reviewed read tools. The reader verifies the live policy before
+content reads; selecting the source grants no unchecked tool access. Granola's candidate surface is restricted to
 `list_meetings` and `get_meetings`, with a bounded prompt and observed read receipts. A notable
 Granola summary requires a successful content read; a quiet result requires a successful list call.
 Notion's reviewed read surface contains `notion-fetch` and `notion-list-recent-pages`. Its live
@@ -105,8 +115,7 @@ name are exercised through both engines. Its credentials and records are synthet
 Notion's browser exchange, native account binding, tool inventory and rotating refresh have been
 verified. Both real engines passed a bounded Notion metadata read through the direct connection.
 Granola's browser exchange, grant storage, inventory and refresh have also been exercised; its
-content reader remains unverified. Public discovery has been checked for all three catalog
-providers. Linear's browser flow and live tools have not been field-tested.
+content reader remains unverified. Public discovery has been checked for both catalog providers.
 
 `directread` accepts `LAB_SLUG=notion` or `granola` and `LAB_ENGINE=codex` or `claude`.
 The Notion case lists at most one recent page; the Granola case lists this week's meeting metadata.

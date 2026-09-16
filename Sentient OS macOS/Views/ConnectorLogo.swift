@@ -25,7 +25,7 @@ struct ConnectorLogo: View {
 #Preview("Connection logos · on black") {
     HStack(alignment: .top, spacing: 28) {
         ForEach(["GmailMark", "GoogleCalendarMark", "GoogleDriveMark", "SlackMark",
-                 "OutlookMark", "NotionMark", "GranolaMark", "LinearMark"], id: \.self) { asset in
+                 "OutlookMark", "NotionMark", "GranolaMark"], id: \.self) { asset in
             VStack(spacing: 16) {
                 ConnectorLogo(asset: asset)
                 Text(asset.replacingOccurrences(of: "Mark", with: ""))
