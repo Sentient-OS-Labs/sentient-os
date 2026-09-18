@@ -16,10 +16,16 @@
 import Foundation
 
 enum FrontierRun {
+    #if DEBUG
+    @TaskLocal static var acceptanceRun: (@Sendable (CodexCLI.Invocation) async throws -> CodexCLI.Envelope)?
+    #endif
 
     /// The structured spine — vault, judge, research, connectors, gift letter.
     static func run(_ invocation: CodexCLI.Invocation,
                     onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
+        #if DEBUG
+        if let acceptanceRun { return try await acceptanceRun(invocation) }
+        #endif
         let backend = ModelBackend.current
         var invocation = invocation.canonicalConnectorTargets()
         let outlookAttached = invocation.includesOutlookMail || invocation.calendarPolicy != nil

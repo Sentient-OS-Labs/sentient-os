@@ -8,7 +8,7 @@
 import Foundation
 
 enum SlackSource {
-    static let revision = "slack-v2"
+    static let revision = "slack-v3"
     static func discoveryCap(_ mode: MCPSource.ReadMode) -> Int { 3 }
     static func candidateCap(_ mode: MCPSource.ReadMode) -> Int { mode == .initial ? 60 : 40 }
     static func threadCap(_ mode: MCPSource.ReadMode) -> Int { mode == .initial ? 8 : 4 }
@@ -38,6 +38,15 @@ enum SlackSource {
 
     static func prompt(mode: MCPSource.ReadMode, window: MCPSource.Window) -> String {
         let bounds = searchBounds(window)
+        let actor = SlackConnector.runIdentity ?? SlackConnector.cachedIdentity()
+        let queries = ["to:me", "from:<@\(actor?.userID ?? "USER_ID")>", broadQuery(window)]
+        let discovery = queries.enumerated().map { index, query in
+            let input: [String: Any] = ["query": query, "after": bounds.after, "before": bounds.before,
+                "content_types": "messages", "channel_types": "public_channel,private_channel,mpim,im",
+                "include_bots": false, "include_context": false, "sort": "timestamp", "sort_dir": "desc",
+                "response_format": "detailed", "limit": mode == .iterative && index < 2 ? 10 : pageSize]
+            return String(decoding: try! JSONSerialization.data(withJSONObject: input, options: [.sortedKeys]), as: UTF8.self)
+        }.joined(separator: "\n")
         return """
         \(mode == .initial ? "INITIAL" : "ITERATIVE") SLACK KNOWLEDGE READ
         Build a selective summary of the user's meaningful work and life from the connected
@@ -67,6 +76,13 @@ enum SlackSource {
         only from the app's verified account context below. A quiet result requires checking
         all three lanes; finding no direct request alone does not prove the window is quiet.
         Do not search channel by channel or enumerate channels, people, files, or history.
+
+        EXACT DISCOVERY ARGUMENTS
+        Copy these three JSON objects verbatim, one per search in order. Do not replace the
+        actor query with from:me, move dates into query/filters, or add semantic descriptions.
+        Omit filters, keywords and natural_language_query; if a wrapper requires them, use
+        only an empty string, empty array and empty string respectively.
+        \(discovery)
 
         SELECTED THREADS
         Use snippets already returned when enough. Open only consequential threads needing
@@ -162,6 +178,11 @@ enum SlackSource {
                       args["context_channel_id"] == nil || args["context_channel_id"] is NSNull,
                       args["only_my_channels"] == nil || args["only_my_channels"] as? Bool == false else {
                     try reject("slack_discovery_arguments")
+                }
+                guard args["filters"] == nil || args["filters"] is NSNull || args["filters"] as? String == "",
+                      args["natural_language_query"] == nil || args["natural_language_query"] is NSNull || args["natural_language_query"] as? String == "",
+                      args["keywords"] == nil || args["keywords"] is NSNull || (args["keywords"] as? [String])?.isEmpty == true else {
+                    try reject("slack_search_scope")
                 }
                 candidateBudget += limit
                 if let identity = SlackConnector.runIdentity {

@@ -201,13 +201,14 @@ enum SlackCurationTests {
             SlackConnector.$runIdentity.withValue(identity) {
                 func searchTrace(queries: [String] = ["to:me", "from:<@UFIXTURE>", SlackSource.broadQuery(window)],
                                  limit: Int = 10, before: String? = nil, bots: Bool = false,
-                                 failed: Bool = false, body: String? = nil) -> String {
+                                 failed: Bool = false, body: String? = nil, extra: [String: Any] = [:]) -> String {
                     var events: [[String: Any]] = []
                     for (i, query) in queries.enumerated() {
-                        let args: [String: Any] = ["query": query, "limit": limit, "after": bounds.after,
+                        var args: [String: Any] = ["query": query, "limit": limit, "after": bounds.after,
                             "before": before ?? bounds.before, "content_types": "messages",
                             "channel_types": "public_channel,private_channel,mpim,im", "include_bots": bots,
                             "include_context": false, "sort": "timestamp", "sort_dir": "desc", "response_format": "detailed"]
+                        args.merge(extra) { _, replacement in replacement }
                         let text = body ?? "# Search Results for: \(query)\n\nNo results found.\n"
                         if backend == .claude {
                             events.append(["type": "assistant", "message": ["content": [["type": "tool_use", "id": "search\(i)",
@@ -229,6 +230,10 @@ enum SlackCurationTests {
                     catch { return false }
                 }
                 check(accepts(searchTrace()), "\(backend.rawValue) successful bounded searches establish a quiet window")
+                check(accepts(searchTrace(extra: ["filters": "", "keywords": [], "natural_language_query": ""])), "\(backend.rawValue) empty optional search fields preserve coverage")
+                check(!accepts(searchTrace(extra: ["filters": "in:one-channel"])), "\(backend.rawValue) extra filters cannot narrow a quiet read")
+                check(!accepts(searchTrace(extra: ["keywords": ["release"]])), "\(backend.rawValue) extra keywords cannot narrow a quiet read")
+                check(!accepts(searchTrace(extra: ["natural_language_query": "only important deadlines"])), "\(backend.rawValue) semantic hints cannot narrow a quiet read")
                 check(!accepts(""), "\(backend.rawValue) no tools cannot advance a quiet checkpoint")
                 check(!accepts(searchTrace(queries: ["to:me"])), "\(backend.rawValue) one empty personal lane is not whole-sample quiet")
                 check(!accepts(searchTrace(queries: ["to:me", "to:me", "to:me"])), "\(backend.rawValue) repeated searches cannot fake coverage")

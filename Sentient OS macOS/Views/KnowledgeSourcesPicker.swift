@@ -81,6 +81,16 @@ struct KnowledgeSourcesPicker: View {
         .onChange(of: selectionCount, initial: true) { _, count in
             onSelectionCountChange(count)
         }
+        .onChange(of: connectors) {
+            guard context == .onboarding else { return }
+            // Apply the onboarding default once a connection is usable. A saved false is
+            // an explicit opt-out and must survive refreshes, reconnects, and reopening.
+            for connector in connectors where connector.healthy && ConnectorRegistry.kbEligible(connector.slug) {
+                guard UserDefaults.standard.object(forKey: ConnectorRegistry.kbKey(connector.slug)) == nil else { continue }
+                ConnectorRegistry.setKBEnabled(connector.slug, true)
+            }
+            selectionCount = SourceSelection.selectionCount
+        }
         // Paint the persisted census instantly, then confirm live (cheap path: one subprocess
         // on Claude, a disk read on codex, nothing on custom — never a model call).
         .task(id: backendRaw) {

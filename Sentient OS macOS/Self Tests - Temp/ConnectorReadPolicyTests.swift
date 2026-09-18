@@ -93,7 +93,8 @@ enum ConnectorReadPolicyTests {
             }
             let sourceClaude = try ClaudeCLI.arguments(for: claudeSourceInvocation, modelID: "haiku", effortArg: "medium")
             let toolIndex = sourceClaude.firstIndex(of: "--tools")!
-            check(sourceClaude[toolIndex + 1].isEmpty, "Claude source ingestion has no filesystem builtins")
+            let builtins = Set(sourceClaude[toolIndex + 1].split(separator: ",").map(String.init))
+            check(builtins.isSubset(of: ["WaitForMcpServers"]), "Claude source ingestion permits readiness waiting but no filesystem builtins")
             var identity = sourceInvocation; identity.mcpReadToolNames = ["get_profile"]
             let identityArgs = try args(identity)
             check(policy(identityArgs).contains("get_profile") && !policy(identityArgs).contains("\"search\""), "identity read exposes only the verified profile tool")
@@ -155,6 +156,38 @@ enum ConnectorReadPolicyTests {
                 }
                 fixture["claude-slack-computer"] = try ModelBackend.$runOverride.withValue(.claude) {
                     try ClaudeCLI.agentArguments(prompt: "Synthetic fixture", modelID: "haiku", effortArg: "low", socketPath: "/tmp/fixture.sock")
+                }
+                // Exercise the production action and computer-use deny recipes for the new
+                // reviewed mutation modes, using volatile synthetic inventories only.
+                for (slug, name, endpoint, read, write) in [
+                    ("asana", "Asana", "https://mcp.asana.com/v2/mcp", "get_me", "create_tasks"),
+                    ("linear", "Linear", "https://mcp.linear.app/mcp", "get_workspace", "create_issue_label") ] {
+                    let prefix = "mcp__claude_ai_" + name + "__"
+                    let destructive = ConnectorClassifier.reviewedDestructiveTools(slug: slug)
+                    let tools = destructive.sorted().map { ConnectorRegistry.ClassifiedTool(name: prefix + $0, category: .destructive) }
+                        + [.init(name: prefix + read, category: .read), .init(name: prefix + write, category: .write)]
+                    var domain = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+                    domain["mcp.connectors.claude"] = try JSONEncoder().encode([
+                        ConnectorCensus.DetectedConnector(slug: slug, displayName: name, origin: .claude,
+                            serverURL: endpoint, catalogID: nil, iconPath: nil, healthy: true, lastSeen: Date())])
+                    domain[ConnectorRegistry.classificationKey(slug)] = try JSONEncoder().encode(
+                        ConnectorRegistry.Classification(tools: tools, cliVersion: ConnectorClassifier.currentCLIVersion ?? "fixture",
+                            capturedAt: Date(), verifiedInventory: tools.map(\.name)))
+                    defaults.setVolatileDomain(domain, forName: UserDefaults.argumentDomain)
+                    var action = CodexCLI.Invocation(prompt: "Synthetic mutation policy check")
+                    action.mcpActionServer = slug
+                    fixture["claude-" + slug + "-action"] = try ModelBackend.$runOverride.withValue(.claude) {
+                        try ClaudeCLI.arguments(for: action, modelID: "haiku", effortArg: "low")
+                    }
+                    fixture["claude-" + slug + "-computer"] = try ModelBackend.$runOverride.withValue(.claude) {
+                        try ClaudeCLI.agentArguments(prompt: "Synthetic fixture", modelID: "haiku", effortArg: "low", socketPath: "/tmp/fixture.sock")
+                    }
+                    for mode in ["action", "computer"] {
+                        let args = fixture["claude-" + slug + "-" + mode]!
+                        let index = args.firstIndex(of: "--disallowedTools")!
+                        let denied = Set(args[index + 1].split(separator: ",").map(String.init))
+                        check(Set(destructive.map { prefix + $0 }).isSubset(of: denied), "\(slug) \(mode) removes every reviewed destructive mode")
+                    }
                 }
                 try JSONSerialization.data(withJSONObject: fixture, options: [.prettyPrinted, .sortedKeys])
                     .write(to: URL(fileURLWithPath: path))

@@ -339,6 +339,7 @@ actor VaultGenerator {
         // Success → atomically swap staging into the real vault (the only moment the old vault is
         // touched); on any throw the vault is left intact (B11 swapStagingIntoVault).
         onProgress(.materializing(notes: written))
+        try Task.checkCancellation()
         CorpusSlicer.deleteCorpus(in: staging)               // the snapshot must never enter the vault
         do {
             try Self.swapStagingIntoVault(staging)

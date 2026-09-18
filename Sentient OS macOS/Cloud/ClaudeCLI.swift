@@ -142,8 +142,14 @@ actor ClaudeCLI {
 
     static func environment(for invocation: CodexCLI.Invocation) -> [String: String] {
         var environment = baseEnv
-        if invocation.mcpAttachServer == "slack" || invocation.mcpActionServer == "slack"
-            || (invocation.connectorOnlyRead && invocation.mcpReadConnectors == ["slack"])
+        if invocation.mcpAttachServer != nil || invocation.mcpActionServer != nil || !invocation.mcpReadConnectors.isEmpty {
+            // Headless connector work needs a settled tool surface before its first query.
+            // Keep the wait bounded; failed connections still fail closed in the readers.
+            environment["MCP_CONNECTION_NONBLOCKING"] = "0"
+            environment["MCP_CONNECT_TIMEOUT_MS"] = "30000"
+        }
+        if invocation.mcpAttachServer != nil || invocation.mcpActionServer == "slack"
+            || (invocation.connectorOnlyRead && !invocation.mcpReadConnectors.isEmpty)
             || Microsoft365Connector.contains(invocation.mcpAttachServer ?? "") || Microsoft365Connector.contains(invocation.mcpActionServer ?? "")
             || invocation.mcpReadConnectors.contains(where: Microsoft365Connector.contains) {
             // Inventory must inspect every schema. Source reads expose only their small
@@ -372,10 +378,17 @@ actor ClaudeCLI {
         let stdoutLine: (@Sendable (String) -> Void)? = onLine.map { sink in
             { @Sendable raw in for s in Self.humanLines(fromStreamJSON: raw) { sink(s) } }
         }
+        var args = try Self.arguments(for: invocation, modelID: modelID, effortArg: effortArg)
+        #if DEBUG
+        if let path = ProcessInfo.processInfo.environment["LAB_CLAUDE_DEBUG_DIR"] {
+            let directory = URL(fileURLWithPath: path, isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            args += ["--debug-file", directory.appending(path: "claude-\(UUID().uuidString).log").path]
+        }
+        #endif
         let out = try await CodexCLI.executeAsync(binary: bin,
-                                                  args: try Self.arguments(for: invocation,
-                                                                           modelID: modelID,
-                                                                           effortArg: effortArg),
+                                                  args: args,
                                                   stdinText: invocation.prompt,
                                                   cwd: invocation.cwd,
                                                   timeout: invocation.timeout,
@@ -585,9 +598,7 @@ actor ClaudeCLI {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
             var tools = inv.connectorOnlyRead || inv.toolsDisabled || Microsoft365Connector.contains(inv.mcpActionServer ?? "") ? [] : ["Bash", "Glob", "Grep", "Read"]
-            if inv.mcpAttachServer == "slack" || inv.mcpActionServer == "slack" || inv.mcpReadConnectors.contains("slack")
-                || Microsoft365Connector.contains(inv.mcpAttachServer ?? "") || Microsoft365Connector.contains(inv.mcpActionServer ?? "")
-                || inv.mcpReadConnectors.contains(where: Microsoft365Connector.contains) {
+            if inv.mcpAttachServer != nil || inv.mcpActionServer != nil || !inv.mcpReadConnectors.isEmpty {
                 tools.append("WaitForMcpServers")
                 allowed.append("WaitForMcpServers")
             }

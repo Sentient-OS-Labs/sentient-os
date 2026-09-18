@@ -68,14 +68,14 @@ extension MCPSource {
     /// A valid empty profile is an explicit unavailable identity; a missing call/invalid
     /// response is a failed read. Account changes between successful calls are refused.
     static func profileFingerprint(raw: String) throws -> String? {
-        struct Profile: Decodable { let id: String?; let email: String? }
+        struct Profile: Decodable { let id: String?; let email: String?; let workspace_id: String? }
         struct Reply: Decodable { let result: Profile }
         func profile(_ value: Any) -> Profile? {
             guard JSONSerialization.isValidJSONObject(value),
                   let data = try? JSONSerialization.data(withJSONObject: value) else { return nil }
             if let wrapped = try? JSONDecoder().decode(Reply.self, from: data) { return wrapped.result }
             if let object = value as? [String: Any],
-               Set(object.keys).isSubset(of: ["id", "email", "name", "nickname", "picture"]),
+               Set(object.keys).isSubset(of: ["id", "email", "name", "nickname", "picture", "workspace_id", "workspace_name"]),
                object["id"] != nil || object["email"] != nil {
                 return try? JSONDecoder().decode(Profile.self, from: data)
             }
@@ -99,7 +99,11 @@ extension MCPSource {
             let email = found.email?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let stable = id.flatMap { $0.isEmpty ? nil : "id:" + $0 }
                 ?? email.flatMap { $0.isEmpty ? nil : "email:" + $0 }
-            identities.insert(stable.map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() })
+            let workspace = found.workspace_id?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let scoped = stable.map { account in
+                workspace.flatMap { $0.isEmpty ? nil : account + "|workspace:" + $0 } ?? account
+            }
+            identities.insert(scoped.map { SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() })
         }
         guard !identities.isEmpty else { throw MCPError.toolFailure(slug: "google-drive") }
         guard identities.count == 1 else { throw MCPError.connectionChanged }

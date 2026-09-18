@@ -1,7 +1,7 @@
 //
 // GranolaSource.swift
 // Fetches a bounded sample of Granola notes natively before tool-free summarization.
-// Checks account scope, date coverage, selected IDs and complete content before returning a result.
+// Checks account scope, bounded sample dates, selected IDs and complete content before returning a result.
 // Doc: Documentation - Sources - Cloud (Gmail, Calendar).md
 //
 
@@ -126,15 +126,12 @@ enum GranolaSource {
         var lastError: Error = DirectMCPError.invalidResponse
         for attempt in 1...2 {
             var envelope: CodexCLI.Envelope?
-            let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous answer failed validation. Check the supplied item count, source markers on every paragraph/action, third person, privacy, and the word budget. Return only valid JSON grounded in the same evidence.")
+            let attemptPrompt = fullPrompt + (attempt == 1 ? "" : "\n\nThe previous answer failed validation. Check the supplied item count, source markers on every paragraph/action, third person, privacy, and the word budget. Lead with the substantive fact, not the act of recording notes. Use the structured-output formatter with all five properties at its root, not a wrapper, JSON string or schema. Return only valid JSON grounded in the same evidence.")
             do {
                 let result = try await MCPSource.model(prompt: attemptPrompt, schema: MCPSource.readSchema,
                     slug: connection.slug, claudeModel: claudeModel)
                 envelope = result
                 let outcome = try parseSummary(result, meetings: notes, mode: mode, slug: connection.slug)
-                if outcome.result == nil, selected.count < all.count {
-                    throw MCPSource.MCPError.toolFailure(slug: connection.slug)
-                }
                 guard try await self.account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity) == account else {
                     throw DirectMCPError.connectionChanged
                 }
@@ -151,11 +148,22 @@ enum GranolaSource {
                 if case DirectMCPError.connectionChanged = error { throw error }
                 if case DirectMCPError.reconnectRequired = error { throw error }
                 if case MCPSource.MCPError.toolFailure = error { throw error }
-                guard case MCPSource.MCPError.invalidResponse = error else { throw error }
+                guard shouldRetrySummary(error) else { throw error }
                 lastError = error
             }
         }
         throw lastError
+    }
+
+    /// Retry only malformed tool-free summary output, using the same already fetched notes.
+    /// Auth, usage, cancellation, native read and other CLI failures remain terminal.
+    static func shouldRetrySummary(_ error: Error) -> Bool {
+        switch error {
+        case MCPSource.MCPError.invalidResponse, CodexCLI.CLIError.badEnvelope: return true
+        case CodexCLI.CLIError.exitFailure(_, let message):
+            return message.contains("StructuredOutput") && message.contains("does not match required schema")
+        default: return false
+        }
     }
 
     static func supportsSurface(_ tools: [DirectMCPTool]) -> Bool {
@@ -203,21 +211,7 @@ enum GranolaSource {
     }
 
     static func payload(_ result: [String: Any]) throws -> [String: Any] {
-        if result["isError"] as? Bool == true || result["is_error"] as? Bool == true {
-            let message = (result["content"] as? [[String: Any]] ?? [])
-                .compactMap { $0["text"] as? String }.joined(separator: " ").lowercased()
-            if message.contains("unauthorized") || message.contains("unauthenticated") || message.contains("invalid_token") {
-                throw DirectMCPError.reconnectRequired
-            }
-            throw DirectMCPError.invalidResponse
-        }
-        if let object = result["structuredContent"] as? [String: Any], object["error"] == nil { return object }
-        let objects = (result["content"] as? [[String: Any]] ?? []).compactMap { block -> [String: Any]? in
-            guard let text = block["text"] as? String, let data = text.data(using: .utf8) else { return nil }
-            return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        }
-        guard objects.count == 1, let object = objects.first, object["error"] == nil else { throw DirectMCPError.invalidResponse }
-        return object
+        try GranolaResponse.decode(result).object
     }
 
     static func account(_ result: [String: Any], expected: String) throws -> Account {
@@ -234,21 +228,31 @@ enum GranolaSource {
     }
 
     static func discovery(_ result: [String: Any], window: MCPSource.Window, owned: Bool) throws -> Discovery {
-        let object = try payload(result)
+        let response = try GranolaResponse.decode(result)
+        let object = response.object
         guard let rows = object["meetings"] as? [[String: Any]], let count = integer(object["count"]),
-              let total = integer(object["total_in_range"]), count == rows.count, total == count,
-              count <= inventoryCap, let range = object["date_range"] as? [String: Any],
-              let from = (range["from"] as? String).flatMap(date), let to = (range["to"] as? String).flatMap(date),
-              abs(from.timeIntervalSince(window.lower)) < 0.00001, abs(to.timeIntervalSince(window.upper)) < 0.00001 else {
-            throw DirectMCPError.invalidResponse
+              count == rows.count, count <= inventoryCap,
+              Set(rows.compactMap { identifier($0) }).count == count else { throw DirectMCPError.invalidResponse }
+        if response.format == .json {
+            // Retain strict validation of exact coverage claims in the legacy JSON form.
+            guard let total = integer(object["total_in_range"]), total == count,
+                  let range = object["date_range"] as? [String: Any],
+                  let from = (range["from"] as? String).flatMap(date), let to = (range["to"] as? String).flatMap(date),
+                  abs(from.timeIntervalSince(window.lower)) < 0.00001,
+                  abs(to.timeIntervalSince(window.upper)) < 0.00001 else { throw DirectMCPError.invalidResponse }
         }
+        // XML supplies a returned sample, not an exact range echo or exhaustive total.
         var candidates: [Candidate] = []
         for row in rows {
+            if response.format == .xml {
+                guard row["captured_by_me"] as? Bool == owned,
+                      owned || row["listed_as_participant"] as? Bool == true else { throw DirectMCPError.invalidResponse }
+            }
             guard let id = identifier(row), let title = row["title"] as? String, title.utf8.count <= 2_000,
                   let timestamp = row["created_at"] as? String ?? row["date"] as? String,
                   let instant = date(timestamp) else { throw DirectMCPError.invalidResponse }
             if instant >= window.lower && instant < window.upper {
-                candidates.append(.init(id: id, title: title, date: timestamp, capturedByUser: owned))
+                candidates.append(.init(id: id, title: title, date: MCPSource.timestamp(instant), capturedByUser: owned))
             }
         }
         guard Set(candidates.map(\.id)).count == candidates.count else { throw DirectMCPError.invalidResponse }
@@ -309,6 +313,7 @@ enum GranolaSource {
         let object = try payload(result)
         guard !selected.isEmpty, selected.count <= 6, let rows = object["meetings"] as? [[String: Any]],
               rows.count == selected.count, Set(selected.map(\.id)).count == selected.count else { throw DirectMCPError.invalidResponse }
+        if let missing = object["not_found"], (missing as? [String]) != [] { throw DirectMCPError.invalidResponse }
         if let count = object["count"], integer(count) != rows.count { throw DirectMCPError.invalidResponse }
         if let truncated = object["truncated"], truncated as? Bool != false { throw DirectMCPError.invalidResponse }
         var notes: [Meeting] = []
@@ -318,8 +323,9 @@ enum GranolaSource {
                   let timestamp = row["created_at"] as? String ?? row["date"] as? String,
                   let instant = date(timestamp), instant >= window.lower, instant < window.upper,
                   instant == date(candidate.date), let title = row["title"] as? String,
-                  title.utf8.count <= 2_000,
+                  title.utf8.count <= 2_000, title == candidate.title,
                   row["truncated"] == nil || row["truncated"] as? Bool == false else { throw DirectMCPError.invalidResponse }
+            if let owner = row["captured_by_me"], owner as? Bool != candidate.capturedByUser { throw DirectMCPError.invalidResponse }
             let privateNotes = row["private_notes"] as? String
             let enhancedNotes = row["enhanced_notes"] as? String ?? row["summary"] as? String
             for key in ["private_notes", "enhanced_notes", "summary"] {
@@ -337,7 +343,7 @@ enum GranolaSource {
                 return name
             }
             let url = (row["url"] as? String).flatMap { verifiedURL($0, id: id) }
-            notes.append(Meeting(id: id, title: title, date: timestamp, capturedByUser: candidate.capturedByUser,
+            notes.append(Meeting(id: id, title: title, date: MCPSource.timestamp(instant), capturedByUser: candidate.capturedByUser,
                 privateNotes: privateText, enhancedNotes: enhancedText, participants: participants, url: url))
         }
         guard Set(notes.map(\.id)) == Set(selected.map(\.id)) else { throw DirectMCPError.invalidResponse }
@@ -373,6 +379,9 @@ enum GranolaSource {
     }
 
     static func validateSummary(_ summary: String, meetings: [Meeting], mode: MCPSource.ReadMode, slug: String) throws {
+        guard summary.range(of: #"^The user (?:recorded|noted|captured) that\b"#, options: .regularExpression) == nil else {
+            throw MCPSource.MCPError.invalidResponse(slug: slug, rule: "note_taking_lead")
+        }
         let markerPattern = try NSRegularExpression(pattern: #"\[M(\d+)\]"#)
         let matches = markerPattern.matches(in: summary, range: NSRange(summary.startIndex..., in: summary))
         let indexes = matches.compactMap { match in Range(match.range(at: 1), in: summary).flatMap { Int(summary[$0]) } }
@@ -403,7 +412,26 @@ enum GranolaSource {
     }
     static func date(_ value: String) -> Date? {
         let format = ISO8601DateFormatter(); format.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return format.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+        if let parsed = format.date(from: value) ?? ISO8601DateFormatter().date(from: value) { return parsed }
+        guard value.utf8.count <= 80, let split = value.lastIndex(of: " ") else { return nil }
+        let zone = String(value[value.index(after: split)...])
+        // The observed US Pacific format and unambiguous UTC/numeric offsets only.
+        // Do not guess ambiguous abbreviations such as CST or IST.
+        let offsets = ["UTC": 0, "GMT": 0, "PDT": -7 * 3600, "PST": -8 * 3600]
+        var offset = offsets[zone]
+        if offset == nil, zone.range(of: #"^[+-](?:0\d|1[0-4]):[0-5]\d$"#, options: .regularExpression) != nil {
+            let parts = zone.dropFirst().split(separator: ":")
+            if let hours = Int(parts[0]), let minutes = Int(parts[1]), hours < 14 || minutes == 0 {
+                offset = (zone.hasPrefix("-") ? -1 : 1) * (hours * 3600 + minutes * 60)
+            }
+        }
+        guard let offset, let timeZone = TimeZone(secondsFromGMT: offset) else { return nil }
+        let display = String(value[..<split])
+        let human = DateFormatter(); human.locale = Locale(identifier: "en_US_POSIX")
+        human.calendar = Calendar(identifier: .gregorian); human.timeZone = timeZone
+        human.dateFormat = "MMM d, yyyy h:mm a"; human.isLenient = false
+        guard let parsed = human.date(from: display), human.string(from: parsed) == display else { return nil }
+        return parsed
     }
     /// The checkpoint and query must use the same millisecond precision, avoiding a boundary gap.
     static func canonicalDate(_ value: Date) throws -> Date {
