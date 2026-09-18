@@ -9,7 +9,7 @@
 //
 //  The shape, size, radii, content and glow all animate together off `phase` (one spring) so nothing
 //  ever hard-cuts. Only the STOP button is hit-testable; everything else passes clicks through. The
-//  panel host + positioning live in NotchWindowController. Doc: Documentation/Notch Magic/.
+//  panel host + positioning live in NotchWindowController. Doc: the two Documentation - Sidekick - *.md files in this folder.
 //
 
 import SwiftUI

@@ -13,7 +13,7 @@
 //  simply never calls `showUpdateFound…`, so the gate never appears.
 //
 //  The method names/labels below MUST match Sparkle's imported Swift signatures exactly (Swift
-//  matches these protocol witnesses by signature). Doc: Documentation/Auto-Update (Sparkle).md
+//  matches these protocol witnesses by signature). Doc: Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md
 //
 
 import Foundation

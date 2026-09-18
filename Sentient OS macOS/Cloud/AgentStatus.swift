@@ -26,6 +26,19 @@ nonisolated enum AgentStatus {
     case couldNot(reason: String)  // STATUS: COULD_NOT — it cleanly gave up (reason may be empty)
     case none                      // no sentinel in the reply (legacy prompt / the model forgot)
 
+    static let unconfirmedConnectorMessage = "Completion could not be confirmed. Check the service before trying again."
+
+    /// Structured connector replies have no echoed transcript. Require the final nonempty
+    /// line to contain the exact sentinel, so "NOT DONE" or quoted earlier output cannot pass.
+    static func parseConnector(_ reply: String) -> AgentStatus {
+        guard let final = reply.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .last(where: { !$0.isEmpty }),
+              final.range(of: #"^STATUS:\s*(DONE|COULD_NOT)(?:\s*[-:—–]\s*.*)?$"#,
+                          options: [.regularExpression, .caseInsensitive]) != nil else { return .none }
+        let value = final.dropFirst("STATUS:".count).trimmingCharacters(in: .whitespaces)
+        return value.uppercased().hasPrefix("DONE") ? .done : .couldNot(reason: reason(of: final))
+    }
+
     /// Parse a reply for the sentinel. Bottom-up: the first `STATUS:`-bearing line from the END
     /// decides — the model's final line always sits below any prompt echo.
     static func parse(_ reply: String) -> AgentStatus {

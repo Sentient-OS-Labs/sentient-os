@@ -11,7 +11,7 @@
 //  (→ open the note in the reader) / Esc (→ back to the reader).
 //
 //  Data: SkyGraph · physics: SkySimulation · brain: NightSkyModel · drawing: SkyRenderer.
-//  Doc: Documentation/Knowledge Viewer.md
+//  Doc: Views/Knowledge/Documentation - Knowledge Window (Constellation & Reader).md
 //
 
 import SwiftUI

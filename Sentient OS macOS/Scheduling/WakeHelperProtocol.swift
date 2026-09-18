@@ -37,6 +37,10 @@ enum WakeHelperConfig {
     static let daemonPlistName = "jesai.Sentient-OS-macOS.WakeHelper.plist"
     /// CLI flag that puts the shared binary into root helper mode.
     static let helperFlag = "--wake-helper"
+    /// The absolute awake ceiling: no matter what the app does (even alive and heartbeating), the
+    /// helper force-restores normal sleep this long after `beginAwake`. The last net under the
+    /// deadman — a wedged-but-heartbeating run can never hold a Mac awake past this.
+    static let maxAwakeSeconds = 6 * 3600
     /// FALLBACK code-signing requirement for the helper's client gate. The primary gate is the
     /// daemon's OWN designated requirement ("signed exactly like me" — `WakeHelper.clientRequirement`,
     /// enforced by the system via `setCodeSigningRequirement`); this static string steps in only

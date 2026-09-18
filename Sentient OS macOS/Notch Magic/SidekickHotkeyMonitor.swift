@@ -22,7 +22,7 @@
 //  Emits: onPress (key down) · onHoldConfirmed (still down at the hold threshold) ·
 //  onRelease(held:) (key up, with duration). The two monitors cover both worlds — global (events
 //  routed to other apps) + local (Sentient itself frontmost) — and a periodic health check
-//  reconciles a missed release. Doc: Documentation/Notch Magic/Notch Magic.md.
+//  reconciles a missed release. Doc: Notch Magic/Documentation - Sidekick - General.md.
 //
 
 import AppKit

@@ -3,17 +3,18 @@
 //  Sentient OS macOS
 //
 //  Renders a knowledge-base note as editorial SwiftUI. The vault's markdown is a small, verified
-//  subset — `#/##/###` headings, paragraphs, `- ` bullets, the odd `---` rule, and very dense
-//  [[wikilinks]] (no code fences / tables / blockquotes / nested or numbered lists). So this is a
-//  tidy line-by-line block renderer (the same shape as HomeView's LetterView) rather than a heavy
-//  markdown dependency.
+//  subset — `#/##/###` headings, paragraphs, `- ` bullets, the odd `---` rule, ``` code fences
+//  (the README's vault-map tree lives in one), and very dense [[wikilinks]] (no tables /
+//  blockquotes / nested or numbered lists). So this is a tidy block renderer (the same shape as
+//  HomeView's LetterView) rather than a heavy markdown dependency: fenced blocks render verbatim
+//  in monospace with whitespace intact; every other line renders on its own.
 //
 //  Inline text goes through AttributedString for **bold** / *italic* / `code` / [text](url); but
 //  [[wikilinks]] are pre-split out first and rendered as accent links carrying a custom
 //  `sentient-wiki:` URL. An OpenURLAction routes those to onNavigate (jump to the note) and real
 //  http links to onExternal. Unresolved wikilinks render dimmed and inert.
 //
-//  Doc: Documentation/Knowledge Viewer.md
+//  Doc: Views/Knowledge/Documentation - Knowledge Window (Constellation & Reader).md
 //
 
 import SwiftUI
@@ -31,10 +32,12 @@ struct MarkdownView: View {
     private static let wikiScheme = "sentient-wiki:"
 
     var body: some View {
-        let lines = markdown.components(separatedBy: "\n")
         VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, raw in
-                line(raw.trimmingCharacters(in: .whitespaces))
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .line(let s): line(s)
+                case .code(let lines): codeBlock(lines)
+                }
             }
         }
         .tint(Theme.knowledgeLink)
@@ -47,6 +50,66 @@ struct MarkdownView: View {
             }
             return .handled
         })
+    }
+
+    // MARK: Blocks — fenced code is grouped verbatim; everything else is one block per line
+
+    private enum Block {
+        case line(String)     // trimmed — the everyday single-line path
+        case code([String])   // raw lines, leading whitespace preserved
+    }
+
+    /// Group the note into blocks. ``` fences become verbatim code blocks (the fence lines
+    /// themselves are dropped; an unterminated fence renders what's there). Runs of bare
+    /// box-drawing tree rows (`├── x`) are caught too, for when the model draws the vault map
+    /// without a fence — trimming their indentation would destroy the tree.
+    private var blocks: [Block] {
+        let lines = markdown.components(separatedBy: "\n")
+        var out: [Block] = []
+        var i = 0
+        while i < lines.count {
+            let trimmed = lines[i].trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                var body: [String] = []
+                i += 1
+                while i < lines.count, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
+                    body.append(lines[i]); i += 1
+                }
+                i += 1   // past the closing fence (or EOF)
+                if !body.isEmpty { out.append(.code(body)) }
+            } else if isTreeRow(trimmed) {
+                var body: [String] = []
+                while i < lines.count, isTreeRow(lines[i].trimmingCharacters(in: .whitespaces)) {
+                    body.append(lines[i]); i += 1
+                }
+                out.append(.code(body))
+            } else {
+                out.append(.line(trimmed))
+                i += 1
+            }
+        }
+        return out
+    }
+
+    /// A box-drawing tree row (`├── x`, `│   └── y`) outside any fence.
+    private func isTreeRow(_ trimmed: String) -> Bool {
+        guard let first = trimmed.first else { return false }
+        return "├└│".contains(first)
+    }
+
+    /// A fenced block, verbatim: monospace (the machine's voice), whitespace intact, neutral ink
+    /// on a whisper of a panel. The README's vault-map tree is the main resident.
+    private func codeBlock(_ lines: [String]) -> some View {
+        Text(verbatim: lines.joined(separator: "\n"))
+            .font(.system(size: 12.5, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.78))
+            .lineSpacing(3)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16).padding(.vertical, 14)
+            .background(RoundedRectangle(cornerRadius: 9).fill(.white.opacity(0.045)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(.white.opacity(0.07), lineWidth: 1))
+            .padding(.vertical, 10)
     }
 
     // MARK: One block per line (blank line = spacer)
@@ -161,10 +224,31 @@ struct MarkdownView: View {
         ### Something noticed
 
         His center of gravity is [[Sentient OS - Product Thesis]].
+
+        ## Structure
+
+        ```
+        Sentient OS - Knowledge Base/
+        ├── Identity/
+        │   ├── Jesai Tarun - Current Portrait.md
+        │   └── Values and Working Style.md
+        ├── Sentient OS/
+        │   ├── Product Thesis.md
+        │   └── Fundraising/
+        │       └── Afore Pre-Seed.md
+        └── People/
+            └── Aditya Vellanki.md
+        ```
+
+        And a fence-less tree, as the model sometimes draws it:
+
+        ├── Identity/
+        │   └── Jesai Tarun - Current Portrait.md
+        └── People/
         """, exists: { ["jesai tarun - current portrait", "sentient os map", "sentient os - product thesis"].contains($0.lowercased()) })
         .frame(maxWidth: 680, alignment: .leading)
         .padding(40)
     }
-    .frame(width: 760, height: 560)
+    .frame(width: 760, height: 900)
     .background(Color.black)
 }

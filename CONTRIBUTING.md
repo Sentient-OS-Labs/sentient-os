@@ -1,6 +1,6 @@
 # Contributing to Sentient OS
 
-Hi. Thanks for wanting to make Sentient better! We're a two-person team and the repo moves quickly, so this guide is short on purpose. It's worth the three minutes :)
+Hi. Thanks for wanting to make Sentient better! The repo moves quickly, so this guide is short on purpose. It's worth the three minutes :)
 
 ## Before you build anything big
 

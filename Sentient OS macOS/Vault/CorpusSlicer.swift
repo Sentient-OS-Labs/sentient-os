@@ -16,7 +16,7 @@
 //     measurement and rendering can never drift)
 //   - saveCorpus / loadCorpus / deleteCorpus → the .sentient-corpus.json staging snapshot
 //
-//  Doc: Documentation/Vault Generation (Stage 2).md
+//  Doc: Vault/Documentation - Knowledge Base (Vault).md
 //
 
 import Foundation

@@ -17,7 +17,7 @@
 //   - generate(notes:resume:onProgress:)      → the agentic build, returns stats
 //   - vaultRoot                               → ~/Sentient OS - Knowledge Base
 //
-//  Doc: Documentation/Vault Generation (Stage 2).md
+//  Doc: Vault/Documentation - Knowledge Base (Vault).md
 //
 
 import Foundation
@@ -165,6 +165,8 @@ actor VaultGenerator {
     func runCodexInStaging(_ invocation: CodexCLI.Invocation, staging: URL,
                            onProgress: @Sendable @escaping (Progress) -> Void = { _ in },
                            onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
+        var invocation = invocation
+        invocation.claudeModel = .opus     // the Claude engine's heavy leg: vault work earns Opus
         onProgress(.calling)
         let poller = Task.detached {
             while !Task.isCancelled {
@@ -175,10 +177,10 @@ actor VaultGenerator {
         }
         defer { poller.cancel() }
         do {
-            return try await CodexCLI.shared.run(invocation, onLine: onLine)
+            return try await FrontierRun.run(invocation, onLine: onLine)
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
-            Log("VaultGenerator: ⚠️ usage limit (session \(sessionID ?? "nil")); staging kept for resume")
+            Log("VaultGenerator: ⚠️ usage limit (thread \(sessionID ?? "nil")); staging kept for resume")
             throw VaultError.usageLimit(message: message,
                                         resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
         }
@@ -231,7 +233,7 @@ actor VaultGenerator {
                 // a single note, resuming it buys nothing — restart fresh under the slicer instead
                 // (also covers any stale launch-window token whose oversized first turn never ran).
                 if Self.census(of: staging).notes == 0 {
-                    Log("VaultGenerator: ⚠️ resume session left staging empty — restarting the build fresh")
+                    Log("VaultGenerator: ⚠️ resumed thread left staging empty — restarting the build fresh")
                     try? fm.removeItem(at: staging)
                     return try await generate(notes: notes, resume: nil, onProgress: onProgress, onLine: onLine)
                 }
@@ -337,6 +339,7 @@ actor VaultGenerator {
         // Success → atomically swap staging into the real vault (the only moment the old vault is
         // touched); on any throw the vault is left intact (B11 swapStagingIntoVault).
         onProgress(.materializing(notes: written))
+        try Task.checkCancellation()
         CorpusSlicer.deleteCorpus(in: staging)               // the snapshot must never enter the vault
         do {
             try Self.swapStagingIntoVault(staging)
@@ -396,6 +399,7 @@ actor VaultGenerator {
         if kind == .whatsapp { return (folder, "WhatsApp · \(folder)") }
         if kind == .gmail { return (folder, "Gmail — the user's email correspondence") }
         if kind == .calendar { return (folder, "Calendar — the user's schedule / events") }
+        if kind == .mcp { return (folder, "\(folder) — the user's own \(folder) account") }
         let p = relPath(sourceID)
         let low = p.lowercased()
         if low.contains("icloud~md~obsidian") {                       // the user's own Obsidian vault
@@ -420,7 +424,7 @@ actor VaultGenerator {
 }
 
 // MARK: - The locked Stage-2 prompt core (validated over a multi-cycle eval — receipts in
-// Documentation/Vault Generation (Stage 2).md)
+// Vault/Documentation - Knowledge Base (Vault).md)
 // The output section (agenticOutputInstructions) follows it.
 
 private let vaultPromptCore = """

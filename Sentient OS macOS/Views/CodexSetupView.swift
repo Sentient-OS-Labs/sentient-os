@@ -6,7 +6,7 @@
 //  shared `CodexSetup` engine. This view is a pure trigger + status renderer (ZERO setup logic
 //  lives here), so the real onboarding flow can present its own polished screen over the very same
 //  engine without re-implementing anything.
-//    1. Install the Codex CLI     2. Log in (browser OAuth)     3. Set up computer use (to build)
+//    1. Install the Codex CLI   2. Log in (browser OAuth)   3. Install the computer-use driver
 //
 //  Opened today from the dev tools' CODEX SETUP button.
 //
@@ -42,7 +42,7 @@ struct CodexSetupView: View {
         .frame(width: 560, height: 640)
         .background(Theme.bg)
         .onAppear {
-            codex.refreshComputerUse()
+            codex.refreshCuaDriver()
             Task { await codex.refreshInstalled() }
             Task { await codex.refreshLoginStatus() }
         }
@@ -91,26 +91,26 @@ struct CodexSetupView: View {
         }
     }
 
-    // MARK: Step 3 — computer use
+    // MARK: Step 3 — the computer-use driver
 
     private var computerUseCard: some View {
-        stepCard(3, "Set up computer use", done: codex.computerUseReady) {
-            if codex.computerUseReady {
-                hint("Computer use is wired into ~/.codex; Codex can drive your Mac through the CLI.")
-                Button { Task { await codex.setupComputerUse(force: true) } } label: {
-                    buttonLabel("arrow.triangle.2.circlepath", "Re-install computer use", busy: codex.settingUpComputerUse)
+        stepCard(3, "Install the computer-use driver", done: codex.cuaDriverReady) {
+            if codex.cuaDriverReady {
+                hint("cua-driver \(CuaDriver.version) is installed; Sentient can act inside your apps in the background.")
+                Button { Task { await codex.setupCuaDriver(force: true) } } label: {
+                    buttonLabel("arrow.triangle.2.circlepath", "Re-install the driver", busy: codex.settingUpCuaDriver)
                 }
                 .buttonStyle(.bordered).tint(Theme.secondary).controlSize(.small)
-                .disabled(codex.settingUpComputerUse)
+                .disabled(codex.settingUpCuaDriver)
             } else {
-                Button { Task { await codex.setupComputerUse() } } label: {
-                    buttonLabel("cpu.fill", "Set up computer use", busy: codex.settingUpComputerUse)
+                Button { Task { await codex.setupCuaDriver() } } label: {
+                    buttonLabel("cpu.fill", "Install the driver", busy: codex.settingUpCuaDriver)
                 }
                 .buttonStyle(.bordered).tint(Theme.Ink.green)
-                .disabled(codex.settingUpComputerUse || !codex.installed)
+                .disabled(codex.settingUpCuaDriver)
             }
-            statusLine(codex.computerUseStatus)
-            hint("Downloads OpenAI's official ChatGPT (Codex) app (~535 MB), lifts out the bundled computer-use plugin, and patches ~/.codex. No desktop app install; nothing hosted by us.")
+            statusLine(codex.cuaDriverStatus)
+            hint("Downloads the pinned cua-driver (~40 MB) from its GitHub release, verifies its checksum and signature, and installs it for Sentient alone. Needs neither codex nor a login.")
         }
     }
 

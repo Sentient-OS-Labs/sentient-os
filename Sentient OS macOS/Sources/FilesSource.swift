@@ -19,7 +19,7 @@
 //  high-water mark, plus a floor while a first run is mid-descent) decides new-vs-done — so edits
 //  never reprocess and a stopped run resumes.
 //
-//  Skipping & caps (see Documentation/Files Source (Skipping & Caps).md): three free layers, no
+//  Skipping & caps (see Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md): three free layers, no
 //  inference — subtree pruning (`pruneReason`: code repos, datasets, data/markup dumps), per-file
 //  rejects (`fileRejectReason`: camera roll, lock/temp, boilerplate, empty, oversize), and caps
 //  (newest 1,000/root · 300/dir · Downloads 1-year). The walk is bounded too — max depth 3, symlinks

@@ -23,7 +23,7 @@
 //  above the compact note; flinging the letter blooms the note into the full center. Once the
 //  plan claim reads Plus it becomes the reset-and-rebuild celebration.
 //
-//  Doc: Documentation/Home — Proactive Intelligence (For You).md · cards + the CodexCLI seam:
+//  Doc: Views/Documentation - Views - Home, Processing & Shared UI.md · cards + the CodexCLI seam:
 //  Briefing.swift.
 //
 
@@ -211,9 +211,9 @@ struct HomeView: View {
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
-                CautionCapsule(message: caution.kind.message,
-                               actionTitle: caution.kind == .loggedOut ? "Open Settings" : nil,
-                               onAction: openHealthSettings,
+                CautionCapsule(message: caution.message,
+                               actionTitle: cautionAction(caution.kind)?.title,
+                               onAction: cautionAction(caution.kind)?.run ?? {},
                                onDismiss: {
                                    OvernightCaution.clear()
                                    withAnimation(.easeInOut(duration: 0.25)) { self.caution = nil }
@@ -227,6 +227,19 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.trailing, 30).padding(.top, 64)
+    }
+
+    /// The amber caution's one-click fix, where there is one: a signed-out codex is fixed in
+    /// Permissions & Health; a full disk in System Settings' Storage pane. Weather kinds (offline,
+    /// usage limit) have nothing to click.
+    private func cautionAction(_ kind: OvernightCaution.Kind) -> (title: String, run: () -> Void)? {
+        switch kind {
+        case .loggedOut: return ("Open Settings", openHealthSettings)
+        case .diskFull:  return ("Manage Storage", { DiskSpace.openStorageSettings() })
+        case .connectorAuth:   // the fix lives on the engine's own connectors page
+            return ("Sign In Again", { NSWorkspace.shared.open(ConnectorCensus.directoryURL) })
+        case .noInternet, .usageLimit, .inputTooLarge, .stalled: return nil
+        }
     }
 
     /// Land directly on Permissions & Health — every banner's fix lives there; never strand the
@@ -317,7 +330,7 @@ struct HomeView: View {
                     slot: slots[min(item.offset, slots.count - 1)],
                     dealFrom: CGPoint(x: geo.size.width / 2, y: -160),
                     fireDimmed: appState.commandCoordinator.run.isRunning
-                        && item.element.action.map { ProactiveExecutor.isFireable($0.method) } == true,
+                        && item.element.action.map { ProactiveExecutor.isFireable($0) } == true,
                     onOffer: { model.run(item.element.id) },
                     onDetail: { openLetter(item.element.b) },
                     onOpenEnvelope: {
@@ -513,7 +526,7 @@ struct HomeView: View {
                            liveDraft: model.entry(b.id)?.action?.preparedContent ?? b.draft ?? "",
                            liveRecipient: model.entry(b.id)?.action?.recipient ?? "",
                            fireDimmed: appState.commandCoordinator.run.isRunning
-                               && model.entry(b.id)?.action.map { ProactiveExecutor.isFireable($0.method) } == true,
+                               && model.entry(b.id)?.action.map { ProactiveExecutor.isFireable($0) } == true,
                            onCommitEdit: { model.applyEdit(b.id, content: $0, recipient: $1) },
                            onOffer: {
                                closeLetter()
@@ -659,7 +672,7 @@ final class ForYouModel {
             // Sidekick/command-bar run or another card — a new fire can't start (the CTA is
             // dimmed; this is the backstop for a click that lands anyway). Only research is
             // exempt (nothing fires).
-            if ProactiveExecutor.isFireable(action.method), coordinator?.run.isRunning == true {
+            if ProactiveExecutor.isFireable(action), coordinator?.run.isRunning == true {
                 Log("card fire blocked — a task is already running (one at a time)")
                 return
             }
@@ -699,11 +712,12 @@ final class ForYouModel {
     /// started.
     private func runReal(_ id: String, _ action: PreparedAction) {
         let v = visit
-        let external = ProactiveExecutor.isFireable(action.method)
+        let external = ProactiveExecutor.isFireable(action)
         if external {
             let fallback: String = switch action.method {
             case .gmail:    "Sending your email…"
             case .calendar: "Updating your calendar…"
+            case .mcp:      "Working through your \(action.methodTarget.map { ConnectorRegistry.displayName(slug: $0) } ?? "connected service") connector…"
             default:        "Working on your Mac…"
             }
             guard let coordinator,
@@ -790,13 +804,12 @@ final class ForYouModel {
     }
 
     /// A copy of a PreparedAction with new `preparedContent` + `recipient` (the rest unchanged).
+    /// Copy the full value so content edits preserve routing, identity and operation metadata.
     private static func replacing(_ a: PreparedAction, content: String, recipient: String) -> PreparedAction {
-        PreparedAction(title: a.title, method: a.method, target: a.target, urgency: a.urgency,
-                       dueDate: a.dueDate, status: a.status, verification: a.verification,
-                       cardSummary: a.cardSummary, preparedContent: content, executionRecipe: a.executionRecipe,
-                       recipient: recipient,
-                       buttonText: a.buttonText, detailLabel: a.detailLabel, sources: a.sources,
-                       reviewNote: a.reviewNote)
+        var copy = a
+        copy.preparedContent = content
+        copy.recipient = recipient
+        return copy
     }
 
     /// Send a card flying along `v` (a flick's predicted translation), then reflow the scatter.

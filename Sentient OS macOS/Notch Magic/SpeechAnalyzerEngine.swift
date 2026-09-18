@@ -24,11 +24,9 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     /// SpeechAnalyzer handles long-form audio; we cap a single spoken command at 3 minutes.
     static let maxUtteranceDuration: TimeInterval = 180
 
-    /// ONE audio engine for the process. A fresh AVAudioEngine per capture opens a new HAL IO proc
-    /// each press, and rapid press/cancel churn wedges CoreAudio input into delivering ZERO buffers
-    /// (field-proven: a 2.3s hold fed the analyzer nothing). Reuse the instance; only the tap and
-    /// start/stop cycle per capture.
-    private static let sharedAudioEngine = AVAudioEngine()
+    /// The process's shared microphone engine lives in MicrophoneEngine (device-change-safe); this
+    /// is the instance the current capture tapped, so stop/cancel release the right one.
+    private var audioEngine: AVAudioEngine?
     private var analyzer: SpeechAnalyzer?
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var resultsTask: Task<String, Error>?
@@ -82,27 +80,32 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         try await analyzer.start(inputSequence: stream)
         try Task.checkCancellation()   // cancelled during the session handoff → never touch the mic
 
-        // Mic → convert to the analyzer's format → stream in. The tap runs on an audio thread and
-        // touches only these locals (never the MainActor self), so there's no isolation violation.
-        let engine = Self.sharedAudioEngine
-        let input = engine.inputNode
-        let inputFormat = input.outputFormat(forBus: 0)
+        // Mic → convert to the analyzer's format → stream in. The engine + tap format come from
+        // MicrophoneEngine, which rebuilds the engine when the input device changed (a stale bus
+        // format is the crash / zero-buffer trap — see that file). The tap runs on an audio thread
+        // and touches only these locals (never the MainActor self), so there's no isolation violation.
+        let (engine, inputFormat) = try MicrophoneEngine.acquire()
+        audioEngine = engine
         guard let converter = AVAudioConverter(from: inputFormat, to: analyzerFormat) else {
             throw VoiceError.modelUnavailable
         }
         let counts = OSAllocatedUnfairLock(initialState: (0, 0))
         self.tapCounts = counts
-        input.removeTap(onBus: 0)   // defensive: a stale tap from an interrupted capture must not linger
-        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
-            counts.withLock { $0.0 += 1 }
-            guard let converted = Self.convert(buffer, using: converter, to: analyzerFormat) else { return }
-            counts.withLock { $0.1 += 1 }
-            continuation.yield(AnalyzerInput(buffer: converted))
+        do {
+            engine.prepare()   // configure the graph against the CURRENT device before the tap goes on
+            try MicrophoneEngine.installTap(on: engine.inputNode, format: inputFormat) { buffer in
+                counts.withLock { $0.0 += 1 }
+                guard let converted = Self.convert(buffer, using: converter, to: analyzerFormat) else { return }
+                counts.withLock { $0.1 += 1 }
+                continuation.yield(AnalyzerInput(buffer: converted))
+            }
+            tapInstalled = true
+            try engine.start()
+        } catch {
+            MicrophoneEngine.markDirty()   // whatever the engine's state is now, the next press starts clean
+            throw error
         }
-        tapInstalled = true
-        engine.prepare()
-        try engine.start()
-        Log("voice: capture started (\(Self.msLabel(clock.now - started))ms)")
+        Log("voice: capture started (\(Self.msLabel(clock.now - started))ms · mic \(Int(inputFormat.sampleRate)) Hz/\(inputFormat.channelCount) ch)")
     }
 
     func stopAndTranscribe() async throws -> String {
@@ -126,7 +129,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
                 }
             }
             teardown()
-            Log("voice: finalized (\(Self.msLabel(clock.now - started))ms · tap \(taps) · fed 0 — no audio, session closed)")
+            Log("voice: finalized (\(Self.msLabel(clock.now - started))ms · tap \(taps) · fed 0 — no audio, capture closed)")
             return ""
         }
 
@@ -137,7 +140,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
             let finalize = Task { try await analyzer.finalizeAndFinishThroughEndOfInput() }
             let bound = Task {
                 try await Task.sleep(for: .seconds(5))
-                Log("voice: finalize parked — force-closing the session")
+                Log("voice: finalize parked — force-closing the capture")
                 await analyzer.cancelAndFinishNow()
             }
             _ = try? await finalize.value
@@ -187,12 +190,10 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     // MARK: Internals
 
     private func stopAudio() {
-        let engine = Self.sharedAudioEngine
-        if tapInstalled {
-            engine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        if engine.isRunning { engine.stop() }
+        guard let engine = audioEngine else { return }
+        MicrophoneEngine.stop(engine, tapInstalled: tapInstalled)
+        tapInstalled = false
+        audioEngine = nil
     }
 
     private func teardown() {

@@ -11,7 +11,30 @@
 import Foundation
 import SwiftUI
 
-if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
+#if DEBUG
+// Helper/wake invocations must retain their dedicated entry even if a child inherits lab env.
+if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
+   CommandLine.arguments.count == 1 {
+    if ProcessInfo.processInfo.environment["LAB_CMD"] == "directrender" {
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        Task { await ConnectorLab.run(); exit(0) }
+        NSApplication.shared.run()
+        exit(0)
+    }
+    Task { await ConnectorLab.run(); exit(0) }
+    dispatchMain()
+}
+#endif
+
+if CommandLine.arguments.dropFirst().first == "--outlook-tool-policy" {
+    exit(OutlookToolPolicy.runHelper(arguments: CommandLine.arguments))
+} else if CommandLine.arguments.dropFirst().first == "--slack-tool-policy" {
+    exit(SlackToolPolicy.runHelper(arguments: CommandLine.arguments))
+} else if CommandLine.arguments.dropFirst().first.map({ ["--direct-mcp-headers", "--direct-mcp-policy"].contains($0) }) == true {
+    let arguments = CommandLine.arguments
+    Task.detached { exit(await DirectMCPRuntime.runHelper(arguments: arguments)) }
+    dispatchMain()
+} else if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
     CrashReporting.start(.wakeHelper)   // crash reporting for the root overnight path
     WakeHelper.run()                    // root LaunchDaemon mode — never returns
 } else {

@@ -48,7 +48,7 @@ enum Notify {
         // surface it (auth status only; NEVER the title/body).
         let status = await center.notificationSettings().authorizationStatus
         guard status == .authorized || status == .provisional else {
-            Log("Notify: not authorized (status \(status.rawValue)) — reminder suppressed")
+            Log("Notify: not permitted (status \(status.rawValue)) — reminder suppressed")
             // A declined permission is the user's choice, not an app defect — product telemetry
             // (how many run with reminders off), so TelemetryDeck, never Sentry (2026-07-12).
             Analytics.signal("Notify.notAuthorized", parameters: ["status": String(status.rawValue)])

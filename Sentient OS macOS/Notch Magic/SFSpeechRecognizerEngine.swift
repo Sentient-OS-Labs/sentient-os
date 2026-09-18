@@ -10,14 +10,15 @@
 //  Key methods: start() · stopAndTranscribe() · cancel().
 //
 
-import Speech
+@preconcurrency import Speech
 @preconcurrency import AVFAudio
 
 final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
     /// SFSpeechRecognizer refuses audio longer than ~1 minute — stop a hair under.
     static let maxUtteranceDuration: TimeInterval = 59
 
-    private let audioEngine = AVAudioEngine()
+    /// The instance of the shared microphone engine (MicrophoneEngine) this capture tapped.
+    private var audioEngine: AVAudioEngine?
     private let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
@@ -37,16 +38,22 @@ final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
         request.addsPunctuation = true
         self.request = request
 
-        // Mic → the recognition request. The tap runs on an audio thread and touches only the captured
-        // `request` local (never the MainActor self), so there's no isolation violation.
-        let input = audioEngine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
-            request.append(buffer)
+        // Mic → the recognition request. The engine + tap format come from MicrophoneEngine (rebuilt
+        // when the input device changed). The tap runs on an audio thread and touches only the
+        // captured `request` local (never the MainActor self), so there's no isolation violation.
+        let (engine, format) = try MicrophoneEngine.acquire()
+        audioEngine = engine
+        do {
+            engine.prepare()
+            try MicrophoneEngine.installTap(on: engine.inputNode, format: format) { buffer in
+                request.append(buffer)
+            }
+            tapInstalled = true
+            try engine.start()
+        } catch {
+            MicrophoneEngine.markDirty()
+            throw error
         }
-        tapInstalled = true
-        audioEngine.prepare()
-        try audioEngine.start()
 
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             // Pull out value types here (off-main), then hop only those onto the actor.
@@ -101,11 +108,10 @@ final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
     }
 
     private func stopAudio() {
-        if tapInstalled {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-        if audioEngine.isRunning { audioEngine.stop() }
+        guard let engine = audioEngine else { return }
+        MicrophoneEngine.stop(engine, tapInstalled: tapInstalled)
+        tapInstalled = false
+        audioEngine = nil
     }
 
     private func teardown() {

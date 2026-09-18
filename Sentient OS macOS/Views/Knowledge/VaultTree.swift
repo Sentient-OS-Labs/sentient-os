@@ -9,7 +9,7 @@
 //  synchronous loader — the view (KnowledgeView) owns all UI state.
 //
 //  Key types: VaultNode (a folder or a note) · KnowledgeVault (.load() / .resolve() /
-//  .ancestors(of:) / .read()). Doc: Documentation/Knowledge Viewer.md
+//  .ancestors(of:) / .read()). Doc: Views/Knowledge/Documentation - Knowledge Window (Constellation & Reader).md
 //
 
 import Foundation

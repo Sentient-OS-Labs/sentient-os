@@ -23,7 +23,7 @@
 //  Sync = whole-vault encrypted-blob replace: POST /vault sends the entire vault as one encrypted
 //  blob (~KBs of markdown) on any change; DELETE /vault is the one-click delete.
 //
-//  Doc: Documentation/MCP Mirror Client.md
+//  Doc: Cloud/Documentation - Cloud - MCP Mirror.md
 //
 
 import Foundation
@@ -91,7 +91,7 @@ actor MirrorClient {
     /// The coached system prompt the user pastes into ChatGPT/Claude/Gemini (custom instructions).
     /// Naming the connector + coaching the get_structure-first habit is what reliably makes the
     /// client load and use the tools — clients lazy-load connector tools behind a search gate
-    /// (field lessons in Documentation/MCP Mirror Client.md).
+    /// (field lessons in Cloud/Documentation - Cloud - MCP Mirror.md).
     /// Lives here (the MCP owner) so every surface that offers "Copy System Prompt" shares one copy.
     static let systemPrompt = """
         You have access to the user's personal knowledge base through the Sentient OS MCP: an \
@@ -341,19 +341,28 @@ actor MirrorClient {
 
 /// Minimal Keychain wrapper for small secrets (the mirror tokens). One service, key = account.
 enum Keychain {
-    private static let service = "ai.sentient-os.app"
+    private static var service: String {
+        #if DEBUG
+        if Bundle.main.bundleIdentifier == "ai.sentientos.acceptance" { return "ai.sentientos.acceptance.mirror" }
+        #endif
+        return "ai.sentient-os.app"
+    }
 
     @discardableResult
     static func set(_ key: String, _ value: String) -> Bool {
-        delete(key)
-        let query: [String: Any] = [
+        let identity: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
-            kSecValueData as String: Data(value.utf8),
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess   // B3: surface a failed persist
+        let data = Data(value.utf8)
+        let status = SecItemUpdate(identity as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
+        var newItem = identity
+        newItem[kSecValueData as String] = data
+        newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        return SecItemAdd(newItem as CFDictionary, nil) == errSecSuccess
     }
 
     static func read(_ key: String) -> String? {

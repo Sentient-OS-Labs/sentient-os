@@ -4,9 +4,11 @@
 //
 //  Root-side wake helper. Runs as a LaunchDaemon — the app binary relaunched by launchd with
 //  --wake-helper (entry in main.swift). It is the ONLY code path that runs as root, and all it
-//  does is toggle `pmset disablesleep` and schedule wakes, behind a DEADMAN timer: if the app
-//  crashes mid-run and stops sending heartbeats, the helper itself restores normal sleep — so a
-//  bug can never leave the Mac awake all day. Connections are gated by a code-signing check.
+//  does is toggle `pmset disablesleep` and schedule wakes, behind TWO independent nets: a DEADMAN
+//  timer (the app crashes and stops heartbeating → the helper restores normal sleep itself) and an
+//  absolute CEILING per awake session (the app is alive and heartbeating but wedged → sleep comes
+//  back after `WakeHelperConfig.maxAwakeSeconds` regardless). A bug can never leave the Mac awake
+//  all day. Connections are gated by a code-signing check.
 //
 
 import Foundation
@@ -31,6 +33,7 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
 
     private let queue = DispatchQueue(label: "wakehelper")
     private var deadman: DispatchSourceTimer?
+    private var ceiling: DispatchSourceTimer?   // absolute per-session limit — heartbeats never feed it
     private var lastTimeout = 7200
     private var armedSpec: String?   // the pmset wake we last scheduled (for idempotent re-arm + cancel)
     private static let armedFile = "/Library/Application Support/SentientOS/armed-wake"
@@ -90,7 +93,8 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
         queue.async {
             let ok = self.pmset(["-a", "disablesleep", "1"])
             self.startDeadman(seconds: max(60, timeoutSeconds))
-            self.log("beginAwake timeout=\(timeoutSeconds)s ok=\(ok)")
+            self.startCeiling()
+            self.log("beginAwake timeout=\(timeoutSeconds)s ceiling=\(WakeHelperConfig.maxAwakeSeconds)s ok=\(ok)")
             reply(ok)
         }
     }
@@ -108,8 +112,9 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
             let ok = self.pmset(["-a", "disablesleep", "0"])
             if ok {
                 self.cancelDeadman()
+                self.cancelCeiling()
             } else {
-                self.log("endAwake: pmset disablesleep 0 FAILED — leaving deadman armed as backstop")
+                self.log("endAwake: pmset disablesleep 0 FAILED — leaving deadman + ceiling armed as backstop")
             }
             self.log("endAwake ok=\(ok)")
             reply(ok)
@@ -155,12 +160,35 @@ final class WakeHelper: NSObject, WakeHelperProtocol, NSXPCListenerDelegate {
             self?.log("DEADMAN fired — no heartbeat in \(seconds)s; forcing disablesleep 0")
             self?.pmset(["-a", "disablesleep", "0"])
             self?.cancelDeadman()
+            self?.cancelCeiling()   // sleep is restored — both nets stand down together
         }
         t.resume()
         deadman = t
     }
 
     private func cancelDeadman() { deadman?.cancel(); deadman = nil }
+
+    // MARK: - Ceiling
+
+    /// The absolute awake limit, armed once per `beginAwake` and deliberately NOT fed by
+    /// heartbeats: the deadman catches a DEAD app, this catches a wedged-but-alive one (still
+    /// heartbeating, making no progress). When it fires, normal sleep comes back no matter what.
+    private func startCeiling() {
+        cancelCeiling()
+        let seconds = WakeHelperConfig.maxAwakeSeconds
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + .seconds(seconds))
+        t.setEventHandler { [weak self] in
+            self?.log("CEILING fired — awake \(seconds)s since beginAwake; forcing disablesleep 0")
+            self?.pmset(["-a", "disablesleep", "0"])
+            self?.cancelDeadman()
+            self?.cancelCeiling()
+        }
+        t.resume()
+        ceiling = t
+    }
+
+    private func cancelCeiling() { ceiling?.cancel(); ceiling = nil }
 
     // MARK: - pmset / codesign gate / log
 

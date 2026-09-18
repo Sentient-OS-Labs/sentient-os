@@ -17,7 +17,7 @@
 //  Key methods:
 //   - findActionItems(from:now:)  → [ActionItem]   (windows to 7 days of summaries, runs Codex)
 //
-//  Doc: Documentation/Proactive Intelligence (Judge).md
+//  Doc: Proactive/Documentation - Proactive Intelligence.md
 //
 
 import Foundation
@@ -122,11 +122,11 @@ actor Proactive {
     /// does not verify, write, or notify. Throws on no-recent / usage-limit / failure so the caller
     /// can surface a clear status.
     func findActionItems(from notes: [CloudNote], now: Date = Date(),
-                         calendarContext: String? = nil,
+                         calendarContext: String? = nil, allowCalendarOnly: Bool = false, calendarContextScoped: Bool = false, persistResult: Bool = true,
                          onLine: (@Sendable (String) -> Void)? = nil) async throws -> [ActionItem] {
         // 1. Window the summaries to the last N days (shared with PART 2 via Self.recent).
         let recent = Self.recent(from: notes, now: now)
-        guard !recent.isEmpty else { throw ProError.noRecent }
+        guard !recent.isEmpty || (allowCalendarOnly && calendarContext?.isEmpty == false) else { throw ProError.noRecent }
 
         // 2. One hermetic Codex call: summaries over stdin, NO tools. A neutral empty scratch dir is
         //    the cwd so even read-only file tools have nothing to find — the model judges from the
@@ -135,28 +135,29 @@ actor Proactive {
             .appendingPathComponent("sentient-proactive-judge", isDirectory: true)
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 
-        var inv = CodexCLI.Invocation(prompt: Self.prompt(recent: recent, now: now, calendarContext: calendarContext))
+        var inv = CodexCLI.Invocation(prompt: Self.prompt(recent: recent, now: now, calendarContext: calendarContext, calendarContextScoped: calendarContextScoped))
         inv.feature = "proactive"
         inv.effort = .high                  // gpt-5.6-sol → high (this judgment is the product)
         inv.sandbox = .readOnly             // never writes or acts
         inv.cwd = scratch.path              // neutral empty dir — nothing to read
         inv.webSearch = false               // summaries-only; web research is PART 2
+        inv.toolsDisabled = calendarContextScoped // source titles cannot gain local file tools
         inv.includeUserConfig = false       // hermetic — no user MCP servers (Gmail is PART 2)
         inv.outputSchema = Self.schema
         inv.timeout = 1_200                 // deep reasoning can run long
 
         Log("Proactive.judge: \(recent.count) summaries in the last \(Self.lookbackDays)d → asking Codex (summaries-only, hermetic)…")
         do {
-            let env = try await CodexCLI.shared.run(inv, onLine: onLine)
+            let env = try await FrontierRun.run(inv, onLine: onLine)
             let items = Array(Self.parse(env.jsonResult).prefix(Self.maxItems))
-            Log("Proactive.judge: ✅ \(items.count) action item(s) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
+            Log("Proactive.judge: ✅ \(items.count) action item(s) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
             #if DEBUG   // B7: title/action/importance/sources are the user's life — DEBUG-only so it can
                         // never become a Release breadcrumb (Sentry is Release-only).
             for (i, it) in items.enumerated() {
                 Log("  #\(i + 1) [\(it.urgency.rawValue)\(it.dueDate.map { " · due \($0)" } ?? "")] \(it.title)\n      → \(it.action)\n      why: \(it.importance)\n      src: \(it.sources.joined(separator: " | "))")
             }
             #endif
-            Self.saveLatest(items)
+            if persistResult { Self.saveLatest(items) }
             return items
         } catch let CodexCLI.CLIError.usageLimit(message, _) {
             throw ProError.usageLimit(message)
@@ -228,13 +229,14 @@ actor Proactive {
 
     // MARK: The prompt — accuracy-first, detailed (the judgment IS the product)
 
-    private static func prompt(recent: [CloudNote], now: Date, calendarContext: String?) -> String {
+    private static func prompt(recent: [CloudNote], now: Date, calendarContext: String?, calendarContextScoped: Bool = false) -> String {
         let today = todayString(now)
 
         // The user's LIVE calendar (last 7 days + next 24h, ALL events), pre-fetched as text so PART 1
         // stays tool-free/hermetic. Only present when Calendar is connected (CalendarConnect.fetch…).
         let calendarBlock: String = {
             guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return "" }
+            if calendarContextScoped { return CalendarContext.promptBlock(ctx) }
             return """
 
             ## THE USER'S LIVE CALENDAR (every event — last 7 days + next 24 hours)
@@ -281,23 +283,23 @@ actor Proactive {
         Connect these when they're genuinely there — but don't strain to manufacture links. A strong \
         item that lives in a single summary is every bit as valid as one that spans several.
 
-        IMPORTANT — your scope: you DETECT and RANK from these summaries ALONE. A separate research \
+        IMPORTANT — your scope: you DETECT and RANK from \(calendarContextScoped ? "the supplied summaries and scoped calendar context" : "these summaries ALONE"). A separate research \
         step runs AFTER you and verifies each item you pick against the live sources (Gmail, the web) \
         and the user's knowledge base — correcting details and dropping anything already done. So you \
         do NOT need to be perfectly certain or fully grounded here; that's handled next. But you must \
         NOT pad: only the genuinely strongest candidates earn a slot. And you must NEVER use computer \
-        use (or any other tool) to verify anything — you judge from the summaries alone; acting on \
+        use (or any other tool) to verify anything — you judge from \(calendarContextScoped ? "the supplied evidence" : "the summaries alone"); acting on \
         the user's Mac belongs only to a later step the user explicitly fires.
 
-        ## YOUR INPUT: the last 7 days of summaries
-        The last \(lookbackDays) days of summaries (at the end of this message) are your ONLY input, \
+        ## YOUR INPUT: \(calendarContextScoped ? "supplied summaries and scoped calendar context" : "the last 7 days of summaries")
+        The last \(lookbackDays) days of summaries (at the end of this message) are \(calendarContextScoped ? "supplemented by the scoped calendar context below" : "your ONLY input"), \
         from EVERY source — files, WhatsApp, iMessage, Apple Notes, Calendar, and Gmail. Each line is \
         `#<n> · [source] location · date` then `Title — summary`. Scan EVERY source thoroughly — a \
         promise made in WhatsApp, a to-do written in Notes, a deadline implied by a saved file, a \
         request in iMessage can each be exactly as important as anything in email. Do NOT force a \
         spread and do NOT penalize any source: just surface the genuinely best items, whatever they \
         happen to be. If the strongest items all turn out to be email, that's completely fine. Judge \
-        from these summaries alone — you have no other tools here.
+        from \(calendarContextScoped ? "this supplied evidence" : "these summaries alone") — you have no other tools here.
 
         ## What an ACTION ITEM is
         Something the user should DO, DECIDE, PREPARE FOR, or BE AWARE OF soon — concrete, time-relevant, \

@@ -89,6 +89,7 @@ struct RootView: View {
                                mode: .auto,
                                runGmail: ModelBackend.connectorsAvailable && gmailConnected && runGmail,
                                runCalendar: ModelBackend.connectorsAvailable && calendarConnected && runCalendar,
+                               mcpSlugs: MCPSource.kbSlugs(),
                                fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
                     appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 14h clock
@@ -115,16 +116,16 @@ struct RootView: View {
         // · the model-download card (ModelDownloadWhisper) — the on-device model landing in the
         //   background while the user is elsewhere (it hides itself when onboarding's full-screen
         //   downloading view shows the same bar big);
-        // · the computer-use setup line — the bootstrap is an unstructured background task that
-        //   outlives onboarding's processing takeover (knowledge base creation, even the home in
-        //   rare cases), so as long as it's actually running, this quiet line shows.
+        // · the computer-use setup line — the driver download is an unstructured background task
+        //   that outlives onboarding's processing takeover (knowledge base creation, even the home
+        //   in rare cases), so as long as it's actually running, this quiet line shows.
         .overlay(alignment: .bottomLeading) {
             VStack(alignment: .leading, spacing: 10) {
                 ModelDownloadWhisper(download: download)
-                if codex.settingUpComputerUse {
+                if codex.settingUpCuaDriver {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small).scaleEffect(0.6)
-                        Text("Setting up Codex computer use in the background.")
+                        Text("Setting up computer use in the background.")
                             .font(.system(size: 11))
                             .foregroundStyle(Theme.faint)
                     }
@@ -133,7 +134,7 @@ struct RootView: View {
             }
             .padding(.leading, 22).padding(.bottom, 12)
         }
-        .animation(.easeInOut(duration: 0.35), value: codex.settingUpComputerUse)
+        .animation(.easeInOut(duration: 0.35), value: codex.settingUpCuaDriver)
         .animation(.easeInOut(duration: 0.35), value: download.phase)
         .animation(.easeInOut(duration: 0.35), value: download.fullScreenVisible)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a

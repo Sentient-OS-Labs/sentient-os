@@ -103,9 +103,9 @@ That third column is our favorite thing we've ever shipped, and it's empty on pu
 - **Reading your real life.** <samp>typedstream decoding · protobuf walks · wal-safe copy-reads · date-added, not mtime · never spotlight</samp>
 - **Privacy engineering.** <samp>zero-trace triage · fail-closed parsing · a pii regex backstop · aes-256-gcm before anything leaves · a 30-day dead-man lease</samp>
 - **The 3 AM machine.** <samp>a codesign-verified root helper · a deadman timer · ac + thermal gates · crash-safe resume</samp>
-- **The cloud brain.** <samp>computer use on the plain Codex CLI · frontier compute on your subscription · marginal cost ~$0 · no sentient servers</samp>
+- **The cloud brain.** <samp>your own Codex CLI as the brain, the open-source cua driver as the hands · frontier compute on your subscription · marginal cost ~$0 · no sentient servers</samp>
 
-And about that cloud brain. Sentient's frontier model is your own Codex CLI, connected to your own frontier model, or signed into your own ChatGPT account. That includes computer use: OpenAI only ships it inside their desktop app, but the "enable" switch turned out to be a local file copy. So Sentient downloads Codex Computer Use straight from OpenAI and gives it to your Codex CLI, on your machine, and we never host or proxy it.
+And about that cloud brain. Sentient's frontier model is your own Codex CLI, connected to your own frontier model, or signed into your own ChatGPT account. The hands are the open-source [cua driver](https://github.com/trycua/cua) (MIT), embedded inside Sentient itself: it clicks and types in the background — no cursor warp, no focus steal, so you keep working while your agent drives another app — under Sentient's own macOS permissions, with the binary version-pinned, checksummed, and signature-verified before it ever runs. We never host or proxy any of it.
 <br/>
 
 ## The privacy flex.
@@ -144,7 +144,7 @@ Sentient costs us nothing to run. Your Mac does about 90% of the compute, and th
 
 As for how we ever make money: enterprise, later. The same engine, with the consumer connectors swapped for work ones like Slack, Granola, Linear, and Notion, becomes a personal intelligence layer for every employee, and companies pay for a license. But nobody has built AI like this before; it's a genuinely new frontier, so we're perfecting it with consumers first. Your data is never the product; we couldn't sell it if we wanted to, because we never have it.
 
-Open source is also personal. [Writing Tools](https://github.com/theJayTea/WritingTools), a repo I built 2 years ago at 17, grew to 2,300 stars, 150 forks, and coverage in over 30 publications. The future of AI, one where it proactively helps you, should be accessible to everyone; that's why all of Sentient is AGPL.
+AI that proactively helps you should be accessible to everyone. Sentient is open source under the AGPL so anyone can inspect, build, and improve it.
 
 </details>
 
@@ -221,7 +221,7 @@ Apple Silicon (M1 or newer) on macOS 15 or later. 8 GB of RAM is enough; the on-
 
 ## The docs go deeper.
 
-Every serious subsystem in this repo has a detailed engineering doc in [the Documentation folder](Sentient%20OS%20macOS/Documentation): how iMessage's typedstream actually decodes, why we never touch Spotlight, how a root helper wakes a lid-shut Mac at 3 AM without ever sending you into System Settings, and what it took to make the notch a button. Filled with fun engineering battles from the trenches :)
+Every serious subsystem in this repo has a detailed engineering doc sitting right next to its code (each feature folder under `Sentient OS macOS/` carries a `Documentation - <Feature>.md`; [the map lives here](Sentient%20OS%20macOS/Documentation%20-%20General%20-%20README.md)): how iMessage's typedstream actually decodes, why we never touch Spotlight, how a root helper wakes a lid-shut Mac at 3 AM without ever sending you into System Settings, and what it took to make the notch a button. Filled with fun engineering battles from the trenches :)
 
 House rules live here: [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECURITY.md) · [LICENSING.md](LICENSING.md) · [CLA.md](CLA.md)
 
@@ -229,15 +229,15 @@ House rules live here: [CONTRIBUTING.md](CONTRIBUTING.md) · [SECURITY.md](SECUR
 
 ## Contributing.
 
-We're two people and this repo moves fast. Issues and PRs are welcome, small PRs are beloved, and for anything ambitious please open an issue first so you don't spend a weekend building something we're mid-rewrite on. Setup and house style are in [CONTRIBUTING.md](CONTRIBUTING.md). Outside contributions sign a CLA on the first PR.
+This repo moves fast. Issues and PRs are welcome, small PRs are beloved, and for anything ambitious please open an issue first so you don't spend a weekend building something we're mid-rewrite on. Setup and house style are in [CONTRIBUTING.md](CONTRIBUTING.md). Outside contributions sign a CLA on the first PR.
 
 <br/>
 
 ## Who's building this.
 
-We're Jesai ([GitHub](https://github.com/theJayTea/) & [LinkedIn](https://www.linkedin.com/in/jesai-tarun-37004725a/)) and Aditya ([GitHub](https://github.com/AdityaHemanthVellanki) & [LinkedIn](https://www.linkedin.com/in/adityahemanth/)): two best friends building Sentient full-time from San Francisco, usually at hours our own morning cards would judge us for. We want to push the bounds of what's possible with on-device inference, and the bounds of AI that truly knows you. We believe this next frontier must be built with privacy and accessibility at its core. This is Sentient.
+Built and maintained by [Rushil](https://github.com/RushilM007). Sentient explores what on-device inference makes possible: AI that understands your context and helps you get work done, with privacy and accessibility at its core.
 
-Say hi: [jesai@sentient-os.ai](mailto:jesai@sentient-os.ai)
+Say hi: [@RushilM007 on GitHub](https://github.com/RushilM007).
 
 *Welcome to the future.*
 

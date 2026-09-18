@@ -14,7 +14,7 @@
 //
 //  Replaced the old DatabaseView (a dev CycleStore-summaries inspector, still in Dev Tools via
 //  SummariesView). Data: VaultTree.swift · rendering: MarkdownView.swift.
-//  Doc: Documentation/Knowledge Viewer.md
+//  Doc: Views/Knowledge/Documentation - Knowledge Window (Constellation & Reader).md
 //
 
 import SwiftUI

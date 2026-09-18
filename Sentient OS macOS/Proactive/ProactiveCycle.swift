@@ -36,8 +36,14 @@ enum ProactiveCyclePhase: Sendable {
 /// A failed cycle step. `kind` is the verified, user-actionable reason (codex signed out ·
 /// offline · usage limit) when one could be established — nil means show `message` as-is.
 struct CycleFailure: Sendable, Equatable {
+    /// Which stage of the tail failed — the night summary reports vault vs proactive separately.
+    enum Stage: String, Sendable { case vault, deciding, preparing }
+
     let message: String
     let kind: OvernightCaution.Kind?
+    let stage: Stage
+    /// The closed-vocabulary reason (CodexFailureReason) — structure only, for diagnostics.
+    let reason: CodexFailureReason
 }
 
 actor ProactiveCycle {
@@ -74,47 +80,61 @@ actor ProactiveCycle {
         PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
         defer { PipelineActivity.end() }
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
-        guard !notes.isEmpty else {                          // nothing new this cycle — harmless no-op
+        var calendarContext: CalendarContext.Result?
+        if notes.isEmpty, CalendarContext.outlookEnabled,
+           FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) {
+            do { calendarContext = try await CalendarContext.fetch() }
+            catch { return await Self.fail("Calendar context: \(Self.msg(error))", error: error,
+                                           stage: .deciding, scheduled: scheduled, progress: progress) }
+        }
+        guard !notes.isEmpty || calendarContext?.hasOutlookEvents == true else {
+            if calendarContext?.outlookComplete == true,
+               ProactiveResearch.latest()?.ready.contains(where: { $0.calendarContextOnly == true }) == true {
+                ProactiveResearch.saveLatest(Self.mergeCalendarOnly(ReadyResult(ready: [], dropped: []), existing: ProactiveResearch.latest()))
+            }                          // nothing new this cycle — harmless no-op
             UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
             progress(.done(ready: ProactiveResearch.latest()?.ready.count ?? 0))
             return nil
         }
 
-        // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
-        let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
-        progress(.knowledgeBase(exists ? "Updating your knowledge…"
-                                       : "Creating your perfect knowledge base from everything we've analyzed…"))
-        // A sliced corpus (too big for one codex prompt) reports each part as it's fed — the
-        // takeover's phase line follows along; single-slice runs emit nothing and keep the line above.
-        let phase: @Sendable (VaultGenerator.Progress) -> Void = { p in
-            if case .folding(let part, let of) = p {
-                progress(.knowledgeBase(exists ? "Updating your knowledge… part \(part) of \(of)"
-                                               : "Creating your knowledge base… part \(part) of \(of)"))
-            }
-        }
-        do {
-            if exists { _ = try await VaultCloud.shared.update(notes: notes, onProgress: phase, onLine: onLine) }
-            else      { _ = try await VaultCloud.shared.create(notes: notes, onProgress: phase, onLine: onLine) }
-            Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
-                             parameters: ["newSummaries": "\(notes.count)"])
-        } catch {
-            Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
-            // half-edited vault isn't dirty; summaries kept
-            return await Self.fail("Knowledge base: \(Self.msg(error))", error: error,
-                                   scheduled: scheduled, progress: progress)
-        }
-        await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
-
-        // 2.5) The welcome "gift" — write it ONCE, the first time a knowledge base exists to read.
-        //      Best-effort: it's a delight, never load-bearing, so a failure never fails the cycle.
-        //      A gift that ALREADY existed before this cycle has had its day-one morning — it retires
-        //      when this cycle's proactive stage replaces the deck (kb-only mode has no replace, so
-        //      the free home's lone envelope lives on).
         let giftPreexisted = GiftLetter.latest() != nil
-        if !giftPreexisted {
-            progress(.knowledgeBase("Writing your welcome…"))
-            do { _ = try await GiftLetter.shared.generate(onLine: onLine) }
-            catch { Log("GiftLetter: welcome skipped — \(ErrorLabel(error))") }   // type only: msg() embeds raw codex output → Sentry breadcrumb
+        if !notes.isEmpty {
+            // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
+            let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
+            progress(.knowledgeBase(exists ? "Updating your knowledge…"
+                                           : "Creating your perfect knowledge base from everything we've analyzed…"))
+            // A sliced corpus (too big for one codex prompt) reports each part as it's fed — the
+            // takeover's phase line follows along; single-slice runs emit nothing and keep the line above.
+            let phase: @Sendable (VaultGenerator.Progress) -> Void = { p in
+                if case .folding(let part, let of) = p {
+                    progress(.knowledgeBase(exists ? "Updating your knowledge… part \(part) of \(of)"
+                                                   : "Creating your knowledge base… part \(part) of \(of)"))
+                }
+            }
+            do {
+                if exists { _ = try await VaultCloud.shared.update(notes: notes, onProgress: phase, onLine: onLine) }
+                else      { _ = try await VaultCloud.shared.create(notes: notes, onProgress: phase, onLine: onLine) }
+                Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
+                                 parameters: ["newSummaries": "\(notes.count)"])
+            } catch {
+                Analytics.signal("KnowledgeBase.failed", parameters: ["phase": exists ? "update" : "build"])
+                // half-edited vault isn't dirty; summaries kept
+                return await Self.fail("Knowledge base: \(Self.msg(error))", error: error, stage: .vault,
+                                       scheduled: scheduled, progress: progress)
+            }
+            await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
+
+            // 2.5) The welcome "gift" — write it ONCE, the first time a knowledge base exists to read.
+            //      Best-effort: it's a delight, never load-bearing, so a failure never fails the cycle.
+            //      A gift that ALREADY existed before this cycle has had its day-one morning — it retires
+            //      when this cycle's proactive stage replaces the deck (kb-only mode has no replace, so
+            //      the free home's lone envelope lives on).
+            if !giftPreexisted {
+                progress(.knowledgeBase("Writing your welcome…"))
+                do { _ = try await GiftLetter.shared.generate(onLine: onLine) }
+                catch { Log("GiftLetter: welcome skipped — \(ErrorLabel(error))") }   // type only: msg() embeds raw codex output → Sentry breadcrumb
+            }
+
         }
 
         // 3) Proactive — decide, then research + prepare. Inject the live calendar when connected.
@@ -123,42 +143,48 @@ actor ProactiveCycle {
         if CodexAuth.knowledgeBaseOnly {
             ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // never leave stale cards
         } else {
-            var calCtx: String?
-            if ModelBackend.connectorsAvailable,
-               UserDefaults.standard.bool(forKey: "dbg.calendar.connected") {
-                calCtx = await CalendarConnect.fetchProactiveContext()
-            }
-
-            progress(.deciding)
-            let items: [ActionItem]
             do {
-                items = try await Proactive.shared.findActionItems(from: notes, calendarContext: calCtx, onLine: onLine)
-            } catch Proactive.ProError.noRecent {
-                items = []                                   // nothing recent enough — clear cards, still success
-            } catch {
-                return await Self.fail("Deciding: \(Self.msg(error))", error: error,
-                                       scheduled: scheduled, progress: progress)
-            }
-            Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
-
-            if items.isEmpty {
-                ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // clear any stale cards
-            } else {
-                progress(.researching(items.count))
+                if calendarContext == nil { calendarContext = try await CalendarContext.fetch() }
+            } catch { return await Self.fail("Calendar context: \(Self.msg(error))", error: error,
+                                            stage: .deciding, scheduled: scheduled, progress: progress) }
+            let calCtx = calendarContext?.text
+            let calendarOnly = calendarContext?.includesOutlook == true && Proactive.recent(from: notes).isEmpty
+            if !calendarOnly || calendarContext?.hasOutlookEvents == true {
+                progress(.deciding)
+                let items: [ActionItem]
                 do {
-                    let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx, onLine: onLine)
-                    // Core tier; floatValue = the staged-card count, so a dashboard Sum is the
-                    // "suggestions Sentient has prepared across the world" total.
-                    Analytics.signal("Proactive.prepared", parameters: [
-                        "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"],
-                        floatValue: Double(result.ready.count), tier: .core)
+                    items = try await Proactive.shared.findActionItems(from: notes, calendarContext: calCtx, allowCalendarOnly: calendarContext?.hasOutlookEvents == true, calendarContextScoped: calendarContext?.includesOutlook == true, onLine: onLine)
+                } catch Proactive.ProError.noRecent {
+                    items = []                                   // nothing recent enough — clear cards, still success
                 } catch {
-                    return await Self.fail("Preparing: \(Self.msg(error))", error: error,
+                    return await Self.fail("Deciding: \(Self.msg(error))", error: error, stage: .deciding,
                                            scheduled: scheduled, progress: progress)
                 }
+                Analytics.signal("Proactive.decided", parameters: ["items": "\(items.count)"])
+
+                if items.isEmpty {
+                    let empty = ReadyResult(ready: [], dropped: [])
+                    ProactiveResearch.saveLatest(calendarOnly ? Self.mergeCalendarOnly(empty, existing: ProactiveResearch.latest()) : empty)
+                } else {
+                    progress(.researching(items.count))
+                    do {
+                        let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx, calendarContextScoped: calendarContext?.includesOutlook == true, persistResult: !calendarOnly, onLine: onLine)
+                        if calendarOnly { ProactiveResearch.saveLatest(Self.mergeCalendarOnly(result, existing: ProactiveResearch.latest())) }
+                        // Core tier; floatValue = the staged-card count, so a dashboard Sum is the
+                        // "suggestions Sentient has prepared across the world" total.
+                        Analytics.signal("Proactive.prepared", parameters: [
+                            "ready": "\(result.ready.count)", "dropped": "\(result.dropped.count)"],
+                            floatValue: Double(result.ready.count), tier: .core)
+                    } catch {
+                        return await Self.fail("Preparing: \(Self.msg(error))", error: error, stage: .preparing,
+                                               scheduled: scheduled, progress: progress)
+                    }
+                }
+                // The deck was replaced (new cards or a clean empty) — a pre-existing gift's day is done.
+                if giftPreexisted { GiftLetter.clear() }
+            } else if calendarContext?.outlookComplete == true {
+                ProactiveResearch.saveLatest(Self.mergeCalendarOnly(ReadyResult(ready: [], dropped: []), existing: ProactiveResearch.latest()))
             }
-            // The deck was replaced (new cards or a clean empty) — a pre-existing gift's day is done.
-            if giftPreexisted { GiftLetter.clear() }
         }
 
         // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.
@@ -170,13 +196,31 @@ actor ProactiveCycle {
         return nil
     }
 
+    /// Refresh only the calendar-only contribution when no new summaries exist. Current
+    /// non-calendar cards remain candidates; ranking still respects the shared five-card cap.
+    static func mergeCalendarOnly(_ fresh: ReadyResult, existing: ReadyResult?) -> ReadyResult {
+        let added = fresh.ready.map { action in var copy = action; copy.calendarContextOnly = true; return copy }
+        let ids = Set(added.map(\.id))
+        let retained = (existing?.ready ?? []).filter { $0.calendarContextOnly != true && !ids.contains($0.id) }
+        func rank(_ urgency: ActionItem.Urgency) -> Int {
+            switch urgency { case .high: 0; case .medium: 1; case .low: 2 }
+        }
+        let candidates = (added + retained).enumerated().sorted { left, right in
+            let a = rank(left.element.urgency), b = rank(right.element.urgency)
+            return a == b ? left.offset < right.offset : a < b
+        }.prefix(ProactiveResearch.maxReady).map(\.element)
+        return ReadyResult(ready: Array(candidates), dropped: fresh.dropped)
+    }
+
     private static func msg(_ e: Error) -> String { (e as? LocalizedError)?.errorDescription ?? "\(e)" }
 
     /// The one shape every catch site shares: classify the failure, persist the caution on the
     /// unattended run, surface it to the live UI, and hand it back for the caller's return.
-    private static func fail(_ message: String, error: Error, scheduled: Bool,
+    private static func fail(_ message: String, error: Error, stage: CycleFailure.Stage, scheduled: Bool,
                              progress: @Sendable (ProactiveCyclePhase) -> Void) async -> CycleFailure {
-        let failure = CycleFailure(message: message, kind: await OvernightCaution.classify(error))
+        let failure = CycleFailure(message: message, kind: await OvernightCaution.classify(error),
+                                   stage: stage, reason: CodexFailureReason.classify(error))
+        Log("proactive cycle: \(stage.rawValue) failed — \(failure.reason.rawValue)")   // reason enum only; the message embeds codex output
         if scheduled { OvernightCaution.record(failure.kind) }   // the morning-after banner
         progress(.failed(failure))
         return failure

@@ -92,8 +92,7 @@ final class ModelDownload {
         // mid-write. `?? .max` is deliberate fail-open: a glitched capacity read never blocks a
         // healthy Mac.
         let requiredFree: Int64 = 10_000_000_000   // 10 GB
-        let free = (try? URL.sentientSupport.resourceValues(
-            forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage) ?? .max
+        let free = DiskSpace.available() ?? .max
         if free < requiredFree {
             fail("Your Mac is out of disk space. Sentient's on-device model is about 3 GB, so please free up space until you have about 10 GB available, then hit Try Again.",
                  type: "disk_space")

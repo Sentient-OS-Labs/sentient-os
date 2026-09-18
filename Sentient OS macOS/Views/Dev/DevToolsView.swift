@@ -47,6 +47,7 @@ struct DeviceJob: Identifiable {
     let mode: IterativeRun.Mode
     let runGmail: Bool
     let runCalendar: Bool
+    let mcpSlugs: [String]
 }
 
 struct DevToolsView: View {
@@ -79,6 +80,7 @@ struct DevToolsView: View {
     @State private var showPermissions = false
     @State private var showHotkeyLab = false
     @State private var showCodexSetup = false
+    @State private var codexSetup = CodexSetup.shared
     @State private var showMore = false
     @State private var fdaGranted = false
     @State private var resetResult: String?
@@ -216,6 +218,45 @@ struct DevToolsView: View {
         .buttonStyle(.plain)
     }
 
+    // MARK: Computer-use driver (cua-driver — install status + reinstall)
+
+    /// The driver's install state at a glance, with a one-tap (re)install. The daemon itself
+    /// starts lazily at fire time (CuaDriverHost), so there's nothing to toggle here.
+    private var driverSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Computer-use driver")
+                .font(.callout.weight(.medium)).foregroundStyle(.white)
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(codexSetup.cuaDriverReady ? Theme.Ink.green : Color.orange)
+                    .frame(width: 6, height: 6)
+                Text(codexSetup.cuaDriverReady
+                     ? "cua-driver \(CuaDriver.version) installed"
+                     : (codexSetup.settingUpCuaDriver ? "downloading…" : "not installed — the next fire self-heals it"))
+                    .font(.caption2).foregroundStyle(Theme.faint)
+                Spacer()
+                Button(codexSetup.cuaDriverReady ? "Re-install" : "Install") {
+                    Task { await codexSetup.setupCuaDriver(force: codexSetup.cuaDriverReady) }
+                }
+                .controlSize(.small)
+                .disabled(codexSetup.settingUpCuaDriver)
+            }
+            if let line = codexSetup.cuaDriverStatus {
+                Text(line)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(line.hasPrefix("✓") ? Theme.Ink.green : line.hasPrefix("✗") ? .red : Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("Acts inside one window in the background on Sentient's OWN Accessibility + Screen Recording — the permission gate asks for those at first fire.")
+                .font(.caption2).foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+        .onAppear { codexSetup.refreshCuaDriver() }
+    }
+
     /// Opens the one CODEX SETUP window (install · log in · computer use) — all three steps live in
     /// `CodexSetupView`, driven by the shared `CodexSetup` engine (the same code onboarding will use).
     private var codexSetupButton: some View {
@@ -260,6 +301,7 @@ struct DevToolsView: View {
                         viewActionItemsButton
                     }
                     mcpToggleButton
+                    driverSection
                     codexSetupButton
                     permissionsButton
                     hotkeyLabButton
@@ -281,7 +323,8 @@ struct DevToolsView: View {
         .sheet(item: $deviceJob) { job in
             // Same takeover + same engine as the home "Analyze Now" — dev just gets the prompt pane.
             ProcessingView(modelPath: Self.modelPath ?? "", connectors: job.connectors,
-                           mode: job.mode, runGmail: job.runGmail, runCalendar: job.runCalendar, showPrompt: true) {
+                           mode: job.mode, runGmail: job.runGmail, runCalendar: job.runCalendar,
+                           mcpSlugs: job.mcpSlugs, showPrompt: true) {
                 deviceJob = nil
             }
             .frame(minWidth: 600, minHeight: 680)
@@ -475,7 +518,8 @@ struct DevToolsView: View {
             run.status[id] = "✗ model not found"; return
         }
         run.status[id] = nil
-        deviceJob = DeviceJob(connectors: connectors, mode: mode, runGmail: gmailRun, runCalendar: calendarRun)
+        deviceJob = DeviceJob(connectors: connectors, mode: mode, runGmail: gmailRun,
+                              runCalendar: calendarRun, mcpSlugs: MCPSource.kbSlugs())
     }
 
     private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {
@@ -925,7 +969,10 @@ struct DevToolsView: View {
     /// you straight back if you only wanted the data wipe.
     @MainActor
     private func runReset() async {
-        await FactoryReset.run(appState: appState)
+        guard await FactoryReset.run(appState: appState) else {
+            resetResult = "Reset paused. Unlock Keychain and retry to remove saved app connections."
+            return
+        }
         let c = await CycleStore.shared.counts()
         resetResult = "✓ reset — cycle store + knowledge base + proactive cards + cloud copy wiped, rewound to onboarding (notes \(c.notes))"
     }

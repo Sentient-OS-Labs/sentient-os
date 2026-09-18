@@ -22,12 +22,16 @@ enum VoiceError: LocalizedError {
     case unavailable        // no transcription engine on this macOS
     case notAuthorized      // microphone or speech-recognition permission denied
     case modelUnavailable   // the on-device speech model isn't installed / ready
+    case noMicrophone       // no input device (the hardware format is 0 Hz / 0 ch)
+    case deviceChanged      // the audio engine's bus format is stale after an input-device change (MicrophoneEngine rebuilds)
 
     var errorDescription: String? {
         switch self {
         case .unavailable:      return "Voice input needs macOS 26 or later."
         case .notAuthorized:    return "Microphone or speech-recognition access is off."
         case .modelUnavailable: return "The on-device speech model isn't ready yet."
+        case .noMicrophone:     return "No microphone is available."
+        case .deviceChanged:    return "The microphone changed — try again."
         }
     }
 }

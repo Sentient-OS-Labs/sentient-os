@@ -18,7 +18,7 @@
 //  (item_type != 0) are filtered in SQL — they'd spam every window otherwise. Chats Messages
 //  hides are excluded too (chat.is_filtered >= 2: Spam + the iOS SMS-filter category chats).
 //  Incrementality: a per-chat high-water mark (max ROWID) per bucket "imessage:<guid>", in CycleStore.
-//  Doc: Documentation/iMessage Source (chat.db).md
+//  Doc: Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md
 //
 
 import Foundation

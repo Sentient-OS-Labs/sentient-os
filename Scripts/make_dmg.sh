@@ -28,7 +28,7 @@
 #   Handoff).md. The window size and icon slots below were drawn INTO the art (halos + arc
 #   endpoints sit under the icons) — if they ever change, change them there and here together.
 #
-# Doc: Sentient OS macOS/Documentation/Auto-Update (Sparkle).md (the release pipeline)
+# Doc: Sentient OS macOS/Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md
 #
 set -euo pipefail
 

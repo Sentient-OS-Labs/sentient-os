@@ -9,7 +9,7 @@
 //
 //  Fragile by nature (private symbols), so it fails gracefully: if anything is missing, `shared` is nil
 //  and the window falls back to its public `collectionBehavior` (.canJoinAllSpaces). Distilled from
-//  DynamicNotch's SkyLightOperator down to the one thing we need. Doc: Documentation/Notch Magic/.
+//  DynamicNotch's SkyLightOperator down to the one thing we need. Doc: the two Documentation - Sidekick - *.md files in this folder.
 //
 
 import AppKit

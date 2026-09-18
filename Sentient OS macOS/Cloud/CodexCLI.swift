@@ -12,12 +12,14 @@
 //
 //  Key methods:
 //   - CodexCLI.locateBinary()  → binary discovery (managed install first, then cache/known paths/which)
-//   - install(onLine:)         → run OpenAI's standalone installer (the codex-setup onboarding step)
+//   - install(onLine:)         → run OpenAI's standalone installer (the codex-setup onboarding step;
+//                                it doubles as the updater — CodexSetup.updateIfDue runs it daily)
+//   - installedVersion / latestReleasedVersion / isNewer → the daily update's cheap version pre-check
 //   - startLogin / loginStatus → step 2: interactive `codex login` (browser) + the status check
 //   - validate(force:)         → Availability via ping (only a good verdict is cached)
 //   - run(_:)                  → Envelope (blocking JSONL mode)
 //
-//  Doc: Documentation/CodexCLI (codex exec Compute Spine).md
+//  Doc: Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md
 //
 
 import Foundation
@@ -44,11 +46,12 @@ actor CodexCLI {
         case xhigh
     }
 
-    /// The model id passed to `codex exec -m`. The gpt-5.6 lineup (sol = flagship · terra = mid ·
-    /// luna = light) rides ChatGPT-account auth like 5.5/5.4-mini did.
+    /// The model id passed to `codex exec -m`. Astra powers the upper computer-use tiers;
+    /// Sol handles the fastest tier and background work, Terra the free/go fallback, Luna reads.
     /// (Old lesson still applies: some SKUs are API-key-only — verify a model answers through
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
+        case gpt6astra = "gpt-6-astra"  // computer use: Medium / Smarter
         case gpt56sol = "gpt-5.6-sol"    // knowledge-base work + everything else (paid plans)
         case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
         case gpt56luna = "gpt-5.6-luna"  // Gmail connect-check + processing
@@ -64,15 +67,17 @@ actor CodexCLI {
     ///    connectors are ChatGPT-only.
     ///  - ChatGPT backend: free/go accounts lost access to gpt-5.6-sol (it stopped answering
     ///    through `codex exec` on those plans, 2026-07-19) — so on a POSITIVE free/go plan
-    ///    read, any sol call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep sol
-    ///    (CodexAuth's fail-open policy), and the luna tier is untouched.
+    ///    read, any sol/astra call downshifts to gpt-5.6-terra at `.medium`. Unknown plans keep
+    ///    the requested model (CodexAuth's fail-open policy), and the luna tier is untouched.
     /// Living here at the spine means every caller — and any future one — is covered without
     /// per-call-site checks.
     private static func backendTuned(model: Model, effort: Effort) -> (modelID: String, effortArg: String) {
         if ModelBackend.current == .custom {
             return (CustomProvider.current.modelName, CustomProvider.reasoning)
         }
-        guard model == .gpt56sol, CodexAuth.isLimited() else { return (model.rawValue, effort.rawValue) }
+        guard model == .gpt56sol || model == .gpt6astra, CodexAuth.isLimited() else {
+            return (model.rawValue, effort.rawValue)
+        }
         return (Model.gpt56terra.rawValue, Effort.medium.rawValue)
     }
 
@@ -97,10 +102,9 @@ actor CodexCLI {
                                                // hermetic run (then we pass --ignore-user-config).
         var bypassApprovals = false            // --dangerously-bypass-approvals-and-sandbox: NO
                                                // approval prompts AND NO sandbox. COMPUTER USE ONLY:
-                                               // the computer-use plugin's per-app "allow app X?"
-                                               // elicitations auto-accept only under the full-access
-                                               // profile — under any Seatbelt profile a headless run
-                                               // auto-denies them (measured 2026-07-18). Hosted
+                                               // a headless run has no one to answer an approval,
+                                               // and the agent shells out alongside the cua tools
+                                               // where any Seatbelt profile stalls it. Hosted
                                                // connector WRITES no longer ride this — they use
                                                // `approveConnectorWrites` (sandbox stays ON).
                                                // TRUSTED, app-authored prompts ONLY (no sandbox!).
@@ -119,6 +123,86 @@ actor CodexCLI {
                                                // strings ONLY — never paths, UUIDs, or free text (the
                                                // Sentry scrubber [Filtered]s those into uselessness).
 
+        // The connector run recipes (see the recipe tables in each engine's argument builder).
+        // Slugs are ConnectorRegistry's canonical identities, resolved to per-engine server
+        // definitions through the ONE seam `ConnectorRegistry.server(for:)`. All three are
+        // inert when unset, on the custom backend, and never combine with each other or with
+        // `bypassApprovals` (the sandboxed recipes never bypass):
+        var mcpActionServer: String? = nil     // FIRED CONNECTOR TASK: user-fired, one connector.
+                                               // Claude: dontAsk + allow that server's tools, a
+                                               // one-server allowedMcpServers wall, destructive
+                                               // tools denied by name (requires a classification —
+                                               // fail-closed). Codex: per-id approve mode (else
+                                               // the shipped id-free `apps._default` preset) +
+                                               // the destructive strip; sandbox stays ON.
+        var slackOperation: SlackConnector.Operation? = nil
+        var slackRunID: UUID? = nil
+        var outlookOperation: OutlookMailConnector.Operation? = nil
+        var outlookRunID: UUID? = nil
+        var outlookKeepsReadBudget = false
+        var outlookCalendarOperation: OutlookCalendarConnector.Operation? = nil
+        var outlookCalendarReadPurpose: OutlookCalendarConnector.ReadPurpose? = nil
+        var outlookCalendarReadWindow: MCPSource.Window? = nil
+        var outlookCalendarExpectedCreationHash: String? = nil
+        var outlookCalendarAccountFingerprint: String? = nil
+        var outlookCalendarIntentHash: String? = nil
+        var includesOutlookMail: Bool {
+            mcpActionServer == OutlookMailConnector.slug || mcpReadConnectors.contains(OutlookMailConnector.slug)
+        }
+        var calendarPolicy: OutlookCalendarToolPolicy.Context? {
+            guard mcpActionServer == OutlookCalendarConnector.slug || mcpReadConnectors.contains(OutlookCalendarConnector.slug) else { return nil }
+            return .init(operation: mcpActionServer == OutlookCalendarConnector.slug ? (outlookCalendarOperation ?? .read) : .read,
+                         purpose: outlookCalendarReadPurpose, window: outlookCalendarReadWindow,
+                         expectedCreationHash: outlookCalendarExpectedCreationHash,
+                         accountFingerprint: outlookCalendarAccountFingerprint, intentHash: outlookCalendarIntentHash)
+        }
+        var outlookReadMode: MCPSource.ReadMode? = nil
+        var outlookReadWindow: MCPSource.Window? = nil
+        var outlookExpectedMessage: String? = nil
+        var outlookExpectedRecipients: [String]? = nil
+        func canonicalConnectorTargets() -> Self {
+            var copy = self
+            copy.mcpActionServer = mcpActionServer.map(ConnectorRegistry.canonicalSlug)
+            copy.mcpAttachServer = mcpAttachServer.map(ConnectorRegistry.canonicalSlug)
+            copy.mcpReadConnectors = mcpReadConnectors.map(ConnectorRegistry.canonicalSlug)
+            return copy
+        }
+        var mcpExpectedIdentity: String? = nil
+        var slackExpectedMessage: String? = nil
+        /// Source ingestion/inventory needs connector tools only; research keeps its vault/web access.
+        var connectorOnlyRead = false
+        /// Native tool-inventory classification does not need any model-accessible tools.
+        var toolsDisabled = false
+        /// Optional narrowing for a single connector, using the current engine's bare names.
+        /// Every name must already be curated; a cross-engine mismatch refuses the run.
+        var mcpReadToolNames: [String]? = nil
+        var mcpReadConnectors: [String] = []   // UNATTENDED READ (KB reads, probes, research):
+                                               // Claude: dontAsk + allow exactly the registry's
+                                               // read tools per slug, wall = those servers only
+                                               // (a slug with no read list throws — fail-closed;
+                                               // measured 2026-08-23: nothing short of an allow
+                                               // rule approves a connector tool headless).
+                                               // Codex: hermetic, only the named apps enabled,
+                                               // only their separately curated reads enabled.
+                                               // Missing identity or read policy refuses the run.
+        var mcpAttachServer: String? = nil     // wall ONE server in with ZERO allow rules — the
+                                               // classifier's inventory read (the run calls no
+                                               // tools; listing your own tools needs no approval).
+                                               // Claude-only in effect; needs includeUserConfig
+                                               // (the strict wall blocks the connector fetch).
+
+        var imagePaths: [String] = []          // screenshots for run(): codex attaches `-i <paths>`
+                                               // (the variadic is terminated by the flag that
+                                               // always follows); claude appends the screenshots
+                                               // block to the prompt and Reads them (no -i flag
+                                               // exists there). runAgentCommand keeps its own
+                                               // parameter — this field is run()'s.
+
+        // Claude-engine field (ignored by CodexCLI; read only when ModelBackend is .claude —
+        // the Invocation is the ONE shape both engines speak, so the engine-specific knob
+        // lives here rather than forking the type):
+        var claudeModel: ClaudeCLI.Model? = nil       // override the tier map (heavy legs pin .opus)
+
         init(prompt: String) { self.prompt = prompt }
 
         /// Pre-approves hosted-connector WRITE tools (Gmail `send_email`, Calendar create) for one
@@ -131,24 +215,13 @@ actor CodexCLI {
             #"apps._default.default_tools_approval_mode="approve""#,
         ]
 
-        /// Removes the connector tools that transmit externally (`open_world_hint` — e.g. Gmail
-        /// send) or destroy data (`destructive_hint` — trash/delete) from the run's tool surface
-        /// entirely; read tools are untouched. For read-only phases (proactive research): "never
-        /// fire" becomes the tools not existing — on top of the prompt rule and the headless
-        /// auto-cancel of unapproved writes. Verified live 2026-07-18: Gmail search completes
-        /// while a send attempt fails with "is not a function" — the tool is genuinely absent.
-        /// The keys MUST be the LONG global catalog connector ids: friendly slugs ("gmail") are
-        /// silent no-ops for hosted connectors, and the app-wide `apps._default` variant strips
-        /// the READ tools too (both measured, codexperms self-test). The ids are global marketplace
-        /// constants (same for every user — see OpenAI's public `openai/plugins` repo, or
-        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). If one ever
-        /// rotated, this strip degrades to a harmless no-op and the other two layers still hold.
-        static let stripConnectorActionTools = [
-            "apps.connector_2128aebfecb84f64a069897515042a44.open_world_enabled=false",    // gmail
-            "apps.connector_2128aebfecb84f64a069897515042a44.destructive_enabled=false",   // gmail
-            "apps.connector_947e0d954944416db111db556030eea6.open_world_enabled=false",    // google-calendar
-            "apps.connector_947e0d954944416db111db556030eea6.destructive_enabled=false",   // google-calendar
-        ]
+        /// The global marketplace catalog ids for the two dedicated-chip connectors — the SAME
+        /// for every user (see OpenAI's public `openai/plugins` repo, or
+        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). One source of
+        /// truth: ConnectorRegistry's packs read these, and every recipe strip resolves through
+        /// the registry back to them.
+        static let gmailCatalogID = "connector_2128aebfecb84f64a069897515042a44"
+        static let calendarCatalogID = "connector_947e0d954944416db111db556030eea6"
     }
 
     /// The `--json` JSONL stream, reduced to an envelope.
@@ -195,16 +268,33 @@ actor CodexCLI {
         /// turn/start before the model runs). Thrown by the pre-spawn guard in both spines;
         /// with corpus slicing in place this is a canary that should never fire.
         case inputTooLarge(chars: Int)
+        /// The installed CLI is older than the files in the shared `~/.codex` (a newer codex,
+        /// typically the ChatGPT desktop app, rewrote `models_cache.json` in a schema this binary
+        /// can't read). `autoUpdating` = the binary is our managed install and CodexSetup is
+        /// already updating it; false means the user's own brew/npm codex, which we don't touch.
+        case staleClient(autoUpdating: Bool)
 
         var description: String {
+            // BOTH engines throw this type (ClaudeCLI reuses it), and these lines reach
+            // user-visible surfaces (the notch's failure line, the takeover) — so the engine is
+            // named at render time from the live backend. staleClient stays codex-worded: only
+            // the codex spine ever throws it.
+            let claude = ModelBackend.current == .claude
+            let engine = claude ? "Claude Code" : "Codex"
+            let binary = claude ? "claude" : "codex"
             switch self {
-            case .notAvailable(let a):            return "Codex unavailable: \(a)"
-            case .launchFailed(let m):            return "Failed to launch codex: \(m)"
-            case .timedOut(let t):                return "codex exec timed out after \(Int(t))s"
-            case .exitFailure(let code, let m):   return "codex exited \(code): \(m.prefix(300))"
-            case .badEnvelope(let m):             return "Unparseable codex output: \(m.prefix(300))"
-            case .usageLimit(let m, _):           return "Codex usage limit: \(m.prefix(200))"
-            case .inputTooLarge(let c):           return "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
+            case .notAvailable(let a):            return "\(engine) unavailable: \(a)"
+            case .launchFailed(let m):            return "Failed to launch \(binary): \(m)"
+            case .timedOut(let t):                return "\(claude ? "claude -p" : "codex exec") timed out after \(Int(t))s"
+            case .exitFailure(let code, let m):   return "\(binary) exited \(code): \(m.prefix(300))"
+            case .badEnvelope(let m):             return "Unparseable \(binary) output: \(m.prefix(300))"
+            case .usageLimit(let m, _):           return "\(engine) usage limit: \(m.prefix(200))"
+            case .inputTooLarge(let c):           return claude
+                ? "Prompt too large for Claude Code: \(c) chars"
+                : "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
+            case .staleClient(let auto):
+                return auto ? "Codex was out of date. Updating it now; try again in a moment."
+                            : "Codex is out of date and can't read its newer files. Update it, then try again."
             }
         }
     }
@@ -212,6 +302,15 @@ actor CodexCLI {
     // MARK: Discovery
 
     private static let pathCacheKey = "codexcli.binaryPath"
+
+    /// Where OpenAI's standalone installer puts the CLI: a symlink into
+    /// `~/.codex/packages/standalone/current/`. The ONE copy Sentient installs and keeps current.
+    static let managedBinaryPath = FileManager.default.homeDirectoryForCurrentUser.path + "/.local/bin/codex"
+
+    /// Is the binary every run resolves to OUR managed install (vs. the user's own brew/npm/nvm
+    /// codex)? The daily updater only ever touches the managed copy: a package-managed codex is
+    /// the user's package manager's business.
+    static var usingManagedBinary: Bool { locateBinary() == managedBinaryPath }
 
     /// The managed install first (unconditionally), then known locations, then a login-shell
     /// `which` (GUI apps don't inherit the user's PATH). Discovery results are cached in
@@ -224,8 +323,7 @@ actor CodexCLI {
         // brew path would otherwise field every run with a stale binary while the fresh install
         // sat unused. `isExecutableFile` resolves the symlink, so a dangling link (e.g. a wiped
         // `~/.codex/packages`) falls through to the fallbacks instead of being returned.
-        let managed = "\(home)/.local/bin/codex"
-        if fm.isExecutableFile(atPath: managed) { return managed }
+        if fm.isExecutableFile(atPath: managedBinaryPath) { return managedBinaryPath }
         if let cached = UserDefaults.standard.string(forKey: pathCacheKey),
            fm.isExecutableFile(atPath: cached) {
             return cached
@@ -250,8 +348,9 @@ actor CodexCLI {
     /// `zsh -lic` (INTERACTIVE login shell — `-lc` never sources .zshrc, where nvm/asdf/volta
     /// init). Interactive shells print theme noise, so the output is scanned line-by-line for
     /// something that is actually an executable path. Watchdog-bounded; can't hang.
-    private static func whichViaLoginShell() -> String? {
-        guard let out = try? execute(binary: "/bin/zsh", args: ["-lic", "which codex"],
+    /// Internal (not private): ClaudeCLI's discovery runs the same probe for its own binary.
+    static func whichViaLoginShell(_ command: String = "which codex") -> String? {
+        guard let out = try? execute(binary: "/bin/zsh", args: ["-lic", command],
                                      stdinText: nil, cwd: nil, timeout: 5) else { return nil }
         let fm = FileManager.default
         return (out.stdout + "\n" + out.stderr)
@@ -364,10 +463,85 @@ actor CodexCLI {
         return lowered.contains("logged in") && !lowered.contains("not logged in")
     }
 
+    // MARK: Versions (the daily update's cheap pre-check — see CodexSetup.updateIfDue)
+
+    /// The installed CLI's version string (`codex --version` → "codex-cli 0.147.0" → "0.147.0"),
+    /// or nil when there's no binary or it doesn't answer.
+    static func installedVersion() async -> String? {
+        guard let bin = locateBinary() else { return nil }
+        guard let out = try? await executeAsync(binary: bin, args: ["--version"],
+                                                stdinText: nil, cwd: nil, timeout: 10),
+              out.status == 0 else { return nil }
+        return out.stdout.split(whereSeparator: \.isWhitespace).last.map(String.init)
+    }
+
+    /// The newest released CLI version, from the same channel feed OpenAI's installer resolves
+    /// against (`releases.openai.com/codex/channels/latest`, `tag_name` = "rust-v0.147.0"). nil
+    /// when offline or the feed's shape changed; the caller then falls back to just running the
+    /// installer, which does its own resolution.
+    static func latestReleasedVersion() async -> String? {
+        guard let url = URL(string: "https://releases.openai.com/codex/channels/latest") else { return nil }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
+        request.httpMethod = "GET"
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tag = obj["tag_name"] as? String else { return nil }
+        let version = tag.hasPrefix("rust-v") ? String(tag.dropFirst("rust-v".count)) : tag
+        return version.isEmpty ? nil : version
+    }
+
+    /// Is `candidate` a newer release than `installed`? Semver-shaped: numeric core compared
+    /// component-wise; when cores tie, a final release beats a prerelease ("0.147.0" is newer than
+    /// "0.147.0-alpha.6.5", so a hand-dropped alpha still moves up to its release), and two
+    /// prereleases of the same core are treated as equal (never churn between alphas).
+    static func isNewer(_ candidate: String, than installed: String) -> Bool {
+        func split(_ v: String) -> (core: [Int], prerelease: Bool) {
+            let parts = v.split(separator: "-", maxSplits: 1)
+            let core = (parts.first ?? "").split(separator: ".").map { Int($0) ?? 0 }
+            return (core, parts.count > 1)
+        }
+        let a = split(candidate), b = split(installed)
+        let n = max(a.core.count, b.core.count)
+        for i in 0..<n {
+            let x = i < a.core.count ? a.core[i] : 0
+            let y = i < b.core.count ? b.core[i] : 0
+            if x != y { return x > y }
+        }
+        return !a.prerelease && b.prerelease
+    }
+
     // MARK: Validation
 
     private var cachedAvailability: Availability?
     private var cachedAvailabilityFingerprint: String?
+
+    // MARK: Diagnostics state (structure-only; see CodexDiagnostics.swift)
+
+    /// Has ANY codex call succeeded since launch? Reported as `first_cloud_call_this_launch` on
+    /// a failure (`first_cloud_call_this_launch`) — the 3 AM run's first ping of the day is a distinct population.
+    private var sessionHadSuccess = false
+    /// Pings since `beginDiagnosticsRun()` (the overnight run's per-night count) and the first
+    /// ping's wall time — the night summary reports both.
+    private var pingsThisRun = 0
+    private var firstPingMS: Int?
+    /// When the current diagnostics run began (nil outside an overnight run).
+    private var diagnosticsRunStart: Date?
+    /// `codex --version`, probed once per launch on the first ping (nil = no binary / no answer).
+    private var cachedVersion: String?
+    private static let launchedAt = Date()
+
+    /// The overnight run calls this once at wake so the night's summary counts from zero.
+    func beginDiagnosticsRun() {
+        pingsThisRun = 0
+        firstPingMS = nil
+        diagnosticsRunStart = Date()
+    }
+
+    /// The counters the night summary reports (`overnight.cloud_stage`).
+    func diagnosticsRunSummary() -> (pings: Int, firstPingMS: Int?, version: String?) {
+        (pingsThisRun, firstPingMS, cachedVersion)
+    }
 
     /// Is `codex exec` actually usable (installed AND — on the ChatGPT backend — logged in;
     /// on a custom backend, the endpoint answering)? Only a GOOD verdict is cached — a failed
@@ -382,12 +556,30 @@ actor CodexCLI {
         if !force, let cachedAvailability, cachedAvailabilityFingerprint == fingerprint {
             return cachedAvailability
         }
+        // Breadcrumbs for the one call that decides "cloud is on/off" — start + verdict, timed.
+        // Structure only: the model is `default` (codex's own) or `custom` (never the slug), the
+        // verdict is a closed reason (never the ping's stderr).
+        let backend = ModelBackend.current == .custom ? "custom" : "chatgpt"
+        let budget = ModelBackend.current == .custom ? 180 : 30
+        if cachedVersion == nil { cachedVersion = await Self.installedVersion() }
+        Log("codex ping: start backend=\(backend) model=\(backend == "custom" ? "custom" : "default") timeout=\(budget)s trigger=\(CodexTrigger.current.rawValue) attempt=1")
+        let t0 = Date()
         let result = await Self.ping()
-        if case .available = result {
+        let ms = Int(Date().timeIntervalSince(t0) * 1000)
+        pingsThisRun += 1
+        if firstPingMS == nil { firstPingMS = ms }
+        switch result {
+        case .available:
             cachedAvailability = result
             cachedAvailabilityFingerprint = fingerprint
-        } else {
+            sessionHadSuccess = true
+            Log("codex ping: available in \(ms)ms")
+        case .notInstalled:
             cachedAvailability = nil
+            Log("codex ping: notInstalled in \(ms)ms")
+        case .notWorking(let detail):
+            cachedAvailability = nil
+            Log("codex ping: notWorking:\(CodexFailureReason.classify(text: detail).rawValue) in \(ms)ms")
         }
         return result
     }
@@ -412,7 +604,7 @@ actor CodexCLI {
     private static func ping(forceCustom: Bool = false) async -> Availability {
         guard let bin = locateBinary() else { return .notInstalled }
         let custom = forceCustom || ModelBackend.current == .custom
-        var args = ["exec", "--json", "--ignore-user-config", "-s", Sandbox.readOnly.rawValue]
+        var args = execArguments() + ["--json", "--ignore-user-config", "-s", Sandbox.readOnly.rawValue]
         var timeout: TimeInterval = 30
         var prompt = "Reply with exactly: PIGGYBACK_OK"
         var probeImage: (url: URL, code: String)?
@@ -498,11 +690,12 @@ actor CodexCLI {
             // A cancelled Task is the user's STOP: the SIGTERM'd process exits non-zero, which
             // masqueraded as a real exitFailure in Sentry (field-found 2026-07-12). Not a defect.
             if !Task.isCancelled {
-                Self.emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
-                                      modelID: modelID, effort: effortArg,
-                                      resumed: invocation.resumeSessionID != nil,
-                                      durationMS: Int(Date().timeIntervalSince(t0) * 1000),
-                                      diag: invocation.diag)
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=\(invocation.feature) in \(ms)ms")
+                emitCodexFailure(event: "codex.failure", error, feature: invocation.feature,
+                                 modelID: modelID, effort: effortArg,
+                                 resumed: invocation.resumeSessionID != nil,
+                                 durationMS: ms, timeoutS: Int(invocation.timeout), diag: invocation.diag)
             }
             throw error
         }
@@ -536,41 +729,104 @@ actor CodexCLI {
         defer { if let schemaFile { try? FileManager.default.removeItem(atPath: schemaFile) } }
 
         let started = Date()
+        // One breadcrumb per exec, start + end — the shape of the run, never its content. On the
+        // custom backend the model is reported as `custom` (a user's model slug is free text).
+        let modelTag = ModelBackend.current == .custom ? "custom" : modelID
+        Log("codex exec: start feature=\(invocation.feature) model=\(modelTag) effort=\(effortArg) resume=\(invocation.resumeSessionID != nil) sandbox=\(invocation.sandbox.rawValue) prompt_kb=\(invocation.prompt.utf8.count / 1024) trigger=\(CodexTrigger.current.rawValue)")
         // When a caller wants live play-by-play, adapt each raw --json line into a readable one.
         let stdoutLine: (@Sendable (String) -> Void)? = onLine.map { sink in
             { @Sendable raw in if let s = Self.humanLine(fromJSONL: raw) { sink(s) } }
         }
         let out = try await Self.executeAsync(binary: bin,
-                                              args: Self.arguments(for: invocation, modelID: modelID,
+                                              args: try Self.arguments(for: invocation, modelID: modelID,
                                                                    effortArg: effortArg,
                                                                    schemaFile: schemaFile),
                                               stdinText: invocation.prompt,
                                               cwd: invocation.cwd,
                                               timeout: invocation.timeout,
                                               onStdoutLine: stdoutLine)
-        return try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
+        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
+        sessionHadSuccess = true
+        Log("codex exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
+        return env
     }
 
     /// The command bar's "Let me DO stuff for you" spine — computer use (the "computer use" phrase is
-    /// built into the prompt by the caller, NOT a flag here). Runs a raw `codex exec` with the prompt
-    /// passed as ARGV and the exact flag set verified to make Codex's computer use work via the CLI:
-    /// `--dangerously-bypass-approvals-and-sandbox -m gpt-5.6-sol -c model_reasoning_effort=<the
-    /// user's ComputerUseSpeed slider; default low> --skip-git-repo-check`, NO `--json`
-    /// (human-readable output, not JSONL). The bypass flag is REQUIRED here — the computer-use
-    /// plugin's per-app "allow app X?" elicitations auto-accept only under the full-access profile;
-    /// under any Seatbelt profile a headless run auto-denies them and every action fails (measured
-    /// 2026-07-18). Safety rides the layers that fit a GUI agent: the fixed app-authored wrapper
-    /// (content = DATA), one-declared-task, user-fired only, live streaming + universal STOP. Each output LINE is
+    /// built into the prompt by the caller, NOT a flag here). The hands are the cua driver
+    /// (Driver/CuaDriver): Sentient's own long-lived daemon (Driver/CuaDriverHost) clicks and types
+    /// in the background, and the agent reaches it over the HYBRID transport — the four vision
+    /// tools as a real MCP server (CuaDriver.codexOverrides: screenshots arrive inline, ~3k tokens
+    /// of schema), every action and the browser family as one-shot CLI calls through the shim the
+    /// host writes (`<shim> <tool> '<json>'`, zero schema cost); the operating manual is
+    /// CuaDriverSkill.rules, spliced into the prompt by the caller. Runs a raw
+    /// `codex exec` with the prompt passed as ARGV:
+    /// `-c service_tier="fast" --dangerously-bypass-approvals-and-sandbox -m <model>
+    /// -c model_reasoning_effort=<effort> --ignore-user-config` (model and effort from the
+    /// user's ComputerUseSpeed slider; default Sol low), followed by
+    /// `--skip-git-repo-check`, NO `--json` (human-readable output, not JSONL). The bypass flag is
+    /// REQUIRED here — a headless run has no one to answer an approval, and the agent's every cua
+    /// action is now a shell call, where any Seatbelt profile would stall it (a sandboxed shell also
+    /// can't connect to the daemon's socket). Safety rides the layers that fit a GUI agent: the
+    /// fixed app-authored wrapper (content = DATA), one-declared-task, user-fired only, live
+    /// streaming + universal STOP. Each output LINE is
     /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
     /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
-    /// (`~/.local/bin/codex` first). The user's ~/.codex config + MCP servers load by default (no
-    /// --ignore-user-config). Returns the full output.
+    /// (`~/.local/bin/codex` first). Returns the full output.
     ///
     /// `imagePaths` (optional): screenshots of the user's displays (main first), attached with
     /// `codex exec -i <file>...` so the agent SEES what they're looking at (the notch/command-bar
     /// path passes one per display; the proactive executor passes none). They're placed right before
     /// `--skip-git-repo-check` so the flag terminates `-i`'s variadic `<FILE>...` and the prompt is
     /// never mistaken for another image.
+    /// The computer-use argv — extracted so the connector lab can print the recipe without
+    /// spawning, and so the destructive strips are one readable place. On the ChatGPT backend
+    /// every known catalog id — the two pinned chip connectors plus everything the census
+    /// detected — gets `apps.<id>.destructive_enabled=false` (task 1.6), so a user-fired
+    /// computer-use run keeps constructive connector writes (send, create) while
+    /// delete/trash-class tools are stripped from the surface entirely. An id the account
+    /// doesn't carry makes the strip an inert no-op (measured), so unlinked chips cost nothing.
+    static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
+                               effortArg: String, socketPath: String) -> [String] {
+        var args = execArguments() + ["--dangerously-bypass-approvals-and-sandbox",
+                    "-m", modelID,
+                    "-c", "model_reasoning_effort=\"\(effortArg)\"",
+                    "--ignore-user-config"]
+        for override in CuaDriver.codexOverrides(socketPath: socketPath) { args += ["-c", override] }
+        for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
+        if ModelBackend.current == .chatgpt {
+            var hooks: [HostedToolPolicy.Rule] = []
+            var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
+            ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)
+            for id in ids { args += ["-c", "apps.\(id).destructive_enabled=false"] }
+            if ConnectorCensus.cached(for: .chatgpt).contains(where: { $0.slug == "slack" }) {
+                if let policy = try? SlackConnector.codexActionPolicy(exclusive: false) { args += ["-c", policy] }
+                hooks.append(SlackToolPolicy.rule(backend: .chatgpt))
+            }
+            if ConnectorCensus.cached(for: .chatgpt).contains(where: { $0.slug == OutlookMailConnector.slug }) {
+                if let policy = try? OutlookMailConnector.codexPolicy(operation: .write, exclusive: false) {
+                    args += ["-c", policy]
+                }
+            }
+            let mail = ConnectorCensus.cached(for: .chatgpt).contains { $0.slug == OutlookMailConnector.slug }
+            let calendar = ConnectorCensus.cached(for: .chatgpt).contains { $0.slug == OutlookCalendarConnector.slug }
+            if calendar, let policy = try? OutlookCalendarConnector.codexPolicy(operation: .read, exclusive: false) {
+                args += ["-c", policy]
+            }
+            if mail || calendar {
+                hooks.append(OutlookToolPolicy.rule(backend: .chatgpt, operation: .write,
+                    runID: OutlookToolPolicy.computerRunID ?? UUID(),
+                    calendar: calendar ? .init(operation: .read) : nil, includesMail: mail))
+            }
+            args += HostedToolPolicy.codexArguments(hooks)
+        }
+        if ModelBackend.current == .custom {
+            for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
+        }
+        if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
+        args += ["--skip-git-repo-check", prompt]
+        return args
+    }
+
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
@@ -579,8 +835,8 @@ actor CodexCLI {
         // custom backend the user's endpoint model + its ONE reasoning level drive computer use
         // (verified end-to-end via OpenRouter 2026-07-24); on ChatGPT, computer use is Plus-gated
         // but dev tools can still reach this on a free account — same downshift.
-        let (modelID, effortArg) = Self.backendTuned(model: .gpt56sol,
-                                                     effort: ComputerUseSpeed.current.effort)
+        let (model, effort) = ComputerUseSpeed.current.codexModelAndEffort
+        let (modelID, effortArg) = Self.backendTuned(model: model, effort: effort)
         do {
             // Same pre-spawn guard as `run` — this spine passes the prompt as ARGV, where an
             // oversized prompt dies even earlier (ARG_MAX) with an unhelpful spawn error.
@@ -588,23 +844,45 @@ actor CodexCLI {
                 throw CLIError.inputTooLarge(chars: prompt.utf8.count)
             }
             guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-            // Self-heal the relaxed confirmation policy: a plugin update (desktop app or a
-            // re-bootstrap) lays a fresh STOCK SKILL.md, whose policy stalls headless runs on
-            // "shall I proceed?" questions nothing can answer. Cheap file check, idempotent.
-            ComputerUseSkillPatch.ensureApplied()
-            var args = ["exec", "--dangerously-bypass-approvals-and-sandbox",
-                        "-m", modelID,
-                        "-c", "model_reasoning_effort=\"\(effortArg)\""]
-            if ModelBackend.current == .custom {
-                for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
+            // The driver binary is the fire-time self-heal: a fresh Mac whose onboarding fetch is
+            // still mid-flight, or an install that broke, gets the 2–3 s pinned download HERE
+            // rather than a dead fire (CodexSetup.ensureCuaDriver waits on an in-flight install
+            // instead of racing it). The guard after it is the honest final check.
+            if !CuaDriver.isInstalled { await CodexSetup.shared.ensureCuaDriver() }
+            guard CuaDriver.isInstalled else {
+                throw CLIError.notAvailable(.notWorking("the cua driver is not installed"))
             }
-            if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
-            args += ["--skip-git-repo-check", prompt]
+            // Sentient's own daemon does the driving; the agent reaches it two ways against the
+            // same socket — the MCP eyes (codexOverrides below) and the CLI shim ensureRunning
+            // just rewrote with the live socket baked in. Started here (not at launch) so a Mac
+            // that never fires a command never runs one.
+            guard let socket = await CuaDriverHost.shared.ensureRunning() else {
+                throw CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
+            }
+            // Hermetic on purpose — and it is the ONLY lever that works. ~/.codex still carries
+            // OpenAI's legacy computer-use PLUGIN on Macs that ran a 1.x bootstrap, and its skill
+            // advertisement makes the model announce "using the computer-use skill", shell out to
+            // read SKILL.md, and burn a turn before it touches a cua tool (field log 2026-08-19).
+            // Measured: a `-c` plugins-disable is a no-op and even disabling the plugin's MCP
+            // server leaves the skill advertised; only --ignore-user-config removes it. It is also
+            // cheaper (~14K vs ~20K tokens on the same task). The hosted Gmail/Calendar connectors
+            // SURVIVE a hermetic run on codex 0.148+ (their curated-remote plugins load outside
+            // the user config): measured 2026-08-19 — skills advertised AND a real hermetic
+            // `gmail.search_emails` completed — so an "email X" task keeps the connector route.
+            let args = Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
+                                           modelID: modelID, effortArg: effortArg,
+                                           socketPath: socket)
+            let modelTag = ModelBackend.current == .custom ? "custom" : modelID
+            Log("codex exec: start feature=computer cua=\(CuaDriver.version) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
+            Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
                 let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+                if let stale = Self.staleClientError(in: out.stderr, detail) { throw stale }
                 throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
             }
+            sessionHadSuccess = true
+            Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
             // §7.9: computer-use is the full-capability path (bypass-sandbox, user-fired), so a
@@ -612,72 +890,191 @@ actor CodexCLI {
             // Task (the user's STOP kills codex → non-zero exit, which is not a failure; field-found
             // polluting Sentry 2026-07-12).
             if !Task.isCancelled {
-                Self.emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                      modelID: modelID, effort: effortArg, resumed: false,
-                                      durationMS: Int(Date().timeIntervalSince(t0) * 1000))
+                let ms = Int(Date().timeIntervalSince(t0) * 1000)
+                Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
+                emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
+                                 modelID: modelID, effort: effortArg, resumed: false, durationMS: ms,
+                                 timeoutS: Int(timeout))
             }
             throw error
         }
     }
 
-    /// Emit a structured codex failure — the CLIError CASE NAME only (never `.message`/stderr/prompt,
-    /// which embed user content). One seam for the whole cloud spine; `feature` makes it attributable;
-    /// `diag` is the caller's structured extras (Invocation.diag — ints/enums only, pre-vetted).
-    /// On the custom backend the model tag reports the literal "custom" — a user's model slug (or a
-    /// private deployment name) is free text and never leaves the Mac.
-    private static func emitCodexFailure(event: String, _ error: Error, feature: String,
-                                         modelID: String, effort: String, resumed: Bool, durationMS: Int,
-                                         diag: [String: String] = [:]) {
+    /// Emit a structured codex failure. One seam for the whole cloud spine. Every value is an
+    /// enum / bool / int / version string — never `.message`, stderr, the prompt, a token, or an
+    /// account id (the free text is classified into `CodexFailureReason` on the Mac and dropped).
+    /// `feature` makes it attributable; `diag` is the caller's structured extras (Invocation.diag —
+    /// ints/enums only, pre-vetted). On the custom backend the model tag reports the literal
+    /// "custom" — a user's model slug (or a private deployment name) is free text.
+    ///
+    /// Tags (indexed): feature · error (case) · model · backend · phase (ping|exec) · availability
+    /// (notInstalled|notWorking|n/a) · reason (CodexFailureReason) · trigger (CodexTrigger) ·
+    /// network / interface (NetworkSnapshot) · login_mode / plan / access_expired
+    /// (CodexAuthSnapshot; keys avoid the scrubber words auth/token/session) · codex_version.
+    /// Extras: exit_code · duration_ms · timeout_s · attempt · effort · resumed ·
+    /// mins_since_last_refresh · has_refresh · secs_since_wake ·
+    /// first_cloud_call_this_launch · hours_since_launch · ping_model · pings_this_run (+ diag).
+    /// Fingerprint: [codex, feature, case, reason, trigger] — so a 3 AM `token_expired` and an
+    /// onboarding `not_logged_in` are different issues.
+    private func emitCodexFailure(event: String, _ error: Error, feature: String,
+                                  modelID: String, effort: String, resumed: Bool, durationMS: Int,
+                                  timeoutS: Int? = nil, diag: [String: String] = [:]) {
         let caseName: String
         let level: CrashReporting.DiagLevel
         var extra = diag
+        var availability = "n/a"
+        var phase = "exec"
         switch error {
         case CLIError.usageLimit:   return   // expected, not a defect — the amber caution + resume own it
-        case CLIError.notAvailable: (caseName, level) = ("notAvailable", .warning)
+        case CLIError.notAvailable(let a):
+            (caseName, level) = ("notAvailable", .warning)
+            phase = "ping"
+            switch a {
+            case .notInstalled: availability = "notInstalled"
+            case .notWorking:   availability = "notWorking"
+            case .available:    availability = "available"
+            }
         case CLIError.timedOut:     (caseName, level) = ("timedOut", .warning)
         case CLIError.launchFailed: (caseName, level) = ("launchFailed", .error)
         case CLIError.exitFailure(let code, _):
             (caseName, level) = ("exitFailure", .error)
             extra["exit_code"] = String(code)
         case CLIError.badEnvelope:  (caseName, level) = ("badEnvelope", .error)
+        case CLIError.staleClient(let auto):
+            // Environment drift (a newer codex rewrote the shared cache), self-healed when the
+            // binary is ours — counted so we can see how often the field hits it.
+            (caseName, level) = ("staleClient", .warning)
+            extra["auto_updating"] = String(auto)
         case CLIError.inputTooLarge(let chars):
             // The canary: every prompt path is byte-budgeted, so this should stay at zero.
             (caseName, level) = ("inputTooLarge", .error)
             extra["prompt_chars"] = String(chars)
         default:                    (caseName, level) = (String(describing: type(of: error)), .error)
         }
+        let reason = CodexFailureReason.classify(error)
+        let trigger = CodexTrigger.current
+        let net = NetworkSnapshot.shared.current
+        let auth = CodexAuthSnapshot.read()
+        let custom = ModelBackend.current == .custom
+
         extra["effort"] = effort
         extra["resumed"] = String(resumed)
         extra["duration_ms"] = String(durationMS)
-        let modelTag = ModelBackend.current == .custom ? "custom" : modelID
-        CrashReporting.captureEvent(event, level: level,
-            tags: ["feature": feature, "error": caseName, "model": modelTag],
-            extra: extra,
-            fingerprint: ["codex", feature, caseName])
+        extra["timeout_s"] = String(phase == "ping" ? (custom ? 180 : 30) : (timeoutS ?? -1))
+        extra["attempt"] = "1"
+        extra["ping_model"] = custom ? "custom" : "default"
+        extra["pings_this_run"] = String(pingsThisRun)
+        extra["first_cloud_call_this_launch"] = String(!sessionHadSuccess)   // not "*_session": a scrubber word
+        extra["hours_since_launch"] = String(Int(Date().timeIntervalSince(Self.launchedAt) / 3600))
+        extra["secs_since_wake"] = diagnosticsRunStart.map { String(Int(Date().timeIntervalSince($0))) } ?? "-1"
+        // Computer-use failures carry the pinned driver version (a constant, never free text), so
+        // a field regression after a driver bump is attributable to the bump.
+        if feature == "computer" { extra["cua_driver"] = CuaDriver.version }
+        extra.merge(auth.extras) { cur, _ in cur }
+
+        var tags: [String: String] = [
+            "feature": feature,
+            "error": caseName,
+            "model": custom ? "custom" : modelID,
+            "backend": custom ? "custom" : "chatgpt",
+            "phase": phase,
+            "availability": availability,
+            "reason": reason.rawValue,
+            "trigger": trigger.rawValue,
+            "network": net.status,
+            "interface": net.interface,
+            "codex_version": cachedVersion ?? "unknown",
+        ]
+        tags.merge(auth.tags) { cur, _ in cur }
+        CrashReporting.captureEvent(event, level: level, tags: tags, extra: extra,
+            fingerprint: ["codex", feature, caseName, reason.rawValue, trigger.rawValue])
+    }
+
+    /// Fast mode applies to every Exec path, including probes and resumed sessions.
+    /// This is a per-run override; the user's Codex configuration is never changed.
+    private static func execArguments(resumeSessionID: String? = nil) -> [String] {
+        var args = ["exec"]
+        if let resumeSessionID { args += ["resume", resumeSessionID] }
+        args += ["-c", #"service_tier="fast""#]
+        return args
     }
 
     /// `exec resume` accepts only a subset of `exec`'s flags — no `-s`/`--cd`/`--add-dir`.
     /// [MEASURED] A resumed session's workspace root is the PROCESS cwd (not the remembered
     /// one), so `execute`'s cwd is load-bearing there, and the sandbox rides the
     /// `sandbox_mode` config key instead of `-s`.
-    private static func arguments(for inv: Invocation, modelID: String, effortArg: String,
-                                  schemaFile: String?) -> [String] {
-        var args = ["exec"]
-        if let sid = inv.resumeSessionID { args += ["resume", sid] }
+    ///
+    /// The connector run recipes, codex column (the README table in the Step 1 plan; the
+    /// Claude column lives in ClaudeCLI.arguments):
+    ///  ┌─────────────────┬────────────────────────────────────────────────────────────────┐
+    ///  │ UNATTENDED READ │ Hermetic config + disabled-by-default apps and tools. Only    │
+    ///  │ mcpReadConnectors│ the requested apps' verified Codex reads are enabled.         │
+    ///  │                 │ Unknown identity/policy refuses the run. Read-only filesystem │
+    ///  │                 │ sandbox remains; connector writes use a separate tool policy. │
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ FIRED TASK      │ `apps.<id>.default_tools_approval_mode="approve"` when the id  │
+    ///  │ mcpActionServer │ resolves (server-scoped write approval), else the shipped      │
+    ///  │                 │ id-free `apps._default` preset; + the destructive strip for    │
+    ///  │                 │ that id. Sandbox stays ON (a real Gmail send worked under      │
+    ///  │                 │ `-s read-only`, measured 2026-07-18).                          │
+    ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
+    ///  │ COMPUTER USE    │ agentArguments below: the shipped hermetic bypass run + (when  │
+    ///  │ (runAgentCommand)│ widened) destructive strips for every known catalog id.       │
+    ///  └─────────────────┴────────────────────────────────────────────────────────────────┘
+    /// Internal (not private) so the connector lab's argv command can print recipes without
+    /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
+    static func arguments(for inv: Invocation, modelID: String, effortArg: String,
+                          schemaFile: String?) throws -> [String] {
+        let inv = inv.canonicalConnectorTargets()
+        if inv.mcpReadToolNames != nil, inv.mcpReadConnectors.count != 1 {
+            throw CLIError.notAvailable(.notWorking("read-tool narrowing requires one connector"))
+        }
+        if inv.connectorOnlyRead {
+            guard !inv.bypassApprovals, inv.sandbox == .readOnly, !inv.webSearch,
+                  inv.mcpActionServer == nil, !inv.mcpReadConnectors.isEmpty else {
+                throw CLIError.notAvailable(.notWorking("invalid connector-only read configuration"))
+            }
+        }
+        let direct = DirectMCPRuntime.current
+        let requestedDirect = Set((inv.mcpReadConnectors + [inv.mcpActionServer].compactMap { $0 }).filter { $0.hasPrefix("direct-") })
+        guard requestedDirect.isSubset(of: Set(direct.map(\.requestedTarget))) else { throw DirectMCPError.policyUnavailable }
+        let hostedReads = inv.mcpReadConnectors.filter { !$0.hasPrefix("direct-") }
+        if !direct.isEmpty, ModelBackend.current == .custom, !hostedReads.isEmpty {
+            throw CLIError.notAvailable(.notWorking("hosted connectors are unavailable on a custom backend"))
+        }
+        let connectorRead = !inv.mcpReadConnectors.isEmpty && (ModelBackend.current == .chatgpt || !direct.isEmpty)
+        if connectorRead {
+            guard inv.sandbox == .readOnly, !inv.bypassApprovals,
+                  inv.mcpActionServer == nil, inv.mcpAttachServer == nil else {
+                throw CLIError.notAvailable(.notWorking("invalid unattended connector configuration"))
+            }
+        }
+        assert([inv.mcpActionServer != nil, !inv.mcpReadConnectors.isEmpty,
+                inv.mcpAttachServer != nil].filter { $0 }.count <= 1,
+               "the connector recipe fields are mutually exclusive")
+        assert(!(inv.bypassApprovals && (inv.mcpActionServer != nil || !inv.mcpReadConnectors.isEmpty)),
+               "the sandboxed connector recipes never bypass approvals")
+        assert(inv.mcpReadConnectors.isEmpty || inv.sandbox == .readOnly,
+               "an unattended read is read-only by definition")
+        var args = execArguments(resumeSessionID: inv.resumeSessionID)
         args += ["--json",
                  "--skip-git-repo-check",      // staging dirs and the vault aren't git repos
                  "-m", modelID,
                  "-c", "model_reasoning_effort=\"\(effortArg)\""]
-        if !inv.includeUserConfig {
-            args += ["--ignore-user-config"]   // explicit hermetic opt-out only — includeUserConfig
-        }                                      // defaults TRUE, so by default we DON'T pass this and
-                                               // the user's ~/.codex config + MCP servers ARE loaded.
+        // Screenshots (run()'s optional eyes). Placed HERE because `-i` is variadic and every
+        // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
+        // which terminates it — the same dodge as probeCustomEndpoint's probe image.
+        if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
+        if !inv.includeUserConfig || connectorRead || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(inv.mcpActionServer ?? "") || !direct.isEmpty || inv.toolsDisabled {
+            // Hosted account apps survive hermetic runs. User MCP servers, plugins and
+            // per-tool/account approvals must not widen an unattended read's tool policy.
+            args += ["--ignore-user-config"]
+        }
 
         // Approvals + sandbox. `codex exec` is headless and can't answer an approval prompt:
         //  · default → `approval_policy=never` (don't stall) + the Seatbelt sandbox (`-s`) as the
-        //    real guardrail for shell/file ops. Hosted-connector WRITE tools are approval-gated
-        //    ("user cancelled MCP tool call" headless) — a caller that must fire one keeps this
-        //    sandboxed path and adds `approveConnectorWrites` to `configOverrides` instead.
+        //    guardrail for shell/file ops. Remote connector capabilities are controlled by
+        //    the read/action policies below, independently of the filesystem sandbox.
         //  · bypassApprovals → `--dangerously-bypass-approvals-and-sandbox` (NO approvals, NO
         //    sandbox) — computer use only (its per-app elicitations auto-deny headless under any
         //    Seatbelt profile). Mutually exclusive — codex rejects `-s`/approval_policy with it.
@@ -695,10 +1092,88 @@ actor CodexCLI {
             }
         }
         for override in inv.configOverrides { args += ["-c", override] }
+        if inv.connectorOnlyRead || inv.toolsDisabled || Microsoft365Connector.contains(inv.mcpActionServer ?? "") {
+            for override in ["project_doc_max_bytes=0", "features.shell_tool=false", "features.view_image=false",
+                             "features.browser_use=false", "features.computer_use=false", "features.multi_agent=false",
+                             "features.code_mode=false", "features.image_generation=false", "features.goals=false",
+                             "features.skill_search=false", "web_search=\"disabled\""] {
+                args += ["-c", override]
+            }
+        }
+        if inv.connectorOnlyRead, inv.mcpReadConnectors == ["slack"] {
+            args += ["-c", "features.tool_search=false"]
+        }
+        // The connector recipes (table above). ChatGPT backend only: hosted connectors ride
+        // ChatGPT-account auth, so on a custom endpoint (hermetic anyway) the fields are inert.
+        if ModelBackend.current == .chatgpt {
+            if let slug = inv.mcpActionServer, !slug.hasPrefix("direct-") {
+                if slug == "slack" {
+                    args += ["-c", try SlackConnector.codexActionPolicy(operation: inv.slackOperation ?? .write)]
+                    args += SlackToolPolicy.codexArguments(operation: inv.slackOperation ?? .write, runID: inv.slackRunID,
+                                                          expectedMessage: inv.slackExpectedMessage)
+                } else if slug == OutlookCalendarConnector.slug {
+                    guard let operation = inv.outlookCalendarOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+                    args += ["-c", try OutlookCalendarConnector.codexPolicy(operation: operation)]
+                } else if slug == OutlookMailConnector.slug {
+                    guard let operation = inv.outlookOperation else { throw MCPSource.MCPError.noReadSurface(slug: slug) }
+                    args += ["-c", try OutlookMailConnector.codexPolicy(operation: operation)]
+                } else if let id = ConnectorRegistry.server(for: slug)?.codexCatalogID {
+                    args += ["-c", "apps.\(id).default_tools_approval_mode=\"approve\"",
+                             "-c", "apps.\(id).destructive_enabled=false"]
+                } else {
+                    // No known id → the shipped id-free preset (approves every connector's
+                    // writes for this one app-authored, single-declared-action run).
+                    for override in Invocation.approveConnectorWrites { args += ["-c", override] }
+                }
+            }
+            if connectorRead {
+                args += ["-c", try connectorReadPolicy(slugs: hostedReads, subset: inv.mcpReadToolNames)]
+            }
+            if inv.includesOutlookMail || inv.calendarPolicy != nil {
+                args += HostedToolPolicy.codexArguments([OutlookToolPolicy.rule(backend: .chatgpt,
+                    operation: inv.mcpActionServer == nil ? .read : (inv.outlookOperation ?? .read), runID: inv.outlookRunID ?? UUID(),
+                    mode: inv.outlookReadMode, window: inv.outlookReadWindow, expectedMessage: inv.outlookExpectedMessage,
+                    expectedRecipients: inv.outlookExpectedRecipients, calendar: inv.calendarPolicy, includesMail: inv.includesOutlookMail)])
+            }
+        }
+        if inv.toolsDisabled || (!direct.isEmpty && ModelBackend.current == .custom) || (inv.mcpActionServer?.hasPrefix("direct-") == true) {
+            args += ["-c", "features.apps=false", "-c", "apps._default.enabled=false"]
+        }
+        for override in DirectMCPRuntime.codexOverrides(direct) { args += ["-c", override] }
         if inv.webSearch { args += ["-c", "tools.web_search=true"] }
         if let schemaFile { args += ["--output-schema", schemaFile] }
         args.append("-")                       // the prompt arrives on stdin
         return args
+    }
+
+    /// One complete override replaces inherited app, account and tool approvals. Quoted tool
+    /// keys live INSIDE the TOML value: CLI dotted paths cannot safely address dotted names.
+    /// New apps/tools remain disabled. `writes` additionally refuses an allowed tool if its
+    /// read-only annotation disappears or changes. No classifier fallback on unattended runs.
+    private static func connectorReadPolicy(slugs: [String], subset: [String]? = nil) throws -> String {
+        var entries = ["_default = { enabled = false }"]
+        var ids = Set<String>()
+        for slug in Set(slugs).sorted() {
+            guard let pack = ConnectorRegistry.pack(forSlug: slug), !pack.capturedProvisional,
+                  let reads = pack.codexReadTools, !reads.isEmpty,
+                  let id = ConnectorRegistry.server(for: slug)?.codexCatalogID,
+                  ConnectorRegistry.isValidCodexCatalogID(id),
+                  ids.insert(id).inserted,
+                  reads.allSatisfy({ $0.range(of: "^[A-Za-z_][A-Za-z0-9_./-]*\\z",
+                                              options: .regularExpression) != nil }) else {
+                throw CLIError.notAvailable(.notWorking("connector \(slug) has no verified Codex read policy"))
+            }
+            let selected = subset ?? reads
+            guard !selected.isEmpty, Set(selected).isSubset(of: Set(reads)) else {
+                throw CLIError.notAvailable(.notWorking("read-tool narrowing cannot widen the curated policy"))
+            }
+            let tools = Set(selected).sorted().map {
+                "\"\($0)\" = { enabled = true, approval_mode = \"writes\" }"
+            }.joined(separator: ", ")
+            entries.append("\(id) = { enabled = true, default_tools_enabled = false, "
+                + "default_tools_approval_mode = \"writes\", tools = { \(tools) } }")
+        }
+        return "apps = { \(entries.joined(separator: ", ")) }"
     }
 
     // MARK: JSONL parsing
@@ -706,6 +1181,39 @@ actor CodexCLI {
     private static let usageLimitMarkers = ["usage limit", "rate limit", "limit reached",
                                             "limit resets", "quota", "too many requests",
                                             "out of extra usage", "plan limit"]
+
+    /// The stale-client signature: an older CLI failing to deserialize a `~/.codex` cache a newer
+    /// codex wrote (field-found on 1.3: `codex_models_manager: failed to renew cache TTL: missing
+    /// field \`base_instructions\``, after the ChatGPT desktop app's bundled CLI rewrote
+    /// `models_cache.json`; reproduced 2026-08-17 as `failed to load models cache: missing field
+    /// \`base_instructions\`` on 0.144.6 against a 0.147.0 cache). Deliberately narrow: only
+    /// serde's "missing field" WITH the cache context, never any "missing field" (a bad `-c`
+    /// override says that too), so it can't misfire on our own config mistakes.
+    private static func isStaleClientSignature(_ text: String) -> Bool {
+        let lowered = text.lowercased()
+        if lowered.contains("failed to renew cache ttl") { return true }
+        return lowered.contains("missing field `") && lowered.contains("cache")
+    }
+
+    /// The run's stderr carries the signature, whatever the outcome (measured: an older CLI logs
+    /// the cache error, refetches, and usually finishes fine). Drifting: tell CodexSetup so the
+    /// next idle tick updates ahead of the daily cap. No error, no banner — a FAILED run is
+    /// classified separately below.
+    private static func noteStaleSignatureIfPresent(_ stderr: String) {
+        guard isStaleClientSignature(stderr) else { return }
+        Task { @MainActor in CodexSetup.shared.noteStaleSignal() }
+    }
+
+    /// Classify a FAILED run as a stale client if any of `texts` carries the signature, and kick
+    /// the repair: CodexSetup updates the managed binary right away (a no-op for a brew/npm
+    /// codex, which stays the user's to update) and raises the health rung so the home and
+    /// Settings say what happened. Returns nil when it's some other failure.
+    private static func staleClientError(in texts: String...) -> CLIError? {
+        guard texts.contains(where: isStaleClientSignature) else { return nil }
+        let managed = usingManagedBinary
+        Task { @MainActor in await CodexSetup.shared.repairStaleClient() }   // logs there
+        return .staleClient(autoUpdating: managed)
+    }
 
     private static func parseEnvelope(_ out: ExecResult, durationMS: Int) throws -> Envelope {
         var sessionID: String?
@@ -741,6 +1249,8 @@ actor CodexCLI {
             }
         }
 
+        noteStaleSignatureIfPresent(out.stderr)   // success or failure: the drift nudge either way
+
         // Failure = non-zero exit OR no final message (a recovered mid-run error that still
         // produced an answer with exit 0 counts as success). The thread id arrives in the very
         // first event, so even a mid-run usage limit keeps its resume handle.
@@ -760,6 +1270,9 @@ actor CodexCLI {
             if usageLimitMarkers.contains(where: { lowered.contains($0) }) {
                 throw CLIError.usageLimit(message: String(detail.prefix(600)), sessionID: sessionID)
             }
+            // The cache-schema error lands on stderr (tracing), which `detail` skips when the JSONL
+            // carried its own error message — so check both.
+            if let stale = staleClientError(in: out.stderr, detail) { throw stale }
             if out.status != 0 {
                 throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
             }
@@ -818,17 +1331,17 @@ actor CodexCLI {
 
     /// Full inherited environment + a rich PATH, for the codex calls that need the real GUI session
     /// context (NOT the bare HOME/USER env `execute` uses). Computer use needs the inherited $TMPDIR
-    /// + session/bootstrap vars (its `SkyComputerUseService` IPC socket lives under $TMPDIR, so the
-    /// bare env hangs at `list_apps`); `codex login` needs the same so the browser launch works. The
-    /// binary's own dir leads PATH (npm shims `#!/usr/bin/env node` right next to themselves).
-    private static func richEnvironment(binDir: String) -> [String: String] {
+    /// and session vars (the cua daemon's socket and the shim's screenshot drop-box resolve against
+    /// the real per-user temp and caches paths); `codex login` needs the same so the browser launch
+    /// works. The binary's own dir leads PATH (npm shims `#!/usr/bin/env node` right next to
+    /// themselves). Internal (not private): ClaudeCLI's login + agent runs need the same context.
+    static func richEnvironment(binDir: String) -> [String: String] {
         var env = ProcessInfo.processInfo.environment
         let home = env["HOME"] ?? NSHomeDirectory()
         let richPath = [binDir,
                         "\(home)/.local/bin",
                         "/opt/homebrew/bin", "/opt/homebrew/sbin",
                         "/usr/local/bin",
-                        "/Applications/ChatGPT.app/Contents/Resources/cua_node/bin",
                         "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
         env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
         // Same unconditional endpoint-key injection as the sanitized env (see execute()).
@@ -845,16 +1358,21 @@ actor CodexCLI {
         var text: String { lock.lock(); defer { lock.unlock() }; return String(data: buf, encoding: .utf8) ?? "" }
     }
 
-    private static func executeAsync(binary: String, args: [String], stdinText: String?,
-                                     cwd: String?, timeout: TimeInterval,
-                                     onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
+    /// Internal (not private): this and `executeStreaming` are the engine-neutral process plumbing
+    /// (sanitized env, watchdog, cancellation, multibyte-safe line streaming) that ClaudeCLI — the
+    /// parallel `claude -p` engine — reuses verbatim rather than duplicating. `extraEnv` lets an
+    /// engine add its own variables (Claude: updater/telemetry kill switches) without forking this.
+    static func executeAsync(binary: String, args: [String], stdinText: String?,
+                             cwd: String?, timeout: TimeInterval,
+                             extraEnv: [String: String] = [:],
+                             onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
         let holder = ProcHolder()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
                     do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
-                                                            cwd: cwd, timeout: timeout,
+                                                            cwd: cwd, timeout: timeout, extraEnv: extraEnv,
                                                             onStdoutLine: onStdoutLine, procHolder: holder)) }
                     catch { cont.resume(throwing: error) }
                 }
@@ -867,6 +1385,7 @@ actor CodexCLI {
     /// ~/.codex (resolved via HOME), no TTY needed (measured — receipts in the CodexCLI doc).
     private static func execute(binary: String, args: [String], stdinText: String?,
                                 cwd: String?, timeout: TimeInterval,
+                                extraEnv: [String: String] = [:],
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,
                                 procHolder: ProcHolder? = nil) throws -> ExecResult {
         let proc = Process()
@@ -886,6 +1405,7 @@ actor CodexCLI {
         // still the active backend. (codex hard-errors on an unset/empty env_key var; a value
         // here also blocks the ChatGPT-token fallthrough on keyless local servers.)
         env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
+        env.merge(extraEnv) { _, new in new }
         proc.environment = env
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
@@ -976,8 +1496,10 @@ actor CodexCLI {
     /// codex's play-by-play live — while accumulating the full text. No stdin (the prompt rides in
     /// argv). Byte-level line splitting so multibyte UTF-8 across a read boundary never garbles.
     /// Honors Task cancellation: cancelling the awaiting Task terminates codex (the STOP button).
-    private static func executeStreaming(binary: String, args: [String], timeout: TimeInterval,
-                                         onLine: @escaping @Sendable (String) -> Void) async throws -> ExecResult {
+    /// Internal (not private): ClaudeCLI's agent runs ride the same streaming plumbing.
+    static func executeStreaming(binary: String, args: [String], timeout: TimeInterval,
+                                 extraEnv: [String: String] = [:],
+                                 onLine: @escaping @Sendable (String) -> Void) async throws -> ExecResult {
         let holder = ProcHolder()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
@@ -986,9 +1508,11 @@ actor CodexCLI {
                 proc.executableURL = URL(fileURLWithPath: binary)
                 proc.arguments = args
                 // Full inherited env + rich PATH (see richEnvironment): computer use needs the real
-                // $TMPDIR + GUI session vars (its helper IPC socket lives under $TMPDIR), and so does
-                // `codex login`'s browser launch — the bare HOME/USER env `execute` uses won't do.
-                proc.environment = richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
+                // $TMPDIR + GUI session vars (the cua daemon's socket lives under the per-user temp
+                // dir), and so does `codex login`'s browser launch — the bare env won't do.
+                var env = richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
+                env.merge(extraEnv) { _, new in new }
+                proc.environment = env
 
                 let outPipe = Pipe(), errPipe = Pipe()
                 proc.standardInput = FileHandle.nullDevice

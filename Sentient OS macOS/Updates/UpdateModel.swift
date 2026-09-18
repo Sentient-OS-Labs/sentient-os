@@ -6,7 +6,7 @@
 //  custom user driver (SentientUpdateDriver) pushes state in through the `began…/found…/…` methods
 //  and stashes its reply/acknowledge closures here; the SwiftUI gate (UpdateGateView) reads `phase`
 //  and calls `installNow()/dismissInfo()/quit()` to fire those closures back. One live update flow
-//  at a time. Owned by UpdateController. Doc: Documentation/Auto-Update (Sparkle).md
+//  at a time. Owned by UpdateController. Doc: Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md
 //
 
 import SwiftUI

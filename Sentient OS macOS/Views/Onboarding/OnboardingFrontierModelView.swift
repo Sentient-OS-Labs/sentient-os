@@ -20,6 +20,7 @@ struct OnboardingFrontierModelView: View {
     let onContinue: () -> Void
 
     @State private var codex = CodexSetup.shared
+    @State private var claude = ClaudeSetup.shared
     /// `codex --help` answered — the ground-truth install confirmation (feeds the login button
     /// AND the custom panels' Test & Select).
     @State private var codexConfirmed = false
@@ -29,12 +30,15 @@ struct OnboardingFrontierModelView: View {
     @AppStorage(CustomProvider.visionVerifiedKey) private var visionVerified = false
 
     /// The one Continue gate: the ACTIVE engine is healthy. ChatGPT = logged in to codex;
-    /// a custom endpoint = configured AND vision-verified (a passing Test & Select).
+    /// Claude = logged in to Claude Code; a custom endpoint = configured AND vision-verified
+    /// (a passing Test & Select).
     private var engineReady: Bool {
         _ = visionVerified
-        return ModelBackend(rawValue: backendRaw) == .custom
-            ? CustomProvider.current.isUsable
-            : codex.loggedIn
+        switch ModelBackend(rawValue: backendRaw) ?? .chatgpt {
+        case .custom:  return CustomProvider.current.isUsable
+        case .claude:  return claude.loggedIn
+        case .chatgpt: return codex.loggedIn
+        }
     }
 
     var body: some View {
@@ -60,8 +64,7 @@ struct OnboardingFrontierModelView: View {
                     }
 
                     FrontierEnginePicker(layout: .singleRow,
-                                         chatgptHealthy: codex.loggedIn,
-                                         codexReady: codexConfirmed) {
+                                         chatgptHealthy: codex.loggedIn) {
                         OnboardingCodexLoginPanel(codexReady: codexConfirmed)
                     }
 
@@ -79,26 +82,22 @@ struct OnboardingFrontierModelView: View {
             OnboardingTrustFooter()
         }
         .onAppear {
-            Task {
-                await codex.refreshInstalled()
-                // No binary (the launch kick failed or skipped a half-deleted setup) → retry via
-                // ensureInstalled, which surfaces the manual-install panel if it gives up. Binary
-                // already present but the installer hasn't run this launch → run it anyway (it
-                // doubles as the updater, handing the latest CLI to the later steps).
-                if !codex.installed {
-                    await codex.ensureInstalled()
-                } else if !codex.ranInstallerThisLaunch {
-                    await codex.installCodex()
-                }
-            }
+            // Detection only — NO install kicks here (decision 2026-08-21): each engine's CLI
+            // downloads lazily when the user actually picks it (a pill click or a panel's
+            // sign-in action), so a Claude user never downloads codex, and vice versa.
+            Task { await codex.refreshInstalled() }
             Task { await codex.refreshLoginStatus() }
+            Task {
+                await claude.refreshInstalled()
+                await claude.refreshLoginStatus()
+            }
         }
         .task {
-            // The confirmation poll: run `codex --help` now, then every 2s until it answers —
-            // "command not found" (no binary) means the install is still going. On the normal
-            // path this succeeds on the first try and nothing is ever seen greyed.
+            // The confirmation poll: once a codex install exists (or is landing), run
+            // `codex --help` every 2s until it answers. Skipped entirely while nothing has
+            // kicked a codex install — a Claude-path onboarding never spawns a probe.
             while !Task.isCancelled {
-                if await CodexCLI.isRunnable() {
+                if codex.installed || codex.installing, await CodexCLI.isRunnable() {
                     await codex.refreshInstalled()   // align the shared engine's flag
                     withAnimation(.easeInOut(duration: 0.3)) { codexConfirmed = true }
                     return
@@ -110,6 +109,7 @@ struct OnboardingFrontierModelView: View {
             // Back from the browser — often already signed in. Step-level on purpose: the
             // ChatGPT panel (and its own watcher) may not exist while another tab is showing.
             Task { await codex.refreshLoginStatus() }
+            Task { await claude.refreshLoginStatus() }
         }
     }
 }

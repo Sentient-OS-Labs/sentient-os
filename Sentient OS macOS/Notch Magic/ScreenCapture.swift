@@ -13,7 +13,7 @@
 //  grant → returns [] and the command runs text-only (never prompts here). The files are short-lived
 //  temps: the caller passes their paths to codex, then calls `discard`. Note: the screens go to the
 //  user's OWN codex/OpenAI (the same trust boundary computer use already crosses).
-//  Doc: Documentation/Notch Magic/.
+//  Doc: the two Documentation - Sidekick - *.md files in this folder.
 //
 //  Key methods: grab() -> [URL] · discard(_:).
 //
