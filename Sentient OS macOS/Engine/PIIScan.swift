@@ -15,7 +15,7 @@
 
 import Foundation
 
-enum PIIScan {
+nonisolated enum PIIScan {
 
     /// True if the text contains a US SSN, a Luhn-valid card number, or a passport number.
     static func containsHighRiskPII(_ text: String) -> Bool {

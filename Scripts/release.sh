@@ -26,7 +26,7 @@
 #   2. ./make_dmg.sh "path/to/Sentient OS.app"   →   ./release.sh build/dmg/SentientOS-<version>.dmg
 #   3. Publish the emitted appcast.xml to https://sentient-os.ai/appcast.xml (the script prints how).
 #
-# Doc: Sentient OS macOS/Documentation/Auto-Update (Sparkle).md
+# Doc: Sentient OS macOS/Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md
 #
 set -euo pipefail
 
@@ -139,7 +139,7 @@ echo "   ✅ notarized · team $TEAM · version $SHORT ($BUILD)"
 # must build without our token). This is the loud seatbelt: find the local dSYMs matching the
 # DMG's binary UUIDs and (re-)upload them — idempotent, sentry-cli skips what the server has.
 # No symbols = every crash from this build is unreadable FOREVER (the beta-wave failure), so a
-# miss ABORTS the release. Doc: Documentation/Crash Reporting (Sentry).md
+# miss ABORTS the release. Doc: Sentient OS macOS/Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md
 if [[ -n "${SKIP_SENTRY:-}" ]]; then
   echo "→ [2/6] Skipping the Sentry symbol check (SKIP_SENTRY set)."
 else

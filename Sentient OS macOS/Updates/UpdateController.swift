@@ -14,7 +14,7 @@
 //  (needs an admin password, or errors).
 //
 //  Config (feed URL, EdDSA key, check interval) lives in Info.plist — see
-//  Documentation/Auto-Update (Sparkle).md. This file is the runtime glue.
+//  Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md. This file is the runtime glue.
 //
 
 import AppKit
@@ -139,13 +139,8 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     }
 
     /// Two invariants: never relaunch out from under an in-flight processing run, and never yank the
-    /// app away from a user who's actively using it. Frontmost with a key window counts as "in use"
-    /// unless they've been idle 5+ minutes; if we're not frontmost at all, the relaunch is invisible.
+    /// app away from a user who's actively using it (UserPresence: not frontmost, or idle 5+ min).
     private var isSafeToRelaunch: Bool {
-        if PipelineActivity.shared.isRunning { return false }
-        let appIsFrontmost = NSApp.isActive && NSApp.keyWindow != nil
-        let anyInput = CGEventType(rawValue: ~0)!   // kCGAnyInputEventType — time since any keyboard/mouse event
-        let idleSeconds = CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
-        return !appIsFrontmost || idleSeconds > 300
+        !PipelineActivity.shared.isRunning && UserPresence.isAwayFromApp
     }
 }

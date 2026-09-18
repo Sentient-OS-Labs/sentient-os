@@ -21,10 +21,14 @@ enum FactoryReset {
     /// onboarding the moment the wipe finishes; the persisted flags below guarantee the same on
     /// the next launch regardless.
     @MainActor
-    static func run(appState: AppState? = nil) async {
+    @discardableResult
+    static func run(appState: AppState? = nil) async -> Bool {
+        do { try await DirectMCPConnections.shared.removeAll() }
+        catch { Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false }
         await CycleStore.shared.wipeEverything()
         try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
         ProactiveCycle.resetAll()
+        try? FileManager.default.removeItem(at: OutlookCalendarToolPolicy.pendingDirectory)
         LifetimeStats.reset()
         try? await MirrorClient.shared.deleteRemote()   // best-effort — offline reset still works
         let d = UserDefaults.standard
@@ -35,9 +39,9 @@ enum FactoryReset {
         // reset on purpose — like the wake helper it's a setup choice, not a learning; a rebuild
         // should come back up on the same engine. Uninstall is what destroys it.
         d.removeObject(forKey: AppState.onboardingKey)
-        d.removeObject(forKey: ComputerUseGate.screenRecordingOfferedKey)   // re-offer Sentient's optional grants on rebuild
-        d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)
+        d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)         // re-offer the optional voice grant on rebuild
         d.removeObject(forKey: HealthCaution.computerUseEverReadyKey)       // the home's computer-use banner re-arms at the rebuild's own gate
+        d.removeObject(forKey: SidekickHistory.key)                         // recent Sidekick requests are learnings — a rebuild starts blank
         // The overnight scheduler starts over too: the 14h clock re-stamps at the REBUILD's first
         // cycle (not the wiped one's), the auto-enable one-shot is re-armed, and the production
         // flag comes off — otherwise a 3am run could fire mid-onboarding, racing the user's own
@@ -46,9 +50,21 @@ enum FactoryReset {
         d.removeObject(forKey: OvernightScheduler.firstCycleAtKey)
         d.removeObject(forKey: OvernightScheduler.autoEnableFiredKey)
         d.removeObject(forKey: OvernightScheduler.prodEnabledKey)
+        // Connectors: one namespaced sweep for the whole `mcp.` key family — the detected lists
+        // (`mcp.connectors.*`), every per-connector KB toggle (`mcp.<slug>.kb`), and every
+        // classifier cache (`mcp.classified.<slug>`), present and future. The rebuild re-detects
+        // and re-classifies from scratch. ⚠️ `mcp.mirror.*` shares the prefix but belongs to the
+        // MCP MIRROR, whose opt-in + last-push state deliberately SURVIVE reset (the share URL in
+        // the user's connectors must keep working; see the header note) — hence the carve-out.
+        for key in d.dictionaryRepresentation().keys
+            where key.hasPrefix("mcp.") && !key.hasPrefix("mcp.mirror.") {
+            d.removeObject(forKey: key)
+        }
         appState?.scheduler.needsSchedulerSetup = false
         appState?.scheduler.reevaluate()                // prod flag is gone → stops the loop + cancels the armed wake
         appState?.hasCompletedOnboarding = false        // live flip (didSet re-persists false)
-        Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy + scheduler state · rewound to onboarding")
+        ComputerUseUpgrade.shared.reset()              // clear pending migration after the onboarding rewind
+        Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy + scheduler state + connector state · rewound to onboarding")
+        return true
     }
 }

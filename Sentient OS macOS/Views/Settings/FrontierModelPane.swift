@@ -23,7 +23,7 @@ struct FrontierModelPane: View {
         SettingsPane(title: "Frontier Model Choice",
                      whisper: "Sentient's on-device model does about 90% of the thinking. This is the engine behind the last 10%.") {
             VStack(alignment: .leading, spacing: 26) {
-                SettingsProse("Everything Sentient reads stays on this Mac. For the heavy cloud reasoning, the knowledge base, the morning cards, Sidekick, it taps one frontier model of your choosing: your ChatGPT subscription, your Claude plan (coming soon), or a model endpoint of your own.")
+                SettingsProse("Everything Sentient reads stays on this Mac. For the heavy cloud reasoning, the knowledge base, the morning cards, Sidekick, it taps one frontier model of your choosing: your ChatGPT subscription, your Claude subscription, or a model endpoint of your own.")
 
                 FrontierEnginePicker {
                     chatgptPanel
@@ -37,13 +37,16 @@ struct FrontierModelPane: View {
     private var chatgptPanel: some View {
         SettingsGroup(label: "Your ChatGPT") {
             VStack(alignment: .leading, spacing: 14) {
-                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, because the connectors only exist here.")
+                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, and the most battle-tested engine.")
                 if backend == .chatgpt {
                     FrontierActiveLine("Sentient is running on your ChatGPT.")
                     SettingsProse("Login and plan live in Permissions & Health.")
                 } else {
                     SettingsPillButton(title: "Use ChatGPT") {
                         backendRaw = ModelBackend.chatgpt.rawValue
+                        // The commitment moment — the lazy codex install fires here (a
+                        // detection-first no-op when the CLI already exists).
+                        Task { await CodexSetup.shared.ensureInstalled() }
                     }
                 }
             }

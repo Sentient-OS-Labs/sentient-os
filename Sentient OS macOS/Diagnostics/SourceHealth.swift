@@ -2,8 +2,8 @@
 //  SourceHealth.swift
 //  Sentient OS macOS
 //
-//  Tiny UserDefaults-backed memory for the diagnostics sensors (Documentation/Source Diagnostics &
-//  Hardening (Sentry).md §4.4). Modeled on LifetimeStats: one dict key, sync + thread-safe, so the
+//  Tiny UserDefaults-backed memory for the diagnostics sensors (doc: Diagnostics/Documentation -
+//  Diagnostics (Sentry & TelemetryDeck).md). Modeled on LifetimeStats: one dict key, sync + thread-safe, so the
 //  off-main connector decoders and the @MainActor IterativeRun can both touch it with no executor hop.
 //
 //  Today it holds the run-over-run LISTING count per source, so a brittle decoder that silently

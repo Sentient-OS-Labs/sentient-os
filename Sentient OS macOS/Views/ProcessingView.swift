@@ -62,6 +62,7 @@ struct ProcessingView: View {
     let mode: IterativeRun.Mode       // home → .auto · dev INITIAL/ITERATIVE buttons → .initial/.iterative
     let runGmail: Bool                // append the cloud Gmail leg (shown in this same takeover)
     let runCalendar: Bool             // append the cloud Google Calendar leg (same takeover)
+    let mcpSlugs: [String]            // KB-toggled connectors to read (the generic MCP legs, same takeover)
     let showPrompt: Bool              // dev: add the left-side prompt pane
     let fullCycle: Bool               // real-mode Analyze Now: after the read, run ProactiveCycle (KB + proactive + wipe)
     let pausable: Bool                // onboarding: the footer button is Pause/Resume (freeze in place) instead of Stop (exit)
@@ -69,11 +70,12 @@ struct ProcessingView: View {
     var onDone: () -> Void
 
     init(modelPath: String, connectors: [any Connector], mode: IterativeRun.Mode,
-         runGmail: Bool = false, runCalendar: Bool = false, showPrompt: Bool = false,
-         fullCycle: Bool = false, pausable: Bool = false, onExitEarly: (() -> Void)? = nil,
-         onDone: @escaping () -> Void) {
+         runGmail: Bool = false, runCalendar: Bool = false, mcpSlugs: [String] = [],
+         showPrompt: Bool = false, fullCycle: Bool = false, pausable: Bool = false,
+         onExitEarly: (() -> Void)? = nil, onDone: @escaping () -> Void) {
         self.modelPath = modelPath; self.connectors = connectors; self.mode = mode
-        self.runGmail = runGmail; self.runCalendar = runCalendar; self.showPrompt = showPrompt
+        self.runGmail = runGmail; self.runCalendar = runCalendar; self.mcpSlugs = mcpSlugs
+        self.showPrompt = showPrompt
         self.fullCycle = fullCycle; self.pausable = pausable; self.onExitEarly = onExitEarly
         self.onDone = onDone
     }
@@ -101,12 +103,17 @@ struct ProcessingView: View {
     private var shownSurvivors: Int { progress.survivors + (demoBaseTotal > 0 ? demoBaseDone * 58 / 100 : 0) }
     private var shownJunk: Int { progress.junk + (demoBaseTotal > 0 ? demoBaseDone * 36 / 100 : 0) }
 
-    private enum UIState: Equatable { case loadingModel, processing, preparing, completed, failed(CycleFailure) }
+    private enum UIState: Equatable {
+        case loadingModel, processing, preparing, completed
+        case failed(CycleFailure)   // the cloud tail errored (classified when it could be)
+        case diskFull               // the on-device read stopped: the Mac's disk is full (IterativeRun)
+    }
     @State private var state: UIState = .loadingModel
-    /// The failed screen's inline codex login (the "Codex isn't logged in" fix) — same shared
-    /// engine Settings → Health drives; `loginStarted` scopes the auto-notice poll + auto-retry
-    /// to a login WE opened from that screen.
+    /// The failed screen's inline engine login (the "isn't logged in" fix) — the same shared
+    /// setup engines Settings drives, picked by the live backend; `loginStarted` scopes the
+    /// auto-notice poll + auto-retry to a login WE opened from that screen.
     @State private var codex = CodexSetup.shared
+    @State private var claude = ClaudeSetup.shared
     @State private var loginStarted = false
     @State private var prepStatus = "Preparing your suggestions…"
     /// The 10-minute patience flip for the cloud tail's bottom line (see `patienceLine`).
@@ -153,7 +160,8 @@ struct ProcessingView: View {
                     case .processing:     processingContent
                     case .preparing:      preparingView
                     case .completed:      completedView
-                    case .failed(let e):  failedView(e)
+                    case .failed(let e):  failedView(kind: e.kind, message: e.message)
+                    case .diskFull:       failedView(kind: .diskFull, message: "")
                     }
                 }
                 Spacer(minLength: 0)
@@ -475,42 +483,59 @@ struct ProcessingView: View {
         }
     }
 
-    private func failedView(_ failure: CycleFailure) -> some View {
+    /// The failed screen for BOTH failure kinds the takeover can end in: the cloud tail's
+    /// classified `CycleFailure` (kind + its own message) and the on-device read's disk-full stop
+    /// (kind `.diskFull`, no message of its own). Classified kinds get a friendly title/body and,
+    /// where there's something to click, the fix next to Retry.
+    private func failedView(kind: OvernightCaution.Kind?, message: String) -> some View {
         VStack(spacing: 20) {
             Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 46))
                 .foregroundStyle(.orange.opacity(0.85))
-            Text(Self.failTitle(failure.kind)).font(.title3.weight(.semibold)).foregroundStyle(.white)
-            Text(Self.failBody(failure)).font(.caption).foregroundStyle(.white.opacity(0.5))
+            Text(Self.failTitle(kind)).font(.title3.weight(.semibold)).foregroundStyle(.white)
+            Text(Self.failBody(kind: kind, message: message)).font(.caption).foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             HStack(spacing: 12) {
                 Button("Back", action: onExitEarly ?? onDone).buttonStyle(.bordered).tint(.white)
-                if failure.kind == .loggedOut {
+                if kind == .loggedOut {
                     Button("Retry") { Task { started = false; await startIfNeeded() } }
                         .buttonStyle(.bordered).tint(.white)
-                    Button("Log in to Codex") { loginStarted = true; codex.startLogin(force: true) }
+                    if ModelBackend.current == .claude {
+                        Button("Sign in to Claude") { loginStarted = true; claude.startLogin(force: true) }
+                            .buttonStyle(.borderedProminent).tint(.white)
+                            .disabled(claude.loggingIn)
+                    } else {
+                        Button("Log in to Codex") { loginStarted = true; codex.startLogin(force: true) }
+                            .buttonStyle(.borderedProminent).tint(.white)
+                            .disabled(codex.loggingIn)
+                    }
+                } else if kind == .diskFull {
+                    Button("Retry") { Task { started = false; await startIfNeeded() } }
+                        .buttonStyle(.bordered).tint(.white)
+                    Button("Manage Storage") { DiskSpace.openStorageSettings() }
                         .buttonStyle(.borderedProminent).tint(.white)
-                        .disabled(codex.loggingIn)
                 } else {
                     Button("Retry") { Task { started = false; await startIfNeeded() } }
                         .buttonStyle(.borderedProminent).tint(.white)
                 }
             }
-            if loginStarted, codex.loggingIn {
+            if loginStarted, (ModelBackend.current == .claude ? claude.loggingIn : codex.loggingIn) {
                 Text("A browser window opened. Finish signing in there; I'll retry on my own.")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
             }
         }
         // The browser-login auto-notice, same as Settings → Health and onboarding: while our
-        // login is out, poll `codex login status` (the codex login process self-exits once
-        // auth.json lands, no confirm button); the moment it reads logged-in, retry the cycle
-        // on our own. Leaving the failed state cancels the poll.
+        // login is out, poll the active engine's login status (the login process self-exits
+        // once the sign-in lands, no confirm button); the moment it reads logged-in, retry the
+        // cycle on our own. Leaving the failed state cancels the poll.
         .task(id: loginStarted) {
             guard loginStarted else { return }
-            while !Task.isCancelled, !codex.loggedIn {
+            let isClaude = ModelBackend.current == .claude
+            while !Task.isCancelled, !(isClaude ? claude.loggedIn : codex.loggedIn) {
                 try? await Task.sleep(for: .seconds(1.5))
-                await codex.refreshLoginStatus()
+                if isClaude { await claude.refreshLoginStatus() }
+                else { await codex.refreshLoginStatus() }
             }
-            guard !Task.isCancelled, codex.loggedIn else { return }
+            guard !Task.isCancelled, (isClaude ? claude.loggedIn : codex.loggedIn) else { return }
             loginStarted = false
             // Unstructured on purpose: the retry flips state out of .failed, which tears THIS
             // task down — the run must survive that.
@@ -519,24 +544,38 @@ struct ProcessingView: View {
     }
 
     private static func failTitle(_ kind: OvernightCaution.Kind?) -> String {
-        switch kind {
-        case .loggedOut:      "Codex isn't logged in"
-        case .usageLimit:     "We hit ChatGPT's usage limit"
+        let claude = ModelBackend.current == .claude
+        return switch kind {
+        case .loggedOut:      claude ? "Claude isn't signed in" : "Codex isn't logged in"
+        case .usageLimit:     claude ? "We hit Claude's usage limit" : "We hit ChatGPT's usage limit"
         case .noInternet:     "No internet connection"
         case .inputTooLarge:  "This batch was too big to send"
+        case .diskFull:       "Your Mac's disk is full"
+        case .connectorAuth:  "A connected app needs a fresh sign-in"
+        case .stalled:        "Processing got stuck"   // recorded only by the 3 AM watchdog; here for exhaustiveness
         case nil:             "Processing failed"
         }
     }
 
     /// Classified failures get a friendly, actionable line (the raw detail is in the log +
     /// Sentry); unclassified ones show the step's own message, as before.
-    private static func failBody(_ failure: CycleFailure) -> String {
-        switch failure.kind {
-        case .loggedOut:      "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
+    private static func failBody(kind: OvernightCaution.Kind?, message: String) -> String {
+        let claude = ModelBackend.current == .claude
+        return switch kind {
+        case .loggedOut:      claude
+            ? "Sentient runs on your own Claude account through Claude Code, and that sign-in has stopped working. Sign back in and I'll pick up right where we stopped."
+            : "Sentient runs on your own ChatGPT account through codex, and that login has stopped working. Log back in and I'll pick up right where we stopped."
         case .usageLimit:     "Your plan's window resets on its own. Everything so far is saved; retry in a while and I'll pick up right where we stopped."
         case .noInternet:     "This step runs in the cloud. Once you're back online, hit Retry; everything so far is saved."
-        case .inputTooLarge:  "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
-        case nil:             failure.message
+        case .inputTooLarge:  claude
+            ? "Sentient tried to send Claude more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
+            : "Sentient tried to send ChatGPT more than it accepts in one request. Your analysis is saved; if a retry hits this again, update Sentient OS and retry once more."
+        case .diskFull:       "I can't save what I read until there's room on this Mac. Free up some space (a few GB is plenty), then hit Retry; everything so far is saved and I'll pick up right where we stopped."
+        case .connectorAuth:  claude
+            ? "One of your connected apps has stopped accepting its sign-in. Reconnect it on claude.ai, then hit Retry; everything so far is saved."
+            : "One of your connected apps has stopped accepting its sign-in. Reconnect it on chatgpt.com, then hit Retry; everything so far is saved."
+        case .stalled:        "The work stopped making progress, so I ended it. Everything so far is saved; hit Retry and I'll pick up right where we stopped."
+        case nil:             message
         }
     }
 
@@ -651,6 +690,13 @@ struct ProcessingView: View {
     /// complete, internally-consistent snapshot, so dropping intermediate frames never desyncs the
     /// prompt pane from the card.
     private func run() async {
+        // Every codex call under this run reports its trigger (task-local, inherited by the child
+        // task below): onboarding's first analysis vs the home's Analyze Now are different failure
+        // populations in Sentry. `pausable` is the onboarding-only footer mode.
+        await CodexTrigger.$current.withValue(pausable ? .onboarding : .analyzeNow) { await runBody() }
+    }
+
+    private func runBody() async {
         let generation = runGeneration   // this invocation's identity — stale once pause/stop bump it
         // Keep the display awake ONLY for the initial ingest — the long one. The home + 3am both run
         // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 14h auto-enable
@@ -681,6 +727,9 @@ struct ProcessingView: View {
             if runCalendar {
                 p = await runCalendarLeg(base: p) { continuation.yield($0) }
             }
+            if !mcpSlugs.isEmpty {
+                p = await runMCPLeg(base: p) { continuation.yield($0) }
+            }
             return p
         }
         runTask = task
@@ -694,6 +743,10 @@ struct ProcessingView: View {
         // tail (knowledge base + cycle) must ONLY ever run at the end of a live, complete read.
         guard generation == runGeneration else { return }
         progress = Self.composed(carried, final)   // completion shows the whole session's counts
+
+        // The read stopped because the disk is full: nothing more can be saved, and the cloud tail
+        // writes too (the knowledge-base staging copy) — show the fix instead of running it.
+        if final.diskFull { withAnimation { state = .diskFull }; return }
 
         // Real-mode Analyze Now: after the read, file into the knowledge base + run all three proactive
         // steps + wipe the summaries — surfacing each phase — then reveal the real cards on the home.
@@ -825,6 +878,56 @@ struct ProcessingView: View {
             yield(p)
             Log("ProcessingView.calendar: ✗ \(ErrorLabel(error))")
         }
+        return box.value
+    }
+
+    /// The generic connector KB legs (KB-toggled connectors, via MCPSource.runAll — always
+    /// iterative-with-fallback, same as the 3am run). The bar gets ONE slot per connector; each
+    /// window's label/summary rides the same card, and a per-connector failure renders exactly
+    /// like the Gmail leg's catch (runAll's `.failed` event; the run continues past it).
+    private func runMCPLeg(base: RunProgress,
+                           yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
+        let box = ProgressBox(base)
+        let baseTotal = base.total, baseDone = base.done
+        let onEvent: @Sendable (String, Int, Int, MCPSource.Progress) -> Void = { slug, index, total, ev in
+            let name = ConnectorRegistry.displayName(slug: slug)
+            switch ev {
+            case let .windowStart(_, _, label, prompt):
+                var p = box.value
+                p.total = baseTotal + total
+                p.lastPrompt = prompt
+                p.lastPath = "\(name) · \(label)"
+                box.value = p
+                yield(p)
+            case let .windowDone(step, windows, label, summary, items, _):
+                var p = box.value
+                p.total = baseTotal + total
+                // The connector's final window completes its bar slot; inner windows (the Step 3
+                // windowed adapters) just refresh the card.
+                if step == windows { p.done = baseDone + index + 1 }
+                if summary != nil { p.survivors += 1 } else { p.junk += 1 }
+                p.lastTitle   = "\(name) · \(label)"
+                p.lastSummary = summary
+                p.lastVerdict = summary == nil ? .junk : .survivor
+                p.lastFilePath = nil
+                p.lastPath    = "\(name) · \(label)" + (items > 0 ? " · \(items) items" : "")
+                p.lastSeconds = nil
+                box.value = p
+                yield(p)
+            case let .failed(label, message):
+                var p = box.value
+                p.total = baseTotal + total
+                p.done = baseDone + index + 1
+                p.lastTitle = "\(label) failed"
+                p.lastSummary = message
+                p.lastVerdict = .junk
+                p.lastFilePath = nil
+                box.value = p
+                yield(p)
+            }
+        }
+        let (_, limited) = await MCPSource.runAll(onEvent: onEvent)
+        if limited { Log("ProcessingView.mcp: usage limit — remaining connector reads skipped") }
         return box.value
     }
 }

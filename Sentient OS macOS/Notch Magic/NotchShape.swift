@@ -5,7 +5,7 @@
 //  The notch silhouette: a top-anchored rounded shape whose outer (top) corners curve UP into the
 //  screen bezel and whose inner (bottom) corners round off. Both radii are animatable, so the shape
 //  morphs fluidly as the notch expands and contracts — the Dynamic-Island feel. Adapted from the
-//  DynamicNotch reference (Documentation/Notch Magic/Notch UI Inspiration).
+//  DynamicNotch reference (see Notch Magic/Documentation - Sidekick - Notch Window & Visual.md).
 //
 //  `NotchSkirtShape` is its open twin — the VISIBLE perimeter: up into the concave TOP CORNERS, down the
 //  sides, around the rounded bottom — but NOT the flat top edge between the corners. The flowing edge glow

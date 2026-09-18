@@ -5,14 +5,15 @@
 //  The one full teardown — FactoryReset's strict superset, driven by Settings → System →
 //  Uninstall Sentient (UninstallView). Removes EVERYTHING Sentient ever created on this Mac:
 //  the root wake helper (+ its /Library files), the cloud mirror copy AND the Keychain identity,
-//  the knowledge base, the on-device model, the cycle store, the login item, the TCC Automation
-//  grant, caches, and the whole defaults domain. Every step is best-effort and idempotent, so a
-//  crash or relaunch mid-way just re-runs cleanly (post-wipe the app lands in onboarding).
+//  the knowledge base, the on-device model + the cua driver (both under the swept SentientOS
+//  root), the cycle store, the login item, the legacy 1.x Automation TCC row, caches, and the
+//  whole defaults domain. Every step is best-effort and idempotent, so a crash or relaunch
+//  mid-way just re-runs cleanly (post-wipe the app lands in onboarding).
 //
 //  Deliberately NOT touched: the .app bundle itself (the gone screen asks the user to drag it to
-//  the Trash — decided 2026-07-10), ALL of ~/.codex (the computer-use payload, config.toml, and
-//  the user's own codex login stay), the Desktop gift keepsakes, and the SIP-protected system
-//  TCC rows. A destructive sequence must never drift — change it HERE only.
+//  the Trash — decided 2026-07-10), ALL of ~/.codex (config.toml, any 1.x-era computer-use
+//  payload, and the user's own codex login stay), the Desktop gift keepsakes, and the
+//  SIP-protected system TCC rows. A destructive sequence must never drift — change it HERE only.
 //
 //  Key members: Stage (the sheet's whisper per step) · run(appState:progress:helperDecision:)
 //  (the teardown) · finishAndQuit() (the gone screen's Quit + post-exit sweeper).
@@ -22,6 +23,7 @@ import Foundation
 import AppKit
 
 enum Uninstall {
+    static var lastFailure: String?
 
     /// The user-facing teardown stages, in run order — the farewell sheet renders each `whisper`
     /// (the mono-caps voice) while its stage runs. The helper goes FIRST: it's the only stage that
@@ -48,13 +50,14 @@ enum Uninstall {
 
     /// The full teardown. `progress` fires on the main actor before each stage so the sheet can
     /// render its whisper; `helperDecision` is asked ONLY when the root admin prompt is declined
-    /// (Try Again / Skip / Cancel). Returns false iff the user cancelled at that prompt — before
-    /// anything irreversible ran, with the scheduler flags restored.
+    /// (Try Again / Skip / Cancel). Returns false on cancellation or an incomplete Keychain
+    /// cleanup. `lastFailure` distinguishes partial cleanup from a canceled admin prompt.
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil,
                     progress: @escaping @MainActor (Stage) -> Void = { _ in },
                     helperDecision: @escaping @MainActor () async -> HelperChoice = { .skip }) async -> Bool {
+        lastFailure = nil
         Analytics.countUninstall()   // fire-and-forget; the teardown never waits on the network
         appState?.isUninstalling = true   // the home clears its cards + won't re-deal off the defaults wipe
 
@@ -98,8 +101,18 @@ enum Uninstall {
         await beat()
 
         progress(.keychain)
+        do { try await DirectMCPConnections.shared.removeAll() }
+        catch {
+            Log("Uninstall: direct-connection Keychain cleanup needs retry")
+            lastFailure = "Uninstall paused because saved app connections couldn't be removed from Keychain. Unlock your Mac and retry to finish removing Sentient."
+            appState?.isUninstalling = false
+            return false
+        }
         MirrorClient.destroyKeychainIdentity()
         CustomProvider.destroy()   // the frontier-model choice + its endpoint API key
+        ClaudeAuth.destroy()       // OUR cached Claude identity only — ~/.claude, the Keychain
+                                   // login, and the claude binary are the user's own Claude
+                                   // Code and stay untouched (the same posture as ~/.codex)
         await beat()
 
         progress(.knowledge)
@@ -109,7 +122,7 @@ enum Uninstall {
         await beat()
 
         progress(.model)
-        try? FileManager.default.removeItem(at: URL.sentientSupport)   // model + download staging + the store
+        try? FileManager.default.removeItem(at: URL.sentientSupport)   // model + download staging + the store + the cua driver
         await beat()
 
         progress(.traces)
@@ -124,7 +137,7 @@ enum Uninstall {
         d.synchronize()
         await beat()
 
-        Log("Uninstall: removed wake helper + cloud copy + keychain identity + knowledge base + model + store + caches + TCC grant + defaults · left the .app, ~/.codex, and gift keepsakes untouched")
+        Log("Uninstall: removed wake helper + cloud copy + keychain identity + knowledge base + model + cua driver + store + caches + TCC grant + defaults · left the .app, ~/.codex, and gift keepsakes untouched")
         return true
     }
 

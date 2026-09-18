@@ -10,7 +10,7 @@
 //
 //  Key types: SkyNode · SkyEdge · SkyGraph (.build(from:) / .mock() for previews).
 //  Physics: SkySimulation.swift · drawing: SkyRenderer.swift · view: NightSkyView.swift.
-//  Doc: Documentation/Knowledge Viewer.md
+//  Doc: Views/Knowledge/Documentation - Knowledge Window (Constellation & Reader).md
 //
 
 import Foundation

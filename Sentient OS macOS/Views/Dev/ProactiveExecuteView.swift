@@ -123,7 +123,7 @@ struct ProactiveExecuteView: View {
     }
 
     private func fireButton(_ a: PreparedAction) -> some View {
-        let fireable = ProactiveExecutor.isFireable(a.method)
+        let fireable = ProactiveExecutor.isFireable(a)
         return Button {
             fire(a)
         } label: {
@@ -182,6 +182,7 @@ struct ProactiveExecuteView: View {
             case .gmail:    return ("GMAIL", Color(red: 1.00, green: 0.50, blue: 0.18))
             case .calendar: return ("CALENDAR", Color(red: 0.36, green: 0.55, blue: 1.00))
             case .computer: return ("COMPUTER USE", Theme.Ink.green)
+            case .mcp:      return ("CONNECTOR", Color(red: 1.00, green: 0.72, blue: 0.30))
             case .research: return ("RESEARCHED", Theme.secondary)
             }
         }()
@@ -250,6 +251,7 @@ struct ProactiveExecuteView: View {
         case .gmail:    return "Send it for you"
         case .computer: return "Run on your Mac"
         case .calendar: return "Add to calendar"
+        case .mcp:      return "Fire the connector"
         case .research: return "Nothing to fire"
         }
     }
@@ -259,6 +261,7 @@ struct ProactiveExecuteView: View {
         case .gmail:    return "paperplane.fill"
         case .computer: return "desktopcomputer"
         case .calendar: return "calendar.badge.plus"
+        case .mcp:      return "link"
         case .research: return "minus.circle"
         }
     }

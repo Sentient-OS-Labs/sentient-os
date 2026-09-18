@@ -15,7 +15,7 @@
 //  fire — computer, gmail, or calendar — adopts the same run — ONE task at a time, app-wide, and the
 //  notch shows it).
 //  Every command is computer use, which raises the notch. A hotkey press during any real run is the
-//  universal STOP. Doc: Documentation/Notch Magic/.
+//  universal STOP. Doc: the two Documentation - Sidekick - *.md files in this folder.
 //
 
 import Foundation
@@ -405,14 +405,19 @@ final class CommandCoordinator {
         if error is CancellationError { return }   // an intentional bail (tap-to-type / Esc / watchdog) — not a failure
         if case VoiceError.notAuthorized = error {
             flash("turn on the microphone to talk to Sentient")
+            return
+        }
+        Log("voice start failed — \(error.localizedDescription)")
+        // Only speak up if we're still in the voice moment — a late failure must never clobber a
+        // newer phase (the watchdog's notice, an open type field, a running task).
+        switch phase {
+        case .opening, .listening, .transcribing: break
+        default: return
+        }
+        if case VoiceError.noMicrophone = error {
+            flash("no microphone found")
         } else {
-            Log("voice start failed — \(error.localizedDescription)")
-            // Hide only if we're still in the voice moment — a late failure must never clobber a
-            // newer phase (the watchdog's notice, an open type field, a running task).
-            switch phase {
-            case .opening, .listening, .transcribing: setPhase(.hidden)
-            default: break
-            }
+            flash("voice got stuck — try again")   // the engine was marked for a rebuild; the next hold starts clean
         }
     }
 

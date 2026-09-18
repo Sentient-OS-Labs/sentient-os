@@ -73,12 +73,15 @@ enum SourceSelection {
         if bool("dbg.run.whatsapp", default: false) && !chatJIDs.isEmpty { n += 1 }
         if bool("dbg.run.imessage", default: false) && !imessageGUIDs.isEmpty { n += 1 }
         if bool("dbg.run.notes", default: false) { n += 1 }
-        // The cloud connectors ride ChatGPT auth inside codex — on a custom frontier backend
-        // they can't run, so they don't count toward the minimum either.
+        // Hosted Gmail and Calendar need a subscription backend, so they cannot count
+        // toward the minimum on a custom endpoint.
         if ModelBackend.connectorsAvailable {
             if bool("dbg.gmail.connected", default: false) && bool("dbg.run.gmail", default: false) { n += 1 }
             if bool("dbg.calendar.connected", default: false) && bool("dbg.run.calendar", default: false) { n += 1 }
         }
+        // The registry gates hosted and direct sources separately. Direct connections also
+        // work on custom backends and must count toward onboarding's minimum there.
+        n += ConnectorRegistry.kbEnabledConnectors().count
         return n
     }
 

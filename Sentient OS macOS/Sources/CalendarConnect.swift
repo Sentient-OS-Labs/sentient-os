@@ -8,7 +8,7 @@
 //  to `codex exec` whether or not `--ignore-user-config` is passed; verified live June 21).
 //
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
-//  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
+//  confirm with `probeConnected()` through the shared ConnectorCensus (no AI read probe).
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "calendar"; the existing "tell cloud"
 //  buttons fold them into the vault, same as every other source):
@@ -27,7 +27,7 @@
 //  write tools are approval-gated and auto-cancel headless otherwise, exactly like Gmail's
 //  send_email — verified live June 21). All reads here are read-only and need no special config.
 //
-//  Doc: Documentation/Calendar Connector (Codex).md
+//  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
 //
 
 import Foundation
@@ -38,7 +38,14 @@ enum CalendarConnect {
     static let bucketKey = "calendar"
 
     /// OpenAI's hosted Google Calendar connector page — opened from CloudConnectSheet's "Connect Calendar".
-    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+    /// Where the user links Google — engine-aware (decided 2026-08-23): OpenAI's hosted
+    /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
+    /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
+    static var connectorURL: URL {
+        ModelBackend.current == .claude
+            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/google-calendar-calendarmcp")!
+            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+    }
 
     /// Newest-N events per read window (a busy month rarely exceeds this; a guard against a runaway list).
     private static let eventCap = 200
@@ -64,42 +71,32 @@ enum CalendarConnect {
         case windowDone(step: Int, total: Int, label: String, summary: String?, events: Int, keptSoFar: Int)
     }
 
-    // MARK: - Connection probe (the "I'm done" YES/NO check)
+    // MARK: - Connection detection
 
-    /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
+    /// Refresh the same hosted-connector census used by every other connected app.
     static func probeConnected() async -> Bool {
-        var inv = CodexCLI.Invocation(prompt: probePrompt)
-        inv.feature = "calendar"
-        inv.model = .gpt56luna               // light model for the connect-check
-        inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
-        inv.sandbox = .readOnly
-        inv.webSearch = false
-        inv.timeout = 120
-        do {
-            let env = try await CodexCLI.shared.run(inv)
-            let answer = env.result.uppercased()
-            let yes = answer.contains("YES") && !answer.contains("NO")
-            Log("CalendarConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
-            return yes
-        } catch {
-            Log("CalendarConnect.probe: ⚠️ \(ErrorLabel(error)) — treating as NOT connected")
-            return false
-        }
+        await ConnectorCensus.checkConnection(slug: "google-calendar")
     }
 
     // MARK: - Initial read (last year → 12 monthly summaries)
 
-    /// Fresh start: wipe the bucket, then read the last 12 months newest-first (one summary each).
-    /// Records each into CycleStore; sets the high-water mark to the run-start on completion.
+    /// Read twelve monthly windows sequentially. Replace notes and checkpoint together only
+    /// after every result is validated; failures preserve the previous bucket.
     @discardableResult
     static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        await CycleStore.shared.clearBucket(bucketKey)
+        try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
+            try await readInitial(onProgress: onProgress, replaceNotes: true)
+        }
+    }
+
+    private static func readInitial(onProgress: @Sendable @escaping (Progress) -> Void, replaceNotes: Bool) async throws -> Int {
         let runStart = Date()
         let cal = Calendar.current
         let today = cal.startOfDay(for: runStart)
         guard let tomorrow = cal.date(byAdding: .day, value: 1, to: today) else { throw CalendarError.dateMath }
 
         var recorded = 0
+        var pending: [NoteDraft] = []
         for month in 0..<initialMonths {
             // Window [tomorrow − 1·(month+1), tomorrow − 1·month) months: contiguous, no overlap, newest
             // first, past-only (the most recent window ends at end-of-today; future events ride the
@@ -113,9 +110,9 @@ enum CalendarConnect {
             let range = "with a start date/time on or after \(iso(lower)) and before \(iso(upper))"
             let prompt = readPrompt(range: range, label: monthLabel)
             onProgress(.windowStart(step: month + 1, total: initialMonths, label: monthLabel, prompt: prompt))
-            if let r = try await read(prompt: prompt) {
+            if let r = try await read(prompt: prompt, window: DateInterval(start: lower, end: upper)) {
                 let itemDate = upperDay
-                await record(r, itemDate: itemDate, label: monthLabel)
+                pending.append(draft(r, itemDate: itemDate, label: monthLabel))
                 recorded += 1
                 onProgress(.windowDone(step: month + 1, total: initialMonths, label: monthLabel,
                                        summary: r.summary, events: r.eventCount, keptSoFar: recorded))
@@ -126,7 +123,7 @@ enum CalendarConnect {
         }
         // High-water mark = run start. Iterative reads everything after it (a little overlap is
         // harmless — the cloud updater synthesizes — and beats a boundary gap).
-        await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, replace: replaceNotes)
         Log("CalendarConnect.runInitial: ✅ \(recorded)/\(initialMonths) monthly summaries recorded; pointer → \(runStart)")
         return recorded
     }
@@ -137,18 +134,28 @@ enum CalendarConnect {
     /// initial read if Calendar has never been read on this Mac.
     @discardableResult
     static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        guard let mark = await CycleStore.shared.pointer(bucketKey) else {
-            return try await runInitial(onProgress: onProgress)   // never read → fall back to initial
+        try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
+            try await readIterative(onProgress: onProgress)
         }
+    }
+
+    private static func readIterative(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
+        guard let checkpoint = try await CycleStore.shared.mcpCheckpoint(bucketKey),
+              checkpoint.origin == GoogleSourceRead.origin(bucket: bucketKey) else {
+            return try await readInitial(onProgress: onProgress, replaceNotes: false)
+        }
+        let mark = checkpoint.mark
         let since = Date(timeIntervalSince1970: mark.order)
         let runStart = Date()
+        guard mark.order <= runStart.timeIntervalSince1970 else { throw MCPSource.MCPError.clockMovedBackwards }
         let sinceLabel = "since \(label(since))"
         let range = "with a start date/time on or after \(iso(since)) and before \(iso(runStart))"
         let prompt = readPrompt(range: range, label: sinceLabel)
         onProgress(.windowStart(step: 1, total: 1, label: sinceLabel, prompt: prompt))
         var recorded = 0
-        if let r = try await read(prompt: prompt) {
-            await record(r, itemDate: runStart, label: sinceLabel)
+        var pending: [NoteDraft] = []
+        if let r = try await read(prompt: prompt, window: DateInterval(start: since, end: runStart)) {
+            pending.append(draft(r, itemDate: runStart, label: sinceLabel))
             recorded = 1
             onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
                                    summary: r.summary, events: r.eventCount, keptSoFar: 1))
@@ -156,7 +163,7 @@ enum CalendarConnect {
             onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
                                    summary: nil, events: 0, keptSoFar: 0))
         }
-        await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart)
         Log("CalendarConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
         return recorded
     }
@@ -176,8 +183,9 @@ enum CalendarConnect {
         inv.webSearch = false
         inv.outputSchema = proactiveSchema
         inv.timeout = 300
+        inv.mcpReadConnectors = ["google-calendar"]   // Claude engine: the unattended-read recipe
         do {
-            let env = try await CodexCLI.shared.run(inv)
+            let env = try await FrontierRun.run(inv)
             guard let span = jsonSpan(env.result),
                   let data = span.data(using: .utf8),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
@@ -197,7 +205,7 @@ enum CalendarConnect {
 
     // MARK: - One read (a single codex exec over a date window)
 
-    private static func read(prompt: String) async throws -> ReadResult? {
+    private static func read(prompt: String, window: DateInterval) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "calendar"
         inv.model = .gpt56luna               // light model — calendar data is small + structured
@@ -206,47 +214,18 @@ enum CalendarConnect {
         inv.webSearch = false                // the calendar is the only source this needs
         inv.outputSchema = readSchema
         inv.timeout = 600
-        let env = try await CodexCLI.shared.run(inv)
-        return parse(env.result)
+        inv.mcpReadConnectors = ["google-calendar"]   // Claude engine: the unattended-read recipe
+        guard let result = try await GoogleSourceRead.read(inv, slug: "google-calendar", countKey: "event_count", cap: eventCap,
+                                                         calendarWindow: window) else { return nil }
+        return ReadResult(summary: result.text, hasActionItems: result.hasActionItems, eventCount: result.count)
     }
 
-    private static func record(_ r: ReadResult, itemDate: Date, label: String) async {
-        let sid = "calendar:\(Int(itemDate.timeIntervalSince1970))"        // unique per window
-        await CycleStore.shared.recordNote(
-            bucketKey: bucketKey, kind: .calendar, sourceID: sid, folder: "Calendar",
-            itemDate: itemDate, text: r.summary, title: "Calendar · \(label)",
-            reminderFlagged: r.hasActionItems)
+    private static func draft(_ r: ReadResult, itemDate: Date, label: String) -> NoteDraft {
+        NoteDraft(kind: .calendar, sourceID: "calendar:\(Int(itemDate.timeIntervalSince1970))", folder: "Calendar",
+            itemDate: itemDate, text: r.summary, title: "Calendar · \(label)", reminderFlagged: r.hasActionItems)
     }
 
     /// Tolerant parse of the structured read reply (output-schema makes `result` the JSON; fence-safe).
-    /// §7.11: SHAPE MISMATCH (no JSON, or the required `notable` key absent — despite the output-schema)
-    /// is a codex/schema regression → event; a QUIET window (`notable:false` / empty summary) is normal
-    /// → silent. Distinguishes a broken Calendar leg from an empty calendar.
-    private static func parse(_ result: String) -> ReadResult? {
-        guard let span = jsonSpan(result),
-              let data = span.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            shapeMismatch(missing: "json", len: result.count)
-            return nil
-        }
-        guard let notable = obj["notable"] as? Bool else {
-            shapeMismatch(missing: "notable", len: result.count)    // key names only — never values
-            return nil
-        }
-        // From here a nil return is a QUIET window — NOT an anomaly, so no event.
-        guard notable, let summary = obj["summary"] as? String,
-              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return ReadResult(summary: summary,
-                          hasActionItems: obj["has_action_items"] as? Bool ?? false,
-                          eventCount: obj["event_count"] as? Int ?? 0)
-    }
-
-    private static func shapeMismatch(missing: String, len: Int) {
-        CrashReporting.captureEvent("calendar.parse.shape_mismatch", level: .warning,
-            tags: ["source": "calendar"], extra: ["missing": missing, "result_len": String(len)],
-            fingerprint: ["calendar", "parse", "shape_mismatch"])
-    }
-
     /// Widest `{ … }` span in a possibly-fenced reply.
     private static func jsonSpan(_ result: String) -> String? {
         if let s = result.firstIndex(of: "{"), let e = result.lastIndex(of: "}"), s < e {
@@ -259,7 +238,7 @@ enum CalendarConnect {
 
     /// ISO-8601 with timezone offset — a precise window boundary the connector can bound on.
     private static func iso(_ d: Date) -> String {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd'T'HH:mm:ssZ"; f.timeZone = .current; f.locale = Locale(identifier: "en_US_POSIX")
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd'T'HH:mm:ssXXXXX"; f.timeZone = .current; f.locale = Locale(identifier: "en_US_POSIX")
         return f.string(from: d)
     }
     private static func label(_ d: Date) -> String {     // display: "Jun 8"
@@ -268,12 +247,6 @@ enum CalendarConnect {
     }
 
     // MARK: - Prompts
-
-    private static let probePrompt = """
-    Using your Google Calendar connector tools, check whether you can read this account's Google \
-    Calendar. Reply with EXACTLY YES if you can, or EXACTLY NO if the Google Calendar connector is not \
-    available. Output only that one word and nothing else.
-    """
 
     /// The structured read reply — one dense window summary plus the flags Sentient keys on.
     private static let readSchema = """

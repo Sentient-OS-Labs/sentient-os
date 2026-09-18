@@ -9,7 +9,7 @@
 	  versions, the NS*UsageDescription strings) is still synthesized by GENERATE_INFOPLIST_FILE=YES
 	  and the INFOPLIST_KEY_* build settings — Xcode MERGES the generated keys on top of this file
 	  (that's why INFOPLIST_FILE + GENERATE_INFOPLIST_FILE coexist here). Do NOT duplicate generated
-	  keys in this file. Doc: Documentation/Auto-Update (Sparkle).md
+	  keys in this file. Doc: Sentient OS macOS/Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md
 
 	  🔑 SUPublicEDKey below is the REAL production key (minted 2026-07-07 on Jesai's Mac). Its
 	  matching private seed lives ONLY in Jesai's login Keychain (service `https://sparkle-project.org`,

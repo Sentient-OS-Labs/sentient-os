@@ -17,9 +17,9 @@
 //  persists (UserDefaults "onboarding.step") so a quit-and-relaunch mid-onboarding — which
 //  granting Full Disk Access requires — resumes exactly where the user left. The background
 //  codex install is NOT here: AppState kicks it off 1s after launch while the film plays.
-//  Computer use (codex step 3) IS here: the analysis takeover appearing arms a silent
-//  one-shot that bootstraps it 2 minutes in (armComputerUseSetup) — armed at analysis start,
-//  not at Start Analysis, so its ~535 MB DMG never competes with the model download's tail.
+//  The computer-use driver (codex step 3) IS here: the analysis takeover appearing arms a
+//  silent one-shot that downloads it 2 minutes in (armComputerUseSetup) — armed at analysis
+//  start, not at Start Analysis, so it never competes with the model download's tail.
 //
 
 import SwiftUI
@@ -93,6 +93,7 @@ struct OnboardingView: View {
                                    mode: .auto,
                                    runGmail: gmailConnected && runGmail,
                                    runCalendar: calendarConnected && runCalendar,
+                                   mcpSlugs: MCPSource.kbSlugs(),
                                    fullCycle: BriefingDeck(rawValue: deckRaw) == .real,
                                    pausable: true,
                                    onExitEarly: { withAnimation(.easeInOut(duration: 0.3)) { analyzing = false } },
@@ -177,21 +178,23 @@ struct OnboardingView: View {
         #endif
     }
 
-    /// Two minutes into the first analysis, bootstrap codex computer use (setup step 3) silently
-    /// in the background — so it's ready by the time the home's cards and Sidekick need it, with
-    /// no onboarding screen of its own. Armed when the analysis takeover APPEARS (not at Start
-    /// Analysis), so its ~535 MB DMG never races the model download still finishing behind the
-    /// downloading screen. An unstructured Task on purpose: pausing or exiting the
-    /// analysis must NOT cancel a DMG download mid-flight. setupComputerUse() self-guards (no-op
-    /// when already bootstrapped, requires the codex binary), so a quit-and-relaunch that restarts
-    /// the analysis just re-arms harmlessly; failures land in the log + Sentry, never in the UI.
+    /// Two minutes into the first analysis, download the computer-use driver (setup step 3)
+    /// silently in the background — so it's ready by the time the home's cards and Sidekick need
+    /// it, with no onboarding screen of its own. Armed when the analysis takeover APPEARS (not at
+    /// Start Analysis), so it never races the model download still finishing behind the
+    /// downloading screen. setupCuaDriver() self-guards (no-op when the pinned version is already
+    /// there; needs neither codex nor a login), so a quit-and-relaunch that restarts the analysis
+    /// just re-arms harmlessly; failures land in the log + Sentry, never in the UI.
     private func armComputerUseSetup() {
         guard !computerUseArmed else { return }
         computerUseArmed = true
+        // An unstructured Task on purpose — pausing or leaving the analysis must not cancel the
+        // download mid-flight. If the user somehow fires a command before it lands, the fire-time
+        // self-heal (CodexSetup.ensureCuaDriver) waits on this very install instead of racing it.
         Task {
             try? await Task.sleep(for: .seconds(120))
-            Log("Onboarding: 2 min into first analysis — starting background computer-use setup")
-            await CodexSetup.shared.setupComputerUse()
+            Log("Onboarding: 2 min into first analysis — fetching the computer-use driver")
+            await CodexSetup.shared.setupCuaDriver()
         }
     }
 
@@ -201,9 +204,10 @@ struct OnboardingView: View {
 
     private func goBack() {
         var target = step - 1
-        // The crossroads only exists for free/go ChatGPT accounts — never strand a full plan
-        // or a custom engine on an auto-advancing screen (back would visibly bounce forward).
-        if target == 2 && (!CodexAuth.isLimited() || ModelBackend.current == .custom) { target -= 1 }
+        // The crossroads only exists for free/go ChatGPT accounts — never strand a full plan,
+        // a Claude engine, or a custom engine on an auto-advancing screen (back would visibly
+        // bounce forward).
+        if target == 2 && (!CodexAuth.isLimited() || ModelBackend.current != .chatgpt) { target -= 1 }
         withAnimation(.easeInOut(duration: 0.25)) { step = max(0, target) }
     }
 

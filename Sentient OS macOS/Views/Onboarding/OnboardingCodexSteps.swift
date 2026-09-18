@@ -34,7 +34,7 @@ struct OnboardingCodexLoginPanel: View {
     var body: some View {
         SettingsGroup(label: "Your ChatGPT") {
             VStack(alignment: .leading, spacing: 14) {
-                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, because the connectors only exist here.")
+                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, and the most battle-tested engine.")
 
                 loginStates
             }
@@ -74,14 +74,24 @@ struct OnboardingCodexLoginPanel: View {
             // step's poll picks Codex up automatically the moment it lands.
             CodexInstallFailedPanel()
         } else {
-            // The login button — greyed until `codex --help` confirms the install
-            // landed. Centered with its status lines: it's the panel's one big CTA.
+            // The login button — the panel's one big CTA. Lazy install (decision 2026-08-21):
+            // with no codex on disk yet, THIS click is what downloads it (never a launch kick),
+            // and the sign-in follows on its own the moment the install lands. Mid-install the
+            // button greys and the streamed progress line narrates.
             VStack(spacing: 10) {
-                OnboardingNextButton(title: "Log in with ChatGPT", enabled: codexReady) {
-                    codex.startLogin()
+                OnboardingNextButton(title: "Log in with ChatGPT",
+                                     enabled: codexReady || !(codex.installed || codex.installing)) {
+                    if codexReady { codex.startLogin(); return }
+                    Task {
+                        await codex.ensureInstalled()
+                        if await CodexCLI.isRunnable() { codex.startLogin() }
+                    }
                 }
-                if !codexReady {
-                    MonoWaitLine("installing codex in the background…")
+                if codex.installing {
+                    MonoWaitLine("installing codex…")
+                    OnboardingStatusText(codex.installStatus)
+                } else if !codexReady, codex.installed {
+                    MonoWaitLine("checking codex…")
                 }
                 OnboardingStatusText(codex.loginStatusLine)
             }

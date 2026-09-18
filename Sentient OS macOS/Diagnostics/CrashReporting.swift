@@ -8,7 +8,7 @@
 //  crash is told apart from a UI crash. `Log()` (Log.swift) tees every line in as a breadcrumb, so a
 //  report arrives carrying the recent log trail that led to it.
 //
-//  Two hard gates decide whether ANYTHING reaches Sentry (Documentation/Source Diagnostics …):
+//  Two hard gates decide whether ANYTHING reaches Sentry (Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md):
 //   1. RELEASE builds only — `start()` no-ops in DEBUG. There is NO debug bypass: Sentry never
 //      initializes in a Debug build, so verify the pipeline from a Release build.
 //   2. Opt-OUT switch — `diagnosticsEnabled` (default ON); the "Share anonymous crash reports"
@@ -24,7 +24,7 @@
 //   - capture(_:) / breadcrumb(_:)    → non-fatal error / the Log() trail
 //   - diagnosticsEnabled              → the opt-out reader (off-main safe)
 //
-//  Doc: Documentation/Crash Reporting (Sentry).md · Documentation/Source Diagnostics & Hardening (Sentry).md
+//  Doc: Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md
 //
 
 import Foundation

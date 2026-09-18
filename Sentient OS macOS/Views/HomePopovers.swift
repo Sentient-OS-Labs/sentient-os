@@ -5,8 +5,8 @@
 //  The two glanceable dropdowns hung off the home's top-bar nav (HomeView). They keep status
 //  OFF the home itself — you open them only when curious:
 //   · AnalysisPopover — the work glance: things understood, vault size, an Analyze Now control
-//     with the last/next-run footer, and the source chips (sources are the INPUTS to analysis,
-//     so they live under "Analysis").
+//     with the last/next-run footer, the overnight-on-battery opt-in, and the source chips
+//     (sources are the INPUTS to analysis, so they live under "Analysis").
 //   · ShareKnowledgePopover — the pitch + the glowing CTA ("Set up in 2 minutes"; "Configure"
 //     once sharing is on) that opens the guided setup window (ConnectAIsView owns sharing
 //     on/off, the link, and the prompt).
@@ -53,7 +53,12 @@ struct AnalysisPopover: View {
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
+    // The overnight run's battery opt-in — the production scheduler key, so the 3 AM gate and this
+    // switch are one truth. Default off: AC-only unless the user says otherwise.
+    @AppStorage(OvernightScheduler.allowBatteryKey) private var overnightOnBattery = false
+
     @State private var vault: (notes: Int, domains: Int)?
+    @State private var hasBattery = false   // desktop Macs hide the battery row entirely
 
     private var anyArmed: Bool {
         runDownloads || runDesktop || runDocuments || runNotes || !customRoots.isEmpty
@@ -74,6 +79,7 @@ struct AnalysisPopover: View {
 
             analyzeButton.padding(.top, 16)
             runFooter.padding(.top, 11)
+            if armed && hasBattery { batteryToggleLine.padding(.top, 13) }
 
             Rectangle().fill(.white.opacity(0.06)).frame(height: 1).padding(.vertical, 16)
 
@@ -110,7 +116,10 @@ struct AnalysisPopover: View {
         .padding(20)
         .frame(width: 360)
         .background(Theme.Ink.cardBG)
-        .task { vault = HomeStats.countVault() }
+        .task {
+            vault = HomeStats.countVault()
+            hasBattery = PowerState.batteryPercent() != nil
+        }
     }
 
     private var understoodLine: String {
@@ -140,9 +149,24 @@ struct AnalysisPopover: View {
                 }
                 GridRow {
                     MonoCaps("Next run", size: 9, tracking: 1.6, color: Theme.Ink.deepMuted)
-                    footerValue("Tonight at \(Self.overnightTime), if your Mac's plugged in & Sentient's open in the menu bar")
+                    footerValue(overnightOnBattery
+                        ? "Tonight at \(Self.overnightTime), if Sentient's open in the menu bar; battery's fine above \(PowerState.batteryFloorPercent)%"
+                        : "Tonight at \(Self.overnightTime), if your Mac's plugged in & Sentient's open in the menu bar")
                 }
             }
+        }
+    }
+
+    /// The battery opt-in for the 3 AM run — one quiet line + a small switch, hidden on desktop
+    /// Macs. Flipping it rewords the "Next run" line above live; the 40% floor lives in that copy,
+    /// so this row stays one line.
+    private var batteryToggleLine: some View {
+        HStack(spacing: 12) {
+            Text("Run on battery too")
+                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
+            Spacer(minLength: 12)
+            Toggle("", isOn: $overnightOnBattery)
+                .labelsHidden().toggleStyle(.switch).controlSize(.mini).tint(Theme.Ink.green)
         }
     }
 

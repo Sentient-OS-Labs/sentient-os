@@ -37,7 +37,7 @@
 //   - countUninstall()                 → its farewell twin, fired as the uninstall teardown begins
 //   - applyEnabledChange()             → react to a mid-session flip of the extended-tier switch
 //
-//  Doc: Documentation/Product Analytics (TelemetryDeck).md · twin: Documentation/Crash Reporting (Sentry).md
+//  Doc: Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md
 //
 
 import Foundation

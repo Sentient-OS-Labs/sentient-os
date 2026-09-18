@@ -8,7 +8,7 @@
 //  `--ignore-user-config` — measured live June 15, no CodexCLI change needed).
 //
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
-//  confirm with `probeConnected()` — a `codex exec` that returns exactly YES/NO.
+//  confirm with `probeConnected()` through the shared ConnectorCensus (no AI read probe).
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "gmail"; the existing "tell cloud"
 //  buttons add them to the vault, same as every other source):
@@ -22,7 +22,7 @@
 //  a mere count in testing (codex over-reads). It searches on metadata/snippets, caps at the newest
 //  300 threads, and only opens the handful of threads that look genuinely important.
 //
-//  Doc: Documentation/Gmail Connector (Codex).md
+//  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
 //
 
 import Foundation
@@ -33,7 +33,14 @@ enum GmailConnect {
     static let bucketKey = "gmail"
 
     /// OpenAI's hosted Gmail connector page — opened from CloudConnectSheet's "Connect Gmail".
-    static let connectorURL = URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
+    /// Where the user links Google — engine-aware (decided 2026-08-23): OpenAI's hosted
+    /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
+    /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
+    static var connectorURL: URL {
+        ModelBackend.current == .claude
+            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/gmail-gmailmcp")!
+            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
+    }
 
     /// Newest-N threads per read (the connector-limits doc's cap; a heavy week exceeds it).
     private static let threadCap = 300
@@ -75,38 +82,25 @@ enum GmailConnect {
                         completed: Int, keptSoFar: Int)
     }
 
-    // MARK: - Connection probe (the "I'm done" YES/NO check)
+    // MARK: - Connection detection
 
-    /// One `codex exec`, read-only, that returns exactly YES/NO. Fail-closed (any error ⇒ false).
+    /// Refresh the same hosted-connector census used by every other connected app.
     static func probeConnected() async -> Bool {
-        var inv = CodexCLI.Invocation(prompt: probePrompt)
-        inv.feature = "gmail"
-        inv.model = .gpt56luna               // light model for the connect-check
-        inv.effort = .low                    // a tool-availability YES/NO — no thinking needed
-        inv.sandbox = .readOnly
-        inv.timeout = 120
-        do {
-            let env = try await CodexCLI.shared.run(inv)
-            let answer = env.result.uppercased()
-            let yes = answer.contains("YES") && !answer.contains("NO")
-            Log("GmailConnect.probe: codex replied (\(env.result.count) chars) ⇒ \(yes ? "connected" : "NOT connected")")
-            return yes
-        } catch {
-            Log("GmailConnect.probe: ⚠️ \(ErrorLabel(error)) — treating as NOT connected")
-            return false
-        }
+        await ConnectorCensus.checkConnection(slug: "gmail")
     }
 
     // MARK: - Initial read (last month → 4 weekly summaries)
 
-    /// Fresh start: wipe the bucket, then read the last 4 weeks — all four `codex exec` reads fire
-    /// IN PARALLEL (independent windows, independent subprocesses). Results are collected as they
-    /// finish (completion order) and recorded into CycleStore; the high-water mark is set to the
-    /// run-start once all four complete. Any window failing aborts the run (mark unset → a retry
-    /// re-runs all four after clearBucket), matching the iterative path's all-or-nothing commit.
+    /// Read four weekly windows concurrently, staging every summary before replacing notes
+    /// and checkpoint in one save. Failed or cancelled reads preserve the previous bucket.
     @discardableResult
     static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        await CycleStore.shared.clearBucket(bucketKey)
+        try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
+            try await readInitial(onProgress: onProgress, replaceNotes: true)
+        }
+    }
+
+    private static func readInitial(onProgress: @Sendable @escaping (Progress) -> Void, replaceNotes: Bool) async throws -> Int {
         let runStart = Date()
         let cal = Calendar.current
         let today = cal.startOfDay(for: runStart)
@@ -134,6 +128,7 @@ enum GmailConnect {
         // Fan out: one codex exec per window, all concurrent. Collect AS each finishes, then record +
         // report serially here in the parent — so the counters and the progress box see no races.
         var recorded = 0, completed = 0
+        var pending: [NoteDraft] = []
         try await withThrowingTaskGroup(of: WindowResult.self) { group in
             for w in windows {
                 group.addTask { WindowResult(window: w, result: try await read(prompt: w.prompt)) }
@@ -141,7 +136,7 @@ enum GmailConnect {
             for try await done in group {
                 completed += 1
                 if let r = done.result {
-                    await record(r, itemDate: done.window.itemDate, label: done.window.label)
+                    pending.append(draft(r, itemDate: done.window.itemDate, label: done.window.label))
                     recorded += 1
                     onProgress(.windowDone(total: initialWeeks, label: done.window.label,
                                            summary: r.summary, threads: r.threadCount,
@@ -156,7 +151,7 @@ enum GmailConnect {
 
         // High-water mark = run start. Iterative reads everything after it (a few hours of overlap
         // is harmless — the cloud updater synthesizes — and beats a boundary gap).
-        await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, replace: replaceNotes)
         Log("GmailConnect.runInitial: ✅ \(recorded)/\(initialWeeks) weekly summaries recorded (parallel); pointer → \(runStart)")
         return recorded
     }
@@ -167,19 +162,29 @@ enum GmailConnect {
     /// full initial read if Gmail has never been read on this Mac.
     @discardableResult
     static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        guard let mark = await CycleStore.shared.pointer(bucketKey) else {
-            return try await runInitial(onProgress: onProgress)   // never read → fall back to initial
+        try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
+            try await readIterative(onProgress: onProgress)
         }
+    }
+
+    private static func readIterative(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
+        guard let checkpoint = try await CycleStore.shared.mcpCheckpoint(bucketKey),
+              checkpoint.origin == GoogleSourceRead.origin(bucket: bucketKey) else {
+            return try await readInitial(onProgress: onProgress, replaceNotes: false)
+        }
+        let mark = checkpoint.mark
         let since = Date(timeIntervalSince1970: mark.order)
         let runStart = Date()
+        guard mark.order <= runStart.timeIntervalSince1970 else { throw MCPSource.MCPError.clockMovedBackwards }
         let sinceLabel = "since \(label(since))"
         // Gmail's `after:` accepts an epoch-seconds boundary — precise, no day-rounding.
         let query = "after:\(Int(since.timeIntervalSince1970))"
         let prompt = weeklyPrompt(query: query, label: sinceLabel)
         onProgress(.windowStart(total: 1, label: sinceLabel, prompt: prompt))
         var recorded = 0
+        var pending: [NoteDraft] = []
         if let r = try await read(prompt: prompt) {
-            await record(r, itemDate: runStart, label: sinceLabel)
+            pending.append(draft(r, itemDate: runStart, label: sinceLabel))
             recorded = 1
             onProgress(.windowDone(total: 1, label: sinceLabel,
                                    summary: r.summary, threads: r.threadCount, completed: 1, keptSoFar: 1))
@@ -187,7 +192,7 @@ enum GmailConnect {
             onProgress(.windowDone(total: 1, label: sinceLabel,
                                    summary: nil, threads: 0, completed: 1, keptSoFar: 0))
         }
-        await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart)
         Log("GmailConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
         return recorded
     }
@@ -202,48 +207,14 @@ enum GmailConnect {
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long
-        let env = try await CodexCLI.shared.run(inv)
-        return parse(env.result)
+        inv.mcpReadConnectors = ["gmail"]    // Claude engine: the unattended-read recipe
+        guard let result = try await GoogleSourceRead.read(inv, slug: "gmail", countKey: "thread_count", cap: threadCap) else { return nil }
+        return ReadResult(summary: result.text, hasActionItems: result.hasActionItems, threadCount: result.count)
     }
 
-    private static func record(_ r: ReadResult, itemDate: Date, label: String) async {
-        let sid = "gmail:\(Int(itemDate.timeIntervalSince1970))"          // unique per window
-        await CycleStore.shared.recordNote(
-            bucketKey: bucketKey, kind: .gmail, sourceID: sid, folder: "Gmail",
-            itemDate: itemDate, text: r.summary, title: "Email · \(label)",
-            reminderFlagged: r.hasActionItems)
-    }
-
-    /// Tolerant parse of the structured reply (output-schema makes `result` the JSON; still fence-safe).
-    /// §7.10: SHAPE MISMATCH (JSON won't parse, or the required `notable` key is absent — despite the
-    /// output-schema) is a codex/schema regression → event. A QUIET week (`notable:false` / empty
-    /// summary) is normal → silent. Distinguishing them stops a broken Gmail leg from hiding as "quiet".
-    private static func parse(_ result: String) -> ReadResult? {
-        let span: String
-        if let s = result.firstIndex(of: "{"), let e = result.lastIndex(of: "}"), s < e {
-            span = String(result[s...e])
-        } else { span = result }
-        guard let data = span.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            shapeMismatch(missing: "json", len: result.count)
-            return nil
-        }
-        guard let notable = obj["notable"] as? Bool else {
-            shapeMismatch(missing: "notable", len: result.count)    // key names only — never values
-            return nil
-        }
-        // From here a nil return is a QUIET week — NOT an anomaly, so no event.
-        guard notable, let summary = obj["summary"] as? String,
-              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return ReadResult(summary: summary,
-                          hasActionItems: obj["has_action_items"] as? Bool ?? false,
-                          threadCount: obj["thread_count"] as? Int ?? 0)
-    }
-
-    private static func shapeMismatch(missing: String, len: Int) {
-        CrashReporting.captureEvent("gmail.parse.shape_mismatch", level: .warning,
-            tags: ["source": "gmail"], extra: ["missing": missing, "result_len": String(len)],
-            fingerprint: ["gmail", "parse", "shape_mismatch"])
+    private static func draft(_ r: ReadResult, itemDate: Date, label: String) -> NoteDraft {
+        NoteDraft(kind: .gmail, sourceID: "gmail:\(Int(itemDate.timeIntervalSince1970))", folder: "Gmail",
+            itemDate: itemDate, text: r.summary, title: "Email · \(label)", reminderFlagged: r.hasActionItems)
     }
 
     // MARK: - Date helpers
@@ -258,12 +229,6 @@ enum GmailConnect {
     }
 
     // MARK: - Prompts
-
-    private static let probePrompt = """
-    Using your Gmail connector tools, check whether you can read this account's Gmail inbox. \
-    Reply with EXACTLY YES if you can, or EXACTLY NO if the Gmail connector is not available. \
-    Output only that one word and nothing else.
-    """
 
     /// The structured reply contract — one dense weekly summary plus the flags Sentient keys on.
     private static let weeklySchema = """

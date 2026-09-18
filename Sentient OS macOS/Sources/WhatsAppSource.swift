@@ -13,7 +13,7 @@
 //
 //  Requires Full Disk Access (Permissions.swift). Incrementality: a per-chat high-water mark
 //  (max message Z_PK) per bucket "whatsapp:<jid>", held in CycleStore and advanced by IterativeRun.
-//  Doc: Documentation/WhatsApp Source (ChatStorage).md.
+//  Doc: Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md.
 //
 
 import Foundation

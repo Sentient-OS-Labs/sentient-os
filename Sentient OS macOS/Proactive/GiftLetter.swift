@@ -67,12 +67,12 @@ actor GiftLetter {
 
         Log("GiftLetter: writing the welcome gift from the knowledge base at \(vault.lastPathComponent)…")
         do {
-            let env = try await CodexCLI.shared.run(inv, onLine: onLine)
+            let env = try await FrontierRun.run(inv, onLine: onLine)
             // The letter is the file the model wrote; fall back to its final message if it skipped it.
             let fromFile = (try? String(contentsOf: giftFile, encoding: .utf8)) ?? ""
             let letter = Self.cleanMarkdown(fromFile.isEmpty ? env.result : fromFile)
             guard !letter.isEmpty else { throw GiftError.empty }
-            Log("GiftLetter: ✅ welcome letter (\(letter.count) chars, turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out-tokens)")
+            Log("GiftLetter: ✅ welcome letter (\(letter.count) chars, turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
             Self.saveLatest(letter)
             return letter
         } catch let CodexCLI.CLIError.usageLimit(message, _) {

@@ -9,7 +9,7 @@
 //  activation: an unproven model can never become the engine), and the honest local-models
 //  warning. The ChatGPT panel is the host's slot: Settings points at Permissions & Health,
 //  onboarding embeds the live codex login. Layout knob: Settings' fixed 3+2 grid, or
-//  onboarding's single centered row. Deep doc: Documentation/Frontier Model Choice (BYOM).md.
+//  onboarding's single centered row. Deep doc: Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md.
 //
 
 import SwiftUI
@@ -40,7 +40,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         var badge: String? {
             switch self {
             case .chatgpt:  return "recommended"
-            case .claude:   return "coming soon"
+            case .claude:   return nil
             case .lmStudio: return "local"
             case .custom:   return "local"
             case .openRouter: return nil
@@ -57,19 +57,13 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     /// passes true — login honesty lives in Permissions & Health there; onboarding passes the
     /// live codex login state.
     let chatgptHealthy: Bool
-    /// Onboarding greys Test & Select until the background codex install answers — the CLI is
-    /// the engine room even for custom endpoints (the vision probe runs through `codex exec`).
-    /// Settings always passes true.
-    let codexReady: Bool
     private let chatgptPanel: () -> ChatGPTPanel
 
     init(layout: Layout = .settingsGrid,
          chatgptHealthy: Bool = true,
-         codexReady: Bool = true,
          @ViewBuilder chatgptPanel: @escaping () -> ChatGPTPanel) {
         self.layout = layout
         self.chatgptHealthy = chatgptHealthy
-        self.codexReady = codexReady
         self.chatgptPanel = chatgptPanel
     }
 
@@ -82,6 +76,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     @AppStorage(CustomProvider.visionVerifiedKey) private var verified = false
 
     @State private var tab: Tab = .chatgpt
+    @State private var claude = ClaudeSetup.shared
     @State private var apiKey = ""
     @State private var showLocalWarning = false
     /// The local-reality popup fires once per picker visit, on the LM Studio tab.
@@ -96,11 +91,15 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     /// The tab wearing the "active engine" dot.
     private var activeTab: Tab {
-        guard backend == .custom else { return .chatgpt }
-        switch savedPreset {
-        case .openRouter: return .openRouter
-        case .lmStudio:   return .lmStudio
-        case .custom:     return .custom
+        switch backend {
+        case .chatgpt: return .chatgpt
+        case .claude:  return .claude
+        case .custom:
+            switch savedPreset {
+            case .openRouter: return .openRouter
+            case .lmStudio:   return .lmStudio
+            case .custom:     return .custom
+            }
         }
     }
 
@@ -172,9 +171,14 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     }
 
     /// The active dot stays honest: a custom engine only wears it once it's proven usable,
-    /// and ChatGPT's honesty is the host's call (Settings: always; onboarding: logged in).
+    /// Claude's is its live login, and ChatGPT's honesty is the host's call (Settings: always;
+    /// onboarding: logged in).
     private func isActiveEngineHealthy(_ t: Tab) -> Bool {
-        t == .chatgpt ? chatgptHealthy : CustomProvider.current.isUsable
+        switch t {
+        case .chatgpt: return chatgptHealthy
+        case .claude:  return claude.loggedIn
+        default:       return CustomProvider.current.isUsable
+        }
     }
 
     /// Browsing tabs never disturbs a live engine: fields are only prefilled while nothing
@@ -183,6 +187,9 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     private func selectTab(_ t: Tab) {
         tab = t
         testVerdict = nil
+        // NO install kicks here (field-found 2026-08-22: a browsing tab click silently
+        // downloaded codex on a Claude-backend Mac). Lazy install fires only on COMMITMENT
+        // actions: the sign-in buttons, Use ChatGPT, and Test & Select — never on browsing.
         if t == .lmStudio, !localWarningShown {
             localWarningShown = true
             showLocalWarning = true
@@ -201,13 +208,81 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         }
     }
 
-    // MARK: - Claude (coming soon)
+    // MARK: - Claude (the claude -p engine)
 
     private var claudePanel: some View {
-        SettingsGroup(label: "Your Claude Plan", badge: "coming soon") {
+        SettingsGroup(label: "Your Claude") {
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsProse("Claude Code runs on your own Claude subscription (Pro, Max, or Team), so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, computer use.")
+
+                claudeStates
+
+                SettingsHairline()
+                SettingsProse("Gmail and Calendar can ride your claude.ai connectors: connect them once at claude.ai, under Settings, then Connectors, and Sentient's reads use them here.")
+            }
+        }
+        .onAppear {
+            Task {
+                await claude.refreshInstalled()
+                await claude.refreshLoginStatus()
+            }
+        }
+        .task(id: claude.loggingIn) {
+            // The sign-in watcher: while the browser flow is out, quietly re-check every 2s —
+            // the panel flips to the signed-in state by itself the moment the login lands.
+            guard claude.loggingIn else { return }
+            while !Task.isCancelled, claude.loggingIn, !claude.loggedIn {
+                try? await Task.sleep(for: .seconds(2))
+                await claude.refreshLoginStatus()
+            }
+        }
+    }
+
+    /// The Claude state machine: signed in (plan named, Use Claude or the live line) → browser
+    /// out → install failed → the sign-in CTA (which lazily installs the CLI first).
+    @ViewBuilder private var claudeStates: some View {
+        if claude.loggedIn {
+            OnboardingDoneLine(claude.plan.map { "Signed in to Claude Code · \($0) plan" }
+                               ?? "Signed in to Claude Code")
+            if backend == .claude {
+                FrontierActiveLine("Sentient is running on your Claude.")
+            } else {
+                SettingsPillButton(title: "Use Claude") {
+                    backendRaw = ModelBackend.claude.rawValue
+                }
+            }
+        } else if claude.loggingIn {
+            Text("Finish signing in in your browser. This screen notices on its own.")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Theme.Ink.body)
+            MonoWaitLine("waiting for the browser sign-in…")
+        } else if claude.installGaveUp && !claude.installed {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Your Claude subscription will power Sentient the same way ChatGPT does today, through Claude Code's own command line. It's on the bench and coming soon.")
-                MonoCaps("claude -p · in the works", size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+                Text("Sentient couldn't finish installing Claude Code automatically.")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(Theme.Ink.body)
+                SettingsProse("You can install it yourself in a minute with this Terminal command, then come back here:")
+                Text("curl -fsSL https://claude.ai/install.sh | bash")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(Theme.Ink.statusInk)
+                    .textSelection(.enabled)
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsPillButton(title: claude.installing ? "Setting up…" : "Sign in with Claude") {
+                    guard !claude.installing else { return }
+                    Task {
+                        // Lazy install: Claude Code downloads at THIS click, never at launch.
+                        if !claude.installed { await claude.ensureInstalled() }
+                        if claude.installed { claude.startLogin() }
+                    }
+                }
+                if claude.installing {
+                    MonoWaitLine("installing claude code…")
+                    OnboardingStatusText(claude.installStatus)
+                } else {
+                    OnboardingStatusText(claude.loginStatusLine)
+                }
             }
         }
     }
@@ -252,23 +327,20 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
                 HStack(spacing: 10) {
                     SettingsPillButton(title: testing ? "Testing…" : "Test & Select",
-                                       tint: codexReady ? Theme.Ink.bright : Theme.Ink.deepMuted) {
-                        guard codexReady, !testing else { return }
+                                       tint: Theme.Ink.bright) {
+                        guard !testing else { return }
                         runTest(preset: preset)
                     }
                     if isActive(preset) {
                         FrontierActiveLine("This model is running Sentient.")
                     }
                 }
-                if !codexReady {
-                    MonoWaitLine("installing codex in the background…")
-                }
                 if let testVerdict {
                     SettingsProse(testVerdict)
                 }
 
                 SettingsHairline()
-                SettingsProse("Gmail and Calendar ride your ChatGPT account, so they sit out while a custom model is active. Everything else works, and your data still never leaves this Mac except what the model itself is sent.")
+                SettingsProse("Gmail and Calendar ride a ChatGPT or Claude subscription, so they sit out while a custom model is active. Everything else works, and your data still never leaves this Mac except what the model itself is sent.")
             }
         }
     }
@@ -365,7 +437,14 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         testing = true
         testVerdict = "Showing your model a picture and asking it to read the number… local models can take a minute to load."
         Task {
-            let verdict = await CodexCLI.probeCustomEndpoint()
+            // Test & Select is the COMMITMENT moment for the custom family, so the lazy codex
+            // install happens here (the vision probe runs through `codex exec` — the CLI is the
+            // engine room even for custom endpoints). A detection-first no-op when it exists.
+            if !CodexSetup.shared.installed {
+                testVerdict = "Installing codex first (it runs the test), then showing your model the picture…"
+                await CodexSetup.shared.ensureInstalled()
+            }
+            let verdict = await CodexTrigger.$current.withValue(.probe) { await CodexCLI.probeCustomEndpoint() }
             await MainActor.run {
                 testing = false
                 switch verdict {
@@ -375,7 +454,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                     testVerdict = "✓ Your model answered and read the picture. Sentient is now running on it."
                 case .notInstalled:
                     verified = false
-                    testVerdict = "✗ Codex CLI is missing on this Mac. Install it in Permissions & Health first; it's the engine room even for custom models."
+                    testVerdict = "✗ Codex CLI couldn't be installed on this Mac (it runs the test). Check your connection and try again."
                 case .notWorking(let detail):
                     verified = false
                     testVerdict = "✗ \(friendly(detail))"

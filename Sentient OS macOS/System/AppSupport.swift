@@ -14,8 +14,9 @@ import Foundation
 extension URL {
     /// `~/Library/Application Support/SentientOS/` — the root under which every Sentient on-disk
     /// artifact lives (the model + its cache, the iterative store, summary backups). Created on
-    /// first access; idempotent.
-    static var sentientSupport: URL {
+    /// first access; idempotent. Nonisolated on purpose: pure filesystem, read from actors and
+    /// background helpers alike (the cycle store, the disk-space guard, the model download).
+    nonisolated static var sentientSupport: URL {
         let dir = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("SentientOS", isDirectory: true)

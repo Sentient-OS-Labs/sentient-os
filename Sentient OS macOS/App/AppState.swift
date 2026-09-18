@@ -10,6 +10,7 @@
 import Foundation
 import SwiftUI
 import UserNotifications
+import Combine
 
 @MainActor
 @Observable
@@ -40,6 +41,10 @@ final class AppState {
 
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
+    private var hasStartedInterface = false
+    private var connectorBackend: ModelBackend?
+    private var connectorCensusTask: Task<Void, Never>?
+    private var backendObservation: AnyCancellable?
 
     /// Drops the Dock icon whenever the home window is closed (the icon belongs to home;
     /// the menu bar item is the anchor then).
@@ -68,21 +73,57 @@ final class AppState {
         // very real admin-password dialog. Same convention as Notify.swift's self-test silence.
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
 
+        // Keep the dedicated cloud-source flags on the selected engine even when Settings
+        // is closed. Ordinary discovery is a cache read / CLI health check, never an AI read.
+        refreshConnectorBackend()
+        backendObservation = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.refreshConnectorBackend() }
+            }
+
+        ComputerUseUpgrade.shared.prepareForLaunch { [weak self] in
+            self?.startInterfaceIfReady()
+        }
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
         scheduler.maybeAutoEnable()   // 14h after initial: flip the overnight scheduler on (or arm the timer)
         // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
         // the coordinator: the notch experience still plays, the codex run just never fires.
-        commandCoordinator.start()   // arm right-⌘ hold-to-talk + warm the speech model
-        notch.start()                // raise the notch overlay window
+        startInterfaceIfReady()      // the upgrade must finish before Sidekick or its notch can appear
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
         UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
+        // Diagnostics baseline for the session (structure only, see CodexDiagnostics.swift): start
+        // the network monitor now so a codex failure right after a wake never reads "unknown", and
+        // leave one breadcrumb saying what codex's login looks like at launch.
+        Task.detached(priority: .utility) {
+            NetworkSnapshot.shared.start()
+            Log(CodexAuthSnapshot.read().logLine)
+            // Legacy cleanup (Sentient 1.x → cua driver): drop the Automation TCC row the old
+            // codex-helper path wrote. Best-effort and idempotent — a quiet no-op on clean Macs,
+            // so it simply runs every launch instead of carrying a migration flag.
+            Permissions.revokeComputerUseAutomation()
+            // Reap computer-use daemons leaked by previous app lives — a daemon that missed the
+            // lifeline EOF would otherwise hold its screen-capture stream (and CPU) forever.
+            await CuaDriverHost.sweepOrphans()
+        }
         // A silent auto-update relaunch opens no window, so DockPolicy's open/close notifications
         // never fire — evaluate once (next runloop tick, after launch settles) so the Dock icon
         // drops to match the windowless launch instead of lingering with nothing behind it.
         if UpdateNotice.suppressHomeThisLaunch {
             Task { dockPolicy.reevaluate() }
         }
+
+        // Keep the managed Codex CLI current (CodexSetup.updateIfDue): a 15-minute tick that only
+        // acts when the user is away, the pipeline is idle, and the Sidekick/card run lock is free,
+        // at most one update a day. Post-onboarding only — onboarding runs the installer itself.
+        // Read the codex doc's "Keeping the CLI current" before touching this.
+        if hasCompletedOnboarding {
+            CodexSetup.shared.startKeepingCurrent { [weak self] in
+                self?.commandCoordinator.run.isRunning ?? true
+            }
+        }
+
+        // Updated Macs complete the computer-use upgrade before their regular UI is available.
 
         // Notifications, banked silently: PROVISIONAL authorization shows NO prompt — macOS just
         // grants quiet Notification Center delivery and lists us in Settings → Notifications (the
@@ -99,7 +140,7 @@ final class AppState {
                 Log("Notifications: launch status = \(label)")
                 if status == .notDetermined {
                     _ = try? await center.requestAuthorization(options: [.provisional])
-                    Log("Notifications: banked provisional (quiet) authorization")
+                    Log("Notifications: banked provisional (quiet) permission")
                 }
             }
         }
@@ -119,31 +160,26 @@ final class AppState {
             }
         }
 
-        // First launch (onboarding not yet completed): kick off the codex CLI install silently in
-        // the background, 1s after launch, while the user reads the intro slides. A USED codex
-        // setup on this Mac (~/.codex/auth.json or config.toml — codex writes those once it's
-        // actually run) means never auto-install over it at launch — those setups get their CLI
-        // update from the onboarding codex screen's kick instead (the installer doubles as the
-        // updater). The bare ~/.codex folder is NOT proof: an install interrupted mid-download
-        // (the FDA relaunch) leaves one behind, and skipping on it would strand onboarding
-        // without codex. A quit-and-relaunch mid-onboarding re-runs the installer, which is safe
-        // (update in place). Login + computer-use stay interactive, later in the flow.
-        if !hasCompletedOnboarding {
-            Task {
-                try? await Task.sleep(for: .seconds(1))
-                let fm = FileManager.default
-                let codexDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
-                if fm.fileExists(atPath: codexDir.appendingPathComponent("auth.json").path)
-                    || fm.fileExists(atPath: codexDir.appendingPathComponent("config.toml").path) {
-                    Log("Onboarding: ~/.codex is a real setup — skipping the background codex install")
-                    return
-                }
-                // OpenAI's installer fails transiently (its GitHub-JSON parsing flaps per request),
-                // so one attempt isn't enough. The retry policy + the give-up flag live in
-                // CodexSetup.ensureInstalled — ONE source of truth the onboarding screen drives too;
-                // a give-up surfaces the "install it yourself" panel on the codex screen.
-                await CodexSetup.shared.ensureInstalled()
-            }
-        }
+        // No engine CLI installs at launch anymore (decision 2026-08-21): each engine's CLI
+        // downloads lazily, the moment the user actually picks it on the frontier-model step —
+        // FrontierEnginePicker.selectTab and the panels' sign-in actions drive
+        // CodexSetup.ensureInstalled / ClaudeSetup.ensureInstalled. A user who chooses Claude
+        // never downloads codex, and vice versa; a user with a real setup already on disk skips
+        // the download entirely (ensureInstalled is detection-first).
+    }
+
+    private func startInterfaceIfReady() {
+        guard !hasStartedInterface, !ComputerUseUpgrade.shared.isBlockingInterface else { return }
+        hasStartedInterface = true
+        commandCoordinator.start()
+        notch.start()
+    }
+
+    private func refreshConnectorBackend() {
+        guard !isUninstalling, connectorBackend != ModelBackend.current else { return }
+        connectorBackend = ModelBackend.current
+        connectorCensusTask?.cancel()
+        ConnectorCensus.syncDedicatedSourceStatus()
+        connectorCensusTask = Task { _ = await ConnectorCensus.list() }
     }
 }

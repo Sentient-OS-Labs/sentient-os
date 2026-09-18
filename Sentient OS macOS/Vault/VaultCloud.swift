@@ -89,12 +89,16 @@ actor VaultCloud {
     enum CloudError: LocalizedError {
         case empty
         case noVault
+        case editorBusy
+        case vaultChanged
         case usageLimit(String)
         case failed(String)
         var errorDescription: String? {
             switch self {
             case .empty:             return "No summaries yet; run the on-device pass first."
             case .noVault:           return "No knowledge base on disk yet; run \"go make knowledge base exist\" first."
+            case .editorBusy:        return "Finish editing your knowledge base, then run analysis again. Your new summaries are saved."
+            case .vaultChanged:      return "Your knowledge base changed during analysis. Run analysis again to merge the saved summaries."
             case .usageLimit(let m): return "Your AI hit its usage limit; try again later to resume. (\(m.prefix(160)))"
             case .failed(let m):     return m
             }
@@ -141,7 +145,7 @@ actor VaultCloud {
         // expensive codex call that the freshness check below would just abort anyway.
         if await MainActor.run(body: { VaultActivity.shared.editorBusy }) {
             Log("VaultCloud.update: editor busy — skipping this cycle (notes retried next run)")
-            return 0
+            throw CloudError.editorBusy
         }
 
         // Reuse the resume's staging dir (loadResume already verified it's usable), else seed a
@@ -241,6 +245,7 @@ actor VaultCloud {
             // in the Knowledge editor during the run? If so, our staging snapshot is stale and swapping
             // would CLOBBER their edit. Discard staging instead; the notes stay in CycleStore and the
             // next cycle re-seeds from the now-current vault (their edit included).
+            try Task.checkCancellation()
             guard VaultGenerator.vaultFingerprint(vault) == baseline else {
                 Log("VaultCloud.update: ⚠️ vault changed during the run (editor?) — swap aborted, re-run next cycle")
                 // Working as designed (the freshness check doing its job) — a counter for
@@ -248,7 +253,7 @@ actor VaultCloud {
                 Analytics.signal("KnowledgeBase.staleSwapAverted")
                 setUpdateResume(nil)
                 try? fm.removeItem(at: staging)
-                return 0
+                throw CloudError.vaultChanged
             }
             CorpusSlicer.deleteCorpus(in: staging)              // the snapshot must never enter the vault
             try VaultGenerator.swapStagingIntoVault(staging)    // atomic; live vault untouched until here

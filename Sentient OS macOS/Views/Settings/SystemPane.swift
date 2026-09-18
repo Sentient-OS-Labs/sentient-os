@@ -28,6 +28,7 @@ struct SystemPane: View {
     @State private var confirmLoginOff = false
     @State private var confirmReset = false
     @State private var resetting = false
+    @State private var resetError: String?
     @State private var showUninstall = false
     @State private var showPrivacyPolicy = false
     @State private var activity = PipelineActivity.shared   // Reset + Uninstall lock while a run is active
@@ -60,7 +61,7 @@ struct SystemPane: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Your Sentient works the night shift.")
                     .font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
-                SettingsProse("Every night at 3 AM, Sentient wakes your Mac to read what's new in your life, update your knowledge base, and prepare your morning suggestions. It only happens while your Mac is plugged in, and only if Sentient is still running in your menu bar. This quiet, on-device work is what keeps your Sentient alive and helpful.")
+                SettingsProse("Every night at 3 AM, Sentient wakes your Mac to read what's new in your life, update your knowledge base, and prepare your morning suggestions. It only happens while your Mac is plugged in (or on battery, if you've allowed that in the home's Analysis menu), and only if Sentient is still running in your menu bar. This quiet, on-device work is what keeps your Sentient alive and helpful.")
                 Text("Runs while your Mac rests.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.Ink.deepMuted)
@@ -178,6 +179,7 @@ struct SystemPane: View {
                     Text("A run is in progress. Reset unlocks when it finishes.")
                         .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
                 }
+                if let resetError { Text(resetError).font(.system(size: 11)).foregroundStyle(Theme.Ink.amber) }
             }
         }
         .alert("Erase everything Sentient has learned?", isPresented: $confirmReset) {
@@ -185,9 +187,11 @@ struct SystemPane: View {
             Button("Erase Everything", role: .destructive) {
                 resetting = true
                 Task {
-                    await FactoryReset.run(appState: appState)
+                    resetError = nil
+                    let completed = await FactoryReset.run(appState: appState)
                     resetting = false
-                    dismiss()   // close Settings — the main window is now the start of onboarding
+                    if completed { dismiss() }
+                    else { resetError = "The saved app connections couldn't be removed from Keychain. Unlock your Mac and retry Reset." }
                 }
             }
         } message: {
