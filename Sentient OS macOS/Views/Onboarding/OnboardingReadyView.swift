@@ -45,7 +45,7 @@ struct OnboardingReadyView: View {
                              size: 8.5, tracking: 1.6,
                              color: canStart ? Theme.faint : Theme.Ink.amber)
                     if !canStart {
-                        Text("Connected apps count after you turn on “Use for knowledge base”.")
+                        Text("Supported apps are selected for your knowledge base when connected.")
                             .font(.system(size: 11.5)).foregroundStyle(Theme.secondary)
                             .multilineTextAlignment(.center)
                     }

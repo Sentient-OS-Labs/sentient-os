@@ -9,7 +9,7 @@ import Foundation
 
 extension MCPSource {
     static let promptRevision = "drive-v6"
-    static let granolaPromptRevision = "granola-v3"
+    static let granolaPromptRevision = "granola-v4-recent-sample"
 
     static func promptRevision(slug: String) -> String {
         switch ConnectorRegistry.pack(forSlug: slug)?.slug {
@@ -25,8 +25,12 @@ extension MCPSource {
     private static func granolaPrompt(mode: ReadMode, window: Window) -> String {
         """
         Summarize a bounded sample of Granola meeting notes for the connected user's private
-        knowledge base. You have no tools. The app supplies the verified notes and item count.
+        knowledge base. You have no connector, file or browsing tools. The app supplies the
+        verified notes and item count. The required structured-output formatter is permitted.
         Do not claim to have searched, edited, sent anything, or reviewed every meeting.
+        This is a bounded recent-note sample, not a complete edit feed. Daily reads revisit the
+        recent 30 days to notice delayed summaries and edits when those notes are selected again.
+        Older edits and unselected notes may be missed. Repeated evidence is not a new development.
         The selected note timestamps are from \(timestamp(window.lower)) inclusive to
         \(timestamp(window.upper)) exclusive. A note timestamp is not a meeting's event time,
         a deadline, or proof of a new edit. Use an actual event date only when the note states it.

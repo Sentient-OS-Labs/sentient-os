@@ -205,15 +205,14 @@ actor CuaDriverHost {
         let data = out.fileHandleForReading.readDataToEndOfFile()
         ps.waitUntilExit()
 
-        let installPrefix = CuaDriver.installRoot.path
         var orphans: [(pid: pid_t, socket: String?)] = []
         for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
             let entry = line.trimmingCharacters(in: .whitespaces)
             guard let gap = entry.firstIndex(of: " "), let pid = pid_t(entry[..<gap]) else { continue }
             let command = String(entry[entry.index(after: gap)...])
-            // argv[0] IS the binary path (ensureRunning always spawns by full path), so a prefix
-            // match hits exactly our daemons — never a shell line that merely quotes one.
-            guard command.hasPrefix(installPrefix), command.contains(" serve ") else { continue }
+            // Verify the executable itself. ps may spell /private/tmp as /tmp, and argv[0]
+            // alone is not an identity check. Resolve aliases and require a directory boundary.
+            guard command.contains(" serve "), isManagedBinary(binaryPath(of: pid)) else { continue }
             guard let host = hostPID(in: command), !isLiveSentient(host) else { continue }
             orphans.append((pid, socketPath(in: command)))
         }
@@ -249,7 +248,7 @@ actor CuaDriverHost {
         guard !Self.exitHookInstalled.exchange(true, ordering: .relaxed) else { return }
         atexit {
             let pid = CuaDriverHost.exitPID.load(ordering: .relaxed)
-            guard pid > 0, CuaDriverHost.binaryPath(of: pid).hasPrefix(CuaDriver.installRoot.path)
+            guard pid > 0, CuaDriverHost.isManagedBinary(CuaDriverHost.binaryPath(of: pid))
             else { return }
             kill(pid, SIGTERM)
         }
@@ -284,6 +283,13 @@ actor CuaDriverHost {
         var buf = [CChar](repeating: 0, count: 4096)
         guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return "" }
         return String(cString: buf)
+    }
+
+    nonisolated private static func isManagedBinary(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        let executable = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
+        let root = CuaDriver.installRoot.resolvingSymlinksInPath().standardizedFileURL.path
+        return executable.lastPathComponent == "cua-driver" && executable.path.hasPrefix(root + "/")
     }
 
     // MARK: Internals

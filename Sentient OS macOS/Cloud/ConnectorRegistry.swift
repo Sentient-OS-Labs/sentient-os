@@ -594,9 +594,10 @@ nonisolated enum ConnectorRegistry {
         var verifiedInventory: [String]? = nil
     }
 
-    // Both logical services classify the same physical suite; preserve the existing Mail key.
+    // Both logical services classify the same physical suite. The versioned cache requires
+    // a fresh capture after switching from model-reported to native CLI inventory evidence.
     static func classificationKey(_ slug: String) -> String {
-        "mcp.classified.\(Microsoft365Connector.contains(slug) ? OutlookMailConnector.slug : slug)"
+        "mcp.classified.native-v1.\(Microsoft365Connector.contains(slug) ? OutlookMailConnector.slug : slug)"
     }
 
     static func classification(for slug: String) -> Classification? {

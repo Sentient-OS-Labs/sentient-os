@@ -354,6 +354,10 @@ enum MCPSource {
     /// Exact half-open windows. The generic first read covers 30 local calendar days;
     /// weekly/monthly adapters retain their four/twelve-window shapes and never read the future.
     static func windows(slug: String, mode: ReadMode, since: Date?, now: Date) throws -> [Window] {
+        if ConnectorRegistry.pack(forSlug: slug)?.slug == "granola" {
+            guard let lower = Calendar.current.date(byAdding: .day, value: -30, to: now) else { throw MCPError.dateMath }
+            return [Window(lower: lower, upper: now, label: "recent 30-day note sample")]
+        }
         if mode == .iterative, let since {
             return [Window(lower: since, upper: now, label: "since \(shortLabel(since))")]
         }
@@ -489,6 +493,8 @@ enum MCPSource {
                     requires successful search/list discovery. Discover the permitted tools if
                     needed; a text-only claim of having checked is not read evidence. If the tools
                     fail, report tool_failure instead of a successful quiet result.
+                    If the connector is still connecting, call WaitForMcpServers when available
+                    before declaring it unavailable, then perform the permitted discovery read.
                     """
                     if slug == OutlookMailConnector.slug {
                         attemptPrompt += "\nOUTLOOK RETRY: Keep only the useful fact itself. Do not mention discarded tests, drafts, notifications, quiet periods or what the mailbox mostly contained. Start directly, for example: The user's subscription renews on its observed date. On Claude, open each retained message and verify isDraft=false. Copy the exact discovery timestamps from the JSON."

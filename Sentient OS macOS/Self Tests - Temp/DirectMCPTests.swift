@@ -127,7 +127,10 @@ enum DirectMCPTests {
                 try DirectMCPRuntime.$current.withValue([attachment]) { try ClaudeCLI.arguments(for: inv, modelID: "haiku", effortArg: "low") }
             }
             try expect(claude.contains("--strict-mcp-config"), "Claude direct-only wall")
-            try expect(claude.contains(connection.toolPrefix + "read_item"), "Claude scoped read allow")
+            let allowIndex = claude.firstIndex(of: "--allowedTools")!
+            let claudeAllows = Set(claude[allowIndex + 1].split(separator: ",").map(String.init))
+            try expect(claudeAllows.contains(connection.toolPrefix + "read_item"), "Claude scoped read allow")
+            try expect(claudeAllows.isSubset(of: [connection.toolPrefix + "read_item", "WaitForMcpServers"]), "direct read adds no unrelated allowed tool")
             let bypass = try DirectMCPRuntime.claudeSettings([attachment], hostedURLs: [], guardBypass: true)
             try expect(bypass.contains("PermissionRequest") && bypass.contains(connection.toolPrefix + "*"), "Claude bypass guard configured")
             try expect(!DirectMCPRuntime.quoted("https://example.com/a").contains(#"\/"#), "TOML strings do not contain JSON-only slash escapes")

@@ -180,6 +180,7 @@ struct NotesSource: Sendable {
             var value: UInt64 = 0, shift: UInt64 = 0
             while i < buf.endIndex, shift <= 63 {
                 let b = buf[i]; i += 1
+                guard shift < 63 || b <= 1 else { return nil }
                 value |= UInt64(b & 0x7F) << shift; shift += 7
                 if b & 0x80 == 0 { return value }
             }
@@ -196,7 +197,7 @@ struct NotesSource: Sendable {
                 i += 8
             case 2:                                       // length-delimited
                 guard let len64 = varint(), let len = Int(exactly: len64),
-                      len >= 0, i + len <= buf.endIndex else { return nil }
+                      len >= 0, len <= buf.endIndex - i else { return nil }
                 if field == want { return buf[i ..< i + len] }
                 i += len
             case 5:                                       // fixed32

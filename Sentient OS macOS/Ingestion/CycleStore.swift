@@ -423,7 +423,18 @@ extension CycleStore {
     /// The app-wide iterative store, backed by its OWN on-disk store ("IterativeCycle.store" under
     /// the namespaced `SentientOS` root in Application Support). A migration/open failure must
     /// preserve the existing data for recovery, never silently delete the database.
-    static let shared: CycleStore = {
+    #if DEBUG
+    @TaskLocal static var acceptanceStore: CycleStore?
+    #endif
+
+    static var shared: CycleStore {
+        #if DEBUG
+        if let acceptanceStore { return acceptanceStore }
+        #endif
+        return persistentStore
+    }
+
+    private static let persistentStore: CycleStore = {
         let schema = Schema([BucketPointer.self, CycleNote.self])
         let url = URL.sentientSupport.appending(path: "IterativeCycle.store")
         let config = ModelConfiguration(schema: schema, url: url)

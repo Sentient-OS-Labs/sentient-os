@@ -32,6 +32,7 @@
 //
 
 import Foundation
+import IOKit.ps
 
 enum ConnectorLab {
 
@@ -52,6 +53,19 @@ enum ConnectorLab {
         let command = ProcessInfo.processInfo.environment["LAB_CMD"] ?? "census"
         Log("=== connector-lab: \(command) ===")
         switch command {
+        case "acceptance": await FullAcceptanceTests.run()
+        case "googleaudit": await FullAcceptanceTests.googleAudit()
+        case "acceptancewake": await WakeAcceptanceTests.run()
+        case "acceptancehealth":
+            if let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() {
+                let source = IOPSGetProvidingPowerSourceType(snapshot)?.takeUnretainedValue() as String?
+                Log("Acceptance power: provider=\(source ?? "unavailable"), expected=\(kIOPSACPowerValue), match=\(source == kIOPSACPowerValue)")
+            } else { Log("Acceptance power: no source snapshot") }
+            Log("Acceptance power: direct check=\(PowerState.onACPower())")
+            Log("Acceptance health: model=\(ModelLocator.resolve() != nil), driver=\(CuaDriver.isInstalled)")
+            Log("Acceptance health: wake helper=\(await WakeHelperClient.shared.healthProbe())")
+            Log("Acceptance health: default power gate=\(PowerState.overnightBlockReason(allowBattery: false) ?? "ready")")
+            Log("Acceptance health: battery opt-in gate=\(PowerState.overnightBlockReason(allowBattery: true) ?? "ready")")
         case "directcheck": await DirectMCPTests.check()
         case "directauth": await DirectMCPTests.authorize()
         case "directfixture": await DirectMCPTests.exportFixture()
@@ -359,6 +373,7 @@ enum ConnectorLab {
             for name in names.sorted() { Log("  \(name)") }
         } catch {
             Log("tools failed: \(ErrorLabel(error))")
+            exit(1)
         }
     }
 
@@ -380,13 +395,13 @@ enum ConnectorLab {
         var failures = 0
         let inventory: [String]
         do { inventory = try await ConnectorClassifier.listTools(slug: slug) }
-        catch { Log("REFUSED: independent inventory unavailable (\(ErrorLabel(error)))"); return }
+        catch { Log("REFUSED: independent inventory unavailable (\(ErrorLabel(error)))"); exit(1) }
 
         for run in 1...max(runs, 1) {
             Log("\n-- classify \(slug), run \(run)/\(runs) --")
             do {
                 let started = Date()
-                let tools = try await ConnectorClassifier.classify(slug: slug)
+                let tools = try await ConnectorClassifier.classify(slug: slug, inventory: inventory)
                 try ConnectorClassifier.validate(tools, slug: slug, inventory: inventory)
                 Log("classified \(tools.count) tool(s) in \(Int(Date().timeIntervalSince(started)))s")
                 printBuckets(tools)
@@ -407,6 +422,7 @@ enum ConnectorLab {
                 .init(tools: tools, cliVersion: version, capturedAt: Date(), verifiedInventory: inventory), for: slug)
             Log("persisted to \(ConnectorRegistry.classificationKey(slug)) (cli \(version))")
         }
+        if failures > 0 { exit(1) }
     }
 
     private static func printBuckets(_ tools: [ConnectorRegistry.ClassifiedTool]) {
@@ -578,6 +594,9 @@ enum ConnectorLab {
         inv.timeout = 300
         inv.mcpReadConnectors = [slug]
         inv.connectorOnlyRead = true
+        if let names = ProcessInfo.processInfo.environment["LAB_READ_TOOLS"] {
+            inv.mcpReadToolNames = names.split(separator: ",").map(String.init)
+        }
         return inv
     }
 

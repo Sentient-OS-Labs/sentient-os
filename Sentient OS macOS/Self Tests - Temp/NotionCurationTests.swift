@@ -9,7 +9,9 @@
 import Foundation
 
 enum NotionCurationTests {
-    // Metadata reviewed 2026-09-14. Additions/removals require another review in the lab.
+    // Metadata reviewed 2026-09-14; upload-skill addition reviewed 2026-09-16.
+    // Additions/removals require another review in the lab.
+    private static let destructive: Set<String> = DirectMCPProvider.notion.destructiveTools.union(["notion-upload-skill"])
     private static let reads: Set<String> = [
         "notion-ai-search", "notion-check-mcp-next-steps", "notion-download-attachment", "notion-download-skill",
         "notion-fetch", "notion-get-async-task", "notion-get-comments", "notion-get-session-status",
@@ -26,7 +28,7 @@ enum NotionCurationTests {
     static func classify(_ connection: DirectMCPConnection) async {
         do {
             let tools = try await DirectMCPProbe.tools(connection: connection)
-            let expected = reads.union(writes).union(DirectMCPProvider.notion.destructiveTools)
+            let expected = reads.union(writes).union(destructive)
             guard Set(tools.map(\.name)) == expected else { throw DirectMCPError.policyUnavailable }
             let runs = max(1, Int(ProcessInfo.processInfo.environment["LAB_RUNS"] ?? "3") ?? 3)
             let output = try ConnectorReadAudit.outputDirectory()
@@ -50,7 +52,7 @@ enum NotionCurationTests {
                 try DirectMCPHTTP.json(record).write(to: output.appending(path: "classification-\(run).json"), options: .atomic)
                 guard tools.allSatisfy({ tool in
                     let category = value.category(for: tool)
-                    if DirectMCPProvider.notion.destructiveTools.contains(tool.name) { return category == .destructive }
+                    if destructive.contains(tool.name) { return category == .destructive }
                     return category != .read || reads.contains(tool.name)
                 }), NotionSource.nativeReads.isSubset(of: Set(value.readNames)) else { throw DirectMCPError.policyUnavailable }
                 Log("NOTION CLASSIFY: PASS run=\(run), reads=\(value.readNames.count), actions=\(value.actionNames.count)")

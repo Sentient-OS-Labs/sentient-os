@@ -115,9 +115,14 @@ enum SlackActionTests {
         SlackToolPolicy.cleanup(runID: runID)
         var source = MCPSource.readInvocation(slug: "slack", prompt: "Fixture")
         check(ClaudeCLI.environment(for: source)["ENABLE_TOOL_SEARCH"] == "false", "Slack's small read surface is eager and visible")
+        check(ClaudeCLI.environment(for: source)["MCP_CONNECTION_NONBLOCKING"] == "0", "source reads wait for MCP startup")
+        check(ClaudeCLI.environment(for: source)["MCP_CONNECT_TIMEOUT_MS"] == "30000", "MCP startup wait has a finite deadline")
         source.mcpReadConnectors = []; source.mcpAttachServer = "slack"
         check(ClaudeCLI.environment(for: source)["ENABLE_TOOL_SEARCH"] == "false", "Slack inventory receives complete schemas")
         check(ClaudeCLI.environment(for: .init(prompt: "Fixture"))["ENABLE_TOOL_SEARCH"] == nil, "unrelated Claude invocations retain their environment")
+        check(ClaudeCLI.environment(for: .init(prompt: "Fixture"))["MCP_CONNECTION_NONBLOCKING"] == nil, "unrelated runs retain startup behavior")
+        source.mcpAttachServer = nil; source.mcpActionServer = "google-drive"
+        check(ClaudeCLI.environment(for: source)["MCP_CONNECTION_NONBLOCKING"] == "0", "generic connector actions wait for their server")
         Log("Slack action checks: \(checks) checks, \(failures) failures")
         return failures
     }

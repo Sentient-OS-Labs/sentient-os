@@ -12,7 +12,8 @@ import os
 
 enum OutlookCalendarCurationTests {
     static let slug = OutlookCalendarConnector.slug
-    static let root = URL(fileURLWithPath: "/tmp/sentient-outlook-calendar-curation", isDirectory: true)
+    static let root = URL(fileURLWithPath: ProcessInfo.processInfo.environment["LAB_CALENDAR_OUTPUT_DIR"]
+        ?? "/tmp/sentient-outlook-calendar-curation", isDirectory: true)
     static func date(_ text: String) -> Date { OutlookMailSource.date(text)! }
     static let window = MCPSource.Window(lower: date("2026-09-01T00:00:00Z"), upper: date("2026-09-15T00:00:00Z"), label: "fixture")
     static func event(id: String = "EVENT_FIXTURE", start: String = "2026-09-14T09:00:00", end: String = "2026-09-14T10:00:00") -> [String: Any] {

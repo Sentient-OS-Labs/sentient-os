@@ -38,23 +38,33 @@ nonisolated enum ConnectorClassifier {
     /// ground-truth eval (zero write-as-read across three consecutive runs).
     static let classificationRules = """
     Classify EVERY one of those tools into exactly one category, from its name and
-    description:
+    description and complete input schema (including optional and nested fields):
     - "read": cannot change anything anywhere; only retrieves or computes.
-    - "write": creates, sends, shares, moves, or modifies content, without
-      permanently destroying anything.
+    - "write": creates new content, sends, shares, moves, or changes metadata, without
+      any mode that removes or replaces existing content or access.
     - "destructive": deletes, trashes, cancels, revokes, or overwrites existing
       content, or plausibly could.
 
+    Classify the whole capability, not a benign example call. An optional existing ID,
+    replacement body/description, remove/delete array, revoke/unshare mode or cancel/close
+    mode makes a mixed tool destructive. A confirmation UI or deprecated status does not
+    remove that capability. Reversible deletion, archival and replacement are still destructive.
     Be strict: doubt between read and write means "write"; doubt between write and
     destructive means "destructive". A missing or vague description is never "read".
     """
 
-    private static let classifySchema = """
-    {"type":"object","additionalProperties":false,"required":["tools"],"properties":{"tools":\
-    {"type":"array","items":{"type":"object","additionalProperties":false,\
-    "required":["name","category"],"properties":{"name":{"type":"string"},\
-    "category":{"type":"string","enum":["read","write","destructive"]}}}}}}
-    """
+    static func classificationSchema(inventory: [String]) throws -> String {
+        guard !inventory.isEmpty, Set(inventory).count == inventory.count else {
+            throw CodexCLI.CLIError.badEnvelope("invalid native classification inventory")
+        }
+        let item: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["name", "category"],
+            "properties": ["name": ["type": "string", "enum": inventory.sorted()],
+                           "category": ["type": "string", "enum": ["read", "write", "destructive"]]]]
+        let entries: [String: Any] = ["type": "array", "minItems": inventory.count, "maxItems": inventory.count, "items": item]
+        let schema: [String: Any] = ["type": "object", "additionalProperties": false, "required": ["tools"],
+                                   "properties": ["tools": entries]]
+        return String(decoding: try JSONSerialization.data(withJSONObject: schema, options: [.sortedKeys]), as: UTF8.self)
+    }
 
     private static let listSchema = """
     {"type":"object","additionalProperties":false,"required":["tools"],"properties":{"tools":\
@@ -120,14 +130,7 @@ nonisolated enum ConnectorClassifier {
         guard reads.isSubset(of: names) else {
             throw CodexCLI.CLIError.badEnvelope("classification omitted a curated read tool")
         }
-        let knownDestructive: Set<String>
-        switch slug {
-        case "google-drive": knownDestructive = ["trash_file", "delete_file"]
-        case "gmail": knownDestructive = ["trash_message", "trash_thread", "delete_label", "delete_filter",
-                                          "mark_message_spam", "mark_thread_spam"]
-        case "google-calendar": knownDestructive = ["delete_event"]
-        default: knownDestructive = []
-        }
+        let knownDestructive = reviewedDestructiveTools(slug: slug)
         for tool in tools where knownDestructive.contains(String(tool.name.dropFirst(prefix.count))) {
             guard tool.category == .destructive else {
                 throw CodexCLI.CLIError.badEnvelope("classification did not deny a reviewed destructive tool")
@@ -147,6 +150,23 @@ nonisolated enum ConnectorClassifier {
             } else if tool.category == .read {
                 throw CodexCLI.CLIError.badEnvelope("classification contains an unreviewed Drive read")
             }
+        }
+    }
+
+    /// Whole-tool exclusions from reviewed mutation modes. These also invalidate older
+    /// cached classifications through isFresh; a benign argument subset cannot bypass them.
+    static func reviewedDestructiveTools(slug: String) -> Set<String> {
+        switch slug {
+        case "google-drive": return ["trash_file", "delete_file"]
+        case "gmail": return ["trash_message", "trash_thread", "delete_label", "delete_filter", "mark_message_spam", "mark_thread_spam"]
+        case "google-calendar": return ["delete_event"]
+        case "asana": return ["delete_task", "update_tasks", "update_project", "save_project_changes_confirm",
+                              "save_task_changes_confirm", "create_project_confirm_populate"]
+        case "linear": return ["delete_attachment", "delete_comment", "delete_diff_comment", "delete_status_update",
+            "retire_issue_label", "retire_project_label", "unshare_issue", "merge_diff", "update_diff",
+            "save_comment", "save_diff_comment", "save_document", "save_issue", "save_issue_label",
+            "save_milestone", "save_project", "save_project_label", "save_release", "save_release_note", "save_status_update"]
+        default: return []
         }
     }
 
@@ -178,7 +198,7 @@ nonisolated enum ConnectorClassifier {
             do {
                 try Task.checkCancellation()
                 let inventory = try await listTools(slug: slug)
-                let tools = try await classify(slug: slug)
+                let tools = try await classify(slug: slug, inventory: inventory)
                 try validate(tools, slug: slug, inventory: inventory)
                 ConnectorRegistry.saveClassification(
                     .init(tools: tools, cliVersion: version, capturedAt: Date(), verifiedInventory: inventory), for: slug)
@@ -216,18 +236,31 @@ nonisolated enum ConnectorClassifier {
     // MARK: The run (the Claude-context input source)
 
     /// One classification run: haiku tier, low effort, the connector's server allowlisted so
-    /// ONLY its tools are in context, dontAsk with zero allow rules (the run makes no tool
-    /// calls — listing your own tools needs no approval), structured output.
-    static func classify(slug: String) async throws -> [ConnectorRegistry.ClassifiedTool] {
+    /// ONLY its tools are in context, dontAsk with no connector allows. The readiness
+    /// builtin may wait for schemas; no connector operation is executed. Structured output.
+    static func classify(slug: String, inventory: [String]) async throws -> [ConnectorRegistry.ClassifiedTool] {
         guard let identity = ConnectorRegistry.claudeIdentity(slug: slug) else {
             throw CodexCLI.CLIError.badEnvelope("no claude identity for connector")
         }
         let prompt = """
         You can see tools from the "\(identity.name)" connector in your context (named
-        \(identity.toolPrefix)...). \(slug == "slack" ? "Do not call any connector tool. If the server is still connecting, you may use WaitForMcpServers before inspecting its tools." : "Do not call any tool.")
+        \(identity.toolPrefix)...). Do not call any connector tool. If the server is still connecting,
+        use WaitForMcpServers when available before inspecting its tools or reporting an empty list.
+        Its configured server name is "claude.ai \(identity.name)"; keep that full name when waiting.
+        List only actual declared tool names, never names inferred from descriptions or capabilities.
+
+        The native connected-server inventory below is the complete name list for this run.
+        Classify all \(inventory.count) names exactly once, including deprecated/UI-only tools.
+        Do not replace current versioned names with aliases or names from descriptions.
+        NATIVE INVENTORY: \(inventory.sorted().joined(separator: ", "))
 
         \(classificationRules)
 
+        Reviewed whole-tool exclusions for this connector: \(reviewedDestructiveTools(slug: slug).sorted().joined(separator: ", ")).
+        Every listed name, when present, must be destructive even if another mode only creates
+        new content. Never downgrade an exclusion based on the example task or a confirmation step.
+
+        \(slug == "gmail" ? "Reviewed Gmail policy: trash_message, trash_thread, delete_label, delete_filter, mark_message_spam and mark_thread_spam must be destructive when present. Moving mail to spam is treated like trash, even though it is reversible." : "")
         \(slug == "slack" ? SlackConnector.classificationGuidance : "")
         \(Microsoft365Connector.contains(slug) ? "Microsoft 365 clarification: outlook_update_draft replaces existing body/content and is destructive. outlook_update_event can remove attendees and send cancellations; outlook_respond_to_event includes decline/removal; sharepoint_upload_file supports replacement. All are destructive. Inspect the complete Microsoft 365 inventory, including non-mail tools." : "")
 
@@ -236,9 +269,9 @@ nonisolated enum ConnectorClassifier {
         Include every connector tool exactly once; exclude built-ins and other
         connectors' tools.
         """
-        let envelope = try await run(prompt: prompt, schema: classifySchema, slug: slug)
+        let envelope = try await run(prompt: prompt, schema: try classificationSchema(inventory: inventory), slug: slug)
         let tools = try parse(envelope.jsonResult, prefix: identity.toolPrefix)
-        try validate(tools, slug: slug)
+        try validate(tools, slug: slug, inventory: inventory)
         return tools
     }
 
@@ -250,22 +283,39 @@ nonisolated enum ConnectorClassifier {
         }
         let prompt = """
         You can see tools from the "\(identity.name)" connector in your context (named
-        \(identity.toolPrefix)...). \(slug == "slack" ? "Do not call any connector tool. If the server is still connecting, you may use WaitForMcpServers before inspecting its tools." : "Do not call any tool.")
+        \(identity.toolPrefix)...). Do not call any connector tool. If the server is still connecting,
+        use WaitForMcpServers when available before inspecting its tools or reporting an empty list.
+        Its configured server name is "claude.ai \(identity.name)"; keep that full name when waiting.
+        List only actual declared tool names, never names inferred from descriptions or capabilities.
 
         Reply with JSON only:
         {"tools":["<full name>", ...]}
         Include every connector tool's full name exactly once; exclude built-ins and
         other connectors' tools.
         """
-        let envelope = try await run(prompt: prompt, schema: listSchema, slug: slug)
-        struct Reply: Codable { let tools: [String] }
-        guard let data = envelope.jsonResult.data(using: .utf8),
-              let reply = try? JSONDecoder().decode(Reply.self, from: data) else {
-            throw CodexCLI.CLIError.badEnvelope("tool list did not parse")
+        for _ in 0..<2 {
+            let envelope = try await run(prompt: prompt, schema: listSchema, slug: slug)
+            if let names = nativeInventory(raw: envelope.raw, prefix: identity.toolPrefix,
+                                           serverName: "claude.ai " + identity.name) { return names }
         }
-        let names = Set(reply.tools.compactMap { normalizedName($0, prefix: identity.toolPrefix) }).sorted()
-        guard !names.isEmpty else { throw CodexCLI.CLIError.badEnvelope("tool list has no matching names") }
-        return names
+        throw CodexCLI.CLIError.badEnvelope("native connector inventory is not ready")
+    }
+
+    /// Classification must cover the CLI's actual attached surface, not another model's
+    /// recollection of it. Pending or missing init snapshots cannot certify completeness.
+    static func nativeInventory(raw: String, prefix: String, serverName: String) -> [String]? {
+        for line in raw.split(separator: "\n") {
+            guard let event = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
+                  event["type"] as? String == "system", event["subtype"] as? String == "init",
+                  let servers = event["mcp_servers"] as? [[String: Any]],
+                  servers.contains(where: { $0["name"] as? String == serverName && $0["status"] as? String == "connected" }),
+                  let tools = event["tools"] as? [String] else { continue }
+            let names = tools.filter { $0.hasPrefix(prefix) }
+            guard !names.isEmpty, Set(names).count == names.count,
+                  names.allSatisfy({ normalizedName($0, prefix: prefix) == $0 }) else { return nil }
+            return names.sorted()
+        }
+        return nil
     }
 
     private static func run(prompt: String, schema: String,
@@ -286,7 +336,14 @@ nonisolated enum ConnectorClassifier {
         // trigger=probe: a failed classification is a quiet retry-later, never filed as an
         // analysis failure (the census warm run's posture).
         return try await CodexTrigger.$current.withValue(.probe) {
-            try await FrontierRun.run(invocation)
+            let result = try await FrontierRun.run(invocation)
+            #if DEBUG
+            if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
+               let path = ProcessInfo.processInfo.environment["LAB_CLASSIFICATION_OUTPUT"] {
+                try result.raw.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
+            }
+            #endif
+            return result
         }
     }
 

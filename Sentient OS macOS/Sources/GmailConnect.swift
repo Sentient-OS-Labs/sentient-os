@@ -91,14 +91,16 @@ enum GmailConnect {
 
     // MARK: - Initial read (last month → 4 weekly summaries)
 
-    /// Fresh start: wipe the bucket, then read the last 4 weeks — all four `codex exec` reads fire
-    /// IN PARALLEL (independent windows, independent subprocesses). Results are collected as they
-    /// finish (completion order) and recorded into CycleStore; the high-water mark is set to the
-    /// run-start once all four complete. Any window failing aborts the run (mark unset → a retry
-    /// re-runs all four after clearBucket), matching the iterative path's all-or-nothing commit.
+    /// Read four weekly windows concurrently, staging every summary before replacing notes
+    /// and checkpoint in one save. Failed or cancelled reads preserve the previous bucket.
     @discardableResult
     static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        await CycleStore.shared.clearBucket(bucketKey)
+        try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
+            try await readInitial(onProgress: onProgress, replaceNotes: true)
+        }
+    }
+
+    private static func readInitial(onProgress: @Sendable @escaping (Progress) -> Void, replaceNotes: Bool) async throws -> Int {
         let runStart = Date()
         let cal = Calendar.current
         let today = cal.startOfDay(for: runStart)
@@ -126,6 +128,7 @@ enum GmailConnect {
         // Fan out: one codex exec per window, all concurrent. Collect AS each finishes, then record +
         // report serially here in the parent — so the counters and the progress box see no races.
         var recorded = 0, completed = 0
+        var pending: [NoteDraft] = []
         try await withThrowingTaskGroup(of: WindowResult.self) { group in
             for w in windows {
                 group.addTask { WindowResult(window: w, result: try await read(prompt: w.prompt)) }
@@ -133,7 +136,7 @@ enum GmailConnect {
             for try await done in group {
                 completed += 1
                 if let r = done.result {
-                    await record(r, itemDate: done.window.itemDate, label: done.window.label)
+                    pending.append(draft(r, itemDate: done.window.itemDate, label: done.window.label))
                     recorded += 1
                     onProgress(.windowDone(total: initialWeeks, label: done.window.label,
                                            summary: r.summary, threads: r.threadCount,
@@ -148,7 +151,7 @@ enum GmailConnect {
 
         // High-water mark = run start. Iterative reads everything after it (a few hours of overlap
         // is harmless — the cloud updater synthesizes — and beats a boundary gap).
-        await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, replace: replaceNotes)
         Log("GmailConnect.runInitial: ✅ \(recorded)/\(initialWeeks) weekly summaries recorded (parallel); pointer → \(runStart)")
         return recorded
     }
@@ -159,19 +162,29 @@ enum GmailConnect {
     /// full initial read if Gmail has never been read on this Mac.
     @discardableResult
     static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
-        guard let mark = await CycleStore.shared.pointer(bucketKey) else {
-            return try await runInitial(onProgress: onProgress)   // never read → fall back to initial
+        try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
+            try await readIterative(onProgress: onProgress)
         }
+    }
+
+    private static func readIterative(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
+        guard let checkpoint = try await CycleStore.shared.mcpCheckpoint(bucketKey),
+              checkpoint.origin == GoogleSourceRead.origin(bucket: bucketKey) else {
+            return try await readInitial(onProgress: onProgress, replaceNotes: false)
+        }
+        let mark = checkpoint.mark
         let since = Date(timeIntervalSince1970: mark.order)
         let runStart = Date()
+        guard mark.order <= runStart.timeIntervalSince1970 else { throw MCPSource.MCPError.clockMovedBackwards }
         let sinceLabel = "since \(label(since))"
         // Gmail's `after:` accepts an epoch-seconds boundary — precise, no day-rounding.
         let query = "after:\(Int(since.timeIntervalSince1970))"
         let prompt = weeklyPrompt(query: query, label: sinceLabel)
         onProgress(.windowStart(total: 1, label: sinceLabel, prompt: prompt))
         var recorded = 0
+        var pending: [NoteDraft] = []
         if let r = try await read(prompt: prompt) {
-            await record(r, itemDate: runStart, label: sinceLabel)
+            pending.append(draft(r, itemDate: runStart, label: sinceLabel))
             recorded = 1
             onProgress(.windowDone(total: 1, label: sinceLabel,
                                    summary: r.summary, threads: r.threadCount, completed: 1, keptSoFar: 1))
@@ -179,7 +192,7 @@ enum GmailConnect {
             onProgress(.windowDone(total: 1, label: sinceLabel,
                                    summary: nil, threads: 0, completed: 1, keptSoFar: 0))
         }
-        await CycleStore.shared.setPointer(bucketKey, ItemKey(order: runStart.timeIntervalSince1970, tiebreak: ""))
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart)
         Log("GmailConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
         return recorded
     }
@@ -195,48 +208,13 @@ enum GmailConnect {
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long
         inv.mcpReadConnectors = ["gmail"]    // Claude engine: the unattended-read recipe
-        let env = try await FrontierRun.run(inv)
-        return parse(env.result)
+        guard let result = try await GoogleSourceRead.read(inv, slug: "gmail", countKey: "thread_count", cap: threadCap) else { return nil }
+        return ReadResult(summary: result.text, hasActionItems: result.hasActionItems, threadCount: result.count)
     }
 
-    private static func record(_ r: ReadResult, itemDate: Date, label: String) async {
-        let sid = "gmail:\(Int(itemDate.timeIntervalSince1970))"          // unique per window
-        await CycleStore.shared.recordNote(
-            bucketKey: bucketKey, kind: .gmail, sourceID: sid, folder: "Gmail",
-            itemDate: itemDate, text: r.summary, title: "Email · \(label)",
-            reminderFlagged: r.hasActionItems)
-    }
-
-    /// Tolerant parse of the structured reply (output-schema makes `result` the JSON; still fence-safe).
-    /// §7.10: SHAPE MISMATCH (JSON won't parse, or the required `notable` key is absent — despite the
-    /// output-schema) is a codex/schema regression → event. A QUIET week (`notable:false` / empty
-    /// summary) is normal → silent. Distinguishing them stops a broken Gmail leg from hiding as "quiet".
-    private static func parse(_ result: String) -> ReadResult? {
-        let span: String
-        if let s = result.firstIndex(of: "{"), let e = result.lastIndex(of: "}"), s < e {
-            span = String(result[s...e])
-        } else { span = result }
-        guard let data = span.data(using: .utf8),
-              let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            shapeMismatch(missing: "json", len: result.count)
-            return nil
-        }
-        guard let notable = obj["notable"] as? Bool else {
-            shapeMismatch(missing: "notable", len: result.count)    // key names only — never values
-            return nil
-        }
-        // From here a nil return is a QUIET week — NOT an anomaly, so no event.
-        guard notable, let summary = obj["summary"] as? String,
-              !summary.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return ReadResult(summary: summary,
-                          hasActionItems: obj["has_action_items"] as? Bool ?? false,
-                          threadCount: obj["thread_count"] as? Int ?? 0)
-    }
-
-    private static func shapeMismatch(missing: String, len: Int) {
-        CrashReporting.captureEvent("gmail.parse.shape_mismatch", level: .warning,
-            tags: ["source": "gmail"], extra: ["missing": missing, "result_len": String(len)],
-            fingerprint: ["gmail", "parse", "shape_mismatch"])
+    private static func draft(_ r: ReadResult, itemDate: Date, label: String) -> NoteDraft {
+        NoteDraft(kind: .gmail, sourceID: "gmail:\(Int(itemDate.timeIntervalSince1970))", folder: "Gmail",
+            itemDate: itemDate, text: r.summary, title: "Email · \(label)", reminderFlagged: r.hasActionItems)
     }
 
     // MARK: - Date helpers

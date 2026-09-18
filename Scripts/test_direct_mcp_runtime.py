@@ -204,6 +204,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--engine", choices=["codex", "claude", "both"], default="both")
     options = parser.parse_args()
+    # Header helpers execute with the fixture directory as cwd; redirection paths must be absolute.
+    options.output = options.output.resolve()
     options.output.mkdir(parents=True, exist_ok=True)
     fixture = Fixture()
     fixture.second = Fixture()

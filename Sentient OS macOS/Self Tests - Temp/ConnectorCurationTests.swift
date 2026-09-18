@@ -23,6 +23,27 @@ enum ConnectorCurationTests {
             Log("\(condition ? "PASS" : "FAIL")  \(message)")
             if !condition { failures += 1 }
         }
+        let inventoryPrefix = "mcp__claude_ai_Fixture__"
+        let inventoryNames = [inventoryPrefix + "read_item", inventoryPrefix + "create_item"]
+        func inventory(_ status: String = "connected", tools: [String]? = nil, server: String = "claude.ai Fixture") -> String {
+            String(decoding: try! JSONSerialization.data(withJSONObject: [
+                "type": "system", "subtype": "init", "mcp_servers": [["name": server, "status": status]],
+                "tools": tools ?? (inventoryNames + ["StructuredOutput", "WaitForMcpServers", "mcp__Other__read"])
+            ]), as: UTF8.self)
+        }
+        func observed(_ raw: String) -> [String]? {
+            ConnectorClassifier.nativeInventory(raw: raw, prefix: inventoryPrefix, serverName: "claude.ai Fixture")
+        }
+        check(observed(inventory()) == inventoryNames.sorted(), "native connected inventory excludes other namespaces and builtins")
+        check(observed(inventory("pending")) == nil, "pending server cannot certify native inventory")
+        check(observed(inventory(server: "claude.ai Other")) == nil, "wrong server cannot certify native inventory")
+        check(observed(inventory(tools: [])) == nil, "empty native tool surface is not complete")
+        check(observed(inventory(tools: inventoryNames + [inventoryNames[0]])) == nil, "duplicate native names are rejected")
+        check(observed(inventory(tools: [inventoryPrefix + "bad name"])) == nil, "malformed native names are rejected")
+        let modelOnly = #"{"type":"result","structured_output":{"tools":["mcp__claude_ai_Fixture__read_item"]}}"#
+        check(observed(modelOnly) == nil, "model-produced inventory cannot replace native evidence")
+        check(observed(inventory() + "\n" + modelOnly) == inventoryNames.sorted(), "model omission cannot shrink native inventory")
+
         let defaults = UserDefaults.standard
         let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
         defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
@@ -32,6 +53,11 @@ enum ConnectorCurationTests {
             ConnectorCensus.DetectedConnector(slug: slug, displayName: "Google Drive", origin: .chatgpt,
                 serverURL: nil, catalogID: "connector_5f3c8c41a1e54ad7a76272c89e2554fa", iconPath: nil,
                 healthy: true, lastSeen: Date())])
+        fixture["mcp.connectors.claude"] = try! JSONEncoder().encode([
+            ConnectorCensus.DetectedConnector(slug: "asana", displayName: "Asana", origin: .claude,
+                serverURL: "https://mcp.asana.com/v2/mcp", catalogID: nil, iconPath: nil, healthy: true, lastSeen: Date()),
+            ConnectorCensus.DetectedConnector(slug: "linear", displayName: "Linear", origin: .claude,
+                serverURL: "https://mcp.linear.app/mcp", catalogID: nil, iconPath: nil, healthy: true, lastSeen: Date())])
         fixture[ConnectorRegistry.readGenerationKey(slug, "chatgpt")] = 0
         fixture[ConnectorRegistry.readGenerationKey(slug, "claude")] = 0
         defaults.setVolatileDomain(fixture, forName: UserDefaults.argumentDomain)
@@ -207,6 +233,20 @@ enum ConnectorCurationTests {
             let identityA = try MCPSource.profileFingerprint(raw: identityTrace("account-a"))
             let identityB = try MCPSource.profileFingerprint(raw: identityTrace("account-b"))
             check(identityA?.count == 64 && identityA != identityB, "account identity is a stable local fingerprint")
+            func structuredProfile(_ workspace: Any, extra: Bool = false) throws -> String {
+                var profile: [String: Any] = ["id": "account-a", "name": "Fixture", "email": "fixture@example.invalid",
+                    "nickname": NSNull(), "picture": NSNull(), "workspace_id": workspace, "workspace_name": NSNull()]
+                if extra { profile["unexpected_scope"] = "unknown" }
+                return String(data: try JSONSerialization.data(withJSONObject: ["type": "item.completed", "item": [
+                    "type": "mcp_tool_call", "tool": "google_drive.get_profile", "status": "completed", "error": NSNull(),
+                    "result": ["content": [["type": "text", "text": "Action completed."]], "structured_content": profile]]]), encoding: .utf8)!
+            }
+            check(try MCPSource.profileFingerprint(raw: structuredProfile(NSNull())) == identityA, "current Drive profile with null workspace preserves account fingerprint")
+            check(try MCPSource.profileFingerprint(raw: structuredProfile("workspace-a")) != MCPSource.profileFingerprint(raw: structuredProfile("workspace-b")), "Drive workspace changes alter checkpoint identity")
+            do { _ = try MCPSource.profileFingerprint(raw: structuredProfile(42)); check(false, "malformed workspace must fail") }
+            catch { check(true, "malformed Drive workspace is rejected") }
+            do { _ = try MCPSource.profileFingerprint(raw: structuredProfile(NSNull(), extra: true)); check(false, "unknown profile shape must fail") }
+            catch { check(true, "unreviewed Drive profile fields remain rejected") }
             do { _ = try MCPSource.profileFingerprint(raw: identityTrace("account-a") + "\n" + identityTrace("account-b")); check(false, "mixed identities must fail") }
             catch { check(true, "mixed successful profile identities are rejected") }
             do { _ = try MCPSource.profileFingerprint(raw: #"{"type":"item.completed","item":{"type":"agent_message","text":"account-a"}}"#); check(false, "model identity claims must fail") }
@@ -223,6 +263,30 @@ enum ConnectorCurationTests {
             } catch { check(true, "account switch during a read aborts the commit") }
             check(try await store.mcpCheckpoint(bucket)?.mark == beforeIdentityChange?.mark, "account switch preserves previous progress")
 
+            let exactSchema = try JSONSerialization.jsonObject(with: Data(ConnectorClassifier.classificationSchema(inventory: inventoryNames).utf8)) as! [String: Any]
+            let props = exactSchema["properties"] as! [String: Any]
+            let array = props["tools"] as! [String: Any]
+            let items = array["items"] as! [String: Any]
+            let fields = items["properties"] as! [String: Any]
+            let nameField = fields["name"] as! [String: Any]
+            check(array["minItems"] as? Int == inventoryNames.count && array["maxItems"] as? Int == inventoryNames.count, "classification schema pins the native tool count")
+            check(Set(nameField["enum"] as? [String] ?? []) == Set(inventoryNames), "classification schema prohibits invented or old alias names")
+            // Replays the observed unsafe classifications without executing connector tools.
+            for (service, prefix, names) in [
+                ("asana", "mcp__claude_ai_Asana__", ["update_tasks", "update_project", "save_project_changes_confirm", "save_task_changes_confirm", "delete_task", "create_project_confirm_populate"]),
+                ("linear", "mcp__claude_ai_Linear__", ["unshare_issue", "merge_diff", "update_diff", "save_document", "save_comment", "save_issue", "save_project", "save_release", "save_release_note", "save_status_update"]) ] {
+                for name in names {
+                    let good = [ConnectorRegistry.ClassifiedTool(name: prefix + name, category: .destructive)]
+                    try ConnectorClassifier.validate(good, slug: service, inventory: good.map(\.name))
+                    for category in [ConnectorRegistry.ToolCategory.read, .write] {
+                        let unsafe = [ConnectorRegistry.ClassifiedTool(name: prefix + name, category: category)]
+                        do { try ConnectorClassifier.validate(unsafe, slug: service, inventory: unsafe.map(\.name)); check(false, "\(service) \(name) cannot be downgraded") }
+                        catch { check(true, "\(service) \(name) blocks \(category.rawValue) verdict") }
+                        let capture = ConnectorRegistry.Classification(tools: unsafe, cliVersion: "fixture", capturedAt: now, verifiedInventory: unsafe.map(\.name))
+                        check(!ConnectorClassifier.isFresh(capture, slug: service, version: "fixture", now: now), "old unsafe cache invalidated for \(service) \(name)")
+                    }
+                }
+            }
             let prefix = "mcp__claude_ai_Google_Drive__"
             let reads = ConnectorRegistry.pack(forSlug: slug)!.readTools!
             let tools = reads.map { ConnectorRegistry.ClassifiedTool(name: prefix + $0, category: .read) }

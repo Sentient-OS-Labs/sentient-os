@@ -13,11 +13,15 @@ import Darwin
 nonisolated enum DirectMCPStore {
     static let preferencesKey = "mcp.connectors.direct"
     private static let service = "ai.sentient-os.app.direct-mcp.v1"
-    private static let indexLock = OSAllocatedUnfairLock()
+    // Serialize read-modify-write transactions only. UI readers must not take this lock:
+    // UserDefaults.set synchronously notifies SwiftUI, which may already be rendering a reader.
+    private static let indexWriteLock = OSAllocatedUnfairLock()
     static let changed = Notification.Name("DirectMCPConnectionsChanged")
 
     static func connections() -> [DirectMCPConnection] {
-        indexLock.withLock { readIndex() }
+        // UserDefaults is thread-safe; each Data value is a complete encoded snapshot.
+        // Reading it directly also keeps helper processes on the persisted source of truth.
+        readIndex()
     }
     private static func readIndex() -> [DirectMCPConnection] {
         guard let data = UserDefaults.standard.data(forKey: preferencesKey) else { return [] }
@@ -33,7 +37,7 @@ nonisolated enum DirectMCPStore {
     static func connection(id: UUID) -> DirectMCPConnection? { connections().first { $0.id == id } }
 
     static func save(_ connection: DirectMCPConnection) throws {
-        try indexLock.withLock {
+        try indexWriteLock.withLock {
             var list = readIndex()
             list.removeAll { $0.id == connection.id }
             list.append(connection)
@@ -42,7 +46,7 @@ nonisolated enum DirectMCPStore {
         NotificationCenter.default.post(name: changed, object: nil)
     }
     static func removeIndex(id: UUID) {
-        indexLock.withLock {
+        indexWriteLock.withLock {
             let list = readIndex().filter { $0.id != id }
             if let data = try? JSONEncoder().encode(list) { UserDefaults.standard.set(data, forKey: preferencesKey) }
         }

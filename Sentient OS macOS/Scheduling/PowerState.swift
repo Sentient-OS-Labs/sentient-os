@@ -17,10 +17,10 @@ enum PowerState {
     /// True iff the Mac is on AC/wall power (not draining the battery).
     static func onACPower() -> Bool {
         guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
-              let type = IOPSGetProvidingPowerSourceType(snapshot)?.takeRetainedValue() as String? else {
+              let type = IOPSGetProvidingPowerSourceType(snapshot)?.takeUnretainedValue() as String? else {
             return false   // can't tell → treat as NOT on AC (fail safe: don't run overnight on battery)
         }
-        return type == kIOPSACPowerValue
+        return type == kIOPMACPowerKey
     }
 
     /// The internal battery's charge, 0–100. Nil when there's no readable battery (desktop Macs).

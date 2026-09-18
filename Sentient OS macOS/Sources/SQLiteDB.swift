@@ -22,11 +22,13 @@ nonisolated enum SQLiteDB {
         case missingFile(String)
         case open(String)
         case prepare(String)
+        case step(Int32)
         var description: String {
             switch self {
             case .missingFile(let p): return "Database not found at: \(p) (is the app installed / Full Disk Access granted?)"
             case .open(let m):        return "SQLite open failed: \(m)"
             case .prepare(let m):     return "SQLite prepare failed: \(m)"
+            case .step(let code):     return "SQLite read failed (code \(code))"
             }
         }
     }
@@ -87,7 +89,17 @@ nonisolated final class SQLiteReader {
             throw SQLiteDB.DBError.prepare(errmsg)
         }
         defer { sqlite3_finalize(stmt) }
-        while sqlite3_step(stmt) == SQLITE_ROW { try row(Row(stmt!)) }
+        while true {
+            let result = sqlite3_step(stmt)
+            switch result {
+            case SQLITE_ROW: try row(Row(stmt!))
+            case SQLITE_DONE: return
+            default:
+                // An interrupted, corrupt, or unavailable snapshot is not a complete read.
+                // Propagate the failure so callers cannot commit a partial source as success.
+                throw SQLiteDB.DBError.step(result)
+            }
+        }
     }
 
     /// Typed, index-based column access for one row.
