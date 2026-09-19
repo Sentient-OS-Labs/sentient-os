@@ -236,7 +236,7 @@ extension MCPSource {
     When successful discovery finds nothing worth retaining, use notable=false,
     has_action_items=false, and summary="". Never add filler about finding nothing.
     Use tool_failure="auth" when the connector requires sign-in or reports an expired account
-    connection. Use "other" when discovery cannot complete because tools are unavailable or broken.
+    connection, or when the connector is missing and no tools can be attached. Use "other" for other tool errors.
     A restriction on one file does not by itself mean account authentication expired. Skip
     inaccessible files when useful discovery can proceed. Never bypass access restrictions.
     When tool_failure is nonempty, use notable=false, has_action_items=false, and summary="".
@@ -328,9 +328,9 @@ extension MCPSource {
          "tool_failure": ""|"auth"|"other"}
 
         Set tool_failure ONLY when the \(name) tools themselves failed you: "auth" when \
-        they demand a sign-in, report an expired connection, or refuse authorization; \
-        "other" for any other tool breakage, including no \(name) tools being available \
-        at all. When tools worked, even on a quiet period, use "". When tool_failure is \
+        they demand a sign-in, report an expired connection, refuse authorization, or no \
+        \(name) tools are available because the connector is missing; "other" for other tool errors \
+        instead. When tools worked, even on a quiet period, use "". When tool_failure is \
         set, notable and has_action_items must be false and summary must be empty.
         """
     }

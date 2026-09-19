@@ -26,10 +26,8 @@ struct RootView: View {
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
     private var deck: BriefingDeck { BriefingDeck(rawValue: deckRaw) ?? .real }
     // Cloud sources — same flags the scheduler reads, so Analyze Now processes exactly what an
-    // overnight run would (a no-op until Gmail/Calendar are actually connected + selected).
-    @AppStorage("dbg.gmail.connected")    private var gmailConnected = false
+    // overnight run would (the user's selection determines which cloud reads to attempt).
     @AppStorage("dbg.run.gmail")          private var runGmail = false
-    @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
     // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
@@ -87,8 +85,8 @@ struct RootView: View {
                 ProcessingView(modelPath: modelPath,
                                connectors: RunSource.connectors(from: selectedSources),
                                mode: .auto,
-                               runGmail: ModelBackend.connectorsAvailable && gmailConnected && runGmail,
-                               runCalendar: ModelBackend.connectorsAvailable && calendarConnected && runCalendar,
+                               runGmail: ModelBackend.connectorsAvailable && runGmail,
+                               runCalendar: ModelBackend.connectorsAvailable && runCalendar,
                                mcpSlugs: MCPSource.kbSlugs(),
                                fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }

@@ -365,10 +365,9 @@ actor CodexCLI {
     /// onboarding step). Runs `curl … install.sh | CODEX_NON_INTERACTIVE=1 sh` as ONE shell pipeline
     /// (the `|` only exists inside a shell) and streams every output line to `onLine` (the console +
     /// the setup UI). The script drops the binary at `~/.local/bin/codex` — the first path
-    /// `locateBinary()` checks. Success = the binary is actually present afterward, NOT the shell's
-    /// exit code: a `curl | sh` pipeline reports the trailing `sh`'s status, so a failed download
-    /// (no network) can still "exit 0" with nothing installed. Throws if codex isn't found after the
-    /// run. (Installed ≠ logged in — auth is the next step; detection-first is the caller's job.)
+    /// `locateBinary()` checks. Every pipeline stage must succeed, and the managed binary must
+    /// answer both --version and --help afterward. When the release feed supplied an expected
+    /// version, an older binary is a failed update even if the installer exited successfully.
     ///
     /// ⚠️ The sed stage is a working workaround for an UPSTREAM bug [MEASURED 2026-07-08]: GitHub's
     /// API began serving MINIFIED JSON to requests without an explicit Accept header, and OpenAI's
@@ -377,7 +376,8 @@ actor CodexCLI {
     /// `Accept: application/json` into the script's curl calls makes GitHub pretty-print again
     /// (verified end-to-end); it's harmless on the script's binary downloads. Drop the sed once
     /// OpenAI fixes install.sh.
-    static func install(onLine: @escaping @Sendable (String) -> Void) async throws {
+    static func install(expectedVersion: String? = nil,
+                        onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         // Survive a slow connection, fail fast on a dead one. The outer curl (the tiny install.sh)
         // caps at 60s; the sed injects matching resilience into the script's OWN curl calls (the
         // real binary download): abort only if throughput stays under ~8 KB/s for 30s, so a
@@ -386,16 +386,30 @@ actor CodexCLI {
         // link can finish — the old 300s ceiling was SIGTERM-ing in-progress downloads on slow
         // connections [MEASURED from install traces, 2026-07-24].
         let pipeline = #"curl -fsSL --connect-timeout 30 --max-time 60 https://chatgpt.com/codex/install.sh | sed 's|curl -fsSL|curl -fsSL -H "Accept: application/json" --connect-timeout 30 --speed-limit 8192 --speed-time 30|g' | CODEX_NON_INTERACTIVE=1 sh"#
-        let out = try await executeStreaming(binary: "/bin/sh", args: ["-c", pipeline],
-                                             timeout: 900, onLine: onLine)
+        // pipefail preserves a failed curl/sed even when the trailing sh receives no script
+        // and exits zero. Pin the destination so inherited installer settings cannot put the
+        // fresh binary somewhere other than the path Sentient will use.
+        let out = try await executeStreaming(binary: "/bin/bash", args: ["-o", "pipefail", "-c", pipeline],
+                                             timeout: 900,
+                                             extraEnv: ["CODEX_INSTALL_DIR": (managedBinaryPath as NSString).deletingLastPathComponent],
+                                             onLine: onLine)
         UserDefaults.standard.removeObject(forKey: pathCacheKey)   // force a fresh discovery scan
-        guard locateBinary() != nil else {
+        guard out.status == 0 else {
             let detail = out.stderr.isEmpty ? out.stdout : out.stderr
             let msg = detail.isEmpty
-                ? "Codex not found after install; check your network connection."
+                ? "The Codex installer failed; check your network connection and try again."
                 : String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(600))
             throw CLIError.exitFailure(code: out.status, message: msg)
         }
+        guard FileManager.default.isExecutableFile(atPath: managedBinaryPath),
+              let version = await installedVersion(binary: managedBinaryPath),
+              await isRunnable(binary: managedBinaryPath) else {
+            throw CLIError.notAvailable(.notWorking("The installed Codex CLI could not be verified. Try again."))
+        }
+        if let expectedVersion, isNewer(expectedVersion, than: version) {
+            throw CLIError.notAvailable(.notWorking("Codex CLI is still at \(version); version \(expectedVersion) or newer is needed. Try updating again."))
+        }
+        return version
     }
 
     // MARK: Login (setup step 2)
@@ -440,20 +454,18 @@ actor CodexCLI {
         return proc
     }
 
-    /// Step 2 ground-truth check — `codex login status`. [MEASURED v0.142.3] exit 0 = logged in;
-    /// exit 1 + "Not logged in" = not. Exit status is the primary signal, with an output scan as a
-    /// backstop. Uses the bare-env `executeAsync` (status only reads `~/.codex/auth.json` via HOME).
-    /// Ground truth for "codex is installed": actually RUN `codex --help` and see it answer.
-    /// A pure path check can be fooled (e.g. a broken symlink left by a half-deleted install);
-    /// no binary found anywhere = the shell's "command not found" case. Onboarding's login
-    /// screen polls this to un-grey its button the moment the background install lands.
-    static func isRunnable() async -> Bool {
-        guard let bin = locateBinary() else { return false }
+    /// Confirm that the selected (or explicitly supplied) binary answers `codex --help`.
+    /// Preparation uses this before accepting an existing version and after installation;
+    /// an executable path alone does not establish that the CLI works.
+    static func isRunnable(binary: String? = nil) async -> Bool {
+        guard let bin = binary ?? locateBinary() else { return false }
         guard let out = try? await executeAsync(binary: bin, args: ["--help"],
                                                 stdinText: nil, cwd: nil, timeout: 10) else { return false }
         return out.status == 0 && !out.stdout.isEmpty
     }
 
+    /// Step 2 ground-truth check: `codex login status`, with exit status as the primary signal
+    /// and an output scan as a backstop. Reads `~/.codex/auth.json` via the bare HOME environment.
     static func loginStatus() async -> Bool {
         guard let bin = locateBinary() else { return false }
         guard let out = try? await executeAsync(binary: bin, args: ["login", "status"],
@@ -467,12 +479,15 @@ actor CodexCLI {
 
     /// The installed CLI's version string (`codex --version` → "codex-cli 0.147.0" → "0.147.0"),
     /// or nil when there's no binary or it doesn't answer.
-    static func installedVersion() async -> String? {
-        guard let bin = locateBinary() else { return nil }
+    static func installedVersion(binary: String? = nil) async -> String? {
+        guard let bin = binary ?? locateBinary() else { return nil }
         guard let out = try? await executeAsync(binary: bin, args: ["--version"],
                                                 stdinText: nil, cwd: nil, timeout: 10),
               out.status == 0 else { return nil }
-        return out.stdout.split(whereSeparator: \.isWhitespace).last.map(String.init)
+        guard let version = out.stdout.split(whereSeparator: \.isWhitespace).last.map(String.init),
+              version.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"#,
+                            options: .regularExpression) != nil else { return nil }
+        return version
     }
 
     /// The newest released CLI version, from the same channel feed OpenAI's installer resolves
@@ -830,6 +845,7 @@ actor CodexCLI {
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
+        var beganCuaSession = false
         // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
         // per run, so a change applies to the very next fire with no restart. backendTuned: on the
         // custom backend the user's endpoint model + its ONE reasoning level drive computer use
@@ -859,6 +875,12 @@ actor CodexCLI {
             guard let socket = await CuaDriverHost.shared.ensureRunning() else {
                 throw CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
             }
+            try Task.checkCancellation()
+            guard await CuaDriverHost.shared.beginAgentSession() else {
+                throw CodexCLI.CLIError.notAvailable(.notWorking("cua-driver session did not start"))
+            }
+            beganCuaSession = true
+
             // Hermetic on purpose — and it is the ONLY lever that works. ~/.codex still carries
             // OpenAI's legacy computer-use PLUGIN on Macs that ran a 1.x bootstrap, and its skill
             // advertisement makes the model announce "using the computer-use skill", shell out to
@@ -883,8 +905,11 @@ actor CodexCLI {
             }
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+            await CuaDriverHost.shared.endAgentSession()
+            beganCuaSession = false
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
+            if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
             // §7.9: computer-use is the full-capability path (bypass-sandbox, user-fired), so a
             // genuine failure is worth a structured event. Case name only — and never on a cancelled
             // Task (the user's STOP kills codex → non-zero exit, which is not a failure; field-found

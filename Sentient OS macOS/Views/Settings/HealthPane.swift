@@ -477,7 +477,7 @@ struct HealthPane: View {
                            note: claude.installing ? (claude.installed ? "updating…" : "installing…")
                                : !claude.installed ? "not installed"
                                : (claude.version.map { "installed · \($0)" } ?? "installed"),
-                           tip: "Anthropic's official Claude Code command line tool. Sentient runs its cloud thinking through it, using your own Claude subscription.\n\nSentient keeps it up to date on its own, quietly, at most once a day while you're away from the app. Install runs Anthropic's own installer; if Claude Code is already there it simply updates in place, and your login and settings are untouched.",
+                           tip: "Anthropic's official Claude Code command line tool. Sentient runs its cloud thinking through it, using your own Claude subscription.\n\nSentient checks for updates quietly, at most once a day while you're away from the app. Existing installations use claude update and follow your release channel. Missing installations use Anthropic's official installer.",
                            fixTitle: claude.installed ? "Update…" : "Install…",
                            fix: claude.installing ? nil : { Task { await claude.installClaude() } })
                 failureLine(claude.installStatus)

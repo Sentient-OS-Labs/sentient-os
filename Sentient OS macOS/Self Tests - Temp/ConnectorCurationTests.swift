@@ -222,7 +222,7 @@ enum ConnectorCurationTests {
                 check(zip(windows, windows.dropFirst()).allSatisfy { $0.lower == $1.upper }, "windowed adapter boundaries are contiguous")
             }
             check(ConnectorRegistry.kbEligible(slug, backend: .chatgpt) && ConnectorRegistry.kbEligible(slug, backend: .claude), "Drive is eligible on both verified hosted engines")
-            check(!ConnectorRegistry.kbEligible(slug, backend: .custom) && !ConnectorRegistry.kbEligible("notion", backend: .claude), "unsupported provider and uncurated pack are ineligible")
+            check(!ConnectorRegistry.kbEligible(slug, backend: .custom) && !ConnectorRegistry.kbEligible("asana", backend: .claude), "unsupported provider and uncurated pack are ineligible")
 
             func identityTrace(_ id: String) throws -> String {
                 let payload = String(data: try JSONSerialization.data(withJSONObject: ["result": ["id": id, "email": "fixture@example.invalid"]]), encoding: .utf8)!

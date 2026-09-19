@@ -38,8 +38,8 @@ actor DirectMCPConnections {
         }
         var pendingConnection = DirectMCPConnection(id: id, providerSlug: provider.slug, label: clean,
             generation: UUID(), state: .verifying)
-        // A new grant still verifies the live account and inventory. Preserve only the tool
-        // policy; verify() reclassifies if any definition or the policy revision has changed.
+        // Preserve only the tool policy. On first use, verify() binds the new account and
+        // reclassifies if any definition or the policy revision has changed.
         if let previousConnection, previousConnection.providerSlug == provider.slug, previousConnection.policyValid {
             pendingConnection.tools = previousConnection.tools
             pendingConnection.policy = previousConnection.policy
@@ -56,7 +56,12 @@ actor DirectMCPConnections {
                 guard DirectMCPStore.connection(id: id)?.generation == connection.generation else { throw DirectMCPError.connectionChanged }
                 try DirectMCPStore.saveGrant(grant)
             }
-            _ = try await Self.verifyAccount(connection)
+            // OAuth has already produced the grant. Account and tool checks belong to use.
+            try Task.checkCancellation()
+            guard var saved = DirectMCPStore.connection(id: id),
+                  saved.generation == connection.generation else { throw DirectMCPError.connectionChanged }
+            saved.state = .connected
+            try DirectMCPStore.save(saved)
         }
         attempts[id] = (connection.generation, task)
         do {
@@ -96,30 +101,6 @@ actor DirectMCPConnections {
                 }
                 if attempts[id]?.generation == connection.generation { attempts[id] = nil }
             }
-            throw error
-        }
-    }
-
-    /// Login and Settings refresh check the grant/account without starting the frontier engine.
-    static func verifyAccount(_ connection: DirectMCPConnection) async throws -> DirectMCPConnection {
-        do {
-            let account = try await DirectMCPProbe.account(connection: connection)
-            let identity = DirectMCPIdentity.parse(account)
-            if let previous = connection.accountFingerprint, previous != identity?.fingerprint {
-                throw DirectMCPError.connectionChanged
-            }
-            try DirectMCPSession.check(connection)
-            guard var updated = DirectMCPStore.connection(id: connection.id),
-                  updated.generation == connection.generation else { throw DirectMCPError.connectionChanged }
-            updated.accountFingerprint = identity?.fingerprint
-            updated.accountLabel = identity?.label
-            updated.verifiedAt = Date()
-            updated.state = updated.usable ? .ready : .connected
-            try DirectMCPStore.save(updated)
-            return updated
-        } catch {
-            if Task.isCancelled || error is CancellationError { throw CancellationError() }
-            recordFailure(error, connection: connection)
             throw error
         }
     }

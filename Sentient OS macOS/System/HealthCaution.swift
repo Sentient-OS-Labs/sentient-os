@@ -55,7 +55,7 @@ enum HealthCaution {
             case .codexSignedOut:
                 return "Codex is signed out, so proactive work is paused. Log back in and I'll catch up tonight."
             case .codexOutdated:
-                return "Codex on this Mac is out of date and can't read its newer files. One click in Settings updates it."
+                return "You are running an older version of Codex. Click to update in Settings"
             case .claudeMissing:
                 return "Claude Code is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
             case .claudeSignedOut:
@@ -158,7 +158,8 @@ enum HealthCaution {
                 // banner behind it would be the same message twice. The banner still covers the
                 // window-less case (the driver vanishing mid-session; the next home open raises
                 // the window and this rung goes quiet again).
-                if computerUseEverReady, !ComputerUseUpgrade.shared.isPresenting {
+                if computerUseEverReady, !ComputerUseUpgrade.shared.isPresenting,
+                   CodexSetup.shared.cuaUpdateNotice == .hidden {
                     return .computerUseBroken(payloadGone: true)
                 }
             } else {

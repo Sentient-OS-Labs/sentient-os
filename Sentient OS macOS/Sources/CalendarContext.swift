@@ -59,17 +59,17 @@ enum CalendarContext {
     }
 
     /// With no opted-in Outlook source, preserve the original Google invocation and result.
-    static func fetch(now: Date = Date()) async throws -> Result {
-        try await ModelBackend.$runOverride.withValue(ModelBackend.current) { try await fetchBody(now: now) }
+    static func fetch(now: Date = Date(), excluding: Set<String> = []) async throws -> Result {
+        try await ModelBackend.$runOverride.withValue(ModelBackend.current) { try await fetchBody(now: now, excluding: excluding) }
     }
 
-    private static func fetchBody(now: Date) async throws -> Result {
+    private static func fetchBody(now: Date, excluding: Set<String>) async throws -> Result {
         let google: String?
-        if ModelBackend.connectorsAvailable, UserDefaults.standard.bool(forKey: "dbg.calendar.connected") {
+        if !excluding.contains("google-calendar"), ModelBackend.connectorsAvailable, UserDefaults.standard.bool(forKey: "dbg.run.calendar") {
             google = await CalendarConnect.fetchProactiveContext()
         } else { google = nil }
         try Task.checkCancellation()
-        guard outlookEnabled else { return Result(text: google, hasOutlookEvents: false) }
+        guard outlookEnabled, !excluding.contains(OutlookCalendarConnector.slug) else { return Result(text: google, hasOutlookEvents: false) }
         let outlook = try await fetchOutlook(now: now)
         return merge(google: google, outlook: outlook)
     }

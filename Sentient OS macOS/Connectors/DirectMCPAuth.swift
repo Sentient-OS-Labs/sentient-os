@@ -188,7 +188,7 @@ nonisolated enum DirectMCPAuth {
                 }
                 await Log("Direct MCP: access exchange complete")
                 try Task.checkCancellation()
-                await onProgress(.verifyingAccount)
+                await onProgress(.savingConnection)
                 return grant
             }
             group.addTask { try await Task.sleep(for: .seconds(300)); throw DirectMCPError.timedOut }

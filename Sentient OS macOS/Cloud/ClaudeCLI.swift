@@ -22,7 +22,7 @@
 //   - `exec resume <sid>`       → `--resume <sid>`
 //
 //  Key methods:
-//   - locateBinary() / install(onLine:) / installedVersion / latestReleasedVersion
+//   - locateBinary() / install(onLine:) / update(onLine:) / installedVersion
 //   - startLogin / loginStatus   → `claude auth login` (browser OAuth) + ClaudeAuth's status read
 //   - validate(force:)           → Availability (binary + login; no model tokens burned)
 //   - run(_:)                    → Envelope (blocking stream-json mode)
@@ -202,55 +202,93 @@ actor ClaudeCLI {
     /// Install Claude Code via Anthropic's official installer (`claude.ai/install.sh` — verified
     /// fully non-interactive when piped; refuses sudo; drops the binary at `~/.local/bin/claude`).
     /// Same resilience posture as the codex installer: outer curl fails fast on a dead link, the
-    /// budget is generous for a slow one, and success = the binary actually present afterward,
-    /// never the pipeline's exit status.
-    static func install(onLine: @escaping @Sendable (String) -> Void) async throws {
+    /// budget is generous for a slow one. Every pipeline stage must succeed, and the managed
+    /// binary must report a valid version afterward. Existing installs use update(onLine:).
+    static func install(onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let pipeline = #"curl -fsSL --connect-timeout 30 --max-time 60 https://claude.ai/install.sh | bash"#
-        let out = try await CodexCLI.executeStreaming(binary: "/bin/sh", args: ["-c", pipeline],
+        let out = try await CodexCLI.executeStreaming(binary: "/bin/bash", args: ["-o", "pipefail", "-c", pipeline],
                                                       timeout: 900, extraEnv: baseEnv, onLine: onLine)
         UserDefaults.standard.removeObject(forKey: pathCacheKey)   // force a fresh discovery scan
-        guard locateBinary() != nil else {
-            let detail = out.stderr.isEmpty ? out.stdout : out.stderr
-            let msg = detail.isEmpty
-                ? "Claude Code not found after install; check your network connection."
-                : String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(600))
-            throw CodexCLI.CLIError.exitFailure(code: out.status, message: msg)
+        guard out.status == 0 else {
+            throw SetupError.failed("Claude Code couldn't be installed. Check your connection and try again.")
         }
+        guard FileManager.default.isExecutableFile(atPath: managedBinaryPath),
+              let version = await installedVersion(binary: managedBinaryPath),
+              await isRunnable(binary: managedBinaryPath) else {
+            throw SetupError.failed("The installed Claude Code could not be verified. Try again.")
+        }
+        return version
     }
 
-    /// Ground truth for "claude is installed": run `claude --version` and see it answer.
-    static func isRunnable() async -> Bool {
-        guard let bin = locateBinary() else { return false }
-        guard let out = try? await CodexCLI.executeAsync(binary: bin, args: ["--version"],
+    enum SetupError: LocalizedError {
+        case failed(String)
+        var errorDescription: String? { switch self { case .failed(let message): return message } }
+    }
+
+    /// The CLI owns release-channel and package-manager policy. `DISABLE_AUTOUPDATER` stops
+    /// background updates only; explicit `claude update` still works (verified on 2.1.246/277).
+    /// Exit zero alone is insufficient: disabled updates can also exit zero, and a custom
+    /// launcher can keep selecting the old version after the updater installs a new one.
+    static func update(onLine: @escaping @Sendable (String) -> Void) async throws -> String {
+        guard let binary = locateBinary() else { throw SetupError.failed("Claude Code is not installed.") }
+        let out = try await CodexCLI.executeStreaming(binary: binary, args: ["update"],
+                                                      timeout: 900, extraEnv: baseEnv, onLine: onLine)
+        UserDefaults.standard.removeObject(forKey: pathCacheKey)
+        guard out.status == 0 else {
+            throw SetupError.failed("Claude Code couldn't be updated. Check your connection, or run claude update in Terminal, then try again.")
+        }
+        let reported = reportedUpdateVersion(in: out.stdout)
+        // Package-managed installs have a documented success line without a version number.
+        let packageCurrent = out.stdout.components(separatedBy: .newlines)
+            .contains { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "Claude is up to date!" }
+        guard reported != nil || packageCurrent else {
+            throw SetupError.failed("Claude Code did not confirm an update. Run claude update in Terminal, then try again.")
+        }
+        guard let version = await installedVersion(), await isRunnable() else {
+            throw SetupError.failed("Claude Code could not be verified after updating. Try again.")
+        }
+        if let reported, CodexCLI.isNewer(reported, than: version) {
+            throw SetupError.failed("Claude Code updated to \(reported), but Sentient still finds \(version). Check your Claude installation, then try again.")
+        }
+        return version
+    }
+
+    /// Native-updater completion messages, including its explicit minimum-version hold.
+    /// Unknown output is retryable, never silently treated as success because a binary survives.
+    static func reportedUpdateVersion(in output: String) -> String? {
+        let patterns = [
+            #"(?m)^Successfully updated from \S+ to version ([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\s*$"#,
+            #"(?m)^Claude Code is up to date \(([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\)\s*$"#,
+            #"(?m)^The (?:stable|latest) channel is at \S+, which is below your minimumVersion setting \(\S+\)\. Staying on ([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)\.\s*$"#,
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: output, range: NSRange(output.startIndex..., in: output)),
+                  let range = Range(match.range(at: 1), in: output) else { continue }
+            return String(output[range])
+        }
+        return nil
+    }
+
+    /// Confirm the selected (or explicitly supplied) executable answers --help.
+    static func isRunnable(binary: String? = nil) async -> Bool {
+        guard let bin = binary ?? locateBinary() else { return false }
+        guard let out = try? await CodexCLI.executeAsync(binary: bin, args: ["--help"],
                                                          stdinText: nil, cwd: nil, timeout: 10,
                                                          extraEnv: baseEnv) else { return false }
         return out.status == 0 && !out.stdout.isEmpty
     }
 
     /// The installed version ("2.1.233 (Claude Code)" → "2.1.233"), or nil.
-    static func installedVersion() async -> String? {
-        guard let bin = locateBinary() else { return nil }
+    static func installedVersion(binary: String? = nil) async -> String? {
+        guard let bin = binary ?? locateBinary() else { return nil }
         guard let out = try? await CodexCLI.executeAsync(binary: bin, args: ["--version"],
                                                          stdinText: nil, cwd: nil, timeout: 10,
                                                          extraEnv: baseEnv),
               out.status == 0 else { return nil }
-        return out.stdout.split(whereSeparator: \.isWhitespace).first.map(String.init)
-    }
-
-    /// The newest released version, from the same endpoint the installer resolves against
-    /// (`downloads.claude.ai/claude-code-releases/latest` answers the bare version string).
-    static func latestReleasedVersion() async -> String? {
-        guard let url = URL(string: "https://downloads.claude.ai/claude-code-releases/latest") else { return nil }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        request.httpMethod = "GET"
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let text = String(data: data, encoding: .utf8) else { return nil }
-        let version = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        // A bare semver, nothing else — a drifted endpoint shape must not become a "version".
-        guard !version.isEmpty, version.count < 32,
-              version.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+"#, options: .regularExpression) != nil
-        else { return nil }
+        guard let version = out.stdout.split(whereSeparator: \.isWhitespace).first.map(String.init),
+              version.range(of: #"^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$"#,
+                            options: .regularExpression) != nil else { return nil }
         return version
     }
 
@@ -734,6 +772,7 @@ actor ClaudeCLI {
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
+        var beganCuaSession = false
         let (modelID, effortArg) = Self.agentTuned()
         do {
             if prompt.utf8.count > CodexCLI.promptByteCap {
@@ -748,6 +787,11 @@ actor ClaudeCLI {
             guard let socket = await CuaDriverHost.shared.ensureRunning() else {
                 throw CodexCLI.CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
             }
+            try Task.checkCancellation()
+            guard await CuaDriverHost.shared.beginAgentSession() else {
+                throw CodexCLI.CLIError.notAvailable(.notWorking("cua-driver session did not start"))
+            }
+            beganCuaSession = true
 
             var fullPrompt = prompt
             if !imagePaths.isEmpty { fullPrompt += Self.screenshotsBlock(imagePaths) }
@@ -772,8 +816,11 @@ actor ClaudeCLI {
             }
             let env2 = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(t0) * 1000))
             Log("claude exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
+            await CuaDriverHost.shared.endAgentSession()
+            beganCuaSession = false
             return env2.result
         } catch {
+            if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
             if !Task.isCancelled {
                 let ms = Int(Date().timeIntervalSince(t0) * 1000)
                 Log("claude exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")

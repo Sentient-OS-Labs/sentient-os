@@ -39,10 +39,11 @@ Two kinds of members:
   its own sibling (`ClaudeSetup.ensureInstalled`, kicked by "Sign in with Claude") — a user who picks
   Claude never downloads codex, and vice versa. `startLogin(force:)` opens the browser
   and returns; the login is noticed by polling `loginStatus` (onboarding and Health both do this; only
-  the dev window keeps a "Finished" button). `setupCuaDriver()` streams the driver install's progress
-  lines; `ensureCuaDriver()` is the fire-time self-heal — a computer-use run whose driver is missing
-  gets the 2–3 s pinned download here (waiting on an in-flight install rather than racing it) instead
-  of a dead fire.
+  the dev window keeps a "Finished" button). `setupCuaDriver()` joins one shared driver installation
+  and exposes byte progress plus verification stages. `updateCuaDriverIfNeeded()` starts the pinned
+  update in the background for existing CUA users; its notice drives the home's progress/retry UI.
+  `ensureCuaDriver()` lets a computer-use command wait for that same task. Canceling the command stops
+  its wait while the background download continues. Uninstall cancels and drains the installer.
 - `whatsNeeded()` re-checks all three and returns the pending steps in order.
 
 Failures emit `codex_setup.step_failed` (error type only).

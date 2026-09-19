@@ -493,7 +493,7 @@ struct DevToolsView: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
             }
             .buttonStyle(.bordered).tint(Theme.Ink.green)
-            .disabled(deviceJob != nil || run.busy != nil || (Self.modelPath == nil && !((gmailConnected && runGmail) || (calendarConnected && runCalendar))))
+            .disabled(deviceJob != nil || run.busy != nil || (Self.modelPath == nil && !((runGmail) || (runCalendar))))
             if let s = run.status[id] {
                 Text(s)
                     .font(.system(.caption2, design: .monospaced))
@@ -507,8 +507,8 @@ struct DevToolsView: View {
     /// of it — device sources AND Gmail (the cloud leg shows in the same takeover). Non-destructive: a
     /// from-scratch run is the deliberate "Reset everything" button under More.
     private func startOnDevice(id: String, mode: IterativeRun.Mode) {
-        let gmailRun = gmailConnected && runGmail
-        let calendarRun = calendarConnected && runCalendar
+        let gmailRun = runGmail
+        let calendarRun = runCalendar
         let connectors = RunSource.connectors(from: selectedSources)
         guard gmailRun || calendarRun || !connectors.isEmpty else {
             run.status[id] = "✗ select a source above (folder / chat / Apple Notes / Gmail / Calendar)"; return
@@ -659,7 +659,7 @@ struct DevToolsView: View {
 
     /// Gmail (cloud). Not connected → tap opens the connect popup; connected → tap toggles selection.
     private var gmailChip: some View {
-        let on = gmailConnected && runGmail
+        let on = runGmail
         return HStack(spacing: 6) {
             Image(systemName: on ? "checkmark.circle.fill" : "envelope").font(.system(size: 11))
             Text("Gmail").font(.caption.weight(.medium)).lineLimit(1)
@@ -675,7 +675,7 @@ struct DevToolsView: View {
 
     /// Google Calendar (cloud). Not connected → tap opens the connect popup; connected → tap toggles.
     private var calendarChip: some View {
-        let on = calendarConnected && runCalendar
+        let on = runCalendar
         return HStack(spacing: 6) {
             Image(systemName: on ? "checkmark.circle.fill" : "calendar").font(.system(size: 11))
             Text("Calendar").font(.caption.weight(.medium)).lineLimit(1)

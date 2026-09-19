@@ -11,8 +11,7 @@
 //  How a run uses it — the HYBRID transport: Sentient owns a long-lived daemon
 //  (Driver/CuaDriverHost) and the codex agent reaches it two ways at once, both clients of the SAME
 //  daemon. The EYES ride MCP: a thin `mcp --embedded --socket …` proxy exposing ONLY the four
-//  vision tools (mcpTools), so every look is one call with the screenshot inline, at ~3k tokens of
-//  schema. The HANDS ride the CLI: one-shot `<shim> <tool> '<json>'` calls for every action and
+//  vision tools (mcpTools), so every look is one call with the screenshot inline, with only four schemas. The HANDS ride the CLI: one-shot `<shim> <tool> '<json>'` calls for every action and
 //  the whole browser family, taught by CuaDriverSkill at zero schema cost. The daemon is a DIRECT
 //  child of Sentient, so macOS answers its Accessibility and Screen Recording checks with
 //  SENTIENT's grants: the user grants twice, to the app they already trust, and no second helper
@@ -38,7 +37,7 @@ enum CuaDriver {
     /// almost daily (0.9 → 0.20 in 27 days, six of them breaking), so "latest" is never an option —
     /// each Sentient release carries the one driver version it was tested against, and bumping it
     /// is a deliberate edit here plus a fresh `tarballSHA256`.
-    static let version = "0.20.0"
+    static let version = "0.28.2"
 
     /// The bare-binary tarball from the release's own GitHub assets (`cua-driver`, plus SDK
     /// artifacts we don't extract). Deliberately NOT their `install.sh`: that installs a
@@ -49,13 +48,13 @@ enum CuaDriver {
     }
 
     /// SHA-256 of that exact asset, checked against upstream's published `checksums.txt` and
-    /// re-verified locally (2026-08-19). Their installer does NOT checksum its download; ours does,
+    /// re-verified locally (2026-09-19). Their installer does NOT checksum its download; ours does,
     /// so a swapped or truncated asset can never reach the user's Mac.
-    static let tarballSHA256 = "07a88ea2c28a9ead66b2d9f6f93fab4b1189a1f7c704d2cd7b6d12c30eee9984"
+    static let tarballSHA256 = "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa"
 
-    /// Roughly 39 MB compressed (a ~60 MB universal Mach-O inside) — named for the setup line, not
+    /// Roughly 42 MiB compressed — named for the setup line, not
     /// used as a gate.
-    static let tarballBytes: Int64 = 40_625_908
+    static let tarballBytes: Int64 = 43_629_843
 
     /// Cua AI's Apple Developer Team ID. The extracted binary must satisfy a codesign requirement
     /// naming it, so we only ever run something Cua actually signed — the provenance half of the
@@ -82,6 +81,44 @@ enum CuaDriver {
     /// the signature and smoke checks happen once, at install (CuaDriverSetup).
     static var isInstalled: Bool {
         FileManager.default.isExecutableFile(atPath: binaryURL.path)
+    }
+
+    /// An installed older release is evidence of CUA setup, not a legacy Codex migration.
+    /// Ignore staging directories and unrelated files. The receipt survives a missing binary and
+    /// Factory Reset (which preserves installed dependencies); Uninstall removes the entire root.
+    static var installedVersions: [String] { installedVersions(at: installRoot) }
+
+    static func installedVersions(at root: URL) -> [String] {
+        let fm = FileManager.default
+        return ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).filter {
+            isReleaseVersion($0) && fm.isExecutableFile(atPath:
+                root.appendingPathComponent($0).appendingPathComponent("cua-driver").path)
+        }.sorted()
+    }
+
+    static func isReleaseVersion(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        return parts.count == 3 && parts.allSatisfy { !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }
+    }
+
+    static var hasInstallationHistory: Bool { hasInstallationHistory(at: installRoot) }
+
+    static func hasInstallationHistory(at root: URL) -> Bool {
+        if let receipt = try? String(contentsOf: root.appendingPathComponent(".installed-version"), encoding: .utf8),
+           isReleaseVersion(receipt.trimmingCharacters(in: .whitespacesAndNewlines)) { return true }
+        return !installedVersions(at: root).isEmpty
+    }
+
+    /// Adopt pre-receipt installations before deciding which upgrade experience to show.
+    static func rememberExistingInstallation() {
+        guard let installed = isInstalled ? version : installedVersions.last else { return }
+        do { try recordInstallation(installed, at: installRoot) }
+        catch { Log("CuaDriver: could not persist installation receipt (\(ErrorLabel(error)))") }
+    }
+
+    static func recordInstallation(_ installed: String, at root: URL) throws {
+        try (installed + "\n").write(to: root.appendingPathComponent(".installed-version"),
+                                     atomically: true, encoding: .utf8)
     }
 
     // MARK: The tool surface handed to the model
@@ -119,9 +156,8 @@ enum CuaDriver {
 
     /// The tools registered with codex over MCP — the model's EYES. Exactly the image-returning
     /// native-window tools, nothing else: their results land in context as real inline images (one
-    /// call per look, no save-file → view-image hop), while their schemas cost only ~3k tokens —
-    /// the expensive schemas (click ~1.6k, type_text ~1.4k…) belong to the action tools, which ride
-    /// the CLI for free. `get_browser_state` is deliberately NOT here: browser targets and refs are
+    /// call per look, no save-file → view-image hop), while action schemas stay out of the initial context and ride
+    /// the CLI, with describe available on demand. `get_browser_state` is deliberately NOT here: browser targets and refs are
     /// session-scoped and a session never bridges transports (verified in run_call's namespace
     /// handling, 2026-08-21), so the whole browser family stays on the CLI where one shared
     /// `"session"` label keeps bind → snapshot → act coherent. The four below carry no session
@@ -186,10 +222,11 @@ enum CuaDriver {
     }
 
     /// The full tool surface the daemon serves over MCP for the PINNED version — captured from
-    /// `cua-driver list-tools` (56 tools, verified 2026-08-21 on 0.20.0). Claude Code has no
+    /// `cua-driver list-tools` (56 tools, verified 2026-09-19 on 0.28.2). Claude Code has no
     /// per-server enabled_tools filter, so the trim is a DENY list: everything except the four
     /// eyes, each denied by its `mcp__cua_driver__<name>` rule, which removes the tool from the
     /// model's context entirely. Version-pinned like the skill: bump `version`, re-capture this.
+    static let toolCatalogVersion = "0.28.2" // checked by Scripts/check_cua_contract.py at build time
     private static let allMcpServedTools = [
         "bring_to_front", "browser_click", "browser_dialog", "browser_download",
         "browser_navigate", "browser_pointer", "browser_prepare", "browser_set_input_files",

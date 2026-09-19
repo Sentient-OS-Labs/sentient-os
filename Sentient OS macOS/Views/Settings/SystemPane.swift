@@ -104,7 +104,9 @@ struct SystemPane: View {
     private var updatesGroup: some View {
         SettingsGroup(label: "Updates") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Sentient keeps itself up to date automatically. When a new version is ready, Sentient asks you to update before continuing, so you're always on the latest, safest version.")
+                SettingsProse(UpdateController.appUpdatesEnabled
+                    ? "Sentient keeps itself up to date automatically. When a new version is ready, Sentient asks you to update before continuing, so you're always on the latest, safest version."
+                    : "App updates are disabled in this development build. Rebuild in Xcode to use your latest changes.")
                 HStack(spacing: 6) {
                     Text("Version \(UpdateController.currentVersionString)")
                         .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
@@ -116,6 +118,7 @@ struct SystemPane: View {
                 SettingsPillButton(title: "Check for Updates Now") {
                     appState.update.checkForUpdatesNow(from: .settings)
                 }
+                .disabled(!UpdateController.appUpdatesEnabled)
             }
         }
     }

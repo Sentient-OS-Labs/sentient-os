@@ -6,11 +6,10 @@
 //  five engine pills in one centered row over the SAME per-engine panels Settings renders
 //  (FrontierEnginePicker), with the live codex login embedded as the ChatGPT panel
 //  (OnboardingCodexLoginPanel). Continue gates on the ACTIVE engine being healthy — ChatGPT
-//  logged in, or a custom endpoint that passed Test & Select — and browsing tabs never disturbs
-//  the active engine. The codex CLI install kick + `codex --help` confirmation poll live HERE,
-//  not in the ChatGPT panel: the CLI is the engine room even for custom endpoints (the vision
-//  probe runs through `codex exec`), so Test & Select greys until it answers, whatever tab the
-//  user is on.
+//  logged in, or a custom endpoint that passed Test & Select. Continue also prepares the CLI
+//  through its shared setup engine, so an existing login cannot bypass its update check.
+//  Browsing tabs only detects state; downloads start at a commitment action.
+//  Doc: Views/Onboarding/Documentation - Onboarding.md
 //
 
 import SwiftUI
@@ -21,9 +20,14 @@ struct OnboardingFrontierModelView: View {
 
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
-    /// `codex --help` answered — the ground-truth install confirmation (feeds the login button
-    /// AND the custom panels' Test & Select).
-    @State private var codexConfirmed = false
+    @State private var continueAttempt: UUID?
+    @State private var continueTask: Task<Void, Never>?
+    private var continuing: Bool { continueAttempt != nil }
+    private var enginePreparing: Bool {
+        backendRaw == ModelBackend.claude.rawValue
+            ? claude.preparing || claude.installing
+            : codex.preparing || codex.installing
+    }
 
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
     /// Observed so a passing Test & Select re-evaluates `engineReady` in place.
@@ -65,13 +69,19 @@ struct OnboardingFrontierModelView: View {
 
                     FrontierEnginePicker(layout: .singleRow,
                                          chatgptHealthy: codex.loggedIn) {
-                        OnboardingCodexLoginPanel(codexReady: codexConfirmed)
+                        OnboardingCodexLoginPanel()
+                    }
+
+                    if backendRaw != ModelBackend.claude.rawValue {
+                        if codex.preparing || codex.installing { MonoWaitLine("preparing codex…") }
+                        OnboardingStatusText(codex.installStatus)
                     }
 
                     // The quiet reward: the halo lights only once an engine is actually
                     // ready (GlowHalo's `active` rides `enabled`), at the armed-CTA subtlety.
-                    OnboardingNextButton(title: "Continue", enabled: engineReady,
-                                         glow: 0.28, action: onContinue)
+                    OnboardingNextButton(title: "Continue",
+                                         enabled: engineReady && !continuing && !enginePreparing,
+                                         glow: 0.28, action: continueWithEngine)
                 }
                 .padding(.horizontal, 40)
                 .padding(.vertical, 48)
@@ -92,25 +102,48 @@ struct OnboardingFrontierModelView: View {
                 await claude.refreshLoginStatus()
             }
         }
-        .task {
-            // The confirmation poll: once a codex install exists (or is landing), run
-            // `codex --help` every 2s until it answers. Skipped entirely while nothing has
-            // kicked a codex install — a Claude-path onboarding never spawns a probe.
-            while !Task.isCancelled {
-                if codex.installed || codex.installing, await CodexCLI.isRunnable() {
-                    await codex.refreshInstalled()   // align the shared engine's flag
-                    withAnimation(.easeInOut(duration: 0.3)) { codexConfirmed = true }
-                    return
-                }
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // Back from the browser — often already signed in. Step-level on purpose: the
             // ChatGPT panel (and its own watcher) may not exist while another tab is showing.
-            Task { await codex.refreshLoginStatus() }
-            Task { await claude.refreshLoginStatus() }
+            Task {
+                await codex.refreshInstalled()
+                await codex.refreshLoginStatus()
+            }
+            Task {
+                await claude.refreshInstalled()
+                await claude.refreshLoginStatus()
+            }
         }
+        .onChange(of: backendRaw) { cancelContinue() }
+        .onDisappear { cancelContinue() }
+    }
+
+    private func continueWithEngine() {
+        guard engineReady, !continuing else { return }
+        let selectedBackend = backendRaw
+        let attempt = UUID()
+        continueAttempt = attempt
+        continueTask = Task {
+            defer {
+                if continueAttempt == attempt { continueAttempt = nil; continueTask = nil }
+            }
+            if selectedBackend == ModelBackend.claude.rawValue {
+                guard await claude.ensureCurrent(), !Task.isCancelled else { return }
+                await claude.refreshLoginStatus()
+            } else {
+                guard await codex.ensureCurrent(), !Task.isCancelled else { return }
+                if selectedBackend == ModelBackend.chatgpt.rawValue { await codex.refreshLoginStatus() }
+            }
+            // The user can browse or select another engine while preparation is in flight.
+            guard !Task.isCancelled, backendRaw == selectedBackend, engineReady else { return }
+            onContinue()
+        }
+    }
+
+    private func cancelContinue() {
+        continueTask?.cancel()
+        continueTask = nil
+        continueAttempt = nil
     }
 }
 

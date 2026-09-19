@@ -25,7 +25,7 @@ struct ConnectorSource: Identifiable {
     }
 
     /// Keep registry order, retain each distinct account, and append other connected apps.
-    /// Gmail and Calendar already have permanent pills in the hosted connection group.
+    /// Gmail and Calendar already have permanent pills in the shared Connectors group.
     /// Teams is outside Knowledge Sources, including when detected as a connected app.
     static func catalog(with connectors: [ConnectorCensus.DetectedConnector]) -> [Self] {
         let hiddenSlugs = ConnectorCensus.dedicatedSourceSlugs.union(["teams", "microsoft-teams"])
@@ -85,23 +85,6 @@ struct ConnectorSource: Identifiable {
     }
 }
 
-struct ConnectorsSection: View {
-    let sources: [ConnectorSource]
-    let locked: Bool
-    let onSelect: (ConnectorSource) -> Void
-
-    var body: some View {
-        SettingsGroup(label: "Connectors") {
-            ChipFlow {
-                ForEach(sources) { source in
-                    ConnectorPill(source: source, locked: locked) { onSelect(source) }
-                }
-            }
-            .animation(.easeInOut(duration: 0.35), value: sources.map(\.id))
-        }
-    }
-}
-
 /// Green means included in analysis, just like the folder, chat, and Gmail chips.
 /// A linked account still needs an explicit knowledge opt-in. Task-only apps never look selected.
 /// The parent owns the sheet so discovery cannot dismiss it.
@@ -120,42 +103,36 @@ struct ConnectorPill: View {
     }
 
     private var selected: Bool {
-        source.connector.map {
-            ConnectorRegistry.contributesToKnowledgeBase($0, enabled: knowledgeEnabled)
-        } ?? false
+        knowledgeEnabled && ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug)
     }
 
     private var detail: String? {
-        guard !locked, let connector = source.connector else { return nil }
-        if !connector.healthy { return "Reconnect" }
-        if !ConnectorRegistry.kbEligible(connector.slug) { return "Tasks only" }
+        guard !locked else { return nil }
+        if !ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug) { return "Tasks only" }
         return selected ? nil : "Not selected"
     }
 
     private var status: String {
         if locked { return CodexAuth.connectorLockedTip }
-        guard let connector = source.connector else { return "Connect this app to get started." }
-        if !connector.healthy { return "Reconnect this app to use it for analysis." }
-        if !ConnectorRegistry.kbEligible(connector.slug) {
-            return "Available for tasks, but not supported as a knowledge source. Does not count toward analysis."
-        }
         return selected ? "Selected for analysis and nightly updates."
-            : "Connected, but not selected for analysis. Open this app and turn on Use for knowledge base."
+            : "Open this app to set it up and choose whether to use it for your knowledge base."
     }
 
     var body: some View {
         SettingsChip(label: source.displayName, detail: detail,
                      on: selected,
                      locked: locked,
-                     needsAttention: source.connector?.healthy == false,
                      action: action)
         .accessibilityValue(status)
         .help(status)
     }
 }
 
-#Preview("Connectors · direct connection catalog") {
-    ConnectorsSection(sources: ConnectorSource.catalog(with: []).filter { !$0.usesHostedConnection },
-                      locked: false, onSelect: { _ in })
-        .padding(38).frame(width: 640).background(Theme.bg)
+#Preview("Connectors · catalog pills") {
+    ChipFlow {
+        ForEach(ConnectorSource.catalog(with: [])) { source in
+            ConnectorPill(source: source, locked: false, action: {})
+        }
+    }
+    .padding(38).frame(width: 640).background(Theme.bg)
 }

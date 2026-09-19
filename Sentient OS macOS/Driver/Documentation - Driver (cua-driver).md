@@ -12,7 +12,7 @@ shim, and skill are identical for both). The frontier model is the brain; this f
 
 | File | Job |
 |---|---|
-| `CuaDriver.swift` | The driver as Sentient sees it: the pinned release (version, tarball URL, SHA-256, signing team), the install location, the MCP tool subset (`mcpTools`), the per-engine wiring (codex `-c` overrides · claude `--mcp-config` JSON + the named deny list), the CLI shim + screenshot paths, and the full tool allowlist (`enabledTools`). |
+| `CuaDriver.swift` | The driver as Sentient sees it: the pinned release (version, tarball URL, SHA-256, signing team), the install location, the MCP tool subset (`mcpTools`), the per-engine wiring (codex `-c` overrides · claude `--mcp-config` JSON + the named deny list), the CLI shim + screenshot paths, the full tool allowlist (`enabledTools`), and versioned installation history. |
 | `CuaDriverHost.swift` | The daemon's lifecycle: spawn, readiness, liveness, replacement on permission changes, teardown. Also writes the per-generation CLI shim and screenshot drop-box. |
 | `CuaDriverSetup.swift` | Puts the pinned binary on disk: download → SHA-256 → extract → codesign verify → smoke run → atomic install. |
 | `CuaDriverSkill.swift` | The operating manual spliced into every computer-use prompt — the model's teaching for the whole tool surface. |
@@ -62,8 +62,7 @@ A computer-use codex run reaches the daemon over two channels against the same s
 - **The eyes ride MCP.** `CuaDriver.codexOverrides` registers a thin `cua-driver mcp --embedded
   --socket …` proxy with codex, filtered by `enabled_tools` to exactly the four vision tools
   (`mcpTools`: `get_window_state`, `get_desktop_state`, `zoom`, `verify_state`). Every look is one
-  call with the screenshot arriving inline as a real image, and the schema cost is ~3k tokens —
-  the expensive schemas belong to the action tools, which never load. The proxy executes nothing
+  call with the screenshot arriving inline as a real image, and only four schemas load. Action schemas stay out of the initial context. The proxy executes nothing
   itself; `required=true` fails the run rather than leaving the model blind, and the tool timeout is
   raised to 120 s (a big window's snapshot outlives codex's 60 s default). The Claude engine
   registers the SAME proxy via `CuaDriver.claudeMcpConfig` (`--mcp-config` + `--strict-mcp-config`);
@@ -71,7 +70,7 @@ A computer-use codex run reaches the daemon over two channels against the same s
   `claudeDisallowedMcpTools` — every non-vision MCP tool denied by name, version-pinned like the
   skill — and the timeouts ride env vars (`MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT`).
 - **The hands ride the CLI.** Every action and the entire browser family run as one-shot shell calls,
-  `<shim> <tool> '<json>'` — upstream's own default transport — at zero schema cost. The shim lives
+  `<shim> <tool> '<json>'` — upstream's own default transport — without loading action schemas up front. The shim lives
   at a deliberately SPACE-FREE path under the app's caches dir (the real binary sits under
   "Application Support", a per-call quoting hazard for an LLM writing shell), bakes in the current
   generation's `--socket` (placed first, so it always wins), and pins the same privacy environment.
@@ -84,38 +83,73 @@ so an `element_token` read over MCP fires directly in a CLI `click`. Codex runs 
 Unix socket, and a headless run has no one to answer approvals; safety rides the app's own layers
 (one declared task, user-fired only, live streaming, a universal STOP).
 
-## The skill (`CuaDriverSkill`)
+## The inlined manual (`CuaDriverSkill`)
 
-With no action schemas in context, the model's only teaching is `CuaDriverSkill.rules`: an operating
-manual curated from cua-driver's own MIT-licensed agent skill pack (SKILL.md + MACOS.md + BROWSER.md
-in the upstream repo), adapted for Sentient — the two-channel transport, a fixed `"session"` label on
-every shell call, the snapshot → act → verify loop, element-token staleness, the ax/px addressing
-model, the background-first delivery ladder, the no-foreground law with its forbidden-command list,
-Electron/Catalyst text-input truth, and the typed browser route. Both computer-use prompts (Sidekick's
-command prompt and the executor's computer wrapper) splice it in. `skillVersion` must equal
-`CuaDriver.version` — an assert trips at build time if the pin bumps without re-curating the text.
+`CuaDriverSkill.rules` is curated from the pinned release's MIT-licensed SKILL.md, MACOS.md, and
+BROWSER.md. Both Sidekick and proactive computer-use prompts include it before the first model turn.
+It identifies the skill as already loaded, so the model does not fetch another copy through MCP
+resources or read a skill file. Action schemas remain available through CLI `describe` only when
+needed.
 
-## Install and pinning (`CuaDriverSetup`)
+The manual teaches the two transports, snapshot-bound targets, background delivery, the typed browser
+route, and verification. In code-mode clients, the model must expose `structuredContent` handles and
+the inline image together, omitting the duplicate Markdown tree. A shell exit code of zero does not
+prove an action succeeded: structured refusals and action facts must be read before continuing.
+Pixels-only observations can skip the accessibility walk; structured verification uses predicates
+supported by the observed tree, while visual outcomes are verified from a fresh image.
 
-The release is PINNED (upstream ships breaking changes at a high cadence, so "latest" is never an
-option; each Sentient release carries the one driver version it was tested against). Setup downloads
-the bare-binary tarball straight from Cua's GitHub release (~40 MB — deliberately not their installer,
-which drops a CuaDriver.app into /Applications, edits the shell PATH, and fires install telemetry),
-then verifies harder than upstream does: SHA-256 against our pin, a codesign requirement naming Cua
-AI's Apple Developer team (so we run their signature or nothing), a `--version` smoke run, and an
-atomic move into `~/Library/Application Support/SentientOS/CuaDriver/<version>/` before older versions
-are swept. Any failure leaves the previous install untouched.
+The driver pin, `skillVersion`, and `toolCatalogVersion` must match. Every Debug and Release build runs
+`Scripts/check_cua_contract.py`, which also checks the four-tool MCP boundary and allowlist membership.
+The manual retains a runtime precondition. These checks enforce version consistency; updating the
+text and checking the live release's behavior remain part of reviewing a pin change.
 
-It rides as step 3 of the Codex setup engine (`CodexSetup.setupCuaDriver`; onboarding arms it in the
-background two minutes into the first analysis), with `ensureCuaDriver()` as the fire-time self-heal.
-Macs updating from the 1.x codex-helper era get the one-time `ComputerUseUpgrade` window instead of a
-silent download (see the Permission Gate doc).
+## Installation and ordinary updates
+
+Each Sentient release selects one tested CUA release, currently **0.28.2**. It downloads that exact
+bare-binary tarball from Cua's release assets into a staging directory under
+`~/Library/Application Support/SentientOS/CuaDriver/`. CUA is not bundled in the app, and Sentient does
+not use Cua's standalone installer or change the user's shell PATH.
+
+Installation checks SHA-256, Cua's signing identity, and the exact `--version` response before an atomic
+rename into `<version>/cua-driver`. Only then are previous installed versions swept. A failed or
+interrupted download leaves the previous binary intact. Local verification processes have deadlines
+and honor cancellation; telemetry and upstream update checks are disabled there too.
+
+`CodexSetup` owns one shared installation task for both frontier engines. Existing CUA users whose
+required version is missing get a background update after launch. The home's top-right notice shows
+actual download progress, an indeterminate verification phase, completion, or a retry action. The rest
+of Sentient remains usable. Computer-use commands join the same download; STOP cancels their wait
+without canceling the background update. The new app requires its pinned runtime and does not silently
+pair the new manual with an older binary. Uninstall cancels and drains an installer before deleting its
+files.
+
+A `.installed-version` receipt, plus detection of earlier installed version directories, distinguishes
+an existing CUA setup from the legacy Codex helper. Launch adopts older installations that predate the
+receipt. The receipt survives a missing binary and Factory Reset, and Uninstall removes it with the
+managed directory. Fresh users retain onboarding. Users with the old Codex helper and no CUA history
+retain the explicit migration window described in the Permission Gate doc.
+
+## Per-command lifecycle
+
+Both frontier engines ask `CuaDriverHost` to start or revive the CLI label `sentient` before running
+the model. They await its cleanup after success, failure, or STOP before releasing the command. This
+releases the action cursor and any browser preparation owned by that run. The host checks the
+structured lifecycle result, not just the subprocess exit code. The model never manages sessions.
+The daemon itself stays warm across commands.
+
+For pinned 0.28.2, explicitly named CLI calls share their daemon's CLI namespace. Anonymous one-shot
+calls are disposable. Browser targets, tabs, and refs stay on the CLI; the separate MCP connection
+provides the native vision tools. Existing-profile browser preparation also needs OS access to that
+profile's metadata. If preparation is unavailable, the model uses the native window route without
+changing browser profile files or OS permissions.
 
 ## Sharp edges (each one field-found; do not re-learn them)
 
-- **Bumping the pin is a three-part edit:** the version + fresh `tarballSHA256` in `CuaDriver.swift`,
-  a re-curated `CuaDriverSkill` (the upstream skill pack changes with the binary), and a real test
-  pass. The `skillVersion` assert exists to make forgetting impossible.
+- **Bump the release as one reviewed change:** update version, tarball checksum/size, the curated
+  manual, and the captured MCP catalog/version. Compare `cua-driver list-tools` with
+  `python3 Scripts/check_cua_contract.py . --tool-list <capture.txt>`, then exercise native and browser
+  cross-transport behavior and the existing-user update paths. A matching version string alone is
+  not a compatibility test.
 - **The browser family is single-transport by design.** Browser targets, tabs, and refs are
   session-scoped, and the daemon deliberately namespaces a named session per transport kind — refs
   minted over MCP would be foreign to a CLI `browser_click`. Everything browser therefore stays on

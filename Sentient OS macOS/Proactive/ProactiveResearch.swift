@@ -142,15 +142,16 @@ actor ProactiveResearch {
     /// item. Returns the ready + dropped split; throws on no-items / no-vault / usage-limit / failure.
     func researchAndPrepare(items: [ActionItem], notes: [CloudNote] = [], now: Date = Date(),
                             calendarContext: String? = nil, calendarContextScoped: Bool = false, persistResult: Bool = true,
+                            unavailableConnectors: Set<String> = [],
                             onLine: (@Sendable (String) -> Void)? = nil) async throws -> ReadyResult {
         let backend = ModelBackend.current
         return try await ModelBackend.$runOverride.withValue(backend) {
-            try await researchBody(items: items, notes: notes, now: now, calendarContext: calendarContext, calendarContextScoped: calendarContextScoped, persistResult: persistResult, onLine: onLine)
+            try await researchBody(items: items, notes: notes, now: now, calendarContext: calendarContext, calendarContextScoped: calendarContextScoped, persistResult: persistResult, unavailableConnectors: unavailableConnectors, onLine: onLine)
         }
     }
 
     private func researchBody(items: [ActionItem], notes: [CloudNote], now: Date,
-                              calendarContext: String?, calendarContextScoped: Bool, persistResult: Bool, onLine: (@Sendable (String) -> Void)?) async throws -> ReadyResult {
+                              calendarContext: String?, calendarContextScoped: Bool, persistResult: Bool, unavailableConnectors: Set<String>, onLine: (@Sendable (String) -> Void)?) async throws -> ReadyResult {
         guard !items.isEmpty else { throw ResError.noItems }
         let recent = Proactive.recent(from: notes, now: now)   // the SAME last-week corpus PART 1 saw
 
@@ -161,7 +162,9 @@ actor ProactiveResearch {
 
         // The card channels this run may teach (the .mcp method): the live detected connectors.
         // Zero detected = the shipped four methods and the shipped schema, byte-identical.
-        let channels = ConnectorRegistry.cardChannels()
+        let channels = ConnectorRegistry.cardChannels().filter {
+            !unavailableConnectors.contains(DirectMCPStore.connection($0.slug)?.slug ?? $0.slug)
+        }
         let slackIdentity = SlackConnector.cachedIdentity()?.fingerprint
         let outlookIdentity = OutlookMailConnector.cachedFingerprint()
         let calendarIdentity = OutlookCalendarConnector.cachedFingerprint()
@@ -171,7 +174,7 @@ actor ProactiveResearch {
         // filter is load-bearing: the Claude builder throws per slug with no read allow-list, and
         // one stale toggle must never fail-close the whole overnight research run. Direct
         // accounts establish their live read policy in FrontierRun before tools are attached.
-        let kbEnabled = ConnectorRegistry.kbEnabledConnectors().map(\.slug)
+        let kbEnabled = ConnectorRegistry.kbEnabledConnectors().map(\.slug).filter { !unavailableConnectors.contains($0) }
         let kbReads = kbEnabled.filter { slug in
             ModelBackend.current != .claude || DirectMCPStore.connection(slug) != nil
                 || !ConnectorRegistry.readToolNames(slug: slug).isEmpty
@@ -195,10 +198,9 @@ actor ProactiveResearch {
             ? [UserDefaults.standard.bool(forKey: "dbg.gmail.connected") ? "gmail" : nil,
                UserDefaults.standard.bool(forKey: "dbg.calendar.connected") ? "google-calendar" : nil].compactMap { $0 }
             : ["gmail", "google-calendar"]
-        inv.mcpReadConnectors = chipReads + kbReads
-                                            // ⚠️ the unattended-read recipe: Gmail/Calendar +
-                                            // KB-enabled connectors readable, and the send/destroy
-                                            // tools out of reach through each engine's read allowlist
+        inv.mcpReadConnectors = (chipReads + kbReads).filter { !unavailableConnectors.contains($0) }
+        // With every connector skipped, keep this run hermetic instead of loading user servers.
+        if inv.mcpReadConnectors.isEmpty { inv.includeUserConfig = false }
         inv.outputSchema = Self.schema(channels: channels)
         inv.timeout = 1_800                 // agentic verify + prepare (Gmail + web + vault) over ≤5 items runs long
         inv.claudeModel = .opus             // the Claude engine's heavy leg: research earns Opus

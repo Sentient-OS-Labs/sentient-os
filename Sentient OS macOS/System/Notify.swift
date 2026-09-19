@@ -12,7 +12,40 @@
 import Foundation
 import UserNotifications
 
+@MainActor
 enum Notify {
+    enum Destination: String, Sendable { case knowledgeSources }
+    private static let delegate = NotificationDelegate()
+    private static var openKnowledgeSources: (() -> Void)?
+    private static var pendingKnowledgeSources = false
+
+    static func installRouting() {
+        guard !suppressed else { return }
+        UNUserNotificationCenter.current().delegate = delegate
+    }
+
+    static func setKnowledgeSourcesHandler(_ handler: @escaping () -> Void) {
+        openKnowledgeSources = handler
+        if pendingKnowledgeSources { pendingKnowledgeSources = false; handler() }
+    }
+
+    fileprivate static func openSources() {
+        if let openKnowledgeSources { openKnowledgeSources() }
+        else { pendingKnowledgeSources = true }
+    }
+
+    static func connectorsUnavailable(_ slugs: Set<String>) async {
+        guard !Task.isCancelled else { return }
+        // The in-app warning is independent of macOS notification permission.
+        let cautions = ConnectorCaution.record(slugs)
+        for caution in cautions {
+            guard !Task.isCancelled else { return }
+            await now(title: "Connector needs attention",
+                body: caution.message,
+                destination: .knowledgeSources)
+        }
+    }
+
 
     /// Headless self-tests can't answer the system permission dialog — requestAuthorization
     /// would hang the harness forever (measured: an early day's-end run wedged here). Notify is a
@@ -39,7 +72,7 @@ enum Notify {
     }
 
     /// Fire a notification immediately.
-    static func now(title: String, body: String) async {
+    static func now(title: String, body: String, destination: Destination? = nil) async {
         guard !suppressed else { return }
         await requestPermissionIfNeeded()
         let center = UNUserNotificationCenter.current()
@@ -59,6 +92,7 @@ enum Notify {
         content.title = title
         content.body = body
         content.sound = .default
+        if let destination { content.userInfo["destination"] = destination.rawValue }
         do {
             try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
         } catch {
@@ -67,5 +101,21 @@ enum Notify {
                 tags: ["error": String(describing: type(of: error))],
                 fingerprint: ["notify", "add_failed"])
         }
+    }
+}
+
+/// Retained by Notify because UNUserNotificationCenter keeps only a weak delegate.
+private final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse) async {
+        guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+              response.notification.request.content.userInfo["destination"] as? String == "knowledgeSources" else { return }
+        await Notify.openSources()
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        notification.request.content.userInfo["destination"] as? String == "knowledgeSources"
+            ? [.banner, .sound] : []
     }
 }

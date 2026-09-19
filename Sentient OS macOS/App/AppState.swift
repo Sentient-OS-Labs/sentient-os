@@ -10,7 +10,6 @@
 import Foundation
 import SwiftUI
 import UserNotifications
-import Combine
 
 @MainActor
 @Observable
@@ -42,9 +41,6 @@ final class AppState {
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
     private var hasStartedInterface = false
-    private var connectorBackend: ModelBackend?
-    private var connectorCensusTask: Task<Void, Never>?
-    private var backendObservation: AnyCancellable?
 
     /// Drops the Dock icon whenever the home window is closed (the icon belongs to home;
     /// the menu bar item is the anchor then).
@@ -73,14 +69,7 @@ final class AppState {
         // very real admin-password dialog. Same convention as Notify.swift's self-test silence.
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
 
-        // Keep the dedicated cloud-source flags on the selected engine even when Settings
-        // is closed. Ordinary discovery is a cache read / CLI health check, never an AI read.
-        refreshConnectorBackend()
-        backendObservation = NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
-            .sink { [weak self] _ in
-                Task { @MainActor [weak self] in self?.refreshConnectorBackend() }
-            }
-
+        CuaDriver.rememberExistingInstallation()
         ComputerUseUpgrade.shared.prepareForLaunch { [weak self] in
             self?.startInterfaceIfReady()
         }
@@ -118,6 +107,9 @@ final class AppState {
         // at most one update a day. Post-onboarding only — onboarding runs the installer itself.
         // Read the codex doc's "Keeping the CLI current" before touching this.
         if hasCompletedOnboarding {
+            if !ComputerUseUpgrade.shared.isBlockingInterface {
+                CodexSetup.shared.updateCuaDriverIfNeeded()
+            }
             CodexSetup.shared.startKeepingCurrent { [weak self] in
                 self?.commandCoordinator.run.isRunning ?? true
             }
@@ -173,13 +165,5 @@ final class AppState {
         hasStartedInterface = true
         commandCoordinator.start()
         notch.start()
-    }
-
-    private func refreshConnectorBackend() {
-        guard !isUninstalling, connectorBackend != ModelBackend.current else { return }
-        connectorBackend = ModelBackend.current
-        connectorCensusTask?.cancel()
-        ConnectorCensus.syncDedicatedSourceStatus()
-        connectorCensusTask = Task { _ = await ConnectorCensus.list() }
     }
 }

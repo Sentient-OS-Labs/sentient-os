@@ -50,6 +50,13 @@ struct SettingsView: View {
     /// row → Frontier Model Choice). Post with the target Pane as the notification object.
     static let switchPane = Notification.Name("sentient.settings.switchPane")
 
+    /// Works both when the window is closed and when it is already showing another pane.
+    static func open(_ pane: Pane, using openWindow: OpenWindowAction) {
+        requestedPane = pane
+        openWindow(id: windowID)
+        NotificationCenter.default.post(name: switchPane, object: pane)
+    }
+
     @State private var selection: Pane = .sources
 
     var body: some View {
@@ -71,7 +78,7 @@ struct SettingsView: View {
             if let pane = Self.requestedPane { selection = pane; Self.requestedPane = nil }
         }
         .onReceive(NotificationCenter.default.publisher(for: Self.switchPane)) { note in
-            if let pane = note.object as? Pane { selection = pane }
+            if let pane = note.object as? Pane { selection = pane; Self.requestedPane = nil }
         }
     }
 

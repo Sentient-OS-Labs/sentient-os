@@ -334,8 +334,8 @@ final class OvernightScheduler {
         let sources = SourceSelection.current(fdaGranted: fda)
         let connectors = RunSource.connectors(from: sources)
         // Connectors ride ChatGPT auth inside codex — a custom frontier backend has none.
-        let runGmail = ModelBackend.connectorsAvailable && ud("dbg.gmail.connected") && ud("dbg.run.gmail")
-        let runCalendar = ModelBackend.connectorsAvailable && ud("dbg.calendar.connected") && ud("dbg.run.calendar")
+        let runGmail = ModelBackend.connectorsAvailable && ud("dbg.run.gmail")
+        let runCalendar = ModelBackend.connectorsAvailable && ud("dbg.run.calendar")
         // KB-toggled connectors (the generic nightly reads) — backend-scoped like the chips.
         let mcpSlugs = MCPSource.kbSlugs()
         log.line("FDA=\(fda) · detected: \(sources.isEmpty ? "none" : sources.map(\.label).joined(separator: ", ")) · gmail=\(runGmail) calendar=\(runCalendar) · connectors=\(mcpSlugs.count)")
@@ -369,6 +369,7 @@ final class OvernightScheduler {
         let signin = CodexAuthSnapshot.read()
         log.line(signin.logLine)
         var legs: [String: String] = ["gmail": "skipped", "calendar": "skipped", "mcp": "skipped", "vault": "ok", "proactive": "skipped"]
+        var unavailableConnectors: Set<String> = []
         var firstCloudCallAt: Date?
         var deviceItems = 0, deviceKept = 0, deviceFailed = 0, deviceSeconds = 0
         let heart = Task {
@@ -432,6 +433,8 @@ final class OvernightScheduler {
             firstCloudCallAt = firstCloudCallAt ?? Date()
             legs["calendar"] = await cloudLeg("Calendar", log: log, pulse: pulse) { try await CalendarConnect.runIterative { _ in pulse.touch() } }
         }
+        if legs["gmail"] == "connector_auth" { unavailableConnectors.insert("gmail") }
+        if legs["calendar"] == "connector_auth" { unavailableConnectors.insert("google-calendar") }
         if Task.isCancelled { await releaseAwake(); return }
         if !mcpSlugs.isEmpty {
             firstCloudCallAt = firstCloudCallAt ?? Date()
@@ -442,14 +445,7 @@ final class OvernightScheduler {
             if Task.isCancelled { await releaseAwake(); return }
             for o in outcomes { log.line("  \(o.slug): \(o.result)") }
             legs["mcp"] = outcomes.first(where: { $0.result != "ok" })?.result ?? "ok"
-            if let auth = outcomes.first(where: { $0.result == "connector_auth" }) {
-                // The connector's own sign-in expired account-side (the engine login is fine) —
-                // the amber caution names it. Recorded BEFORE any usage-limit caution below, so
-                // a night with both keeps the broader story.
-                log.line("connector sign-in needed (\(auth.slug)) — caution recorded")
-                OvernightCaution.record(.connectorAuth,
-                                        detail: ConnectorRegistry.displayName(slug: auth.slug))
-            }
+            unavailableConnectors.formUnion(outcomes.filter { $0.result == "connector_auth" }.map(\.slug))
             if limited {
                 // The reads run the light tier, so their limit can trip while the heavier tail
                 // still succeeds — record the morning caution here rather than hoping the tail
@@ -467,7 +463,7 @@ final class OvernightScheduler {
         // Now runs (ProcessingView → ProactiveCycle), so a scheduled run produces the morning's
         // For-You cards too — there is no scheduler-specific knowledge-base path. Still held awake +
         // heartbeating throughout (proactive uses codex, same as the KB step already does).
-        if let failure = await ProactiveCycle.shared.run(scheduled: true, progress: { phase in
+        if let failure = await ProactiveCycle.shared.run(scheduled: true, unavailableConnectors: unavailableConnectors, progress: { phase in
             pulse.touch()
             Task { @MainActor in
                 switch phase {
@@ -533,6 +529,8 @@ final class OvernightScheduler {
         do { try await body(); pulse.touch(); log.line("\(name) DONE"); return "ok" }
         catch {
             pulse.touch()
+            if Task.isCancelled || error is CancellationError { return "cancelled" }
+            if ConnectorReadFailure.isConnectionFailure(error) { return "connector_auth" }
             let reason = CodexFailureReason.classify(error)
             log.line("\(name) FAILED: \(ErrorLabel(error)) — \(reason.rawValue)")
             return reason.rawValue

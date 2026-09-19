@@ -58,6 +58,39 @@ actor CuaDriverHost {
 
     // MARK: Lifecycle
 
+    /// The CLI label is owned by the app, not by the model. Starting it here revives an ended
+    /// label without spending an LLM turn; ending it releases browser preparation and cursors.
+    func beginAgentSession() async -> Bool {
+        guard let socket, process?.isRunning == true else { return false }
+        return await sessionCommand("start_session", socket: socket.path)
+    }
+
+    func endAgentSession() async {
+        guard let socket, process?.isRunning == true else { return }
+        if await !sessionCommand("end_session", socket: socket.path) {
+            await MainActor.run { Log("CuaDriverHost: run cleanup did not complete; the driver retains its cleanup state") }
+        }
+    }
+
+    private func sessionCommand(_ name: String, socket: String) async -> Bool {
+        let binary = await CuaDriver.binaryURL.path
+        // Cleanup must run even when STOP canceled the agent task. Await it before the one-task
+        // lock is released, so it cannot close the next run's identically named CLI session.
+        return await Task.detached {
+            do {
+                let result = try await CodexCLI.executeAsync(binary: binary,
+                    args: ["--socket", socket, name, #"{"session":"sentient"}"#],
+                    stdinText: nil, cwd: nil, timeout: 20,
+                    extraEnv: ["CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
+                               "CUA_TELEMETRY_ENABLED": "false", "CUA_DRIVER_RS_UPDATE_CHECK": "false"])
+                guard result.status == 0,
+                      let json = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
+                      let active = json["active"] as? Bool else { return false }
+                return active == (name == "start_session")
+            } catch { return false }
+        }.value
+    }
+
     /// Make sure a daemon is up, and hand back its socket. Idempotent: a live daemon short-circuits
     /// (a cheap liveness check, not just "is the pid still there" — a wedged daemon that stopped
     /// answering is worse than none, so it gets replaced). Returns nil when the driver isn't

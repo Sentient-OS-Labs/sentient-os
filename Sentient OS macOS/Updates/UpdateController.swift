@@ -28,7 +28,17 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     let model = UpdateModel()
 
     private let driver: SentientUpdateDriver
-    private var updater: SPUUpdater!
+    private var updater: SPUUpdater?
+
+    /// Development products must never join the published app's update channel. Do not turn
+    /// Sparkle preferences off: Debug and Release share those defaults on a developer's Mac.
+    static var appUpdatesEnabled: Bool {
+        #if DEBUG
+        false
+        #else
+        true
+        #endif
+    }
 
     /// Sparkle's "install + relaunch now" trigger for a silently-staged update, stashed until the
     /// moment is safe (see `isSafeToRelaunch`). Set from `willInstallUpdateOnQuit`; cleared once fired.
@@ -40,6 +50,7 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
         let model = self.model
         driver = SentientUpdateDriver(model: model)
         super.init()
+        guard Self.appUpdatesEnabled else { return }
         updater = SPUUpdater(hostBundle: .main,
                              applicationBundle: .main,
                              userDriver: driver,
@@ -49,6 +60,10 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     /// Start scheduling checks, and immediately do one silent background check so a mandatory update
     /// gates at launch. With no reachable feed this is a no-op (fail-open — nobody gets locked out).
     func start() {
+        guard let updater else {
+            Log("Sparkle: app updates disabled for development builds")
+            return
+        }
         do {
             try updater.start()
             if updater.automaticallyChecksForUpdates {
@@ -63,7 +78,7 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     /// "you're up to date" in the originating window; escalates to the full gate if a real
     /// update is found.
     func checkForUpdatesNow(from origin: UpdateModel.CheckOrigin) {
-        guard updater.canCheckForUpdates else { return }
+        guard let updater, updater.canCheckForUpdates else { return }
         model.userInitiated = true
         model.checkOrigin = origin
         updater.checkForUpdates()
@@ -71,8 +86,8 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
 
     // MARK: - Read-only surface for Settings
 
-    var canCheckForUpdates: Bool { updater.canCheckForUpdates }
-    var lastCheckDate: Date? { updater.lastUpdateCheckDate }
+    var canCheckForUpdates: Bool { updater?.canCheckForUpdates ?? false }
+    var lastCheckDate: Date? { updater?.lastUpdateCheckDate }
 
     /// The installed version, formatted for display, e.g. "1.2.0 (42)".
     static var currentVersionString: String {
@@ -127,7 +142,7 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     }
 
     private func installIfSafe() {
-        guard let install = pendingInstallHandler, isSafeToRelaunch else { return }
+        guard Self.appUpdatesEnabled, let install = pendingInstallHandler, isSafeToRelaunch else { return }
         pendingInstallHandler = nil
         idleTimer?.invalidate()
         idleTimer = nil

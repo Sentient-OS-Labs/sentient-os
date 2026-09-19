@@ -75,15 +75,18 @@ actor ProactiveCycle {
     /// every cloud stage — the takeover's live thought line. nil (the 3am run) streams nothing.
     @discardableResult
     func run(scheduled: Bool = false,
+             unavailableConnectors: Set<String> = [],
              progress: @escaping @Sendable (ProactiveCyclePhase) -> Void,
              onLine: (@Sendable (String) -> Void)? = nil) async -> CycleFailure? {
         PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
         defer { PipelineActivity.end() }
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
+        // No new summaries is a completed no-op. Otherwise delivery waits for the atomic KB swap.
+        if notes.isEmpty { await Notify.connectorsUnavailable(unavailableConnectors) }
         var calendarContext: CalendarContext.Result?
         if notes.isEmpty, CalendarContext.outlookEnabled,
            FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) {
-            do { calendarContext = try await CalendarContext.fetch() }
+            do { calendarContext = try await CalendarContext.fetch(excluding: unavailableConnectors) }
             catch { return await Self.fail("Calendar context: \(Self.msg(error))", error: error,
                                            stage: .deciding, scheduled: scheduled, progress: progress) }
         }
@@ -122,6 +125,7 @@ actor ProactiveCycle {
                 return await Self.fail("Knowledge base: \(Self.msg(error))", error: error, stage: .vault,
                                        scheduled: scheduled, progress: progress)
             }
+            await Notify.connectorsUnavailable(unavailableConnectors)
             await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
 
             // 2.5) The welcome "gift" — write it ONCE, the first time a knowledge base exists to read.
@@ -144,7 +148,7 @@ actor ProactiveCycle {
             ProactiveResearch.saveLatest(ReadyResult(ready: [], dropped: []))   // never leave stale cards
         } else {
             do {
-                if calendarContext == nil { calendarContext = try await CalendarContext.fetch() }
+                if calendarContext == nil { calendarContext = try await CalendarContext.fetch(excluding: unavailableConnectors) }
             } catch { return await Self.fail("Calendar context: \(Self.msg(error))", error: error,
                                             stage: .deciding, scheduled: scheduled, progress: progress) }
             let calCtx = calendarContext?.text
@@ -168,7 +172,7 @@ actor ProactiveCycle {
                 } else {
                     progress(.researching(items.count))
                     do {
-                        let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx, calendarContextScoped: calendarContext?.includesOutlook == true, persistResult: !calendarOnly, onLine: onLine)
+                        let result = try await ProactiveResearch.shared.researchAndPrepare(items: items, notes: notes, calendarContext: calCtx, calendarContextScoped: calendarContext?.includesOutlook == true, persistResult: !calendarOnly, unavailableConnectors: unavailableConnectors, onLine: onLine)
                         if calendarOnly { ProactiveResearch.saveLatest(Self.mergeCalendarOnly(result, existing: ProactiveResearch.latest())) }
                         // Core tier; floatValue = the staged-card count, so a dashboard Sum is the
                         // "suggestions Sentient has prepared across the world" total.

@@ -23,6 +23,7 @@ serif italic display, no borrowed brand hues.
 | `HomePopovers.swift` | The Analysis popover (things understood, vault counts, Analyze Now, the run footer, the overnight-on-battery switch, source chips) and the Give AIs Knowledge popover. `SourceChip`, `HomeStats`. |
 | `PromptBar.swift` | The command bar ("Tell me what you want me to DO"): computer use only; STOP while running. |
 | `ProcessingView.swift` | The one analysis takeover, shared by the home, onboarding, and the dev buttons; `RunSource` and `RunSource.connectors(from:)`. |
+| `CuaDriverUpdateNotice.swift` | The ordinary computer-use update notice: real download progress, verification, retry, and completion, fed by the shared installer. |
 | `CautionCapsule.swift` | The banner capsule (amber / red / green) and the self-contained `UpdateNoticeCapsule`. |
 | `LetterBody.swift` · `LetterPaper.swift` · `PlanEditor.swift` · `GiftShareImage.swift` | The letter renderer (the light Markdown subset), the dog-eared page for research notes, the mono step-plan editor, and the gift's Save-to-Desktop poster. |
 | `ConnectAIsView.swift` | The guided "Connect your AIs" window (its own scene). |
@@ -84,6 +85,12 @@ neutral; the gift keeps its accent dress and carries the **Save to Desktop** kee
 a Get ChatGPT Plus glow, and a Reset Sentient… pill (deep-linking to Settings → System); the gift
 envelope perches top-center above a compact version; once the claim reads Plus it becomes "You're on
 Plus. Time to go live." with a Reset & Rebuild glow. The command bar is hidden.
+
+The banner slot also carries ordinary CUA updates. Live health issues take precedence, followed by
+an active or failed driver update, morning/connector cautions, and completion notices. The driver
+notice uses real byte progress when the total is known, an indeterminate bar for preparation and
+verification, and Retry after failure. It does not block the home. The legacy Codex-to-CUA migration
+remains a separate setup window; see the Driver and Permission Gate docs.
 
 ## The cards (`Briefing`, `BriefingCard`)
 
