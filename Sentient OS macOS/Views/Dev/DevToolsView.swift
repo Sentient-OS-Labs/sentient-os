@@ -91,6 +91,12 @@ struct DevToolsView: View {
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
+    // Double Tap (right ⌘ twice → draft a reply) — the manual-test harness (Double Tap/DoubleTap.swift).
+    @AppStorage(DoubleTap.enabledKey) private var doubleTapEnabled = false
+    @State private var doubleTapKeyDraft = ""
+    @State private var doubleTapKeySaved = DoubleTapInference.apiKey != nil
+    @State private var doubleTap = DoubleTap.shared
+
     // The 3-way card mode (which deck the home deals) — see BriefingDeck (Briefing.swift).
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
 
@@ -257,6 +263,57 @@ struct DevToolsView: View {
         .onAppear { codexSetup.refreshCuaDriver() }
     }
 
+    /// Double Tap's switch, OpenAI key (Keychain), and the last run's timings.
+    private var doubleTapSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Double Tap (right ⌘ twice → draft a reply)")
+                    .font(.callout.weight(.medium)).foregroundStyle(.white)
+                Spacer()
+                Toggle("", isOn: $doubleTapEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
+            }
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(doubleTapKeySaved ? Theme.Ink.green : Color.orange)
+                    .frame(width: 6, height: 6)
+                Text(doubleTapKeySaved ? "OpenAI key saved (Keychain)" : "no OpenAI key yet")
+                    .font(.caption2).foregroundStyle(Theme.faint)
+                Spacer()
+                if doubleTapKeySaved {
+                    Button("Remove") {
+                        Keychain.delete(DoubleTapInference.apiKeyAccount)
+                        doubleTapKeySaved = false
+                    }
+                    .controlSize(.small)
+                }
+            }
+            HStack(spacing: 8) {
+                SecureField("sk-…", text: $doubleTapKeyDraft)
+                    .textFieldStyle(.roundedBorder).font(.caption)
+                Button("Save") {
+                    let key = doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !key.isEmpty else { return }
+                    doubleTapKeySaved = Keychain.set(DoubleTapInference.apiKeyAccount, key)
+                    doubleTapKeyDraft = ""
+                }
+                .controlSize(.small)
+                .disabled(doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            if let report = doubleTap.lastReport {
+                Text(report)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). With the switch on, a single tap waits \(Int(DoubleTap.window * 1000)) ms before tap-to-type opens.")
+                .font(.caption2).foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     /// Opens the one CODEX SETUP window (install · log in · computer use) — all three steps live in
     /// `CodexSetupView`, driven by the shared `CodexSetup` engine (the same code onboarding will use).
     private var codexSetupButton: some View {
@@ -302,6 +359,7 @@ struct DevToolsView: View {
                     }
                     mcpToggleButton
                     driverSection
+                    doubleTapSection
                     codexSetupButton
                     permissionsButton
                     hotkeyLabButton

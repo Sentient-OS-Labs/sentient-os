@@ -15,10 +15,12 @@
 //  user's OWN codex/OpenAI (the same trust boundary computer use already crosses).
 //  Doc: the two Documentation - Sidekick - *.md files in this folder.
 //
-//  Key methods: grab() -> [URL] · discard(_:).
+//  Key methods: grab() -> [URL] · grabDisplayUnderCursor() -> URL? · downscaledJPEG(_:maxLongEdge:) · discard(_:).
 //
 
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 
 enum ScreenCapture {
     /// Capture every display to temp JPEGs for computer-use context — the MAIN display always first
@@ -50,6 +52,45 @@ enum ScreenCapture {
         let kb = shots.reduce(0) { $0 + (((try? FileManager.default.attributesOfItem(atPath: $1.path)[.size] as? Int) ?? 0) / 1024) }
         Log("📸 \(shots.count) display screenshot\(shots.count == 1 ? "" : "s") captured (\(kb) KB)")   // sizes only — never the pixels
         return shots
+    }
+
+    /// ONE display: the one under the cursor (Double Tap's proxy for keyboard focus), the main
+    /// display when the cursor is on none. Same `screencapture` contract as `grab()`; the NSScreen
+    /// order is only guaranteed to match `-D` for the main display (index 0 ↔ `-D 1`).
+    static func grabDisplayUnderCursor() async -> URL? {
+        guard Permissions.hasScreenRecording() else {
+            Log("📸 screenshot skipped — no Screen Recording grant")
+            return nil
+        }
+        let mouse = NSEvent.mouseLocation
+        let display = (NSScreen.screens.firstIndex { $0.frame.contains(mouse) } ?? 0) + 1
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sentient-shot-\(UUID().uuidString).jpg")
+        let ok = await runCapture(["-x", "-t", "jpg", "-D", "\(display)", url.path])
+        guard ok, FileManager.default.fileExists(atPath: url.path) else {
+            try? FileManager.default.removeItem(at: url)
+            Log("📸 screenshot capture failed (display \(display))")
+            return nil
+        }
+        return url
+    }
+
+    /// A capture shrunk to `maxLongEdge` pixels as JPEG, via an ImageIO thumbnail so the full Retina
+    /// frame is never decoded. A model downscales past ~2000 px anyway; shrinking first only saves
+    /// upload time (a Retina capture is multi-MB; this is a few hundred KB).
+    static func downscaledJPEG(_ url: URL, maxLongEdge: Int, quality: Double = 0.8) -> Data? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxLongEdge,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return out as Data
     }
 
     /// Delete the temp frames once codex has consumed them (safe on empty).

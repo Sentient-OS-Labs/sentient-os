@@ -91,6 +91,11 @@ final class CommandCoordinator {
     private var phaseToken = 0              // guards delayed phase transitions against newer ones
     private var readBackToken = 0
 
+    /// Double Tap (DoubleTap.swift): when the first tap released, while the notch waits for a
+    /// possible second press; the deferred tap-to-type that fires if none comes.
+    private var doubleTapArmedAt: Date?
+    private var pendingTypingTask: Task<Void, Never>?
+
     // MARK: Lifecycle
 
     /// Arm the hotkey + warm the speech model + wire run-completion. Idempotent.
@@ -190,7 +195,7 @@ final class CommandCoordinator {
         notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
         run.adoptExternal(caption: caption, onStopRequest: onStopRequest)
         setPhase(.running)
-        Log("▶︎ external run adopted (proactive card)")
+        Log("▶︎ external run adopted (\(caption))")
         return true
     }
 
@@ -266,6 +271,12 @@ final class CommandCoordinator {
             return
         }
         guard VoiceCapture.isAvailable else { return }
+        // Double Tap: a second press within the window after a tap drafts a reply (DoubleTap.swift).
+        if phase == .opening, let armedAt = doubleTapArmedAt,
+           Date().timeIntervalSince(armedAt) <= DoubleTap.window {
+            fireDoubleTap()
+            return
+        }
         // A hotkey tap while the type field is open toggles it closed (no action) — a quick way to back out.
         if phase == .typing { dismissTyping(); return }
         // The press also bails a stuck finalize (there is no global Esc — keyDown taps are what
@@ -334,7 +345,9 @@ final class CommandCoordinator {
     private func voiceReleased(held: TimeInterval) {
         switch phase {
         case .opening, .listening:
-            if held >= SidekickHotkeyMonitor.holdThreshold { finalizeVoice() } else { beginTyping() }
+            if held >= SidekickHotkeyMonitor.holdThreshold { finalizeVoice() }
+            else if DoubleTap.isEnabled, phase == .opening { awaitSecondTap() }
+            else { beginTyping() }
         default:
             break
         }
@@ -342,10 +355,55 @@ final class CommandCoordinator {
 
     /// A quick tap → drop any mic capture and morph the open notch into a focused text field.
     private func beginTyping() {
+        abandonVoice()
+        setPhase(.typing)
+    }
+
+    /// Drop any mic capture (a tap, or a double tap, never talks).
+    private func abandonVoice() {
         listening = false
         voiceStartTask?.cancel(); voiceStartTask = nil
         voice.cancel()
-        setPhase(.typing)
+    }
+
+    // MARK: Double Tap (DoubleTap.swift)
+
+    /// A tap with Double Tap on: keep the revealed notch as it is for the window — keyboard focus
+    /// must stay in the user's app, and the type field would take it. A second press in time
+    /// drafts a reply (voicePressBegan → fireDoubleTap); otherwise tap-to-type opens as usual.
+    private func awaitSecondTap() {
+        doubleTapArmedAt = Date()
+        let token = phaseToken
+        pendingTypingTask?.cancel()
+        pendingTypingTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(DoubleTap.window))
+            guard let self, !Task.isCancelled, self.phaseToken == token, self.phase == .opening else { return }
+            self.doubleTapArmedAt = nil
+            self.beginTyping()
+        }
+    }
+
+    /// The second tap landed: the run adopts the notch exactly like a card fire (one-task lock,
+    /// "Drafting your reply", a hotkey press is STOP) and ends in the usual flourish — or, for a
+    /// screenshot that isn't a reply box, the short aside.
+    private func fireDoubleTap() {
+        doubleTapArmedAt = nil
+        pendingTypingTask?.cancel(); pendingTypingTask = nil
+        abandonVoice()
+        let doubleTap = DoubleTap.shared
+        guard beginExternalRun(caption: "Drafting your reply", onStopRequest: { doubleTap.cancel() }) else { return }
+        Log("⌘⌘ double tap → drafting a reply")
+        doubleTap.start { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .pasted:          self.run.completeExternal(.success, line: "Reply pasted")
+            case .stopped:         self.run.completeExternal(.stopped, line: "Stopped")
+            case .failed(let why): self.run.completeExternal(.failed, line: "✗ \(why)")
+            case .notAMessage:
+                self.run.completeExternal(.success, line: "Not a reply box")
+                self.flash(DoubleTap.notice, for: 3.0)   // supersedes the ✓ flourish runFinished just queued
+            }
+        }
     }
 
     private func finalizeVoice() {
