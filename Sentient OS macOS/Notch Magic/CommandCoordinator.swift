@@ -91,10 +91,10 @@ final class CommandCoordinator {
     private var phaseToken = 0              // guards delayed phase transitions against newer ones
     private var readBackToken = 0
 
-    /// Double Tap (DoubleTap.swift): when the first tap released, while the notch waits for a
-    /// possible second press; the deferred tap-to-type that fires if none comes.
-    private var doubleTapArmedAt: Date?
-    private var pendingTypingTask: Task<Void, Never>?
+    /// Double Tap (DoubleTap.swift): its OWN key (DoubleTap.key), a second zero-permission
+    /// flagsChanged monitor beside Sidekick's; the previous press, for the two-presses-in-a-window test.
+    private let doubleTapKey = SidekickHotkeyMonitor()
+    private var doubleTapLastPressAt: Date?
 
     // MARK: Lifecycle
 
@@ -112,6 +112,11 @@ final class CommandCoordinator {
         // Sentient itself is frontmost; over other apps, a fresh hotkey press is the cancel
         // (see voicePressBegan).
         hotkey.start()
+        // Double Tap listens on its own key, always armed (zero-permission, like Sidekick's); the
+        // dev switch is read per press, so flipping it needs no re-arm.
+        doubleTapKey.setKey(DoubleTap.key)
+        doubleTapKey.onPress = { [weak self] in self?.doubleTapPressed() }
+        doubleTapKey.start()
         // Live re-key when the user flips the choice in Settings — no restart needed.
         hotkeyChangeObserver = NotificationCenter.default.addObserver(
             forName: .sidekickHotkeyChanged, object: nil, queue: .main) { [weak self] _ in
@@ -271,12 +276,6 @@ final class CommandCoordinator {
             return
         }
         guard VoiceCapture.isAvailable else { return }
-        // Double Tap: a second press within the window after a tap drafts a reply (DoubleTap.swift).
-        if phase == .opening, let armedAt = doubleTapArmedAt,
-           Date().timeIntervalSince(armedAt) <= DoubleTap.window {
-            fireDoubleTap()
-            return
-        }
         // A hotkey tap while the type field is open toggles it closed (no action) — a quick way to back out.
         if phase == .typing { dismissTyping(); return }
         // The press also bails a stuck finalize (there is no global Esc — keyDown taps are what
@@ -345,9 +344,7 @@ final class CommandCoordinator {
     private func voiceReleased(held: TimeInterval) {
         switch phase {
         case .opening, .listening:
-            if held >= SidekickHotkeyMonitor.holdThreshold { finalizeVoice() }
-            else if DoubleTap.isEnabled, phase == .opening { awaitSecondTap() }
-            else { beginTyping() }
+            if held >= SidekickHotkeyMonitor.holdThreshold { finalizeVoice() } else { beginTyping() }
         default:
             break
         }
@@ -355,41 +352,33 @@ final class CommandCoordinator {
 
     /// A quick tap → drop any mic capture and morph the open notch into a focused text field.
     private func beginTyping() {
-        abandonVoice()
-        setPhase(.typing)
-    }
-
-    /// Drop any mic capture (a tap, or a double tap, never talks).
-    private func abandonVoice() {
         listening = false
         voiceStartTask?.cancel(); voiceStartTask = nil
         voice.cancel()
+        setPhase(.typing)
     }
 
     // MARK: Double Tap (DoubleTap.swift)
 
-    /// A tap with Double Tap on: keep the revealed notch as it is for the window — keyboard focus
-    /// must stay in the user's app, and the type field would take it. A second press in time
-    /// drafts a reply (voicePressBegan → fireDoubleTap); otherwise tap-to-type opens as usual.
-    private func awaitSecondTap() {
-        doubleTapArmedAt = Date()
-        let token = phaseToken
-        pendingTypingTask?.cancel()
-        pendingTypingTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(DoubleTap.window))
-            guard let self, !Task.isCancelled, self.phaseToken == token, self.phase == .opening else { return }
-            self.doubleTapArmedAt = nil
-            self.beginTyping()
+    /// Every press of Double Tap's key: two within the window → draft a reply. Quiet unless the dev
+    /// switch is on, and always quiet when Sidekick's hotkey is set to the same key (Sidekick keeps it).
+    private func doubleTapPressed() {
+        guard DoubleTap.isEnabled, hotkey.key != doubleTapKey.key else { return }
+        let now = Date()
+        if let last = doubleTapLastPressAt, now.timeIntervalSince(last) <= DoubleTap.window {
+            doubleTapLastPressAt = nil
+            fireDoubleTap()
+        } else {
+            doubleTapLastPressAt = now
         }
     }
 
-    /// The second tap landed: the run adopts the notch exactly like a card fire (one-task lock,
-    /// "Drafting your reply", a hotkey press is STOP) and ends in the usual flourish — or, for a
-    /// screenshot that isn't a reply box, the short aside.
+    /// The second press landed: the run adopts the notch exactly like a card fire (one-task lock,
+    /// "Drafting your reply", a Sidekick hotkey press is STOP) and ends in the usual flourish — or,
+    /// for a screenshot that isn't a reply box, the short aside. Ignored while anything else owns
+    /// the notch (a run, an open type field, a live hold).
     private func fireDoubleTap() {
-        doubleTapArmedAt = nil
-        pendingTypingTask?.cancel(); pendingTypingTask = nil
-        abandonVoice()
+        guard !run.isRunning, !isInteracting else { Log("⌘⌘ double tap ignored — busy"); return }
         let doubleTap = DoubleTap.shared
         guard beginExternalRun(caption: "Drafting your reply", onStopRequest: { doubleTap.cancel() }) else { return }
         Log("⌘⌘ double tap → drafting a reply")

@@ -91,7 +91,7 @@ struct DevToolsView: View {
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
-    // Double Tap (right ⌘ twice → draft a reply) — the manual-test harness (Double Tap/DoubleTap.swift).
+    // Double Tap (its own key twice → draft a reply) — the manual-test harness (Double Tap/DoubleTap.swift).
     @AppStorage(DoubleTap.enabledKey) private var doubleTapEnabled = false
     @State private var doubleTapKeyDraft = ""
     @State private var doubleTapKeySaved = DoubleTapInference.apiKey != nil
@@ -267,7 +267,7 @@ struct DevToolsView: View {
     private var doubleTapSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Double Tap (right ⌘ twice → draft a reply)")
+                Text("Double Tap (\(DoubleTap.key.label) twice → draft a reply)")
                     .font(.callout.weight(.medium)).foregroundStyle(.white)
                 Spacer()
                 Toggle("", isOn: $doubleTapEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
@@ -305,7 +305,7 @@ struct DevToolsView: View {
                     .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). With the switch on, a single tap waits \(Int(DoubleTap.window * 1000)) ms before tap-to-type opens.")
+            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Its own key (\(DoubleTap.key.label)), separate from Sidekick's hotkey; if Sidekick is set to the same key, Sidekick keeps it and Double Tap stays quiet.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }

@@ -2,19 +2,20 @@
 //  DoubleTap.swift
 //  Sentient OS macOS
 //
-//  The run behind a DOUBLE TAP of the Sidekick key (right ⌘ by default): the cursor sits in a reply
+//  The run behind a DOUBLE TAP of its own key (`key`, right ⌥ for now): the cursor sits in a reply
 //  box, the user taps the key twice, and a reply written in their voice lands in the box. One
 //  screenshot of the display under the cursor → one cold call with the ENTIRE knowledge base in
 //  context (DoubleTapInference) → the reply is pasted into the focused field (pasteboard + ⌘V, the
 //  user's clipboard put back after). A screenshot that isn't an email or message reply box gets a
 //  short notch aside instead.
 //
-//  Manual-test harness for now: the enable switch and the OpenAI key live in Dev Tools. The tap
-//  detection lives in CommandCoordinator (with the switch on, a tap waits `window` seconds for a
-//  second press before tap-to-type opens); the run rides the coordinator's one-task lock, so the
-//  notch shows "Drafting your reply" and a hotkey press is STOP.
+//  Manual-test harness for now: the enable switch and the OpenAI key live in Dev Tools. The key
+//  listener and the two-presses-in-a-window test live in CommandCoordinator (a second
+//  SidekickHotkeyMonitor beside Sidekick's own; Sidekick's hotkey setting is untouched, and if it
+//  is set to the same key Sidekick keeps it). The run rides the coordinator's one-task lock, so the
+//  notch shows "Drafting your reply" and a Sidekick hotkey press is STOP.
 //
-//  Key methods: start(completion:) · cancel() · isEnabled · lastReport.
+//  Key methods: start(completion:) · cancel() · key · isEnabled · lastReport.
 //
 
 import AppKit
@@ -23,14 +24,16 @@ import AppKit
 final class DoubleTap {
     static let shared = DoubleTap()
 
-    /// A second press must land within this many seconds of the first tap's RELEASE. While the
-    /// feature is on, every tap-to-type waits this long before its field opens.
-    static let window: TimeInterval = 0.3
+    /// Double Tap's own key, separate from Sidekick's hotkey setting. Hardcoded for the test build.
+    static let key: SidekickHotkey = .rightOption
+
+    /// Two presses within this many seconds (press to press) count as a double tap.
+    static let window: TimeInterval = 0.35
 
     /// The notch aside for a screenshot that isn't a reply box (the notch truncates past ~45 chars).
     static let notice = "double tap in an email or message reply box"
 
-    /// Dev switch (UserDefaults). Off = the hotkey behaves exactly as before, no tap delay.
+    /// Dev switch (UserDefaults). Off = the key does nothing.
     static let enabledKey = "doubletap.enabled"
     static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
 
