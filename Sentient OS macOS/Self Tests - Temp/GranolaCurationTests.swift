@@ -397,9 +397,15 @@ enum GranolaCurationTests {
             check(!connection.kbPolicyReady, "unbound account cannot ingest")
             connection.accountFingerprint = identity.fingerprint
             check(connection.kbPolicyReady, "bound reviewed policy can be trialed")
-            check(!DirectMCPProvider.granola.kbVerified && !connection.kbEligible, "production remains gated until field acceptance")
+            check(connection.kbEligible, "Granola supports production knowledge selection")
             var domain = saved; domain[DirectMCPStore.preferencesKey] = try JSONEncoder().encode([connection])
+            domain[CodexAuth.kbOnlyKey] = false
             defaults.setVolatileDomain(domain, forName: UserDefaults.argumentDomain)
+            for backend in [ModelBackend.chatgpt, .claude, .custom] {
+                check(ConnectorRegistry.kbEligible("granola", backend: backend)
+                    && ConnectorRegistry.kbEligible(connection.slug, backend: backend),
+                    "catalog and connected Granola accounts offer knowledge selection on \(backend.rawValue)")
+            }
             let recent = try MCPSource.windows(slug: connection.slug, mode: .iterative, since: end.addingTimeInterval(-60), now: end)[0]
             check(recent.lower <= start && recent.upper == end, "daily sample revisits pre-checkpoint notes for delayed enrichment")
             check(recent.label.contains("sample"), "coverage label does not claim an exhaustive update feed")
@@ -415,7 +421,7 @@ enum GranolaCurationTests {
             let container = try ModelContainer(for: schema, configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true))
             let store = CycleStore(modelContainer: container)
             let fixtureSlug = connection.slug
-            try await GranolaSource.$curationTrial.withValue(true) {
+            do {
                 let initial = try await MCPSource.run(slug: fixtureSlug, mode: .initial, store: store, now: end,
                     reader: { _, _, _, _ in accepted })
                 check(initial == 1, "real orchestration commits validated fixture")
