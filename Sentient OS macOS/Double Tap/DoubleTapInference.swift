@@ -17,7 +17,7 @@
 import Foundation
 
 enum DoubleTapInference {
-    static let model = "gpt-5.6-luna"
+    static let model = "gpt-5.6-sol"     // luna measured 2026-09-19 (cold ~1.0–1.5 s to first text); sol under test
     static let endpoint = URL(string: "https://api.openai.com/v1/responses")!
 
     /// Keychain account for the user's OpenAI API key (same helper + service as the mirror secret).
