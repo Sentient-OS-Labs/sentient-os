@@ -95,8 +95,8 @@ The manual teaches the two transports, snapshot-bound targets, background delive
 route, and verification. In code-mode clients, the model must expose `structuredContent` handles and
 the inline image together, omitting the duplicate Markdown tree. A shell exit code of zero does not
 prove an action succeeded: structured refusals and action facts must be read before continuing.
-Pixels-only observations can skip the accessibility walk; structured verification uses predicates
-supported by the observed tree, while visual outcomes are verified from a fresh image.
+The pinned 0.20.0 snapshot always walks accessibility; it does not support the newer
+`include_accessibility_tree` switch. Visual outcomes are verified from a fresh image.
 
 The driver pin, `skillVersion`, and `toolCatalogVersion` must match. Every Debug and Release build runs
 `Scripts/check_cua_contract.py`, which also checks the four-tool MCP boundary and allowlist membership.
@@ -105,7 +105,7 @@ text and checking the live release's behavior remain part of reviewing a pin cha
 
 ## Installation and ordinary updates
 
-Each Sentient release selects one tested CUA release, currently **0.28.2**. It downloads that exact
+Each Sentient release selects one tested CUA release, currently **0.20.0**. It downloads that exact
 bare-binary tarball from Cua's release assets into a staging directory under
 `~/Library/Application Support/SentientOS/CuaDriver/`. CUA is not bundled in the app, and Sentient does
 not use Cua's standalone installer or change the user's shell PATH.
@@ -123,6 +123,13 @@ without canceling the background update. The new app requires its pinned runtime
 pair the new manual with an older binary. Uninstall cancels and drains an installer before deleting its
 files.
 
+The required pin is authoritative in both directions: a deliberate rollback from 0.28.2 to 0.20.0
+uses the same verified background installation, completion notice, and receipt. It does not replay
+the Codex-to-CUA migration. The 0.20.0 rollback restores its original curated tool contract while
+retaining the explicit inlined-skill notice, safe shell quoting, structured MCP handles, final-result
+verification, and the host-owned lifecycle confirmed against that binary. The independent Debug
+Sparkle guard remains in place.
+
 A `.installed-version` receipt, plus detection of earlier installed version directories, distinguishes
 an existing CUA setup from the legacy Codex helper. Launch adopts older installations that predate the
 receipt. The receipt survives a missing binary and Factory Reset, and Uninstall removes it with the
@@ -137,7 +144,7 @@ releases the action cursor and any browser preparation owned by that run. The ho
 structured lifecycle result, not just the subprocess exit code. The model never manages sessions.
 The daemon itself stays warm across commands.
 
-For pinned 0.28.2, explicitly named CLI calls share their daemon's CLI namespace. Anonymous one-shot
+For pinned 0.20.0, explicitly named CLI calls share their daemon's CLI namespace. Anonymous one-shot
 calls are disposable. Browser targets, tabs, and refs stay on the CLI; the separate MCP connection
 provides the native vision tools. Existing-profile browser preparation also needs OS access to that
 profile's metadata. If preparation is unavailable, the model uses the native window route without

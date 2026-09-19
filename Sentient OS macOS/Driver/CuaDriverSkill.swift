@@ -28,7 +28,7 @@ enum CuaDriverSkill {
 
     /// The cua-driver release this text was curated against. `rules` checks it matches the pinned
     /// binary so a version bump can't silently ship a stale manual.
-    static let skillVersion = "0.28.2"
+    static let skillVersion = "0.20.0"
 
     /// The operating manual, ready to splice into a computer-use prompt. Ends with a newline.
     static var rules: String {
@@ -38,7 +38,7 @@ enum CuaDriverSkill {
         let shots = CuaDriver.shotsDirURL.path
         let tools = CuaDriver.enabledTools.joined(separator: ", ")
         return """
-        ── CUA 0.28.2 OPERATING MANUAL — ALREADY LOADED ──
+        ── CUA 0.20.0 OPERATING MANUAL — ALREADY LOADED ──
         The host has already loaded and adapted CUA's SKILL.md, MACOS.md, and BROWSER.md below. \
         This is the active skill for this embedded Sentient run. Do not fetch or read another copy \
         through skills/get, resources/read, a skill:// URI, or a local skill file; the MCP server's \
@@ -80,7 +80,7 @@ enum CuaDriverSkill {
         with a non-zero exit. Never continue from a refusal as though the action happened.
         - The driver daemon is already running and owned by the app. NEVER run its management \
         commands (serve, stop, status, mcp, mcp-config, update, check-update, permissions, recording, \
-        telemetry, skills, config, autostart, doctor, diagnose, manifest, channel, sessions, cursor-theme, history, revoke). Tool calls only \
+        telemetry, skills, config, autostart, doctor, cursor-theme, history, revoke). Tool calls only \
         — plus `\(shim) list-tools` (one-line catalog) and `\(shim) describe <tool>` (full input \
         schema) when you are unsure of a parameter.
         - ONLY these tools are allowed, on whichever channel carries them (the binary has more; do \
@@ -113,9 +113,6 @@ enum CuaDriverSkill {
         image, click that pixel, no scaling math.
         - Re-indexing before an element action and don't need fresh pixels? Pass \
         `"include_screenshot":false` — much faster.
-        - Need pixels only (canvas work or a visual check)? `"include_accessibility_tree":false` \
-        skips the expensive AX walk. Keep include_screenshot true. Never disable BOTH; never use \
-        an old element token after a pixels-only observation as a substitute for fresh indexing.
         - A huge app tree (a big Finder window is ~1,600 elements) can flood the response: bound \
         the walk with `"max_elements"` / `"max_depth"` on get_window_state.
         - NEVER use `screencapture`, and never call the four vision tools through the shell — as \
@@ -130,11 +127,6 @@ enum CuaDriverSkill {
         running — it is idempotent, returns the pid AND a `windows` array (so you usually skip \
         list_windows), and launches HIDDEN with zero focus steal. `"urls":[…]` hands it a file or \
         link the same safe way (that is how you open a document or a new browser window).
-        Select a real content window using title, dimensions, and on-screen/Space evidence; never \
-        assume the first array entry is the main window. Thin untitled off-screen strips can be \
-        menu/helper windows, unsuitable for text, menu paths, or clicks. If only helpers exist, \
-        use the app's supported new/open-window command, then list_windows once and select the \
-        resulting real window before entering content. Do not repeatedly re-list unchanged helpers.
         2. `get_window_state {"pid":P,"window_id":W}` (an MCP eye) returns the accessibility tree \
         AND a screenshot together. The tree tells you WHAT is clickable (roles, labels, element \
         handles); the screenshot tells you WHICH one — and catches the tree lying. Cross-check \
@@ -147,12 +139,7 @@ enum CuaDriverSkill {
         `"include_screenshot":true` for inline visual evidence) polls a structured \
         postcondition (element exists / value / enabled / selected; window exists / bounds) — use it \
         instead of hand-written sleeps. Results are satisfied / unsatisfied / unknown, and `unknown` \
-        NEVER means success (including stability_unproven or an incomplete search domain). \
-        Build predicates from roles/labels/values actually present in the observed tree; never \
-        invent an AX selector for text only visible in the screenshot. Rich-text, canvas, and \
-        other visual outcomes can be verified from a fresh image directly; do not add a redundant \
-        structured check for something AX does not expose.
-        For postconditions it can't express, re-snapshot and judge tree+pixels \
+        NEVER means success. For postconditions it can't express, re-snapshot and judge tree+pixels \
         yourself.
 
         Addressing — ax vs px, chosen per ACTION (perception always returns both):
@@ -170,8 +157,7 @@ enum CuaDriverSkill {
         capture raced a closing window — re-snapshot, and if persistent pick another window_id.
 
         Reading action results honestly:
-        - Dispatched actions return `effect` and `route`, with an optional `escalation`; a refusal \
-        may instead carry `status:"refused"` and a structured `refusal` (see shell mechanics). `confirmed` = \
+        - Every action returns `effect` and `route`, with an optional `escalation`. `confirmed` = \
         the driver has real readback evidence. `unverifiable`, `partial`, and `suspected_noop` are \
         NOT success. `refused` = the chosen route deliberately did not deliver.
         - `escalation` is an instruction to YOU, never an auto-retry: target `pixel` → re-ground on \
@@ -194,16 +180,10 @@ enum CuaDriverSkill {
         - Modified clicks (cmd-click multi-select etc.) require `delivery_mode:"foreground"` plus a \
         concrete window_id — macOS discards background modifier state, so the driver refuses that \
         combination on purpose.
-        - A target is chosen per action: either flat pid/window_id for a native window, OR \
-        `target:{"kind":"window","pid":P,"window_id":W}`. Do not combine target with flat \
-        pid/window_id/scope. A desktop action does not change subsequent calls into desktop mode.
         - Last resort for screen-absolute work: `get_desktop_state` (an MCP eye) then the shell \
         action with `"target":{"kind":"desktop","display_id":"primary"}` and screen coordinates \
         from that exact image. Desktop actions use foreground delivery — exhaust the window ladder \
-        first. Verify desktop actions with a fresh get_desktop_state, not window verify_state. \
-        Its image is native full-display pixels; if your harness downsizes it, map coordinates back \
-        to the returned screenshot_width/height before acting. Window snapshots instead use the \
-        returned window-image pixel space; never substitute macOS screen points.
+        first.
 
         Window-state truth table:
         - Minimized: tree + AX actions work (they fire in place); keyboard commits (Return / Tab / \
@@ -212,9 +192,8 @@ enum CuaDriverSkill {
         instead of pressing Return.
         - On another Space/desktop: AX actions work; pixels don't; the tree may come back stripped \
         (the response carries `off_space:true` so you can tell).
-        - Hidden apps: AX actions can work and screenshots may still be available, but background \
-        pixel input is refused. A screenshot does NOT prove that a hidden window accepts pixels.
-        - Occluded / backgrounded but not hidden or minimized: use the normal background ladder.
+        - Hidden / occluded / backgrounded: everything works except pixels on a window with no \
+        screen presence.
 
         Typing:
         - `type_text {"pid":P,"element_token":T,"text":…}` (ax) targets the field directly, no \
@@ -236,10 +215,8 @@ enum CuaDriverSkill {
         it landed, THEN `hotkey {"pid":P,"x":X,"y":Y,"keys":["cmd","v"]}` (the px form clicks the \
         field first). Same pattern to COPY something out: read the value from a snapshot, \
         clipboard_write it — no select-and-copy theater.
-        - Pass an explicit window_id on `press_key` / `hotkey` when a real window exists; pid-only \
-        calls can be refused as ambiguous. Without an element or x,y they use the window's current \
-        focus, which must actually be the intended control. Background keys do not raise or \
-        unminimize a window. `scroll {"pid":P,"direction":…,"element_token":…}` scrolls without focus.
+        - `press_key` / `hotkey` without an element or x,y go to the pid's current focus and never \
+        raise a window. `scroll {"pid":P,"direction":…,"element_token":…}` scrolls without focus.
 
         Menus and geometry:
         - A known native menu command → `invoke_menu {"pid":P,"window_id":W,"path":["File",\
@@ -299,27 +276,19 @@ enum CuaDriverSkill {
         `browser_prepare {"pid":P,"window_id":W,"strategy":{"kind":"existing_profile"},\
         "session":"sentient"}` to attach to the user's logged-in browser (pre-authorized at launch), \
         or `{"allow_launch":true,"profile":{"mode":"isolated_new"}}` when login state isn't needed. \
-        After isolated preparation, use prepared_pid and list its windows before binding. After \
-        ANY preparation/reconnect, discard old target IDs, tab IDs, and refs, then re-bind. Never \
-        change browser profile files, kill/restart the user's browser, or enable remote debugging \
-        yourself. If browser_prepare refuses, use the native AX/PX route or report the limitation.
+        Then re-bind.
         3. Snapshot the tab: `get_browser_state {"target_id":…,"tab_id":…,\
         "snapshot_format":"semantic_v2","session":"sentient"}` — when visuals matter add \
         `"include_screenshot":true` AND `--screenshot-out-file \(shots)/<step>.png`, then view the \
         file. Read `outline` for the content; `refs` are ACTION capabilities (each declares which actions it supports); `content_refs` are read-only \
         scopes, never clickable. Check `snapshot.complete`; use `"query":"…"` or the returned \
         `continuation` for more of a big page. Tab `active` is tri-state — null means unproven, \
-        never guess from list order. `continuation` is under `snapshot`, opaque and single-use; a \
-        newer snapshot invalidates it. Use `query` or `scope_ref` to bound reads.
-        4. EVERY browser action must include the returned target_id and tab_id, plus \
-        `"session":"sentient"`; do not omit them in the abbreviated examples below. Act: `browser_navigate {"url":…}` (http/https/about only — and it invalidates every ref); \
+        never guess from list order.
+        4. Act: `browser_navigate {"url":…}` (http/https/about only — and it invalidates every ref); \
         `browser_click {"ref":"p3:7"}`; `browser_type {"ref":…,"text":…,"mode":"insert_text"}` \
         (`"replace":true` to overwrite an existing value, empty text + replace to clear); \
         `browser_pointer` for hover / right_click / double_click / scroll / drag (drag needs \
-        `destination_ref` in the same frame). For standalone Chrome/Edge on macOS, also pass \
-        `"input_route":"dom_event"` to pointer actions when synthetic input is acceptable. \
-        `browser_dialog` handles page-owned JS dialogs only; inspect first and accept/dismiss the \
-        returned current dialog_id.
+        `destination_ref`); `browser_dialog` for page-owned JS dialogs only.
         5. Re-snapshot to verify. Refs are scoped to session + tab + snapshot: navigation or a newer \
         snapshot invalidates them, and a stale-ref refusal means "snapshot again" — never a license \
         to fall back to a remembered coordinate or CSS selector.
@@ -345,8 +314,7 @@ enum CuaDriverSkill {
         - "window_id W belongs to pid P, not …" → wrong pair; `list_windows {"pid":…}` and pick \
         again.
         - "ambiguous_window_target" → several candidate windows matched; pass an explicit window_id.
-        - "AX action … failed with code …" → the element doesn't support that action. Inspect \
-        the current structured element's `actions` before choosing another advertised action; try \
+        - "AX action … failed with code …" → the element doesn't support that action; try \
         `"action":"show_menu"` / `"confirm"` / `"pick"`, or px-click the element's center.
         - "Accessibility permission not granted" → do NOT try to fix permissions; stop and report \
         COULD_NOT. "Screen Recording permission not granted" → you can still work tree-only \
@@ -354,8 +322,6 @@ enum CuaDriverSkill {
         COULD_NOT.
         - "pid X has no on-screen window" → the pixel path needs a visible window to anchor the \
         conversion; use AX actions or report the state honestly.
-        - "minimized_or_hidden_window" → the native pixel route was refused, even if a screenshot \
-        exists. Use an exact AX action; do not repeatedly retry the same pixel click.
         - macOS alert beep on press_key with no visible change → the window is minimized and the \
         commit didn't land; use set_value or click a commit button.
 

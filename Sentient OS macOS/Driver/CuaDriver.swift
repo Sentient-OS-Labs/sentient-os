@@ -37,7 +37,7 @@ enum CuaDriver {
     /// almost daily (0.9 → 0.20 in 27 days, six of them breaking), so "latest" is never an option —
     /// each Sentient release carries the one driver version it was tested against, and bumping it
     /// is a deliberate edit here plus a fresh `tarballSHA256`.
-    static let version = "0.28.2"
+    static let version = "0.20.0"
 
     /// The bare-binary tarball from the release's own GitHub assets (`cua-driver`, plus SDK
     /// artifacts we don't extract). Deliberately NOT their `install.sh`: that installs a
@@ -50,11 +50,11 @@ enum CuaDriver {
     /// SHA-256 of that exact asset, checked against upstream's published `checksums.txt` and
     /// re-verified locally (2026-09-19). Their installer does NOT checksum its download; ours does,
     /// so a swapped or truncated asset can never reach the user's Mac.
-    static let tarballSHA256 = "386db225a3080714a0f9f935525e61efaf46709587ef8b94dd2df81aeb2f6daa"
+    static let tarballSHA256 = "07a88ea2c28a9ead66b2d9f6f93fab4b1189a1f7c704d2cd7b6d12c30eee9984"
 
-    /// Roughly 42 MiB compressed — named for the setup line, not
+    /// Roughly 39 MiB compressed — named for the setup line, not
     /// used as a gate.
-    static let tarballBytes: Int64 = 43_629_843
+    static let tarballBytes: Int64 = 40_625_908
 
     /// Cua AI's Apple Developer Team ID. The extracted binary must satisfy a codesign requirement
     /// naming it, so we only ever run something Cua actually signed — the provenance half of the
@@ -222,11 +222,11 @@ enum CuaDriver {
     }
 
     /// The full tool surface the daemon serves over MCP for the PINNED version — captured from
-    /// `cua-driver list-tools` (56 tools, verified 2026-09-19 on 0.28.2). Claude Code has no
+    /// `cua-driver list-tools` (56 tools, verified 2026-09-19 on 0.20.0). Claude Code has no
     /// per-server enabled_tools filter, so the trim is a DENY list: everything except the four
     /// eyes, each denied by its `mcp__cua_driver__<name>` rule, which removes the tool from the
     /// model's context entirely. Version-pinned like the skill: bump `version`, re-capture this.
-    static let toolCatalogVersion = "0.28.2" // checked by Scripts/check_cua_contract.py at build time
+    static let toolCatalogVersion = "0.20.0" // checked by Scripts/check_cua_contract.py at build time
     private static let allMcpServedTools = [
         "bring_to_front", "browser_click", "browser_dialog", "browser_download",
         "browser_navigate", "browser_pointer", "browser_prepare", "browser_set_input_files",
