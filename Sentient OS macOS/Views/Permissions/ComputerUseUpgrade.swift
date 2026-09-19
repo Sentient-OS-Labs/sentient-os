@@ -345,7 +345,7 @@ struct ComputerUseUpgradeView: View {
         case .pitch, .installing:
             "Sentient's computer use is now way faster and smarter"
         case .grants:
-            "The new computer use acts as Sentient itself, so it needs these two grants, once. You will not be asked again."
+            "The new faster computer use needs these permissions. You'll only be asked once."
         }
     }
 
