@@ -93,9 +93,13 @@ struct DevToolsView: View {
 
     // Double Tap (its own key twice → draft a reply) — the manual-test harness (Double Tap/DoubleTap.swift).
     @AppStorage(DoubleTap.enabledKey) private var doubleTapEnabled = false
+    @AppStorage(DoubleTapInference.providerKey) private var doubleTapProviderRaw = DoubleTapInference.Provider.openai.rawValue
     @State private var doubleTapKeyDraft = ""
-    @State private var doubleTapKeySaved = DoubleTapInference.apiKey != nil
+    @State private var doubleTapKeysSaved: [DoubleTapInference.Provider: Bool] = [:]
     @State private var doubleTap = DoubleTap.shared
+    private var doubleTapProvider: DoubleTapInference.Provider {
+        .init(rawValue: doubleTapProviderRaw) ?? .openai
+    }
 
     // The 3-way card mode (which deck the home deals) — see BriefingDeck (Briefing.swift).
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
@@ -263,37 +267,45 @@ struct DevToolsView: View {
         .onAppear { codexSetup.refreshCuaDriver() }
     }
 
-    /// Double Tap's switch, OpenAI key (Keychain), and the last run's timings.
+    /// Double Tap's switch, the provider picker, that provider's key (Keychain), and the last run's timings.
     private var doubleTapSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let provider = doubleTapProvider
+        let keySaved = doubleTapKeysSaved[provider] ?? false
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Double Tap (\(DoubleTap.key.label) twice → draft a reply)")
                     .font(.callout.weight(.medium)).foregroundStyle(.white)
                 Spacer()
                 Toggle("", isOn: $doubleTapEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
             }
+            Picker("", selection: $doubleTapProviderRaw) {
+                ForEach(DoubleTapInference.Provider.allCases) { p in
+                    Text("\(p.label) · \(p.model)").tag(p.rawValue)
+                }
+            }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.small)
             HStack(spacing: 8) {
                 Circle()
-                    .fill(doubleTapKeySaved ? Theme.Ink.green : Color.orange)
+                    .fill(keySaved ? Theme.Ink.green : Color.orange)
                     .frame(width: 6, height: 6)
-                Text(doubleTapKeySaved ? "OpenAI key saved (Keychain)" : "no OpenAI key yet")
+                Text(keySaved ? "\(provider.label) key saved (Keychain)" : "no \(provider.label) key yet")
                     .font(.caption2).foregroundStyle(Theme.faint)
                 Spacer()
-                if doubleTapKeySaved {
+                if keySaved {
                     Button("Remove") {
-                        Keychain.delete(DoubleTapInference.apiKeyAccount)
-                        doubleTapKeySaved = false
+                        Keychain.delete(provider.apiKeyAccount)
+                        doubleTapKeysSaved[provider] = false
                     }
                     .controlSize(.small)
                 }
             }
             HStack(spacing: 8) {
-                SecureField("sk-…", text: $doubleTapKeyDraft)
+                SecureField("\(provider.label) API key", text: $doubleTapKeyDraft)
                     .textFieldStyle(.roundedBorder).font(.caption)
                 Button("Save") {
                     let key = doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !key.isEmpty else { return }
-                    doubleTapKeySaved = Keychain.set(DoubleTapInference.apiKeyAccount, key)
+                    doubleTapKeysSaved[provider] = Keychain.set(provider.apiKeyAccount, key)
                     doubleTapKeyDraft = ""
                 }
                 .controlSize(.small)
@@ -305,13 +317,18 @@ struct DevToolsView: View {
                     .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Its own key (\(DoubleTap.key.label)), separate from Sidekick's hotkey; if Sidekick is set to the same key, Sidekick keeps it and Double Tap stays quiet.")
+            Text("\(provider.model) · \(provider.reasoningNote) · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Its own key (\(DoubleTap.key.label)), separate from Sidekick's hotkey; if Sidekick is set to the same key, Sidekick keeps it and Double Tap stays quiet.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .frame(maxWidth: .infinity)
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+        .onAppear {
+            for p in DoubleTapInference.Provider.allCases {
+                doubleTapKeysSaved[p] = DoubleTapInference.apiKey(for: p) != nil
+            }
+        }
     }
 
     /// Opens the one CODEX SETUP window (install · log in · computer use) — all three steps live in

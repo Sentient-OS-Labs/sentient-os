@@ -70,7 +70,9 @@ final class DoubleTap {
     func cancel() { task?.cancel() }
 
     private func perform() async -> Result {
-        guard DoubleTapInference.apiKey != nil else { return .failed(DoubleTapInference.Failure.noKey.label) }
+        guard DoubleTapInference.apiKey != nil else {
+            return .failed(DoubleTapInference.Failure.noKey(DoubleTapInference.provider).label)
+        }
         guard Permissions.hasAccessibility() else { return .failed("needs Accessibility to paste") }
         let started = Date()
         guard let shot = await ScreenCapture.grabDisplayUnderCursor() else {
@@ -85,9 +87,11 @@ final class DoubleTap {
         do {
             let outcome = try await DoubleTapInference.draft(screenshot: jpeg, vault: VaultGenerator.vaultRoot)
             let t = outcome.timing
-            lastReport = "capture \(captureMs) ms · first text \(t.firstToken.map { "\(Int($0 * 1000)) ms" } ?? "—")"
+            lastReport = "\(DoubleTapInference.provider.model) · capture \(captureMs) ms"
+                + " · first text \(t.firstToken.map { "\(Int($0 * 1000)) ms" } ?? "—")"
                 + " · total \(Int(t.total * 1000)) ms · in \(t.inputTokens ?? 0) (cached \(t.cachedTokens ?? 0))"
-                + " · out \(t.outputTokens ?? 0) · \(outcome.verdict == .notAMessage ? "not a reply box" : "reply pasted")"
+                + " · out \(t.outputTokens ?? 0) · thinking \(t.thinkingTokens ?? 0)"
+                + " · \(outcome.verdict == .notAMessage ? "not a reply box" : "reply pasted")"
             switch outcome.verdict {
             case .notAMessage:
                 return .notAMessage
