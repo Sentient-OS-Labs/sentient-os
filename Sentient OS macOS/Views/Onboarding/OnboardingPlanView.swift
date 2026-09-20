@@ -62,7 +62,7 @@ struct OnboardingPlanView: View {
                     MonoCaps("With ChatGPT Plus", size: 9, tracking: 2.2, color: Theme.Ink.label)
                         .padding(.bottom, 3)
                     featureRow("sunrise", "Proactive mornings: things worth doing, already done")
-                    featureRow("command", "Sidekick anywhere: hold right \u{2318} and just say it")
+                    featureRow("command", "Sidekick anywhere: tap right \u{2318} and tell it what to do")
                     featureRow("moon.stars", "Gmail, Calendar, and a knowledge base that keeps learning")
                 }
 

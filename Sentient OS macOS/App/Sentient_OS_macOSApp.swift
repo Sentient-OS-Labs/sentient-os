@@ -39,7 +39,12 @@ struct SentientOSApp: App {
             RootView()
                 .environment(appState)
                 .preferredColorScheme(.dark)   // Sentient OS is dark-only — no light mode
-                .task { await VaultCloud.pushIfDirty() }   // catch up a mirror sync deferred by an earlier quit/failure
+                .task {
+                    #if DEBUG
+                    guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
+                    #endif
+                    await VaultCloud.pushIfDirty() // catch up a mirror sync deferred by an earlier quit/failure
+                }
                 .modifier(ComputerUseWindowGuard())
         }
         .windowStyle(.hiddenTitleBar)            // OLED black runs edge-to-edge; no gray trim

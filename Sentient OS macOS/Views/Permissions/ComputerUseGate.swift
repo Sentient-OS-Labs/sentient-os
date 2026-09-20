@@ -10,12 +10,12 @@
 //  The driver runs inside Sentient's responsibility chain, so macOS answers its checks with
 //  Sentient's grants: the user grants twice, to the app they already trust, and no helper app ever
 //  appears in System Settings. Microphone & Speech rides along as an OPTIONAL row (Sidekick's
-//  voice): missing it never gates anything — hold-to-talk stays off while tap-to-type and typed
-//  commands still work. The optional grant is offered exactly once (a persisted flag), and a voice
-//  HOLD against a DENIED mic re-raises the window as a non-blocking fix surface
-//  (presentVoiceFixIfDenied — a denied grant has no native prompt left to show). Closing the
-//  window instead cancels the pending action. All required grants green and the optional offered
-//  means it never appears at all. Status probes reuse Permissions/VoiceCapture.
+//  voice): missing it never gates anything — the notch's mic stays off while typed commands still
+//  work. The optional grant is offered exactly once (a persisted flag), and a MIC CLICK against a
+//  DENIED mic re-raises the window as a non-blocking fix surface (presentVoiceFixIfDenied — a
+//  denied grant has no native prompt left to show). Closing the window instead cancels the pending
+//  action. All required grants green and the optional offered means it never appears at all.
+//  Status probes reuse Permissions/VoiceCapture.
 //
 //  Key methods: intercept(_:) · refresh() · continueNow()
 //
@@ -34,11 +34,14 @@ final class ComputerUseGate {
 
     // MARK: Grant status (probed, not cached beyond the last refresh)
 
-    /// Sentient's mic + speech recognition — Sidekick's ears. OPTIONAL: without it, hold-to-talk
-    /// stays off (the first hold flashes the mic notice); tap-to-type and typed commands are
-    /// untouched. Detail preserved for the fix action.
+    /// Sentient's mic + speech recognition — Sidekick's ears. OPTIONAL: without it, the notch's mic
+    /// stays off (a click on it flashes the mic notice); typed commands are untouched. Detail
+    /// preserved for the fix action.
     enum MicSpeechState { case granted, notAsked, denied }
     private(set) var micSpeech: MicSpeechState = .notAsked
+
+    /// The Microphone & Speech row's hover tip — one string for the gate window and Settings → Health.
+    static let micSpeechTip = "Optional but recommended.\nLets Sidekick hear you."
 
     /// Sentient's own Screen Recording — the cua driver's EYES (per-window screenshots) and the
     /// screen-context snapshot at fire time, since the driver runs inside Sentient's TCC chain and
@@ -128,7 +131,7 @@ final class ComputerUseGate {
         guard micSpeech == .denied else { return false }
         presentedBlocking = false   // pending stays untouched — a held offer command still fires on close
         present()
-        Log("ComputerUseGate: voice hold hit a denied mic/speech — setup window up as the fix surface")
+        Log("ComputerUseGate: mic click hit a denied mic/speech — setup window up as the fix surface")
         return true
     }
 

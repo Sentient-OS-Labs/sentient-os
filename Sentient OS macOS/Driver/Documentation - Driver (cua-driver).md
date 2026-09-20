@@ -3,8 +3,9 @@
 How Sentient acts on the Mac. The driver is [cua-driver](https://github.com/trycua/cua) (MIT, by Cua
 AI): one self-contained binary that clicks, types, scrolls, reads accessibility trees, and takes
 per-window screenshots IN THE BACKGROUND — per-window input with no cursor warp and no focus steal,
-plus a typed route into Chromium pages over CDP and a visible agent-cursor overlay so the user can see
-where their agent is working. Sentient runs it as its own long-lived daemon and lets each computer-use
+plus a visible agent-cursor overlay so the user can see where their agent is working. Browsers are
+driven the same way, as native windows; the driver's typed CDP route into Chrome is deliberately off
+(see "Browsers are native windows" below). Sentient runs it as its own long-lived daemon and lets each computer-use
 run drive it — codex or claude, whichever engine is live (FrontierRun dispatches; the daemon, socket,
 shim, and skill are identical for both). The frontier model is the brain; this folder is the body.
 
@@ -13,7 +14,7 @@ shim, and skill are identical for both). The frontier model is the brain; this f
 | File | Job |
 |---|---|
 | `CuaDriver.swift` | The driver as Sentient sees it: the pinned release (version, tarball URL, SHA-256, signing team), the install location, the MCP tool subset (`mcpTools`), the per-engine wiring (codex `-c` overrides · claude `--mcp-config` JSON + the named deny list), the CLI shim + screenshot paths, the full tool allowlist (`enabledTools`), and versioned installation history. |
-| `CuaDriverHost.swift` | The daemon's lifecycle: spawn, readiness, liveness, replacement on permission changes, teardown. Also writes the per-generation CLI shim and screenshot drop-box. |
+| `CuaDriverHost.swift` | The daemon's lifecycle: spawn, readiness, liveness, replacement on permission changes, teardown. Also writes the per-generation CLI shim. |
 | `CuaDriverSetup.swift` | Puts the pinned binary on disk: download → SHA-256 → extract → codesign verify → smoke run → atomic install. |
 | `CuaDriverSkill.swift` | The operating manual spliced into every computer-use prompt — the model's teaching for the whole tool surface. |
 
@@ -30,10 +31,10 @@ the reason this shape is worth its lifecycle code over a per-run `mcp --direct` 
 Daemon shape (one per app lifetime, an actor so racing fires can't spawn two):
 
 - `serve --embedded --socket <fresh per-generation path in the temp dir>` with a curated environment.
-  `--permission-mode standard`, `--grant existing-profile` (the one launch grant the driver accepts:
-  binding to the user's already-logged-in Chrome; a tool call can never ask for it, which is exactly
-  why it must be decided here), `--no-permissions-gate` (Sentient owns the permission UX), and a
-  420 ms cursor glide so the overlay reads as motion.
+  `--permission-mode standard` and no launch grant (the only grant the driver accepts unlocks its
+  typed browser route, which is off; without it the daemon refuses that attachment outright),
+  `--no-permissions-gate` (Sentient owns the permission UX), and a 420 ms cursor glide so the
+  overlay reads as motion.
 - `--parent-liveness-stdio` + a held stdin pipe: if Sentient dies, the daemon dies with it — no orphan
   ever left holding the user's grants.
 - stdout and stderr both use `FileHandle.nullDevice`. Shutdown logging stays writable after the parent exits, so EOF cleanup can finish. There is no parent-owned stderr drain or recent-lines buffer; host lifecycle logs remain, raw daemon stderr is discarded.
@@ -69,7 +70,7 @@ A computer-use codex run reaches the daemon over two channels against the same s
   Claude Code has no per-server `enabled_tools` filter, so the trim is
   `claudeDisallowedMcpTools` — every non-vision MCP tool denied by name, version-pinned like the
   skill — and the timeouts ride env vars (`MCP_TIMEOUT`, `MCP_TOOL_TIMEOUT`).
-- **The hands ride the CLI.** Every action and the entire browser family run as one-shot shell calls,
+- **The hands ride the CLI.** Every action runs as a one-shot shell call,
   `<shim> <tool> '<json>'` — upstream's own default transport — without loading action schemas up front. The shim lives
   at a deliberately SPACE-FREE path under the app's caches dir (the real binary sits under
   "Application Support", a per-call quoting hazard for an LLM writing shell), bakes in the current
@@ -85,14 +86,14 @@ Unix socket, and a headless run has no one to answer approvals; safety rides the
 
 ## The inlined manual (`CuaDriverSkill`)
 
-`CuaDriverSkill.rules` is curated from the pinned release's MIT-licensed SKILL.md, MACOS.md, and
-BROWSER.md. Both Sidekick and proactive computer-use prompts include it before the first model turn.
+`CuaDriverSkill.rules` is curated from the pinned release's MIT-licensed SKILL.md and MACOS.md.
+Both Sidekick and proactive computer-use prompts include it before the first model turn.
 It identifies the skill as already loaded, so the model does not fetch another copy through MCP
 resources or read a skill file. Action schemas remain available through CLI `describe` only when
 needed.
 
-The manual teaches the two transports, snapshot-bound targets, background delivery, the typed browser
-route, and verification. In code-mode clients, the model must expose `structuredContent` handles and
+The manual teaches the two transports, snapshot-bound targets, background delivery, browsers as
+native windows, and verification. In code-mode clients, the model must expose `structuredContent` handles and
 the inline image together, omitting the duplicate Markdown tree. A shell exit code of zero does not
 prove an action succeeded: structured refusals and action facts must be read before continuing.
 The pinned 0.20.0 snapshot always walks accessibility; it does not support the newer
@@ -140,36 +141,57 @@ retain the explicit migration window described in the Permission Gate doc.
 
 Both frontier engines ask `CuaDriverHost` to start or revive the CLI label `sentient` before running
 the model. They await its cleanup after success, failure, or STOP before releasing the command. This
-releases the action cursor and any browser preparation owned by that run. The host checks the
+releases the action cursor owned by that run. The host checks the
 structured lifecycle result, not just the subprocess exit code. The model never manages sessions.
 The daemon itself stays warm across commands.
 
 For pinned 0.20.0, explicitly named CLI calls share their daemon's CLI namespace. Anonymous one-shot
-calls are disposable. Browser targets, tabs, and refs stay on the CLI; the separate MCP connection
-provides the native vision tools. Existing-profile browser preparation also needs OS access to that
-profile's metadata. If preparation is unavailable, the model uses the native window route without
-changing browser profile files or OS permissions.
+calls are disposable. The separate MCP connection provides the native vision tools.
+
+## Browsers are native windows
+
+A browser window is driven like any other app: `get_window_state` returns the page's accessibility
+tree and screenshot, and the model acts through the same ax/px ladder, in the user's own logged-in
+browser. The driver's typed browser route (`browser_prepare`, `get_browser_state`, `browser_*`) is
+deliberately off: no launch grant on the daemon, none of those tools in the allowlist, and the
+manual teaches the native route instead (2026-09-20).
+
+The reason is Chrome's own design. Chrome 136 and later ignores the remote-debugging flag on the
+user's real profile, so the only way into a logged-in Chrome over CDP is the per-instance toggle at
+`chrome://inspect/#remote-debugging`, which the driver flips by opening a tab in the user's browser
+and typing into it. In that mode Chrome activates its window and shows an "Allow remote debugging?"
+dialog on every new debugging connection, with no way to remember the answer and no policy to
+silence it, and it adds the "controlled by automated test software" bar while a connection is open.
+The toggle also persists in Chrome's Local State despite its label. On the pinned release the
+dialog's Allow button is not matched on current Chrome (its title and description repeat the same
+word; upstream #3705), so the dialog is left for the user. None of that belongs in a run the user
+did not ask to watch, so the route stays off regardless of driver version.
+
+What the manual teaches for web pages: open URLs with `launch_app` + `urls` (a new tab, no focus
+steal; never the address bar or ⌘L / ⌘T), bound big page trees with `query` / `max_elements`,
+re-snapshot once when Chrome's first page tree is sparse, click links and buttons by element token,
+type into web fields with the px form of `type_text` (the driver never trusts an accessibility
+write into web content), and treat page dialogs, permission bubbles, and the address bar as native
+surfaces of the same window. What is lost: exact page refs and the semantic page outline, which
+matter mostly on very dense pages.
 
 ## Sharp edges (each one field-found; do not re-learn them)
 
 - **Bump the release as one reviewed change:** update version, tarball checksum/size, the curated
   manual, and the captured MCP catalog/version. Compare `cua-driver list-tools` with
-  `python3 Scripts/check_cua_contract.py . --tool-list <capture.txt>`, then exercise native and browser
-  cross-transport behavior and the existing-user update paths. A matching version string alone is
+  `python3 Scripts/check_cua_contract.py . --tool-list <capture.txt>`, then exercise the native ladder
+  on an ordinary app and on a browser window, plus the existing-user update paths. A matching version string alone is
   not a compatibility test.
-- **The browser family is single-transport by design.** Browser targets, tabs, and refs are
-  session-scoped, and the daemon deliberately namespaces a named session per transport kind — refs
-  minted over MCP would be foreign to a CLI `browser_click`. Everything browser therefore stays on
-  the CLI, sharing one `"session"` label. Do not move `get_browser_state` onto MCP.
+- **The typed browser route stays off** (see "Browsers are native windows"): no `--grant` on the
+  daemon, no `browser_*` tool in `enabledTools`. `Scripts/check_cua_contract.py` fails the build on
+  either. A future driver version that handles Chrome's dialog better does not change this: the
+  dialog itself is the problem.
 - **The MCP eyes refuse a `session` argument** ("session is not available to this transport") — the
   skill text tells the model to omit it there, and to pass it on every shell call.
-- **A capability manifest cannot replace the tool allowlist.** A manifest also origin-pins
-  `browser_navigate` in every permission mode, and Sentient's tasks go to arbitrary URLs. The
-  `enabledTools` trim is therefore prompt-enforced, same posture as the old MCP `enabled_tools`.
-- **Screenshot output paths must not sit under the `/tmp` symlink** — the driver's output-path check
-  refuses a symlinked ancestor. The shots drop-box lives under the app's caches dir (a real
-  directory), which also puts it inside Uninstall's existing sweep; the host wipes it every
-  generation because the frames are content-bearing.
+- **A capability manifest is not an allowlist.** It is the driver's bounded permission mode with its
+  own review burden. The `enabledTools` trim is prompt-enforced, same posture as the old MCP
+  `enabled_tools`; the one hard gate that matters (the profile attachment) is the missing launch
+  grant.
 - **A sandboxed shell cannot reach the daemon's socket** — one more reason computer-use runs require
   the bypass flag.
 
@@ -182,6 +204,8 @@ changing browser profile files or OS permissions.
 - The driver's telemetry and update checks stay off in every spawned process (daemon, proxy, shim).
 - `mcpTools` is the vision set and nothing else; action tools are taught by the skill, not loaded as
   schemas.
+- No launch grant on the daemon and no `browser_*` tool in the allowlist: web pages are native
+  windows.
 
 ## Related docs
 

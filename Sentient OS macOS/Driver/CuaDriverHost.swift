@@ -122,10 +122,10 @@ actor CuaDriverHost {
                        "--socket", endpoint.path,
                        "--host-bundle-id", bundleID,
                        "--permission-mode", "standard",
-                       // The one launch grant cua accepts: binding to the user's already-running,
-                       // logged-in Chrome. A tool call can never ask for this, which is exactly why
-                       // it has to be decided here.
-                       "--grant", "existing-profile",
+                       // No launch grants, on purpose: the only one the driver accepts
+                       // (`existing-profile`) unlocks its typed CDP route into the user's Chrome,
+                       // which is off — see CuaDriver.enabledTools. Without the grant the daemon
+                       // refuses that attachment outright, the one hard gate that matters.
                        // Exit when our end of stdin closes (the lifeline below).
                        "--parent-liveness-stdio",
                        // We own the permission experience; the daemon must never raise its own UI.
@@ -355,17 +355,15 @@ actor CuaDriverHost {
     /// Write the CLI shim for this daemon generation — the space-free launcher the model's shell
     /// calls (`<shim> <tool> '<json>'`). Our `--socket` goes FIRST so it always wins (the driver
     /// takes the first occurrence of a flag), and the privacy env rides along so a one-shot call
-    /// can never phone home. Also (re)creates the screenshot drop-box and wipes the previous
-    /// generation's frames — they are content-bearing images of the user's windows, so they live
-    /// exactly as long as they're useful.
+    /// can never phone home.
     private func writeShim(socket: String) {
         let fm = FileManager.default
         let shim = CuaDriver.shimURL
-        let shots = CuaDriver.shotsDirURL
         do {
             try fm.createDirectory(at: shim.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? fm.removeItem(at: shots)                     // wipe last generation's frames
-            try fm.createDirectory(at: shots, withIntermediateDirectories: true)
+            // The typed browser route used to save page screenshots beside the shim; those frames
+            // are content-bearing, so sweep any left by an earlier version once.
+            try? fm.removeItem(at: shim.deletingLastPathComponent().appendingPathComponent("cua-shots"))
             let script = """
             #!/bin/sh
             # Sentient OS — cua-driver one-shot launcher (regenerated per daemon generation).

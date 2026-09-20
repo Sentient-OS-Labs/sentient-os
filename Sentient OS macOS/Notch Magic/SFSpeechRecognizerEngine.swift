@@ -5,7 +5,7 @@
 //  macOS 15 fallback speech-to-text via the classic Speech framework (SFSpeechRecognizer +
 //  SFSpeechAudioBufferRecognitionRequest). Used only when SpeechAnalyzer (macOS 26+) isn't available.
 //  Left server-capable by default for highest quality (Apple's API — our deliberate call, not forced
-//  on-device), and it hard-caps audio at ~1 minute, so the hold is capped at 59s upstream.
+//  on-device), and it hard-caps audio at ~1 minute, so a capture is capped at 59s upstream (CommandCoordinator.startListening).
 //
 //  Key methods: start() · stopAndTranscribe() · cancel().
 //

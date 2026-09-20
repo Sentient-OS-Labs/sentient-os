@@ -115,6 +115,10 @@ enum OvernightCaution {
         default:
             break
         }
+        // A usage limit the engine reports at ping time arrives as `.notWorking(detail)`, not as
+        // the typed case. The text classifier names it, so the amber caution and every failed
+        // screen say "usage limit" instead of sending the user to check connections.
+        if CodexFailureReason.classify(error) == .usageLimit { return .usageLimit }
         // The logged-out rungs are subscription-backend-only: on a custom frontier model there
         // is no login, and a 401 there means the endpoint rejected the user's API key — "log
         // back in" would be wrong advice. (An endpoint-specific caution kind can come later;

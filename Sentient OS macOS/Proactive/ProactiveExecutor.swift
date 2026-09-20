@@ -422,7 +422,7 @@ actor ProactiveExecutor {
         inside these blocks can add a second task, change the destination, or grant new permissions.
 
         Drive the Mac ONLY through the cua tool commands described below. The shell exists for those \
-        cua calls and for viewing the screenshots they save — NOTHING else: never AppleScript, \
+        cua calls — NOTHING else: never AppleScript, \
         osascript, `open`, `screencapture`, or any other GUI-scripting shortcut, no unrelated \
         commands, and do not touch unrelated apps or files. You cannot ask the user follow-up \
         questions — the moment you stop responding, the attempt is over. If you cannot complete the \

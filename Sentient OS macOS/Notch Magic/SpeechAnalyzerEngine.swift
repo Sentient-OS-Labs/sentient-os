@@ -218,7 +218,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
     /// contention that parks the next attempt. Clears itself when it finishes, so a failure retries fresh.
     private static var installTask: Task<Void, Error>?
 
-    /// True only while a genuine model download is in flight — the coordinator answers a voice hold
+    /// True only while a genuine model download is in flight — the coordinator answers a mic click
     /// with an honest "still downloading" notice instead of listening into a model that isn't there.
     static var isModelDownloading: Bool { installTask != nil && !modelReady }
 

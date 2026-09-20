@@ -270,7 +270,7 @@ struct DevToolsView: View {
         let route = DoubleTapInference.Route(rawValue: doubleTapRouteRaw) ?? .relay
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Double Tap (\(DoubleTap.key.label) twice → draft a reply)")
+                Text("Double Tap (\(SidekickHotkey.current.label) twice → draft a reply)")
                     .font(.callout.weight(.medium)).foregroundStyle(.white)
                 Spacer()
                 Toggle("", isOn: $doubleTapEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
@@ -321,7 +321,7 @@ struct DevToolsView: View {
                     .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Its own key (\(DoubleTap.key.label)), separate from Sidekick's hotkey; if Sidekick is set to the same key, Sidekick keeps it and Double Tap stays quiet.")
+            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Rides Sidekick's key (\(SidekickHotkey.current.label), the Settings choice): one tap opens Sidekick, two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. With this switch off, two taps just open Sidekick sooner.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }

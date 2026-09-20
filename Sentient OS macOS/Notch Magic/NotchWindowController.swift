@@ -86,18 +86,25 @@ final class NotchWindowController {
         }
     }
 
-    /// Esc handling is LOCAL-ONLY (a global keyDown tap is exactly what Input Monitoring gates — never
-    /// add one): this monitor sees Esc whenever events route to Sentient — the focused type field (where
-    /// it consumes Esc *before* the text field so dismissing never beeps) and any notch state while a
-    /// Sentient window is frontmost. Over OTHER apps, a fresh right-⌘ press is the cancel instead
-    /// (CommandCoordinator.voicePressBegan). A LOCAL monitor needs no permission (it only sees events
-    /// already routed to us); `cancelCurrent()` returns true when it handled the Esc → we swallow it
-    /// (nil) so the field doesn't also act on it.
+    /// Esc and ⏎ handling is LOCAL-ONLY (a global keyDown tap is exactly what Input Monitoring gates —
+    /// never add one): this monitor sees them whenever events route to Sentient — the focused type field
+    /// (where it consumes Esc *before* the text field so dismissing never beeps) and any notch state
+    /// while a Sentient window is frontmost. Esc cancels; ⏎ while the mic is open ends the recording and
+    /// fires (the keyboard twin of the field row's stop button; in the type field ⏎ is left to the
+    /// field's own submit). Over OTHER apps, a fresh hotkey press is the cancel instead
+    /// (CommandCoordinator.hotkeyPressed). A LOCAL monitor needs no permission (it only sees events
+    /// already routed to us); a `true` return means the coordinator handled the key → we swallow it
+    /// (nil) so nothing else also acts on it.
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return event }   // 53 = Esc (keep the non-Sendable event off-isolation)
-            let consumed = MainActor.assumeIsolated { self?.coordinator.cancelCurrent() ?? false }
+            let code = event.keyCode   // keep the non-Sendable event off-isolation
+            let consumed: Bool
+            switch code {
+            case 53:      consumed = MainActor.assumeIsolated { self?.coordinator.cancelCurrent() ?? false }   // Esc
+            case 36, 76:  consumed = MainActor.assumeIsolated { self?.coordinator.finishListening() ?? false } // Return · keypad Enter
+            default:      return event
+            }
             return consumed ? nil : event
         }
     }
@@ -153,14 +160,16 @@ final class NotchWindowController {
 
         // The hover affordance is idle-only: the instant the notch opens for real (a hotkey press,
         // a click landing in .typing, a notice), hover yields — the phase owns the shape now, and
-        // the window is already up so there's nothing to choreograph.
+        // the window is already up so there's nothing to choreograph. The panel is KEY only for
+        // .typing and .listening (see reveal); .opening never takes it — a double tap must leave
+        // keyboard focus in the user's own app for Double Tap's paste.
         if coordinator.phase != .hidden, hovering { clearHover() }
 
         // Click-through: while interactive, a cursor poll lets the window receive clicks ONLY over the
         // notch silhouette (the glow + canvas always pass through); otherwise the whole window ignores
         // the mouse so every click sails past. Hovering counts as interactive — the same poll also
         // detects the cursor LEAVING the hover zone (updateMousePassthrough → endHover).
-        if coordinator.phase == .running || coordinator.phase == .typing || hovering {
+        if Self.isInteractive(coordinator.phase) || hovering {
             startMouseTracking()
         } else {
             stopMouseTracking()
@@ -169,7 +178,7 @@ final class NotchWindowController {
 
         if coordinator.phase != .hidden {
             placeCanvas()                                   // the fixed canvas — NEVER resized per morph
-            reveal(makeKey: coordinator.phase == .typing)
+            reveal(makeKey: wantsKey)
         } else if !hovering {
             // Order the window out only AFTER the SwiftUI retract animation has played.
             Task { @MainActor [weak self] in
@@ -186,8 +195,13 @@ final class NotchWindowController {
     /// and never slides during the Spaces swipe). SkyLight is best-effort; the public behavior is the
     /// fallback if it's unavailable.
     ///
-    /// `makeKey` (typing only) makes the panel KEY so its text field can take keystrokes — it's a
-    /// non-activating panel, so this never brings the app forward over whatever you're using.
+    /// `makeKey` makes the panel KEY so its text field can take keystrokes (and, while the mic is
+    /// open, so Esc and ⏎ still reach the local key monitor) — it's a non-activating panel, so this
+    /// never brings the app forward over whatever you're using. Any OTHER reveal from a panel that
+    /// is still key (⏎ just submitted a typed task; a double tap landed inside the dismiss settle
+    /// of a field) first drops it: ordered out and straight back in, inside one run-loop pass, so no
+    /// frame is drawn without the notch. The user's own app has its keyboard back while the agent
+    /// works, and Double Tap's ⌘V lands in their reply box, never in us.
     private func reveal(makeKey: Bool = false) {
         guard let panel else { return }
         panel.collectionBehavior = Self.collectionBehavior
@@ -195,10 +209,14 @@ final class NotchWindowController {
             panel.makeKeyAndOrderFront(nil)
             typingKeyAt = Date()
         } else {
+            if panel.isKeyWindow { panel.orderOut(nil) }
             panel.orderFrontRegardless()
         }
         NotchSpace.shared?.pin(panel)
     }
+
+    /// The phases that own the keyboard: the type field, and the open mic (Esc cancels, ⏎ finishes).
+    private var wantsKey: Bool { coordinator.phase == .typing || coordinator.phase == .listening }
 
     // MARK: Geometry
 
@@ -239,6 +257,16 @@ final class NotchWindowController {
     }
 
     // MARK: Click-through (silhouette-only, by cursor position)
+
+    /// The phases with something to click: the running STOP, the type field and its mic, the
+    /// listening stop button; transcribing rides along so a click on the notch mid-finalize is
+    /// absorbed rather than passed to whatever sits under it.
+    private static func isInteractive(_ phase: NotchPhase) -> Bool {
+        switch phase {
+        case .running, .typing, .listening, .transcribing: return true
+        default: return false
+        }
+    }
 
     /// Poll tiers: crisp while the cursor is anywhere near the notch (inside the canvas), lazy when
     /// it's across the screen — the far tick is just "did they come back?" (one rect test), so timer
@@ -302,8 +330,7 @@ final class NotchWindowController {
     private func updateMousePassthrough() {
         guard let panel else { return }
         if hovering, coordinator.phase == .hidden, !cursorStillHovering() { endHover(); return }
-        let interactive = coordinator.phase == .running || coordinator.phase == .typing
-            || (hovering && coordinator.phase == .hidden)
+        let interactive = Self.isInteractive(coordinator.phase) || (hovering && coordinator.phase == .hidden)
         // The canvas box gates the EXPENSIVE silhouette test (a Path build + the read-back text
         // measurement): a far cursor can't be over the silhouette, so it never pays for one.
         let receive = interactive && cursorNearNotch() && cursorOverSilhouette()
@@ -485,7 +512,7 @@ final class NotchWindowController {
         add(ws, NSWorkspace.didWakeNotification) { [weak self] in self?.reposition() }
         add(ws, NSWorkspace.didActivateApplicationNotification) { [weak self] in
             guard let self, self.coordinator.phase != .hidden else { return }
-            self.reveal(makeKey: self.coordinator.phase == .typing)
+            self.reveal(makeKey: self.wantsKey)
         }
         // Clicked away while the type field was open → close it (ignore the transient resign during setup).
         // ⚠️ A REAL click-away can also land INSIDE the setup grace (clicking away mid-morph, before the
@@ -523,7 +550,7 @@ final class NotchWindowController {
         guard let screen = activeScreen() else { panel?.orderOut(nil); return }
         applyMetrics(for: screen)                       // same display can still mean a new notch geometry
         placeCanvas()                                   // re-size/re-center the canvas for the new display
-        if coordinator.phase != .hidden { reveal(makeKey: coordinator.phase == .typing) }
+        if coordinator.phase != .hidden { reveal(makeKey: wantsKey) }
     }
 
     deinit {
@@ -570,8 +597,8 @@ final class NotchPanel: NSPanel {
 }
 
 /// The hosting view. The window is already sized to just the notch, so the only thing that can capture
-/// clicks is the notch's own box — and only while there's something to click (the running STOP button);
-/// every other phase returns nil so clicks pass through. acceptsFirstMouse → STOP fires on first click.
+/// clicks is the notch's own box — and only while there's something to click (STOP, the field and its
+/// mic, the listening stop). acceptsFirstMouse → a control fires on the first click.
 final class NotchHostingView: NSHostingView<NotchView> {
     private let coordinator: CommandCoordinator
     private var metrics: NotchMetrics

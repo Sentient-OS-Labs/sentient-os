@@ -36,12 +36,14 @@ nonisolated enum SQLiteDB {
     /// WAL-safe copy of a live DB (+ `-wal`/`-shm`) into a brand-new temp dir. Returns the copy's
     /// URL and the temp dir. The caller MUST delete `dir` when done (the DB sources do it the
     /// instant extraction finishes).
-    static func walSafeCopy(of dbPath: String) throws -> (db: URL, dir: URL) {
+    static func walSafeCopy(of dbPath: String, requireCompleteWAL: Bool = false) throws -> (db: URL, dir: URL) {
         let fm = FileManager.default
         guard fm.fileExists(atPath: dbPath) else { throw DBError.missingFile(dbPath) }
 
         let dir = fm.temporaryDirectory.appendingPathComponent("sentientos-db-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var completed = false
+        defer { if !completed { try? fm.removeItem(at: dir) } }
 
         let name = URL(fileURLWithPath: dbPath).lastPathComponent
         let dst = dir.appendingPathComponent(name)
@@ -50,8 +52,12 @@ nonisolated enum SQLiteDB {
             // §7.7: a swallowed `-wal` copy → SQLite can't replay the latest rows → looks like "no new
             // data" (silent stale reads). Surface it (breadcrumb via Log) instead of `try?`-hiding it.
             do { try fm.copyItem(atPath: dbPath + sib, toPath: dst.path + sib) }
-            catch { Log("SQLiteDB: \(name)\(sib) copy failed (may read stale) — \(error)") }
+            catch {
+                if requireCompleteWAL { throw error }
+                Log("SQLiteDB: \(name)\(sib) copy failed (may read stale) — \(error)")
+            }
         }
+        completed = true
         return (dst, dir)
     }
 }

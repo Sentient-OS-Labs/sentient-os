@@ -447,7 +447,7 @@ struct HomeView: View {
         if !compact {   // the feature rows return once the envelope is gone
             VStack(alignment: .leading, spacing: 11) {
                 previewRow("sunrise", "Mornings where things worth doing arrive already done")
-                previewRow("command", "Sidekick anywhere: hold right \u{2318} and just say it")
+                previewRow("command", "Sidekick anywhere: tap right \u{2318} and tell it what to do")
                 previewRow("moon.stars", "A knowledge base that keeps learning, night after night")
             }
             .padding(.top, 20)

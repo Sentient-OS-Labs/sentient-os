@@ -2,20 +2,21 @@
 //  DoubleTap.swift
 //  Sentient OS macOS
 //
-//  The run behind a DOUBLE TAP of its own key (`key`, right ⌥): the cursor sits in a reply box, the
-//  user taps the key twice, and a reply written in their voice lands in the box. One screenshot of
-//  the display under the cursor → one cold call with the ENTIRE knowledge base in context
-//  (DoubleTapInference) → the reply is pasted into the focused field (pasteboard + ⌘V, the user's
-//  clipboard put back after). A screenshot that isn't an email or message reply box gets a short
-//  notch aside instead.
+//  The run behind a DOUBLE TAP of Sidekick's key (right ⌘ by default; the Settings choice): the
+//  cursor sits in a reply box, the user taps the key twice, and a reply written in their voice
+//  lands in the box. One screenshot of the display under the cursor → one cold call with the
+//  ENTIRE knowledge base in context (DoubleTapInference) → the reply is pasted into the focused
+//  field (pasteboard + ⌘V, the user's clipboard put back after). A screenshot that isn't an email
+//  or message reply box gets a short notch aside instead.
 //
 //  The enable switch and the OpenAI key live in Dev Tools until the key question is settled (see
-//  the doc). The key listener and the two-presses-in-a-window test live in CommandCoordinator (a
-//  second SidekickHotkeyMonitor beside Sidekick's own; Sidekick's hotkey setting is untouched, and
-//  if it is set to the same key Sidekick keeps it). The run rides the coordinator's one-task lock,
-//  so the notch shows "Drafting your reply" and a Sidekick hotkey press is STOP.
+//  the doc). The key listener and the two-presses-in-a-window test live in CommandCoordinator: one
+//  press opens the notch, a second inside `window` fires this instead of the type field (the notch
+//  waits out the window before becoming key, so the ⌘V lands in the user's own box). The run rides
+//  the coordinator's one-task lock, so the notch shows "Drafting your reply" and a Sidekick hotkey
+//  press is STOP.
 //
-//  Key methods: start(completion:) · cancel() · key · isEnabled · lastReport.
+//  Key methods: start(completion:) · cancel() · window · isEnabled · lastReport.
 //  Doc: Documentation - Double Tap.md (this folder).
 //
 
@@ -25,11 +26,8 @@ import AppKit
 final class DoubleTap {
     static let shared = DoubleTap()
 
-    /// Double Tap's own key, fixed, separate from Sidekick's hotkey setting. If Sidekick is set to
-    /// the same key, Sidekick keeps it and Double Tap stays quiet (CommandCoordinator.doubleTapPressed).
-    static let key: SidekickHotkey = .rightOption
-
-    /// Two presses within this many seconds (press to press) count as a double tap.
+    /// Two presses of Sidekick's key within this many seconds (press to press) count as a double
+    /// tap. Also how long a single press waits before the type field opens (CommandCoordinator).
     static let window: TimeInterval = 0.35
 
     /// The notch aside for a screenshot that isn't a reply box (the notch truncates past ~45 chars).

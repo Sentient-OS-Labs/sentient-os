@@ -18,6 +18,7 @@ enum SelfTest {
         Task {
             switch mode {
             case "connectorlab": await ConnectorLab.run()
+            case "writingstyle": await WritingStyleTests.run()
             default: Log("SELFTEST: unknown mode '\(mode)'")
             }
             exit(0)

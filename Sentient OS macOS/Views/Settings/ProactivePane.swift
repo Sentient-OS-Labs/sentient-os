@@ -6,7 +6,8 @@
 //  suggestion writer, Sidekick's shortcut key + standing context, and the speed-vs-intelligence
 //  slider (ComputerUseSpeed — the model/effort EVERY computer-use run rides, per engine). The strings
 //  persist and autosave. The hotkey choice (right ⌘ / right ⌥) is LIVE — toggling it posts
-//  `.sidekickHotkeyChanged`, which re-keys the running SidekickHotkeyMonitor with no restart. The
+//  `.sidekickHotkeyChanged`, which re-keys the running SidekickHotkeyMonitor with no restart (Double
+//  Tap rides the same key, so it follows the choice too). The
 //  two text fields are LIVE too: `proactive.instructions` feeds the proactive prompts
 //  (Proactive.instructionsBlock, PART 1 + 2) and `sidekick.context` feeds the command/Sidekick
 //  prompt (CommandRunModel.commandPrompt) — the two keys live in CustomInstructions so producer
@@ -30,7 +31,7 @@ struct ProactivePane: View {
 
     var body: some View {
         SettingsPane(title: "Proactive & Sidekick",
-                     whisper: "Morning suggestions, and the hold-to-talk magic in your notch.") {
+                     whisper: "Morning suggestions, and the Sidekick magic in your notch.") {
             VStack(alignment: .leading, spacing: 30) {
                 SettingsGroup(label: "Proactive Intelligence") {
                     VStack(alignment: .leading, spacing: 10) {
@@ -43,7 +44,7 @@ struct ProactivePane: View {
                     .padding(.vertical, -7)   // sit tighter than the pane's 30pt group rhythm
                 SettingsGroup(label: "Sidekick") {
                     VStack(alignment: .leading, spacing: 14) {
-                        SettingsProse("Hold the shortcut key and just talk (\u{201C}finish this for me\u{201D}), and Sidekick acts on whatever you're looking at.")
+                        SettingsProse("Tap the shortcut key, then type or click the mic and just talk (\u{201C}finish this for me\u{201D}), and Sidekick acts on whatever you're looking at.")
                         ChipFlow {
                             SettingsChip(label: "Right ⌘", on: sidekickHotkey == "rightCommand") {
                                 sidekickHotkey = "rightCommand"

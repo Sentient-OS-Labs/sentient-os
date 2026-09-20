@@ -36,9 +36,13 @@ def check(root, tool_list=None):
 
     eyes, allowed, catalog = (names(name) for name in ("mcpTools", "enabledTools", "allMcpServedTools"))
     if eyes != {"get_window_state", "get_desktop_state", "zoom", "verify_state"}:
-        raise ValueError("the MCP surface must remain the four native vision tools; actions and browser state share the CLI")
+        raise ValueError("the MCP surface must remain the four native vision tools; actions share the CLI")
     if not eyes <= allowed <= catalog:
         raise ValueError("MCP eyes and CLI allowlist must belong to the captured driver catalog")
+    if any(tool.startswith("browser_") or tool == "get_browser_state" for tool in allowed):
+        raise ValueError("the typed browser route stays off: it attaches over Chrome's remote-debugging port, which raises a consent dialog on every connection; browsers are native windows (screenshot + accessibility tree)")
+    if "--grant" in (root / "Sentient OS macOS/Driver/CuaDriverHost.swift").read_text():
+        raise ValueError("the daemon must launch without a --grant; the existing-profile grant is what unlocks the typed browser route")
     if tool_list:
         live = set(re.findall(r"^([a-z][a-z0-9_]*):", tool_list.read_text(), re.M))
         if live != catalog:

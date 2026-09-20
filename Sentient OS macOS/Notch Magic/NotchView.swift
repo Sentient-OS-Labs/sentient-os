@@ -8,8 +8,9 @@
 //  serif→mono read-back dissolve, and the flowing Sentient edge glow that says "the AI is working".
 //
 //  The shape, size, radii, content and glow all animate together off `phase` (one spring) so nothing
-//  ever hard-cuts. Only the STOP button is hit-testable; everything else passes clicks through. The
-//  panel host + positioning live in NotchWindowController. Doc: the two Documentation - Sidekick - *.md files in this folder.
+//  ever hard-cuts. Only the controls are hit-testable (the type field with its mic button, the send
+//  button, the listening stop button, the running STOP); everything else passes clicks through. The panel
+//  host + positioning live in NotchWindowController. Doc: the two Documentation - Sidekick - *.md files in this folder.
 //
 
 import SwiftUI
@@ -31,9 +32,9 @@ struct NotchMetrics: Equatable {
     var controlSlot: CGFloat { 17 }            // the square both the logo AND every right control fill, so they twin exactly (same size, same optical center)
     var topPad: CGFloat { 0 }
     var bottomPad: CGFloat { 4 }
-    var fieldRowHeight: CGFloat { 30 }         // the tap-to-type field row (below the camera band)
+    var fieldRowHeight: CGFloat { 30 }         // the type field row (below the camera band); listening/transcribing keep it
     /// `baseHeight` (auxiliaryTopLeftArea) reports a hair shallower than the notch's real black cutout, so
-    /// the mic state (sized to exactly baseHeight) falls short and the hardware lip peeks below. Add a
+    /// the opening state (sized to exactly baseHeight) falls short and the hardware lip peeks below. Add a
     /// small cover so it fully fills the hardware notch. (Other states are taller and already overshoot.)
     var notchBottomCover: CGFloat { 2 }
     /// The most the notch grows to fit a long spoken instruction before the caption truncates.
@@ -73,9 +74,11 @@ struct NotchMetrics: Equatable {
             // not a fade. (A notch-less display has nothing to merge into → the view fades instead, see
             // `shellOpacity`; base size keeps that fallback sane.)
             return hardwareNotch ?? CGSize(width: baseWidth, height: baseHeight)
-        case .opening, .listening, .transcribing:
+        case .opening:
             return CGSize(width: baseWidth + 76, height: baseHeight + notchBottomCover)   // fully fill the hardware notch
-        case .typing:
+        case .typing, .listening, .transcribing:
+            // One geometry for the whole type-or-talk moment: the mic click swaps the field row's
+            // content in place (placeholder → "Listening…", mic → stop), never the shape.
             return CGSize(width: max(baseWidth + 240, 480), height: baseHeight + fieldRowHeight + bottomPad + 4)
         case .running, .finishing:
             let caption: CGFloat
@@ -91,9 +94,9 @@ struct NotchMetrics: Equatable {
 
     func radii(for phase: NotchPhase) -> (top: CGFloat, bottom: CGFloat) {
         switch phase {
-        case .opening, .listening, .transcribing, .hidden:
+        case .opening, .hidden:
             // The macOS notch's OWN corner radius (DynamicNotch's tuned match: baseHeight / 3), so at
-            // the real notch height the mic state reads as the genuine notch — and the hidden state
+            // the real notch height the opening state reads as the genuine notch — and the hidden state
             // collapses to that same shape so it merges cleanly into the physical cutout on dismiss.
             let r = baseHeight / 3
             return (top: max(r - 4, 0), bottom: r)
@@ -170,6 +173,8 @@ struct NotchView: View {
                      metrics: metrics,
                      onStop: { coordinator.stop() },
                      onSubmitText: { coordinator.submitTyped($0) },
+                     onMic: { coordinator.startListening() },
+                     onFinishListening: { coordinator.finishListening() },
                      onNotchClick: { coordinator.notchClicked() })
     }
 }
@@ -193,6 +198,9 @@ struct NotchContent: View {
     let metrics: NotchMetrics
     var onStop: () -> Void = {}
     var onSubmitText: (String) -> Void = { _ in }
+    /// The field's mic button → open the mic; the listening stop button → transcribe and fire.
+    var onMic: () -> Void = {}
+    var onFinishListening: () -> Void = {}
     var onNotchClick: () -> Void = {}
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -299,6 +307,10 @@ struct NotchContent: View {
                 typingField
                     .frame(height: metrics.fieldRowHeight)
                     .transition(.opacity)
+            } else if phase == .listening || phase == .transcribing {
+                voiceRow
+                    .frame(height: metrics.fieldRowHeight)
+                    .transition(.opacity)
             } else if showsCaption {
                 caption
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -313,21 +325,16 @@ struct NotchContent: View {
 
     @ViewBuilder private var rightControl: some View {
         switch phase {
-        case .opening, .listening:
-            // Shared identity (controlKey) → .opening intensifies INTO .listening (a gentle "lean in"),
-            // never a cross-fade. The full behind-mic color dance is a later polish pass.
-            Image(systemName: "mic.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.white.opacity(phase == .listening ? 0.92 : 0.5))
-                .scaleEffect(phase == .listening ? 1 : 0.9)
-                .allowsHitTesting(false)
-        case .transcribing:
-            ProgressView().controlSize(.small).tint(.white).scaleEffect(0.8).allowsHitTesting(false)
-        case .typing:
-            Image(systemName: "return")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.white.opacity(draft.isEmpty ? 0.3 : 0.7))
-                .allowsHitTesting(false)
+        case .typing, .listening, .transcribing:
+            // One identity (controlKey) across the type-or-talk moment, so the send button sits still
+            // while the field row underneath changes. Solid and clickable when there is something to
+            // send (a typed draft, or an open mic, where a click ends the recording and fires, same
+            // as the stop button), a faint ghost otherwise. Transcribing has nothing to send yet, so
+            // it waits dim.
+            NotchSendButton(enabled: phase == .listening || (phase == .typing && !draft.isEmpty),
+                            help: phase == .listening ? "Stop and send" : "Send") {
+                if phase == .listening { onFinishListening() } else { submitDraft() }
+            }
         case .running:
             // The onboarding demo is theater — nothing real to stop, so no STOP.
             if showStop { NotchStopButton(action: onStop) } else { Color.clear.frame(width: 1, height: 18) }
@@ -336,27 +343,85 @@ struct NotchContent: View {
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(Self.outcomeColor(outcome))
                 .allowsHitTesting(false)
-        case .hidden, .notice:
+        case .hidden, .opening, .notice:
             Color.clear.frame(width: 1, height: 18)
         }
     }
 
-    /// The tap-to-type field — a focused TextField that fires the typed task on ⏎ (Esc / empty cancels).
+    /// The type field — a focused TextField that fires the typed task on ⏎ or the send button (Esc /
+    /// empty cancels) — with the mic button at its trailing end, directly under the send button (same
+    /// slot width, same axis).
+    /// The mic is the way to talk instead; it dissolves the moment the draft has text, since the field
+    /// is now a typed task. Its slot stays reserved so nothing else shifts.
     private var typingField: some View {
-        ZStack(alignment: .leading) {
-            if draft.isEmpty {
-                Text("What can I take over for you?")
-                    .font(.system(size: 13, design: .serif)).italic()
-                    .foregroundStyle(.white.opacity(0.4))
-                    .allowsHitTesting(false)
+        HStack(spacing: 10) {
+            ZStack(alignment: .leading) {
+                if draft.isEmpty {
+                    Text("What can I take over for you?")
+                        .font(.system(size: 13, design: .serif)).italic()
+                        .foregroundStyle(.white.opacity(0.4))
+                        .allowsHitTesting(false)
+                }
+                TextField("", text: $draft)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white)
+                    .tint(Theme.accent)
+                    .focused($fieldFocused)
+                    .onSubmit(submitDraft)
             }
-            TextField("", text: $draft)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13))
-                .foregroundStyle(.white)
-                .tint(Theme.accent)
-                .focused($fieldFocused)
-                .onSubmit { let t = draft; draft = ""; onSubmitText(t) }
+            ZStack {
+                if draft.isEmpty {
+                    NotchMicButton(action: onMic)
+                        .transition(.opacity.combined(with: .scale(scale: 0.7)))
+                }
+            }
+            .frame(width: metrics.controlSlot, height: metrics.controlSlot)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: draft.isEmpty)
+        }
+    }
+
+    /// Fire the typed draft (the field's ⏎ and the send button land here) and clear the field.
+    private func submitDraft() {
+        let text = draft
+        draft = ""
+        onSubmitText(text)
+    }
+
+    /// The field row while the mic is open, and while the transcript finalizes: the same row, its
+    /// content swapped in place — the serif whisper on the left, and in the mic's slot the stop
+    /// button (ends the recording and fires the task) or the finalize spinner.
+    private var voiceRow: some View {
+        HStack(spacing: 10) {
+            Group {
+                if phase == .listening {
+                    TimelineView(.animation(minimumInterval: reduceMotion ? 1 : 1.0 / 30.0)) { ctx in
+                        let t = ctx.date.timeIntervalSinceReferenceDate
+                        let breathe = reduceMotion ? 0.5 : (sin(t * 2 * .pi / 1.6) + 1) / 2   // the "I'm hearing you" breath
+                        Text("Listening…")
+                            .opacity(0.55 + 0.35 * breathe)
+                    }
+                } else {
+                    Text("Transcribing…")
+                        .opacity(0.55)
+                }
+            }
+            .font(.system(size: 13, design: .serif)).italic()
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .allowsHitTesting(false)
+            ZStack {
+                if phase == .listening {
+                    NotchListenStopButton(action: onFinishListening)
+                        .transition(.opacity.combined(with: .scale(scale: 0.7)))
+                } else {
+                    ProgressView().controlSize(.small).tint(.white).scaleEffect(0.8)
+                        .transition(.opacity)
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(width: metrics.controlSlot, height: metrics.controlSlot)
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: phase)
         }
     }
 
@@ -510,24 +575,25 @@ struct NotchContent: View {
         switch phase { case .running, .finishing, .notice: return true; default: return false }
     }
 
-    /// Identity for the right-control cross-fade (mic → spinner → stop → glyph).
+    /// Identity for the right-control cross-fade (⏎ glyph → STOP → outcome glyph).
     private var controlKey: Int {
         switch phase {
         case .hidden: return 0
-        case .opening, .listening: return 1   // shared identity → .opening intensifies INTO .listening
-        case .transcribing: return 2
+        case .opening: return 1
+        case .typing, .listening, .transcribing: return 2   // shared identity → the send button holds still across type-or-talk
         case .running: return 3
         case .finishing: return 4
         case .notice: return 5
-        case .typing: return 6
         }
     }
 
     private var a11yLabel: String {
         switch phase {
         case .hidden: return hovering ? "Sentient — click to type a task" : ""
-        case .opening, .listening, .transcribing: return "Sentient is listening"
-        case .typing: return "Type a task for Sentient"
+        case .opening: return "Sentient"
+        case .typing: return "Type a task for Sentient, or click the microphone to say it"
+        case .listening: return "Sentient is listening. Click stop, or press Return, when you're done"
+        case .transcribing: return "Sentient is transcribing"
         case .running: return "Sentient is working. \(statusLine)"
         case .finishing: return statusLine
         case .notice(let m): return m
@@ -546,8 +612,9 @@ struct NotchContent: View {
     }
 }
 
-// MARK: - The notch's one interactive element
+// MARK: - The notch's interactive elements (each fills the 17 pt control slot, like the logo)
 
+/// The running STOP: a circle, because it interrupts the work.
 private struct NotchStopButton: View {
     let action: () -> Void
     var body: some View {
@@ -562,6 +629,79 @@ private struct NotchStopButton: View {
         }
         .buttonStyle(.plain)
         .help("Stop")
+    }
+}
+
+/// The send button in the camera band: the pointer's twin of pressing Return, drawn as the familiar
+/// up-arrow in a filled circle. Solid white and clickable only when there is something to send (it
+/// brightens fully under the cursor); a faint ghost of itself and hit-transparent otherwise, so it
+/// never swallows a click as a dead button.
+private struct NotchSendButton: View {
+    let enabled: Bool
+    let help: String
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(enabled ? Color.black : .white.opacity(0.3))
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(.white.opacity(!enabled ? 0.12 : hovering ? 1.0 : 0.88)))
+                .contentShape(Circle().inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .allowsHitTesting(enabled)
+        .onHover { hovering = $0 }
+        .onChange(of: enabled) { _, on in if !on { hovering = false } }   // hover exits don't reach a hit-transparent view
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .animation(.easeOut(duration: 0.15), value: enabled)
+        .help(help)
+    }
+}
+
+/// The type field's mic: a quiet glyph that brightens under the cursor. Its hit area is padded past
+/// the 17 pt slot so a click near it lands.
+private struct NotchMicButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.55))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle().inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .help("Say it instead")
+    }
+}
+
+/// The listening stop: a rounded square holding a white square (the recording-stop shape), sitting
+/// exactly where the mic was so the second click lands on the first. Ends the recording AND fires
+/// the task; it is not a cancel (Esc and a hotkey press are).
+private struct NotchListenStopButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+    var body: some View {
+        Button(action: action) {
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(.white)
+                .frame(width: 7, height: 7)
+                .frame(width: 18, height: 18)
+                .background(RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                    .fill(.white.opacity(hovering ? 0.3 : 0.18)))
+                .overlay(RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                    .strokeBorder(.white.opacity(0.25), lineWidth: 1))
+                .contentShape(Rectangle().inset(by: -6))
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .help("Stop and send")
     }
 }
 
@@ -604,11 +744,17 @@ private struct NotchPreviewStage<Content: View>: View {
 #Preview("hover (click affordance)") {
     NotchPreviewStage { NotchContent(phase: .hidden, readBack: nil, statusLine: "", hovering: true, metrics: .preview) }
 }
-#Preview("listening") {
+#Preview("opening") {
+    NotchPreviewStage { NotchContent(phase: .opening, readBack: nil, statusLine: "", metrics: .preview) }
+}
+#Preview("typing (mic in the field)") {
+    NotchPreviewStage { NotchContent(phase: .typing, readBack: nil, statusLine: "", metrics: .preview) }
+}
+#Preview("listening (stop in the field)") {
     NotchPreviewStage { NotchContent(phase: .listening, readBack: nil, statusLine: "", metrics: .preview) }
 }
-#Preview("typing") {
-    NotchPreviewStage { NotchContent(phase: .typing, readBack: nil, statusLine: "", metrics: .preview) }
+#Preview("transcribing") {
+    NotchPreviewStage { NotchContent(phase: .transcribing, readBack: nil, statusLine: "", metrics: .preview) }
 }
 #Preview("running · read-back") {
     NotchPreviewStage { NotchContent(phase: .running, readBack: "register me for ZFellows", statusLine: "", metrics: .preview) }
