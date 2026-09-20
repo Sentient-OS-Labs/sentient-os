@@ -71,7 +71,7 @@ final class DoubleTap {
 
     private func perform() async -> Result {
         guard DoubleTapInference.apiKey != nil else {
-            return .failed(DoubleTapInference.Failure.noKey(DoubleTapInference.provider).label)
+            return .failed(DoubleTapInference.Failure.noKey(DoubleTapInference.provider.vendor).label)
         }
         guard Permissions.hasAccessibility() else { return .failed("needs Accessibility to paste") }
         let started = Date()

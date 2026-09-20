@@ -93,12 +93,12 @@ struct DevToolsView: View {
 
     // Double Tap (its own key twice → draft a reply) — the manual-test harness (Double Tap/DoubleTap.swift).
     @AppStorage(DoubleTap.enabledKey) private var doubleTapEnabled = false
-    @AppStorage(DoubleTapInference.providerKey) private var doubleTapProviderRaw = DoubleTapInference.Provider.openai.rawValue
+    @AppStorage(DoubleTapInference.providerKey) private var doubleTapProviderRaw = DoubleTapInference.Provider.sol.rawValue
     @State private var doubleTapKeyDraft = ""
-    @State private var doubleTapKeysSaved: [DoubleTapInference.Provider: Bool] = [:]
+    @State private var doubleTapKeysSaved: [DoubleTapInference.Vendor: Bool] = [:]
     @State private var doubleTap = DoubleTap.shared
     private var doubleTapProvider: DoubleTapInference.Provider {
-        .init(rawValue: doubleTapProviderRaw) ?? .openai
+        .init(rawValue: doubleTapProviderRaw) ?? .sol
     }
 
     // The 3-way card mode (which deck the home deals) — see BriefingDeck (Briefing.swift).
@@ -270,7 +270,8 @@ struct DevToolsView: View {
     /// Double Tap's switch, the provider picker, that provider's key (Keychain), and the last run's timings.
     private var doubleTapSection: some View {
         let provider = doubleTapProvider
-        let keySaved = doubleTapKeysSaved[provider] ?? false
+        let vendor = provider.vendor
+        let keySaved = doubleTapKeysSaved[vendor] ?? false
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Double Tap (\(DoubleTap.key.label) twice → draft a reply)")
@@ -280,7 +281,7 @@ struct DevToolsView: View {
             }
             Picker("", selection: $doubleTapProviderRaw) {
                 ForEach(DoubleTapInference.Provider.allCases) { p in
-                    Text("\(p.label) · \(p.model)").tag(p.rawValue)
+                    Text(p.model).tag(p.rawValue)
                 }
             }
             .pickerStyle(.segmented).labelsHidden().controlSize(.small)
@@ -288,24 +289,24 @@ struct DevToolsView: View {
                 Circle()
                     .fill(keySaved ? Theme.Ink.green : Color.orange)
                     .frame(width: 6, height: 6)
-                Text(keySaved ? "\(provider.label) key saved (Keychain)" : "no \(provider.label) key yet")
+                Text(keySaved ? "\(vendor.label) key saved (Keychain)" : "no \(vendor.label) key yet")
                     .font(.caption2).foregroundStyle(Theme.faint)
                 Spacer()
                 if keySaved {
                     Button("Remove") {
-                        Keychain.delete(provider.apiKeyAccount)
-                        doubleTapKeysSaved[provider] = false
+                        Keychain.delete(vendor.apiKeyAccount)
+                        doubleTapKeysSaved[vendor] = false
                     }
                     .controlSize(.small)
                 }
             }
             HStack(spacing: 8) {
-                SecureField("\(provider.label) API key", text: $doubleTapKeyDraft)
+                SecureField("\(vendor.label) API key", text: $doubleTapKeyDraft)
                     .textFieldStyle(.roundedBorder).font(.caption)
                 Button("Save") {
                     let key = doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !key.isEmpty else { return }
-                    doubleTapKeysSaved[provider] = Keychain.set(provider.apiKeyAccount, key)
+                    doubleTapKeysSaved[vendor] = Keychain.set(vendor.apiKeyAccount, key)
                     doubleTapKeyDraft = ""
                 }
                 .controlSize(.small)
@@ -317,7 +318,7 @@ struct DevToolsView: View {
                     .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("\(provider.model) · \(provider.reasoningNote) · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Its own key (\(DoubleTap.key.label)), separate from Sidekick's hotkey; if Sidekick is set to the same key, Sidekick keeps it and Double Tap stays quiet.")
+            Text("\(provider.model) · \(vendor.reasoningNote) · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Its own key (\(DoubleTap.key.label)), separate from Sidekick's hotkey; if Sidekick is set to the same key, Sidekick keeps it and Double Tap stays quiet.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -325,8 +326,8 @@ struct DevToolsView: View {
         .frame(maxWidth: .infinity)
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
         .onAppear {
-            for p in DoubleTapInference.Provider.allCases {
-                doubleTapKeysSaved[p] = DoubleTapInference.apiKey(for: p) != nil
+            for v in [DoubleTapInference.Vendor.openai, .gemini] {
+                doubleTapKeysSaved[v] = DoubleTapInference.apiKey(for: v) != nil
             }
         }
     }
