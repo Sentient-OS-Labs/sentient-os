@@ -7,17 +7,17 @@
 //  One model, chosen after a measured bake-off (2026-09-19: luna, sol, Gemini 3.8 Flash):
 //  gpt-5.6-sol with reasoning off, on OpenAI's Responses API, streamed so the time to first text
 //  is measurable. Two routes, picked in Dev Tools: the RELAY (the shipped path: Sentient's
-//  Cloudflare Worker in `Relay/` at the repo root adds Sentient's key, enforces the per-user caps,
-//  and owns the prompt; the client sends only the screenshot and the vault, named by a random
-//  identity minted into the Keychain) and the DIRECT KEY (dev: straight to OpenAI with a key from
-//  Dev Tools). Both bypass the FrontierRun seam on purpose: a `codex exec` spawn costs seconds and
-//  this feature is judged on feel. Every call is COLD by construction: the screenshot is the first
-//  thing in the prompt and differs on every press, so no prefix cache can ever match. `store: false`
-//  keeps OpenAI from retaining a copy.
+//  Cloudflare Worker adds Sentient's key, enforces the per-user caps, and owns the prompt; the
+//  client sends only the screenshot and the vault, named by a random identity minted into the
+//  Keychain) and the DIRECT KEY (dev: straight to OpenAI with a key from Dev Tools). Both bypass
+//  the FrontierRun seam on purpose: a `codex exec` spawn costs seconds and this feature is judged
+//  on feel. Every call is COLD by construction: the screenshot is the first thing in the prompt and
+//  differs on every press, so no prefix cache can ever match. `store: false` keeps OpenAI from
+//  retaining a copy.
 //
 //  Key methods: draft(screenshot:vault:) · route · relayIdentity · configurationProblem ·
 //  verdict(from:) · packVault(_:).
-//  Doc: Documentation - Double Tap.md (this folder) · Relay/README.md (the Worker).
+//  Doc: Documentation - Double Tap.md (this folder).
 //
 
 import Foundation
@@ -49,9 +49,9 @@ enum DoubleTapInference {
         Route(rawValue: UserDefaults.standard.string(forKey: routeKey) ?? "") ?? .relay
     }
 
-    /// The deployed Worker (`Relay/wrangler.toml` names it; the workers.dev subdomain is the
-    /// account's). Dev Tools can override it (`doubletap.relayURL`) to point at a preview or a
-    /// local `wrangler dev` (`http://localhost:8787`).
+    /// The deployed Worker (its name, then the account's workers.dev subdomain). Dev Tools can
+    /// override it (`doubletap.relayURL`) to point at a preview or a local `wrangler dev`
+    /// (`http://localhost:8787`).
     static let defaultRelayURL = "https://sentient-doubletap-relay.sentient-doubletap-relay.workers.dev"
     static let relayURLKey = "doubletap.relayURL"
     static var relayURL: URL? {
@@ -234,7 +234,7 @@ enum DoubleTapInference {
         return request
     }
 
-    /// The relay's JSON error → the ✗ caption (see Relay/README.md for the contract).
+    /// The relay's JSON error → the ✗ caption.
     private static func relayLabel(status: Int, body: String) -> String {
         let payload = (try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? [String: Any]
         let code = payload?["error"] as? String ?? ""

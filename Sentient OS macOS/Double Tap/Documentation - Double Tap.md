@@ -18,9 +18,9 @@ on feel: the whole point is that the reply appears before the user could have st
 
 Three pieces live elsewhere. `CommandCoordinator` (Notch Magic/) owns the key listener and the
 two-presses-in-a-window test, and adopts the run into the notch. `ScreenCapture` (Notch Magic/)
-grew a single-display capture and a JPEG downscale for this feature. The server half is the
-Cloudflare Worker in `Relay/` at the repo root. The switch, the route picker, the relay URL
-override, the dev key field, and the timing readout sit in Dev Tools
+grew a single-display capture and a JPEG downscale for this feature. The server half is a
+Cloudflare Worker Sentient runs; the app knows only its URL. The switch, the route picker, the
+relay URL override, the dev key field, and the timing readout sit in Dev Tools
 (`Views/Dev/DevToolsView.swift`).
 
 ## How a press works
@@ -39,11 +39,11 @@ override, the dev key field, and the timing readout sit in Dev Tools
    past this size anyway.
 4. **The call.** `DoubleTapInference.draft` sends the screenshot and the entire knowledge base
    (README first, then every note in full, under a 600 KB ceiling) to the relay, Sentient's
-   Cloudflare Worker in `Relay/` at the repo root. The Worker checks the caller's caps, builds the
-   OpenAI request itself (`gpt-5.6-sol`, reasoning off, the prompt, `store: false`), adds
-   Sentient's key, and streams the reply back. The screenshot is the first thing in the prompt,
-   so every call is cold: no prefix cache can match a screen that differs on every press. A
-   dev-only second route sends the same request straight to OpenAI with a key from Dev Tools.
+   Cloudflare Worker. The Worker checks the caller's caps, builds the OpenAI request itself
+   (`gpt-5.6-sol`, reasoning off, the prompt, `store: false`), adds Sentient's key, and streams
+   the reply back. The screenshot is the first thing in the prompt, so every call is cold: no
+   prefix cache can match a screen that differs on every press. A dev-only second route sends
+   the same request straight to OpenAI with a key from Dev Tools.
 5. **The verdict.** `NOT_A_MESSAGE`, tolerant of the decoration models add around it, becomes the
    notch aside "double tap in an email or message reply box". Anything else is the reply.
 6. **The paste.** The reply goes on the pasteboard, one ⌘V is posted to the frontmost app, and the
@@ -92,11 +92,10 @@ visible on screen.
 
 Double Tap bypasses the FrontierRun seam that every other cloud call uses, because a `codex exec`
 spawn costs seconds this feature cannot spend. The decision (2026-09-20) is that Sentient pays for
-the model, through a relay it runs: a stateless Cloudflare Worker (`Relay/`, its own README). The
-app never holds an OpenAI key. What it holds instead is a **relay identity**: 32 random bytes
-minted once into the Keychain (`doubletap.relay.identity`), sent as a bearer token. The Worker
-keeps a hash of it as the key for that user's counters and stores nothing else; there are still no
-accounts.
+the model, through a relay it runs: a stateless Cloudflare Worker. The app never holds an OpenAI
+key. What it holds instead is a **relay identity**: 32 random bytes minted once into the Keychain
+(`doubletap.relay.identity`), sent as a bearer token. The Worker keeps a hash of it as the key for
+that user's counters and stores nothing else; there are still no accounts.
 
 What the relay enforces, per identity: 60 drafts an hour and 100 a day (config values on the
 Worker). A global monthly ceiling exists as the kill switch against bulk-minted identities and
@@ -114,7 +113,6 @@ in the Claude context need to say so plainly before it ships to users.
 
 ## Related docs
 
-- `Relay/README.md` (repo root): the Worker, its contract, its measurements, the account notes.
 - `Notch Magic/Documentation - Sidekick - General.md`: the coordinator, the hotkey monitor, the
   run model, adopted runs.
 - `Notch Magic/Documentation - Sidekick - Notch Window & Visual.md`: the notch phases and the aside.
