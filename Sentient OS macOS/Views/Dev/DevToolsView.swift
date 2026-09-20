@@ -93,6 +93,8 @@ struct DevToolsView: View {
 
     // Double Tap (its own key twice → draft a reply) — the manual-test harness (Double Tap/DoubleTap.swift).
     @AppStorage(DoubleTap.enabledKey) private var doubleTapEnabled = false
+    @AppStorage(DoubleTapInference.routeKey) private var doubleTapRouteRaw = DoubleTapInference.Route.relay.rawValue
+    @AppStorage(DoubleTapInference.relayURLKey) private var doubleTapRelayURL = ""
     @State private var doubleTapKeyDraft = ""
     @State private var doubleTapKeySaved = false
     @State private var doubleTap = DoubleTap.shared
@@ -263,41 +265,55 @@ struct DevToolsView: View {
         .onAppear { codexSetup.refreshCuaDriver() }
     }
 
-    /// Double Tap's switch, the OpenAI key (Keychain), and the last run's timings.
+    /// Double Tap's switch, the route (relay or a dev key), that route's settings, and the last run's timings.
     private var doubleTapSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let route = DoubleTapInference.Route(rawValue: doubleTapRouteRaw) ?? .relay
+        return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Double Tap (\(DoubleTap.key.label) twice → draft a reply)")
                     .font(.callout.weight(.medium)).foregroundStyle(.white)
                 Spacer()
                 Toggle("", isOn: $doubleTapEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
             }
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(doubleTapKeySaved ? Theme.Ink.green : Color.orange)
-                    .frame(width: 6, height: 6)
-                Text(doubleTapKeySaved ? "OpenAI key saved (Keychain)" : "no OpenAI key yet")
+            Picker("", selection: $doubleTapRouteRaw) {
+                ForEach(DoubleTapInference.Route.allCases) { r in Text(r.label).tag(r.rawValue) }
+            }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+            if route == .relay {
+                TextField(DoubleTapInference.defaultRelayURL.isEmpty ? "https://….workers.dev" : DoubleTapInference.defaultRelayURL,
+                          text: $doubleTapRelayURL)
+                    .textFieldStyle(.roundedBorder).font(.caption)
+                Text("Sentient's Worker adds the key and enforces the caps (60/hour, 100/day per identity). This Mac's identity is a random secret in the Keychain; the relay stores only a hash of it.")
                     .font(.caption2).foregroundStyle(Theme.faint)
-                Spacer()
-                if doubleTapKeySaved {
-                    Button("Remove") {
-                        Keychain.delete(DoubleTapInference.apiKeyAccount)
-                        doubleTapKeySaved = false
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(doubleTapKeySaved ? Theme.Ink.green : Color.orange)
+                        .frame(width: 6, height: 6)
+                    Text(doubleTapKeySaved ? "OpenAI key saved (Keychain)" : "no OpenAI key yet")
+                        .font(.caption2).foregroundStyle(Theme.faint)
+                    Spacer()
+                    if doubleTapKeySaved {
+                        Button("Remove") {
+                            Keychain.delete(DoubleTapInference.apiKeyAccount)
+                            doubleTapKeySaved = false
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                HStack(spacing: 8) {
+                    SecureField("OpenAI API key", text: $doubleTapKeyDraft)
+                        .textFieldStyle(.roundedBorder).font(.caption)
+                    Button("Save") {
+                        let key = doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !key.isEmpty else { return }
+                        doubleTapKeySaved = Keychain.set(DoubleTapInference.apiKeyAccount, key)
+                        doubleTapKeyDraft = ""
                     }
                     .controlSize(.small)
+                    .disabled(doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }
-            HStack(spacing: 8) {
-                SecureField("OpenAI API key", text: $doubleTapKeyDraft)
-                    .textFieldStyle(.roundedBorder).font(.caption)
-                Button("Save") {
-                    let key = doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !key.isEmpty else { return }
-                    doubleTapKeySaved = Keychain.set(DoubleTapInference.apiKeyAccount, key)
-                    doubleTapKeyDraft = ""
-                }
-                .controlSize(.small)
-                .disabled(doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             if let report = doubleTap.lastReport {
                 Text(report)

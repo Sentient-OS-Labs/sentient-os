@@ -6,18 +6,22 @@
 //  base + the drafting instructions → either the reply to paste or a "not a reply box" verdict.
 //  One model, chosen after a measured bake-off (2026-09-19: luna, sol, Gemini 3.8 Flash):
 //  gpt-5.6-sol with reasoning off, on OpenAI's Responses API, streamed so the time to first text
-//  is measurable. The call goes straight to OpenAI with the key from the Keychain — a deliberate
-//  bypass of the FrontierRun seam, because a `codex exec` spawn costs seconds and this feature is
-//  judged on feel (whose key it is in the shipped product is still an open decision; see the doc).
-//  Every call is COLD by construction: the screenshot is the first thing in the prompt and differs
-//  on every press, so no prefix cache can ever match. `store: false` keeps OpenAI from retaining a
-//  copy.
+//  is measurable. Two routes, picked in Dev Tools: the RELAY (the shipped path: Sentient's
+//  Cloudflare Worker in `Relay/` at the repo root adds Sentient's key, enforces the per-user caps,
+//  and owns the prompt; the client sends only the screenshot and the vault, named by a random
+//  identity minted into the Keychain) and the DIRECT KEY (dev: straight to OpenAI with a key from
+//  Dev Tools). Both bypass the FrontierRun seam on purpose: a `codex exec` spawn costs seconds and
+//  this feature is judged on feel. Every call is COLD by construction: the screenshot is the first
+//  thing in the prompt and differs on every press, so no prefix cache can ever match. `store: false`
+//  keeps OpenAI from retaining a copy.
 //
-//  Key methods: draft(screenshot:vault:) · apiKey · verdict(from:) · packVault(_:).
-//  Doc: Documentation - Double Tap.md (this folder).
+//  Key methods: draft(screenshot:vault:) · route · relayIdentity · configurationProblem ·
+//  verdict(from:) · packVault(_:).
+//  Doc: Documentation - Double Tap.md (this folder) · Relay/README.md (the Worker).
 //
 
 import Foundation
+import Security
 
 enum DoubleTapInference {
     static let model = "gpt-5.6-sol"
@@ -30,6 +34,54 @@ enum DoubleTapInference {
     static var apiKey: String? {
         let key = Keychain.read(apiKeyAccount)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return key.isEmpty ? nil : key
+    }
+
+    // MARK: Route (the relay, or a direct key)
+
+    enum Route: String, CaseIterable, Identifiable {
+        case relay, directKey
+        var id: String { rawValue }
+        var label: String { self == .relay ? "Sentient relay" : "OpenAI key (dev)" }
+    }
+
+    static let routeKey = "doubletap.route"
+    static var route: Route {
+        Route(rawValue: UserDefaults.standard.string(forKey: routeKey) ?? "") ?? .relay
+    }
+
+    /// The deployed Worker. Dev Tools can override it (`doubletap.relayURL`) to point at a
+    /// preview or a local `wrangler dev`.
+    static let defaultRelayURL = ""   // filled in once the Worker is deployed
+    static let relayURLKey = "doubletap.relayURL"
+    static var relayURL: URL? {
+        let override = UserDefaults.standard.string(forKey: relayURLKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw = override.isEmpty ? defaultRelayURL : override
+        return raw.isEmpty ? nil : URL(string: raw)
+    }
+
+    /// The relay identity: 32 random bytes, base64url, minted once into the Keychain. It is the
+    /// user's only name to the relay (no accounts); the Worker keeps a hash of it as the counter
+    /// key and never stores the secret itself.
+    static let relayIdentityAccount = "doubletap.relay.identity"
+    static var relayIdentity: String {
+        if let existing = Keychain.read(relayIdentityAccount), !existing.isEmpty { return existing }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let minted = Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        Keychain.set(relayIdentityAccount, minted)
+        return minted
+    }
+
+    /// Nil when the selected route can run; otherwise the ✗ caption naming what is missing.
+    static var configurationProblem: String? {
+        switch route {
+        case .relay: return relayURL == nil ? "relay URL not set (Dev Tools)" : nil
+        case .directKey: return apiKey == nil ? Failure.noKey.label : nil
+        }
     }
 
     /// The whole vault rides along, but never past this many bytes of notes (a typical vault is
@@ -63,6 +115,7 @@ enum DoubleTapInference {
         case noKey
         case noVault(String)
         case http(Int, String)
+        case relay(String)
         case api(String)
         case empty
         case cancelled
@@ -73,6 +126,7 @@ enum DoubleTapInference {
             case .noKey: return "no OpenAI key (Dev Tools)"
             case .noVault(let path): return "no knowledge base at \(path)"
             case .http(let code, _): return "OpenAI HTTP \(code)"
+            case .relay(let why): return why
             case .api(let message): return "OpenAI: \(message.prefix(80))"
             case .empty: return "empty reply"
             case .cancelled: return "stopped"
@@ -85,12 +139,20 @@ enum DoubleTapInference {
     /// One streamed call. `screenshot` is JPEG bytes (already downscaled); `vault` is the knowledge
     /// base root. Throws `Failure`; a cancelled Task surfaces as `.cancelled`.
     static func draft(screenshot: Data, vault: URL) async throws -> Outcome {
-        guard let key = apiKey else { throw Failure.noKey }
+        let route = route
         let packed = packVault(vault)
         guard packed.notes > 0 else { throw Failure.noVault(vault.path) }
-        Log("⌘⌘ \(model): \(packed.notes) notes, \(packed.bytes / 1024) KB\(packed.truncated ? " (truncated)" : ""), screenshot \(screenshot.count / 1024) KB")
+        Log("⌘⌘ \(model) via \(route == .relay ? "relay" : "key"): \(packed.notes) notes, \(packed.bytes / 1024) KB\(packed.truncated ? " (truncated)" : ""), screenshot \(screenshot.count / 1024) KB")
 
-        let request = try request(key: key, image: screenshot, prompt: instructions + packed.text)
+        let request: URLRequest
+        switch route {
+        case .directKey:
+            guard let key = apiKey else { throw Failure.noKey }
+            request = try directRequest(key: key, image: screenshot, prompt: instructions + packed.text)
+        case .relay:
+            guard let base = relayURL else { throw Failure.relay("relay URL not set (Dev Tools)") }
+            request = try relayRequest(base: base, image: screenshot, knowledgeBase: packed.text)
+        }
         let started = Date()
         var timing = Timing()
         var text = ""
@@ -100,7 +162,8 @@ enum DoubleTapInference {
             guard status == 200 else {
                 var detail = ""
                 for try await line in bytes.lines where detail.count < 400 { detail += line }
-                throw Failure.http(status, detail)
+                throw route == .relay ? Failure.relay(relayLabel(status: status, body: detail))
+                                      : Failure.http(status, detail)
             }
             for try await line in bytes.lines {
                 guard line.hasPrefix("data:") else { continue }
@@ -147,9 +210,42 @@ enum DoubleTapInference {
         return "\(Int(seconds * 1000)) ms"
     }
 
-    // MARK: The Responses API request + its stream
+    // MARK: The relay request (the shipped path)
 
-    private static func request(key: String, image: Data, prompt: String) throws -> URLRequest {
+    private static func relayRequest(base: URL, image: Data, knowledgeBase: String) throws -> URLRequest {
+        var request = URLRequest(url: base.appendingPathComponent("v1/draft"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = idleTimeout
+        request.setValue("Bearer \(relayIdentity)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "image": image.base64EncodedString(),
+            "knowledgeBase": knowledgeBase,
+        ])
+        return request
+    }
+
+    /// The relay's JSON error → the ✗ caption (see Relay/README.md for the contract).
+    private static func relayLabel(status: Int, body: String) -> String {
+        let payload = (try? JSONSerialization.jsonObject(with: Data(body.utf8))) as? [String: Any]
+        let code = payload?["error"] as? String ?? ""
+        switch code {
+        case "cap_reached":
+            let window = payload?["window"] as? String ?? "hour"
+            let minutes = max(1, (payload?["retryAfterSeconds"] as? Int ?? 60) / 60)
+            return "\(window == "day" ? "daily" : "hourly") cap reached, try in \(minutes) min"
+        case "budget_reached": return "relay budget reached this month"
+        case "identity_required": return "relay rejected the identity"
+        case "upstream_error": return "OpenAI HTTP \(payload?["status"] as? Int ?? 0) (via relay)"
+        case "upstream_unreachable": return "relay could not reach OpenAI"
+        case "too_large", "bad_image", "bad_knowledge_base": return "relay refused the payload (\(code))"
+        default: return "relay HTTP \(status)"
+        }
+    }
+
+    // MARK: The direct Responses API request (dev) + the stream both routes share
+
+    private static func directRequest(key: String, image: Data, prompt: String) throws -> URLRequest {
         let body: [String: Any] = [
             "model": model,
             "stream": true,
