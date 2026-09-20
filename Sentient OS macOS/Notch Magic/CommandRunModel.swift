@@ -646,7 +646,7 @@ final class CommandRunModel {
     /// references something it doesn't recognize. `screenshots` is how many display frames are attached (via `codex exec -i`,
     /// main display first — ScreenCapture's guarantee): the prompt tells the agent to ground "this"/"here"
     /// in what it can see, and with several displays, that it's seeing all of them.
-    /// When `spoken` (Sidekick's hold-to-talk), the agent is told the task is a speech-to-text transcript,
+    /// When `spoken` (the notch's mic), the agent is told the task is a speech-to-text transcript,
     /// so it reads through mis-transcriptions instead of taking them literally — but doesn't gamble on an
     /// uncertain reading when the outcome would be non-trivial.
     /// `history` (from `SidekickHistory.promptBlock()`) inlines the recent requests + outcomes so

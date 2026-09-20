@@ -34,8 +34,9 @@ final class AppState {
     /// The in-app scheduler — only ever runs while the app is alive (DEV TOOLS "Scheduled run").
     let scheduler = OvernightScheduler()
 
-    /// The "do this for me" brain: the right-⌘ hold-to-talk hotkey + voice + the one shared codex run
-    /// + the notch's status phase. Both the home command bar and the hotkey drive this. (Notch Magic/)
+    /// The "do this for me" brain: the right-⌘ tap-to-type hotkey (two taps → a reply draft) + the
+    /// notch's mic + the one shared codex run + the notch's status phase. Both the home command bar
+    /// and the hotkey drive this. (Notch Magic/)
     let commandCoordinator = CommandCoordinator()
 
     /// The notch overlay window — renders the coordinator's status phase as the living notch.

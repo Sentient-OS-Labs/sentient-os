@@ -616,6 +616,28 @@ actor CodexCLI {
         await ping(forceCustom: true)
     }
 
+    /// The error messages codex reports inside its JSON stream.
+    private static func streamErrors(in stdout: String) -> [String] {
+        stdout.split(separator: "\n", omittingEmptySubsequences: true).compactMap { line in
+            guard let data = line.data(using: .utf8),
+                  let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  ["turn.failed", "error"].contains(obj["type"] as? String ?? "") else { return nil }
+            return (obj["error"] as? [String: Any])?["message"] as? String ?? obj["message"] as? String
+        }
+    }
+
+    /// What a failed codex process actually said. The stream's own error events come first:
+    /// codex prints a "Reading additional input from stdin..." notice on stderr whenever it is
+    /// spawned without a terminal, so stderr is never empty on a failure and would otherwise
+    /// stand in for a usage limit or a login problem that the stream named precisely.
+    private static func failureDetail(_ out: ExecResult) -> String {
+        let errors = streamErrors(in: out.stdout)
+        if !errors.isEmpty { return errors.joined(separator: " · ") }
+        let stderr = out.stderr.replacingOccurrences(of: "Reading additional input from stdin...", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return stderr.isEmpty ? out.stdout : stderr
+    }
+
     private static func ping(forceCustom: Bool = false) async -> Availability {
         guard let bin = locateBinary() else { return .notInstalled }
         let custom = forceCustom || ModelBackend.current == .custom
@@ -649,7 +671,7 @@ actor CodexCLI {
                                              stdinText: nil, cwd: nil, timeout: timeout)
             if let probeImage {
                 guard out.status == 0 else {
-                    let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+                    let detail = failureDetail(out)
                     return .notWorking(String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))
                 }
                 // The model must have READ the code — proof it sees screenshots, not just that
@@ -660,7 +682,7 @@ actor CodexCLI {
                 return .available(path: bin)
             }
             if out.status == 0 && out.stdout.contains("PIGGYBACK_OK") { return .available(path: bin) }
-            let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+            let detail = failureDetail(out)
             return .notWorking(String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300)))
         } catch {
             return .notWorking("\(error)")
@@ -771,7 +793,7 @@ actor CodexCLI {
     /// (Driver/CuaDriver): Sentient's own long-lived daemon (Driver/CuaDriverHost) clicks and types
     /// in the background, and the agent reaches it over the HYBRID transport — the four vision
     /// tools as a real MCP server (CuaDriver.codexOverrides: screenshots arrive inline, ~3k tokens
-    /// of schema), every action and the browser family as one-shot CLI calls through the shim the
+    /// of schema), every action as one-shot CLI calls through the shim the
     /// host writes (`<shim> <tool> '<json>'`, zero schema cost); the operating manual is
     /// CuaDriverSkill.rules, spliced into the prompt by the caller. Runs a raw
     /// `codex exec` with the prompt passed as ARGV:
@@ -899,7 +921,7 @@ actor CodexCLI {
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
             Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
-                let detail = out.stderr.isEmpty ? out.stdout : out.stderr
+                let detail = Self.failureDetail(out)
                 if let stale = Self.staleClientError(in: out.stderr, detail) { throw stale }
                 throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
             }
@@ -1280,8 +1302,7 @@ actor CodexCLI {
         // produced an answer with exit 0 counts as success). The thread id arrives in the very
         // first event, so even a mid-run usage limit keeps its resume handle.
         if out.status != 0 || lastMessage == nil {
-            let detail = errors.isEmpty ? (out.stderr.isEmpty ? out.stdout : out.stderr)
-                                        : errors.joined(separator: " · ")
+            let detail = errors.isEmpty ? failureDetail(out) : errors.joined(separator: " · ")
             let lowered = detail.lowercased()
             // Belt-and-suspenders behind the pre-spawn guard: if a prompt still reached the
             // server and bounced off the turn-input cap (config drift, a changed cap), name it

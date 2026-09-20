@@ -44,7 +44,7 @@ struct ComputerUseGateView: View {
                     StatusLine(title: "Microphone & Speech",
                                health: gate.micSpeech == .granted ? .ok : .warn,   // optional — amber, never blocking
                                note: micSpeechNote,
-                               tip: "Optional but recommended.\nLets Sidekick hear you and turn your words into text when you hold the shortcut key.\n\nWithout it, hold-to-talk stays off — you can still tap the key (or click the notch) and type.\n\nYour voice is heard and transcribed on this Mac, never in the cloud.",
+                               tip: ComputerUseGate.micSpeechTip,
                                fixTitle: gate.micSpeech == .notAsked ? "Allow…" : "Fix…") {
                         fixMicSpeech()
                     }

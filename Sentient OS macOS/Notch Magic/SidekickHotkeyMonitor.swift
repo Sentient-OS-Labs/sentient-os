@@ -3,10 +3,12 @@
 //  Sentient OS macOS
 //
 //  The global notch trigger via NSEvent `flagsChanged` monitors (one global + one local) — ZERO
-//  permissions, ZERO prompts: hold / tap the user's chosen Sidekick key (right ⌘ or right ⌥ —
-//  push-to-talk · tap-to-type), read from the device-dependent flag bit on every `flagsChanged`,
-//  so press/release self-heals even if an event is dropped. The key is configurable at runtime
-//  (`setKey`) — both choices are MODIFIERS, the half macOS hands out freely.
+//  permissions, ZERO prompts: every PRESS of the user's chosen Sidekick key (right ⌘ or right ⌥),
+//  read from the device-dependent flag bit on every `flagsChanged`, so press/release self-heals
+//  even if an event is dropped. The key is configurable at runtime (`setKey`) — both choices are
+//  MODIFIERS, the half macOS hands out freely. What a press MEANS (one tap opens the type field,
+//  two taps inside the double-tap window draft a reply) is CommandCoordinator's call; this file
+//  only reports presses.
 //
 //  ⚠️ NEVER use a CGEventTap here — not even listen-only masking flagsChanged ONLY. Creating ANY
 //  keyboard-class tap pings the Input Monitoring TCC service: on a fresh Mac that raises the
@@ -17,19 +19,18 @@
 //  the same modifier information and never touch TCC. And NEVER monitor keyDown/keyUp globally
 //  either — real keystrokes are the gated half (a global keyDown monitor delivers nothing without
 //  Accessibility). Esc still cancels whenever Sentient is frontmost (the notch window's LOCAL
-//  monitor); over other apps, a fresh hotkey press is the cancel (CommandCoordinator.voicePressBegan).
+//  monitor); over other apps, a fresh hotkey press is the cancel (CommandCoordinator.hotkeyPressed).
 //
-//  Emits: onPress (key down) · onHoldConfirmed (still down at the hold threshold) ·
-//  onRelease(held:) (key up, with duration). The two monitors cover both worlds — global (events
-//  routed to other apps) + local (Sentient itself frontmost) — and a periodic health check
-//  reconciles a missed release. Doc: Notch Magic/Documentation - Sidekick - General.md.
+//  Emits: onPress (key down). The two monitors cover both worlds — global (events routed to other
+//  apps) + local (Sentient itself frontmost) — and a periodic health check reconciles a missed
+//  release so a lost key-up can never swallow the next press. Doc: Notch Magic/Documentation - Sidekick - General.md.
 //
 
 import AppKit
 
 /// The Sidekick trigger key — the single source of truth mapping the persisted `sidekick.hotkey`
 /// choice to the flag bits we read and a label for logs / UI. Both are RIGHT-side modifiers, so
-/// holding/tapping either one alone types nothing — a safe push-to-talk trigger.
+/// tapping either one alone types nothing — a safe global trigger.
 enum SidekickHotkey: String {
     case rightCommand
     case rightOption
@@ -74,43 +75,26 @@ extension Notification.Name {
 
 @MainActor
 final class SidekickHotkeyMonitor {
-    /// Held ≥ this long = a HOLD (push-to-talk). Below = a TAP (type mode).
-    static let holdThreshold: TimeInterval = 0.25
-
     /// The key we currently watch. Swap it at runtime with `setKey` — the monitors hear every
     /// modifier transition regardless; we just read a different device bit.
     private(set) var key: SidekickHotkey = .rightCommand
 
-    /// Force-release a hold after this long — set from the active speech engine's transcription limit
-    /// (SpeechAnalyzer 3 min · SFSpeechRecognizer 59s), which doubles as the stuck-key safety net.
-    var maxHold: TimeInterval = 180
-
     var onPress: (() -> Void)?
-    var onHoldConfirmed: (() -> Void)?
-    var onRelease: ((TimeInterval) -> Void)?
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var keyIsDown = false
-    private var downAt: Date?
-    private var holdConfirmTask: Task<Void, Never>?
-    private var maxHoldTask: Task<Void, Never>?
     private var healthTimer: Timer?
     private var running = false
 
     // MARK: Lifecycle
 
     /// Point the monitor at a different key. If a press is somehow in flight (the user can't really
-    /// change Settings mid-hold, but be safe), abandon it cleanly so we never strand a "down" belief
-    /// on the old bit. Idempotent — a no-op when the key is unchanged.
+    /// change Settings mid-press, but be safe), forget it so we never strand a "down" belief on the
+    /// old bit. Idempotent — a no-op when the key is unchanged.
     func setKey(_ newKey: SidekickHotkey) {
         guard newKey != key else { return }
-        if keyIsDown {
-            keyIsDown = false
-            holdConfirmTask?.cancel(); holdConfirmTask = nil
-            maxHoldTask?.cancel(); maxHoldTask = nil
-            downAt = nil
-        }
+        keyIsDown = false
         key = newKey
         Log("hotkey: now watching \(newKey.label)")
     }
@@ -128,11 +112,8 @@ final class SidekickHotkeyMonitor {
     func stop() {
         running = false
         teardownMonitors()
-        holdConfirmTask?.cancel(); holdConfirmTask = nil
-        maxHoldTask?.cancel(); maxHoldTask = nil
         healthTimer?.invalidate(); healthTimer = nil
         keyIsDown = false
-        downAt = nil
     }
 
     // MARK: The monitors
@@ -180,40 +161,13 @@ final class SidekickHotkeyMonitor {
     // MARK: Event handling
 
     /// Both monitors funnel here: read OUR key's device bit and act only on a TRANSITION — so a
-    /// duplicate or dropped event can never wedge the press state.
+    /// duplicate or dropped event can never wedge the press state. Only the DOWN edge is reported;
+    /// the up edge just re-arms the next press.
     private func handle(flags: UInt64) {
         let nowDown = (flags & key.deviceBit) != 0
         guard nowDown != keyIsDown else { return }
         keyIsDown = nowDown
-        if nowDown { beginPress() } else { endPress() }
-    }
-
-    private func beginPress() {
-        downAt = Date()
-        onPress?()
-        holdConfirmTask?.cancel()
-        holdConfirmTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(Self.holdThreshold))
-            guard let self, !Task.isCancelled, self.keyIsDown else { return }
-            self.onHoldConfirmed?()
-        }
-        let cap = maxHold
-        maxHoldTask?.cancel()
-        maxHoldTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(cap))
-            guard let self, !Task.isCancelled, self.keyIsDown else { return }
-            Log("hotkey: max-hold cap (\(Int(cap))s) — forcing release")
-            self.keyIsDown = false
-            self.endPress()
-        }
-    }
-
-    private func endPress() {
-        holdConfirmTask?.cancel(); holdConfirmTask = nil
-        maxHoldTask?.cancel(); maxHoldTask = nil
-        let held = downAt.map { Date().timeIntervalSince($0) } ?? 0
-        downAt = nil
-        onRelease?(held)
+        if nowDown { onPress?() }
     }
 
     // MARK: Self-healing
@@ -222,16 +176,12 @@ final class SidekickHotkeyMonitor {
         guard running else { return }
         if globalMonitor == nil || localMonitor == nil { installMonitors() }
         // Reconcile a missed release: if we think the key is down but NO matching modifier is
-        // physically down now, we missed the up event → release. (Conservative: if the modifier is
-        // down we can't tell left vs right here, so we leave it — better a late release than a false
-        // one.)
-        if keyIsDown {
-            let live = UInt64(NSEvent.modifierFlags.rawValue)
-            if (live & key.genericBit) == 0 {
-                Log("hotkey: reconciled a missed release")
-                keyIsDown = false
-                endPress()
-            }
+        // physically down now, we missed the up event → re-arm, or the next press would be read as
+        // a non-transition and silently dropped. (Conservative: if the modifier is down we can't
+        // tell left vs right here, so we leave it — better a late re-arm than a false one.)
+        if keyIsDown, (UInt64(NSEvent.modifierFlags.rawValue) & key.genericBit) == 0 {
+            Log("hotkey: reconciled a missed release")
+            keyIsDown = false
         }
     }
 }

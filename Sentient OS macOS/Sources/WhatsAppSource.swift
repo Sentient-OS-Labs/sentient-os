@@ -222,7 +222,7 @@ struct WhatsAppSource: Sendable {
     /// are long, UNBROKEN base64-ish tokens (e.g. "CIW9/tAGIA…") — they never contain spaces.
     /// Anything multi-word is a real name, slashes and all ("Amrit Sanju Uncle T34/1803" is a
     /// real saved contact; rejecting on '/' alone showed the raw number instead).
-    private static func cleanName(_ s: String?) -> String? {
+    static func cleanName(_ s: String?) -> String? {
         guard let s = s?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
         if s.contains(" ") { return s }                      // multi-word → a real name
         if s.contains("/") || s.count > 24 { return nil }    // single long/slashed token → LID/JID blob
@@ -230,7 +230,7 @@ struct WhatsAppSource: Sendable {
     }
 
     /// Phone/handle from a JID like "14155551234@s.whatsapp.net" → "14155551234" (chat-name fallback only).
-    private static func handle(_ jid: String) -> String { String(jid.prefix { $0 != "@" }) }
+    static func handle(_ jid: String) -> String { String(jid.prefix { $0 != "@" }) }
 
     /// Chat display name: validated partner name → participant roll-up for unnamed groups
     /// ("Aditya & Ondrej", like WhatsApp itself) → phone handle — but NEVER an opaque @lid

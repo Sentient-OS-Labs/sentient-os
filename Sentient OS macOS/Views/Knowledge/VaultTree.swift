@@ -59,6 +59,10 @@ struct KnowledgeVault {
             for url in items {
                 let name = url.lastPathComponent
                 if name.hasPrefix(".") { continue }   // .obsidian, .DS_Store, dotfiles (belt + suspenders)
+                // Double Tap's writing samples (verbatim sent messages, app-managed) are not a note
+                // the user wrote or wants to read: out of the tree, the search, the count, the
+                // wikilink index, and the graph alike.
+                if name.caseInsensitiveCompare(WritingStyle.fileName) == .orderedSame { continue }
                 let isFolder = (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
                 if isFolder {
                     // Show ALL subfolders, including empty ones — so a folder the user just created

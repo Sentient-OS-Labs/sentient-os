@@ -81,6 +81,8 @@ actor ProactiveCycle {
         PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
         defer { PipelineActivity.end() }
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
+        // Initial processing can finish an interrupted setup even without new summaries.
+        if notes.isEmpty { await Self.prepareWritingStyle(progress: progress) }
         // No new summaries is a completed no-op. Otherwise delivery waits for the atomic KB swap.
         if notes.isEmpty { await Notify.connectorsUnavailable(unavailableConnectors) }
         var calendarContext: CalendarContext.Result?
@@ -126,6 +128,7 @@ actor ProactiveCycle {
                                        scheduled: scheduled, progress: progress)
             }
             await Notify.connectorsUnavailable(unavailableConnectors)
+            await Self.prepareWritingStyle(progress: progress)
             await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
 
             // 2.5) The welcome "gift" — write it ONCE, the first time a knowledge base exists to read.
@@ -217,6 +220,22 @@ actor ProactiveCycle {
     }
 
     private static func msg(_ e: Error) -> String { (e as? LocalizedError)?.errorDescription ?? "\(e)" }
+
+    static func prepareWritingStyle(progress: @escaping @Sendable (ProactiveCyclePhase) -> Void) async {
+        // Existing users get the foreground setup sheet. An unattended overnight update must
+        // not preempt that one-time introduction by silently creating their samples first.
+        let onboarding = await MainActor.run { !UserDefaults.standard.bool(forKey: AppState.onboardingKey) }
+        guard onboarding else { return }
+        guard !WritingStyle.exists(), FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) else { return }
+        progress(.knowledgeBase("Setting up double tap"))
+        do {
+            try await WritingStyle.generateIfNeeded { progress(.knowledgeBase($0)) }
+        } catch {
+            // Like the welcome gift, a failed setup must not discard the completed knowledge base.
+            // The missing file keeps onboarding and the home setup sheet eligible to retry.
+            Log("WritingStyle: setup deferred (\(ErrorLabel(error)))")
+        }
+    }
 
     /// The one shape every catch site shares: classify the failure, persist the caution on the
     /// unattended run, surface it to the live UI, and hand it back for the caller's return.
