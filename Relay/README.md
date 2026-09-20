@@ -39,13 +39,46 @@ npm install
 npx wrangler login                       # once, opens the browser
 echo -n "sk-..." | npx wrangler secret put OPENAI_API_KEY
 npm run deploy                           # prints the workers.dev URL
-npm run tail                             # live structure-only logs
+npx wrangler tail --format json > /tmp/relay-tail.txt 2>&1 &   # live structure-only logs, to a file
 ```
 
-Local: `npm run dev` with an `OPENAI_API_KEY=...` line in `.dev.vars` (git-ignored).
+The deployed address is `https://sentient-doubletap-relay.sentient-doubletap-relay.workers.dev`
+(Worker name, then the account's workers.dev subdomain); the app carries it as
+`DoubleTapInference.defaultRelayURL`. Every draft logs one line,
+`draft ok image=… kb=… parse=…ms caps=…ms upstream=…ms total=…ms`, and the tail event beside it
+carries `cpuTime` and `wallTime`. Run the tail with a plain `&` into a file; under `nohup` or a
+subshell it produces nothing.
+
+Local: `npm run dev` with an `OPENAI_API_KEY=...` line in `.dev.vars` (git-ignored; delete it
+after). `--var HOURLY_CAP:2` on `wrangler dev` is the quick way to watch a 429 happen.
 
 Change a cap: edit `[vars]` in `wrangler.toml` and deploy, or set it in the Cloudflare dashboard
 under the Worker's variables, which takes effect without a deploy.
+
+## What it measured (2026-09-20, five drafts, one identity, distinct screenshots)
+
+| Step | Warm identity | First call of a new identity |
+|---|---|---|
+| Parse the ~500 KB body | 3 to 9 ms | 6 ms |
+| Cap check (Durable Object round trip) | 24 to 28 ms | 190 to 300 ms (object created) |
+| OpenAI response headers | 0.4 to 0.9 s | 0.4 s |
+| Worker CPU per draft | 5 to 11 ms | |
+
+Seen from the app: first text in 1.6 to 2.4 s cold, reply complete in 2.3 to 3.1 s, about
+0.3 to 0.5 s over a direct call. The second upload leg is most of it: the Worker has to hold the
+whole body before it can forward it. Smart Placement is on and will move the Worker toward
+OpenAI's backend once it has seen enough traffic.
+
+## Account notes
+
+- **Plan.** A new account is on Workers Free: 100,000 requests a day and a 10 ms CPU ceiling per
+  request. Drafts measure 5 to 11 ms of CPU, so upgrade to Workers Paid ($5/month, 30 s ceiling)
+  before real users.
+- **Browser Integrity Check.** workers.dev rejects generic scripting user agents (Cloudflare error
+  1010) before the Worker runs; `Python-urllib` is blocked, curl and CFNetwork pass. The app
+  sends `SentientOS-DoubleTap/<version> (macOS)` explicitly.
+- **Email verification** is required before the first deploy; wrangler reports Cloudflare error
+  10034 until it is done.
 
 ## Rules
 

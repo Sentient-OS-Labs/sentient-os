@@ -61,7 +61,10 @@ export default {
     const parsedAt = Date.now();
     const image = typeof body.image === "string" ? stripDataURL(body.image) : "";
     const knowledgeBase = typeof body.knowledgeBase === "string" ? body.knowledgeBase : "";
-    if (!image || image.length > maxImage || !/^[A-Za-z0-9+/=]+$/.test(image)) {
+    // Length checks only: the upstream body is built with JSON.stringify, so nothing in these
+    // strings can escape its field, and a full character scan of ~400 KB would cost more CPU than
+    // the rest of the request. Malformed base64 is OpenAI's 400, relayed as upstream_error.
+    if (!image || image.length > maxImage || image.length % 4 !== 0) {
       return json({ error: "bad_image" }, 400);
     }
     if (!knowledgeBase || knowledgeBase.length > maxKB) return json({ error: "bad_knowledge_base" }, 400);
