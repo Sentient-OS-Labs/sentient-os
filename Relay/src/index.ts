@@ -58,6 +58,7 @@ export default {
     } catch {
       return json({ error: "bad_json" }, 400);
     }
+    const parsedAt = Date.now();
     const image = typeof body.image === "string" ? stripDataURL(body.image) : "";
     const knowledgeBase = typeof body.knowledgeBase === "string" ? body.knowledgeBase : "";
     if (!image || image.length > maxImage || !/^[A-Za-z0-9+/=]+$/.test(image)) {
@@ -79,6 +80,7 @@ export default {
       const g = await global.take({ month: globalCap });
       if (!g.ok) return json({ error: "budget_reached", retryAfterSeconds: g.retryAfterSeconds }, 503);
     }
+    const admittedAt = Date.now();
 
     // 4. Upstream: the request is built here, so the client controls nothing but its two inputs.
     const upstreamBody = JSON.stringify({
@@ -113,8 +115,10 @@ export default {
       return json({ error: "upstream_error", status: upstream.status, detail }, 502);
     }
 
-    // 5. Stream it back untouched. Sizes and timing only; never content.
-    console.log(`draft ok image=${image.length} kb=${knowledgeBase.length} headers=${Date.now() - started}ms`);
+    // 5. Stream it back untouched. Sizes and timings only; never content.
+    const headersAt = Date.now();
+    console.log(`draft ok image=${image.length} kb=${knowledgeBase.length} `
+      + `parse=${parsedAt - started}ms caps=${admittedAt - parsedAt}ms upstream=${headersAt - admittedAt}ms total=${headersAt - started}ms`);
     return new Response(upstream.body, {
       status: 200,
       headers: {

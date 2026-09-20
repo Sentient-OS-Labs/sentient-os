@@ -219,6 +219,10 @@ enum DoubleTapInference {
         request.timeoutInterval = idleTimeout
         request.setValue("Bearer \(relayIdentity)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        // An explicit, honest agent: Cloudflare's edge checks browser signatures on workers.dev and
+        // rejects generic scripting agents (error 1010) before the Worker runs.
+        request.setValue("SentientOS-DoubleTap/\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0") (macOS)",
+                         forHTTPHeaderField: "User-Agent")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "image": image.base64EncodedString(),
             "knowledgeBase": knowledgeBase,
