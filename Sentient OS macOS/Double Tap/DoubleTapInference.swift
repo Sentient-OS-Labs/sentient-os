@@ -49,9 +49,10 @@ enum DoubleTapInference {
         Route(rawValue: UserDefaults.standard.string(forKey: routeKey) ?? "") ?? .relay
     }
 
-    /// The deployed Worker. Dev Tools can override it (`doubletap.relayURL`) to point at a
-    /// preview or a local `wrangler dev`.
-    static let defaultRelayURL = ""   // filled in once the Worker is deployed
+    /// The deployed Worker (`Relay/wrangler.toml` names it; the workers.dev subdomain is the
+    /// account's). Dev Tools can override it (`doubletap.relayURL`) to point at a preview or a
+    /// local `wrangler dev` (`http://localhost:8787`).
+    static let defaultRelayURL = "https://sentient-doubletap-relay.sentient-doubletap-relay.workers.dev"
     static let relayURLKey = "doubletap.relayURL"
     static var relayURL: URL? {
         let override = UserDefaults.standard.string(forKey: relayURLKey)?

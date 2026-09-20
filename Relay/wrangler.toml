@@ -28,3 +28,7 @@ class_name = "Counter"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["Counter"]
+
+# Smart Placement: run the Worker near the backend it talks to (OpenAI, US), not only near the user.
+[placement]
+mode = "smart"
