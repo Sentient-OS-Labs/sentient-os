@@ -2,20 +2,21 @@
 //  DoubleTap.swift
 //  Sentient OS macOS
 //
-//  The run behind a DOUBLE TAP of its own key (`key`, right ⌥ for now): the cursor sits in a reply
-//  box, the user taps the key twice, and a reply written in their voice lands in the box. One
-//  screenshot of the display under the cursor → one cold call with the ENTIRE knowledge base in
-//  context (DoubleTapInference) → the reply is pasted into the focused field (pasteboard + ⌘V, the
-//  user's clipboard put back after). A screenshot that isn't an email or message reply box gets a
-//  short notch aside instead.
+//  The run behind a DOUBLE TAP of its own key (`key`, right ⌥): the cursor sits in a reply box, the
+//  user taps the key twice, and a reply written in their voice lands in the box. One screenshot of
+//  the display under the cursor → one cold call with the ENTIRE knowledge base in context
+//  (DoubleTapInference) → the reply is pasted into the focused field (pasteboard + ⌘V, the user's
+//  clipboard put back after). A screenshot that isn't an email or message reply box gets a short
+//  notch aside instead.
 //
-//  Manual-test harness for now: the enable switch and the OpenAI key live in Dev Tools. The key
-//  listener and the two-presses-in-a-window test live in CommandCoordinator (a second
-//  SidekickHotkeyMonitor beside Sidekick's own; Sidekick's hotkey setting is untouched, and if it
-//  is set to the same key Sidekick keeps it). The run rides the coordinator's one-task lock, so the
-//  notch shows "Drafting your reply" and a Sidekick hotkey press is STOP.
+//  The enable switch and the OpenAI key live in Dev Tools until the key question is settled (see
+//  the doc). The key listener and the two-presses-in-a-window test live in CommandCoordinator (a
+//  second SidekickHotkeyMonitor beside Sidekick's own; Sidekick's hotkey setting is untouched, and
+//  if it is set to the same key Sidekick keeps it). The run rides the coordinator's one-task lock,
+//  so the notch shows "Drafting your reply" and a Sidekick hotkey press is STOP.
 //
 //  Key methods: start(completion:) · cancel() · key · isEnabled · lastReport.
+//  Doc: Documentation - Double Tap.md (this folder).
 //
 
 import AppKit
@@ -24,7 +25,8 @@ import AppKit
 final class DoubleTap {
     static let shared = DoubleTap()
 
-    /// Double Tap's own key, separate from Sidekick's hotkey setting. Hardcoded for the test build.
+    /// Double Tap's own key, fixed, separate from Sidekick's hotkey setting. If Sidekick is set to
+    /// the same key, Sidekick keeps it and Double Tap stays quiet (CommandCoordinator.doubleTapPressed).
     static let key: SidekickHotkey = .rightOption
 
     /// Two presses within this many seconds (press to press) count as a double tap.
@@ -70,9 +72,7 @@ final class DoubleTap {
     func cancel() { task?.cancel() }
 
     private func perform() async -> Result {
-        guard DoubleTapInference.apiKey != nil else {
-            return .failed(DoubleTapInference.Failure.noKey(DoubleTapInference.provider.vendor).label)
-        }
+        guard DoubleTapInference.apiKey != nil else { return .failed(DoubleTapInference.Failure.noKey.label) }
         guard Permissions.hasAccessibility() else { return .failed("needs Accessibility to paste") }
         let started = Date()
         guard let shot = await ScreenCapture.grabDisplayUnderCursor() else {
@@ -87,10 +87,10 @@ final class DoubleTap {
         do {
             let outcome = try await DoubleTapInference.draft(screenshot: jpeg, vault: VaultGenerator.vaultRoot)
             let t = outcome.timing
-            lastReport = "\(DoubleTapInference.provider.model) · capture \(captureMs) ms"
+            lastReport = "\(DoubleTapInference.model) · capture \(captureMs) ms"
                 + " · first text \(t.firstToken.map { "\(Int($0 * 1000)) ms" } ?? "—")"
                 + " · total \(Int(t.total * 1000)) ms · in \(t.inputTokens ?? 0) (cached \(t.cachedTokens ?? 0))"
-                + " · out \(t.outputTokens ?? 0) · thinking \(t.thinkingTokens ?? 0)"
+                + " · out \(t.outputTokens ?? 0) · reasoning \(t.reasoningTokens ?? 0)"
                 + " · \(outcome.verdict == .notAMessage ? "not a reply box" : "reply pasted")"
             switch outcome.verdict {
             case .notAMessage:

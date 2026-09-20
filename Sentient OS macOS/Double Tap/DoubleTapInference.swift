@@ -4,67 +4,36 @@
 //
 //  The one model call behind Double Tap: a screenshot of the user's screen + the ENTIRE knowledge
 //  base + the drafting instructions → either the reply to paste or a "not a reply box" verdict.
-//  Three models under test, picked in Dev Tools: OpenAI's Responses API (gpt-5.6-sol or gpt-5.6-luna,
-//  reasoning off) and Google's Gemini API (gemini-3.8-flash at its thinking floor, `low`; Gemini 3.x
-//  cannot switch thinking off, so the prompt also opens with an order to answer at once). All are
-//  streamed, so the time to first text is measurable, and all use the user's OWN vendor key from
-//  the Keychain — a deliberate bypass of the FrontierRun seam for this harness, because a `codex
-//  exec` spawn costs seconds and this feature is judged on feel. Every call is COLD by construction:
-//  the screenshot is the first thing in the prompt and differs on every press, so no provider prefix
-//  cache can ever match. OpenAI gets `store: false` so it keeps no copy.
+//  One model, chosen after a measured bake-off (2026-09-19: luna, sol, Gemini 3.8 Flash):
+//  gpt-5.6-sol with reasoning off, on OpenAI's Responses API, streamed so the time to first text
+//  is measurable. The call goes straight to OpenAI with the key from the Keychain — a deliberate
+//  bypass of the FrontierRun seam, because a `codex exec` spawn costs seconds and this feature is
+//  judged on feel (whose key it is in the shipped product is still an open decision; see the doc).
+//  Every call is COLD by construction: the screenshot is the first thing in the prompt and differs
+//  on every press, so no prefix cache can ever match. `store: false` keeps OpenAI from retaining a
+//  copy.
 //
-//  Key methods: draft(screenshot:vault:) · provider · apiKey(for:) · verdict(from:) · packVault(_:).
+//  Key methods: draft(screenshot:vault:) · apiKey · verdict(from:) · packVault(_:).
+//  Doc: Documentation - Double Tap.md (this folder).
 //
 
 import Foundation
 
 enum DoubleTapInference {
+    static let model = "gpt-5.6-sol"
+    static let endpoint = URL(string: "https://api.openai.com/v1/responses")!
 
-    // MARK: Providers
+    /// Keychain account for the OpenAI key (same helper + service as the mirror secret).
+    static let apiKeyAccount = "doubletap.openai.apiKey"
 
-    /// Who the key belongs to; one key per vendor, shared by its models.
-    enum Vendor: String {
-        case openai, gemini
-        var label: String { self == .openai ? "OpenAI" : "Gemini" }
-        /// Keychain account for the user's key (same helper + service as the mirror secret).
-        var apiKeyAccount: String { "doubletap.\(rawValue).apiKey" }
-        /// How thinking is held down on this vendor, for the dev pane.
-        var reasoningNote: String {
-            self == .openai ? "reasoning off" : "thinking at its floor (low), told to answer at once"
-        }
-    }
-
-    /// The models under test, picked in Dev Tools.
-    enum Provider: String, CaseIterable, Identifiable {
-        case sol, luna, gemini
-
-        var id: String { rawValue }
-        var vendor: Vendor { self == .gemini ? .gemini : .openai }
-        var model: String {
-            switch self {
-            case .sol: return "gpt-5.6-sol"
-            case .luna: return "gpt-5.6-luna"
-            case .gemini: return "gemini-3.8-flash"
-            }
-        }
-    }
-
-    /// The selected model (UserDefaults), sol by default.
-    static let providerKey = "doubletap.provider"
-    static var provider: Provider {
-        Provider(rawValue: UserDefaults.standard.string(forKey: providerKey) ?? "") ?? .sol
-    }
-
-    static func apiKey(for vendor: Vendor) -> String? {
-        let key = Keychain.read(vendor.apiKeyAccount)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    /// The key, or nil when none is saved.
+    static var apiKey: String? {
+        let key = Keychain.read(apiKeyAccount)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return key.isEmpty ? nil : key
     }
 
-    /// The selected model's vendor key, or nil when none is saved.
-    static var apiKey: String? { apiKey(for: provider.vendor) }
-
     /// The whole vault rides along, but never past this many bytes of notes (a typical vault is
-    /// ~70 KB; both models take 1M tokens). Notes beyond the ceiling are dropped, README first kept.
+    /// ~70 KB; the model takes 1M tokens). Notes beyond the ceiling are dropped, README first kept.
     static let vaultByteCeiling = 600_000
 
     /// Idle timeout between streamed bytes. The overall deadline is the caller's (DoubleTap).
@@ -82,7 +51,7 @@ enum DoubleTapInference {
         var inputTokens: Int?
         var cachedTokens: Int?
         var outputTokens: Int?
-        var thinkingTokens: Int?
+        var reasoningTokens: Int?
     }
 
     struct Outcome {
@@ -91,7 +60,7 @@ enum DoubleTapInference {
     }
 
     enum Failure: Error {
-        case noKey(Vendor)
+        case noKey
         case noVault(String)
         case http(Int, String)
         case api(String)
@@ -100,12 +69,11 @@ enum DoubleTapInference {
 
         /// Short, content-free line for the notch's ✗ caption.
         var label: String {
-            let vendor = DoubleTapInference.provider.vendor.label
             switch self {
-            case .noKey(let v): return "no \(v.label) key (Dev Tools)"
+            case .noKey: return "no OpenAI key (Dev Tools)"
             case .noVault(let path): return "no knowledge base at \(path)"
-            case .http(let code, _): return "\(vendor) HTTP \(code)"
-            case .api(let message): return "\(vendor): \(message.prefix(80))"
+            case .http(let code, _): return "OpenAI HTTP \(code)"
+            case .api(let message): return "OpenAI: \(message.prefix(80))"
             case .empty: return "empty reply"
             case .cancelled: return "stopped"
             }
@@ -114,20 +82,15 @@ enum DoubleTapInference {
 
     // MARK: The call
 
-    /// One streamed call on the selected provider. `screenshot` is JPEG bytes (already downscaled);
-    /// `vault` is the knowledge base root. Throws `Failure`; a cancelled Task surfaces as `.cancelled`.
+    /// One streamed call. `screenshot` is JPEG bytes (already downscaled); `vault` is the knowledge
+    /// base root. Throws `Failure`; a cancelled Task surfaces as `.cancelled`.
     static func draft(screenshot: Data, vault: URL) async throws -> Outcome {
-        let provider = provider
-        guard let key = apiKey(for: provider.vendor) else { throw Failure.noKey(provider.vendor) }
+        guard let key = apiKey else { throw Failure.noKey }
         let packed = packVault(vault)
         guard packed.notes > 0 else { throw Failure.noVault(vault.path) }
-        Log("⌘⌘ \(provider.model): \(packed.notes) notes, \(packed.bytes / 1024) KB\(packed.truncated ? " (truncated)" : ""), screenshot \(screenshot.count / 1024) KB")
+        Log("⌘⌘ \(model): \(packed.notes) notes, \(packed.bytes / 1024) KB\(packed.truncated ? " (truncated)" : ""), screenshot \(screenshot.count / 1024) KB")
 
-        let prompt = instructions + packed.text
-        let request = provider.vendor == .openai
-            ? try openAIRequest(model: provider.model, key: key, image: screenshot, prompt: prompt)
-            : try geminiRequest(model: provider.model, key: key, image: screenshot, prompt: prompt)
-
+        let request = try request(key: key, image: screenshot, prompt: instructions + packed.text)
         let started = Date()
         var timing = Timing()
         var text = ""
@@ -144,10 +107,7 @@ enum DoubleTapInference {
                 let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
                 guard let data = json.data(using: .utf8),
                       let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                let delta = provider.vendor == .openai
-                    ? try openAIDelta(event, timing: &timing)
-                    : try geminiDelta(event, timing: &timing)
-                if let delta, !delta.isEmpty {
+                if let delta = try delta(event, timing: &timing), !delta.isEmpty {
                     if timing.firstToken == nil { timing.firstToken = Date().timeIntervalSince(started) }
                     text += delta
                 }
@@ -165,7 +125,7 @@ enum DoubleTapInference {
         let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reply.isEmpty else { throw Failure.empty }
         let verdict = verdict(from: reply)
-        Log("⌘⌘ \(provider.model): first text \(ms(timing.firstToken)) · total \(ms(timing.total)) · in \(timing.inputTokens ?? -1) (cached \(timing.cachedTokens ?? 0)) · out \(timing.outputTokens ?? -1) · thinking \(timing.thinkingTokens ?? 0) · \(verdict == .notAMessage ? "not a reply box" : "reply")")
+        Log("⌘⌘ \(model): first text \(ms(timing.firstToken)) · total \(ms(timing.total)) · in \(timing.inputTokens ?? -1) (cached \(timing.cachedTokens ?? 0)) · out \(timing.outputTokens ?? -1) · reasoning \(timing.reasoningTokens ?? 0) · \(verdict == .notAMessage ? "not a reply box" : "reply")")
         #if DEBUG
         if case .reply(let r) = verdict { Log("⌘⌘ reply:\n\(r)") }   // content — DEBUG only
         #endif
@@ -187,9 +147,9 @@ enum DoubleTapInference {
         return "\(Int(seconds * 1000)) ms"
     }
 
-    // MARK: OpenAI (Responses API, streamed)
+    // MARK: The Responses API request + its stream
 
-    private static func openAIRequest(model: String, key: String, image: Data, prompt: String) throws -> URLRequest {
+    private static func request(key: String, image: Data, prompt: String) throws -> URLRequest {
         let body: [String: Any] = [
             "model": model,
             "stream": true,
@@ -205,7 +165,7 @@ enum DoubleTapInference {
                 ],
             ]],
         ]
-        var request = URLRequest(url: URL(string: "https://api.openai.com/v1/responses")!)
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = idleTimeout
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -214,9 +174,9 @@ enum DoubleTapInference {
         return request
     }
 
-    /// One Responses SSE event → the text it adds (nil for bookkeeping events). Fills usage from
+    /// One SSE event → the text it adds (nil for bookkeeping events). Fills usage from
     /// `response.completed`; a failure event throws.
-    private static func openAIDelta(_ event: [String: Any], timing: inout Timing) throws -> String? {
+    private static func delta(_ event: [String: Any], timing: inout Timing) throws -> String? {
         switch event["type"] as? String {
         case "response.output_text.delta":
             return event["delta"] as? String
@@ -225,7 +185,7 @@ enum DoubleTapInference {
             timing.inputTokens = usage?["input_tokens"] as? Int
             timing.outputTokens = usage?["output_tokens"] as? Int
             timing.cachedTokens = (usage?["input_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int
-            timing.thinkingTokens = (usage?["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int
+            timing.reasoningTokens = (usage?["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int
             return nil
         case "response.failed", "error":
             let error = (event["response"] as? [String: Any])?["error"] as? [String: Any] ?? event
@@ -233,53 +193,6 @@ enum DoubleTapInference {
         default:
             return nil
         }
-    }
-
-    // MARK: Gemini (generativelanguage streamGenerateContent, SSE)
-
-    private static func geminiRequest(model: String, key: String, image: Data, prompt: String) throws -> URLRequest {
-        let body: [String: Any] = [
-            "contents": [[
-                "role": "user",
-                "parts": [
-                    ["inlineData": ["mimeType": "image/jpeg", "data": image.base64EncodedString()]],
-                    ["text": prompt],
-                ],
-            ]],
-            "generationConfig": [
-                "maxOutputTokens": maxOutputTokens,
-                // The floor on 3.8 Flash: `minimal` is rejected and there is no off (per Google's docs).
-                "thinkingConfig": ["thinkingLevel": "low"],
-            ],
-        ]
-        let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):streamGenerateContent?alt=sse")!
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = idleTimeout
-        request.setValue(key, forHTTPHeaderField: "x-goog-api-key")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        return request
-    }
-
-    /// One Gemini SSE chunk → the answer text it carries (thought parts skipped). Usage rides on
-    /// the chunks that carry `usageMetadata`; an error object throws.
-    private static func geminiDelta(_ event: [String: Any], timing: inout Timing) throws -> String? {
-        if let error = event["error"] as? [String: Any] {
-            throw Failure.api(error["message"] as? String ?? "failed")
-        }
-        if let usage = event["usageMetadata"] as? [String: Any] {
-            timing.inputTokens = usage["promptTokenCount"] as? Int
-            timing.outputTokens = usage["candidatesTokenCount"] as? Int
-            timing.cachedTokens = usage["cachedContentTokenCount"] as? Int
-            timing.thinkingTokens = usage["thoughtsTokenCount"] as? Int
-        }
-        let candidate = (event["candidates"] as? [[String: Any]])?.first
-        let parts = (candidate?["content"] as? [String: Any])?["parts"] as? [[String: Any]] ?? []
-        return parts
-            .filter { ($0["thought"] as? Bool) != true }
-            .compactMap { $0["text"] as? String }
-            .joined()
     }
 
     // MARK: The knowledge base, whole

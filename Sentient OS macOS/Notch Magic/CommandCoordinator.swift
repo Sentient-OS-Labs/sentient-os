@@ -193,12 +193,14 @@ final class CommandCoordinator {
     /// caller must not fire. Doubles as the gate-held re-check — a fire the permission gate held
     /// for minutes re-answers the lock here. Completion needs no coordinator API: the card's
     /// completeExternal rides onFinished → runFinished → the normal finishing flourish.
+    /// `history: false` keeps the run out of SidekickHistory (Double Tap is not a Sidekick task).
     @discardableResult
-    func beginExternalRun(caption: String, onStopRequest: @escaping @MainActor () -> Void) -> Bool {
+    func beginExternalRun(caption: String, history: Bool = true,
+                          onStopRequest: @escaping @MainActor () -> Void) -> Bool {
         guard !run.isRunning else { return false }
         clearReadBack()
         notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
-        run.adoptExternal(caption: caption, onStopRequest: onStopRequest)
+        run.adoptExternal(caption: caption, history: history, onStopRequest: onStopRequest)
         setPhase(.running)
         Log("▶︎ external run adopted (\(caption))")
         return true
@@ -380,7 +382,8 @@ final class CommandCoordinator {
     private func fireDoubleTap() {
         guard !run.isRunning, !isInteracting else { Log("⌘⌘ double tap ignored — busy"); return }
         let doubleTap = DoubleTap.shared
-        guard beginExternalRun(caption: "Drafting your reply", onStopRequest: { doubleTap.cancel() }) else { return }
+        guard beginExternalRun(caption: "Drafting your reply", history: false,
+                               onStopRequest: { doubleTap.cancel() }) else { return }
         Log("⌘⌘ double tap → drafting a reply")
         doubleTap.start { [weak self] result in
             guard let self else { return }
