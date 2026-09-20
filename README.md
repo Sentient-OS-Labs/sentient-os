@@ -233,15 +233,6 @@ This repo moves fast. Issues and PRs are welcome, small PRs are beloved, and for
 
 <br/>
 
-## Who's building this.
-
-Built and maintained by [Rushil](https://github.com/RushilM007). Sentient explores what on-device inference makes possible: AI that understands your context and helps you get work done, with privacy and accessibility at its core.
-
-Say hi: [@RushilM007 on GitHub](https://github.com/RushilM007).
-
-*Welcome to the future.*
-
-<br/>
 
 ---
 
