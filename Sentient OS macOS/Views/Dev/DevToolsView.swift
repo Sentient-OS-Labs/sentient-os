@@ -91,6 +91,14 @@ struct DevToolsView: View {
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
+    // Double Tap (its own key twice → draft a reply) — the manual-test harness (Double Tap/DoubleTap.swift).
+    @AppStorage(DoubleTap.enabledKey) private var doubleTapEnabled = false
+    @AppStorage(DoubleTapInference.routeKey) private var doubleTapRouteRaw = DoubleTapInference.Route.relay.rawValue
+    @AppStorage(DoubleTapInference.relayURLKey) private var doubleTapRelayURL = ""
+    @State private var doubleTapKeyDraft = ""
+    @State private var doubleTapKeySaved = false
+    @State private var doubleTap = DoubleTap.shared
+
     // The 3-way card mode (which deck the home deals) — see BriefingDeck (Briefing.swift).
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
 
@@ -257,6 +265,72 @@ struct DevToolsView: View {
         .onAppear { codexSetup.refreshCuaDriver() }
     }
 
+    /// Double Tap's switch, the route (relay or a dev key), that route's settings, and the last run's timings.
+    private var doubleTapSection: some View {
+        let route = DoubleTapInference.Route(rawValue: doubleTapRouteRaw) ?? .relay
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Double Tap (\(DoubleTap.key.label) twice → draft a reply)")
+                    .font(.callout.weight(.medium)).foregroundStyle(.white)
+                Spacer()
+                Toggle("", isOn: $doubleTapEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
+            }
+            Picker("", selection: $doubleTapRouteRaw) {
+                ForEach(DoubleTapInference.Route.allCases) { r in Text(r.label).tag(r.rawValue) }
+            }
+            .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+            if route == .relay {
+                TextField(DoubleTapInference.defaultRelayURL.isEmpty ? "https://….workers.dev" : DoubleTapInference.defaultRelayURL,
+                          text: $doubleTapRelayURL)
+                    .textFieldStyle(.roundedBorder).font(.caption)
+                Text("Sentient's Worker adds the key and enforces the caps (60/hour, 100/day per identity). This Mac's identity is a random secret in the Keychain; the relay stores only a hash of it.")
+                    .font(.caption2).foregroundStyle(Theme.faint)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(doubleTapKeySaved ? Theme.Ink.green : Color.orange)
+                        .frame(width: 6, height: 6)
+                    Text(doubleTapKeySaved ? "OpenAI key saved (Keychain)" : "no OpenAI key yet")
+                        .font(.caption2).foregroundStyle(Theme.faint)
+                    Spacer()
+                    if doubleTapKeySaved {
+                        Button("Remove") {
+                            Keychain.delete(DoubleTapInference.apiKeyAccount)
+                            doubleTapKeySaved = false
+                        }
+                        .controlSize(.small)
+                    }
+                }
+                HStack(spacing: 8) {
+                    SecureField("OpenAI API key", text: $doubleTapKeyDraft)
+                        .textFieldStyle(.roundedBorder).font(.caption)
+                    Button("Save") {
+                        let key = doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !key.isEmpty else { return }
+                        doubleTapKeySaved = Keychain.set(DoubleTapInference.apiKeyAccount, key)
+                        doubleTapKeyDraft = ""
+                    }
+                    .controlSize(.small)
+                    .disabled(doubleTapKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            if let report = doubleTap.lastReport {
+                Text(report)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Its own key (\(DoubleTap.key.label)), separate from Sidekick's hotkey; if Sidekick is set to the same key, Sidekick keeps it and Double Tap stays quiet.")
+                .font(.caption2).foregroundStyle(Theme.faint)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity)
+        .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
+        .onAppear { doubleTapKeySaved = DoubleTapInference.apiKey != nil }
+    }
+
     /// Opens the one CODEX SETUP window (install · log in · computer use) — all three steps live in
     /// `CodexSetupView`, driven by the shared `CodexSetup` engine (the same code onboarding will use).
     private var codexSetupButton: some View {
@@ -302,6 +376,7 @@ struct DevToolsView: View {
                     }
                     mcpToggleButton
                     driverSection
+                    doubleTapSection
                     codexSetupButton
                     permissionsButton
                     hotkeyLabButton

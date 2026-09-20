@@ -30,6 +30,7 @@ disk join the target automatically, and the docs are stripped from the shipped b
 | `Proactive/` | Proactive Intelligence: the cycle, judge → research and prepare → the executor, the gift letter | `Proactive/Documentation - Proactive Intelligence.md` |
 | `Scheduling/` | The 3 AM run: the scheduler, the root wake helper and its installer, power gates, launch at login, the morning-after caution | `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md` |
 | `Notch Magic/` | Sidekick: the hotkey, voice, the shared run, the notch overlay | `Notch Magic/Documentation - Sidekick - General.md` · `Notch Magic/Documentation - Sidekick - Notch Window & Visual.md` |
+| `Double Tap/` | Double Tap: two taps of right ⌥ draft the reply to the email or message on screen, from one screenshot plus the whole knowledge base, pasted into the focused field | `Double Tap/Documentation - Double Tap.md` |
 | `System/` | Permissions (FDA, Sentient's action grants, TCC reads), the live health ladder, notifications, uninstall | `System/Documentation - System (Permissions, Health, Uninstall).md` |
 | `Diagnostics/` | `Log()`, Sentry, TelemetryDeck, the executor scoreboard, the source-health sensors | `Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md` |
 | `Updates/` | Sparkle auto-update and the release pipeline (`Scripts/`) | `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md` |
