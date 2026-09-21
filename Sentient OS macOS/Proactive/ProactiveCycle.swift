@@ -7,7 +7,8 @@
 //  reused by the home's real-mode Analyze Now and (later) the overnight 3am scheduler — so the
 //  sequencing lives in exactly one place:
 //
-//    1. file the summaries into the knowledge base (VaultCloud: create first time, else update)
+//    1. file the summaries into the knowledge base (VaultCloud: create first time, else update),
+//       with Double Tap's writing samples gathered alongside and landed once the vault is swapped in
 //    2. push the MCP mirror (no-op if it's off)
 //    3. PROACTIVE — decide (Proactive) → research + prepare (ProactiveResearch) → persisted `latest`
 //       (skipped entirely in knowledge-base-only mode — free/go plans have no quota for it)
@@ -81,8 +82,10 @@ actor ProactiveCycle {
         PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
         defer { PipelineActivity.end() }
         let notes = await CycleStore.shared.notes().map(CloudNote.init)
-        // Initial processing can finish an interrupted setup even without new summaries.
-        if notes.isEmpty { await Self.prepareWritingStyle(progress: progress) }
+        // Initial processing can finish an interrupted Double Tap setup even without new summaries.
+        if notes.isEmpty, FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) {
+            await Self.publishWritingStyle(await Self.collectWritingStyle())
+        }
         // No new summaries is a completed no-op. Otherwise delivery waits for the atomic KB swap.
         if notes.isEmpty { await Notify.connectorsUnavailable(unavailableConnectors) }
         var calendarContext: CalendarContext.Result?
@@ -116,6 +119,10 @@ actor ProactiveCycle {
                                                    : "Creating your knowledge base… part \(part) of \(of)"))
                 }
             }
+            // Double Tap's writing samples gather alongside the build: collecting them needs no
+            // knowledge base, only landing the file does, so it is published once the swap has
+            // happened. A build failure returns below, which cancels the collection with it.
+            async let writingStyle = Self.collectWritingStyle()
             do {
                 if exists { _ = try await VaultCloud.shared.update(notes: notes, onProgress: phase, onLine: onLine) }
                 else      { _ = try await VaultCloud.shared.create(notes: notes, onProgress: phase, onLine: onLine) }
@@ -127,8 +134,8 @@ actor ProactiveCycle {
                 return await Self.fail("Knowledge base: \(Self.msg(error))", error: error, stage: .vault,
                                        scheduled: scheduled, progress: progress)
             }
+            await Self.publishWritingStyle(await writingStyle)
             await Notify.connectorsUnavailable(unavailableConnectors)
-            await Self.prepareWritingStyle(progress: progress)
             await VaultCloud.pushIfDirty()                       // no-op if the mirror is off
 
             // 2.5) The welcome "gift" — write it ONCE, the first time a knowledge base exists to read.
@@ -221,20 +228,24 @@ actor ProactiveCycle {
 
     private static func msg(_ e: Error) -> String { (e as? LocalizedError)?.errorDescription ?? "\(e)" }
 
-    static func prepareWritingStyle(progress: @escaping @Sendable (ProactiveCyclePhase) -> Void) async {
-        // Existing users get the foreground setup sheet. An unattended overnight update must
-        // not preempt that one-time introduction by silently creating their samples first.
+    /// Gather Double Tap's writing samples during initial processing, or nil when that is not this
+    /// cycle's job: existing users get theirs from the home's silent setup (RootView), one path so
+    /// two runs never race, and an unattended overnight update leaves it in charge. Needs no
+    /// knowledge base, which is what lets the first build run it alongside itself. Silent on the
+    /// takeover, and best-effort like the welcome gift: a failure never discards a completed
+    /// knowledge base; it is logged, and the absent file keeps the home's setup eligible to retry.
+    static func collectWritingStyle() async -> String? {
         let onboarding = await MainActor.run { !UserDefaults.standard.bool(forKey: AppState.onboardingKey) }
-        guard onboarding else { return }
-        guard !WritingStyle.exists(), FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) else { return }
-        progress(.knowledgeBase("Setting up double tap"))
-        do {
-            try await WritingStyle.generateIfNeeded { progress(.knowledgeBase($0)) }
-        } catch {
-            // Like the welcome gift, a failed setup must not discard the completed knowledge base.
-            // The missing file keeps onboarding and the home setup sheet eligible to retry.
-            Log("WritingStyle: setup deferred (\(ErrorLabel(error)))")
-        }
+        guard onboarding, !WritingStyle.exists() else { return nil }
+        do { return try await WritingStyle.collect() }
+        catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))"); return nil }
+    }
+
+    /// Land collected samples in the knowledge base, which exists by the time this is called.
+    @MainActor static func publishWritingStyle(_ content: String?) {
+        guard let content else { return }
+        do { try WritingStyle.publishIfNeeded(content) }
+        catch { Log("WritingStyle: setup deferred (\(ErrorLabel(error)))") }
     }
 
     /// The one shape every catch site shares: classify the failure, persist the caution on the
