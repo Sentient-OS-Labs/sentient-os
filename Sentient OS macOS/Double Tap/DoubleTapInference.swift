@@ -376,6 +376,12 @@ enum DoubleTapInference {
     Other replies visible on screen are context only; never copy them.
     - Write in the user's own voice, grounded in the knowledge base. Use only facts you can see on \
     screen or find in the knowledge base; never invent commitments, dates, or details.
+    - If it is a MESSAGE (not an email): the user's own earlier messages in this thread are on \
+    screen (the sending side of the chat, or the ones under the user's own name). Match their \
+    writing style exactly: message length, capitalization, punctuation, abbreviations, slang, \
+    emoji, and how casual they are with this person. A chat reply is usually one short line with \
+    no greeting or sign-off. When the thread shows the user's own messages, they outrank the \
+    writingstyle.md samples; when it shows none, fall back to the samples.
     - If writingstyle.md samples are present at the end, match the user's spelling, capitalization, \
     punctuation, rhythm, length, greetings and sign-offs for this medium. Preserve their natural \
     informality. Do not force a greeting or signature they would not use.
