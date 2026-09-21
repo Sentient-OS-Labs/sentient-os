@@ -23,7 +23,7 @@ extension MCPSource {
         Discover Google Drive get_profile using tool search if it is not already visible,
         then call get_profile exactly once to verify the connected account. Tool discovery
         is allowed; do not call any other connector tool. Do not repeat profile data in your reply.
-        Reply OK if it worked, AUTH if it requires sign-in, or FAILED for any other failure.
+        Reply OK if it worked, AUTH if it requires sign-in or the connector is missing, or FAILED for any other failure.
         """
         for attempt in 1...2 {
             try Task.checkCancellation()
@@ -55,7 +55,7 @@ extension MCPSource {
             } catch {
                 onReceipt?(envelope, nil, attempt, prompt, "identity_error", [:])
                 try Task.checkCancellation()
-                if error is CancellationError { throw error }
+                if error is CancellationError || ConnectorReadFailure.isConnectionFailure(error) { throw error }
                 if case CodexCLI.CLIError.usageLimit = error { throw error }
                 if case CodexCLI.CLIError.notAvailable = error { throw error }
                 if attempt == 2 { throw error }

@@ -43,9 +43,7 @@ struct OnboardingView: View {
 
     // The same run flags the home's Analyze Now reads (RootView).
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
-    @AppStorage("dbg.gmail.connected")     private var gmailConnected = false
     @AppStorage("dbg.run.gmail")           private var runGmail = false
-    @AppStorage("dbg.calendar.connected")  private var calendarConnected = false
     @AppStorage("dbg.run.calendar")        private var runCalendar = false
 
     /// The onboarding model download (AppState kicks it post-FDA-relaunch; the downloading
@@ -91,8 +89,8 @@ struct OnboardingView: View {
                                    connectors: RunSource.connectors(from:
                                        SourceSelection.current(fdaGranted: Permissions.hasFullDiskAccess())),
                                    mode: .auto,
-                                   runGmail: gmailConnected && runGmail,
-                                   runCalendar: calendarConnected && runCalendar,
+                                   runGmail: ModelBackend.connectorsAvailable && runGmail,
+                                   runCalendar: ModelBackend.connectorsAvailable && runCalendar,
                                    mcpSlugs: MCPSource.kbSlugs(),
                                    fullCycle: BriefingDeck(rawValue: deckRaw) == .real,
                                    pausable: true,

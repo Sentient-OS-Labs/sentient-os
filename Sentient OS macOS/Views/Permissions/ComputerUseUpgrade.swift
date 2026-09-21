@@ -66,13 +66,45 @@ final class ComputerUseUpgrade {
     /// home never shows the red "needs setting up again" banner behind this window's own fix.
     var isPresenting: Bool { window != nil }
 
-    /// Called before any scene or Sidekick starts, so the home cannot flash behind the setup UI.
+    /// A pending marker from an earlier build cannot outweigh an already configured CUA setup.
+    /// Keep genuinely incomplete migrations pending, including installations still missing grants.
+    static func requiresMigration(onboarded: Bool, pending: Bool, legacyWasReady: Bool,
+                                  hasCuaHistory: Bool, requiredVersionInstalled: Bool,
+                                  permissionsReady: Bool = false) -> Bool {
+        let unresolvedPending = pending && !(hasCuaHistory && permissionsReady)
+        return onboarded && (unresolvedPending || (legacyWasReady && !hasCuaHistory && !requiredVersionInstalled))
+    }
+
+    /// The actual helper installed by Sentient's old ComputerUseSetup. A readiness latch alone
+    /// is shared with CUA and cannot prove that a fresh user ever had the legacy driver.
+    static func hasLegacyPayload(in codexHome: URL) -> Bool {
+        FileManager.default.isExecutableFile(atPath: codexHome.appendingPathComponent(
+            "computer-use/Codex Computer Use.app/Contents/MacOS/SkyComputerUseService").path)
+    }
+
     func prepareForLaunch(onSetupFinished: @escaping @MainActor () -> Void) {
         guard !isBlockingInterface else { return }
         let defaults = UserDefaults.standard
-        guard defaults.bool(forKey: AppState.onboardingKey),
-              isPreview || defaults.bool(forKey: Self.pendingKey)
-                || (defaults.bool(forKey: HealthCaution.computerUseEverReadyKey) && !CuaDriver.isInstalled)
+        guard defaults.bool(forKey: AppState.onboardingKey) else { return }
+        let hasCuaHistory = CuaDriver.hasInstallationHistory
+        let pending = defaults.bool(forKey: Self.pendingKey)
+        var permissionsReady = false
+        if !isPreview, pending, hasCuaHistory {
+            ComputerUseGate.shared.refresh()
+            permissionsReady = ComputerUseGate.shared.allRequiredGranted
+            if permissionsReady {
+                defaults.removeObject(forKey: Self.pendingKey)
+                Log("ComputerUseUpgrade: cleared obsolete setup marker; CUA and grants already configured")
+            }
+        }
+        guard Self.requiresMigration(onboarded: defaults.bool(forKey: AppState.onboardingKey),
+                                     pending: isPreview || pending,
+                                     legacyWasReady: defaults.bool(forKey: HealthCaution.computerUseEverReadyKey)
+                                        && Self.hasLegacyPayload(in: FileManager.default.homeDirectoryForCurrentUser
+                                            .appendingPathComponent(".codex")),
+                                     hasCuaHistory: hasCuaHistory,
+                                     requiredVersionInstalled: CuaDriver.isInstalled,
+                                     permissionsReady: permissionsReady)
         else { return }
 
         self.onSetupFinished = onSetupFinished
@@ -345,7 +377,7 @@ struct ComputerUseUpgradeView: View {
         case .pitch, .installing:
             "Sentient's computer use is now way faster and smarter"
         case .grants:
-            "The new computer use acts as Sentient itself, so it needs these two grants, once. You will not be asked again."
+            "The new faster computer use needs these permissions. You'll only be asked once."
         }
     }
 

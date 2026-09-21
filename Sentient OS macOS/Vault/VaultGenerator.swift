@@ -131,6 +131,7 @@ actor VaultGenerator {
     static func swapStagingIntoVault(_ staging: URL) throws {
         let fm = FileManager.default
         let root = vaultRoot
+        try WritingStyle.preserve(in: staging, from: root)
         if fm.fileExists(atPath: root.path) {
             _ = try fm.replaceItemAt(root, withItemAt: staging)
         } else {

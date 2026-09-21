@@ -214,7 +214,8 @@ nonisolated enum ConnectorRegistry {
         }
         let pack = pack(forSlug: slug)
         let claude = ConnectorCensus.cached(for: .claude).first { $0.slug == slug }
-        let codex = ConnectorCensus.cached(for: .chatgpt).first { $0.slug == slug }
+        let codex = ConnectorCensus.cached(for: .chatgpt).first { $0.slug == slug && $0.catalogID != nil }
+            ?? ConnectorCensus.listCodex().first { $0.slug == slug }
         guard pack != nil || claude != nil || codex != nil else { return nil }
         let name = pack?.claudeName ?? claude?.displayName
         return ResolvedServer(slug: slug,
@@ -512,41 +513,43 @@ nonisolated enum ConnectorRegistry {
         UserDefaults.standard.set(enabled, forKey: kbKey(slug))
     }
 
-    /// The detected connectors whose KB toggle is on — the nightly read list (task 1.8) and the
-    /// proactive-research attachment (task 1.7). Gated through kbEligible, so a toggle
-    /// persisted before the curated-only rule landed can never read.
+    /// Expected reads come from the user's selections, including unavailable accounts. This
+    /// allows the processing run to skip and report an unavailable source instead of hiding it.
     static func kbEnabledConnectors() -> [ConnectorCensus.DetectedConnector] {
-        detectedForCurrentBackend().filter {
-            contributesToKnowledgeBase($0, enabled: isKBEnabled($0.slug))
+        let origin = ConnectorCensus.DetectedConnector.Origin(backend: ModelBackend.current)
+        var candidates = origin.map { ConnectorCensus.cached(for: $0) } ?? []
+        candidates.removeAll { ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) }
+        candidates += DirectMCPStore.connections().map(\.detected)
+        for pack in packs where !ConnectorCensus.dedicatedSourceSlugs.contains(pack.slug) {
+            guard !candidates.contains(where: { $0.slug == pack.slug }), isKBEnabled(pack.slug),
+                  let sourceOrigin = pack.directProvider != nil ? .direct : origin else { continue }
+            candidates.append(.init(slug: pack.slug, displayName: pack.displayName, origin: sourceOrigin,
+                serverURL: pack.claudeServerURL, catalogID: pack.codexCatalogID,
+                iconPath: nil, healthy: false, lastSeen: .distantPast))
         }
+        return candidates.filter { contributesToKnowledgeBase($0, enabled: isKBEnabled($0.slug)) }
     }
 
-    /// The picker and the analysis list share one definition of an included source.
-    /// Being connected alone is never consent to read an app for the knowledge base.
     static func contributesToKnowledgeBase(_ connector: ConnectorCensus.DetectedConnector,
                                            enabled: Bool) -> Bool {
-        enabled && connector.healthy && kbEligible(connector.slug)
+        enabled && kbEligible(connector.slug)
     }
 
-    /// Whether a connector may feed the knowledge base at all: only curated packs with a
-    /// hand-verified read surface qualify, on both engines (Aditya's call, 2026-09-03,
-    /// amending the original design where any connector could earn the toggle through the
-    /// auto-classifier). An ineligible connector has no KB toggle anywhere; it stays fully
-    /// task-usable (Sidekick, cards, computer use), which needs no toggle by ledger #2.
+    /// Curation and backend support determine whether a source can be selected. Connection
+    /// health and the live tool policy are checked by the actual reader, never by the picker.
     static func kbEligible(_ slug: String, backend: ModelBackend = ModelBackend.current) -> Bool {
         if backend == .chatgpt, UserDefaults.standard.bool(forKey: CodexAuth.kbOnlyKey) { return false }
-        if let direct = DirectMCPStore.connection(slug) {
-            return direct.kbEligible
+        if let direct = DirectMCPStore.connection(slug) { return direct.kbEligible }
+        guard let pack = pack(forSlug: slug), !pack.capturedProvisional else { return false }
+        if let provider = pack.directProvider {
+            return provider.kbVerified && !provider.reviewedReads.isEmpty
         }
-        guard let pack = pack(forSlug: slug), !pack.capturedProvisional,
-              let server = server(for: slug) else { return false }
         switch backend {
         case .claude:
-            return pack.readTools?.isEmpty == false && server.claudeServerURL != nil
-                && server.claudeToolPrefix != nil
+            return pack.readTools?.isEmpty == false && pack.claudeServerURL != nil
+                && pack.claudeToolPrefix != nil
         case .chatgpt:
-            guard pack.codexReadTools?.isEmpty == false, let id = server.codexCatalogID else { return false }
-            return isValidCodexCatalogID(id)
+            return pack.codexReadTools?.isEmpty == false
         case .custom:
             return false
         }

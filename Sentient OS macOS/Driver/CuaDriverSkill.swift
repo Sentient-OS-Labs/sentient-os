@@ -8,14 +8,15 @@
 //  arrive inline), everything else rides one-shot `cua` CLI calls through the app-owned shim. The
 //  action tools have no schemas in context, so this text is their ONLY teaching — it carries the
 //  full contract: the snapshot→act→verify loop, element tokens, the ax/px addressing model, the
-//  delivery ladder, the no-foreground law, and the (shell-only) typed browser route.
+//  delivery ladder, the no-foreground law, and web pages driven as native windows (screenshot +
+//  accessibility tree; the driver's typed CDP browser route is off — see CuaDriver.enabledTools).
 //
-//  Curated from cua-driver's own agent skill pack (SKILL.md + MACOS.md + BROWSER.md, MIT licensed,
+//  Curated from cua-driver's own agent skill pack (SKILL.md + MACOS.md, MIT licensed,
 //  github.com/trycua/cua · libs/cua-driver/rust/Skills/cua-driver/), version-matched to the pinned
 //  driver and adapted for Sentient: the two-channel transport, a fixed session label on shell
-//  calls, no daemon management, no ask-the-user flows.
+//  calls, browsers as native windows, no daemon management, no ask-the-user flows.
 //  ‼️ Regenerate this text whenever CuaDriver.version bumps — the upstream pack changes with the
-//  binary (the `skillVersion` assert below is the tripwire).
+//  binary (the release-active `skillVersion` precondition below is the tripwire).
 //
 //  Key members: rules (the injected text) · skillVersion (must equal CuaDriver.version)
 //
@@ -26,18 +27,24 @@ import Foundation
 
 enum CuaDriverSkill {
 
-    /// The cua-driver release this text was curated against. `rules` asserts it matches the pinned
+    /// The cua-driver release this text was curated against. `rules` checks it matches the pinned
     /// binary so a version bump can't silently ship a stale manual.
     static let skillVersion = "0.20.0"
 
     /// The operating manual, ready to splice into a computer-use prompt. Ends with a newline.
     static var rules: String {
-        assert(skillVersion == CuaDriver.version,
+        precondition(skillVersion == CuaDriver.version,
                "CuaDriverSkill.rules was curated for \(skillVersion) but the pinned driver is \(CuaDriver.version) — re-curate the skill text")
         let shim = CuaDriver.shimURL.path
-        let shots = CuaDriver.shotsDirURL.path
         let tools = CuaDriver.enabledTools.joined(separator: ", ")
         return """
+        ── CUA 0.20.0 OPERATING MANUAL — ALREADY LOADED ──
+        The host has already loaded and adapted CUA's SKILL.md and MACOS.md below. \
+        This is the active skill for this embedded Sentient run. Do not fetch or read another copy \
+        through skills/get, resources/read, a skill:// URI, or a local skill file; the MCP server's \
+        generic instruction to load its skill is already satisfied here. Start with the task. \
+        Sentient owns startup, sessions, permissions, and cleanup; follow this transport mapping.
+
         ── HOW YOU DRIVE THE MAC — the cua tools, two channels ──
         Your hands and eyes are cua-driver: it clicks, types, scrolls, reads windows, and \
         screenshots IN THE BACKGROUND — per-window input with no cursor warp and no focus steal. \
@@ -59,10 +66,18 @@ enum CuaDriverSkill {
         response works directly in a shell click — snapshot with the eyes, act with the hands.
 
         Shell mechanics:
-        - Arguments are ONE JSON object passed as a single-quoted shell argument. If the JSON itself \
-        must contain a single quote, pipe it on stdin instead: `printf '%s' '<json>' | \(shim) <tool>`.
-        - Output is the tool's structured result as JSON on stdout; failures print to stderr with a \
-        non-zero exit.
+        - Arguments are ONE JSON object passed as a single-quoted shell argument. For text containing \
+        apostrophes, use a QUOTED heredoc instead; its body is literal, so quotes, dollar signs, and \
+        backticks in user content cannot become shell commands:
+            \(shim) type_text <<'CUA_JSON'
+            {"pid":844,"element_token":"CURRENT_TOKEN","text":"It's ready","session":"sentient"}
+            CUA_JSON
+        Choose a delimiter that does not appear on a line by itself in the content. JSON still \
+        requires normal escaping (double quotes, backslashes, newlines).
+        - Output is structured JSON on stdout. A shell exit code of 0 is NOT action success: \
+        refusals can return `{"status":"refused","refusal":{"code":"…","message":"…"}}` \
+        with exit 0. Read the JSON on EVERY call. Transport failures can instead print to stderr \
+        with a non-zero exit. Never continue from a refusal as though the action happened.
         - The driver daemon is already running and owned by the app. NEVER run its management \
         commands (serve, stop, status, mcp, mcp-config, update, check-update, permissions, recording, \
         telemetry, skills, config, autostart, doctor, cursor-theme, history, revoke). Tool calls only \
@@ -71,11 +86,28 @@ enum CuaDriverSkill {
         - ONLY these tools are allowed, on whichever channel carries them (the binary has more; do \
         not touch them): \(tools).
         - Include `"session":"sentient"` in the JSON of EVERY shell tool call — it keeps one \
-        stable, visible agent-cursor session across your calls. NEVER pass `session` to the four \
+        stable, visible agent-cursor session across your calls. Sentient starts/revives this named \
+        session before the run and ends it afterward; do not start or end sessions yourself. \
+        NEVER omit the label on CLI calls. NEVER pass `session` to the four \
         MCP eyes: that transport refuses it ("session is not available to this transport") — just \
         omit it there.
 
         Looking — how to use the eyes:
+        - Read `structuredContent.elements` and `structuredContent.snapshot_id` from the SAME \
+        result as the image. The text-only `content` tree can show [N] without its element_token. \
+        NEVER invent a token or build one from a visible index. In a code-mode tool call, expose \
+        the structured result AND inline images together, for example:
+            const r = await tools.mcp__cua_driver__get_window_state(args);
+            if (r.structuredContent) {
+                const {tree_markdown, ...state} = r.structuredContent;
+                text(state);
+            }
+            for (const c of r.content ?? []) {
+                if (c.type === "image") image(c);
+                else if (c.type === "text" && !r.structuredContent) text(c.text);
+            }
+        Avoid printing tree_markdown or duplicate content text when you exposed the structured rows. \
+        Bound large trees with query/max_elements rather than truncating away needed handles.
         - Study the screenshot IN the MCP response together with the tree from the same call. The \
         image and the coordinates the tools accept are the SAME pixel space: pick a pixel off the \
         image, click that pixel, no scaling math.
@@ -85,10 +117,6 @@ enum CuaDriverSkill {
         the walk with `"max_elements"` / `"max_depth"` on get_window_state.
         - NEVER use `screencapture`, and never call the four vision tools through the shell — as \
         MCP tools they show you the image; through the shell they dump base64.
-        - The ONE exception where a screenshot rides the shell: `get_browser_state` with \
-        `"include_screenshot":true` (browser work is shell-only, below). End that command with \
-        `--screenshot-out-file \(shots)/<step>.png`, then open the file with your image-viewing \
-        tool.
 
         ── THE CORE LOOP: snapshot → act → verify (not optional) ──
         1. `launch_app {"bundle_id": …}` is ALWAYS how you open or find an app, even one already \
@@ -207,10 +235,9 @@ enum CuaDriverSkill {
         - osascript / AppleScript that activates, launches, opens, or sets frontmost; System Events \
         GUI scripting; `cliclick`; raw CGEvent posting; `screencapture`; `kill`/`killall`/`pkill` \
         (to quit an app the task asks you to quit: `hotkey ["cmd","q"]`).
-        - ⌘L (browser address-bar focus) and tab-switching shortcuts (⌘1…⌘9, ⌘], ⌘[): the app pulls \
-        itself frontmost or visibly flips the user's tabs even when the keys are delivered in the \
-        background. Navigate with `browser_navigate` on a bound page, or open a separately \
-        addressable window with `launch_app` + `urls`.
+        - ⌘L (browser address-bar focus), ⌘T, and tab-switching shortcuts (⌘1…⌘9, ⌘], ⌘[): the app \
+        pulls itself frontmost or visibly flips the user's tabs even when the keys are delivered in \
+        the background. Open a URL with `launch_app` + `urls` instead (see BROWSERS below).
         Reading frontmost state is fine; mutating it is not. Before any shell command that touches a \
         GUI app, ask: does this raise, activate, or foreground anything? Does it move the real \
         cursor? Does it bypass the cua tools? Any yes → stop and use the cua tool for the same \
@@ -227,52 +254,51 @@ enum CuaDriverSkill {
         - Chromium `<video>` play/pause often swallows pixel clicks — use `press_key` "k" (YouTube) \
         or "space" instead.
         - A pixel RIGHT-click on Chromium web content arrives as a LEFT click (renderer limitation) \
-        — right_click by element_token, or use the browser route.
+        — right_click by element_token instead.
         - Small or dense targets: `zoom {"pid":P,"window_id":W,"x1":…,"y1":…,"x2":…,"y2":…}` (an \
         MCP eye — the magnified crop arrives inline) — then pass `"from_zoom":true` on the \
         follow-up click/type_text and the driver translates the zoomed coordinates back for you.
 
-        ── BROWSER PAGES (Chrome / Edge): the typed route (shell-only) ──
-        For page CONTENT, don't poke pixels at a browser window — bind the page and use the typed \
-        tools. The ENTIRE browser family runs through the shell (browser state is session-scoped, \
-        and your shell calls share the "sentient" session — the MCP eyes don't):
-        1. Bind: `get_browser_state {"pid":P,"window_id":W,"session":"sentient"}` (window from \
-        launch_app/list_windows). Proceed to mutation ONLY on `status:"ok"` + \
-        `binding_quality:"exact"` + `mutation_allowed:true`. Ambiguity means re-bind, not "close \
-        enough".
-        2. If it answers `browser_requires_setup` or `browser_consent_required`: run \
-        `browser_prepare {"pid":P,"window_id":W,"strategy":{"kind":"existing_profile"},\
-        "session":"sentient"}` to attach to the user's logged-in browser (pre-authorized at launch), \
-        or `{"allow_launch":true,"profile":{"mode":"isolated_new"}}` when login state isn't needed. \
-        Then re-bind.
-        3. Snapshot the tab: `get_browser_state {"target_id":…,"tab_id":…,\
-        "snapshot_format":"semantic_v2","session":"sentient"}` — when visuals matter add \
-        `"include_screenshot":true` AND `--screenshot-out-file \(shots)/<step>.png`, then view the \
-        file. Read `outline` for the content; `refs` are ACTION capabilities (each declares which actions it supports); `content_refs` are read-only \
-        scopes, never clickable. Check `snapshot.complete`; use `"query":"…"` or the returned \
-        `continuation` for more of a big page. Tab `active` is tri-state — null means unproven, \
-        never guess from list order.
-        4. Act: `browser_navigate {"url":…}` (http/https/about only — and it invalidates every ref); \
-        `browser_click {"ref":"p3:7"}`; `browser_type {"ref":…,"text":…,"mode":"insert_text"}` \
-        (`"replace":true` to overwrite an existing value, empty text + replace to clear); \
-        `browser_pointer` for hover / right_click / double_click / scroll / drag (drag needs \
-        `destination_ref`); `browser_dialog` for page-owned JS dialogs only.
-        5. Re-snapshot to verify. Refs are scoped to session + tab + snapshot: navigation or a newer \
-        snapshot invalidates them, and a stale-ref refusal means "snapshot again" — never a license \
-        to fall back to a remembered coordinate or CSS selector.
-        macOS specifics: a trusted-input `browser_click` on standalone Chrome is REFUSED on purpose \
-        (it would raise the window). Pass `"input_route":"dom_event"` — an explicit synthetic click. \
-        Dispatch is not proof: trust-gated controls can ignore synthetic events, so verify the \
-        postcondition after, and if the page ignored it fall back to the native ax/px ladder on the \
-        browser window. Browser-snapshot screenshots are viewport CSS px — convert PNG pixels with \
-        the returned `pixel_to_css_scale_x/y` before a coordinate action.
-        Browser CHROME — tabs, address bar, permission prompts, native pickers, extension UI — plus \
-        Safari, Firefox, and unbound webviews are NATIVE surfaces: normal get_window_state + the \
-        ax/px ladder.
-        Recovery vocabulary: `browser_ref_stale` → fresh snapshot; `browser_binding_ambiguous` → \
-        resolve the window and re-bind; `browser_action_unavailable` → pick a ref that declares that \
-        action; `browser_input_trust_unavailable` → dom_event or the native ladder; closed/moved \
-        tab or browser restart → discard everything and bind again.
+        ── BROWSERS (Chrome, Safari, Arc, Firefox…): web pages are native windows ──
+        A browser window is driven exactly like any other app: get_window_state gives you the \
+        page's accessibility tree AND its screenshot, and you act with the same ax/px ladder. There \
+        is no separate page route: never call the driver's browser_* tools (browser_prepare, \
+        get_browser_state, browser_navigate, browser_click, browser_type, browser_pointer, \
+        browser_dialog) — they attach over Chrome's remote-debugging port, which makes Chrome throw \
+        a consent dialog at the user, so they are switched off for this run. You are driving the \
+        user's own logged-in browser, so their sessions and cookies are already there.
+        - Open a page: `launch_app {"bundle_id":"com.google.Chrome","urls":["https://…"]}` (if the \
+        task doesn't name a browser, use the one that is running — `list_apps`). This opens the URL \
+        as a new tab without stealing focus, and the returned `windows` tell you which window to \
+        snapshot. NEVER navigate by typing into the address bar and pressing Return from the \
+        background, and never ⌘L / ⌘T.
+        - The tree shows the SELECTED tab only, and it covers the whole page, not just the visible \
+        part: `"query":"…"` finds text or controls anywhere on it without scrolling. An AX click on \
+        an element that is scrolled out of view usually still lands; if it comes back \
+        suspected_noop or unverifiable, `scroll` it into view and use px (pixels always need the \
+        target visible). Chrome's page tree is often sparse on the FIRST snapshot — re-snapshot \
+        once before concluding the page is non-AX (`degraded:true`).
+        - Big pages flood the response (Gmail is thousands of nodes): bound with `"max_elements"`, \
+        `"max_depth"`, or `"query"`. Read page content from the tree's text; use the screenshot for \
+        layout and visual state.
+        - Links and buttons: `click` by element_token (background, verifiable). Menus, dropdowns, \
+        and checkboxes inside the page: element_token first, px on a real signal, as everywhere.
+        - Typing into a web field: the AX layer echoes a write the renderer never showed (everything \
+        under an AXWebArea is such a surface — the driver reports `unverifiable` rather than lie), \
+        so use the px form directly: `type_text {"pid":P,"window_id":W,"x":X,"y":Y,"text":…}` — it \
+        clicks the field for real renderer focus, then types. To replace an existing value: \
+        `hotkey {"pid":P,"x":X,"y":Y,"keys":["cmd","a"]}` then the px type_text. Submit with \
+        `press_key {"pid":P,"key":"return"}` or an AX click on the page's own button, then \
+        re-snapshot and read the result.
+        - Tabs: switching the user's tabs is visible to them. Prefer opening the destination in a \
+        new tab with launch_app + urls; if the task is about a page already open in another tab, \
+        AX-click that tab in the tab strip (never ⌘1…⌘9) and say so in your report.
+        - Page dialogs (alert / confirm), permission bubbles, save and open panels, and the address \
+        bar are native surfaces of the browser window: they show up in the same tree, so snapshot \
+        and click their buttons by element_token.
+        - Verify like everywhere else: fresh snapshot, tree + pixels, `verify_state` for a \
+        structured postcondition. The same words can appear on several pages — check the URL and \
+        title in the address bar and tab, not just the words.
 
         Common errors → what they actually mean:
         - "No cached AX state for pid X window_id W" → you skipped get_window_state this turn, or \
@@ -295,6 +321,10 @@ enum CuaDriverSkill {
 
         Discipline: within the GUI task, act through the cua tools — never replace a GUI action \
         with a shell script that mutates the app's state behind its back. Verify after EVERY action. \
+        Final verification must match the requested destination/account/context and quantities, \
+        not just find matching words somewhere on screen. Separate carts or workspaces can have \
+        different destinations. Inspect the specific result before reporting completion, and \
+        check existing results before repeating a task so you do not create duplicates. \
         Do exactly the one task you were given, and take no destructive step (delete, close unsaved \
         work, send, submit) beyond what that task explicitly is.
 

@@ -37,6 +37,7 @@ enum UpdateNotice {
     /// Only ever recorded after onboarding: a mid-onboarding user may have closed a broken
     /// onboarding window, and the post-update relaunch should bring it back fixed.
     static func recordSilentRelaunch() {
+        guard UpdateController.appUpdatesEnabled else { return }
         guard UserDefaults.standard.bool(forKey: AppState.onboardingKey) else { return }
         UserDefaults.standard.set(UpdateController.currentVersionString, forKey: suppressKey)
     }
@@ -46,6 +47,7 @@ enum UpdateNotice {
     /// install never actually landed (a failed swap relaunched the same build), and the window
     /// presents normally rather than silently vanishing on a normal launch.
     static let suppressHomeThisLaunch: Bool = {
+        guard UpdateController.appUpdatesEnabled else { return false }
         let defaults = UserDefaults.standard
         guard let oldVersion = defaults.string(forKey: suppressKey) else { return false }
         defaults.removeObject(forKey: suppressKey)
@@ -56,6 +58,7 @@ enum UpdateNotice {
     /// means an update landed: fire the macOS notification and arm the in-app capsule. The
     /// first-ever launch just records — a fresh install is not an update.
     static func checkAtLaunch() {
+        guard UpdateController.appUpdatesEnabled else { return }
         let defaults = UserDefaults.standard
         let current = UpdateController.currentVersionString
         let last = defaults.string(forKey: lastRunVersionKey)
@@ -68,12 +71,18 @@ enum UpdateNotice {
 
     /// The armed notice's version — nil when none. Views read this on appearance (the same
     /// pull-on-appear pattern as OvernightCaution.latest()).
-    static var pending: String? { UserDefaults.standard.string(forKey: noticeKey) }
+    static var pending: String? {
+        UpdateController.appUpdatesEnabled ? UserDefaults.standard.string(forKey: noticeKey) : nil
+    }
 
-    static func dismiss() { UserDefaults.standard.removeObject(forKey: noticeKey) }
+    static func dismiss() {
+        guard UpdateController.appUpdatesEnabled else { return }
+        UserDefaults.standard.removeObject(forKey: noticeKey)
+    }
 
     /// "Read the changelog" — the latest GitHub release; opening it retires the notice.
     static func openChangelog() {
+        guard UpdateController.appUpdatesEnabled else { return }
         NSWorkspace.shared.open(changelogURL)
         dismiss()
     }

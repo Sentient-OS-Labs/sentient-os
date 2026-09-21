@@ -60,7 +60,7 @@ enum SourceSelection {
     }
 
     /// How many SELECTIONS are armed — every folder (default or custom), each chat source with
-    /// chats picked, Notes, and each connected cloud source counts as ONE. The shared minimum
+    /// chats picked, Notes, and each selected cloud source counts as ONE. The shared minimum
     /// (at least 4) that onboarding's ready screen and Settings both enforce: the defaults alone
     /// (three folders) deliberately don't pass, so starting always takes one deliberate connect.
     static let minimumSelections = 4
@@ -76,8 +76,8 @@ enum SourceSelection {
         // Hosted Gmail and Calendar need a subscription backend, so they cannot count
         // toward the minimum on a custom endpoint.
         if ModelBackend.connectorsAvailable {
-            if bool("dbg.gmail.connected", default: false) && bool("dbg.run.gmail", default: false) { n += 1 }
-            if bool("dbg.calendar.connected", default: false) && bool("dbg.run.calendar", default: false) { n += 1 }
+            if bool("dbg.run.gmail", default: false) { n += 1 }
+            if bool("dbg.run.calendar", default: false) { n += 1 }
         }
         // The registry gates hosted and direct sources separately. Direct connections also
         // work on custom backends and must count toward onboarding's minimum there.

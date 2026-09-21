@@ -143,10 +143,17 @@ enum GoogleSourceRead {
             let formatter = ISO8601DateFormatter()
             request.prompt += "\nCalendar discovery must use exactly these instants: \(formatter.string(from: window.start)) through \(formatter.string(from: window.end)). On Claude use list_events with startTime/endTime and pageSize at most 50; on Codex use search_events with time_min/time_max. Use the primary calendar and no keyword query. The first successful discovery must cover this whole window and return a native structured calendar response. Claude may omit events entirely for a genuine empty response that contains accessRole, defaultReminders, summary, timeZone and updated with no nextPageToken; accept that as empty and stop. A saved-to-file or oversized-result notice is not a readable result: retry the same full bounds with a smaller page size. Prefer the same bounds for supported pagination; any narrower follow-up must remain entirely inside this original interval. An empty successful result is valid: do not broaden the window, search other times, or use search_events on Claude to second-guess it."
         }
+        request.prompt += "\nIf the connector is missing, disconnected, or requires sign-in, return tool_failure=auth, no summary, zero items, and false for both flags. Use tool_failure=other for other tool errors, and an empty tool_failure on success."
         for attempt in 1...2 {
             try Task.checkCancellation()
             let result = try await FrontierRun.run(request)
             do {
+                try ConnectorReadFailure.validate(result, slug: slug)
+                if let data = result.jsonResult.data(using: .utf8),
+                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   object["tool_failure"] as? String == "other" {
+                    throw MCPSource.MCPError.toolFailure(slug: slug)
+                }
                 let summary = try parse(result.result, countKey: countKey, cap: cap)
                 try validateDiscovery(result, slug: slug, calendarWindow: calendarWindow)
                 return summary

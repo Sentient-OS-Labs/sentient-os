@@ -29,34 +29,19 @@ struct MenuBarView: View {
             openHome()   // the check's info card lives in the home window — make sure it's up front
             appState.update.checkForUpdatesNow(from: .home)
         }
-        .disabled(ComputerUseUpgrade.shared.isBlockingInterface)
+        .disabled(ComputerUseUpgrade.shared.isBlockingInterface || !UpdateController.appUpdatesEnabled)
         Text("Version \(UpdateController.currentVersionString)")
 
         Divider()
         Button("Quit Sentient OS") { NSApplication.shared.terminate(nil) }
     }
 
-    /// Bring the proactive home window to the front — focus it if it's open, otherwise reopen it
-    /// (a red-button close destroys the WindowGroup's window, so it must be recreated).
+    /// Share explicit reopening with Dock clicks, including minimized Home and pending setup.
     @MainActor private func openHome() {
-        if ComputerUseUpgrade.shared.isBlockingInterface {
-            ComputerUseUpgrade.shared.registerHomeOpener {
-                openWindow(id: SentientOSApp.homeWindowID)
-            }
-            ComputerUseUpgrade.shared.maybePresent()
-            return
-        }
-        // We may be .accessory (Dock icon hidden because no window is up). Restore .regular BEFORE
-        // opening/activating so the window takes focus and the Dock icon reappears cleanly — the
-        // DockPolicy observer would do it on didBecomeKey, but that lands too late for activate().
-        NSApp.setActivationPolicy(.regular)
-        if let home = NSApp.windows.first(where: { SentientOSApp.isHomeWindow($0) }) {
-            home.makeKeyAndOrderFront(nil)
-            home.orderFrontRegardless()
-        } else {
+        HomeWindowOpening.registerOpener {
             openWindow(id: SentientOSApp.homeWindowID)
         }
-        NSApp.activate()
+        HomeWindowOpening.open()
     }
 }
 
@@ -69,6 +54,9 @@ struct MenuBarIcon: View {
         Image(nsImage: OrbMark.menuBarIcon)
             .accessibilityLabel("Sentient OS")
             .onAppear {
+                HomeWindowOpening.registerOpener {
+                    openWindow(id: SentientOSApp.homeWindowID)
+                }
                 ComputerUseUpgrade.shared.registerHomeOpener {
                     openWindow(id: SentientOSApp.homeWindowID)
                 }

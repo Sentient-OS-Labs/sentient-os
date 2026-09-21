@@ -41,6 +41,9 @@ final class CommandRunModel {
     /// True while the onboarding notch demo is performing — the notch hides STOP (scripted
     /// theater has nothing to stop). Cleared the moment a REAL run starts.
     private(set) var isDemo = false
+    /// False for an adopted run that is not a Sidekick task (Double Tap): it neither records in
+    /// SidekickHistory nor closes an entry there, so "finish this" never resolves against it.
+    private var recordsHistory = true
 
     /// True while this run is an ADOPTED external one — a proactive card's computer-use fire.
     /// The work lives in ForYouModel's Task (not `task`), so stop() delegates to `externalStop`
@@ -302,7 +305,7 @@ final class CommandRunModel {
     /// out until it ends. The work itself stays in the caller's Task; `onStopRequest` is how any
     /// STOP surface (notch, bar, hotkey) reaches it. Silently refuses while a run is live — the
     /// caller checks the coordinator's `beginExternalRun` return.
-    func adoptExternal(caption: String, onStopRequest: @escaping @MainActor () -> Void) {
+    func adoptExternal(caption: String, history: Bool = true, onStopRequest: @escaping @MainActor () -> Void) {
         guard !isRunning else { return }
         mode = .computer
         source = "proactive_card"        // log/analytics honesty only — external ends never reach complete()
@@ -316,7 +319,8 @@ final class CommandRunModel {
         remembering = nil
         rememberClear?.cancel()
         statusLine = caption
-        SidekickHistory.record(caption, card: true)
+        recordsHistory = history
+        if history { SidekickHistory.record(caption, card: true) }
     }
 
     /// One raw codex line from the adopted run, through the same cleaning a native run gets
@@ -385,7 +389,8 @@ final class CommandRunModel {
     /// scoreboard + analytics), the demo's theater exit, and completeExternal. Sets the final
     /// status line, releases the run, tells the coordinator, and lets the line linger.
     private func finish(_ outcome: Outcome, line: String) {
-        if !isDemo { SidekickHistory.close(outcome, line: line) }   // theater never touches history
+        if !isDemo, recordsHistory { SidekickHistory.close(outcome, line: line) }   // theater never touches history
+        recordsHistory = true
         clearRemembering()
         statusLine = line
         isRunning = false
@@ -641,7 +646,7 @@ final class CommandRunModel {
     /// references something it doesn't recognize. `screenshots` is how many display frames are attached (via `codex exec -i`,
     /// main display first — ScreenCapture's guarantee): the prompt tells the agent to ground "this"/"here"
     /// in what it can see, and with several displays, that it's seeing all of them.
-    /// When `spoken` (Sidekick's hold-to-talk), the agent is told the task is a speech-to-text transcript,
+    /// When `spoken` (the notch's mic), the agent is told the task is a speech-to-text transcript,
     /// so it reads through mis-transcriptions instead of taking them literally — but doesn't gamble on an
     /// uncertain reading when the outcome would be non-trivial.
     /// `history` (from `SidekickHistory.promptBlock()`) inlines the recent requests + outcomes so

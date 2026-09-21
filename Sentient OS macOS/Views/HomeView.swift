@@ -67,6 +67,9 @@ struct HomeView: View {
     @State private var showCalendarConnect = false
     /// The morning-after caution (last night's scheduled run hit a known snag) — nil = no banner.
     @State private var caution: OvernightCaution.Record?
+    /// Kept separately from whole-cycle failures: successfully processing the other sources
+    /// must not erase a skipped connector. AppStorage also updates a visible home after 3 AM.
+    @AppStorage(ConnectorCaution.key) private var connectorCautionData = Data()
     /// The LIVE health issue (essential perms · codex · computer use) — HealthCaution's ladder;
     /// nil = healthy or muted. Outranks the morning-after caution in the banner slot.
     @State private var liveIssue: HealthCaution.Issue?
@@ -127,6 +130,7 @@ struct HomeView: View {
             guard !appState.isUninstalling else { return }
             model.beginVisit(deck: v)                               // mode flip → re-deal
         }
+        .onChange(of: CodexSetup.shared.cuaDriverReady) { _, _ in probeHealth() }
         .onChange(of: appState.isUninstalling) { _, tearing in
             // Uninstall began → take every card off the table; a cancel deals them back in.
             if tearing { withAnimation(.easeInOut(duration: 0.3)) { model.clear() } }
@@ -196,7 +200,8 @@ struct HomeView: View {
     // cycle clears it on its own). Both roads lead to Settings → Permissions & Health. Live
     // issues re-probe on foreground and melt away when fixed; ✕ mutes a live issue's kind for
     // the session (a lower rung may then surface), while the amber ✕ clears the record. Below
-    // both: the green just-updated notice (UpdateNotice) with its changelog link — good news
+    // both: skipped-connector warnings from the last completed KB pass, then the green
+    // just-updated notice (UpdateNotice) with its changelog link. Good news
     // never outranks something broken.
 
     private var cautionBanner: some View {
@@ -210,6 +215,9 @@ struct HomeView: View {
                                    probeHealth()   // the muted kind may have been hiding a lower rung
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if CodexSetup.shared.cuaUpdateNotice == .updating || CodexSetup.shared.cuaUpdateNotice == .failed {
+                cuaUpdateNotice
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
                 CautionCapsule(message: caution.message,
                                actionTitle: cautionAction(caution.kind)?.title,
@@ -219,6 +227,18 @@ struct HomeView: View {
                                    withAnimation(.easeInOut(duration: 0.25)) { self.caution = nil }
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if let connector = ConnectorCaution.items(from: connectorCautionData).first {
+                CautionCapsule(message: connector.message,
+                               actionTitle: "Open Settings", onAction: openSourceSettings,
+                               onDismiss: {
+                                   withAnimation(.easeInOut(duration: 0.25)) {
+                                       ConnectorCaution.dismiss(connector.slug)
+                                   }
+                               })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if CodexSetup.shared.cuaUpdateNotice == .ready {
+                cuaUpdateNotice
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             } else {
                 // The lowest rung — the green just-updated notice. Self-contained: draws
                 // nothing unless UpdateNotice armed one at launch.
@@ -227,6 +247,15 @@ struct HomeView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.trailing, 30).padding(.top, 64)
+        .animation(.easeInOut(duration: 0.25), value: connectorCautionData)
+        .animation(.easeInOut(duration: 0.25), value: CodexSetup.shared.cuaUpdateNotice)
+    }
+
+    private var cuaUpdateNotice: some View {
+        CuaDriverUpdateNotice(state: CodexSetup.shared.cuaUpdateNotice,
+                             progress: CodexSetup.shared.cuaDriverProgress,
+                             onRetry: CodexSetup.shared.updateCuaDriverIfNeeded,
+                             onDismiss: CodexSetup.shared.dismissCuaUpdateNotice)
     }
 
     /// The amber caution's one-click fix, where there is one: a signed-out codex is fixed in
@@ -247,6 +276,10 @@ struct HomeView: View {
     private func openHealthSettings() {
         SettingsView.requestedPane = .health
         openWindow(id: SettingsView.windowID)
+    }
+
+    private func openSourceSettings() {
+        SettingsView.open(.sources, using: openWindow)
     }
 
     /// Run HealthCaution's ladder off the main thread of thought: cheap sync probes, plus a
@@ -414,7 +447,7 @@ struct HomeView: View {
         if !compact {   // the feature rows return once the envelope is gone
             VStack(alignment: .leading, spacing: 11) {
                 previewRow("sunrise", "Mornings where things worth doing arrive already done")
-                previewRow("command", "Sidekick anywhere: hold right \u{2318} and just say it")
+                previewRow("command", "Sidekick anywhere: tap right \u{2318} and tell it what to do")
                 previewRow("moon.stars", "A knowledge base that keeps learning, night after night")
             }
             .padding(.top, 20)

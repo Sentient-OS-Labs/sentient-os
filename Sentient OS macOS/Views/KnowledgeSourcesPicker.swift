@@ -1,7 +1,7 @@
 //
 // KnowledgeSourcesPicker.swift
 // Shared source groups and connection flows for Settings and onboarding. Owns folder/chat
-// selection, connector discovery, refresh, and sheets. Reports the live selection count to
+// selection, saved connector choices, and sheets. Reports the live selection count to
 // onboarding; Settings also guards direct toggle-offs at the four-source minimum.
 // Doc: Settings/Documentation - Settings.md; Onboarding/Documentation - Onboarding.md
 //
@@ -25,20 +25,16 @@ struct KnowledgeSourcesPicker: View {
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
     @AppStorage("dbg.run.imessage")  private var runIMessage = false
     @AppStorage("dbg.imessage.chats") private var imessageCSV = ""
-    @AppStorage("dbg.gmail.connected") private var gmailConnected = false
     @AppStorage("dbg.run.gmail")       private var runGmail = false
-    @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
-    // Re-renders the picker live when the engine changes (the cloud group's header and the
-    // Connectors list both follow it), and keys the census reload below.
+    // Re-renders the connector catalog and availability when the engine changes,
+    // and keys the census reload below.
     @AppStorage(ModelBackend.key) private var backendRaw = ""
 
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
     @State private var connectors: [ConnectorCensus.DetectedConnector] = []
     @State private var selectedConnector: ConnectorSource?
-    @State private var watchStartedAt: Date?          // non-nil = the connect window is polling
-    @State private var refreshingConnectors = false
     @State private var showWhatsAppPicker = false
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
@@ -70,7 +66,6 @@ struct KnowledgeSourcesPicker: View {
             if !fdaGranted { fdaLine }
             foldersGroup
             chatsGroup
-            cloudGroup
             connectorsGroup
         }
         .task { fdaGranted = Permissions.hasFullDiskAccess() }
@@ -83,30 +78,19 @@ struct KnowledgeSourcesPicker: View {
         }
         .onChange(of: connectors) {
             guard context == .onboarding else { return }
-            // Apply the onboarding default once a connection is usable. A saved false is
+            // Apply the onboarding default to saved user connections. A saved false is
             // an explicit opt-out and must survive refreshes, reconnects, and reopening.
-            for connector in connectors where connector.healthy && ConnectorRegistry.kbEligible(connector.slug) {
+            for connector in connectors where ConnectorRegistry.kbEligible(connector.slug) {
                 guard UserDefaults.standard.object(forKey: ConnectorRegistry.kbKey(connector.slug)) == nil else { continue }
                 ConnectorRegistry.setKBEnabled(connector.slug, true)
             }
             selectionCount = SourceSelection.selectionCount
         }
-        // Paint the persisted census instantly, then confirm live (cheap path: one subprocess
-        // on Claude, a disk read on codex, nothing on custom — never a model call).
-        .task(id: backendRaw) {
-            updateConnectors()
-            _ = await ConnectorCensus.list()
-            updateConnectors()
-        }
-        // The connect window. Owning it here means leaving the picker cancels the polling
-        // (structured concurrency, no cleanup call); census logs the stop reason.
-        .task(id: watchStartedAt) {
-            guard watchStartedAt != nil else { return }
-            await ConnectorCensus.startWatching { _ in updateConnectors() }
-            watchStartedAt = nil
-        }
+        // Catalog and saved selections only. Opening this picker never verifies a connection.
+        .task(id: backendRaw) { updateConnectors() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             fdaGranted = Permissions.hasFullDiskAccess()   // may have changed in System Settings
+            updateConnectors()
         }
         .sheet(isPresented: $showWhatsAppPicker) {
             ChatPicker(sourceName: "WhatsApp", loadChats: { try WhatsAppSource().listChats() },
@@ -123,9 +107,7 @@ struct KnowledgeSourcesPicker: View {
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
         .sheet(item: $selectedConnector) { source in
-            ConnectorConnectSheet(source: source, connectors: $connectors,
-                                  onRefresh: refreshConnectors, onConnect: connectApps,
-                                  refreshing: refreshingConnectors)
+            ConnectorConnectSheet(source: source, connectors: $connectors, onConnect: connectApps)
         }
         .onChange(of: backendRaw) { selectedConnector = nil }
         .onReceive(NotificationCenter.default.publisher(for: DirectMCPStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }
@@ -177,20 +159,21 @@ struct KnowledgeSourcesPicker: View {
         }
     }
 
-    // MARK: - Sources connected through the selected engine
+    // MARK: - Hosted and direct connectors
 
-    private var cloudGroup: some View {
-        SettingsGroup(label: ModelBackend.current == .claude ? "Through Your Claude"
-                                                             : "Through Your ChatGPT") {
+    private var connectorsGroup: some View {
+        SettingsGroup(label: "Connectors") {
             VStack(alignment: .leading, spacing: 12) {
                 SettingsProse("Read through your own connectors, never our servers.")
                 ChipFlow {
-                    SettingsChip(label: "Gmail", on: gmailConnected && runGmail,
+                    SettingsChip(label: "Gmail", on: runGmail,
                                  locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
-                    SettingsChip(label: "Google Calendar", on: calendarConnected && runCalendar,
+                    SettingsChip(label: "Google Calendar", on: runCalendar,
                                  locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
-                    ForEach(connectorSources.filter(\.usesHostedConnection)) { source in
-                        ConnectorPill(source: source, locked: CodexAuth.connectorsLocked) {
+                    ForEach(connectorSources) { source in
+                        ConnectorPill(source: source,
+                                      locked: source.usesHostedConnection
+                                          ? CodexAuth.connectorsLocked : CodexAuth.knowledgeBaseOnly) {
                             selectedConnector = source
                         }
                     }
@@ -199,54 +182,13 @@ struct KnowledgeSourcesPicker: View {
                                      locked: CodexAuth.connectorsLocked, action: connectApps)
                     }
                 }
-                if watchStartedAt != nil {
-                    MonoCaps("Watching for new apps", size: 8.5, tracking: 1.6,
-                             color: .white.opacity(0.45))
-                        .transition(.opacity)
-                }
             }
             .animation(.easeInOut(duration: 0.35), value: connectors)
-            .animation(.easeInOut(duration: 0.25), value: watchStartedAt != nil)
-        } trailing: {
-            Button { Task { await refreshConnectors() } } label: {
-                if refreshingConnectors {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    MonoCaps("Refresh", size: 8.5, tracking: 1.6, color: .white.opacity(0.55))
-                }
-            }
-            .buttonStyle(PressScaleStyle())
-            .disabled(refreshingConnectors)
         }
     }
 
-    // MARK: - Connectors set up directly in Sentient
-
-    private var connectorsGroup: some View {
-        ConnectorsSection(sources: connectorSources.filter { !$0.usesHostedConnection },
-                          locked: CodexAuth.knowledgeBaseOnly,
-                          onSelect: { selectedConnector = $0 })
-    }
-
-    /// Open the engine's connector directory and start the bounded polling window, so the new
-    /// pill appears on its own once the user finishes linking. A re-press restarts the window.
     private func connectApps() {
         NSWorkspace.shared.open(ConnectorCensus.directoryURL)
-        watchStartedAt = Date()
-    }
-
-    /// The header's Refresh — the one picker path that warm-runs codex for cache freshness.
-    private func refreshConnectors() async {
-        guard !refreshingConnectors else { return }
-        refreshingConnectors = true
-        defer { refreshingConnectors = false }
-        _ = await ConnectorCensus.refresh()
-        for connection in DirectMCPStore.connections() where connection.state != .reconnect && connection.state != .verifying {
-            guard !Task.isCancelled else { return }
-            _ = try? await DirectMCPConnections.verifyAccount(connection)
-        }
-        guard !Task.isCancelled else { return }
-        updateConnectors()
     }
 
     private func updateConnectors() {

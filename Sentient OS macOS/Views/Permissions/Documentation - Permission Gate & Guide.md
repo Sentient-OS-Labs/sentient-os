@@ -71,17 +71,28 @@ Analytics: `PermissionGate.shown` / `.continued`.
 
 ## The upgrade window (`ComputerUseUpgrade`)
 
-This is a migration gate, prepared by `AppState` before regular scenes and Sidekick start. Eligibility
-requires completed onboarding and either a pending upgrade or the legacy `computerUse.everReady`
-latch with the pinned driver missing. An already-configured user with no pending flag sees normal
-startup. Fresh installs retain onboarding; this is not a release announcement for every user and does
-not continuously relock the app when the driver disappears mid-session.
+This is a migration gate, prepared by `AppState` before regular scenes and Sidekick start. It requires
+completed onboarding and either a pending migration or evidence of the old Codex setup: the
+`computerUse.everReady` latch and its installed `SkyComputerUseService` helper, with no CUA installation
+history and the required driver missing. An existing CUA receipt or version directory routes the user
+to the ordinary background update instead. A shared readiness latch alone cannot identify a legacy
+installation. Fresh installs retain onboarding.
+
+Ordinary CUA version updates keep the interface and Sidekick available. The top-right home notice
+shows the shared installer's progress and retry state; a computer-use command waits for its required
+version. That flow never raises this migration pitch or asks again for already-granted permissions.
+See the Driver doc for version receipts and installation details.
 
 `computerUse.upgradePending` is recorded before presentation and survives relaunches, including the
-period after installation but before Done. The flow is pitch → installing → grants. Failure returns
+period after installation while required grants are missing. At normal launch, a pending marker with
+CUA installation history and both required grants already present is obsolete and is cleared. This
+recovers markers written by older builds without replaying setup; a required driver-version change
+still uses the ordinary background updater. Missing grants preserve the pending migration. The Debug
+preview never clears this marker. The flow is pitch → installing → grants. Failure returns
 to a retryable pitch; close/reopen retains phase and progress and awaits the shared installer.
-Completion re-probes and requires the installed driver, Accessibility, Screen Recording, and an
-explicit Done press. There is no Finish later bypass. Optional voice prompting remains independent.
+Completion of an open setup re-probes and requires the installed driver, Accessibility, Screen
+Recording, and an explicit Done press. There is no Finish later bypass. Optional voice prompting
+remains independent.
 
 The native, normal-level window has close, minimize, resize/fullscreen controls, a unified dark title
 bar, and a 560-point content column. Its pitch reads “Sentient's computer use is now way faster and

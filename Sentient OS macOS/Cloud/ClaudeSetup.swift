@@ -14,13 +14,12 @@
 //  surface. A user who chooses Claude never downloads codex, and vice versa.
 //
 //  Key methods:
-//   - refreshInstalled() / installClaude() / ensureInstalled() → step 1 (+ retries + give-up flag)
+//   - refreshInstalled() / installClaude() / ensureCurrent()   → verified setup (+ retries)
 //   - startLogin() / refreshLoginStatus()                      → step 2 (browser OAuth, auto-noticed)
 //   - updateIfDue(trigger:)                                    → the daily managed-binary update,
 //                                                                only while Claude IS the engine
 //
-//  Doc: Cloud/Documentation - Cloud - Codex Setup.md (the reference flow; the Claude engine's
-//  own doc lands once the feature is tested and confirmed).
+//  Doc: Cloud/Documentation - Cloud - ClaudeCLI (the claude -p engine).md
 //
 
 import Foundation
@@ -49,9 +48,16 @@ final class ClaudeSetup {
     /// Latest streamed progress line, or the final ✓/✗ result.
     private(set) var installStatus: String?
     /// True once install retries are exhausted and claude still isn't on disk — drives the
-    /// install-it-yourself panel. Reset when a fresh ensureInstalled run begins; any positive
+    /// install-it-yourself panel. Reset when a fresh ensureCurrent run begins; any positive
     /// detection clears it.
     private(set) var installGaveUp = false
+    /// Includes retry waits as well as the update command itself.
+    private(set) var preparing = false
+    private var preparationTask: Task<Bool, Never>?
+    private var installTask: Task<Bool, Never>?
+    private var installProgressID: UUID?
+    /// Share successful preparation between Use Claude/sign-in and Continue this launch.
+    private var preparedVersion: String?
 
     /// Cheap re-detect of step 1 — call on appear and after an install. Off-main (locateBinary
     /// can spawn a login shell).
@@ -61,53 +67,91 @@ final class ClaudeSetup {
         version = installed ? await ClaudeCLI.installedVersion() : nil
     }
 
-    /// Step 1 — install OR update Claude Code via Anthropic's official installer (it updates in
-    /// place over an existing install; login untouched). Streams progress into `installStatus`.
-    func installClaude() async {
-        guard !installing else { return }
-        let updating = ClaudeCLI.locateBinary() != nil
-        let before = version
+    /// Existing CLI: `claude update`. Missing CLI: the official installer, then the same update
+    /// verification. A surviving old executable is not evidence that an update succeeded.
+    @discardableResult
+    func installClaude() async -> Bool {
+        if let installTask { return await installTask.value }
         installing = true
+        let task = Task { await performInstall() }
+        installTask = task
+        let success = await task.value
+        installTask = nil
+        installing = false
+        return success
+    }
+
+    private func performInstall() async -> Bool {
+        await refreshInstalled()
+        let updating = installed
+        let before = version
+        preparedVersion = nil
         installStatus = updating ? "Updating Claude Code…" : "Installing Claude Code…"
-        do {
-            try await ClaudeCLI.install { [weak self] line in
-                Log("[claude-install] \(line)")
-                Task { @MainActor in self?.installStatus = line }
+        let progressID = UUID()
+        installProgressID = progressID
+        let progress: @Sendable (String) -> Void = { [weak self] line in
+            Log("[claude-install] \(line)")
+            Task { @MainActor in
+                if self?.installProgressID == progressID { self?.installStatus = line }
             }
+        }
+        do {
+            if !installed { _ = try await ClaudeCLI.install(onLine: progress) }
+            let verifiedVersion = try await ClaudeCLI.update(onLine: progress)
+            installProgressID = nil
             installed = true
+            installGaveUp = false
+            version = verifiedVersion
+            preparedVersion = verifiedVersion
             installStatus = updating ? "✓ Claude Code up to date" : "✓ Claude Code installed"
             Self.stampUpdateAttempt()
-            version = await ClaudeCLI.installedVersion()
             if updating, let before, let after = version, before != after {
                 Log("ClaudeSetup: Claude Code updated \(before) → \(after)")
                 Analytics.signal("Claude.updated", parameters: ["from": before, "to": after])
             }
+            return true
         } catch {
-            installed = ClaudeCLI.locateBinary() != nil
-            installStatus = installed
-                ? "✓ Claude Code present (update skipped: \((error as? LocalizedError)?.errorDescription ?? "\(error)"))"
-                : "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+            installProgressID = nil
+            await refreshInstalled()
+            let detail = (error as? ClaudeCLI.SetupError)?.errorDescription
+                ?? "Claude Code couldn't be prepared. Try again, or run claude update in Terminal."
+            installStatus = "✗ \(detail)"
             stepFailed(.install, error, binaryFound: installed)
+            return false
         }
-        installing = false
     }
 
-    /// Install with retries; flip `installGaveUp` when the budget is spent. The ONE retry policy
-    /// (the frontier pickers drive this on the user's engine choice). No-op when already
-    /// installed or installing.
-    func ensureInstalled(attempts: Int = 3) async {
-        guard !installed, !installing else { return }
+    /// Commitment-only preparation: sign-in, Use Claude, or Continue with an existing login.
+    /// Concurrent callers share the same update; failed attempts remain retryable.
+    func ensureCurrent(attempts: Int = 3) async -> Bool {
+        if let preparationTask { return await preparationTask.value }
+        preparing = true
+        let task = Task { await prepareCurrent(attempts: attempts) }
+        preparationTask = task
+        let ready = await task.value
+        preparationTask = nil
+        preparing = false
+        return ready
+    }
+
+    private func prepareCurrent(attempts: Int) async -> Bool {
+        if let installTask { _ = await installTask.value }
+        await refreshInstalled()
+        if let version, version == preparedVersion, await ClaudeCLI.isRunnable() { return true }
         installGaveUp = false
+        guard attempts > 0 else { return false }
         for attempt in 1...attempts {
-            await installClaude()
-            if installed { return }
+            guard !Task.isCancelled else { return false }
+            if await installClaude() { return true }
             if attempt < attempts {
                 Log("ClaudeSetup: install attempt \(attempt) failed — retrying in 10s")
-                try? await Task.sleep(for: .seconds(10))
+                do { try await Task.sleep(for: .seconds(10)) }
+                catch { return false }
             }
         }
         installGaveUp = !installed
         if installGaveUp { Log("ClaudeSetup: install gave up after \(attempts) attempts — surfacing the manual-install panel") }
+        return false
     }
 
     // MARK: Keeping the CLI current (the daily update)
@@ -125,22 +169,15 @@ final class ClaudeSetup {
 
     /// The daily update, self-guarding: only while Claude IS the active engine (an engine out of
     /// service earns no background downloads), only over the managed install, at most once per
-    /// 24 h, and only when a newer release actually exists (a tiny version-feed read). Rides the
-    /// same idle tick as codex's updater (CodexSetup.startKeepingCurrent calls both).
+    /// 24 h. `claude update` resolves the user's release channel and skips downloads when current.
+    /// Rides the same idle tick as codex's updater (CodexSetup.startKeepingCurrent calls both).
     func updateIfDue(trigger: String) async {
         guard ModelBackend.current == .claude else { return }
-        guard installed, !installing else { return }
+        guard installed, !installing, !preparing else { return }
         guard ClaudeCLI.usingManagedBinary else { return }   // brew/npm claude is the user's to update
         guard Self.sinceLastUpdateAttempt >= 86_400 else { return }
         Self.stampUpdateAttempt()
-        let current = await ClaudeCLI.installedVersion()
-        version = current
-        let latest = await ClaudeCLI.latestReleasedVersion()
-        if let current, let latest, !CodexCLI.isNewer(latest, than: current) {
-            Log("ClaudeSetup: update (\(trigger)) — Claude Code \(current) is already the newest release")
-            return
-        }
-        Log("ClaudeSetup: update (\(trigger)) — \(current ?? "?") → \(latest ?? "latest"), running the installer")
+        Log("ClaudeSetup: update (\(trigger)) — checking with claude update")
         await installClaude()
     }
 

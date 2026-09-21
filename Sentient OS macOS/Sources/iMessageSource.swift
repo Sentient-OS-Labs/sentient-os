@@ -228,7 +228,7 @@ struct iMessageSource: Sendable {
     /// NSMutableString class marker, skip the 5-byte preamble, read the length (one byte, or
     /// 0x81 + two bytes little-endian for long messages), decode UTF-8. nil = not decodable
     /// (attachment-only rows land here; the caller skips them).
-    static func typedstreamText(_ blob: Data) -> String? {
+    nonisolated static func typedstreamText(_ blob: Data) -> String? {
         let marker = blob.range(of: Data("NSString".utf8))
             ?? blob.range(of: Data("NSMutableString".utf8))
         guard let marker else { return nil }

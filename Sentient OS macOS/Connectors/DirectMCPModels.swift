@@ -41,7 +41,7 @@ nonisolated enum DirectMCPError: Error, LocalizedError {
 }
 
 nonisolated enum DirectMCPConnectPhase: Sendable, Equatable {
-    case openingBrowser, waitingForBrowser, verifyingAccount, checkingTools
+    case openingBrowser, waitingForBrowser, savingConnection, checkingTools
 }
 
 nonisolated struct DirectMCPProvider: Sendable, Equatable {
@@ -75,7 +75,7 @@ nonisolated struct DirectMCPProvider: Sendable, Equatable {
     static let granola = Self(slug: "granola", name: "Granola",
         endpoint: URL(string: "https://mcp.granola.ai/mcp")!,
         trustedOrigins: ["https://mcp.granola.ai", "https://mcp-auth.granola.ai"],
-        offlineScope: "offline_access", reviewedReads: ["list_meetings", "get_meetings"], kbVerified: false)
+        offlineScope: "offline_access", reviewedReads: ["list_meetings", "get_meetings"], kbVerified: true)
     static let notion = Self(slug: "notion", name: "Notion",
         endpoint: URL(string: "https://mcp.notion.com/mcp")!,
         trustedOrigins: ["https://mcp.notion.com"], offlineScope: nil,
@@ -151,9 +151,8 @@ nonisolated struct DirectMCPConnection: Codable, Sendable, Identifiable, Equatab
         return policy[tool.name] ?? .destructive
     }
     var kbEligible: Bool {
-        guard provider?.kbVerified == true else { return false }
-        // Opt-in is available after login; the native reader verifies policy before reading.
-        return (state == .connected && provider?.reviewedReads.isEmpty == false) || kbPolicyReady
+        // Selection is user intent. Live grant and tool policy checks happen only on use.
+        provider?.kbVerified == true && provider?.reviewedReads.isEmpty == false
     }
     /// Curation can test this policy in an isolated store before enabling the production reader.
     var kbPolicyReady: Bool {

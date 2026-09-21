@@ -203,7 +203,7 @@ struct HealthPane: View {
                 StatusLine(title: "Microphone & Speech",
                            health: micSpeech == .granted ? .ok : .warn,   // optional — Sidekick's voice; tap-to-type works without it
                            note: micSpeechNote,
-                           tip: "Optional but recommended.\nLets Sidekick hear you and turn your words into text when you hold the shortcut key.\n\nWithout it, hold-to-talk stays off — you can still tap the key (or click the notch) and type.\n\nYour voice is heard and transcribed on this Mac, never in the cloud.",
+                           tip: ComputerUseGate.micSpeechTip,
                            fixTitle: micSpeech == .notAsked ? "Allow…" : "Fix…") {
                     fixMicSpeech()
                 }
@@ -477,7 +477,7 @@ struct HealthPane: View {
                            note: claude.installing ? (claude.installed ? "updating…" : "installing…")
                                : !claude.installed ? "not installed"
                                : (claude.version.map { "installed · \($0)" } ?? "installed"),
-                           tip: "Anthropic's official Claude Code command line tool. Sentient runs its cloud thinking through it, using your own Claude subscription.\n\nSentient keeps it up to date on its own, quietly, at most once a day while you're away from the app. Install runs Anthropic's own installer; if Claude Code is already there it simply updates in place, and your login and settings are untouched.",
+                           tip: "Anthropic's official Claude Code command line tool. Sentient runs its cloud thinking through it, using your own Claude subscription.\n\nSentient checks for updates quietly, at most once a day while you're away from the app. Existing installations use claude update and follow your release channel. Missing installations use Anthropic's official installer.",
                            fixTitle: claude.installed ? "Update…" : "Install…",
                            fix: claude.installing ? nil : { Task { await claude.installClaude() } })
                 failureLine(claude.installStatus)

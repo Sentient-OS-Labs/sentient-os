@@ -45,6 +45,7 @@ struct ComputerUseWindowGuard: ViewModifier {
 
             func registerWindow() {
                 guard let window, let openHome else { return }
+                HomeWindowOpening.windowAttached(window)
                 ComputerUseUpgrade.shared.register(window: window, openHome: openHome)
             }
         }

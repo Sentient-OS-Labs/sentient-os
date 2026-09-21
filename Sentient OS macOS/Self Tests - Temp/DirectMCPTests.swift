@@ -302,7 +302,7 @@ enum DirectMCPTests {
                 onProgress: report, openBrowser: browser)
             guard let connection = DirectMCPStore.connection(id: id), connection.connected, !connection.usable,
                   connection.tools.isEmpty, connection.detected.healthy,
-                  phases.withLock({ $0 }) == [.openingBrowser, .waitingForBrowser, .verifyingAccount],
+                  phases.withLock({ $0 }) == [.openingBrowser, .waitingForBrowser, .savingConnection],
                   ConnectorRegistry.detectedForCurrentBackend().contains(where: { $0.id == connection.detected.id }),
                   CommandRouter.routableServices().contains(where: { $0.slug == connection.taskTarget }) else {
                 throw Failure("new login was not connected and discoverable without a tool policy")
@@ -365,7 +365,7 @@ enum DirectMCPTests {
                 onProgress: report, openBrowser: browser)
             guard let reconnected = DirectMCPStore.connection(id: id), reconnected.connected, !reconnected.usable,
                   reconnected.generation != grant.generation, reconnected.policy == connected.policy,
-                  phases.withLock({ $0 }) == [.openingBrowser, .waitingForBrowser, .verifyingAccount] else {
+                  phases.withLock({ $0 }) == [.openingBrowser, .waitingForBrowser, .savingConnection] else {
                 throw Failure("unchanged reconnect did not reuse policy with ordered progress")
             }
             let verified = try await DirectMCPConnections.verify(reconnected, onProgress: report)
@@ -545,7 +545,7 @@ enum DirectMCPTests {
     static func renderConnectView() async {
         let slug = ProcessInfo.processInfo.environment["LAB_SLUG"] ?? "granola"
         guard let source = ConnectorSource.catalog(with: []).first(where: { $0.serviceSlug == slug }) else { exit(1) }
-        let view = ConnectorConnectSheet(source: source, connectors: .constant([]), onRefresh: {}, onConnect: {})
+        let view = ConnectorConnectSheet(source: source, connectors: .constant([]), onConnect: {})
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2

@@ -8,7 +8,7 @@
 //  to `codex exec` whether or not `--ignore-user-config` is passed; verified live June 21).
 //
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
-//  confirm with `probeConnected()` through the shared ConnectorCensus (no AI read probe).
+//  trust their confirmation. Connection problems are handled by the actual processing read.
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "calendar"; the existing "tell cloud"
 //  buttons fold them into the vault, same as every other source):
@@ -69,13 +69,6 @@ enum CalendarConnect {
     enum Progress: Sendable {
         case windowStart(step: Int, total: Int, label: String, prompt: String)
         case windowDone(step: Int, total: Int, label: String, summary: String?, events: Int, keptSoFar: Int)
-    }
-
-    // MARK: - Connection detection
-
-    /// Refresh the same hosted-connector census used by every other connected app.
-    static func probeConnected() async -> Bool {
-        await ConnectorCensus.checkConnection(slug: "google-calendar")
     }
 
     // MARK: - Initial read (last year → 12 monthly summaries)
@@ -254,8 +247,9 @@ enum CalendarConnect {
     "event_count":{"type":"integer"},\
     "notable":{"type":"boolean"},\
     "has_action_items":{"type":"boolean"},\
-    "summary":{"type":"string"}},\
-    "required":["event_count","notable","has_action_items","summary"]}
+    "summary":{"type":"string"},\
+    "tool_failure":{"type":"string","enum":["","auth","other"]}},\
+    "required":["event_count","notable","has_action_items","summary","tool_failure"]}
     """
 
     private static func readPrompt(range: String, label: String) -> String {

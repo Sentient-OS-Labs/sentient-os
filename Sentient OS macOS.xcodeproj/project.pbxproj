@@ -83,7 +83,7 @@
 			buildConfigurationList = 5A3F391C2FD0F43400DD835E /* Build configuration list for PBXNativeTarget "Sentient OS macOS" */;
 			buildPhases = (
 				5A3F390D2FD0F43300DD835E /* Sources */,
-				5AC0DE1E01000000000000E1 /* Lint log vocabulary (Debug) */,
+				5AC0DE1E01000000000000E1 /* Validate CUA contract and Debug logs */,
 				5A3F390E2FD0F43300DD835E /* Frameworks */,
 				5A3F390F2FD0F43300DD835E /* Resources */,
 				5A7E1D0003000000000000C1 /* Copy wake-helper daemon plist */,
@@ -178,7 +178,7 @@
 			shellPath = /bin/sh;
 			shellScript = "# Sentient OS bundle-trim phase (runs before the final app code-sign, so the seal stays\n# valid). Two jobs, both shrinking the shipped .app:\n#\n# 1) Thin the prebuilt LiteRT-LM dylib to the app's ARCHS. Google ships CLiteRTLM_mac as a\n#    fat arm64+x86_64 binary (~127MB); arm64-only roughly halves the .app. ARCHS=arm64\n#    only governs code Xcode COMPILES -- a checksum-pinned remote SwiftPM binary is copied\n#    in whole, so we strip it here. Idempotent (skips an already-thin slice) + re-signs.\n# 2) Drop the internal engineering docs the synchronized file group sweeps in (the per-feature\n#    'Documentation - *.md' files, incl. the 'Documentation - General - *' set). They're public in the repo and never\n#    read at runtime; dead weight. Globbed so future docs are dropped automatically.\nset -e\n\nDYLIB=\"${TARGET_BUILD_DIR}/${FRAMEWORKS_FOLDER_PATH}/libCLiteRTLM_mac.dylib\"\nif [ -f \"$DYLIB\" ]; then\n  THINNED=0\n  for arch in $(lipo -archs \"$DYLIB\"); do\n    case \" $ARCHS \" in\n      *\" $arch \"*) ;;\n      *) echo \"Thinning libCLiteRTLM_mac.dylib: removing $arch\"; lipo -remove \"$arch\" \"$DYLIB\" -output \"$DYLIB\"; THINNED=1 ;;\n    esac\n  done\n  if [ \"$THINNED\" = \"1\" ]; then\n    # Re-sign with the SAME options Xcode used, so a notarized Release stays valid: hardened\n    # runtime when enabled, plus a secure timestamp for Developer ID (distribution) signing\n    # only -- Apple Development / adhoc dev builds need neither (and skip the network round-trip).\n    SIGN_OPTS=\"\"\n    [ \"$ENABLE_HARDENED_RUNTIME\" = \"YES\" ] && SIGN_OPTS=\"--options runtime\"\n    case \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" in \"Developer ID\"*) SIGN_OPTS=\"$SIGN_OPTS --timestamp\" ;; esac\n    echo \"Re-signing thinned libCLiteRTLM_mac.dylib ($SIGN_OPTS)\"\n    codesign --force $SIGN_OPTS --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" \"$DYLIB\"\n  fi\nelse\n  echo \"warning: libCLiteRTLM_mac.dylib not found at $DYLIB -- skipping arch thinning\"\nfi\n\nRES=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}\"\nif [ -d \"$RES\" ]; then\n  find \"$RES\" -name \"*.md\" -print -delete\nfi\n";
 		};
-		5AC0DE1E01000000000000E1 /* Lint log vocabulary (Debug) */ = {
+		5AC0DE1E01000000000000E1 /* Validate CUA contract and Debug logs */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -188,14 +188,14 @@
 			);
 			inputPaths = (
 			);
-			name = "Lint log vocabulary (Debug)";
+			name = "Validate CUA contract and Debug logs";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Debug-only: fail the build if a Log() literal or a diagnostics tag/extra carries a word Sentry's\n# server-side scrubber redacts wholesale (token/auth/session/...). Doc: Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  \"${SRCROOT}/Scripts/lint_log_words.sh\" \"${SRCROOT}\"\nfi\n";
+			shellScript = "# Pin, manual and tool-catalog consistency is required in EVERY configuration.\n/usr/bin/python3 \"${SRCROOT}/Scripts/check_cua_contract.py\" \"${SRCROOT}\" || exit 1\n\n# Debug-only: fail the build if a Log() literal or a diagnostics tag/extra carries a word Sentry's\n# server-side scrubber redacts wholesale (token/auth/session/...). Doc: Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md\nif [ \"${CONFIGURATION}\" = \"Debug\" ]; then\n  \"${SRCROOT}/Scripts/lint_log_words.sh\" \"${SRCROOT}\"\nfi\n";
 		};
 		5AE5710001000000000000B1 /* Upload dSYMs to Sentry */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -360,7 +360,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -376,7 +376,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.4.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "jesai.Sentient-OS-macOS";
 				PRODUCT_NAME = "Sentient OS";
 				REGISTER_APP_GROUPS = YES;
@@ -398,7 +398,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 5;
+				CURRENT_PROJECT_VERSION = 6;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -414,7 +414,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.4;
+				MARKETING_VERSION = 1.4.1;
 				PRODUCT_BUNDLE_IDENTIFIER = "jesai.Sentient-OS-macOS";
 				PRODUCT_NAME = "Sentient OS";
 				REGISTER_APP_GROUPS = YES;

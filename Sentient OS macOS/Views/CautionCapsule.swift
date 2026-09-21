@@ -37,6 +37,7 @@ struct CautionCapsule: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss notification")
         }
         .padding(.horizontal, 16).padding(.vertical, 11)
         .frame(maxWidth: 480, alignment: .leading)

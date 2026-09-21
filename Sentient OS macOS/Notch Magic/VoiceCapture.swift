@@ -2,10 +2,10 @@
 //  VoiceCapture.swift
 //  Sentient OS macOS
 //
-//  The voice front-end for the right-⌘ hotkey: requests microphone + speech permission (once, lazily,
-//  on first hold), picks the OS-appropriate transcription engine, and exposes start / stopAndTranscribe
-//  / cancel. Today only the macOS 26 engine (SpeechAnalyzerEngine) exists; older macOS reports
-//  unavailable. Audio never touches disk — it streams through the on-device model in memory.
+//  The voice front-end for the notch's mic button: requests microphone + speech permission (once,
+//  lazily, on the first mic click), picks the OS-appropriate transcription engine (SpeechAnalyzer on
+//  macOS 26+, SFSpeechRecognizer on 15), and exposes start / stopAndTranscribe / cancel. Audio never
+//  touches disk — it streams through the on-device model in memory.
 //
 //  Key methods: prewarm() · start() · stopAndTranscribe() · cancel().
 //
@@ -21,8 +21,8 @@ final class VoiceCapture {
     /// Voice works on every supported macOS (15+): SpeechAnalyzer on 26+, SFSpeechRecognizer below.
     static let isAvailable = true
 
-    /// True only when BOTH mic and speech are ALREADY granted — lets a press start the mic with no
-    /// prompt (a tap-to-type must never trigger a permission dialog; first-use prompting waits for a hold).
+    /// True only when BOTH mic and speech are ALREADY granted. A denied grant has no native prompt
+    /// left, so the coordinator routes a mic click to the permission window instead of `start()`.
     static var isAuthorized: Bool {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
             && SFSpeechRecognizer.authorizationStatus() == .authorized
@@ -35,7 +35,7 @@ final class VoiceCapture {
     }
 
     /// True while the on-device speech model is genuinely downloading (first run / post-OS-purge) —
-    /// a voice hold is answered honestly instead of listening into a model that isn't there.
+    /// a mic click is answered honestly instead of listening into a model that isn't there.
     /// macOS 15's engine needs no model download.
     static var isModelDownloading: Bool {
         if #available(macOS 26, *) { return SpeechAnalyzerEngine.isModelDownloading }
@@ -96,7 +96,7 @@ final class VoiceCapture {
         return SFSpeechRecognizerEngine()
     }
 
-    // MARK: Permissions (lazy, on first hold)
+    // MARK: Permissions (lazy, on the first mic click)
 
     /// Microphone (always needed) + speech recognition (the Speech framework gate). Each prompts only
     /// the first time. Returns false if either is denied / restricted.

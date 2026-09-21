@@ -122,6 +122,8 @@ enum Uninstall {
         await beat()
 
         progress(.model)
+        await CodexSetup.shared.cancelCuaDriverInstall()
+        await CuaDriverHost.shared.stop()
         try? FileManager.default.removeItem(at: URL.sentientSupport)   // model + download staging + the store + the cua driver
         await beat()
 

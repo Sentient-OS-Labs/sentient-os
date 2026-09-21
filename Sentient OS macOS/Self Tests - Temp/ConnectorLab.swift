@@ -833,10 +833,10 @@ enum ConnectorLab {
     /// answers YES on a linked account.
     private static func probes() async {
         guard requireConnectorBackend("the probes") else { return }
-        let gmail = await GmailConnect.probeConnected()
-        Log("GmailConnect.probeConnected → \(gmail)")
-        let calendar = await CalendarConnect.probeConnected()
-        Log("CalendarConnect.probeConnected → \(calendar)")
+        let gmail = await ConnectorCensus.checkConnection(slug: "gmail")
+        Log("Gmail census → \(gmail)")
+        let calendar = await ConnectorCensus.checkConnection(slug: "google-calendar")
+        Log("Calendar census → \(calendar)")
     }
 
     // MARK: routereval (the 1.5 router eval — canned commands through the LIVE router)

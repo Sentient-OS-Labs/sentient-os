@@ -43,8 +43,7 @@ enum MCPSource {
         case noReadSurface(slug: String)
         /// The model reported the connector's own tools refusing auth (`tool_failure: "auth"`).
         /// The one reliable detector for a dead OAuth token: an expired connector doesn't THROW —
-        /// its tools just refuse (or never attach), and without this the night reads as falsely
-        /// quiet while `claude mcp list` still says Connected. Becomes the amber morning caution.
+        /// its tools just refuse (or never attach). Report it after the KB finishes.
         case connectorAuth(slug: String)
         /// The model reported the tools breaking for any other reason (`tool_failure: "other"`).
         /// Mark stays unset; next night retries. Never a caution — could be transient.
@@ -126,8 +125,8 @@ enum MCPSource {
 
     // MARK: - The per-cycle loop (both chain drivers call this)
 
-    /// The KB-enabled slugs for the live backend (empty on a custom endpoint — the registry is
-    /// backend-scoped and detection-filtered, so a stale toggle for an unlinked app never runs).
+    /// The user-selected sources for this backend, including missing or unavailable connections.
+    /// Custom endpoints may use direct sources; hosted sources require a subscription backend.
     static func kbSlugs() -> [String] { ConnectorRegistry.kbEnabledConnectors().map(\.slug) }
 
     /// One connector's night: "ok", or the closed-vocabulary reason it failed/skipped.
@@ -147,7 +146,6 @@ enum MCPSource {
         PipelineActivity.begin()
         defer { PipelineActivity.end() }
         let slugs = kbSlugs()
-        logVanishedToggles()
         var outcomes: [LegOutcome] = []
         var hitUsageLimit = false
         for (index, slug) in slugs.enumerated() {
@@ -176,8 +174,8 @@ enum MCPSource {
                 }
                 if case CodexCLI.CLIError.usageLimit = error { hitUsageLimit = true }
                 let reason: String
-                if case MCPError.connectorAuth = error {
-                    reason = "connector_auth"   // the scheduler turns this into the amber caution
+                if ConnectorReadFailure.isConnectionFailure(error) {
+                    reason = "connector_auth"
                 } else {
                     reason = CodexFailureReason.classify(error).rawValue
                 }
@@ -188,9 +186,11 @@ enum MCPSource {
                     tags: ["slug": ConnectorRegistry.telemetrySlug(slug), "reason": reason],
                     extra: ["seconds": String(Int(Date().timeIntervalSince(legStart)))],
                     fingerprint: ["mcp", "read", reason])
-                onEvent(slug, index, slugs.count,
-                        .failed(label: ConnectorRegistry.displayName(slug: slug),
-                                message: (error as? LocalizedError)?.errorDescription ?? "The read failed."))
+                if !ConnectorReadFailure.isConnectionFailure(error) {
+                    onEvent(slug, index, slugs.count,
+                            .failed(label: ConnectorRegistry.displayName(slug: slug),
+                                    message: (error as? LocalizedError)?.errorDescription ?? "The read failed."))
+                }
             }
         }
         return (outcomes, hitUsageLimit)
@@ -210,23 +210,6 @@ enum MCPSource {
             "seconds": String(Int(Date().timeIntervalSince(started))),
             "inCount": String(tokens.tokensIn),
             "outCount": String(tokens.tokensOut)])
-    }
-
-    /// A KB toggle whose app is no longer linked anywhere is the user's own act (they unlinked
-    /// it on the website): one quiet count line, never a caution, never an error. A connector
-    /// merely absent from the LIVE backend but linked on the other engine is not "vanished" —
-    /// it simply doesn't run tonight.
-    private static func logVanishedToggles() {
-        let known = Set((ConnectorCensus.cached(for: .claude)
-                         + ConnectorCensus.cached(for: .chatgpt)).map(\.slug) + DirectMCPStore.connections().map(\.slug))
-        let vanished = UserDefaults.standard.dictionaryRepresentation()
-            .filter { $0.key.hasPrefix("mcp.") && $0.key.hasSuffix(".kb")
-                      && ($0.value as? Bool) == true }
-            .map { String($0.key.dropFirst("mcp.".count).dropLast(".kb".count)) }
-            .filter { !known.contains($0) }
-        if !vanished.isEmpty {
-            Log("MCPSource.runAll: \(vanished.count) KB toggle(s) for apps no longer linked — skipped")
-        }
     }
 
     // MARK: - One connector's read and atomic commit
@@ -477,7 +460,7 @@ enum MCPSource {
             } catch {
                 onReceipt?(attemptedEnvelope, nil, attempt, attemptPrompt, "content", [:])
                 try Task.checkCancellation()
-                if error is CancellationError { throw error }
+                if error is CancellationError || ConnectorReadFailure.isConnectionFailure(error) { throw error }
                 if case CodexCLI.CLIError.usageLimit = error { throw error }
                 if case CodexCLI.CLIError.notAvailable = error { throw error }
                 if case MCPError.invalidResponse = error {
@@ -537,6 +520,12 @@ enum MCPSource {
         #endif
         guard ConnectorRegistry.kbEligible(slug) else { throw MCPError.noReadSurface(slug: slug) }
         if DirectMCPStore.connection(slug) != nil { return } // native preparation validates live policy before spawn
+        if slug.hasPrefix("direct-") || ConnectorRegistry.pack(forSlug: slug)?.directProvider != nil {
+            throw MCPError.connectorAuth(slug: slug)
+        }
+        if ModelBackend.current == .chatgpt, ConnectorRegistry.server(for: slug)?.codexCatalogID == nil {
+            throw MCPError.connectorAuth(slug: slug)
+        }
         let inv = readInvocation(slug: slug, prompt: "Read-policy validation")
         switch ModelBackend.current {
         case .chatgpt:

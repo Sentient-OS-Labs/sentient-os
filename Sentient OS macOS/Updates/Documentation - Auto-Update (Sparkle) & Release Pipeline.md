@@ -19,6 +19,7 @@ scripts at the repo root (`Scripts/make_dmg.sh` → `Scripts/release.sh`) plus o
 
 ## The update model
 
+- **Release builds only.** `UpdateController.appUpdatesEnabled` is false under `DEBUG`; no `SPUUpdater` is created, automatic/manual checks are inert, and Settings/menu update buttons are disabled. Debug `UpdateNotice` calls neither consume nor change the shared release-version, relaunch, or notice preferences. Do not disable Sparkle by writing its automatic-update preferences: Debug and Release share the bundle ID and defaults. CUA driver updates remain enabled independently.
 - **Normal case: fully silent, zero clicks.** Sparkle checks every 3 h (plus once at launch), silently downloads and stages a new version, then calls `willInstallUpdateOnQuit`. `UpdateController` takes over and, the moment it is **idle-safe** (`isSafeToRelaunch`: no pipeline run in flight (`PipelineActivity`), and either the app is not frontmost or the user has been idle 5+ minutes; a 30 s timer retries), installs and relaunches with no UI. Returning `true` from that hook means we MUST eventually fire the handler; the timer guarantees it, and if the user quits first Sparkle installs on quit anyway.
 - **The relaunch is windowless.** `UpdateNotice.recordSilentRelaunch()` (only after onboarding) stores the old version string right before the relaunch; the new build consumes it once and launches the home `.suppressed` (Dock icon dropped to match). If the running build still matches the stored version the install never landed, and the flag is ignored, so a stale flag can never hide the window.
 - **"Sentient just updated."** Every launch diffs a persisted last-run version; a change fires the macOS notification (explaining the Dock bounce) and arms the persistent green capsule with a Read the changelog pill (the latest GitHub release), rendered in the home's banner slot and over onboarding until dismissed.
@@ -66,7 +67,7 @@ and prints the final manual step: publish `appcast.xml` to `sentient-os.ai/appca
 repo's `public/appcast.xml`, deployed by Vercel) and bump the site's version-pinned Download URL.
 `./release.sh keys` is the one-time key generator.
 
-Testing a real update: publish a "new" build to the live feed, install an "old" one, let it sit idle, and
+Testing a real update uses **Release** configuration: publish a "new" build to the live feed, install an "old" one, let it sit idle, and
 watch it silently relaunch into "new" (the build number flip and the PID change are the proof; Release
 builds are quiet in the unified log). A local throwaway-key harness with a `python3 -m http.server`
 appcast works for fast iteration.
@@ -74,7 +75,8 @@ appcast works for fast iteration.
 ## Gotchas
 
 - Apple code signing and Sparkle EdDSA signing are independent; both are needed.
-- Atomic swap needs same-team nested helpers: a Debug build's Autoupdate helper is ad-hoc signed and Sparkle logs "Skipping atomic rename/swap" (a still-working non-atomic install); a Developer ID export re-signs it. `make_dmg.sh` checks.
+- Never let a development build join the live update channel. A September 2026 Debug launch installed CUA 0.28.2 successfully, then Sparkle replaced the app in DerivedData with the published release carrying older CUA logic. That release raised the migration pitch and left `computerUse.upgradePending` behind. The compile-time gate prevents this even when the published build number exceeds the development one. Verify normal startup as well as headless self-tests, which intentionally bypass updater startup.
+- Atomic swap needs same-team nested helpers; a Developer ID export re-signs the Sparkle helpers. `make_dmg.sh` checks.
 - The silent path needs a user-writable install dir; a root-owned one falls back to the gate (intended).
 - Never ship `.pkg` updates (they always require authorization). Ship a signed, notarized `.app` in a `.dmg`.
 - All `SPUUpdater` calls on the main thread. The driver's method labels must match Sparkle's imported Swift signatures exactly.
