@@ -9,12 +9,13 @@
 //  field (pasteboard + ⌘V, the user's clipboard put back after). A screenshot that isn't an email
 //  or message reply box gets a short notch aside instead.
 //
-//  The enable switch and the OpenAI key live in Dev Tools until the key question is settled (see
-//  the doc). The key listener and the two-presses-in-a-window test live in CommandCoordinator: one
-//  press opens the notch, a second inside `window` fires this instead of the type field (the notch
-//  waits out the window before becoming key, so the ⌘V lands in the user's own box). The run rides
-//  the coordinator's one-task lock, so the notch shows "Drafting your reply" and a Sidekick hotkey
-//  press is STOP.
+//  On by default: an unset `doubletap.enabled` means on, so a fresh install and a Release build
+//  (which has no Dev Tools) ship with Double Tap live; Dev Tools keeps a dev-only off switch, the
+//  route picker, and the timing readout. The key listener and the two-presses-in-a-window test
+//  live in CommandCoordinator: one press opens the notch, a second inside `window` fires this
+//  instead of the type field (the notch waits out the window before becoming key, so the ⌘V lands
+//  in the user's own box). The run rides the coordinator's one-task lock, so the notch shows
+//  "Drafting your reply" and a Sidekick hotkey press is STOP.
 //
 //  Key methods: start(completion:) · cancel() · window · isEnabled · lastReport.
 //  Doc: Documentation - Double Tap.md (this folder).
@@ -33,9 +34,12 @@ final class DoubleTap {
     /// The notch aside for a screenshot that isn't a reply box (the notch truncates past ~45 chars).
     static let notice = "double tap in an email or message reply box"
 
-    /// Dev switch (UserDefaults). Off = the key does nothing.
+    /// On unless a developer switches it off in Dev Tools (UserDefaults; unset = on). Off, two
+    /// taps just open Sidekick sooner.
     static let enabledKey = "doubletap.enabled"
-    static var isEnabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
+    static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: enabledKey) == nil || UserDefaults.standard.bool(forKey: enabledKey)
+    }
 
     /// Screenshots are shrunk to this long edge before upload; a model downscales past ~2000 px
     /// anyway, so a full Retina frame only costs upload time.

@@ -91,8 +91,8 @@ struct DevToolsView: View {
     @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
-    // Double Tap (its own key twice → draft a reply) — the manual-test harness (Double Tap/DoubleTap.swift).
-    @AppStorage(DoubleTap.enabledKey) private var doubleTapEnabled = false
+    // Double Tap (Sidekick's key twice → draft a reply): the dev-only off switch, the route, the key, the timings (Double Tap/DoubleTap.swift).
+    @AppStorage(DoubleTap.enabledKey) private var doubleTapEnabled = true
     @AppStorage(DoubleTapInference.routeKey) private var doubleTapRouteRaw = DoubleTapInference.Route.relay.rawValue
     @AppStorage(DoubleTapInference.relayURLKey) private var doubleTapRelayURL = ""
     @State private var doubleTapKeyDraft = ""
@@ -321,7 +321,7 @@ struct DevToolsView: View {
                     .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Rides Sidekick's key (\(SidekickHotkey.current.label), the Settings choice): one tap opens Sidekick, two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. With this switch off, two taps just open Sidekick sooner.")
+            Text("\(DoubleTapInference.model) · reasoning off · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Rides Sidekick's key (\(SidekickHotkey.current.label), the Settings choice): one tap opens Sidekick, two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. On by default (Release has no way off); with this switch off, two taps just open Sidekick sooner.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }
