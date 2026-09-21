@@ -5,7 +5,6 @@
 import Foundation
 import SQLite3
 import SwiftUI
-import os
 
 enum WritingStyleTests {
     private static var checks = 0
@@ -406,23 +405,19 @@ enum WritingStyleTests {
 
         overrides[AppState.onboardingKey] = false
         defaults.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
-        let phases = OSAllocatedUnfairLock(initialState: [String]())
         await FrontierRun.$acceptanceRun.withValue({ invocation in
             try await MainActor.run { try envelope(slug: invocation.mcpReadConnectors[0], backend: .chatgpt) }
         }) {
-            await ProactiveCycle.prepareWritingStyle { phase in
-                if case .knowledgeBase(let line) = phase { phases.withLock { $0.append(line) } }
-            }
+            ProactiveCycle.publishWritingStyle(await ProactiveCycle.collectWritingStyle())
         }
-        try check(WritingStyle.exists() && phases.withLock { $0.contains("Setting up double tap") },
-                  "initial-processing hook creates the file and reports the setup phase")
+        try check(WritingStyle.exists(), "initial-processing hook collects the samples and lands the file")
         try fm.removeItem(at: file)
         overrides[AppState.onboardingKey] = true
         defaults.setVolatileDomain(overrides, forName: UserDefaults.argumentDomain)
         await FrontierRun.$acceptanceRun.withValue({ _ in throw TestError.failed }) {
-            await ProactiveCycle.prepareWritingStyle { _ in }
+            ProactiveCycle.publishWritingStyle(await ProactiveCycle.collectWritingStyle())
         }
-        try check(!WritingStyle.exists(), "existing-user background cycles leave setup to the popup")
+        try check(!WritingStyle.exists(), "existing-user background cycles leave setup to the home")
     }
 }
 #endif

@@ -16,8 +16,7 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var isProcessing = false
     @State private var showDevTools = false
-    @State private var showWritingStyleSetup = false
-    @State private var offeredWritingStyleSetup = false
+    @State private var startedWritingStyleSetup = false
     // Persistent custom folder roots (CustomRoots store) — added in Settings or Dev Tools,
     // watched here so Analyze Now and the Analysis popover react to edits from any window.
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
@@ -143,24 +142,29 @@ struct RootView: View {
         .sheet(isPresented: $showDevTools) {
             DevToolsView()
         }
-        .sheet(isPresented: $showWritingStyleSetup) {
-            WritingStyleSetupView()
-        }
-        .task(id: canOfferWritingStyleSetup) {
-            guard canOfferWritingStyleSetup, !offeredWritingStyleSetup else { return }
-            offeredWritingStyleSetup = true
-            showWritingStyleSetup = true
+        // Existing knowledge bases get their Double Tap writing samples set up silently, once per
+        // session, the first time the home is idle. The introduction sheet (WritingStyleSetupView)
+        // is hidden for now. An independent Task, not this view task: generateIfNeeded marks the
+        // pipeline busy, which flips the id below and would cancel its own run.
+        .task(id: canStartWritingStyleSetup) {
+            guard canStartWritingStyleSetup, !startedWritingStyleSetup else { return }
+            startedWritingStyleSetup = true
+            Task { @MainActor in
+                Log("WritingStyle: silent setup started for an existing knowledge base")
+                do { try await WritingStyle.generateIfNeeded() }
+                catch { Log("WritingStyle: silent setup failed (\(ErrorLabel(error)))") }
+            }
         }
         .onChange(of: showDevTools) { _, open in
             if !open { fdaGranted = Permissions.hasFullDiskAccess() }   // may have changed in the sheet
         }
     }
 
-    private var canOfferWritingStyleSetup: Bool {
+    private var canStartWritingStyleSetup: Bool {
         #if DEBUG
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return false }
         #endif
-        return appState.hasCompletedOnboarding && !isProcessing && !showDevTools
+        return appState.hasCompletedOnboarding && !isProcessing
             && !PipelineActivity.shared.isRunning && !appState.commandCoordinator.run.isRunning
             && !WritingStyle.exists()
             && FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.appendingPathComponent("README.md").path)

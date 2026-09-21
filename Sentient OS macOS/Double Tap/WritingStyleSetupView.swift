@@ -1,7 +1,9 @@
 //
 // WritingStyleSetupView.swift
-// One-time setup for existing knowledge bases. Runs the same collector as initial processing,
-// with cancellation and an explicit retry after failures.
+// The introduction sheet for existing knowledge bases: runs the same collector as initial
+// processing, with cancellation and an explicit retry after failures. Hidden for now: RootView
+// runs the same setup silently in the background instead, and this sheet waits for the
+// introduction to return.
 // Doc: Documentation - Double Tap.md
 //
 

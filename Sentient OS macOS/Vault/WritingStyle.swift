@@ -2,7 +2,9 @@
 // WritingStyle.swift
 // Creates writingstyle.md once from the user's own words in sent mail and local messages, each
 // headed by who it went to and the medium.
-// generateIfNeeded() serves onboarding and the upgrade sheet; preserve() protects vault swaps.
+// collect() gathers and renders the samples with no knowledge base needed; publishIfNeeded() lands
+// the file once one exists; generateIfNeeded() is both, for the home's silent setup of an existing
+// knowledge base. preserve() protects vault swaps.
 // Doc: Documentation - Knowledge Base (Vault).md
 //
 
@@ -70,12 +72,23 @@ nonisolated enum WritingStyle {
         }
     }
 
-    /// Fewer samples are valid when the selected sources have less history, including none.
-    /// Errors and cancellation leave the file absent so the next setup can retry honestly.
+    /// Collect, then land the file, for a knowledge base that already exists: the home's silent
+    /// setup and the introduction sheet. Initial processing calls the two halves itself, so the
+    /// collection can run alongside the first build.
     @MainActor static func generateIfNeeded(progress: @escaping @Sendable (String) -> Void = { _ in }) async throws {
         let root = VaultGenerator.vaultRoot
         guard !exists(in: root) else { return }
         guard FileManager.default.fileExists(atPath: root.appendingPathComponent("README.md").path) else { throw Failure.noVault }
+        let content = try await collect(progress: progress)
+        progress("Saving your writing samples…")
+        try publishIfNeeded(content, in: root)
+    }
+
+    /// The samples, rendered, without touching the knowledge base: only landing the file needs a
+    /// vault, so the first build can gather these in parallel. Fewer samples are valid when the
+    /// selected sources have less history, including none. Errors and cancellation leave nothing
+    /// behind, so the next setup can retry honestly.
+    @MainActor static func collect(progress: @escaping @Sendable (String) -> Void = { _ in }) async throws -> String {
         guard !generating else { throw Failure.busy }
         generating = true
         PipelineActivity.begin()
@@ -94,7 +107,6 @@ nonisolated enum WritingStyle {
             return (imessage, whatsapp, names)
         }
         let (imessage, whatsapp, names) = try await withTaskCancellationHandler { try await localTask.value } onCancel: { localTask.cancel() }
-        Log("WritingStyle: collected \(imessage.count) iMessage and \(whatsapp.count) WhatsApp messages")
         try Task.checkCancellation()
         var mail: [(source: String, sample: WritingStyleMail.Sample)] = []
         for slug in selection.mail {
@@ -116,8 +128,14 @@ nonisolated enum WritingStyle {
         let content = render(entries)
         // Keep every byte of the samples. Never silently lose them at the normal vault cap.
         guard content.utf8.count <= DoubleTapInference.vaultByteCeiling - 2_000 else { throw Failure.tooLarge }
-        progress("Saving your writing samples…")
-        if exists(in: root) { return } // A user-created file always wins.
+        Log("WritingStyle: collected \(mail.count) emails, \(imessage.count) iMessage and \(whatsapp.count) WhatsApp messages")
+        return content
+    }
+
+    /// Land collected samples in the knowledge base. A file that appeared meanwhile, the user's own
+    /// or another run's, always wins.
+    @MainActor static func publishIfNeeded(_ content: String, in root: URL = VaultGenerator.vaultRoot) throws {
+        if exists(in: root) { return }
         try publish(content, in: root)
         #if DEBUG
         // Scratch-vault checks must not alter the real vault's sync state or schedule a push.
@@ -125,7 +143,7 @@ nonisolated enum WritingStyle {
         #else
         VaultActivity.shared.markChanged()
         #endif
-        Log("WritingStyle: saved \(mail.count) emails and \(imessage.count + whatsapp.count) messages")
+        Log("WritingStyle: saved to the knowledge base")
     }
 
     /// One sample as written: the user's words, who they went to, and the medium.
