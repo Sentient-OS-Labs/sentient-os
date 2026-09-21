@@ -8,7 +8,7 @@
 //  `--ignore-user-config` — measured live June 15, no CodexCLI change needed).
 //
 //  Connection: the user links Google on OpenAI's connector page (opened from CloudConnectSheet); we
-//  confirm with `probeConnected()` through the shared ConnectorCensus (no AI read probe).
+//  trust their confirmation. Connection problems are handled by the actual processing read.
 //
 //  Reads (each summary is ONE ephemeral CycleNote in bucket "gmail"; the existing "tell cloud"
 //  buttons add them to the vault, same as every other source):
@@ -80,13 +80,6 @@ enum GmailConnect {
         case windowStart(total: Int, label: String, prompt: String)
         case windowDone(total: Int, label: String, summary: String?, threads: Int,
                         completed: Int, keptSoFar: Int)
-    }
-
-    // MARK: - Connection detection
-
-    /// Refresh the same hosted-connector census used by every other connected app.
-    static func probeConnected() async -> Bool {
-        await ConnectorCensus.checkConnection(slug: "gmail")
     }
 
     // MARK: - Initial read (last month → 4 weekly summaries)
@@ -236,8 +229,9 @@ enum GmailConnect {
     "thread_count":{"type":"integer"},\
     "notable":{"type":"boolean"},\
     "has_action_items":{"type":"boolean"},\
-    "summary":{"type":"string"}},\
-    "required":["thread_count","notable","has_action_items","summary"]}
+    "summary":{"type":"string"},\
+    "tool_failure":{"type":"string","enum":["","auth","other"]}},\
+    "required":["thread_count","notable","has_action_items","summary","tool_failure"]}
     """
 
     private static func weeklyPrompt(query: String, label: String) -> String {

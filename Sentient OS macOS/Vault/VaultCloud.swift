@@ -343,6 +343,8 @@ actor VaultCloud {
         \(skeleton)
 
         ## How to work — surgical edits, not a rebuild
+        - `writingstyle.md` is an app-managed collection of verbatim sent messages. Do not read,
+        summarize, edit, rename or delete it, and do not copy its contents into other notes.
         - **You are the second sieve — not every item deserves the vault.** The on-device model \
         already dropped obvious junk, but it is a small, lenient model; YOU are the quality bar, \
         exactly as when you built this vault (curate ruthlessly). Change the vault ONLY where an \

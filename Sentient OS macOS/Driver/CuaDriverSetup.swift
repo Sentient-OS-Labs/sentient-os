@@ -24,6 +24,20 @@ import Foundation
 
 enum CuaDriverSetup {
 
+    enum Progress: Sendable, Equatable {
+        case downloading(Double?), verifying, unpacking, checkingSignature, checkingVersion, installing, ready
+
+        var message: String {
+            switch self {
+            case .downloading: "Downloading…"
+            case .verifying, .checkingSignature, .checkingVersion: "Verifying update…"
+            case .unpacking: "Preparing computer use…"
+            case .installing: "Finishing up…"
+            case .ready: "Computer use is up to date."
+            }
+        }
+    }
+
     enum SetupError: LocalizedError {
         case download(String), integrity(String), extract(String), signature(String), smoke(String), install(String)
         var errorDescription: String? {
@@ -43,23 +57,30 @@ enum CuaDriverSetup {
     /// Download, verify, and install the pinned cua-driver. Idempotent: a no-op when the pinned
     /// version is already in place (pass `force` to re-fetch it). Streams human-readable progress to
     /// `onLine`, the same convention as every other setup step.
-    static func install(force: Bool = false, onLine: @escaping @Sendable (String) -> Void) async throws {
+    static func install(force: Bool = false,
+                        onProgress: @escaping @MainActor @Sendable (Progress) -> Void = { _ in },
+                        onLine: @escaping @Sendable (String) -> Void) async throws {
         if !force, CuaDriver.isInstalled { onLine("✓ Cua driver already installed"); return }
 
         let fm = FileManager.default
         let staging = CuaDriver.installRoot.appendingPathComponent(".download-\(UUID().uuidString.prefix(8))",
                                                                    isDirectory: true)
-        try? fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: staging) }
 
         // 1) Download. Whole-file: at ~40 MB a clean retry costs less than resume bookkeeping (the
         //    3.66 GB model is the one that earns chunked resume).
         onLine("Downloading the Cua driver (~\(CuaDriver.tarballBytes / 1_048_576) MB)…")
+        onProgress(.downloading(nil))
         let tarball = staging.appendingPathComponent("cua-driver.tar.gz")
-        try await download(CuaDriver.tarballURL, to: tarball)
+        try await download(CuaDriver.tarballURL, to: tarball) { fraction in
+            Task { @MainActor in onProgress(.downloading(fraction)) }
+        }
+        try Task.checkCancellation()
 
         // 2) The pin. Poisoned bytes stop here, before anything is unpacked or run.
         onLine("Verifying checksum…")
+        onProgress(.verifying)
         let digest = try sha256(of: tarball)
         guard digest == CuaDriver.tarballSHA256 else {
             throw SetupError.integrity("expected \(CuaDriver.tarballSHA256.prefix(12))…, got \(digest.prefix(12))…")
@@ -68,6 +89,7 @@ enum CuaDriverSetup {
         // 3) Just the one member — the SDK dylib and node runtime in the same tarball are for
         //    embedding hosts we are not, and there is no reason to write 48 MB we never load.
         onLine("Unpacking…")
+        onProgress(.unpacking)
         let extracted = staging.appendingPathComponent("cua-driver")
         let untar = try await sh("/usr/bin/tar", ["-xzf", tarball.path, "-C", staging.path, "cua-driver"])
         guard untar.status == 0, fm.fileExists(atPath: extracted.path) else {
@@ -80,6 +102,7 @@ enum CuaDriverSetup {
         // 4) Provenance. The hash proves these are the bytes we pinned; this proves Cua signed them
         //    and nothing has touched the binary since.
         onLine("Checking signature…")
+        onProgress(.checkingSignature)
         let requirement = "=anchor apple generic and certificate leaf[subject.OU] = \"\(CuaDriver.signingTeamID)\""
         let verify = try await sh("/usr/bin/codesign",
                                   ["--verify", "--strict", "--test-requirement=\(requirement)", extracted.path])
@@ -87,23 +110,32 @@ enum CuaDriverSetup {
 
         // 5) It exists, it's Cua's, it's intact — but does it RUN here? One cheap exec answers the
         //    architecture, Gatekeeper, and truncation questions at setup time instead of mid-command.
+        onProgress(.checkingVersion)
         let probe = try await sh(extracted.path, ["--version"])
         let reported = probe.out.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard probe.status == 0, reported.contains(CuaDriver.version) else {
+        guard probe.status == 0, reported == "cua-driver \(CuaDriver.version)" else {
             throw SetupError.smoke(probe.status == 0 ? "reported \"\(reported)\"" : "exit \(probe.status)")
         }
 
         // 6) Into place. The version directory is built beside the live one and swapped last, so an
         //    interrupted install can never leave a half-written binary where a run would find it.
         let dest = CuaDriver.binaryURL
+        try Task.checkCancellation()
+        onProgress(.installing)
         do {
             try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? fm.removeItem(at: dest)
-            try fm.moveItem(at: extracted, to: dest)
+            // Same-volume rename atomically replaces even a force-reinstalled binary. Never
+            // remove the working destination before its verified replacement is ready.
+            guard rename(extracted.path, dest.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
         } catch { throw SetupError.install("\(error)") }
         guard CuaDriver.isInstalled else { throw SetupError.install("post-install check failed") }
 
+        do { try CuaDriver.recordInstallation(CuaDriver.version, at: CuaDriver.installRoot) }
+        catch { Log("CuaDriverSetup: installation is ready; receipt write failed (\(ErrorLabel(error)))") }
         sweepOtherVersions()
+        onProgress(.ready)
         Log("CuaDriverSetup: installed cua-driver \(CuaDriver.version) (verified: sha256 + Cua signature + --version)")
         onLine("✓ Cua driver ready")
     }
@@ -120,28 +152,33 @@ enum CuaDriverSetup {
     private static func sweepOtherVersions() {
         let fm = FileManager.default
         let keep = CuaDriver.version
-        for name in (try? fm.contentsOfDirectory(atPath: CuaDriver.installRoot.path)) ?? [] where name != keep {
+        for name in CuaDriver.installedVersions where name != keep {
             try? fm.removeItem(at: CuaDriver.installRoot.appendingPathComponent(name))
         }
     }
 
     // MARK: Plumbing
 
-    /// Download to an exact path. URLSession's async download hands back a temp file the caller owns,
-    /// so it moves in the same breath — no window where a finished download is nobody's.
-    private static func download(_ url: URL, to dest: URL) async throws {
+    /// Download with byte progress. The delegate moves the temporary file before returning from
+    /// its completion callback, then resumes the awaiting installer.
+    private static func download(_ url: URL, to dest: URL,
+                                 onProgress: @escaping @Sendable (Double?) -> Void) async throws {
         let cfg = URLSessionConfiguration.default
         cfg.timeoutIntervalForResource = 900   // 15 min ceiling for a ~40 MB transfer
-        let session = URLSession(configuration: cfg)
+        cfg.timeoutIntervalForRequest = 60
+        let delegate = DownloadProgress(destination: dest, onProgress: onProgress)
+        let session = URLSession(configuration: cfg, delegate: delegate, delegateQueue: nil)
         defer { session.finishTasksAndInvalidate() }
         do {
-            let (tmp, response) = try await session.download(from: url)
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                try? FileManager.default.removeItem(at: tmp)
-                throw SetupError.download("HTTP \(http.statusCode)")
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                try await withCheckedThrowingContinuation { continuation in
+                    delegate.begin(continuation)
+                    session.downloadTask(with: url).resume()
+                }
+            } onCancel: {
+                session.invalidateAndCancel()
             }
-            try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.moveItem(at: tmp, to: dest)
         } catch let error as SetupError {
             throw error
         } catch {
@@ -158,25 +195,66 @@ enum CuaDriverSetup {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Minimal async Process runner (combined stdout+stderr) for the local tar/codesign/probe steps,
-    /// off-main via a global queue. Output is small and bounded, so one drain is safe.
+    /// Reuse the engine-neutral process runner's deadline and cancellation behavior. A wedged
+    /// signature check or smoke process cannot hold a command or Uninstall indefinitely.
     @discardableResult
     private static func sh(_ launch: String, _ args: [String]) async throws -> (status: Int32, out: String) {
-        try await withCheckedThrowingContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: launch)
-                p.arguments = args
-                let pipe = Pipe()
-                p.standardOutput = pipe
-                p.standardError = pipe
-                do { try p.run() }
-                catch { cont.resume(throwing: SetupError.extract("\(launch): \(error)")); return }
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                p.waitUntilExit()
-                cont.resume(returning: (p.terminationStatus, String(data: data, encoding: .utf8) ?? ""))
+        let result = try await CodexCLI.executeAsync(binary: launch, args: args, stdinText: nil,
+            cwd: nil, timeout: 45,
+            extraEnv: ["CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
+                       "CUA_TELEMETRY_ENABLED": "false", "CUA_DRIVER_RS_UPDATE_CHECK": "false"])
+        return (result.status, result.stdout + result.stderr)
+    }
+
+}
+
+/// URLSession retains this delegate for its async download. Byte counts are real; an unknown
+/// content length stays indeterminate. Only the UI consumer hops to the main actor.
+private final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    let destination: URL
+    let onProgress: @Sendable (Double?) -> Void
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+
+    init(destination: URL, onProgress: @escaping @Sendable (Double?) -> Void) {
+        self.destination = destination
+        self.onProgress = onProgress
+    }
+
+    func begin(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.lock(); defer { lock.unlock() }
+        self.continuation = continuation
+    }
+
+    private func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(with: result)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        onProgress(totalBytesExpectedToWrite > 0
+            ? min(1, max(0, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))) : nil)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        do {
+            guard let http = downloadTask.response as? HTTPURLResponse, http.statusCode == 200 else {
+                throw CuaDriverSetup.SetupError.download("HTTP \((downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0)")
             }
-        }
+            // The delegate's temporary file is only valid until this callback returns.
+            try FileManager.default.moveItem(at: location, to: destination)
+            finish(.success(()))
+        } catch { finish(.failure(error)) }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error { finish(.failure(error)) }
     }
 }
 

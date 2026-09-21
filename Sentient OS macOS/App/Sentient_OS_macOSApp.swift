@@ -39,7 +39,12 @@ struct SentientOSApp: App {
             RootView()
                 .environment(appState)
                 .preferredColorScheme(.dark)   // Sentient OS is dark-only — no light mode
-                .task { await VaultCloud.pushIfDirty() }   // catch up a mirror sync deferred by an earlier quit/failure
+                .task {
+                    #if DEBUG
+                    guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
+                    #endif
+                    await VaultCloud.pushIfDirty() // catch up a mirror sync deferred by an earlier quit/failure
+                }
                 .modifier(ComputerUseWindowGuard())
         }
         .windowStyle(.hiddenTitleBar)            // OLED black runs edge-to-edge; no gray trim
@@ -127,17 +132,38 @@ struct SentientOSApp: App {
                 .environment(appState)
                 .preferredColorScheme(.dark)
         } label: {
-            MenuBarIcon()
+            MenuBarIcon().modifier(NotificationRouting())
         }
     }
 }
 
-/// Dock reopen is an explicit request to resume setup, including while the app is already active
-/// or setup is minimized. Ordinary activation leaves a minimized setup alone.
+/// Dock reopen explicitly opens Home or resumes pending setup, even when another window is visible.
+/// Ordinary activation remains separate, so silent launches and permission prompts keep their behavior.
 final class SentientAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        Notify.installRouting()
+    }
+
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        guard ComputerUseUpgrade.shared.isBlockingInterface else { return true }
-        ComputerUseUpgrade.shared.maybePresent()
+        #if DEBUG
+        Log("App reopen: visible windows=\(flag), suppressed launch=\(UpdateNotice.suppressHomeThisLaunch)")
+        #endif
+        HomeWindowOpening.open()
         return false
+    }
+}
+
+/// The menu-bar label exists even on a windowless launch. Keep its scene action available for
+/// notification clicks, including clicks received before SwiftUI finishes creating the scenes.
+private struct NotificationRouting: ViewModifier {
+    @Environment(\.openWindow) private var openWindow
+
+    func body(content: Content) -> some View {
+        content.onAppear {
+            Notify.setKnowledgeSourcesHandler {
+                SettingsView.open(.sources, using: openWindow)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
     }
 }

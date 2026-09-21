@@ -9,8 +9,7 @@
 //  picker (OnboardingFrontierModelView): one button that opens the OAuth page, then the panel
 //  NOTICES the finished sign-in on its own (a 2s `codex login status` poll while the browser is
 //  out; the step adds a re-check on app foreground) — no "I'm done" button. The login button
-//  stays greyed until the step's `codex --help` poll confirms the background CLI install landed
-//  (`codexReady` — the install kicks live in the step, since custom endpoints need the CLI too).
+//  awaits CodexSetup.ensureCurrent before opening the browser, including for existing installs.
 //  Also home to the shared onboarding bits: OnboardingWhisper · OnboardingDoneLine ·
 //  MonoWaitLine · OnboardingStatusText.
 //
@@ -23,10 +22,8 @@ import AppKit
 // MARK: - The ChatGPT panel: log in to codex
 
 struct OnboardingCodexLoginPanel: View {
-    /// The step's `codex --help` confirmation — the ground truth that un-greys the login button.
-    let codexReady: Bool
-
     @State private var codex = CodexSetup.shared
+    @State private var preparationTask: Task<Void, Never>?
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
 
     private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
@@ -50,6 +47,7 @@ struct OnboardingCodexLoginPanel: View {
                 await codex.refreshLoginStatus()
             }
         }
+        .onDisappear { preparationTask?.cancel() }
     }
 
     /// The login state machine: done → browser out → install failed → the button.
@@ -60,8 +58,12 @@ struct OnboardingCodexLoginPanel: View {
                 // A custom engine won Test & Select earlier — logging in doesn't switch
                 // by itself (browsing never disturbs a live engine); this does.
                 SettingsPillButton(title: "Use ChatGPT") {
-                    backendRaw = ModelBackend.chatgpt.rawValue
+                    preparationTask = Task {
+                        guard await codex.ensureCurrent(), !Task.isCancelled else { return }
+                        backendRaw = ModelBackend.chatgpt.rawValue
+                    }
                 }
+                .disabled(codex.preparing || codex.installing)
             }
         } else if codex.loggingIn {
             Text("Finish signing in in your browser. This screen notices on its own.")
@@ -71,39 +73,36 @@ struct OnboardingCodexLoginPanel: View {
         } else if codex.installGaveUp && !codex.installed {
             // The auto-install couldn't finish (no network, connection reset, or Codex is
             // unavailable in this region). Point the user to install it themselves; the
-            // step's poll picks Codex up automatically the moment it lands.
+            // foreground refresh notices a manual install when the user returns to Sentient.
             CodexInstallFailedPanel()
+            SettingsPillButton(title: "Try again", action: prepareAndLogin)
+                .disabled(codex.preparing || codex.installing)
         } else {
             // The login button — the panel's one big CTA. Lazy install (decision 2026-08-21):
-            // with no codex on disk yet, THIS click is what downloads it (never a launch kick),
-            // and the sign-in follows on its own the moment the install lands. Mid-install the
-            // button greys and the streamed progress line narrates.
+            // THIS click installs or updates Codex; a broken existing executable can be
+            // repaired here too. Sign-in follows only after preparation succeeds.
             VStack(spacing: 10) {
                 OnboardingNextButton(title: "Log in with ChatGPT",
-                                     enabled: codexReady || !(codex.installed || codex.installing)) {
-                    if codexReady { codex.startLogin(); return }
-                    Task {
-                        await codex.ensureInstalled()
-                        if await CodexCLI.isRunnable() { codex.startLogin() }
-                    }
-                }
-                if codex.installing {
-                    MonoWaitLine("installing codex…")
-                    OnboardingStatusText(codex.installStatus)
-                } else if !codexReady, codex.installed {
-                    MonoWaitLine("checking codex…")
-                }
+                                     enabled: !codex.preparing && !codex.installing,
+                                     action: prepareAndLogin)
                 OnboardingStatusText(codex.loginStatusLine)
             }
             .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func prepareAndLogin() {
+        preparationTask = Task {
+            guard await codex.ensureCurrent(), !Task.isCancelled else { return }
+            codex.startLogin()
         }
     }
 }
 
 /// Shown on the ChatGPT panel when the automatic install has clearly failed (retries exhausted):
 /// no network, a connection reset, or Codex being unavailable in the user's region. It points the
-/// user to install Codex themselves; the step's `codex --help` poll picks it up the moment it
-/// lands, and a relaunch resumes right here (onboarding persists its step). Copy approved 2026-07-24.
+/// user to install Codex themselves; the step refreshes detection on foreground, and a relaunch
+/// resumes right here (onboarding persists its step). Copy approved 2026-07-24.
 private struct CodexInstallFailedPanel: View {
     private let guideURL = URL(string: "https://learn.chatgpt.com/docs/codex/cli#getting-started")!
 
@@ -199,7 +198,7 @@ struct OnboardingStatusText: View {
 #Preview("Onboarding — codex login panel") {
     ZStack {
         Theme.bg.ignoresSafeArea()
-        OnboardingCodexLoginPanel(codexReady: true)
+        OnboardingCodexLoginPanel()
             .frame(maxWidth: 640)
             .padding(40)
     }

@@ -15,6 +15,7 @@
 //
 //  Key methods:
 //   - refreshInstalled()   → re-detect whether the codex binary is present (async, off-main)
+//   - ensureCurrent()      → the engine commitment gate: check, install/update, and verify
 //   - installCodex()       → step 1: run OpenAI's installer (ALWAYS runs — it doubles as the
 //                            updater over an existing install; streams progress)
 //   - startLogin/confirmLogin → step 2: interactive `codex login` (browser) + confirm
@@ -78,69 +79,139 @@ final class CodexSetup {
         version = installed ? await CodexCLI.installedVersion() : nil
     }
 
-    /// One successful installer run already happened this launch — the once-per-launch guard for
-    /// the onboarding screen's update kick (a second run would just re-resolve the same release).
-    private(set) var ranInstallerThisLaunch = false
+    /// Preparation includes the release check and retry waits as well as the installer itself.
+    private(set) var preparing = false
+    private var preparationTask: Task<Bool, Never>?
+    private var installTask: Task<Bool, Never>?
+    private var installProgressID: UUID?
+    /// Avoid repeating the release check between sign-in and Continue. A different binary
+    /// version (including a downgrade outside Sentient) must pass preparation again.
+    private var preparedVersion: String?
+
+    /// Called only when the user commits to a Codex-backed engine, including Continue for an
+    /// existing login. An old brew/npm install gets a standalone copy; its package is untouched.
+    /// Concurrent callers await the same preparation, and failed preparation is always retryable.
+    func ensureCurrent() async -> Bool {
+        if let preparationTask { return await preparationTask.value }
+        preparing = true
+        let task = Task { await prepareCurrent() }
+        preparationTask = task
+        let ready = await task.value
+        preparationTask = nil
+        preparing = false
+        return ready
+    }
+
+    private func prepareCurrent() async -> Bool {
+        if let installTask { _ = await installTask.value }
+        await refreshInstalled()
+        if let version, version == preparedVersion, await CodexCLI.isRunnable() { return true }
+
+        installStatus = "Checking Codex CLI…"
+        let latest = await CodexCLI.latestReleasedVersion()
+        if let version, let latest, !CodexCLI.isNewer(latest, than: version),
+           await CodexCLI.isRunnable() {
+            preparedVersion = version
+            installStatus = "✓ Codex CLI up to date"
+            return true
+        }
+        if let version, let latest, CodexCLI.isNewer(latest, than: version) { outdated = true }
+        // An unavailable feed falls back to the installer's own release resolution. The
+        // installer still has to succeed and produce a runnable managed binary.
+        return await installWithRetries(expectedVersion: latest)
+    }
 
     /// Step 1 — install OR update the Codex CLI via OpenAI's official installer. Always runs the
-    /// script, even over an existing install: it updates in place (auth/config untouched), so the
-    /// setup flow always drops the latest computer use into the latest CLI. Streams the
-    /// installer's output into `installStatus` (and the console). Both onboarding and the dev
-    /// button call THIS — no duplicated logic.
-    func installCodex() async {
-        guard !installing else { return }
-        let updating = CodexCLI.locateBinary() != nil
-        let before = version
-        installing = true
-        installStatus = updating ? "Updating Codex CLI…" : "Installing Codex CLI…"
-        do {
-            try await CodexCLI.install { [weak self] line in
-                Log("[codex-install] \(line)")
-                Task { @MainActor in self?.installStatus = line }
+    /// script, even over an existing install. Only a verified installer result counts as success;
+    /// preserving an old executable on failure does not mean it was updated.
+    @discardableResult
+    func installCodex(expectedVersion: String? = nil) async -> Bool {
+        if let installTask {
+            guard await installTask.value else { return false }
+            // A caller may have learned of a newer release while another install was running.
+            if let expectedVersion, let version, CodexCLI.isNewer(expectedVersion, than: version) {
+                outdated = true
+                preparedVersion = nil
+                installStatus = "✗ Codex CLI still needs an update. Try again."
+                return false
             }
+            return true
+        }
+        installing = true
+        let task = Task { await performInstall(expectedVersion: expectedVersion) }
+        installTask = task
+        let success = await task.value
+        installTask = nil
+        installing = false
+        return success
+    }
+
+    private func performInstall(expectedVersion: String?) async -> Bool {
+        await refreshInstalled()
+        let updating = installed
+        let before = version
+        preparedVersion = nil
+        installStatus = updating ? "Updating Codex CLI…" : "Installing Codex CLI…"
+        let progressID = UUID()
+        installProgressID = progressID
+        do {
+            let target: String?
+            if let expectedVersion { target = expectedVersion }
+            else { target = await CodexCLI.latestReleasedVersion() }
+            let verifiedVersion = try await CodexCLI.install(expectedVersion: target) { [weak self] line in
+                Log("[codex-install] \(line)")
+                Task { @MainActor in
+                    if self?.installProgressID == progressID { self?.installStatus = line }
+                }
+            }
+            installProgressID = nil
             installed = true
-            ranInstallerThisLaunch = true
+            installGaveUp = false
+            version = verifiedVersion
+            preparedVersion = verifiedVersion
             installStatus = updating ? "✓ Codex CLI up to date" : "✓ Codex CLI installed"
             // The installer resolves and lays down the newest release, so a run counts as today's
             // update: stamp the daily cap, clear the stale-client flag, and learn the new version.
             Self.stampUpdateAttempt()
             outdated = false
-            version = await CodexCLI.installedVersion()
             if updating, let before, let after = version, before != after {
                 Log("CodexSetup: Codex CLI updated \(before) → \(after)")
                 Analytics.signal("Codex.updated", parameters: ["from": before, "to": after])
             }
+            return true
         } catch {
-            installed = CodexCLI.locateBinary() != nil
-            // A failed UPDATE still leaves a working codex — don't wave a ✗ at a healthy setup.
-            installStatus = installed
-                ? "✓ Codex CLI present (update skipped: \((error as? LocalizedError)?.errorDescription ?? "\(error)"))"
-                : "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+            installProgressID = nil
+            await refreshInstalled()
+            installStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
             stepFailed(.install, error, binaryFound: installed)   // "installer ran, binary missing" if false
+            return false
         }
-        installing = false
     }
 
-    /// Install with retries; flip `installGaveUp` when the budget is spent and codex still isn't
-    /// here. The ONE place the install RETRY policy lives — both the launch kick (AppState) and the
-    /// onboarding screen drive this, so there's no second, divergent loop. A no-op if codex is
-    /// already present or an install is already running. Each attempt is patient (900s + curl
-    /// speed-limits in CodexCLI.install), so a slow download finishes on the first try; fast-failing
-    /// causes (no network, connection reset, region block) exhaust the retries in a couple minutes
-    /// and surface the "install it yourself" panel.
+    /// Presence-only setup for callers that do not need the engine commitment/version gate.
     func ensureInstalled(attempts: Int = 3) async {
-        guard !installed, !installing else { return }
+        await refreshInstalled()
+        guard !installed else { return }
+        _ = await installWithRetries(attempts: attempts)
+    }
+
+    /// One retry policy for fresh installs and updates. A surviving old binary is never a
+    /// successful attempt. Fresh-install exhaustion also exposes the manual-install guide.
+    private func installWithRetries(attempts: Int = 3, expectedVersion: String? = nil) async -> Bool {
         installGaveUp = false
+        guard attempts > 0 else { return false }
         for attempt in 1...attempts {
-            await installCodex()
-            if installed { return }
+            guard !Task.isCancelled else { return false }
+            if await installCodex(expectedVersion: expectedVersion) { return true }
             if attempt < attempts {
                 Log("CodexSetup: install attempt \(attempt) failed — retrying in 10s")
-                try? await Task.sleep(for: .seconds(10))
+                do { try await Task.sleep(for: .seconds(10)) }
+                catch { return false }
             }
         }
         installGaveUp = !installed
         if installGaveUp { Log("CodexSetup: install gave up after \(attempts) attempts — surfacing the manual-install panel") }
+        return false
     }
 
     // MARK: Keeping the CLI current (the daily update)
@@ -164,9 +235,9 @@ final class CodexSetup {
         UserDefaults.standard.set(Date(), forKey: lastUpdateAttemptKey)
     }
 
-    /// A run failed on the stale-client signature and the fix hasn't landed yet. Drives the home's
-    /// red health rung and the Health row's "needs an update"; cleared by any successful install.
-    /// Session-only: the next run re-flags it if the CLI is still stale after a relaunch.
+    /// A version check found an older CLI, or a run failed on the stale-client signature.
+    /// Drives the health row's "needs an update" until a verified install succeeds. Session-only;
+    /// the next version check or stale-client failure can flag it again after a relaunch.
     private(set) var outdated = false
 
     /// The signature showed up in a run that still SUCCEEDED (an older CLI logs the cache error and
@@ -193,7 +264,7 @@ final class CodexSetup {
         // An engine out of service earns no background downloads: while Claude is the backend,
         // codex sits idle (chatgpt AND custom both run through codex, so only .claude skips).
         guard ModelBackend.current != .claude else { return }
-        guard installed, !installing else { return }
+        guard installed, !installing, !preparing else { return }
         guard CodexCLI.usingManagedBinary else { return }   // not ours to update
         // Once a day; a stale-client signal on a successful run pulls the next attempt forward,
         // but never more often than hourly (each attempt is at least a version check).
@@ -218,7 +289,8 @@ final class CodexSetup {
             return
         }
         Log("CodexSetup: update (\(trigger)) — \(current ?? "?") → \(latest ?? "latest"), running the installer")
-        await installCodex()
+        if let current, let latest, CodexCLI.isNewer(latest, than: current) { outdated = true }
+        await installCodex(expectedVersion: latest)
     }
 
     /// Start the periodic trigger (call once from launch, after onboarding). Every 15 minutes it
@@ -348,51 +420,104 @@ final class CodexSetup {
     /// Cheap re-detect — call on appear and after a setup.
     func refreshCuaDriver() { cuaDriverReady = CuaDriver.isInstalled }
 
-    /// Step 3 — download + verify + install the pinned cua-driver. Detection-first (a no-op when
-    /// the pinned version is already there; `force` re-fetches). Onboarding, the dev tools, and
-    /// the Health pane's fix all call THIS — no duplicated logic.
+    enum CuaUpdateNotice: Equatable { case hidden, updating, failed, ready }
+    private(set) var cuaUpdateNotice: CuaUpdateNotice = .hidden
+    private(set) var cuaDriverProgress: CuaDriverSetup.Progress?
+    @ObservationIgnored private var cuaDriverInstallTask: Task<Bool, Never>?
+    @ObservationIgnored private var cuaInstallGeneration = UUID()
+
+    /// Existing CUA users get an ordinary background update. Legacy Codex users are handled
+    /// by ComputerUseUpgrade, and fresh installs by onboarding. One pinned version per app.
+    func updateCuaDriverIfNeeded() {
+        guard CuaDriver.hasInstallationHistory, !CuaDriver.isInstalled else { return }
+        cuaUpdateNotice = .updating
+        beginCuaDriverInstall()
+    }
+
+    func dismissCuaUpdateNotice() {
+        guard cuaUpdateNotice != .updating else { return }
+        cuaUpdateNotice = .hidden
+    }
+
+    /// All callers join ONE install, including a command arriving during a background update.
+    /// A force repair cannot race an onboarding download or swap the binary twice.
     func setupCuaDriver(force: Bool = false) async {
-        guard !settingUpCuaDriver else { return }
+        beginCuaDriverInstall(force: force)
+        _ = await cuaDriverInstallTask?.value
+    }
+
+    private func beginCuaDriverInstall(force: Bool = false) {
+        guard cuaDriverInstallTask == nil else { return }
         if !force, CuaDriver.isInstalled {
             cuaDriverReady = true
             cuaDriverStatus = "✓ Cua driver already installed"
             return
         }
+        if CuaDriver.hasInstallationHistory { cuaUpdateNotice = .updating }
         settingUpCuaDriver = true
+        cuaDriverReady = false
+        cuaDriverProgress = .downloading(nil)
         cuaDriverStatus = force ? "Re-installing…" : "Starting…"
-        do {
-            try await CuaDriverSetup.install(force: force) { [weak self] line in
-                Log("[cua-driver] \(line)")
-                Task { @MainActor in self?.cuaDriverStatus = line }
+        let generation = UUID()
+        cuaInstallGeneration = generation
+        cuaDriverInstallTask = Task { [self] in
+            defer {
+                settingUpCuaDriver = false
+                cuaDriverInstallTask = nil
             }
-            cuaDriverReady = true
-            cuaDriverStatus = "✓ Cua driver ready"
-        } catch {
-            cuaDriverReady = CuaDriver.isInstalled
-            cuaDriverStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
-            stepFailed(.cuaDriver, error)
+            do {
+                try await CuaDriverSetup.install(force: force, onProgress: { [weak self] progress in
+                    guard let self, self.settingUpCuaDriver, self.cuaInstallGeneration == generation else { return }
+                    // URLSession byte callbacks may arrive after the download has completed.
+                    // Never let a late callback rewind verification or a newer progress value.
+                    if case .downloading(let next) = progress {
+                        guard case .downloading(let previous) = self.cuaDriverProgress else { return }
+                        if let previous, let next, next < previous { return }
+                    }
+                    self.cuaDriverProgress = progress
+                }) { line in
+                    Log("[cua-driver] \(line)")
+                    Task { @MainActor [weak self] in
+                        guard self?.settingUpCuaDriver == true, self?.cuaInstallGeneration == generation else { return }
+                        self?.cuaDriverStatus = line
+                    }
+                }
+                cuaDriverReady = true
+                cuaDriverStatus = "✓ Cua driver ready"
+                cuaDriverProgress = .ready
+                if cuaUpdateNotice == .updating { cuaUpdateNotice = .ready }
+                return true
+            } catch {
+                cuaDriverReady = CuaDriver.isInstalled
+                cuaDriverStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
+                if cuaUpdateNotice == .updating { cuaUpdateNotice = .failed }
+                if !Task.isCancelled { stepFailed(.cuaDriver, error) }
+                return false
+            }
         }
-        settingUpCuaDriver = false
     }
 
-    /// The fire-time self-heal (CodexCLI.runAgentCommand): make sure the pinned driver is on disk
-    /// before a computer-use run. Installed → immediate true. An install already in flight
-    /// (onboarding's fetch, a Health fix) → wait for IT rather than racing a second download over
-    /// the same staging. Otherwise run the normal setup (a measured 2–3 s on a good connection).
-    /// Returns the final on-disk truth; the caller still guards on it.
+    /// STOP cancels this waiter immediately, without canceling the shared background download.
+    /// The install's own network deadline is authoritative; a slow connection must not hit the
+    /// former two-minute waiter ceiling while the same download legitimately continues.
     @discardableResult
     func ensureCuaDriver() async -> Bool {
-        if CuaDriver.isInstalled { cuaDriverReady = true; return true }
-        if settingUpCuaDriver {
-            // Bounded wait — a stuck download must fail the fire, not hang it forever.
-            for _ in 0..<480 where settingUpCuaDriver {   // ~2 min at 250 ms
-                try? await Task.sleep(for: .milliseconds(250))
-            }
-        } else {
-            await setupCuaDriver()
+        if !settingUpCuaDriver, CuaDriver.isInstalled { cuaDriverReady = true; return true }
+        beginCuaDriverInstall()
+        while settingUpCuaDriver {
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return false }
         }
+        guard !Task.isCancelled else { return false }
         refreshCuaDriver()
         return cuaDriverReady
+    }
+
+    /// Uninstall must drain the installer before deleting the managed dependency directory.
+    func cancelCuaDriverInstall() async {
+        cuaDriverInstallTask?.cancel()
+        _ = await cuaDriverInstallTask?.value
+        cuaUpdateNotice = .hidden
     }
 
     // MARK: Onboarding driver (one source of truth for BOTH a dumb-sequential and a smart flow)

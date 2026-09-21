@@ -77,6 +77,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     @State private var tab: Tab = .chatgpt
     @State private var claude = ClaudeSetup.shared
+    @State private var claudePreparationTask: Task<Void, Never>?
     @State private var apiKey = ""
     @State private var showLocalWarning = false
     /// The local-reality popup fires once per picker visit, on the LM Studio tab.
@@ -217,6 +218,9 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
                 claudeStates
 
+                if claude.preparing || claude.installing { MonoWaitLine("preparing claude code…") }
+                OnboardingStatusText(claude.installStatus)
+
                 SettingsHairline()
                 SettingsProse("Gmail and Calendar can ride your claude.ai connectors: connect them once at claude.ai, under Settings, then Connectors, and Sentient's reads use them here.")
             }
@@ -236,6 +240,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 await claude.refreshLoginStatus()
             }
         }
+        .onDisappear { claudePreparationTask?.cancel() }
     }
 
     /// The Claude state machine: signed in (plan named, Use Claude or the live line) → browser
@@ -248,8 +253,9 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 FrontierActiveLine("Sentient is running on your Claude.")
             } else {
                 SettingsPillButton(title: "Use Claude") {
-                    backendRaw = ModelBackend.claude.rawValue
+                    prepareClaude(signIn: false)
                 }
+                .disabled(claude.preparing || claude.installing)
             }
         } else if claude.loggingIn {
             Text("Finish signing in in your browser. This screen notices on its own.")
@@ -266,24 +272,27 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(Theme.Ink.statusInk)
                     .textSelection(.enabled)
+                SettingsPillButton(title: "Try again") { prepareClaude(signIn: true) }
+                    .disabled(claude.preparing || claude.installing)
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsPillButton(title: claude.installing ? "Setting up…" : "Sign in with Claude") {
-                    guard !claude.installing else { return }
-                    Task {
-                        // Lazy install: Claude Code downloads at THIS click, never at launch.
-                        if !claude.installed { await claude.ensureInstalled() }
-                        if claude.installed { claude.startLogin() }
-                    }
+                SettingsPillButton(title: claude.preparing || claude.installing ? "Setting up…" : "Sign in with Claude") {
+                    prepareClaude(signIn: true)
                 }
-                if claude.installing {
-                    MonoWaitLine("installing claude code…")
-                    OnboardingStatusText(claude.installStatus)
-                } else {
-                    OnboardingStatusText(claude.loginStatusLine)
-                }
+                .disabled(claude.preparing || claude.installing)
+                OnboardingStatusText(claude.loginStatusLine)
             }
+        }
+    }
+
+    private func prepareClaude(signIn: Bool) {
+        claudePreparationTask = Task {
+            guard await claude.ensureCurrent(), !Task.isCancelled else { return }
+            await claude.refreshLoginStatus()
+            guard !Task.isCancelled else { return }
+            if signIn, !claude.loggedIn { claude.startLogin() }
+            if claude.loggedIn { backendRaw = ModelBackend.claude.rawValue }
         }
     }
 
@@ -435,15 +444,17 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             return
         }
         testing = true
-        testVerdict = "Showing your model a picture and asking it to read the number… local models can take a minute to load."
+        testVerdict = "Preparing Codex CLI to test your model…"
         Task {
-            // Test & Select is the COMMITMENT moment for the custom family, so the lazy codex
-            // install happens here (the vision probe runs through `codex exec` — the CLI is the
-            // engine room even for custom endpoints). A detection-first no-op when it exists.
-            if !CodexSetup.shared.installed {
-                testVerdict = "Installing codex first (it runs the test), then showing your model the picture…"
-                await CodexSetup.shared.ensureInstalled()
+            // Custom endpoints run through Codex too. Test & Select must prepare an existing
+            // older CLI just as it installs a missing one, before launching the vision probe.
+            guard await CodexSetup.shared.ensureCurrent() else {
+                testing = false
+                verified = false
+                testVerdict = CodexSetup.shared.installStatus ?? "✗ Codex CLI couldn't be prepared. Try again."
+                return
             }
+            testVerdict = "Showing your model a picture and asking it to read the number… local models can take a minute to load."
             let verdict = await CodexTrigger.$current.withValue(.probe) { await CodexCLI.probeCustomEndpoint() }
             await MainActor.run {
                 testing = false

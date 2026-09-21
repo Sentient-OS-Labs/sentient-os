@@ -48,9 +48,7 @@ struct AnalysisPopover: View {
     @AppStorage("dbg.run.notes")          private var runNotes = false
     @AppStorage("dbg.whatsapp.chats")     private var whatsappCSV = ""
     @AppStorage("dbg.imessage.chats")     private var imessageCSV = ""
-    @AppStorage("dbg.gmail.connected")    private var gmailConnected = false
     @AppStorage("dbg.run.gmail")          private var runGmail = false
-    @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
     // The overnight run's battery opt-in — the production scheduler key, so the 3 AM gate and this
@@ -63,7 +61,7 @@ struct AnalysisPopover: View {
     private var anyArmed: Bool {
         runDownloads || runDesktop || runDocuments || runNotes || !customRoots.isEmpty
             || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
-            || (gmailConnected && runGmail) || (calendarConnected && runCalendar)
+            || runGmail || runCalendar || !MCPSource.kbSlugs().isEmpty
     }
     private var armed: Bool { anyArmed && !modelMissing }
 
@@ -105,9 +103,9 @@ struct AnalysisPopover: View {
                 }
                 HStack(spacing: 8) {
                     SourceChip("Notes",    on: runNotes) { runNotes.toggle() }
-                    SourceChip("Gmail",    on: gmailConnected && runGmail,
+                    SourceChip("Gmail",    on: runGmail,
                                locked: CodexAuth.connectorsLocked, action: onPickGmail)
-                    SourceChip("Calendar", on: calendarConnected && runCalendar,
+                    SourceChip("Calendar", on: runCalendar,
                                locked: CodexAuth.connectorsLocked, action: onPickCalendar)
                 }
             }

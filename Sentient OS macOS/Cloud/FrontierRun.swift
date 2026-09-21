@@ -95,6 +95,10 @@ enum FrontierRun {
                 case .claude: result = try await ClaudeCLI.shared.run(prepared, onLine: onLine)
                 case .chatgpt, .custom: result = try await CodexCLI.shared.run(prepared, onLine: onLine)
                 }
+                if prepared.connectorOnlyRead, prepared.mcpReadConnectors.count == 1,
+                   let slug = prepared.mcpReadConnectors.first {
+                    try ConnectorReadFailure.validate(result, slug: slug)
+                }
                 #if DEBUG
                 if ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(prepared.mcpActionServer ?? ""), ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
                    let path = ProcessInfo.processInfo.environment["LAB_TRACE_OUTPUT"] {

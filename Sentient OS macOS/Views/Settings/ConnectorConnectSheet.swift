@@ -11,28 +11,23 @@ import SwiftUI
 struct ConnectorConnectSheet: View {
     let source: ConnectorSource
     @Binding var connectors: [ConnectorCensus.DetectedConnector]
-    let onRefresh: () async -> Void
     let onConnect: () -> Void
-    var refreshing = false
 
     @Environment(\.dismiss) private var dismiss
+    @State private var openedConnectorPage = false
     @State private var boundConnectorID: String?
     @State private var connectionPhase: DirectMCPConnectPhase?
     @State private var newConnectionID: UUID?
     @State private var connectionCompleted = false
-    @State private var checking = false
     @State private var disconnecting = false
     @State private var message: String?
     @State private var operation: Task<Void, Never>?
 
     init(source: ConnectorSource, connectors: Binding<[ConnectorCensus.DetectedConnector]>,
-         onRefresh: @escaping () async -> Void, onConnect: @escaping () -> Void,
-         refreshing: Bool = false) {
+         onConnect: @escaping () -> Void) {
         self.source = source
         _connectors = connectors
-        self.onRefresh = onRefresh
         self.onConnect = onConnect
-        self.refreshing = refreshing
         _boundConnectorID = State(initialValue: source.connector?.id)
     }
 
@@ -54,14 +49,15 @@ struct ConnectorConnectSheet: View {
         (connector ?? source.connector).map { $0.origin == .direct } ?? (source.directProvider != nil)
     }
 
-    private var healthy: Bool { connector?.healthy == true }
+    private var selectionSlug: String { connector?.slug ?? source.serviceSlug }
     private var connecting: Bool { connectionPhase != nil }
-    private var busy: Bool { connecting || checking || disconnecting }
+    private var busy: Bool { connecting || disconnecting }
     private var connectTitle: String {
         switch connectionPhase {
         case .openingBrowser: "Opening sign-in…"
         case .waitingForBrowser: "Waiting for sign-in…"
-        case .verifyingAccount, .checkingTools: "Verifying connection…"
+        case .savingConnection: "Saving connection…"
+        case .checkingTools: "Preparing tools…"
         case nil: connector == nil ? "Connect \(name)" : "Reconnect \(name)"
         }
     }
@@ -103,11 +99,11 @@ struct ConnectorConnectSheet: View {
                 .padding(.top, 16)
             }
 
-            if let connector, ConnectorRegistry.kbEligible(connector.slug) {
-                ConnectorKnowledgeControl(slug: connector.slug, healthy: healthy)
+            if ConnectorRegistry.kbEligible(selectionSlug) {
+                ConnectorKnowledgeControl(slug: selectionSlug)
                     .disabled(busy)
                     .padding(.top, 20)
-            } else if healthy {
+            } else if connector != nil {
                 Text("Available for tasks. This app does not support knowledge-base analysis.")
                     .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
                     .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
@@ -117,9 +113,9 @@ struct ConnectorConnectSheet: View {
             actionButton(connectTitle,
                          primary: true, external: !connecting, action: connect)
                 .padding(.top, 26)
-                .disabled(busy || direct?.state == .verifying)
-            actionButton(checking || refreshing ? "Checking…" : "Done", action: done)
-                .padding(.top, 10).disabled(busy || refreshing)
+                .disabled(busy)
+            actionButton("Done", action: done)
+                .padding(.top, 10).disabled(busy)
 
             statusLine.padding(.top, 14).frame(minHeight: 42, alignment: .top)
 
@@ -135,13 +131,9 @@ struct ConnectorConnectSheet: View {
         .overlay(alignment: .topLeading) {
             CloseHoverButton { dismiss() }.padding(12).disabled(disconnecting)
         }
-        .animation(.easeOut(duration: 0.2), value: healthy)
         .onChange(of: connector?.id, initial: true) { _, id in
             // Once linked, never silently move this popup to another account of the service.
             if boundConnectorID == nil { boundConnectorID = id }
-        }
-        .onChange(of: connector) {
-            if !usesDirect && healthy { message = nil }
         }
         .onDisappear(perform: cancelOperation)
     }
@@ -166,7 +158,7 @@ struct ConnectorConnectSheet: View {
                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                if (connecting && primary) || (checking && !primary) {
+                if connecting && primary {
                     ProgressView().controlSize(.mini)
                 }
                 Text(title).font(.system(size: primary ? 14 : 13.5, weight: primary ? .semibold : .medium))
@@ -191,23 +183,14 @@ struct ConnectorConnectSheet: View {
                     Text("Opening \(name)'s sign-in page…").foregroundStyle(Theme.Ink.body)
                 case .waitingForBrowser:
                     Text("Finish signing in in your browser.").foregroundStyle(Theme.Ink.body)
-                case .verifyingAccount:
-                    Text("Signed in. Verifying your account…").foregroundStyle(Theme.Ink.body)
+                case .savingConnection:
+                    Text("Saving your sign-in…").foregroundStyle(Theme.Ink.body)
                 case .checkingTools:
                     Text("Signed in. Checking available tools. This can take a moment.").foregroundStyle(Theme.Ink.body)
                 }
-            } else if checking {
-                Text("Checking your connection…").foregroundStyle(Theme.Ink.body)
-            } else if healthy {
-                Label("\(name) connected", systemImage: "checkmark.seal.fill")
-                    .foregroundStyle(Theme.Ink.green)
-            } else if direct?.state == .verifying {
-                Text("Connection setup is in progress.").foregroundStyle(Theme.Ink.body)
-            } else if connector != nil {
-                Text("This connection needs attention. Sign in again, then press Done.")
-                    .foregroundStyle(Theme.Ink.amber)
             } else {
-                Text(usesDirect ? "Connect your account to get started." : "Linked it on the page? Press Done and I'll check.")
+                Text(usesDirect ? "Sign in in your browser, then press Done."
+                                : "Linked it on the page? Press Done to use it in Sentient.")
                     .foregroundStyle(Theme.faint)
             }
         }
@@ -218,7 +201,7 @@ struct ConnectorConnectSheet: View {
     private func connect() {
         guard !busy else { return }
         message = nil
-        guard usesDirect else { onConnect(); return }
+        guard usesDirect else { openedConnectorPage = true; onConnect(); return }
         guard let provider = direct?.provider ?? source.directProvider else { return }
         let existing = direct
         let id = existing?.id ?? newConnectionID ?? UUID()
@@ -238,6 +221,12 @@ struct ConnectorConnectSheet: View {
                 guard !Task.isCancelled else { return }
                 connectionCompleted = true
                 if let connection = DirectMCPStore.connection(id: id) {
+                    // Carry the catalog choice onto this account's stable source key.
+                    let defaults = UserDefaults.standard
+                    if let enabled = defaults.object(forKey: ConnectorRegistry.kbKey(source.serviceSlug)) as? Bool {
+                        ConnectorRegistry.setKBEnabled(connection.slug, enabled)
+                        defaults.removeObject(forKey: ConnectorRegistry.kbKey(source.serviceSlug))
+                    }
                     boundConnectorID = connection.detected.id
                     connectors.removeAll { $0.id == connection.detected.id }
                     connectors.append(connection.detected)
@@ -247,7 +236,7 @@ struct ConnectorConnectSheet: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 message = (error as? DirectMCPError)?.errorDescription
-                    ?? "The connection couldn't be verified. Please try again."
+                    ?? "Sign-in couldn't be completed. Please try again."
             }
         }
     }
@@ -276,17 +265,12 @@ struct ConnectorConnectSheet: View {
     }
 
     private func done() {
-        if healthy { dismiss(); return }
-        checking = true
-        message = nil
-        operation = Task {
-            await onRefresh()
-            guard !Task.isCancelled else { return }
-            checking = false
-            if !healthy {
-                message = "Couldn't confirm \(name) yet. Finish connecting, then press Done again."
-            }
+        if !usesDirect { ConnectorCensus.confirmSelection(slug: selectionSlug, reconnected: openedConnectorPage) }
+        if ConnectorRegistry.kbEligible(selectionSlug),
+           UserDefaults.standard.object(forKey: ConnectorRegistry.kbKey(selectionSlug)) == nil {
+            ConnectorRegistry.setKBEnabled(selectionSlug, true)
         }
+        dismiss()
     }
 
     private func disconnect() {
@@ -307,11 +291,9 @@ struct ConnectorConnectSheet: View {
 
 /// The existing opt-in, on its production key. Discovery never selects a source for the user.
 private struct ConnectorKnowledgeControl: View {
-    let healthy: Bool
     @AppStorage private var enabled: Bool
 
-    init(slug: String, healthy: Bool) {
-        self.healthy = healthy
+    init(slug: String) {
         _enabled = AppStorage(wrappedValue: false, ConnectorRegistry.kbKey(slug))
     }
 
@@ -324,7 +306,6 @@ private struct ConnectorKnowledgeControl: View {
                 Spacer(minLength: 12)
                 Toggle("Use for knowledge base", isOn: $enabled)
                     .labelsHidden().toggleStyle(.switch).tint(Theme.Ink.green)
-                    .disabled(!healthy && !enabled)
             }
             Text("Include this app in your analysis and nightly updates.")
                 .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
@@ -335,7 +316,7 @@ private struct ConnectorKnowledgeControl: View {
 
 #Preview("Connect Google Drive · not connected") {
     ConnectorConnectSheet(source: ConnectorSource.catalog(with: [])[0], connectors: .constant([]),
-                          onRefresh: {}, onConnect: {})
+                          onConnect: {})
 }
 
 #Preview("Connect Asana · no logo") {
@@ -344,6 +325,6 @@ private struct ConnectorKnowledgeControl: View {
         serverURL: nil, catalogID: nil, iconPath: nil, healthy: true, lastSeen: .now)
     if let source = ConnectorSource.catalog(with: [connector]).first(where: { $0.id == connector.id }) {
         ConnectorConnectSheet(source: source, connectors: .constant([connector]),
-                              onRefresh: {}, onConnect: {})
+                              onConnect: {})
     }
 }

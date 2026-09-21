@@ -2,33 +2,15 @@
 //  ConnectorCensus.swift
 //  Sentient OS macOS
 //
-//  Zero-prompt detection of the hosted account connectors the user has ALREADY linked on
-//  whichever frontier engine is live (Google Drive, Notion, Slack, …). No model call in the
-//  ordinary path, because the two engines answer in completely different ways:
-//   - Claude  → run `claude mcp list` and parse the `claude.ai <Name>: <url> - <status>` lines.
-//   - codex   → pure disk read of the plugins cache; there is NO codex command that lists
-//               hosted connectors (`codex mcp list` shows local config servers only). That
-//               cache is rewritten ONLY when codex itself runs, hence the warm run below.
-//  Gmail and Google Calendar use this same detection. Their existing source flags mirror the
-//  selected engine's census; dedicated chips and reading preferences remain separate.
-//
-//  Key methods:
-//   - list()             → the CURRENT backend's connectors (cheap enough for every pane open)
-//   - refresh()          → the same, preceded by the codex warm run (freshness on demand)
-//   - cached(for:)       → the last persisted list, no subprocess
-//   - startWatching(onChange:) / stopWatching() → the bounded connect-polling window behind
-//                          "+ Connect Apps" (runs inside the pane's .task, so closing the pane
-//                          cancels it); directoryURL is the engine's connector page it pairs with
-//   - listClaude() / listCodex() → the engine-explicit listers. The lab calls these directly so
-//                          testing one engine never mutates the user's live backend setting.
-//   - parseClaudeList()  → pure (String) -> [DetectedConnector]: the ONE place the unversioned
-//                          `claude mcp list` output format is understood.
+//  Hosted connector metadata, saved user declarations, and explicit lab diagnostics.
+//  Settings uses cached records and confirmSelection(), without a provider check. The runtime
+//  can read Codex's local plugin catalog to resolve tool IDs. Live listing/refresh are used only
+//  by the developer lab; they never overwrite the user's connection declarations or KB choices.
 //
 //  Doc: Sources/Documentation - Sources - Cloud (Gmail, Calendar).md
 //
 
 import Foundation
-import os
 
 nonisolated enum ConnectorCensus {
 
@@ -131,7 +113,6 @@ nonisolated enum ConnectorCensus {
             return persist(connectors, for: .claude)
         case .chatgpt: return persist(listCodex(), for: .chatgpt)
         case .custom:
-            syncDedicatedSourceStatus()
             return []
         }
     }
@@ -157,20 +138,23 @@ nonisolated enum ConnectorCensus {
             && connectors.contains { $0.origin == origin && $0.slug == slug && $0.healthy }
     }
 
-    /// Preserve the production keys observed by every source picker and the scheduler. They
-    /// are derived connection status, never permission to start reading: dbg.run.* stays untouched.
-    /// A missing census (including an older cache without these services) starts disconnected
-    /// until the ordinary list completes. Never carry one engine's old YES into another engine.
-    static func syncDedicatedSourceStatus(defaults: UserDefaults = .standard) {
-        // A lab run may override its engine without changing the user's selected engine.
-        let backend = ModelBackend(rawValue: defaults.string(forKey: ModelBackend.key) ?? "") ?? .chatgpt
-        let connectors = DetectedConnector.Origin(backend: backend).map { cached(for: $0, defaults: defaults) } ?? []
-        for (slug, key) in [("gmail", "dbg.gmail.connected"), ("google-calendar", "dbg.calendar.connected")] {
-            let connected = connectors.contains { $0.slug == slug && $0.healthy }
-            if defaults.bool(forKey: key) != connected {
-                defaults.set(connected, forKey: key)
-            }
+    /// Save the user's declaration without querying the provider. Cached metadata is used only
+    /// to address the connector; its old health verdict never overrides the user's selection.
+    static func confirmSelection(slug: String, reconnected: Bool = false) {
+        guard let origin = DetectedConnector.Origin(backend: ModelBackend.current) else { return }
+        var records = cached(for: origin)
+        let previous = records.first { $0.slug == slug }
+        let pack = ConnectorRegistry.pack(forSlug: slug)
+        records.removeAll { $0.slug == slug }
+        records.append(DetectedConnector(slug: slug, displayName: previous?.displayName ?? pack?.displayName ?? titleCased(slug),
+            origin: origin, serverURL: previous?.serverURL ?? pack?.claudeServerURL,
+            catalogID: previous?.catalogID ?? pack?.codexCatalogID, iconPath: previous?.iconPath,
+            healthy: true, lastSeen: .now))
+        if reconnected, previous != nil {
+            let key = ConnectorRegistry.readGenerationKey(slug, origin.rawValue)
+            UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key) + 1, forKey: key)
         }
+        persist(records, for: origin)
     }
 
     /// The last persisted list for an origin — no subprocess, no disk scan. What the UI paints
@@ -219,7 +203,7 @@ nonisolated enum ConnectorCensus {
         return result
     }
 
-    // MARK: Watch mode (the "+ Connect Apps" polling window)
+    // MARK: Connector directory
 
     /// The engine's connector directory page — where "+ Connect Apps" sends the user to link a
     /// new app (GmailConnect.connectorURL's engine-switch pattern; the chatgpt anchor is the
@@ -229,64 +213,6 @@ nonisolated enum ConnectorCensus {
         ModelBackend.current == .claude
             ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory")!
             : URL(string: "https://chatgpt.com/plugins#settings/Connectors")!
-    }
-
-    /// One watch window at a time: starting (or an explicit stop) bumps the generation, and any
-    /// older loop exits at its next check.
-    private static let watchGeneration = OSAllocatedUnfairLock(initialState: 0)
-
-    /// Poll the live engine until a NEW connector appears, so its pill can arrive on its own the
-    /// moment the user finishes linking on the website. Designed to run inside the pane's
-    /// `.task(id:)`: cancellation is the leak-proofing, so a closed pane stops the polling with
-    /// no cleanup call, and a 10 minute ceiling stops it regardless — it never runs outside an
-    /// explicit start. Claude re-lists every ~5 s (each list is its own live fetch); codex needs
-    /// the warm run to rewrite its cache, so it cycles every ~25 s (the warm run carries ~13k
-    /// input tokens, mostly cached — measured 2026-08-27 — which is why the interval stays
-    /// coarse). `onChange` fires on EVERY visible change (health flips and removals render live
-    /// too); a slug that was absent at watch start is what ends the window.
-    static func startWatching(onChange: @escaping @MainActor ([DetectedConnector]) -> Void) async {
-        guard let origin = DetectedConnector.Origin(backend: ModelBackend.current) else { return }
-        let generation = watchGeneration.withLock { $0 += 1; return $0 }
-        let deadline = Date().addingTimeInterval(10 * 60)
-        let baseline = Set(cached(for: origin).map(\.slug))
-        var lastDelivered = fingerprint(cached(for: origin))
-        Log("ConnectorCensus.watch: started (\(origin.rawValue), \(baseline.count) known)")
-
-        while true {
-            if Task.isCancelled {
-                Log("ConnectorCensus.watch: stopped (cancelled)"); return
-            }
-            if watchGeneration.withLock({ $0 }) != generation {
-                Log("ConnectorCensus.watch: stopped (superseded)"); return
-            }
-            if Date() >= deadline {
-                Log("ConnectorCensus.watch: stopped (timeout)"); return
-            }
-            guard DetectedConnector.Origin(backend: ModelBackend.current) == origin else {
-                Log("ConnectorCensus.watch: stopped (backend changed)"); return
-            }
-
-            let connectors = origin == .claude ? await list() : await refresh()
-            if fingerprint(connectors) != lastDelivered, !Task.isCancelled {
-                lastDelivered = fingerprint(connectors)
-                await onChange(connectors)
-            }
-            if connectors.contains(where: { !baseline.contains($0.slug) }) {
-                Log("ConnectorCensus.watch: stopped (new connector)"); return
-            }
-            try? await Task.sleep(for: .seconds(origin == .claude ? 5 : 25))
-        }
-    }
-
-    /// End any active watch window from outside the owning task.
-    static func stopWatching() {
-        watchGeneration.withLock { $0 += 1 }
-    }
-
-    /// What "changed" means to the watcher: identity, name, and health — never `lastSeen`,
-    /// which every listing rewrites (comparing it would fire onChange on every tick).
-    private static func fingerprint(_ connectors: [DetectedConnector]) -> [String] {
-        connectors.map { "\($0.id)|\($0.displayName)|\($0.healthy)" }
     }
 
     // MARK: Persistence
@@ -320,7 +246,6 @@ nonisolated enum ConnectorCensus {
             defaults.set(defaults.integer(forKey: generationKey) + 1, forKey: generationKey)
         }
         defaults.set(data, forKey: key)
-        syncDedicatedSourceStatus(defaults: defaults)
         // Telemetry: the detected count per engine, ints only, and only when the count actually
         // changed (a steady watch tick or pane open stays silent — this fires on link/unlink).
         if connectors.count != previous {

@@ -696,7 +696,10 @@ struct ProcessingView: View {
         await CodexTrigger.$current.withValue(pausable ? .onboarding : .analyzeNow) { await runBody() }
     }
 
+    @State private var unavailableConnectors: Set<String> = []
+
     private func runBody() async {
+        unavailableConnectors = []
         let generation = runGeneration   // this invocation's identity — stale once pause/stop bump it
         // Keep the display awake ONLY for the initial ingest — the long one. The home + 3am both run
         // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 14h auto-enable
@@ -753,7 +756,7 @@ struct ProcessingView: View {
         if fullCycle {
             withAnimation { state = .preparing }
             thoughtPending = nil; thoughtTrail = []
-            let failure = await ProactiveCycle.shared.run(progress: { phase in
+            let failure = await ProactiveCycle.shared.run(unavailableConnectors: unavailableConnectors, progress: { phase in
                 Task { @MainActor in
                     thoughtPending = nil; thoughtTrail = []          // a new phase, a fresh thought stream
                     switch phase {
@@ -819,6 +822,11 @@ struct ProcessingView: View {
             _ = mode == .initial ? try await GmailConnect.runInitial(onProgress: onProgress)
                                  : try await GmailConnect.runIterative(onProgress: onProgress)
         } catch {
+            if Task.isCancelled || error is CancellationError { return box.value }
+            if ConnectorReadFailure.isConnectionFailure(error) {
+                unavailableConnectors.insert("gmail")
+                return base
+            }
             var p = box.value
             p.lastTitle = "Gmail failed"
             p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
@@ -869,6 +877,11 @@ struct ProcessingView: View {
             _ = mode == .initial ? try await CalendarConnect.runInitial(onProgress: onProgress)
                                  : try await CalendarConnect.runIterative(onProgress: onProgress)
         } catch {
+            if Task.isCancelled || error is CancellationError { return box.value }
+            if ConnectorReadFailure.isConnectionFailure(error) {
+                unavailableConnectors.insert("google-calendar")
+                return base
+            }
             var p = box.value
             p.lastTitle = "Calendar failed"
             p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
@@ -926,7 +939,12 @@ struct ProcessingView: View {
                 yield(p)
             }
         }
-        let (_, limited) = await MCPSource.runAll(onEvent: onEvent)
+        let (outcomes, limited) = await MCPSource.runAll(onEvent: onEvent)
+        unavailableConnectors.formUnion(outcomes.filter { $0.result == "connector_auth" }.map(\.slug))
+        var final = box.value
+        final.done = max(final.done, baseDone + outcomes.count)
+        final.total = max(final.total, baseTotal + outcomes.count)
+        box.value = final
         if limited { Log("ProcessingView.mcp: usage limit — remaining connector reads skipped") }
         return box.value
     }

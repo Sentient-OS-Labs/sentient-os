@@ -16,6 +16,7 @@ struct RootView: View {
     @Environment(\.openWindow) private var openWindow
     @State private var isProcessing = false
     @State private var showDevTools = false
+    @State private var startedWritingStyleSetup = false
     // Persistent custom folder roots (CustomRoots store) — added in Settings or Dev Tools,
     // watched here so Analyze Now and the Analysis popover react to edits from any window.
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
@@ -26,10 +27,8 @@ struct RootView: View {
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
     private var deck: BriefingDeck { BriefingDeck(rawValue: deckRaw) ?? .real }
     // Cloud sources — same flags the scheduler reads, so Analyze Now processes exactly what an
-    // overnight run would (a no-op until Gmail/Calendar are actually connected + selected).
-    @AppStorage("dbg.gmail.connected")    private var gmailConnected = false
+    // overnight run would (the user's selection determines which cloud reads to attempt).
     @AppStorage("dbg.run.gmail")          private var runGmail = false
-    @AppStorage("dbg.calendar.connected") private var calendarConnected = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
 
     // Resolved at launch (env → bundle → App Support → repo root); nil = model not on this Mac.
@@ -87,8 +86,8 @@ struct RootView: View {
                 ProcessingView(modelPath: modelPath,
                                connectors: RunSource.connectors(from: selectedSources),
                                mode: .auto,
-                               runGmail: ModelBackend.connectorsAvailable && gmailConnected && runGmail,
-                               runCalendar: ModelBackend.connectorsAvailable && calendarConnected && runCalendar,
+                               runGmail: ModelBackend.connectorsAvailable && runGmail,
+                               runCalendar: ModelBackend.connectorsAvailable && runCalendar,
                                mcpSlugs: MCPSource.kbSlugs(),
                                fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
                     withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
@@ -143,9 +142,32 @@ struct RootView: View {
         .sheet(isPresented: $showDevTools) {
             DevToolsView()
         }
+        // Existing knowledge bases get their Double Tap writing samples set up silently, once per
+        // session, the first time the home is idle. The introduction sheet (WritingStyleSetupView)
+        // is hidden for now. An independent Task, not this view task: generateIfNeeded marks the
+        // pipeline busy, which flips the id below and would cancel its own run.
+        .task(id: canStartWritingStyleSetup) {
+            guard canStartWritingStyleSetup, !startedWritingStyleSetup else { return }
+            startedWritingStyleSetup = true
+            Task { @MainActor in
+                Log("WritingStyle: silent setup started for an existing knowledge base")
+                do { try await WritingStyle.generateIfNeeded() }
+                catch { Log("WritingStyle: silent setup failed (\(ErrorLabel(error)))") }
+            }
+        }
         .onChange(of: showDevTools) { _, open in
             if !open { fdaGranted = Permissions.hasFullDiskAccess() }   // may have changed in the sheet
         }
+    }
+
+    private var canStartWritingStyleSetup: Bool {
+        #if DEBUG
+        guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return false }
+        #endif
+        return appState.hasCompletedOnboarding && !isProcessing
+            && !PipelineActivity.shared.isRunning && !appState.commandCoordinator.run.isRunning
+            && !WritingStyle.exists()
+            && FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.appendingPathComponent("README.md").path)
     }
 
     private var home: some View {

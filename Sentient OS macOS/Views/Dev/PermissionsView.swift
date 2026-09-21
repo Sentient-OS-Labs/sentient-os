@@ -125,7 +125,7 @@ struct PermissionsView: View {
     private var micPane: some View {
         pane(icon: "mic.fill", iconColor: micGranted ? Theme.verdictColor(.survivor) : Theme.accent,
              title: "Microphone & Speech", granted: micGranted,
-             description: "Lets you hold the right Command key and speak the task you want done — Sentient transcribes it on-device.") {
+             description: "Lets you click the mic in the notch and speak the task you want done — Sentient transcribes it on-device.") {
             Button("Grant microphone…") {
                 Task {
                     // First ask surfaces the system prompt; if it's already denied/restricted there's no

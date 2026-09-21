@@ -3,13 +3,11 @@
 //  Sentient OS macOS
 //
 //  The Gmail / Google Calendar connect popup — ONE sheet for both cloud sources (they are exact
-//  twins: same connector page flow, shared connector census, same storage shape), engine-aware: the
+//  twins: same connector page flow and storage shape), engine-aware: the
 //  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
-//    Done       → refreshes ConnectorCensus (Claude health list / Codex refreshed plugin cache).
-//                 A healthy record selects the source, shows a success status, and dismisses.
-//                 A missing or unhealthy record shows a quiet amber retry line.
+//    Done       → trusts the user, selects the source, and dismisses without a probe.
 //    ✕ (top-left) → closes without saving.
 //  Already connected → "Stop reading …" clears selection, not the provider connection.
 //
@@ -36,21 +34,12 @@ struct CloudConnectSheet: View {
                     ("link", "Link your Google account on \(page)"),
                     ("lock", "Sentient never sees your password")]
         }
-        var connectedLine: String { self == .gmail ? "Gmail connected" : "Calendar connected" }
-        var failedLine: String {
-            self == .gmail
-            ? "Couldn't see Gmail yet. Finish linking on the page, then press Done again."
-            : "Couldn't see your calendar yet. Finish linking on the page, then press Done again."
-        }
+        var connectedLine: String { self == .gmail ? "Gmail selected" : "Calendar selected" }
         var stopLine: String { self == .gmail ? "Stop reading Gmail" : "Stop reading Google Calendar" }
         var connectorURL: URL { self == .gmail ? GmailConnect.connectorURL : CalendarConnect.connectorURL }
         var connectedKey: String { self == .gmail ? "dbg.gmail.connected" : "dbg.calendar.connected" }
         var selectedKey: String { self == .gmail ? "dbg.run.gmail" : "dbg.run.calendar" }
         var analyticsName: String { self == .gmail ? "gmail" : "calendar" }
-
-        func probe() async -> Bool {
-            self == .gmail ? await GmailConnect.probeConnected() : await CalendarConnect.probeConnected()
-        }
     }
 
     private let service: Service
@@ -59,9 +48,9 @@ struct CloudConnectSheet: View {
     @AppStorage private var selected: Bool
     @AppStorage(ModelBackend.key) private var backendRaw = ""
 
-    private enum Phase { case idle, checking, connected, failed }
+    private enum Phase { case idle, connected }
+    @State private var openedConnectorPage = false
     @State private var phase: Phase
-    @State private var operation: Task<Void, Never>?
 
     init(_ service: Service) {
         self.service = service
@@ -70,7 +59,7 @@ struct CloudConnectSheet: View {
         _connected = connection
         _selected = selection
         // Resolve the opening state before presentation, so the sheet's initial layout isn't animated.
-        _phase = State(initialValue: connection.wrappedValue && selection.wrappedValue ? .connected : .idle)
+        _phase = State(initialValue: selection.wrappedValue ? .connected : .idle)
     }
 
     var body: some View {
@@ -103,7 +92,7 @@ struct CloudConnectSheet: View {
                 .frame(minHeight: 42, alignment: .top)
                 .animation(.easeOut(duration: 0.2), value: phase)
 
-            if connected && selected && phase != .checking {
+            if selected {
                 stopLink.padding(.top, 2)
             }
         }
@@ -111,11 +100,7 @@ struct CloudConnectSheet: View {
         .frame(width: 400)
         .background(Theme.bg)
         .overlay(alignment: .topLeading) { closeButton.padding(12) }
-        .onChange(of: connected) { _, linked in
-            if !linked && phase != .checking { phase = .idle }
-        }
-        .onChange(of: backendRaw) { operation?.cancel(); dismiss() }
-        .onDisappear { operation?.cancel() }
+        .onChange(of: backendRaw) { dismiss() }
     }
 
     // MARK: - The two buttons (+ the ✕)
@@ -123,6 +108,7 @@ struct CloudConnectSheet: View {
     private var connectButton: some View {
         Button {
             phase = .idle
+            openedConnectorPage = true
             NSWorkspace.shared.open(service.connectorURL)
         } label: {
             HStack(spacing: 7) {
@@ -135,14 +121,12 @@ struct CloudConnectSheet: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
-        .disabled(phase == .checking)
     }
 
     private var doneButton: some View {
         Button(action: done) {
             HStack(spacing: 7) {
-                if phase == .checking { ProgressView().controlSize(.mini) }
-                Text(phase == .checking ? "Checking…" : "Done")
+                Text("Done")
                     .font(.system(size: 13.5, weight: .medium))
             }
             .foregroundStyle(Theme.Ink.bright)
@@ -152,14 +136,13 @@ struct CloudConnectSheet: View {
             .contentShape(Capsule())
         }
         .buttonStyle(PressScaleStyle())
-        .disabled(phase == .checking)
     }
 
     private var closeButton: some View {
         CloseHoverButton { dismiss() }
     }
 
-    // MARK: - The status line (instruction → amber retry → success)
+    // MARK: - The instruction or saved selection
 
     private var statusLine: some View {
         Group {
@@ -167,10 +150,8 @@ struct CloudConnectSheet: View {
             case .connected:
                 Label(service.connectedLine, systemImage: "checkmark.seal.fill")
                     .foregroundStyle(Theme.Ink.green)
-            case .failed:
-                Text(service.failedLine).foregroundStyle(Theme.Ink.amber)
             default:
-                Text("Linked it on the page? Press Done and I'll check.")
+                Text("Linked it on the page? Press Done to use it in Sentient.")
                     .foregroundStyle(Theme.faint)
             }
         }
@@ -179,7 +160,7 @@ struct CloudConnectSheet: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    /// Reading is an opt-in independent of the detected provider connection.
+    /// Reading remains an explicit opt-in.
     private var stopLink: some View {
         Button(service.stopLine) { selected = false; dismiss() }
             .buttonStyle(.plain)
@@ -187,32 +168,18 @@ struct CloudConnectSheet: View {
             .foregroundStyle(Theme.Ink.deepMuted)
     }
 
-    // MARK: - Done: verify, persist, and briefly show success
+    // MARK: - Done: accept the user's confirmation
 
     private func done() {
-        if phase == .connected { dismiss(); return }
-        phase = .checking
-        let backend = ModelBackend.current
-        let wasConnected = connected
-        operation = Task {
-            let ok = await service.probe()
-            guard !Task.isCancelled, ModelBackend.current == backend else { return }
-            await MainActor.run {
-                if ok {
-                    if !wasConnected { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
-                    selected = true                     // include in INITIAL / ITERATIVE runs
-                    phase = .connected
-                } else {
-                    phase = .failed
-                }
-            }
-            if ok {
-                try? await Task.sleep(for: .seconds(1.1))
-                guard !Task.isCancelled, ModelBackend.current == backend else { return }
-                await MainActor.run { dismiss() }
-            }
-        }
+        if !connected { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
+        // Keep the production connection key as the user's declaration for task routing.
+        ConnectorCensus.confirmSelection(slug: service == .gmail ? "gmail" : "google-calendar",
+                                         reconnected: openedConnectorPage)
+        connected = true
+        selected = true
+        dismiss()
     }
+
 }
 
 /// The quiet ✕ — a small glass circle that brightens on hover.
