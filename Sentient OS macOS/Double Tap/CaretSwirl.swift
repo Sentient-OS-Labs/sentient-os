@@ -9,9 +9,10 @@
 //  there is nothing to paste it loosens and fades (the dissolve). Sparks trail the comets and
 //  burst with the bloom.
 //
-//  It lives in its own click-through, non-activating panel above everything, excluded from
-//  screen capture so the screenshot that follows the tap never carries it, and it never takes
-//  key (the ⌘V must land in the user's own box). Everything drawn is a pure function of time in
+//  It lives in its own click-through, non-activating panel above everything, and it never takes
+//  key (the ⌘V must land in the user's own box). It stays visible to screen capture on purpose,
+//  so recordings and demos carry the light; the tap's own screenshot carries the ring too, since
+//  the ring is up before the shot fires. Everything drawn is a pure function of time in
 //  ONE Canvas: no per-frame state, no blur filters (the glow is stacked strokes), so it holds a
 //  full frame rate on the smallest Mac. The phase changes are continuous: a landing or a dissolve
 //  starts from the exact radius, angle, and speed the ring had at that moment.
@@ -86,7 +87,6 @@ final class CaretSwirl {
         panel.ignoresMouseEvents = true
         panel.animationBehavior = .none
         panel.level = .screenSaver
-        panel.sharingType = .none          // invisible to screen capture: the tap's screenshot never carries it
         panel.collectionBehavior = Self.collectionBehavior
         let host = NSHostingView(rootView: CaretSwirlView(model: model))
         host.frame = NSRect(x: 0, y: 0, width: side, height: side)

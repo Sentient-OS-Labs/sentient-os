@@ -87,7 +87,8 @@ final class DoubleTap {
         if let problem = DoubleTapInference.configurationProblem { return .failed(problem) }
         guard Permissions.hasAccessibility() else { return .failed("needs Accessibility to paste") }
         // The light first: the caret is read at the instant of the tap, and the ring is up before
-        // the screenshot starts (the panel is excluded from capture, so the shot never carries it).
+        // the screenshot starts. The panel is capture-visible (recordings should show the light),
+        // so the shot carries the ring around the caret; the model reads through it.
         let target = CaretLocator.locate()
         swirl.begin(at: target)
         let started = Date()
