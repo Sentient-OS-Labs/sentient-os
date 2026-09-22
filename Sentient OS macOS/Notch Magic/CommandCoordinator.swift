@@ -11,12 +11,13 @@
 //  Hotkey path: press → the notch OPENS (.opening) · no second press inside the double-tap window →
 //  a focused TYPE field (.typing) → ⏎ submits, or the field's mic button → .listening → its stop
 //  button (or ⏎) → transcribe → submit(.voice) · a SECOND press inside the window → Double Tap
-//  drafts a reply into the focused box (Double Tap/DoubleTap.swift; the run adopts the notch like a
-//  card fire). Prompt-bar path: submit(.promptBar). Card-fire path: beginExternalRun (a proactive
-//  card's fire — computer, gmail, or calendar — adopts the same run — ONE task at a time, app-wide,
-//  and the notch shows it).
-//  Every command is computer use, which raises the notch. A hotkey press during any real run is the
-//  universal STOP. Doc: the two Documentation - Sidekick - *.md files in this folder.
+//  drafts a reply into the focused box (Double Tap/DoubleTap.swift), silently: it never touches the
+//  notch or the one-task lock, so it works mid computer use too. Prompt-bar path: submit(.promptBar).
+//  Card-fire path: beginExternalRun (a proactive card's fire — computer, gmail, or calendar — adopts
+//  the same run — ONE task at a time, app-wide, and the notch shows it).
+//  Every command is computer use, which raises the notch. A hotkey press during a running task
+//  does nothing on its own (the notch's STOP button, the bar's STOP, and Esc are the cancels);
+//  two presses are still a double tap. Doc: the two Documentation - Sidekick - *.md files here.
 //
 
 import Foundation
@@ -91,6 +92,7 @@ final class CommandCoordinator {
     private var voiceStartTask: Task<Void, Never>?
     private var phaseToken = 0              // guards delayed phase transitions against newer ones
     private var readBackToken = 0
+    private var lastPressAt: Date?          // the previous hotkey press — two inside DoubleTap.window are a double tap
 
     // MARK: Lifecycle
 
@@ -102,8 +104,8 @@ final class CommandCoordinator {
         hotkey.onPress = { [weak self] in self?.hotkeyPressed() }
         // No global Esc: a keyDown tap is exactly what Input Monitoring gates, so the monitor
         // listens to modifiers only. Esc still cancels via the window's LOCAL monitor whenever
-        // Sentient itself is frontmost; over other apps, a fresh hotkey press is the cancel
-        // (see hotkeyPressed).
+        // Sentient itself is frontmost; a hotkey press backs out of the type field and a live
+        // capture, never a running task (see hotkeyPressed).
         hotkey.start()
         // Live re-key when the user flips the choice in Settings — no restart needed. Double Tap
         // rides the same key (two presses inside its window), so it follows the choice for free.
@@ -168,7 +170,8 @@ final class CommandCoordinator {
     /// Cancel the running task. A STOP (or Esc) WHILE THE TRANSCRIPT IS SHOWN means "you misheard me — redo":
     /// dismiss INSTANTLY with no "Stopped" flourish (hiding first makes `runFinished` skip it). Once computer
     /// use is actually working, STOP halts it with the honest "Stopped" beat. Either way the run is cancelled
-    /// (an adopted card fire included — run.stop() routes to the card's own cancel).
+    /// (an adopted card fire included — run.stop() routes to the card's own cancel). Reached from the
+    /// notch's and the bar's STOP buttons and from Esc at the transcript beat; never from the hotkey.
     func stop() {
         if phase == .running, readBack != nil, run.remembering == nil { setPhase(.hidden) }
         run.stop()
@@ -182,14 +185,12 @@ final class CommandCoordinator {
     /// caller must not fire. Doubles as the gate-held re-check — a fire the permission gate held
     /// for minutes re-answers the lock here. Completion needs no coordinator API: the card's
     /// completeExternal rides onFinished → runFinished → the normal finishing flourish.
-    /// `history: false` keeps the run out of SidekickHistory (Double Tap is not a Sidekick task).
     @discardableResult
-    func beginExternalRun(caption: String, history: Bool = true,
-                          onStopRequest: @escaping @MainActor () -> Void) -> Bool {
+    func beginExternalRun(caption: String, onStopRequest: @escaping @MainActor () -> Void) -> Bool {
         guard !run.isRunning else { return false }
         clearReadBack()
         notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
-        run.adoptExternal(caption: caption, history: history, onStopRequest: onStopRequest)
+        run.adoptExternal(caption: caption, onStopRequest: onStopRequest)
         setPhase(.running)
         Log("▶︎ external run adopted (\(caption))")
         return true
@@ -199,9 +200,11 @@ final class CommandCoordinator {
     //
     // press → .opening (reveal NOW — you are pulling it open) · the double-tap window passes with no
     // second press → .typing (the field; its mic button is the way to talk) · a second press inside
-    // the window → Double Tap (.running, "Drafting your reply"). The field never opens on the first
-    // press itself, because the second press must land on a notch that is NOT key: Double Tap ends
-    // in a ⌘V into the user's own focused box, and a key notch panel would swallow it.
+    // the window → the notch retracts and Double Tap drafts, silently. The field never opens on the
+    // first press itself, because the second press must land on a notch that is NOT key: Double Tap
+    // ends in a ⌘V into the user's own focused box, and a key notch panel would swallow it.
+    // While a task is running the notch is busy with it, so the double tap is read from press
+    // timestamps instead (`lastPressAt`) and fires without touching the notch at all.
 
     /// The knowledge-base-only aside — one string for the press flash and the submit backstop.
     /// Short on purpose (the notch truncates around ~45 characters), and shaped like the mic
@@ -247,14 +250,20 @@ final class CommandCoordinator {
     }
 
     private func hotkeyPressed() {
-        // One task, one notch, one key: a press while ANY real task is running STOPS it —
-        // hotkey-, command-bar-, or card-launched alike (decided 2026-07-17). stop() keeps the
-        // transcript beat's instant no-flourish dismiss ("you misheard me"); every other running
-        // moment gets the honest "Stopped" beat. The onboarding demo is exempt (scripted
-        // theater — the film narrates through it; those presses fall to the guards below).
+        // While a reply is being drafted (≈2 s) every press is swallowed: a third tap must not open
+        // the type field (it would take key focus and catch the ⌘V) or stop anything.
+        if DoubleTap.shared.isDrafting { Log("hotkey press ignored — a reply is being drafted"); return }
+        let now = Date()
+        let isSecondPress = lastPressAt.map { now.timeIntervalSince($0) <= DoubleTap.window } ?? false
+        lastPressAt = now
+        // A press while a real task is running never stops it (decided 2026-09-21; until then
+        // it was the universal STOP, and a double tap mid computer use was impossible). The
+        // notch's STOP button, the bar's STOP, and Esc are the cancels. The key stays free for
+        // Double Tap: two presses inside the window draft a reply, with nothing on the notch.
+        // The onboarding demo is exempt (scripted theater; those presses fall to the guards below).
         if run.isRunning, !run.isDemo {
-            stop()
-            Log("hotkey → STOP (universal cancel, \(hotkey.key.label))")
+            if isSecondPress, DoubleTap.isEnabled { fireDoubleTap() }
+            else { Log("hotkey press during a run — ignored (double tap to draft a reply)") }
             return
         }
         // The armed onboarding beat answers the hotkey too — the key variant's NAMED door
@@ -267,7 +276,9 @@ final class CommandCoordinator {
         }
         switch phase {
         case .opening:
-            secondPress()                 // inside the double-tap window
+            // Inside the double-tap window. With Double Tap off, two quick taps still only mean
+            // "open Sidekick", so the field opens right away.
+            if DoubleTap.isEnabled { fireDoubleTap() } else { setPhase(.typing) }
             return
         case .typing:
             dismissTyping()               // a tap while the field is open toggles it closed — a quick way to back out
@@ -310,13 +321,6 @@ final class CommandCoordinator {
             self.setPhase(.typing)
             Log("hotkey tap → typing")
         }
-    }
-
-    /// The second press inside the double-tap window. With Double Tap on, it drafts the reply;
-    /// with it off, two quick taps still only mean "open Sidekick", so the field opens right away.
-    private func secondPress() {
-        guard DoubleTap.isEnabled else { setPhase(.typing); return }
-        fireDoubleTap()
     }
 
     // MARK: Voice (the field's mic button)
@@ -376,25 +380,22 @@ final class CommandCoordinator {
 
     // MARK: Double Tap (DoubleTap.swift)
 
-    /// The second press landed: the run adopts the notch exactly like a card fire (one-task lock,
-    /// "Drafting your reply", a Sidekick hotkey press is STOP) and ends in the usual flourish — or,
-    /// for a screenshot that isn't a reply box, the short aside. Only ever reached from `.opening`
-    /// (the first press already passed the onboarding, plan, and permission doors).
+    /// The second press landed: draft the reply, silently. Double Tap never shows on the notch and
+    /// never takes the one-task lock, so it runs beside computer use and beside whatever the notch
+    /// is doing; its only outcome is the paste (or nothing), and the log and Dev Tools' timing
+    /// readout carry the rest. From `.opening` (the idle path, where the first press already passed
+    /// the onboarding, plan, and permission doors) the reveal retracts first; from a running task
+    /// the notch is left exactly as it was.
     private func fireDoubleTap() {
-        guard phase == .opening, !run.isRunning else { Log("⌘⌘ double tap ignored — busy"); return }
-        let doubleTap = DoubleTap.shared
-        guard beginExternalRun(caption: "Drafting your reply", history: false,
-                               onStopRequest: { doubleTap.cancel() }) else { return }
-        Log("⌘⌘ double tap → drafting a reply")
-        doubleTap.start { [weak self] result in
-            guard let self else { return }
+        lastPressAt = nil                                  // both presses are spent; the next one starts a fresh count
+        if phase == .opening { setPhase(.hidden) }
+        Log("⌘⌘ double tap → drafting a reply" + (run.isRunning ? " (beside the running task)" : ""))
+        DoubleTap.shared.start { result in
             switch result {
-            case .pasted:          self.run.completeExternal(.success, line: "Reply pasted")
-            case .stopped:         self.run.completeExternal(.stopped, line: "Stopped")
-            case .failed(let why): self.run.completeExternal(.failed, line: "✗ \(why)")
-            case .notAMessage:
-                self.run.completeExternal(.success, line: "Not a reply box")
-                self.flash(DoubleTap.notice, for: 3.0)   // supersedes the ✓ flourish runFinished just queued
+            case .pasted:          Log("⌘⌘ reply pasted")
+            case .notAMessage:     Log("⌘⌘ not a reply box — nothing pasted")
+            case .stopped:         Log("⌘⌘ draft stopped")
+            case .failed(let why): Log("⌘⌘ draft failed: \(why)")
             }
         }
     }
