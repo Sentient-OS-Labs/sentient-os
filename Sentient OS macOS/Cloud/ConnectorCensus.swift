@@ -63,11 +63,16 @@ nonisolated enum ConnectorCensus {
     /// Detected normally, but keep their dedicated chips, read pipelines and card channels.
     static let dedicatedSourceSlugs: Set<String> = ["gmail", "google-calendar"]
 
-    /// OpenAI's own plumbing entries in the curated cache — not user connectors. There is no
-    /// structural way to spot them: `deep-research-work` is a real linked app that also carries
-    /// a `connector_openai_*` id, so the id prefix cannot be the discriminator (measured
-    /// 2026-08-27). The slug list stays hand-maintained and fail-closed.
-    static let codexSystemSlugs: Set<String> = ["openai-templates", "plugin-management"]
+    /// OpenAI's own entries in the curated cache — never user connectors, so never listed. Two
+    /// kinds: codex plumbing (templates, plugin management) and the apps OpenAI links on every
+    /// ChatGPT account without the user doing anything (Deep Research, Finances, Sites). There is
+    /// no structural way to spot the second kind: Finances carries an ordinary `connector_<hex>`
+    /// id exactly like Gmail (measured 2026-09-21), so the id shape cannot be the discriminator.
+    /// The slug list stays hand-maintained and fail-closed; a new OpenAI default shows up here
+    /// as a connector the user never linked, and its cache directory name goes in this set.
+    /// Applied in `logicalServices`, so the disk scan, the saved copy and every persist agree.
+    static let codexSystemSlugs: Set<String> = ["openai-templates", "plugin-management",
+                                                "deep-research-work", "finances", "sites"]
 
     /// The prefix `claude mcp list` puts on every claude.ai connector. Filtering on it drops the
     /// per-run cua-driver entry and any local MCP server the user configured themselves.
@@ -182,12 +187,17 @@ nonisolated enum ConnectorCensus {
             iconPath: connector.iconPath, healthy: connector.healthy, lastSeen: connector.lastSeen)
     }
 
-    /// Project the suite into distinct opt-in sources without duplicating already-normalized
-    /// cache records. The endpoint remains physical; toggles and checkpoints remain logical.
+    /// The one path every record takes (disk scan, saved copy, persist): drop OpenAI's own codex
+    /// entries (`codexSystemSlugs`), then project the Microsoft 365 suite into distinct opt-in
+    /// sources without duplicating already-normalized cache records. The endpoint remains
+    /// physical; toggles and checkpoints remain logical.
     static func logicalServices(_ connectors: [DetectedConnector]) -> [DetectedConnector] {
         var seen = Set<String>()
         var result: [DetectedConnector] = []
         for original in connectors {
+            // OpenAI's own entries never become records, whether they arrive from the disk scan
+            // or from a copy saved before their slug joined the list.
+            if original.origin == .chatgpt, codexSystemSlugs.contains(original.slug) { continue }
             let connector = logicalService(original)
             let suite = connector.origin == .claude && connector.serverURL == Microsoft365Connector.url
                 && (connector.displayName == Microsoft365Connector.name || Microsoft365Connector.contains(connector.slug))
@@ -357,7 +367,6 @@ nonisolated enum ConnectorCensus {
         var connectors: [DetectedConnector] = []
 
         for slug in slugs.sorted() where !slug.hasPrefix(".") {
-            guard !codexSystemSlugs.contains(slug) else { continue }
             let slugDir = cacheRoot.appendingPathComponent(slug)
             guard let versionDir = newestVersionDirectory(in: slugDir),
                   let catalogID = catalogID(in: versionDir, slug: slug) else { continue }
