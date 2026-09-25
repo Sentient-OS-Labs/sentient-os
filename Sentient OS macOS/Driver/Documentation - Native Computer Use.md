@@ -80,8 +80,9 @@ Screen Recording for Sidekick's screen context. Claude/custom continue using Sen
 Accessibility and Screen Recording grants. Microphone and Speech remain optional.
 
 Automation checks use Apple's asynchronous permission API after starting the helper through
-LaunchServices. A stopped target is not treated as denied permission. Permission requests run only
-from the user's Allow action; no TCC database is written. Normal startup and Factory Reset preserve
+LaunchServices. A stopped target is not treated as denied permission. Visible setup surfaces request unasked Apple Events consent through the macOS dialog. There is no
+separate Automation row; the user still chooses Allow in the system prompt. Denial exposes a Settings
+action without another automatic prompt. Background checks never request consent and no TCC database is written. Normal startup and Factory Reset preserve
 the grant. Uninstall uses `tccutil` to reset only Sentient's Apple Events access.
 
 `ComputerUseGate`, its shared permission rows, Settings health and migration all select the same

@@ -60,8 +60,18 @@ final class ComputerUseGate {
         }
     }
 
+    /// The visible setup surface owns the native consent request. Already-granted and denied
+    /// states never raise another prompt just because the permission rows were displayed.
+    func prepareNativePermissions() async {
+        refresh()
+        guard backend == .openAI, setup.ready else { return }
+        await awaitAutomationRefresh()
+        guard !Task.isCancelled, backend == .openAI, setup.ready, automation == .notAsked else { return }
+        requestAutomation()
+    }
+
     func requestAutomation() {
-        guard !requestingAutomation else { return }
+        guard backend == .openAI, setup.ready, !requestingAutomation else { return }
         requestingAutomation = true
         nativePermissionError = nil
         Task {
@@ -74,9 +84,8 @@ final class ComputerUseGate {
                 try await OpenAIComputerUse.launchForPermissionRequest()
                 automation = await Permissions.nativeAutomationState(ask: true)
                 lastAutomationProbe = Date()
-                if automation == .denied { Permissions.openAutomationSettings() }
                 if automation == .unavailable {
-                    nativePermissionError = "The helper could not be reached. Try Allow again."
+                    nativePermissionError = "The macOS permission could not be checked. Try again."
                 }
                 refresh()
             } catch {

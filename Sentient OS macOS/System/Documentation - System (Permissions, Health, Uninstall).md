@@ -48,7 +48,7 @@ PostEvent; the user database otherwise).
 ChatGPT computer use runs through OpenAI's signed helper. Sentient carries the Apple Events
 entitlement and uses `AEDeterminePermissionToAutomateTarget` off the main thread to check or request
 Automation access. The helper is started through LaunchServices before querying, so a stopped target
-is not mistaken for denied access. Checks do not prompt; the user's Allow action requests consent.
+is not mistaken for denied access. Background checks do not prompt. Visible permission setup requests unasked consent through the macOS dialog, with no redundant Automation row; the user chooses Allow in that dialog.
 
 The helper's Accessibility and Screen Recording status is read from the system TCC database when
 Full Disk Access is available. Its grant rows carry the helper bundle to System Settings. Sentient's

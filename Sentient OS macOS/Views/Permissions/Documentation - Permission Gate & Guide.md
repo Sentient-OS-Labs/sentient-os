@@ -1,7 +1,7 @@
 # The Permission Gate & the Floating Guide (Views/Permissions/)
 
-How Sentient acquires the grants that make computer use work without ever asking at launch or as an
-onboarding step (the lazy-grant policy). Three pieces:
+How visible setup surfaces acquire the grants needed for computer use. Background health checks
+only check permission state and never request consent. Three pieces:
 
 1. **`ComputerUseGate`**: the one-time setup window that appears the first time the user fires anything
    that acts on the Mac (the command bar, Sidekick, a card's fire) while a required grant is missing.
@@ -39,8 +39,7 @@ The required grants follow the selected runtime:
 | Both | Microphone and Speech are optional; typed commands work without them. |
 
 OpenAI Automation is checked through Apple's asynchronous API after launching the signed helper.
-Only the user's Allow action requests consent. The native rows distinguish checking, denied and
-unavailable states. The helper's own Accessibility/Screen Recording rows use the floating drag guide
+Visible permission setup requests unasked consent through the macOS Apple Events dialog; the user chooses Allow there. Granted and denied states are not re-prompted automatically. Automation remains an internal readiness check rather than a separate permission row. Denied or unavailable consent exposes a contextual Settings/retry action. The helper's own Accessibility/Screen Recording rows use the floating drag guide
 with the helper bundle, while Sentient's rows carry Sentient itself. Full Disk Access permits read-only
 helper grant checks; there are no direct permission-database writes.
 

@@ -339,20 +339,24 @@ struct ComputerUseUpgradeView: View {
             OnboardingWhisper(model.phase == .grants ? "ONE LAST STEP" : "SENTIENT UPDATED")
                 .frame(maxWidth: .infinity)
 
-            Text(model.phase == .grants ? "Now give it its hands and eyes."
+            Text(model.phase == .grants ? "Allow the permissions needed to control your computer"
                                         : "Computer use just got better.")
                 .display(23)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 18)
 
-            Text(subtitle)
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.secondary)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)   // wrap — never truncate the pitch
-                .padding(.top, 8)
+            if model.phase != .grants {
+                Text("Prepare computer use for your selected AI engine.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.secondary)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+            }
 
             switch model.phase {
             case .pitch, .installing:
@@ -392,15 +396,6 @@ struct ComputerUseUpgradeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             gate.refresh()   // the user may just have flipped a switch in System Settings
-        }
-    }
-
-    private var subtitle: String {
-        switch model.phase {
-        case .pitch, .installing:
-            "Prepare computer use for your selected AI engine."
-        case .grants:
-            "Allow the permissions needed to act in your apps."
         }
     }
 

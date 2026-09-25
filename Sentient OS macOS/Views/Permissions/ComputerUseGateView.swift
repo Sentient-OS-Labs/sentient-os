@@ -14,18 +14,13 @@ struct ComputerUseGateView: View {
             OnboardingWhisper("ONE-TIME SETUP")
                 .frame(maxWidth: .infinity)
 
-            Text("Give Sentient its hands and eyes.")
+            Text("Allow the permissions needed to control your computer")
                 .display(23)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 18)
-
-            Text("Set up computer use and allow the permissions it needs to act in your apps.")
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.secondary)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
-                .padding(.top, 8)
 
             VStack(alignment: .leading, spacing: 26) {
                 SentientPermissionRows(gate: gate)
@@ -171,43 +166,39 @@ struct SentientPermissionRows: View {
 /// Native helper grants are shared by the first-use gate, upgrade flow and Settings.
 struct NativeComputerUsePermissionRows: View {
     let gate: ComputerUseGate
-    private var automationNote: String {
-        if gate.requestingAutomation { return "waiting for permission…" }
-        if gate.checkingAutomation { return "checking…" }
-        switch gate.automation {
-        case .granted: return "granted"
-        case .notAsked: return "not granted"
-        case .denied: return "off"
-        case .unavailable: return "check required"
-        }
-    }
     var body: some View {
-        SettingsGroup(label: "OpenAI Computer Use") {
+        SettingsGroup(label: "Computer Use") {
             VStack(alignment: .leading, spacing: 2) {
-                StatusLine(title: "Automation",
-                           health: gate.automation == .granted ? .ok : (gate.requestingAutomation ? .warn : .bad),
-                           note: automationNote,
-                           tip: "Lets Sentient communicate with OpenAI's computer-use helper. Choose Allow in the macOS prompt.",
-                           fixTitle: gate.automation == .denied ? "Fix…" : "Allow…",
-                           fix: !gate.setup.ready || gate.requestingAutomation || gate.automation == .granted ? nil : { gate.requestAutomation() })
-                StatusLine(title: "Accessibility (OpenAI helper)",
+                StatusLine(title: "Accessibility",
                            health: gate.helperAccessibility ? .ok : .bad,
                            note: gate.helperAccessibility ? "granted" : "not granted",
-                           tip: "Lets OpenAI's helper click and type in your apps.",
+                           tip: "Allows clicking and typing in your apps.",
                            fixTitle: "Allow…",
                            fix: !gate.setup.ready || gate.helperAccessibility ? nil : {
                     PermissionGuide.shared.guide(.accessibility, dragging: OpenAIComputerUse.appURL)
                 })
-                StatusLine(title: "Screen Recording (OpenAI helper)",
+                StatusLine(title: "Screen Recording",
                            health: gate.helperScreen ? .ok : .bad,
                            note: gate.helperScreen ? "granted" : "not granted",
-                           tip: "Lets OpenAI's helper see the app it is working in.",
+                           tip: "Allows computer use to see the app it is working in.",
                            fixTitle: "Allow…",
                            fix: !gate.setup.ready || gate.helperScreen ? nil : {
                     PermissionGuide.shared.guide(.screenRecording, dragging: OpenAIComputerUse.appURL)
                 })
-                if let error = gate.nativePermissionError { SettingsProse(error) }
+                if gate.requestingAutomation {
+                    SettingsProse("Choose Allow in the macOS permission prompt.")
+                } else if gate.automation == .denied {
+                    SettingsProse("Allow Sentient in System Settings to finish setup.")
+                    SettingsPillButton(title: "Open Settings") { Permissions.openAutomationSettings() }
+                } else if gate.setup.ready, !gate.checkingAutomation, gate.automation == .unavailable {
+                    SettingsProse(gate.nativePermissionError ?? "The macOS permission could not be checked.")
+                    SettingsPillButton(title: "Try again") { gate.requestAutomation() }
+                }
             }
+        }
+        .task(id: gate.setup.ready) { await gate.prepareNativePermissions() }
+        .onChange(of: gate.automation) { _, state in
+            if state == .notAsked, gate.setup.ready { gate.requestAutomation() }
         }
     }
 }
