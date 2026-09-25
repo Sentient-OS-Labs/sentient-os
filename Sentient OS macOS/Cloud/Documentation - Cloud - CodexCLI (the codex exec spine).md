@@ -30,18 +30,17 @@ the custom-endpoint key variable). Optional `onLine:` streams a humanized play-b
 
 **`runAgentCommand(prompt, imagePaths:, timeout:, onLine:) → String`** is the computer-use path. The
 prompt rides in **argv**, output is human-readable (no `--json`), and every line is pumped to `onLine`
-as it arrives. Before spawning it guarantees the hands: the cua driver on disk
-(`CodexSetup.ensureCuaDriver`, the fire-time self-heal) and Sentient's daemon up
-(`CuaDriverHost.ensureRunning`, which also rewrites the CLI shim with the live socket). The run is
-**hermetic** (`--ignore-user-config` — the user's own plugins, skills, and MCP servers never load, so
-nothing can detour the model or bloat the prompt; the hosted Gmail/Calendar connectors survive a
-hermetic run, so an "email X" task keeps its connector route) and registers exactly one MCP server via
-per-run `-c` overrides: the driver's four vision tools (`CuaDriver.codexOverrides` — see the Driver
-doc for the hybrid transport). Flags: `--dangerously-bypass-approvals-and-sandbox` (required: a
-headless run has no one to answer approvals, and a Seatbelt profile would block both the agent's
-one-shot CLI calls and the daemon's Unix socket), `-m` + the Speed slider's model and effort, optional
-`-i <screenshots>` (Sidekick's per-display stills; a following flag terminates the variadic),
-`--skip-git-repo-check`.
+as it arrives. `ComputerUseSetup` prepares the selected runtime. On ChatGPT, the signed OpenAI
+helper is validated and its native client is registered directly as the required `sentient_native`
+MCP server. Custom endpoints retain `CuaDriverHost` and its four-tool vision registration plus CLI
+shim. Claude's sibling runner continues to use CUA.
+
+The run remains hermetic (`--ignore-user-config`) and preserves its hosted/direct connector policies.
+`FrontierRun` adds exactly one runtime manual after capturing the selected backend. Native setup
+writes no plugin or global Codex configuration. See `Driver/Documentation - Native Computer Use.md`
+for installation, permissions and compatibility checks. Computer-use flags remain
+`--dangerously-bypass-approvals-and-sandbox`, the selected model and effort, optional `-i` screenshots,
+and `--skip-git-repo-check`; structured connector runs retain their separate permission policy.
 
 **Cancellation is real on both paths:** cancelling the awaiting Swift Task terminates the codex child
 process (a process holder inside `withTaskCancellationHandler`). Every STOP button in the app reaches
@@ -73,7 +72,7 @@ Both engines retain internal argument builders so the connector lab can inspect 
 
 - Unattended reads keep the read-only sandbox and strip both action and destructive tools from requested connectors and every other detected ChatGPT connector, using catalog IDs.
 - Fired connector tasks keep the sandbox and approve the selected server's tools per invocation, with its destructive tools stripped. An unresolved ID retains the existing id-free `approveConnectorWrites` fallback.
-- Computer use keeps its extracted `agentArguments` builder, cua registration, bypass posture, and destructive-tool strips for pinned and detected connectors. Custom-provider overrides still apply afterward.
+- Computer use keeps its extracted `agentArguments` builder, selected-runtime registration, bypass posture, and destructive-tool strips for pinned and detected connectors. Custom-provider overrides still apply afterward.
 - Classifier attachment keeps its existing engine-specific restrictions. No fast-tier or model change broadens any recipe's permissions.
 
 The older `approveConnectorWrites` and `stripConnectorActionTools` presets remain available for their
@@ -138,11 +137,11 @@ user's STOP) and `usageLimit` never report.
 
 ## `AgentStatus`
 
-Every app-authored wrapper prompt (the executor's channels, Sidekick's command prompt) demands a final
-`STATUS: DONE — …` or `STATUS: COULD_NOT — …` line. `AgentStatus.parse` scans lines from the END and
-treats a line carrying BOTH forms as the echoed instruction (computer use's human-readable output echoes
-the prompt), so the model's real final line always wins. `.none` (no sentinel) is optimistic but flagged
-to the scoreboard.
+Every app-authored wrapper prompt demands a final `STATUS: DONE` or `STATUS: COULD_NOT` line.
+The final nonempty line must match the exact sentinel grammar. Earlier quoted output, prompt echoes,
+and negated status do not count. Missing or malformed status is unconfirmed and surfaces as a failed
+attempt rather than a completed action. Process exit zero is necessary but does not establish task
+success. The legacy opening `COULD NOT` form is still recognized as failure.
 
 ## Rules
 

@@ -122,13 +122,13 @@ enum Uninstall {
         await beat()
 
         progress(.model)
-        await CodexSetup.shared.cancelCuaDriverInstall()
+        await ComputerUseSetup.cancelAll()
         await CuaDriverHost.shared.stop()
         try? FileManager.default.removeItem(at: URL.sentientSupport)   // model + download staging + the store + the cua driver
         await beat()
 
         progress(.traces)
-        Permissions.revokeComputerUseAutomation()
+        await Permissions.resetAutomationForUninstall()
         let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library")
         for sub in ["Caches/\(bundleID)", "HTTPStorages/\(bundleID)", "WebKit/\(bundleID)",
                     "Saved Application State/\(bundleID).savedState", "Logs/SentientOS"] {

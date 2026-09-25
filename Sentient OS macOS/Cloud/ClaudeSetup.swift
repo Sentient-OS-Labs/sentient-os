@@ -6,8 +6,8 @@
 //    1. INSTALL — drop the Claude Code binary on disk (Anthropic's official installer).
 //    2. AUTH    — `claude auth login` with the user's Claude account (Pro/Max/Team; there is
 //                 no free tier, so logged-in IS the plan gate).
-//  The computer-use driver is NOT a step here: the cua driver is engine-neutral and CodexSetup
-//  owns its one install path (setupCuaDriver / ensureCuaDriver) for both engines.
+//  The computer-use driver is NOT a step here: the cua driver is engine-neutral and ComputerUseSetup
+//  owns the shared CUA installation path for Claude and custom endpoints.
 //
 //  Lazy by design (decision 2026-08-21): NOTHING installs at first launch anymore — this engine
 //  (and codex alike) downloads only when the user actually picks it on the frontier-model

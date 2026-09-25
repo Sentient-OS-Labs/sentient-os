@@ -73,6 +73,10 @@ struct HomeView: View {
     /// The LIVE health issue (essential perms · codex · computer use) — HealthCaution's ladder;
     /// nil = healthy or muted. Outranks the morning-after caution in the banner slot.
     @State private var liveIssue: HealthCaution.Issue?
+    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
+    private var computerSetup: ComputerUseSetup {
+        .instance(for: .selected(for: ModelBackend(rawValue: backendRaw) ?? .chatgpt))
+    }
 
     // Chat selections the Analysis popover's WhatsApp/iMessage chips pick into (same keys as SourceSelection).
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
@@ -130,7 +134,9 @@ struct HomeView: View {
             guard !appState.isUninstalling else { return }
             model.beginVisit(deck: v)                               // mode flip → re-deal
         }
-        .onChange(of: CodexSetup.shared.cuaDriverReady) { _, _ in probeHealth() }
+        .onChange(of: computerSetup.ready) { _, _ in probeHealth() }
+        .onChange(of: ComputerUseGate.shared.automation) { _, _ in probeHealth() }
+        .onChange(of: backendRaw) { _, _ in probeHealth() }
         .onChange(of: appState.isUninstalling) { _, tearing in
             // Uninstall began → take every card off the table; a cancel deals them back in.
             if tearing { withAnimation(.easeInOut(duration: 0.3)) { model.clear() } }
@@ -215,8 +221,8 @@ struct HomeView: View {
                                    probeHealth()   // the muted kind may have been hiding a lower rung
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
-            } else if CodexSetup.shared.cuaUpdateNotice == .updating || CodexSetup.shared.cuaUpdateNotice == .failed {
-                cuaUpdateNotice
+            } else if computerSetup.updateNotice == .updating || computerSetup.updateNotice == .failed {
+                computerUseUpdateNotice
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
                 CautionCapsule(message: caution.message,
@@ -236,8 +242,8 @@ struct HomeView: View {
                                    }
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
-            } else if CodexSetup.shared.cuaUpdateNotice == .ready {
-                cuaUpdateNotice
+            } else if computerSetup.updateNotice == .ready {
+                computerUseUpdateNotice
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else {
                 // The lowest rung — the green just-updated notice. Self-contained: draws
@@ -248,14 +254,17 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.trailing, 30).padding(.top, 64)
         .animation(.easeInOut(duration: 0.25), value: connectorCautionData)
-        .animation(.easeInOut(duration: 0.25), value: CodexSetup.shared.cuaUpdateNotice)
+        .animation(.easeInOut(duration: 0.25), value: computerSetup.updateNotice)
     }
 
-    private var cuaUpdateNotice: some View {
-        CuaDriverUpdateNotice(state: CodexSetup.shared.cuaUpdateNotice,
-                             progress: CodexSetup.shared.cuaDriverProgress,
-                             onRetry: CodexSetup.shared.updateCuaDriverIfNeeded,
-                             onDismiss: CodexSetup.shared.dismissCuaUpdateNotice)
+    private var computerUseUpdateNotice: some View {
+        ComputerUseUpdateNotice(state: computerSetup.updateNotice,
+                             progress: computerSetup.progress,
+                             onRetry: {
+                                 let setup = computerSetup
+                                 Task { await setup.install(force: true) }
+                             },
+                             onDismiss: computerSetup.dismissUpdateNotice)
     }
 
     /// The amber caution's one-click fix, where there is one: a signed-out codex is fixed in

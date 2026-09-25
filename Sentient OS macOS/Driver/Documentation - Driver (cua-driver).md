@@ -1,13 +1,9 @@
 # The Cua Driver (Driver/): the hands and eyes of computer use
 
-How Sentient acts on the Mac. The driver is [cua-driver](https://github.com/trycua/cua) (MIT, by Cua
-AI): one self-contained binary that clicks, types, scrolls, reads accessibility trees, and takes
-per-window screenshots IN THE BACKGROUND — per-window input with no cursor warp and no focus steal,
-plus a visible agent-cursor overlay so the user can see where their agent is working. Browsers are
-driven the same way, as native windows; the driver's typed CDP route into Chrome is deliberately off
-(see "Browsers are native windows" below). Sentient runs it as its own long-lived daemon and lets each computer-use
-run drive it — codex or claude, whichever engine is live (FrontierRun dispatches; the daemon, socket,
-shim, and skill are identical for both). The frontier model is the brain; this folder is the body.
+CUA powers computer use for Claude and custom endpoints. It is the pinned open-source driver from
+[trycua/cua](https://github.com/trycua/cua), embedded as Sentient's own daemon. Its background native
+window input, cursor overlay, four MCP vision tools, CLI shim and manual remain shared by those two
+CLI paths. ChatGPT uses the separate OpenAI helper described in `Documentation - Native Computer Use.md`.
 
 ## Files
 
@@ -87,7 +83,7 @@ Unix socket, and a headless run has no one to answer approvals; safety rides the
 ## The inlined manual (`CuaDriverSkill`)
 
 `CuaDriverSkill.rules` is curated from the pinned release's MIT-licensed SKILL.md and MACOS.md.
-Both Sidekick and proactive computer-use prompts include it before the first model turn.
+`FrontierRun` adds it once to CUA tasks after capturing the selected engine.
 It identifies the skill as already loaded, so the model does not fetch another copy through MCP
 resources or read a skill file. Action schemas remain available through CLI `describe` only when
 needed.
@@ -116,7 +112,7 @@ rename into `<version>/cua-driver`. Only then are previous installed versions sw
 interrupted download leaves the previous binary intact. Local verification processes have deadlines
 and honor cancellation; telemetry and upstream update checks are disabled there too.
 
-`CodexSetup` owns one shared installation task for both frontier engines. Existing CUA users whose
+`ComputerUseSetup` owns the shared CUA installation task for Claude and custom endpoints. Existing CUA users whose
 required version is missing get a background update after launch. The home's top-right notice shows
 actual download progress, an indeterminate verification phase, completion, or a retry action. The rest
 of Sentient remains usable. Computer-use commands join the same download; STOP cancels their wait
@@ -139,11 +135,11 @@ retain the explicit migration window described in the Permission Gate doc.
 
 ## Per-command lifecycle
 
-Both frontier engines ask `CuaDriverHost` to start or revive the CLI label `sentient` before running
+Both CUA-backed CLI paths ask `CuaDriverHost` to start or revive the CLI label `sentient` before running
 the model. They await its cleanup after success, failure, or STOP before releasing the command. This
 releases the action cursor owned by that run. The host checks the
 structured lifecycle result, not just the subprocess exit code. The model never manages sessions.
-The daemon itself stays warm across commands.
+Pending cleanup is polled with a deadline before the task lock is released. If cleanup cannot finish, only the owned daemon is stopped so the next task starts a fresh generation. The daemon otherwise stays warm across commands.
 
 For pinned 0.20.0, explicitly named CLI calls share their daemon's CLI namespace. Anonymous one-shot
 calls are disposable. The separate MCP connection provides the native vision tools.

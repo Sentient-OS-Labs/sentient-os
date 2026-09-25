@@ -88,10 +88,6 @@ final class AppState {
         Task.detached(priority: .utility) {
             NetworkSnapshot.shared.start()
             Log(CodexAuthSnapshot.read().logLine)
-            // Legacy cleanup (Sentient 1.x → cua driver): drop the Automation TCC row the old
-            // codex-helper path wrote. Best-effort and idempotent — a quiet no-op on clean Macs,
-            // so it simply runs every launch instead of carrying a migration flag.
-            Permissions.revokeComputerUseAutomation()
             // Reap computer-use daemons leaked by previous app lives — a daemon that missed the
             // lifeline EOF would otherwise hold its screen-capture stream (and CPU) forever.
             await CuaDriverHost.sweepOrphans()
@@ -109,7 +105,7 @@ final class AppState {
         // Read the codex doc's "Keeping the CLI current" before touching this.
         if hasCompletedOnboarding {
             if !ComputerUseUpgrade.shared.isBlockingInterface {
-                CodexSetup.shared.updateCuaDriverIfNeeded()
+                ComputerUseSetup.current.updateIfNeeded()
             }
             CodexSetup.shared.startKeepingCurrent { [weak self] in
                 self?.commandCoordinator.run.isRunning ?? true

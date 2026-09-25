@@ -10,7 +10,7 @@ Full Disk Access requires resumes exactly where the user left off.
 
 | File | Job |
 |---|---|
-| `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, the DEBUG "SKIP TO HOME" handle, and the two-minutes-in cua-driver download. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
+| `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, the DEBUG "SKIP TO HOME" handle, and the two-minutes-in selected-runtime download. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
 | `OnboardingFilmView.swift` | Step 0: the website's film in a `WKWebView`. |
 | `OnboardingFrontierModelView.swift` · `OnboardingCodexSteps.swift` | Step 1: the engine picker with the codex login as the ChatGPT panel; the lazy install-on-commitment kicks, the `codex --help` confirmation poll (skipped until a codex install exists), the manual-install panel; the shared onboarding bits (`OnboardingWhisper`, `OnboardingDoneLine`, `MonoWaitLine`, `OnboardingStatusText`). |
 | `OnboardingPlanView.swift` | Step 2: the plan crossroads. |
@@ -73,7 +73,7 @@ finished run calls `onFinished`.
 
 ## Things that happen around the steps
 
-- The Codex CLI installs silently from launch (`AppState`); the on-device model starts downloading 2 s after the post-FDA relaunch; the cua driver downloads silently **two minutes into the first analysis** (armed when the takeover appears, so its ~40 MB fetch never races the model download's tail; an unstructured task, so pausing the analysis never cancels it).
+- Frontier CLIs install at engine commitment. The on-device model starts downloading after the post-FDA relaunch; the selected computer-use runtime is prepared two minutes into the first analysis. ChatGPT prepares OpenAI's signed helper; Claude/custom prepare CUA. The unstructured shared installation is not canceled by pausing analysis.
 - `DisplayAwake` holds the screen on for the whole flow (the download and the first analysis run behind the slides).
 - Right-clicks are swallowed for onboarding's whole lifetime (the film's webview would offer a browser context menu).
 - Sidekick is home-only: before the film's notch beat a press does nothing; after it, the honest "finish onboarding to use Sidekick" aside; the notch's hover swell is off before the beat too.

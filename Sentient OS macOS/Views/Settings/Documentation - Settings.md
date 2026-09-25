@@ -72,13 +72,13 @@ start of onboarding and dismisses Settings; locked while `PipelineActivity` repo
 daemon answers over XPC; `notSetUp` fixes with the password installer, `disabled` gets a Turn On… into
 Login Items), Launch at login (needs-approval gets the guide's instruction panel). SIDEKICK &
 PROACTIVE: Microphone & Speech (one row, native prompts; only an explicit denial goes red), then the
-cua driver's action grants — both Sentient's own, since the driver runs inside Sentient's TCC chain:
+selected computer-use runtime's grants:
 Accessibility (fix = the real system prompt, falling back to the Settings pane) and Screen Recording
 (fix = the drag panel with Sentient as the card), and Notifications. THE ENGINE GROUP follows the
 live frontier choice: SET UP CODEX on ChatGPT (Codex CLI, ChatGPT account, ChatGPT plan with its
 Re-check), SET UP CLAUDE on the Claude backend (Claude Code CLI, Claude account with the plan named
 in its note), and on custom backends SET UP CODEX with a Frontier model row in place of the account
-rows (codex is the harness there too); every variant ends with Computer use (the pinned cua-driver
+rows (codex is the harness there too); every variant ends with Computer use (the selected native or CUA runtime
 binary; its fix streams the download's progress under the row). The fixes drive the shared setup
 engines INLINE (amber = working on it; the browser logins are auto-noticed by a 2 s poll), only the
 live engine's rows are probed, and switching engines re-probes in place. When the whole engine stack
@@ -101,3 +101,5 @@ stays on the Mac), and a tip that appears on several surfaces carries the same c
 ## Related docs
 
 `Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Cloud/Documentation - Cloud - MCP Mirror.md`, `System/Documentation - System (Permissions, Health, Uninstall).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md`.
+
+ChatGPT shows Automation and the OpenAI helper's Accessibility/Screen Recording grants. Claude/custom retain Sentient's own action grants. Changing engines prepares the selected dependency without rewriting Codex configuration or login.

@@ -148,8 +148,8 @@ final class CommandRunModel {
                     Log("CMD: final → \(out.suffix(1200))")
                     #endif
                     // Honesty gate: codex exiting 0 is NOT success — the run's own STATUS sentinel is.
-                    // A clean give-up (COULD_NOT) surfaces its reason in the notch/bar; a missing
-                    // sentinel stays optimistic but is flagged to the scoreboard (statusPresent: false).
+                    // A clean give-up surfaces its reason. Missing or malformed confirmation
+                    // remains unconfirmed rather than becoming a successful action.
                     switch AgentStatus.parse(out) {
                     case .couldNot(let reason):
                         Log("──────── 🤖 ⚠️ COULD NOT after \(secs)s (\(reason.count)-char reason) ────────")
@@ -163,8 +163,9 @@ final class CommandRunModel {
                         Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
                         self?.complete(.success, line: "✓ done")
                     case .none:
-                        Log("──────── 🤖 ✓ DONE in \(secs)s (no STATUS sentinel) ────────")
-                        self?.complete(.success, line: "✓ done", statusPresent: false)
+                        Log("CMD: computer task completion was not confirmed")
+                        self?.complete(.failed, line: AgentStatus.unconfirmedComputerMessage,
+                                       board: .refused, statusPresent: false)
                     }
                 } catch {
                     let secs = Int(Date().timeIntervalSince(started))
@@ -675,9 +676,8 @@ final class CommandRunModel {
         return """
         Using \(mode.promptPhrase), \(task)
         \(voiceLine)\(screenLine)
-        Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate) through the cua tools described below. Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
+        Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate) through the computer-use tools provided for this run. Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
 
-        \(CuaDriverSkill.rules)\(CustomProvider.computerUsePromptRules)
         \(servicesLine)\(Self.injectionGuard)
 
         You will not be able to ask me follow-up questions to clarify: in this harness, the moment you stop responding I see the task attempt as completed. So don't stop to ask trivial follow-up questions. Either do the task, or if it's genuinely way too ambiguous to act on (like in case of critical TTS fumble), just stop. No follow-up questions are possible.

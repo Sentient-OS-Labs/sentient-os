@@ -180,7 +180,7 @@ struct OnboardingView: View {
     /// silently in the background — so it's ready by the time the home's cards and Sidekick need
     /// it, with no onboarding screen of its own. Armed when the analysis takeover APPEARS (not at
     /// Start Analysis), so it never races the model download still finishing behind the
-    /// downloading screen. setupCuaDriver() self-guards (no-op when the pinned version is already
+    /// downloading screen. ComputerUseSetup.install() self-guards (no-op when the pinned version is already
     /// there; needs neither codex nor a login), so a quit-and-relaunch that restarts the analysis
     /// just re-arms harmlessly; failures land in the log + Sentry, never in the UI.
     private func armComputerUseSetup() {
@@ -188,11 +188,11 @@ struct OnboardingView: View {
         computerUseArmed = true
         // An unstructured Task on purpose — pausing or leaving the analysis must not cancel the
         // download mid-flight. If the user somehow fires a command before it lands, the fire-time
-        // self-heal (CodexSetup.ensureCuaDriver) waits on this very install instead of racing it.
+        // self-heal (ComputerUseSetup.ensureInstalled) waits on this very install instead of racing it.
         Task {
             try? await Task.sleep(for: .seconds(120))
             Log("Onboarding: 2 min into first analysis — fetching the computer-use driver")
-            await CodexSetup.shared.setupCuaDriver()
+            await ComputerUseSetup.current.install()
         }
     }
 

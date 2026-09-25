@@ -1,16 +1,6 @@
-//
-//  ComputerUseGateView.swift
-//  Sentient OS macOS
-//
-//  The one-time setup window's face (ComputerUseGate presents it): the action grants as the same
-//  StatusLine rows Settings → Health uses. The cua driver acts as Sentient, so SENTIENT
-//  PERMISSIONS holds Sentient's own Accessibility and Screen Recording as the REQUIRED pair;
-//  SIDEKICK holds the OPTIONAL Microphone & Speech row (amber, never blocking). Mic & Speech and
-//  Accessibility fix via the native system prompts; the Screen Recording list fixes via
-//  PermissionGuide's floating drag panel (a system-TCC list — only the user can flip it). Continue
-//  fires the held action whether or not the optional is green; the rows re-probe when the app
-//  foregrounds (returning from System Settings).
-//
+// Shared setup and permission rows for native OpenAI and CUA computer use.
+// Reuses the existing Settings visual language and the floating macOS permission guide.
+// Doc: Documentation - Permission Gate & Guide.md
 
 import SwiftUI
 import AppKit
@@ -30,7 +20,7 @@ struct ComputerUseGateView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.top, 18)
 
-            Text("Acting on your Mac needs these grants, once. You will not be asked again.")
+            Text("Set up computer use and allow the permissions it needs to act in your apps.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.secondary)
                 .frame(maxWidth: .infinity)
@@ -76,7 +66,12 @@ struct ComputerUseGateView: View {
         .frame(width: 560)
         .background(Color.black)
         .preferredColorScheme(.dark)
-        .onAppear { gate.refresh() }
+        .task {
+            while !Task.isCancelled {
+                gate.refresh()
+                do { try await Task.sleep(for: .seconds(1)) } catch { break }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             gate.refresh()   // the user may just have flipped a switch in System Settings
         }
@@ -118,23 +113,33 @@ struct SentientPermissionRows: View {
     let gate: ComputerUseGate
 
     var body: some View {
-        // The driver acts inside Sentient's own responsibility chain, so these two grants,
-        // given to the app the user already trusts, are what let it act.
-        SettingsGroup(label: "Sentient Permissions") {
-            VStack(alignment: .leading, spacing: 2) {
-                StatusLine(title: "Accessibility (act in your apps)",
-                           health: gate.sentientAccessibility ? .ok : .bad,
-                           note: gate.sentientAccessibility ? "granted" : "not granted",
-                           tip: "Lets Sentient read what's on a window and click and type inside it — in the background, without taking over your cursor.\n\nGranted to Sentient itself, so there's no second helper app to trust.",
-                           fixTitle: "Allow…") {
-                    fixSentientAccessibility()
+        VStack(alignment: .leading, spacing: 22) {
+            if gate.backend == .openAI, !gate.setup.ready {
+                SettingsGroup(label: "Computer use") {
+                    StatusLine(title: "Set up computer use",
+                               health: gate.setup.isInstalling ? .warn : .bad,
+                               note: gate.setup.isInstalling ? "setting up…" : "not set up",
+                               tip: "Prepares the computer-use tools for your selected AI engine.",
+                               fixTitle: "Set up…",
+                               fix: gate.setup.isInstalling ? nil : { Task { await gate.setup.install() } })
+                    if let line = gate.setup.status { SettingsProse(line) }
                 }
-                StatusLine(title: "Screen Recording (see the screen)",
-                           health: gate.sentientScreen ? .ok : .bad,
-                           note: gate.sentientScreen ? "granted" : "not granted",
-                           tip: "Lets Sentient see the window it's working in, so it acts on the right thing.\n\nGranted to Sentient itself. Screenshots are read on this Mac and passed to your own Codex; they never reach a Sentient server.",
-                           fixTitle: "Allow…") {
-                    fixSentientScreen()
+            }
+            if gate.backend == .openAI { NativeComputerUsePermissionRows(gate: gate) }
+            SettingsGroup(label: "Sentient Permissions") {
+                VStack(alignment: .leading, spacing: 2) {
+                    if gate.backend == .cua {
+                        StatusLine(title: "Accessibility (act in your apps)",
+                                   health: gate.sentientAccessibility ? .ok : .bad,
+                                   note: gate.sentientAccessibility ? "granted" : "not granted",
+                                   tip: "Lets Sentient read windows and act inside your apps in the background.",
+                                   fixTitle: "Allow…") { fixSentientAccessibility() }
+                    }
+                    StatusLine(title: "Screen Recording (see the screen)",
+                               health: gate.sentientScreen ? .ok : .bad,
+                               note: gate.sentientScreen ? "granted" : "not granted",
+                               tip: "Lets Sidekick understand the screen you are asking about. Screenshots go to your selected AI engine, never a Sentient server.",
+                               fixTitle: "Allow…") { fixSentientScreen() }
                 }
             }
         }
@@ -159,6 +164,50 @@ struct SentientPermissionRows: View {
             try? await Task.sleep(for: .milliseconds(600))
             gate.refresh()
             if !gate.sentientAccessibility { Permissions.openAccessibilitySettings() }
+        }
+    }
+}
+
+/// Native helper grants are shared by the first-use gate, upgrade flow and Settings.
+struct NativeComputerUsePermissionRows: View {
+    let gate: ComputerUseGate
+    private var automationNote: String {
+        if gate.requestingAutomation { return "waiting for permission…" }
+        if gate.checkingAutomation { return "checking…" }
+        switch gate.automation {
+        case .granted: return "granted"
+        case .notAsked: return "not granted"
+        case .denied: return "off"
+        case .unavailable: return "check required"
+        }
+    }
+    var body: some View {
+        SettingsGroup(label: "OpenAI Computer Use") {
+            VStack(alignment: .leading, spacing: 2) {
+                StatusLine(title: "Automation",
+                           health: gate.automation == .granted ? .ok : (gate.requestingAutomation ? .warn : .bad),
+                           note: automationNote,
+                           tip: "Lets Sentient communicate with OpenAI's computer-use helper. Choose Allow in the macOS prompt.",
+                           fixTitle: gate.automation == .denied ? "Fix…" : "Allow…",
+                           fix: !gate.setup.ready || gate.requestingAutomation || gate.automation == .granted ? nil : { gate.requestAutomation() })
+                StatusLine(title: "Accessibility (OpenAI helper)",
+                           health: gate.helperAccessibility ? .ok : .bad,
+                           note: gate.helperAccessibility ? "granted" : "not granted",
+                           tip: "Lets OpenAI's helper click and type in your apps.",
+                           fixTitle: "Allow…",
+                           fix: !gate.setup.ready || gate.helperAccessibility ? nil : {
+                    PermissionGuide.shared.guide(.accessibility, dragging: OpenAIComputerUse.appURL)
+                })
+                StatusLine(title: "Screen Recording (OpenAI helper)",
+                           health: gate.helperScreen ? .ok : .bad,
+                           note: gate.helperScreen ? "granted" : "not granted",
+                           tip: "Lets OpenAI's helper see the app it is working in.",
+                           fixTitle: "Allow…",
+                           fix: !gate.setup.ready || gate.helperScreen ? nil : {
+                    PermissionGuide.shared.guide(.screenRecording, dragging: OpenAIComputerUse.appURL)
+                })
+                if let error = gate.nativePermissionError { SettingsProse(error) }
+            }
         }
     }
 }

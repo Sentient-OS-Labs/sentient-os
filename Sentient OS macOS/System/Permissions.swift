@@ -19,55 +19,42 @@ import Foundation
 import AppKit
 import ApplicationServices // AXIsProcessTrusted — Sentient's own Accessibility grant (the cua driver's hands)
 import CoreGraphics // CGPreflight/RequestScreenCaptureAccess — Sentient's own Screen Recording grant
-import SQLite3    // TCC.db status reads + the legacy Automation row cleanup (we hold Full Disk Access)
+import SQLite3    // Read-only TCC status checks (when Full Disk Access is available)
+import Carbon
 
 enum Permissions {
 
-    // MARK: - Legacy cleanup: the 1.x Automation grant (Sentient → OpenAI's Codex helper)
-    //
-    // Sentient 1.x drove computer use through OpenAI's bundled "Codex Computer Use" helper and
-    // wrote itself a kTCCServiceAppleEvents row (Sentient → the helper) into the USER TCC database
-    // so headless runs never stalled on a consent macOS had no prompt for. The cua driver needs no
-    // Automation grant at all, so on an updated Mac that row is dead weight — and OUR mess to
-    // sweep. `revokeComputerUseAutomation()` deletes exactly that row: called once per launch
-    // (cheap, idempotent — AppState.init) and by Uninstall. The helper's own Accessibility and
-    // Screen Recording rows live in the SIP-protected SYSTEM TCC database and are not ours to
-    // remove; without anything driving the helper they're inert.
+    /// OpenAI's native helper receives the Apple Events permission request.
+    static let computerUseHelperBundleID = OpenAIComputerUse.bundleID
 
-    /// The 1.x helper's bundle id — the Apple Events TARGET of the legacy row being cleaned up.
-    static let computerUseHelperBundleID = "com.openai.sky.CUAService"
+    /// Apple owns permission writes. Uninstall resets only Sentient's Apple Events grants using
+    /// the supported system utility; normal launch and Factory Reset never revoke them.
+    static func resetAutomationForUninstall() async {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return }
+        _ = try? await CodexCLI.executeAsync(binary: "/usr/bin/tccutil",
+            args: ["reset", "AppleEvents", bundleID], stdinText: nil, cwd: nil, timeout: 15)
+    }
 
-    /// DELETE the legacy kTCCServiceAppleEvents row (scoped to our bundle id AND the Codex helper
-    /// target, so no other app's Automation grants are ever touched) from the USER TCC database,
-    /// then reload tccd. Best-effort: no FDA, no DB, or no row is a quiet no-op — and it logs only
-    /// when a row was actually removed, so the every-launch call stays silent on clean Macs.
-    static func revokeComputerUseAutomation() {
-        guard hasFullDiskAccess() else { return }
-        let bundleID = Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"
-        let dbPath = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db").path
+    nonisolated enum AutomationState: Equatable, Sendable {
+        case granted, notAsked, denied, unavailable
+    }
 
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(dbPath, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
-            sqlite3_close(db); return
-        }
-        defer { sqlite3_close(db) }
-
-        let sql = """
-        DELETE FROM access WHERE service='kTCCServiceAppleEvents'
-          AND client=? AND client_type=0 AND indirect_object_identifier=?;
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
-        defer { sqlite3_finalize(stmt) }
-
-        let TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
-        sqlite3_bind_text(stmt, 1, bundleID, -1, TRANSIENT)
-        sqlite3_bind_text(stmt, 2, computerUseHelperBundleID, -1, TRANSIENT)
-
-        if sqlite3_step(stmt) == SQLITE_DONE, sqlite3_changes(db) > 0 {
-            reloadTCCD()
-            Log("Permissions: removed the legacy Automation grant row (\(bundleID) → Codex Computer Use)")
+    /// Called only after starting the helper, on the user's Allow action. A missing process
+    /// (-600) is unavailable, not an explicit denial. Never block AppKit's main run loop.
+    static func nativeAutomationState(ask: Bool = false) async -> AutomationState {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let target = NSAppleEventDescriptor(bundleIdentifier: OpenAIComputerUse.bundleID)
+                let code = AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, ask)
+                let state: AutomationState
+                switch code {
+                case noErr: state = .granted
+                case -1743: state = .denied
+                case -1744: state = .notAsked
+                default: state = .unavailable
+                }
+                continuation.resume(returning: state)
+            }
         }
     }
 
@@ -142,21 +129,13 @@ enum Permissions {
     @MainActor static func openMicrophoneSettings() { openPrivacy("Privacy_Microphone") }
     @MainActor static func openSpeechRecognitionSettings() { openPrivacy("Privacy_SpeechRecognition") }
     @MainActor static func openScreenRecordingSettings() { openPrivacy("Privacy_ScreenCapture") }
+    @MainActor static func openAutomationSettings() { openPrivacy("Privacy_Automation") }
     @MainActor static func openAccessibilitySettings() { openPrivacy("Privacy_Accessibility") }
 
     private static func openPrivacy(_ anchor: String) {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
             NSWorkspace.shared.open(url)
         }
-    }
-
-    /// Reload the per-user TCC daemon so a removed row applies immediately (tccd caches on launch).
-    private static func reloadTCCD() {
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        p.arguments = ["tccd"]
-        try? p.run()
-        p.waitUntilExit()
     }
 
     /// Canonical FDA-gated files. We can READ any of these *only* with Full Disk Access. We try

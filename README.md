@@ -103,10 +103,9 @@ That third column is our favorite thing we've ever shipped, and it's empty on pu
 - **Reading your real life.** <samp>typedstream decoding · protobuf walks · wal-safe copy-reads · date-added, not mtime · never spotlight</samp>
 - **Privacy engineering.** <samp>zero-trace triage · fail-closed parsing · a pii regex backstop · aes-256-gcm before anything leaves · a 30-day dead-man lease</samp>
 - **The 3 AM machine.** <samp>a codesign-verified root helper · a deadman timer · ac + thermal gates · crash-safe resume</samp>
-- **The cloud brain.** <samp>your own Codex CLI as the brain, the open-source cua driver as the hands · frontier compute on your subscription · marginal cost ~$0 · no sentient servers</samp>
+- **The cloud brain.** <samp>your own frontier CLI as the brain, native computer-use tools as the hands · frontier compute on your subscription · marginal cost ~$0 · no sentient servers</samp>
 
-And about that cloud brain. Sentient's frontier model is your own Codex CLI, connected to your own frontier model, or signed into your own ChatGPT account. The hands are the open-source [cua driver](https://github.com/trycua/cua) (MIT), embedded inside Sentient itself: it clicks and types in the background — no cursor warp, no focus steal, so you keep working while your agent drives another app — under Sentient's own macOS permissions, with the binary version-pinned, checksummed, and signature-verified before it ever runs. We never host or proxy any of it.
-<br/>
+And about that cloud brain. Sentient uses your own Codex CLI, Claude Code, or chosen model endpoint. ChatGPT tasks use OpenAI's signed computer-use helper; Claude and custom endpoints use the open-source [CUA driver](https://github.com/trycua/cua) (MIT). Both act in your own apps and browser, with visible progress and STOP. Dependencies download directly from their publishers and are verified before use. We never host or proxy your frontier compute.
 
 ## The privacy flex.
 

@@ -780,7 +780,7 @@ actor ClaudeCLI {
             }
             guard let bin = Self.locateBinary() else { throw CodexCLI.CLIError.notAvailable(.notInstalled) }
             // Same fire-time self-heals as codex: driver on disk, then the daemon + live socket.
-            if !CuaDriver.isInstalled { await CodexSetup.shared.ensureCuaDriver() }
+            if !CuaDriver.isInstalled { await ComputerUseSetup.instance(for: .cua).ensureInstalled() }
             guard CuaDriver.isInstalled else {
                 throw CodexCLI.CLIError.notAvailable(.notWorking("the cua driver is not installed"))
             }

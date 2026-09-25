@@ -68,7 +68,8 @@ actor CuaDriverHost {
     func endAgentSession() async {
         guard let socket, process?.isRunning == true else { return }
         if await !sessionCommand("end_session", socket: socket.path) {
-            await MainActor.run { Log("CuaDriverHost: run cleanup did not complete; the driver retains its cleanup state") }
+            await MainActor.run { Log("CuaDriverHost: cleanup did not finish; replacing the owned daemon before another run") }
+            await stop()
         }
     }
 
@@ -77,17 +78,25 @@ actor CuaDriverHost {
         // Cleanup must run even when STOP canceled the agent task. Await it before the one-task
         // lock is released, so it cannot close the next run's identically named CLI session.
         return await Task.detached {
-            do {
-                let result = try await CodexCLI.executeAsync(binary: binary,
-                    args: ["--socket", socket, name, #"{"session":"sentient"}"#],
-                    stdinText: nil, cwd: nil, timeout: 20,
-                    extraEnv: ["CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
-                               "CUA_TELEMETRY_ENABLED": "false", "CUA_DRIVER_RS_UPDATE_CHECK": "false"])
-                guard result.status == 0,
-                      let json = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
-                      let active = json["active"] as? Bool else { return false }
-                return active == (name == "start_session")
-            } catch { return false }
+            let deadline = Date().addingTimeInterval(name == "end_session" ? 8 : 20)
+            repeat {
+                do {
+                    let result = try await CodexCLI.executeAsync(binary: binary,
+                        args: ["--socket", socket, name, #"{"session":"sentient"}"#],
+                        stdinText: nil, cwd: nil, timeout: name == "start_session" ? 20 : max(1, min(5, deadline.timeIntervalSinceNow)),
+                        extraEnv: ["CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
+                                   "CUA_TELEMETRY_ENABLED": "false", "CUA_DRIVER_RS_UPDATE_CHECK": "false"])
+                    guard result.status == 0,
+                          let json = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any] else { return false }
+                    if name == "start_session" { return json["active"] as? Bool == true }
+                    let pending = json["cleanup_in_progress"] as? Bool == true
+                        || json["cleanup_complete"] as? Bool == false
+                        || json["code"] as? String == "session_cleanup_pending"
+                    if !pending { return json["active"] as? Bool == false || json["cleanup_complete"] as? Bool == true }
+                    try await Task.sleep(for: .milliseconds(150))
+                } catch { return false }
+            } while Date() < deadline
+            return false
         }.value
     }
 

@@ -236,20 +236,20 @@ struct DevToolsView: View {
                 .font(.callout.weight(.medium)).foregroundStyle(.white)
             HStack(spacing: 8) {
                 Circle()
-                    .fill(codexSetup.cuaDriverReady ? Theme.Ink.green : Color.orange)
+                    .fill(ComputerUseSetup.current.ready ? Theme.Ink.green : Color.orange)
                     .frame(width: 6, height: 6)
-                Text(codexSetup.cuaDriverReady
-                     ? "cua-driver \(CuaDriver.version) installed"
-                     : (codexSetup.settingUpCuaDriver ? "downloading…" : "not installed — the next fire self-heals it"))
+                Text(ComputerUseSetup.current.ready
+                     ? "\(ComputerUseBackend.current.name) installed"
+                     : (ComputerUseSetup.current.isInstalling ? "downloading…" : "not installed — the next fire self-heals it"))
                     .font(.caption2).foregroundStyle(Theme.faint)
                 Spacer()
-                Button(codexSetup.cuaDriverReady ? "Re-install" : "Install") {
-                    Task { await codexSetup.setupCuaDriver(force: codexSetup.cuaDriverReady) }
+                Button(ComputerUseSetup.current.ready ? "Re-install" : "Install") {
+                    Task { await ComputerUseSetup.current.install(force: ComputerUseSetup.current.ready) }
                 }
                 .controlSize(.small)
-                .disabled(codexSetup.settingUpCuaDriver)
+                .disabled(ComputerUseSetup.current.isInstalling)
             }
-            if let line = codexSetup.cuaDriverStatus {
+            if let line = ComputerUseSetup.current.status {
                 Text(line)
                     .font(.system(.caption2, design: .monospaced))
                     .foregroundStyle(line.hasPrefix("✓") ? Theme.Ink.green : line.hasPrefix("✗") ? .red : Theme.secondary)
@@ -262,7 +262,7 @@ struct DevToolsView: View {
         .padding(12)
         .frame(maxWidth: .infinity)
         .background(.white.opacity(0.03), in: RoundedRectangle(cornerRadius: 12))
-        .onAppear { codexSetup.refreshCuaDriver() }
+        .onAppear { ComputerUseSetup.current.refresh() }
     }
 
     /// Double Tap's switch, the route (relay or a dev key), that route's settings, and the last run's timings.

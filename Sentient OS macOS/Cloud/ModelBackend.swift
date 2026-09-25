@@ -247,7 +247,7 @@ struct CustomProvider: Sendable {
 
     /// Extra guardrails injected into the app-authored computer-use prompts (Sidekick's
     /// commandPrompt, the executor's computerWrapper) ON THE CUSTOM BACKEND ONLY — empty on
-    /// ChatGPT. The full operating manual is CuaDriverSkill.rules for every backend; these lines
+    /// ChatGPT. FrontierRun supplies the selected runtime's operating manual; these lines
     /// add only what weaker custom models measurably need on top (2026-07-24: MiniMax sent
     /// `element_index: ""`, got `invalidElementID`, "fixed" it with the window element, clicked
     /// the window center 15 times, then claimed success off an accidental spacebar play): a hard

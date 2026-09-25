@@ -292,7 +292,10 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             await claude.refreshLoginStatus()
             guard !Task.isCancelled else { return }
             if signIn, !claude.loggedIn { claude.startLogin() }
-            if claude.loggedIn { backendRaw = ModelBackend.claude.rawValue }
+            if claude.loggedIn {
+                backendRaw = ModelBackend.claude.rawValue
+                if layout == .settingsGrid { await ComputerUseSetup.instance(for: .cua).install() }
+            }
         }
     }
 
@@ -429,6 +432,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         presetRaw = preset.rawValue
         guard CustomProvider.current.isUsable else { return }
         backendRaw = ModelBackend.custom.rawValue
+        if layout == .settingsGrid { Task { await ComputerUseSetup.instance(for: .cua).install() } }
     }
 
     private func runTest(preset: CustomProvider.Preset) {

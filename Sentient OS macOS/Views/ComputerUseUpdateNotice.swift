@@ -1,14 +1,14 @@
-// CuaDriverUpdateNotice.swift
+// ComputerUseUpdateNotice.swift
 // The home's quiet computer-use update: real download progress, verification, retry, and done.
 // Reads the shared installer so a Sidekick command and a launch-time update show the same state.
 // Doc: Documentation - Views - Home, Processing & Shared UI.md
 
 import SwiftUI
 
-struct CuaDriverUpdateNotice: View {
+struct ComputerUseUpdateNotice: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let state: CodexSetup.CuaUpdateNotice
-    let progress: CuaDriverSetup.Progress?
+    let state: ComputerUseSetup.UpdateNotice
+    let progress: ComputerUseSetup.Progress?
     var onRetry: () -> Void = {}
     var onDismiss: () -> Void = {}
 
@@ -73,10 +73,10 @@ struct CuaDriverUpdateNotice: View {
 
 #Preview("Computer-use update") {
     VStack(alignment: .trailing, spacing: 22) {
-        CuaDriverUpdateNotice(state: .updating, progress: .downloading(0.58))
-        CuaDriverUpdateNotice(state: .updating, progress: .checkingSignature)
-        CuaDriverUpdateNotice(state: .failed, progress: nil)
-        CuaDriverUpdateNotice(state: .ready, progress: .ready)
+        ComputerUseUpdateNotice(state: .updating, progress: .downloading(0.58))
+        ComputerUseUpdateNotice(state: .updating, progress: .checkingSignature)
+        ComputerUseUpdateNotice(state: .failed, progress: nil)
+        ComputerUseUpdateNotice(state: .ready, progress: .ready)
     }
     .padding(40).frame(width: 540).background(.black).preferredColorScheme(.dark)
 }

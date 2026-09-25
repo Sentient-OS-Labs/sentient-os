@@ -16,7 +16,7 @@ protocol (decided 2026-08-21).
 |---|---|
 | `ClaudeCLI.swift` | The actor: discovery, install, login, validation, `run()` (stream-json runs) and `runAgentCommand()` (computer use), argument building, envelope parsing, the connector allow rules, failure diagnostics. |
 | `ClaudeAuth.swift` | Plan identity from `claude auth status` (clean JSON: `loggedIn`, `subscriptionType`, `email`) plus the cached flags the model choke point reads synchronously. |
-| `ClaudeSetup.swift` | The `@Observable` setup engine (install, login, the daily managed-binary update) — CodexSetup's two-step sibling; the computer-use driver stays CodexSetup's shared step 3. |
+| `ClaudeSetup.swift` | The `@Observable` setup engine (install, login, the daily managed-binary update) — CodexSetup's two-step sibling; computer-use installation is owned by ComputerUseSetup. |
 | `FrontierRun.swift` | The dispatch switch (`run`, `runAgentCommand`, `validate`). |
 
 ## The dialect map (codex → claude)
@@ -41,7 +41,7 @@ protocol (decided 2026-08-21).
 schema consumers keep decoding from `Envelope.jsonResult` unchanged. Sessions persist (resume works);
 only probes pass `--no-session-persistence`.
 
-**`runAgentCommand()`** is computer use on the same cua driver, same daemon, same shim, same
+**`runAgentCommand()`** retains the CUA driver, daemon, shim and
 `CuaDriverSkill` manual: `--strict-mcp-config --mcp-config` registers the four MCP eyes
 (`CuaDriver.claudeMcpConfig`), the driver's other ~52 MCP tools are denied by name
 (`CuaDriver.claudeDisallowedMcpTools` — Claude Code has no per-server `enabled_tools` filter),
