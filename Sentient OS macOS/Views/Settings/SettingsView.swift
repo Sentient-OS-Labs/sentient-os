@@ -5,7 +5,7 @@
 //  The Settings window — a modern two-pane layout: a quiet sidebar of sections on the left
 //  (with the About footer: version + the open-source link), the selected pane on the right,
 //  and the trust ribbon riding the foot. Every pane is real and lives beside this file:
-//  SourcesPane · ProactivePane · ShareKnowledgePane · SystemPane · HealthPane.
+//  SourcesPane · FrontierModelPane · DoubleTapPane · ProactivePane · ShareKnowledgePane · SystemPane · HealthPane.
 //
 
 import SwiftUI
@@ -14,15 +14,16 @@ import AppKit
 struct SettingsView: View {
     static let windowID = "settings"
 
-    /// The six sections, in sidebar order.
+    /// The sections, in sidebar order.
     enum Pane: CaseIterable, Identifiable {
-        case sources, frontierModel, proactive, shareKnowledge, system, health
+        case sources, frontierModel, doubleTap, proactive, shareKnowledge, system, health
 
         var id: Self { self }
         var title: String {
             switch self {
             case .sources:   return "Knowledge Sources"
             case .frontierModel: return "Frontier Model Choice"
+            case .doubleTap: return "Double Tap"
             case .proactive: return "Proactive & Sidekick"
             case .shareKnowledge: return "Give AIs Knowledge"
             case .system:    return "System"
@@ -33,6 +34,7 @@ struct SettingsView: View {
             switch self {
             case .sources:   return "tray.full"
             case .frontierModel: return "cpu"
+            case .doubleTap: return "hand.tap"
             case .proactive: return "sparkles"
             case .shareKnowledge: return "antenna.radiowaves.left.and.right"
             case .system:    return "gearshape"
@@ -144,6 +146,7 @@ struct SettingsView: View {
                 switch selection {
                 case .sources:   SourcesPane()
                 case .frontierModel: FrontierModelPane()
+                case .doubleTap: DoubleTapPane()
                 case .proactive: ProactivePane()
                 case .shareKnowledge: ShareKnowledgePane()
                 case .system:    SystemPane()

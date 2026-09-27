@@ -80,6 +80,8 @@ final class SidekickHotkeyMonitor {
     private(set) var key: SidekickHotkey = .rightCommand
 
     var onPress: (() -> Void)?
+    /// The native onboarding keycap follows the physical key back up as well as down.
+    var onRelease: (() -> Void)?
 
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -167,7 +169,7 @@ final class SidekickHotkeyMonitor {
         let nowDown = (flags & key.deviceBit) != 0
         guard nowDown != keyIsDown else { return }
         keyIsDown = nowDown
-        if nowDown { onPress?() }
+        if nowDown { onPress?() } else { onRelease?() }
     }
 
     // MARK: Self-healing
@@ -182,6 +184,7 @@ final class SidekickHotkeyMonitor {
         if keyIsDown, (UInt64(NSEvent.modifierFlags.rawValue) & key.genericBit) == 0 {
             Log("hotkey: reconciled a missed release")
             keyIsDown = false
+            onRelease?()
         }
     }
 }

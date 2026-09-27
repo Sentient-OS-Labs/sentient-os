@@ -85,7 +85,7 @@ enum CommandRouter {
     static func route(_ command: String, services: [Service]) async -> Route {
         let t0 = Date()
         var inv = CodexCLI.Invocation(prompt: prompt(command: command, services: services))
-        inv.model = .gpt56luna          // → haiku on the Claude tier map
+        inv.model = .gpt6luna          // → haiku on the Claude tier map
         inv.effort = .low
         inv.sandbox = .readOnly
         inv.webSearch = false

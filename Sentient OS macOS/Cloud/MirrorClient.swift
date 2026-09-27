@@ -379,11 +379,13 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func delete(_ key: String) {
-        SecItemDelete([
+    @discardableResult
+    static func delete(_ key: String) -> Bool {
+        let status = SecItemDelete([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ] as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 }

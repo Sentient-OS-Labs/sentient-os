@@ -322,7 +322,7 @@ nonisolated enum ConnectorClassifier {
                             slug: String) async throws -> CodexCLI.Envelope {
         var invocation = CodexCLI.Invocation(prompt: prompt)
         invocation.feature = "classify"
-        invocation.model = .gpt56luna          // → haiku on the Claude tier map
+        invocation.model = .gpt6luna          // → haiku on the Claude tier map
         // Slack's mixed-mode tools repeatedly confused the light-tier inventory/classifier.
         // This infrequent policy check uses Sonnet; knowledge reads keep their own model tier.
         if slug == "slack" || Microsoft365Connector.contains(slug) { invocation.claudeModel = .sonnet }

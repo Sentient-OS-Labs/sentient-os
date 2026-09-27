@@ -195,8 +195,8 @@ enum GmailConnect {
     private static func read(prompt: String) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "gmail"
-        inv.model = .gpt56luna               // light model for the high-volume Gmail reads
-        inv.effort = .medium                 // gpt-5.6-luna → medium
+        inv.model = .gpt6luna               // light model for the high-volume Gmail reads
+        inv.effort = .medium                 // gpt-6-luna → medium
         inv.sandbox = .readOnly              // we only read Gmail + return text (no file writes)
         inv.outputSchema = weeklySchema
         inv.timeout = 900                    // a heavy window with a few deep reads can run long

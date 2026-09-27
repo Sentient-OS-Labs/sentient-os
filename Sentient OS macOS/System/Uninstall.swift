@@ -101,6 +101,11 @@ enum Uninstall {
         await beat()
 
         progress(.keychain)
+        guard DoubleTapProvider.destroyKeys() else {
+            lastFailure = "Uninstall paused because your Double Tap API keys couldn't be removed from Keychain. Unlock your Mac and retry."
+            appState?.isUninstalling = false
+            return false
+        }
         do { try await DirectMCPConnections.shared.removeAll() }
         catch {
             Log("Uninstall: direct-connection Keychain cleanup needs retry")

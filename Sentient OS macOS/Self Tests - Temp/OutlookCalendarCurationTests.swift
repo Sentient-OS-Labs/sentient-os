@@ -118,13 +118,13 @@ enum OutlookCalendarCurationTests {
                 read.outlookCalendarReadPurpose = .initial; read.outlookCalendarReadWindow = window
                 do {
                     let argv = backend == .claude ? try ClaudeCLI.arguments(for: read, modelID: "sonnet", effortArg: "medium")
-                        : try CodexCLI.arguments(for: read, modelID: "gpt-5.6-luna", effortArg: "medium", schemaFile: nil)
+                        : try CodexCLI.arguments(for: read, modelID: "gpt-6-luna", effortArg: "medium", schemaFile: nil)
                     check(argv.joined().contains("--outlook-tool-policy"), "\(backend) read invokes native policy")
                     check(!argv.contains("--dangerously-bypass-approvals-and-sandbox") && !argv.contains("--dangerously-skip-permissions"), "\(backend) read remains sandboxed")
                     var mixed = read; mixed.mcpReadConnectors = ["outlook-mail", slug]; mixed.mcpReadToolNames = nil
                     mixed.outlookCalendarReadPurpose = nil; mixed.outlookCalendarReadWindow = nil
                     let both = backend == .claude ? try ClaudeCLI.arguments(for: mixed, modelID: "sonnet", effortArg: "medium")
-                        : try CodexCLI.arguments(for: mixed, modelID: "gpt-5.6-luna", effortArg: "medium", schemaFile: nil)
+                        : try CodexCLI.arguments(for: mixed, modelID: "gpt-6-luna", effortArg: "medium", schemaFile: nil)
                     check(both.joined().contains(backend == .claude ? "outlook_calendar_search" : "list_events"), "\(backend) mixed reads retain Calendar")
                     if backend == .claude, let index = both.firstIndex(of: "--disallowedTools") {
                         check(!both[index + 1].contains("outlook_calendar_search") && !both[index + 1].contains("__read_resource"), "mixed suite complement does not veto approved reads")
@@ -296,10 +296,10 @@ enum OutlookCalendarCurationTests {
                         if kind == "computer" {
                             args = backend == .claude
                                 ? try ClaudeCLI.agentArguments(prompt: "Synthetic policy fixture", modelID: "sonnet", effortArg: "low", socketPath: "/tmp/calendar-fixture.sock")
-                                : CodexCLI.agentArguments(prompt: "Synthetic policy fixture", imagePaths: [], modelID: "gpt-5.6-luna", effortArg: "low", socketPath: "/tmp/calendar-fixture.sock")
+                                : CodexCLI.agentArguments(prompt: "Synthetic policy fixture", imagePaths: [], modelID: "gpt-6-luna", effortArg: "low", socketPath: "/tmp/calendar-fixture.sock")
                         } else {
                             args = backend == .claude ? try ClaudeCLI.arguments(for: inv, modelID: "sonnet", effortArg: "low")
-                                : try CodexCLI.arguments(for: inv, modelID: "gpt-5.6-luna", effortArg: "low", schemaFile: nil)
+                                : try CodexCLI.arguments(for: inv, modelID: "gpt-6-luna", effortArg: "low", schemaFile: nil)
                         }
                         recipes["\(backend.rawValue)-\(kind)"] = args
                     }

@@ -5,9 +5,9 @@
 //  Onboarding slide 1 — the website's film (sentient-os.ai/onboarding) playing inside a
 //  WKWebView. The page drives itself (its Autopilot scrolls the film) and parks at the
 //  morning-home rest (?end=0.42 in film progress); at each park it posts "parked" to the
-//  `autopilot` message handler and the native Continue button blooms in. Three legs: the
-//  night film → the Sidekick scene → the Under-the-hood exhibit (the site's architecture
-//  diagram, parked on its "hood" anchor). The webview is a movie, not a page: hit-testing
+//  `autopilot` message handler and the native Continue button blooms in. The night film leads
+//  into Sidekick, a native Double Tap lesson, then the Under-the-hood exhibit (the site's
+//  architecture diagram, parked on its "hood" anchor). The webview is a movie, not a page: hit-testing
 //  returns nil (no scrolling, no clicks), navigation off our host is blocked, and the view
 //  fades in black-on-black only after the page loads (no flash) — with ONE exception: the
 //  hood park is interactive (hover captions + the Read More popup), wheel still swallowed.
@@ -31,8 +31,8 @@ struct OnboardingFilmView: View {
     /// The step's phases, three film legs in one webview: black until the film is really
     /// rendering → leg 1 (night → the morning park; Continue up) → on Continue, leg 2
     /// (the turn, "One more thing. Meet Sidekick.", the dive, the whole Sidekick scene;
-    /// same page instance, `continueTo` over evaluateJavaScript) → parked again → on
-    /// Continue, leg 3 (a short ride down to the Under-the-hood exhibit, parked on its
+    /// same page instance, `continueTo` over evaluateJavaScript) → parked again → the native
+    /// Double Tap lesson → on Continue, leg 3 (a short ride to the Under-the-hood exhibit, parked on its
     /// "hood" anchor — the film's one INTERACTIVE beat: hover captions and the Read More
     /// popup work) → the final Continue advances onboarding. `unavailable` is the offline
     /// fallback slide.
@@ -47,12 +47,13 @@ struct OnboardingFilmView: View {
     /// and the film rides on (.ridingSidekick).
     private enum Phase {
         case loading, playing, parked, ridingToInvitation, awaitingNotch,
-             ridingSidekick, sidekickDone, ridingToHood, hoodParked, unavailable
+             ridingSidekick, sidekickDone, doubleTap, ridingToHood, hoodParked, unavailable
     }
     @State private var phase: Phase = .loading
 
     /// didFinish fired — arms the fallback fade for a "ready"-less page (older deploy).
     @State private var finishedLoad = false
+    @State private var filmUnavailable = false
 
     /// The bridge for driving the page's autopilot (leg 2's continueTo).
     @State private var driver = FilmDriver()
@@ -127,17 +128,30 @@ struct OnboardingFilmView: View {
             if phase == .unavailable {
                 fallbackSlide.transition(.opacity)
             } else {
-                FilmWebView(url: Self.filmURL,
-                            driver: driver,
-                            onLoaded: { finishedLoad = true },
-                            onReady: { fadeIn() },
-                            onParked: { legParked() },
-                            onFailed: { if phase == .loading { setPhase(.unavailable) } })
-                    .ignoresSafeArea()
-                    .opacity(phase == .loading ? 0 : 1)
-                    // The movie can't be touched — except the hood park, the film's one
-                    // interactive beat (PassiveWebView gates the NSView side in lockstep).
-                    .allowsHitTesting(phase == .hoodParked)
+                if !filmUnavailable {
+                    FilmWebView(url: Self.filmURL,
+                                driver: driver,
+                                onLoaded: { finishedLoad = true },
+                                onReady: { fadeIn() },
+                                onParked: { legParked() },
+                                onFailed: { if phase == .loading { setPhase(.unavailable) } })
+                        .ignoresSafeArea()
+                        .opacity(phase == .loading || phase == .doubleTap || phase == .ridingToHood ? 0 : 1)
+                        .accessibilityHidden(phase != .hoodParked)
+                        // The movie can't be touched — except the hood park, the film's one
+                        // interactive beat (PassiveWebView gates the NSView side in lockstep).
+                        .allowsHitTesting(phase == .hoodParked)
+                }
+
+                // Keep the page mounted at its Sidekick park while the native lesson owns the
+                // stage. On Continue it travels beneath the lesson, then crossfades at the hood
+                // park, so neither a page reload nor a stale Sidekick frame can flash through.
+                if phase == .doubleTap || phase == .ridingToHood {
+                    OnboardingDoubleTapView(coordinator: appState.commandCoordinator,
+                                            onContinue: finishDoubleTap)
+                        .allowsHitTesting(phase == .doubleTap)
+                        .transition(.opacity)
+                }
 
                 // Continue blooms in whenever a leg parks. On the MORNING park the laptop
                 // fills the window's lower half, so the button sits ABOVE it — centered in
@@ -247,6 +261,7 @@ struct OnboardingFilmView: View {
     }
 
     private func setPhase(_ new: Phase) {
+        if new == .unavailable { filmUnavailable = true }
         withAnimation(.easeInOut(duration: 0.45)) { phase = new }
         // The NSView-side hit-testing gate rides the phase in lockstep with the
         // SwiftUI-side .allowsHitTesting above.
@@ -265,25 +280,27 @@ struct OnboardingFilmView: View {
     }
 
     /// The parked Continue: the first park rides on to the invitation beat. The Sidekick park's
-    /// Continue rides leg 3 down to the Under-the-hood exhibit; the hood park's Continue hands
-    /// onboarding to the next step.
+    /// Continue opens the native Double Tap lesson; the hood park's Continue hands onboarding
+    /// to the next step. The native lesson owns its own completion gate.
     private func advanceFromPark() {
         switch phase {
         case .parked:
             setPhase(.ridingToInvitation)
             driver.continueTo(Self.invitationEndP)
         case .sidekickDone:
-            setPhase(.ridingToHood)
-            // A deploy without the hood anchor (older site) reports unsupported —
-            // then the Continue the user just pressed keeps its old meaning and
-            // onboarding simply moves on. Never a second parked-in-place button
-            // (field-found 2026-07-17: pre-deploy, the fallback bloomed a stray
-            // bottom-right Continue over the Sidekick frame).
-            driver.continueToHood { supported in
-                if !supported { exitStep() }
-            }
+            setPhase(.doubleTap)
         default:
             exitStep()
+        }
+    }
+
+    private func finishDoubleTap() {
+        guard phase == .doubleTap else { return }
+        guard !filmUnavailable else { exitStep(); return }
+        setPhase(.ridingToHood)
+        driver.continueToHood(delay: 0, seconds: 0.6) { supported in
+            guard phase == .ridingToHood else { return }
+            if !supported { exitStep() }
         }
     }
 
@@ -364,7 +381,7 @@ struct OnboardingFilmView: View {
             Spacer()
             Text("An AI that knows your life, and acts on it.")
                 .display(30)
-            OnboardingNextButton(title: "Continue", action: exitStep)
+            OnboardingNextButton(title: "Continue", action: { setPhase(.doubleTap) })
             Spacer()
             OnboardingTrustFooter()
         }
@@ -397,14 +414,14 @@ final class FilmDriver {
     /// anchor existing in the deployed page (an older deploy has no "hood" id, and
     /// feeding its Autopilot a string would ride into NaN) — the completion reports
     /// whether the leg actually fired.
-    func continueToHood(delay: Double = 0.1, completion: @escaping (Bool) -> Void) {
+    func continueToHood(delay: Double = 0.1, seconds: Double? = nil, completion: @escaping (Bool) -> Void) {
         guard let webView else { completion(false); return }
         Log("Onboarding film: continueTo(hood, delay: \(delay))")
         webView.evaluateJavaScript(
             """
             (() => {
               if (!document.getElementById('hood') || !window.__sentientAutopilot) return false;
-              window.__sentientAutopilot.continueTo('hood', \(delay));
+              window.__sentientAutopilot.continueTo('hood', \(delay), undefined, \(seconds.map { String($0) } ?? "undefined"));
               return true;
             })()
             """) { result, _ in

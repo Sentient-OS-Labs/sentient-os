@@ -450,7 +450,7 @@ nonisolated enum ConnectorCensus {
     static func refreshCodexCache() async {
         var invocation = CodexCLI.Invocation(prompt: "Reply with exactly: OK")
         invocation.feature = "census"
-        invocation.model = .gpt56luna
+        invocation.model = .gpt6luna
         invocation.effort = .low
         invocation.sandbox = .readOnly
         invocation.webSearch = false

@@ -123,7 +123,7 @@ enum CodexAuth {
     /// True only on a POSITIVE free/go read — the convenience most gates want. A user who told
     /// us they upgraded is never limited: the whole point of trusting them is that the claim on
     /// disk is the thing we've decided not to believe (chiefly CodexCLI.planTuned, which would
-    /// otherwise keep downshifting them off gpt-5.6-sol).
+    /// otherwise keep downshifting them off gpt-6-sol).
     static func isLimited() -> Bool { !assertedPlus && currentPlan()?.tier == .limited }
 
     /// Extract `chatgpt_plan_type` from a JWT's payload segment (base64url, no signature check —

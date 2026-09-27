@@ -52,9 +52,9 @@ actor CodexCLI {
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
         case gpt6astra = "gpt-6-astra"  // computer use: Medium / Smarter
-        case gpt56sol = "gpt-5.6-sol"    // knowledge-base work + everything else (paid plans)
+        case gpt6sol = "gpt-6-sol"    // knowledge-base work + everything else (paid plans)
         case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
-        case gpt56luna = "gpt-5.6-luna"  // Gmail connect-check + processing
+        case gpt6luna = "gpt-6-luna"  // Gmail connect-check + processing
     }
 
     /// The ONE model-resolution choke point: every run's `-m` value comes from here.
@@ -75,7 +75,7 @@ actor CodexCLI {
         if ModelBackend.current == .custom {
             return (CustomProvider.current.modelName, CustomProvider.reasoning)
         }
-        guard model == .gpt56sol || model == .gpt6astra, CodexAuth.isLimited() else {
+        guard model == .gpt6sol || model == .gpt6astra, CodexAuth.isLimited() else {
             return (model.rawValue, effort.rawValue)
         }
         return (Model.gpt56terra.rawValue, Effort.medium.rawValue)
@@ -91,8 +91,8 @@ actor CodexCLI {
     /// One headless `codex exec` call, fully specified.
     struct Invocation: Sendable {
         var prompt: String
-        var model: Model = .gpt56sol              // gpt-5.6-sol for everything except the Gmail tier
-        var effort: Effort = .high             // gpt-5.6-sol default (nothing overrides upward); Gmail tier → .medium
+        var model: Model = .gpt6sol              // gpt-6-sol for everything except the Gmail tier
+        var effort: Effort = .high             // gpt-6-sol default (nothing overrides upward); Gmail tier → .medium
         var sandbox: Sandbox = .readOnly
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd

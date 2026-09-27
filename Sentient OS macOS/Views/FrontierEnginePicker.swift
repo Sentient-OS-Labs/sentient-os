@@ -40,7 +40,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         var badge: String? {
             switch self {
             case .chatgpt:  return "recommended"
-            case .claude:   return nil
+            case .claude:   return "beta"
             case .lmStudio: return "local"
             case .custom:   return "local"
             case .openRouter: return nil
@@ -314,7 +314,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                     SettingsProse("Any endpoint that speaks the OpenAI Responses API (a /v1/responses route). Base URL, model name, key if it needs one.")
                 }
                 if preset != .lmStudio {
-                    SettingsProse("One important note: of every model we tested, Kimi K3 at low reasoning is the only open-weights model that can reliably drive computer use. Claude Sonnet 5 with reasoning off, and GPT-5.6 Sol at low reasoning are also great options we can stand by.")
+                    SettingsProse("For computer use, consider GPT-6 Sol at low reasoning or Claude Sonnet 5 with reasoning off. Of the open-weights models we tested, Kimi K3 at low reasoning is the only one we can recommend for reliably driving computer use.")
                 }
 
                 // OpenRouter's base URL is fixed — no field, the tab pins it itself.

@@ -494,7 +494,7 @@ enum MCPSource {
         let slug = ConnectorRegistry.canonicalSlug(slug)
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "mcp-read"
-        inv.model = .gpt56luna
+        inv.model = .gpt6luna
         inv.effort = .medium
         inv.sandbox = .readOnly
         inv.webSearch = false
@@ -529,7 +529,7 @@ enum MCPSource {
         let inv = readInvocation(slug: slug, prompt: "Read-policy validation")
         switch ModelBackend.current {
         case .chatgpt:
-            _ = try CodexCLI.arguments(for: inv, modelID: "gpt-5.6-luna", effortArg: "medium", schemaFile: nil)
+            _ = try CodexCLI.arguments(for: inv, modelID: "gpt-6-luna", effortArg: "medium", schemaFile: nil)
         case .claude:
             _ = try ClaudeCLI.arguments(for: inv, modelID: "haiku", effortArg: "medium")
         case .custom:

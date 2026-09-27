@@ -252,7 +252,7 @@ actor ProactiveExecutor {
                                progress: @escaping @Sendable (String) -> Void) async -> FireResult {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = feature
-        inv.effort = .high                   // gpt-5.6-sol → high
+        inv.effort = .high                   // gpt-6-sol → high
         inv.sandbox = .readOnly              // Seatbelt ON — a connector action needs no shell/file writes
         inv.includeUserConfig = true         // the recipes need the connector fetch
         inv.webSearch = false

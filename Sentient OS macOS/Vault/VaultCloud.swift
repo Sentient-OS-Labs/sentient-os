@@ -194,7 +194,7 @@ actor VaultCloud {
         func configure(_ prompt: String) -> CodexCLI.Invocation {
             var i = CodexCLI.Invocation(prompt: prompt)
             i.feature = "vault"
-            i.effort = .high                                    // incremental KB update (gpt-5.6-sol → high)
+            i.effort = .high                                    // incremental KB update (gpt-6-sol → high)
             i.sandbox = .workspaceWrite                        // edits confined to the staging dir
             i.cwd = staging.path
             i.timeout = 1_800
