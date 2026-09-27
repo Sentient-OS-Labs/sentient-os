@@ -1,8 +1,8 @@
 //
 // ConnectorConnectSheet.swift
 // Gmail-style connection popup for catalog apps and all detected accounts. Uses the pane's live
-// discovery state and starts direct browser sign-in here. Knowledge selection remains explicit
-// and direct accounts retain their IDs.
+// discovery state and starts direct browser sign-in here. Settings exposes the knowledge toggle;
+// onboarding uses the picker's automatic selection. Direct accounts retain their IDs.
 // Doc: Documentation - Settings.md
 //
 
@@ -11,6 +11,7 @@ import SwiftUI
 struct ConnectorConnectSheet: View {
     let source: ConnectorSource
     @Binding var connectors: [ConnectorCensus.DetectedConnector]
+    let context: KnowledgeSourcesPicker.Context
     let onConnect: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -24,9 +25,11 @@ struct ConnectorConnectSheet: View {
     @State private var operation: Task<Void, Never>?
 
     init(source: ConnectorSource, connectors: Binding<[ConnectorCensus.DetectedConnector]>,
+         context: KnowledgeSourcesPicker.Context = .settings,
          onConnect: @escaping () -> Void) {
         self.source = source
         _connectors = connectors
+        self.context = context
         self.onConnect = onConnect
         _boundConnectorID = State(initialValue: source.connector?.id)
     }
@@ -100,9 +103,11 @@ struct ConnectorConnectSheet: View {
             }
 
             if ConnectorRegistry.kbEligible(selectionSlug) {
-                ConnectorKnowledgeControl(slug: selectionSlug)
-                    .disabled(busy)
-                    .padding(.top, 20)
+                if context == .settings {
+                    ConnectorKnowledgeControl(slug: selectionSlug)
+                        .disabled(busy)
+                        .padding(.top, 20)
+                }
             } else if connector != nil {
                 Text("Available for tasks. This app does not support knowledge-base analysis.")
                     .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
@@ -317,6 +322,13 @@ private struct ConnectorKnowledgeControl: View {
 #Preview("Connect Google Drive · not connected") {
     ConnectorConnectSheet(source: ConnectorSource.catalog(with: [])[0], connectors: .constant([]),
                           onConnect: {})
+}
+
+#Preview("Onboarding · connect Granola") {
+    if let source = ConnectorSource.catalog(with: []).first(where: { $0.serviceSlug == "granola" }) {
+        ConnectorConnectSheet(source: source, connectors: .constant([]), context: .onboarding,
+                              onConnect: {})
+    }
 }
 
 #Preview("Connect Asana · no logo") {

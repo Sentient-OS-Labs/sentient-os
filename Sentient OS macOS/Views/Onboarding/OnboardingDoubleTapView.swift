@@ -31,6 +31,7 @@ struct OnboardingDoubleTapView: View {
     var body: some View {
         GeometryReader { geometry in
             let windowWidth = min(660, geometry.size.width - 96)
+            let flightProgress = reduceMotion ? 0 : (demo.sample == .email ? demo.emailDeparture : 1 - demo.messageArrival)
             ZStack {
                 Color.black.ignoresSafeArea()
 
@@ -39,11 +40,12 @@ struct OnboardingDoubleTapView: View {
 
                     sampleWindow
                         .frame(width: windowWidth, height: 440)
-                        .scaleEffect(demo.windowVisible || reduceMotion ? 1 : 0.97)
-                        .offset(y: demo.windowVisible || reduceMotion ? 0 : 16)
-                        .opacity(demo.windowVisible ? 1 : 0)
-                        .modifier(DemoEmailDeparture(progress: demo.sample == .email && !reduceMotion ? demo.emailDeparture : 0,
-                                                     viewport: geometry.size))
+                        .scaleEffect(demo.sample == .email && !demo.windowVisible && !reduceMotion ? 0.97 : 1)
+                        .offset(y: demo.sample == .email && !demo.windowVisible && !reduceMotion ? 16 : 0)
+                        .opacity(demo.sample == .message && !reduceMotion ? 1 : (demo.windowVisible ? 1 : 0))
+                        .modifier(DemoWindowFlight(progress: flightProgress,
+                                                   side: demo.sample == .email ? .right : .left,
+                                                   viewport: geometry.size))
                         .accessibilityHidden(!demo.windowVisible || demo.emailDeparture > 0)
 
                     VStack(spacing: 16) {
@@ -147,7 +149,6 @@ struct OnboardingDoubleTapView: View {
 /// The final beat's quiet disclosure, placed above the icon without moving the lesson.
 private struct DoubleTapInferenceInfo: View {
     @State private var hovering = false
-    @State private var expanded = false
 
     private static let text = """
     Due to latency requirements, Double Tap uses the OpenAI API with Zero Data Retention for maximum privacy.
@@ -155,45 +156,36 @@ private struct DoubleTapInferenceInfo: View {
     If you’d like, in Double Tap settings, you can change the inference provider to your own.
     """
 
-    private var shown: Bool { hovering || expanded }
-
     var body: some View {
-        Button { expanded.toggle() } label: {
-            Image(systemName: "info.circle")
-                .font(.system(size: 16))
-                .foregroundStyle(.white.opacity(shown ? 0.8 : 0.4))
-                .frame(width: 32, height: 32)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityLabel("About Double Tap inference")
-        .accessibilityHint(Self.text)
-        .overlay(alignment: .bottomLeading) {
-            if shown {
-                Text(Self.text)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(.white.opacity(0.8))
-                    .lineSpacing(4)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(width: 310, alignment: .leading)
-                    .padding(16)
-                    .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 12))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-                    }
-                    .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
-                    .offset(y: -40)
-                    .allowsHitTesting(false)
-                    .transition(.opacity)
+        Image(systemName: "info.circle")
+            .font(.system(size: 16))
+            .foregroundStyle(.white.opacity(hovering ? 0.8 : 0.4))
+            .frame(width: 32, height: 32)
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+            .accessibilityLabel("About Double Tap inference")
+            .accessibilityHint(Self.text)
+            .overlay(alignment: .bottomLeading) {
+                if hovering {
+                    Text(Self.text)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .lineSpacing(4)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 310, alignment: .leading)
+                        .padding(16)
+                        .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 12)
+                                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                        }
+                        .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
+                        .offset(y: -40)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
             }
-        }
-        .animation(.easeOut(duration: 0.15), value: shown)
-        .onExitCommand {
-            hovering = false
-            expanded = false
-        }
+            .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }
 
@@ -220,11 +212,13 @@ private struct DemoNextSampleButton: View {
     }
 }
 
-/// One animated progress value follows a cubic arc, rather than interpolating two offsets
-/// along a straight diagonal. It starts with a small rightward scoop, then accelerates upward,
-/// lifting the right edge as the email leaves through the top-right of the window.
-private struct DemoEmailDeparture: GeometryEffect {
+/// One cubic arc for both windows: email flies out to the top-right; Messages follows the
+/// mirrored path in reverse from the top-left, including the same tilt and change in scale.
+/// Zero is the resting position and one is fully outside the viewport.
+private struct DemoWindowFlight: GeometryEffect {
+    enum Side { case left, right }
     var progress: CGFloat
+    let side: Side
     let viewport: CGSize
 
     var animatableData: CGFloat {
@@ -235,9 +229,10 @@ private struct DemoEmailDeparture: GeometryEffect {
     func effectValue(size: CGSize) -> ProjectionTransform {
         let t = min(max(progress, 0), 1)
         let u = 1 - t
-        let x = viewport.width * (3 * u * u * t * 0.26 + 3 * u * t * t * 0.52 + t * t * t * 0.66)
+        let direction: CGFloat = side == .right ? 1 : -1
+        let x = direction * viewport.width * (3 * u * u * t * 0.26 + 3 * u * t * t * 0.52 + t * t * t * 0.66)
         let y = viewport.height * (3 * u * u * t * 0.08 - 3 * u * t * t * 0.38 - t * t * t * 1.05)
-        let tilt = -CGFloat.pi / 10 * t * t
+        let tilt = -direction * CGFloat.pi / 10 * t * t
         let scale = 1 - 0.07 * t
         let transform = CGAffineTransform(translationX: size.width / 2 + x, y: size.height / 2 + y)
             .rotated(by: tilt)
@@ -360,6 +355,11 @@ private struct DoubleTapDemoInput: NSViewRepresentable {
 
 #Preview("Double Tap · Messages") {
     OnboardingDoubleTapView(onContinue: {}, demo: .preview(sample: .message))
+        .frame(width: 1180, height: 880)
+}
+
+#Preview("Double Tap · Messages curved entrance") {
+    OnboardingDoubleTapView(onContinue: {}, demo: .preview(sample: .message, arrival: 0.45))
         .frame(width: 1180, height: 880)
 }
 
