@@ -17,6 +17,7 @@ final class OnboardingDoubleTapDemo {
     let swirl = SwirlModel()
     private(set) var windowVisible = false
     private(set) var emailDeparture: CGFloat = 0
+    private(set) var messageArrival: CGFloat = 1
     private(set) var controlsVisible = false
     private(set) var completionVisible = false
     private(set) var spiralVisible = false
@@ -29,7 +30,7 @@ final class OnboardingDoubleTapDemo {
     private var lastPress: TimeInterval?
     private var sequence: Task<Void, Never>?
 
-    private static let departureDuration = 0.78
+    private static let flightDuration = 0.78
 
     var instructionVisible: Bool { controlsVisible && !completionVisible }
     var nextVisible: Bool { phase == .emailReady }
@@ -136,22 +137,31 @@ final class OnboardingDoubleTapDemo {
                     try await Task.sleep(for: .milliseconds(260))
                 } else {
                     // Keep the email opaque until its curved throw clears the top-right.
-                    withAnimation(.timingCurve(0.3, 0, 0.65, 0.3, duration: Self.departureDuration)) {
+                    withAnimation(.timingCurve(0.3, 0, 0.65, 0.3, duration: Self.flightDuration)) {
                         self.emailDeparture = 1
                     }
-                    try await Task.sleep(for: .seconds(Self.departureDuration + 0.04))
+                    try await Task.sleep(for: .seconds(Self.flightDuration + 0.04))
                 }
                 self.windowVisible = false
                 self.sample = .message
                 self.emailDeparture = 0
+                self.messageArrival = self.reduceMotion ? 1 : 0
                 self.replyVisible = false
                 self.resetGesture()
-                // Commit the new window and caret while invisible before its entrance.
+                // Mount Messages beyond the top-left before following the mirrored arc home.
                 try await Task.sleep(for: .milliseconds(30))
-                withAnimation(self.reduceMotion ? .easeOut(duration: 0.25) : .spring(duration: 0.55, bounce: 0.06)) {
+                let arrivalDuration = self.reduceMotion ? 0.25 : Self.flightDuration
+                if self.reduceMotion {
+                    withAnimation(.easeOut(duration: arrivalDuration)) { self.windowVisible = true }
+                } else {
+                    // Reverse the email's timing curve as well as its path: matching momentum
+                    // from the top-left, slowing into the same resting position.
                     self.windowVisible = true
+                    withAnimation(.timingCurve(0.35, 0.7, 0.7, 1, duration: arrivalDuration)) {
+                        self.messageArrival = 1
+                    }
                 }
-                try await Task.sleep(for: .milliseconds(560))
+                try await Task.sleep(for: .seconds(arrivalDuration + 0.04))
                 self.lastPress = nil
                 self.phase = .waiting
                 self.sequence = nil
@@ -164,6 +174,7 @@ final class OnboardingDoubleTapDemo {
         if enabled {
             spiralVisible = false
             swirl.phase = .idle
+            messageArrival = 1
             // Switching Reduce Motion on during a throw must never snap the email back.
             if emailDeparture > 0 { windowVisible = false }
         }
@@ -178,13 +189,14 @@ final class OnboardingDoubleTapDemo {
 
     #if DEBUG
     static func preview(sample: Sample = .email, completed: Bool = false,
-                        departure: CGFloat = 0) -> OnboardingDoubleTapDemo {
+                        departure: CGFloat = 0, arrival: CGFloat = 1) -> OnboardingDoubleTapDemo {
         let demo = OnboardingDoubleTapDemo()
         demo.sample = sample
         let finished = completed && sample == .message
-        demo.phase = departure > 0 ? .switching : (completed ? (finished ? .complete : .emailReady) : .waiting)
+        demo.phase = departure > 0 || arrival < 1 ? .switching : (completed ? (finished ? .complete : .emailReady) : .waiting)
         demo.windowVisible = true
         demo.emailDeparture = departure
+        demo.messageArrival = arrival
         demo.controlsVisible = true
         demo.spiralAtCaret = true
         demo.replyVisible = completed

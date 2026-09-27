@@ -107,7 +107,8 @@ struct KnowledgeSourcesPicker: View {
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
         .sheet(item: $selectedConnector) { source in
-            ConnectorConnectSheet(source: source, connectors: $connectors, onConnect: connectApps)
+            ConnectorConnectSheet(source: source, connectors: $connectors, context: context,
+                                  onConnect: connectApps)
         }
         .onChange(of: backendRaw) { selectedConnector = nil }
         .onReceive(NotificationCenter.default.publisher(for: DirectMCPStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }

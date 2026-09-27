@@ -80,12 +80,16 @@ Migration is prepared by `AppState` before regular scenes and Sidekick start. Fr
 onboarding. CUA retains its existing legacy migration predicate and persistent marker; ordinary CUA
 version changes use the nonblocking shared updater. ChatGPT has separate native pending, deferred and
 ready state, so CUA installation history cannot incorrectly mark native setup as complete.
+An onboarded ChatGPT user enters native migration when prior computer-use readiness, a CUA
+installation receipt or binary, or an earlier deferred migration establishes existing setup history.
+Earlier deferral is treated as unfinished setup. Native completion remains separate from CUA history.
 
 The flow is pitch → shared installation → required grants. Failure is retryable. Completing it
-requires a fresh readiness check and an explicit Done action. Native migration also offers Set up
-later: this restores the rest of the app, while first-use gating still prevents unprepared computer
-tasks. This keeps Settings reachable if the helper requires repair or a newer macOS. Closing or
-minimizing the migration window alone does not release its interface coordination.
+requires a fresh readiness check and an explicit Done action. Both migration paths are mandatory:
+the regular interface stays unavailable until installation and required permissions are ready.
+Closing or minimizing setup does not release the interface, and quitting preserves pending setup for
+the next launch. Errors and permission fixes remain in the setup window. Already-ready installations
+are recognized at launch without requiring another migration.
 
 The native, normal-level window has close, minimize, resize/fullscreen controls, a unified dark title
 bar, and a 560-point content column. Its copy describes preparing computer use for the selected engine. This window has no privacy footer; the app's other trust surfaces retain theirs. Long
