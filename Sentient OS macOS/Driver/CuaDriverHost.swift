@@ -83,6 +83,18 @@ actor CuaDriverHost {
                     stdinText: nil, cwd: nil, timeout: 20,
                     extraEnv: ["CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
                                "CUA_TELEMETRY_ENABLED": "false", "CUA_DRIVER_RS_UPDATE_CHECK": "false"])
+                #if DEBUG
+                // Bounded lifecycle receipts for the isolated signed-host audit; no UI content.
+                let lab = ProcessInfo.processInfo.environment
+                if lab["SENTIENT_SELFTEST"] == "nativecua", let root = lab["LAB_ROOT"], let label = lab["LAB_NAME"] {
+                    let receipt: [String: Any] = ["command": name, "exit": result.status,
+                        "stdout": result.stdout, "stderr": result.stderr, "time": Date().timeIntervalSince1970]
+                    if let data = try? JSONSerialization.data(withJSONObject: receipt, options: [.prettyPrinted, .sortedKeys]) {
+                        let file = URL(fileURLWithPath: root).appendingPathComponent("evidence/\(label).session-\(name)-\(UUID().uuidString).json")
+                        try? data.write(to: file, options: .atomic)
+                    }
+                }
+                #endif
                 guard result.status == 0,
                       let json = try? JSONSerialization.jsonObject(with: Data(result.stdout.utf8)) as? [String: Any],
                       let active = json["active"] as? Bool else { return false }
