@@ -1,5 +1,5 @@
 // Coordinates upgrade setup for the selected computer-use runtime before its first task.
-// CUA retains its legacy migration; native setup has separate state and an explicit deferral.
+// Both migrations hold the regular interface until installation and required grants are ready.
 // Pending work survives relaunch, and reset prevents late installer callbacks reviving a window.
 // Doc: Documentation - Permission Gate & Guide.md
 
@@ -14,7 +14,9 @@ final class ComputerUseUpgrade {
     private init() {}
 
     private static let cuaPendingKey = "computerUse.upgradePending"
-    private static let nativeDeferredKey = "computerUse.nativeUpgradeDeferred"
+    // Older builds allowed native setup to be skipped. Preserve that history as evidence of
+    // unfinished migration, never as permission to bypass setup.
+    private static let legacyNativeDeferredKey = "computerUse.nativeUpgradeDeferred"
     private static let nativePendingKey = "computerUse.nativeUpgradePending"
     private var migrationBackend = ComputerUseBackend.current
     private var pendingKey: String { migrationBackend == .openAI ? Self.nativePendingKey : Self.cuaPendingKey }
@@ -87,7 +89,8 @@ final class ComputerUseUpgrade {
         if migrationBackend == .openAI {
             required = Self.requiresNativeMigration(onboarded: true, pending: pending || isPreview,
                 previouslyUsed: defaults.bool(forKey: HealthCaution.computerUseEverReadyKey)
-                    && !defaults.bool(forKey: Self.nativeDeferredKey),
+                    || CuaDriver.hasInstallationHistory
+                    || defaults.bool(forKey: Self.legacyNativeDeferredKey),
                 nativeCompleted: defaults.bool(forKey: HealthCaution.nativeComputerUseEverReadyKey),
                 ready: ready && !isPreview)
         } else {
@@ -99,6 +102,7 @@ final class ComputerUseUpgrade {
         }
         if ready, !isPreview {
             defaults.removeObject(forKey: pendingKey)
+            if migrationBackend == .openAI { defaults.removeObject(forKey: Self.legacyNativeDeferredKey) }
             HealthCaution.latchComputerUse()
         }
         guard required else { return }
@@ -259,20 +263,11 @@ final class ComputerUseUpgrade {
         completeSetup()
     }
 
-    /// Keep Settings and non-computer features reachable if the native helper needs a repair
-    /// or a newer macOS. First-use gates still prevent an unprepared computer task from starting.
-    func deferNativeSetup() {
-        guard migrationBackend == .openAI, isBlockingInterface else { return }
-        if !isPreview {
-            UserDefaults.standard.set(true, forKey: Self.nativeDeferredKey)
-            UserDefaults.standard.removeObject(forKey: pendingKey)
-        }
-        installGeneration = UUID()
-        releaseInterface()
-    }
-
     private func completeSetup() {
-        if !isPreview { UserDefaults.standard.removeObject(forKey: pendingKey) }
+        if !isPreview {
+            UserDefaults.standard.removeObject(forKey: pendingKey)
+            if migrationBackend == .openAI { UserDefaults.standard.removeObject(forKey: Self.legacyNativeDeferredKey) }
+        }
         releaseInterface()
         Log("ComputerUseUpgrade: setup complete; main interface revealed")
     }
@@ -282,7 +277,7 @@ final class ComputerUseUpgrade {
     func reset() {
         UserDefaults.standard.removeObject(forKey: Self.cuaPendingKey)
         UserDefaults.standard.removeObject(forKey: Self.nativePendingKey)
-        UserDefaults.standard.removeObject(forKey: Self.nativeDeferredKey)
+        UserDefaults.standard.removeObject(forKey: Self.legacyNativeDeferredKey)
         installGeneration = UUID()
         phase = .pitch
         failureLine = nil
@@ -370,14 +365,6 @@ struct ComputerUseUpgradeView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.top, 32)
-            }
-            if model.setup.backend == .openAI {
-                Button("Set up later") { model.deferNativeSetup() }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 18)
             }
         }
         .padding(.horizontal, 44)

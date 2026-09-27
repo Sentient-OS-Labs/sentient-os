@@ -87,10 +87,13 @@ the grant. Uninstall uses `tccutil` to reset only Sentient's Apple Events access
 
 `ComputerUseGate`, its shared permission rows, Settings health and migration all select the same
 runtime. An engine switch from Settings prepares the selected dependency. Onboarding retains its
-existing deferred computer-use setup. Native migration has an explicit Set up later action so repair
-or OS-version requirements cannot trap the rest of the application; the first-use gate still blocks
-unprepared computer tasks. Native readiness has its own persistent latch, separate from old CUA
-history, and Factory Reset clears both readiness and migration state.
+existing deferred computer-use setup. Existing CUA users on ChatGPT complete a mandatory native
+migration before the regular interface and Sidekick start. CUA installation history and earlier
+deferred migrations are recognized even without the old readiness flag. Setup remains pending across
+window closure and relaunch until installation and required grants are ready. Native readiness has
+its own persistent latch, separate from old CUA history, and Factory Reset clears both readiness and
+migration state. Fresh onboarding and later repairs of an already-migrated installation retain their
+existing flows.
 
 ## Validation boundary
 
