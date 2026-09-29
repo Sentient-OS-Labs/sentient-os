@@ -97,6 +97,12 @@ enum Uninstall {
 
         // The cloud copy dies while the Keychain password still exists to authorize the DELETE.
         progress(.cloud)
+        do { try await MailAccountCloud.shared.erase() }
+        catch {
+            lastFailure = "Uninstall paused because saved email addresses couldn't be deleted. Connect to the internet, unlock your Mac, and retry."
+            appState?.isUninstalling = false
+            return false
+        }
         try? await MirrorClient.shared.deleteRemote()
         await beat()
 

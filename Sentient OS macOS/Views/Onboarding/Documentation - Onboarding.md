@@ -17,7 +17,7 @@ Full Disk Access requires resumes exactly where the user left off.
 | `OnboardingPermissionsView.swift` | Step 3: overnight wake → launch at login → Full Disk Access, unlocking sequentially. |
 | `OnboardingReadyView.swift` | Step 4: the source tiles and the big Start Analysis glow. |
 | `OnboardingModelDownloadView.swift` | Shown between Start Analysis and the takeover if the model has not finished landing. |
-| `OnboardingTelemetryConsent.swift` | The film's final park: "We never collect your personal info." with Read More (the privacy policy) and Configure Telemetry (the two toggles, the same keys as Settings). |
+| `OnboardingTelemetryConsent.swift` | The film's final park: "Your content stays private. See what we store." with Read More (the privacy policy) and Configure Telemetry (the two toggles, the same keys as Settings). |
 
 ## The steps
 

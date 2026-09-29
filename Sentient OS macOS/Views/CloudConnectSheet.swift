@@ -7,7 +7,7 @@
 //  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
-//    Done       → trusts the user, selects the source, and dismisses without a probe.
+//    Done       → Gmail confirms and saves the connected email address; Calendar saves selection.
 //    ✕ (top-left) → closes without saving.
 //  Already connected → "Stop reading …" clears selection, not the provider connection.
 //
@@ -50,6 +50,8 @@ struct CloudConnectSheet: View {
 
     private enum Phase { case idle, connected }
     @State private var openedConnectorPage = false
+    @State private var showMailAccountSetup = false
+    @State private var mailSetupEngine: MailAccount.Engine?
     @State private var phase: Phase
 
     init(_ service: Service) {
@@ -101,6 +103,14 @@ struct CloudConnectSheet: View {
         .background(Theme.bg)
         .overlay(alignment: .topLeading) { closeButton.padding(12) }
         .onChange(of: backendRaw) { dismiss() }
+        .sheet(isPresented: $showMailAccountSetup) {
+            if let engine = mailSetupEngine {
+                MailAccountSetupSheet(engine: engine, provider: .gmail) {
+                    guard ModelBackend.current.rawValue == engine.rawValue else { return }
+                    confirmDone()
+                }
+            }
+        }
     }
 
     // MARK: - The two buttons (+ the ✕)
@@ -171,6 +181,15 @@ struct CloudConnectSheet: View {
     // MARK: - Done: accept the user's confirmation
 
     private func done() {
+        if service == .gmail {
+            mailSetupEngine = MailAccount.Engine(rawValue: ModelBackend.current.rawValue)
+            showMailAccountSetup = mailSetupEngine != nil
+            return
+        }
+        confirmDone()
+    }
+
+    private func confirmDone() {
         if !connected { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
         // Keep the production connection key as the user's declaration for task routing.
         ConnectorCensus.confirmSelection(slug: service == .gmail ? "gmail" : "google-calendar",

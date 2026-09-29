@@ -23,6 +23,8 @@ struct ConnectorConnectSheet: View {
     @State private var disconnecting = false
     @State private var message: String?
     @State private var operation: Task<Void, Never>?
+    @State private var showMailAccountSetup = false
+    @State private var mailSetupEngine: MailAccount.Engine?
 
     init(source: ConnectorSource, connectors: Binding<[ConnectorCensus.DetectedConnector]>,
          context: KnowledgeSourcesPicker.Context = .settings,
@@ -141,6 +143,14 @@ struct ConnectorConnectSheet: View {
             if boundConnectorID == nil { boundConnectorID = id }
         }
         .onDisappear(perform: cancelOperation)
+        .sheet(isPresented: $showMailAccountSetup) {
+            if let engine = mailSetupEngine {
+                MailAccountSetupSheet(engine: engine, provider: source.serviceSlug == "gmail" ? .gmail : .outlook) {
+                    guard ModelBackend.current.rawValue == engine.rawValue else { return }
+                    confirmDone()
+                }
+            }
+        }
     }
 
     @ViewBuilder private var serviceIcon: some View {
@@ -270,6 +280,15 @@ struct ConnectorConnectSheet: View {
     }
 
     private func done() {
+        if !usesDirect && (source.serviceSlug == "gmail" || OutlookMailConnector.isMail(source.serviceSlug)) {
+            mailSetupEngine = MailAccount.Engine(rawValue: origin?.rawValue ?? "")
+            showMailAccountSetup = mailSetupEngine != nil
+            return
+        }
+        confirmDone()
+    }
+
+    private func confirmDone() {
         if !usesDirect { ConnectorCensus.confirmSelection(slug: selectionSlug, reconnected: openedConnectorPage) }
         if ConnectorRegistry.kbEligible(selectionSlug),
            UserDefaults.standard.object(forKey: ConnectorRegistry.kbKey(selectionSlug)) == nil {

@@ -21,6 +21,7 @@ measure, one green.
 | `ShareKnowledgePane.swift` | Give AIs Knowledge. |
 | `SystemPane.swift` | System. |
 | `HealthPane.swift` | Permissions & Health. |
+| `MailAccountSetupSheet.swift` · `MailAccountSettingsGroup.swift` · `MailAccountMigration.swift` | Shared email-address disclosure, Claude Gmail entry, saved-address management and existing-installation prompt. Storage and security: `Cloud/Mail Accounts/Documentation - Connected Email Accounts.md`. |
 | `UninstallView.swift` · `PrivacyPolicyView.swift` | The farewell sheet and the one-screen privacy policy. |
 
 ## The panes
@@ -61,7 +62,7 @@ sharing on/off; the pane carries no toggle), live `stats()` activity when sharin
 launch-at-login toggle with a keep-Sentient-alive confirm on the way off, the Updates group with the
 version and Check for Updates Now), privacy (the two toggles: crash reports → Sentry, analytics →
 TelemetryDeck, each applying live; the always-on core-tier disclosure appears under the analytics
-toggle when it is off; How We Protect Your Data → the `PrivacyPolicyView` sheet), and behind a
+toggle when it is off; How We Protect Your Data → the `PrivacyPolicyView` sheet; saved email addresses can be reviewed, synced or deleted separately), and behind a
 red-tinted hairline the exit door: **Reset Sentient…** (the shared `FactoryReset`, which rewinds to the
 start of onboarding and dismisses Settings; locked while `PipelineActivity` reports a run) and
 **Uninstall Sentient…** (the farewell sheet).

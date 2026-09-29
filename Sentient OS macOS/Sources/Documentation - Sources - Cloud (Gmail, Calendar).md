@@ -27,11 +27,18 @@ Analysis popover, onboarding's ready screen, and Dev Tools. Flow: **Connect** op
 connector page (`GmailConnect.connectorURL` / `CalendarConnect.connectorURL` pick per backend:
 OpenAI's hosted connector page on ChatGPT, claude.ai's connector directory on Claude; the sheet's
 copy follows, and the sources group header reads "Through Your ChatGPT" / "Through Your Claude")
-where the user links Google; **Done** waits 1 s, then runs `probeConnected()`, a real headless run
-(luna tier — `gpt-5.6-luna` / `haiku`, low effort, read-only) that must reply exactly YES or NO off
-an actual connector read. YES persists `dbg.gmail.connected` + `dbg.run.gmail` (calendar twins),
-shows a green beat, and auto-dismisses; NO shows a quiet retry line. The "Stop reading …" link fully
-disconnects (both flags cleared); reconnecting is the whole flow again.
+where the user links Google. Calendar's **Done** saves the user's declaration and selects the source.
+Gmail's **Done** opens the connected-email confirmation sheet: Codex discovers the address from its
+connector metadata; Claude Gmail asks the user for the linked address. The sheet discloses Supabase
+storage before saving. A confirmed address is persisted securely on the Mac and synced, with an
+explicit pending state when offline, before the source selection finishes. No email message is read
+for identity collection. "Stop reading" turns off knowledge selection; it does not unlink the provider
+or delete saved contact metadata.
+
+Outlook Mail's connector popup uses the same confirmation sheet, reading Codex metadata or Claude
+Microsoft 365 `get_me`. Settings → System can review or delete saved addresses. Account storage,
+RLS, retention and deletion are documented in `Cloud/Mail Accounts/Documentation - Connected Email
+Accounts.md`. Message ingestion and its existing per-run identity checks remain independent.
 
 ## How reads work
 

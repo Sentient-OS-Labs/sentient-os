@@ -114,7 +114,7 @@ struct ConnectAIsView: View {
                     .frame(maxWidth: 440)
                     .padding(.top, 20)
                 VStack(alignment: .leading, spacing: 10) {
-                    veilPillar("lock.fill", "Zero-access encryption. Your knowledge base is sealed on this Mac with a key only your Mac and your private link hold; our servers store nothing but ciphertext, with no key beside it. Hack them and there is nothing to unlock.")
+                    veilPillar("lock.fill", "Zero-access encryption. Your knowledge base is sealed on this Mac with a key only your Mac and your private link hold. The knowledge-base mirror stores ciphertext, separately from your saved email addresses.")
                     veilPillar("chevron.left.forwardslash.chevron.right", "The server in between is open source. Everything's verifiable.")
                     veilPillar("key.fill", "No account. Turn it off anytime and the cloud copy is deleted on the spot.")
                 }

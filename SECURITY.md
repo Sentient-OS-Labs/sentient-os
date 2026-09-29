@@ -23,6 +23,7 @@ Everything Sentient OS ships is in scope:
 
 - The macOS app (this repository)
 - The hosted MCP mirror at `mcp.sentient-os.ai` and its server code
+- Connected-email storage in Supabase and its Auth/RLS boundary
 - Our release and update infrastructure
 
 We are especially interested in reports that break our privacy invariants, because they are security claims, not marketing:
@@ -30,12 +31,33 @@ We are especially interested in reports that break our privacy invariants, becau
 1. Raw data never leaves the device; cloud models only ever see PII-stripped summaries.
 2. Items judged sensitive on-device leave zero trace downstream.
 3. The MCP mirror stores only ciphertext encrypted on the user's Mac (AES-256-GCM); the server never sees plaintext at rest.
-4. No accounts: a mirror cannot be tied to a human identity.
+4. The mirror secret and encryption key are independent of the installation identity used for connected-email storage.
 5. Deletion is total and self-serve; an unrefreshed mirror auto-deletes after 30 days.
 
 If you find a way to violate any of these, we especially want to know.
 
 When testing the live mirror, test against your own data and your own mirror URL. Please avoid disruptive testing (denial of service, resource exhaustion) against `mcp.sentient-os.ai`, and if you believe you can reach another user's vault, stop at the minimum proof needed and report it.
+
+## Connected-email storage
+
+`supabase/migrations/` defines the connected-email schema. Its public table has enabled and forced
+row-level security, explicit owner policies for every CRUD operation, and restricted column grants.
+The application embeds only a publishable key. Each installation authenticates independently and
+keeps its session in Keychain; an email address is metadata, never an authentication credential.
+
+The snapshot RPC is `SECURITY INVOKER` and derives ownership from `auth.uid()`. Its only privileged
+companion is the parameterless self-deletion RPC: with a fixed empty search path, it deletes only the
+caller's anonymous Auth identity, cascading to its records. Unauthenticated callers cannot execute
+either RPC. Privileged database administrators remain able to access records.
+
+The Supabase advisor reports anonymous-user policies and authenticated execution of the self-deletion
+definer function. Both are intentional and bounded by these ownership checks; they are not public
+anonymous access. `Scripts/test_mail_account_rls.py` exercises isolation using two disposable Auth
+identities and no service-role credential. Do not replace these policies with unrestricted access.
+
+Email records are retained until replaced or deleted by their installation. They do not inherit the
+mirror's 30-day lease. Server records contain client-reported account information, which must never
+be treated as verified ownership or authorization to access a mailbox.
 
 ## Why Sentient needs the access it does
 

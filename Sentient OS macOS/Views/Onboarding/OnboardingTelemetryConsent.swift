@@ -2,7 +2,7 @@
 //  OnboardingTelemetryConsent.swift
 //  Sentient OS macOS
 //
-//  The film's hood-park privacy block — "We never collect your personal info." over two
+//  The film's hood-park privacy block — a link to the storage disclosure over two
 //  capsules, bottom-left on the hood Continue's row: Read More (the Settings Privacy Policy
 //  sheet, PrivacyPolicyView, reused verbatim) and Configure Telemetry, which blooms a small
 //  anchored card with the two anonymous-telemetry toggles (crash reports → Sentry ·
@@ -62,7 +62,7 @@ struct OnboardingTelemetryConsent: View {
 
     private var pillBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("We never collect your personal info.")
+            Text("Your content stays private. See what we store.")
                 .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
             HStack(spacing: 10) {
                 SettingsPillButton(title: "Read More") { showPrivacyPolicy = true }

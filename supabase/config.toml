@@ -1,0 +1,16 @@
+project_id = "sentient-os-app-data"
+
+[auth]
+enable_signup = true
+enable_anonymous_sign_ins = true
+enable_refresh_token_rotation = true
+refresh_token_reuse_interval = 10
+
+[auth.rate_limit]
+anonymous_users = 30
+
+[db.migrations]
+enabled = true
+
+[db.seed]
+enabled = false

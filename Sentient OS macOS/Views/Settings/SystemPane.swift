@@ -44,6 +44,7 @@ struct SystemPane: View {
                 SettingsHairline(opacity: 0.12)
                     .padding(.vertical, -8)
                 privacyGroup
+                MailAccountSettingsGroup()
                 protectionGroup
                 SettingsHairline(color: Theme.Ink.red, opacity: 0.25)
                     .padding(.vertical, -8)
@@ -128,7 +129,7 @@ struct SystemPane: View {
     private var privacyGroup: some View {
         SettingsGroup(label: "Privacy") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Sentient never collects any of your personal data, nor any AI analysis of it. Privacy is a core principle that extends to every part of Sentient, and the whole stack will always remain open source.")
+                SettingsProse("Your files and message content stay out of Sentient's account database. When you confirm a connected email account, Sentient stores its address in Supabase. You can review and delete those records below. Diagnostics remain separate and contain no email addresses.")
                     .padding(.bottom, 6)
                 SettingToggleLine(title: "Share anonymous crash reports",
                                   sub: "Privacy-friendly, structure-only reports that help us fix your bugs; never your content.",
@@ -159,7 +160,7 @@ struct SystemPane: View {
     private var protectionGroup: some View {
         SettingsGroup(label: "How We Protect Your Data") {
             HStack(spacing: 14) {
-                Text("We never collect your personal info.")
+                Text("See what stays local and what is stored.")
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
                 SettingsPillButton(title: "Read More") { showPrivacyPolicy = true }
             }
@@ -194,7 +195,7 @@ struct SystemPane: View {
                     let completed = await FactoryReset.run(appState: appState)
                     resetting = false
                     if completed { dismiss() }
-                    else { resetError = "The saved app connections couldn't be removed from Keychain. Unlock your Mac and retry Reset." }
+                    else { resetError = "Reset couldn't finish removing saved account data. Connect to the internet, unlock your Mac, and try again." }
                 }
             }
         } message: {
