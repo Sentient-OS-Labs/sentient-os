@@ -42,7 +42,7 @@ struct CodexSetupView: View {
         .frame(width: 560, height: 640)
         .background(Theme.bg)
         .onAppear {
-            codex.refreshCuaDriver()
+            ComputerUseSetup.current.refresh()
             Task { await codex.refreshInstalled() }
             Task { await codex.refreshLoginStatus() }
         }
@@ -94,23 +94,25 @@ struct CodexSetupView: View {
     // MARK: Step 3 — the computer-use driver
 
     private var computerUseCard: some View {
-        stepCard(3, "Install the computer-use driver", done: codex.cuaDriverReady) {
-            if codex.cuaDriverReady {
-                hint("cua-driver \(CuaDriver.version) is installed; Sentient can act inside your apps in the background.")
-                Button { Task { await codex.setupCuaDriver(force: true) } } label: {
-                    buttonLabel("arrow.triangle.2.circlepath", "Re-install the driver", busy: codex.settingUpCuaDriver)
+        stepCard(3, "Install the computer-use driver", done: ComputerUseSetup.current.ready) {
+            if ComputerUseSetup.current.ready {
+                hint("\(ComputerUseBackend.current.name) is installed; Sentient can act inside your apps in the background.")
+                Button { Task { await ComputerUseSetup.current.install(force: true) } } label: {
+                    buttonLabel("arrow.triangle.2.circlepath", "Re-install the driver", busy: ComputerUseSetup.current.isInstalling)
                 }
                 .buttonStyle(.bordered).tint(Theme.secondary).controlSize(.small)
-                .disabled(codex.settingUpCuaDriver)
+                .disabled(ComputerUseSetup.current.isInstalling)
             } else {
-                Button { Task { await codex.setupCuaDriver() } } label: {
-                    buttonLabel("cpu.fill", "Install the driver", busy: codex.settingUpCuaDriver)
+                Button { Task { await ComputerUseSetup.current.install() } } label: {
+                    buttonLabel("cpu.fill", "Install the driver", busy: ComputerUseSetup.current.isInstalling)
                 }
                 .buttonStyle(.bordered).tint(Theme.Ink.green)
-                .disabled(codex.settingUpCuaDriver)
+                .disabled(ComputerUseSetup.current.isInstalling)
             }
-            statusLine(codex.cuaDriverStatus)
-            hint("Downloads the pinned cua-driver (~40 MB) from its GitHub release, verifies its checksum and signature, and installs it for Sentient alone. Needs neither codex nor a login.")
+            statusLine(ComputerUseSetup.current.status)
+            hint(ComputerUseBackend.current == .openAI
+                 ? "Downloads OpenAI's signed computer-use helper directly from OpenAI and reuses your Codex login."
+                 : "Downloads the pinned CUA driver, verifies its checksum and signature, and installs it for Sentient.")
         }
     }
 

@@ -92,12 +92,17 @@ enum HealthCaution {
     /// ComputerUseGate at its moment of truth. FactoryReset clears it: a rebuild re-runs the gate.
     static let computerUseEverReadyKey = "computerUse.everReady"
 
+    static let nativeComputerUseEverReadyKey = "computerUse.nativeEverReady"
+
     static func latchComputerUse() {
         UserDefaults.standard.set(true, forKey: computerUseEverReadyKey)
+        if ComputerUseBackend.current == .openAI {
+            UserDefaults.standard.set(true, forKey: nativeComputerUseEverReadyKey)
+        }
     }
 
     private static var computerUseEverReady: Bool {
-        UserDefaults.standard.bool(forKey: computerUseEverReadyKey)
+        UserDefaults.standard.bool(forKey: ComputerUseBackend.current == .openAI ? nativeComputerUseEverReadyKey : computerUseEverReadyKey)
     }
 
     // MARK: The probe
@@ -152,22 +157,20 @@ enum HealthCaution {
         // (AXIsProcessTrusted answers live; the Screen Recording preflight is this process's view,
         // so the FDA-backed TCC read rides along as the live truth when it's available).
         if engineBinaryPresent, !dismissed.contains("computerUse") {
-            if !CuaDriver.isInstalled {
+            if !ComputerUseBackend.current.isInstalled || !ComputerUseSetup.current.ready {
                 // The update-migration window (ComputerUseUpgrade) presents on this exact state at
                 // home open, with the download as ITS one glowing fix — while it's up, a red
                 // banner behind it would be the same message twice. The banner still covers the
                 // window-less case (the driver vanishing mid-session; the next home open raises
                 // the window and this rung goes quiet again).
                 if computerUseEverReady, !ComputerUseUpgrade.shared.isPresenting,
-                   CodexSetup.shared.cuaUpdateNotice == .hidden {
+                   ComputerUseSetup.current.updateNotice == .hidden {
                     return .computerUseBroken(payloadGone: true)
                 }
             } else {
-                let hands = Permissions.hasAccessibility()
-                let eyes = Permissions.hasScreenRecording()
-                    || (fda && Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
-                                                        clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"))
-                if hands && eyes {
+                ComputerUseGate.shared.refresh()
+                await ComputerUseGate.shared.awaitAutomationRefresh()
+                if ComputerUseGate.shared.allRequiredGranted {
                     latchComputerUse()   // healthy — arm the latch so future drift banners
                 } else if computerUseEverReady {
                     return .computerUseBroken(payloadGone: false)

@@ -454,7 +454,7 @@ enum DirectMCPTests {
             default: throw Failure("no reviewed live test")
             }
             var inv = CodexCLI.Invocation(prompt: "Call \(tool) once with \(arguments). Do not fetch content, repeat returned data, or call any other tool. Reply with exactly READ_OK if the tool succeeded, otherwise READ_FAILED.")
-            inv.feature = "mcp-read"; inv.model = .gpt56luna; inv.effort = .low; inv.timeout = 120
+            inv.feature = "mcp-read"; inv.model = .gpt6luna; inv.effort = .low; inv.timeout = 120
             inv.webSearch = false; inv.connectorOnlyRead = true; inv.mcpReadConnectors = [connection.slug]
             inv.mcpReadToolNames = [tool]
             let envelope = try await FrontierRun.run(inv)
@@ -545,7 +545,7 @@ enum DirectMCPTests {
     static func renderConnectView() async {
         let slug = ProcessInfo.processInfo.environment["LAB_SLUG"] ?? "granola"
         guard let source = ConnectorSource.catalog(with: []).first(where: { $0.serviceSlug == slug }) else { exit(1) }
-        let view = ConnectorConnectSheet(source: source, connectors: .constant([]), onConnect: {})
+        let view = ConnectorConnectSheet(source: source, connectors: .constant([]))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2

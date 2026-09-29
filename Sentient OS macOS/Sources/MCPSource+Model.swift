@@ -24,7 +24,7 @@ extension MCPSource {
     static func modelInvocation(prompt: String, schema: String, claudeModel: ClaudeCLI.Model?) -> CodexCLI.Invocation {
         var invocation = CodexCLI.Invocation(prompt: prompt)
         invocation.feature = "mcp-read"
-        invocation.model = .gpt56luna
+        invocation.model = .gpt6luna
         invocation.claudeModel = claudeModel
         invocation.effort = .medium
         invocation.sandbox = .readOnly

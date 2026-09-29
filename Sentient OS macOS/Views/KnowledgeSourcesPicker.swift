@@ -12,6 +12,7 @@ import AppKit
 
 struct KnowledgeSourcesPicker: View {
     enum Context { case settings, onboarding }
+    enum Section { case connectors }
 
     var context: Context = .settings
     var onSelectionCountChange: (Int) -> Void = { _ in }
@@ -55,7 +56,7 @@ struct KnowledgeSourcesPicker: View {
     @State private var selectionCount = SourceSelection.selectionCount
 
     var body: some View {
-        VStack(alignment: .leading, spacing: context == .settings ? 30 : 26) {
+        VStack(alignment: .leading, spacing: context == .settings ? 30 : 20) {
             if context == .settings {
                 Text("Your Sentient needs at least four sources to truly know you.")
                     .font(.system(size: 12.5))
@@ -64,9 +65,12 @@ struct KnowledgeSourcesPicker: View {
                     .padding(.top, -16)
             }
             if !fdaGranted { fdaLine }
-            foldersGroup
+            emailAndCalendarGroup
+                .id(Section.connectors)
             chatsGroup
-            connectorsGroup
+            SettingsHairline()
+            otherAppsGroup
+            foldersGroup
         }
         .task { fdaGranted = Permissions.hasFullDiskAccess() }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
@@ -107,7 +111,7 @@ struct KnowledgeSourcesPicker: View {
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
         .sheet(item: $selectedConnector) { source in
-            ConnectorConnectSheet(source: source, connectors: $connectors, onConnect: connectApps)
+            ConnectorConnectSheet(source: source, connectors: $connectors, context: context)
         }
         .onChange(of: backendRaw) { selectedConnector = nil }
         .onReceive(NotificationCenter.default.publisher(for: DirectMCPStore.changed).receive(on: RunLoop.main)) { _ in updateConnectors() }
@@ -128,67 +132,138 @@ struct KnowledgeSourcesPicker: View {
     // MARK: - Local sources
 
     private var foldersGroup: some View {
-        SettingsGroup(label: "Folders") {
+        SettingsGroup(label: "Folders on this Mac") {
             ChipFlow {
-                SettingsChip(label: "Desktop", on: runDesktop) { toggleConnector($runDesktop) }
-                SettingsChip(label: "Downloads", on: runDownloads) { toggleConnector($runDownloads) }
-                SettingsChip(label: "Documents", on: runDocuments) { toggleConnector($runDocuments) }
+                KnowledgeSourcePill(label: "Desktop", systemImage: "desktopcomputer", selected: runDesktop) {
+                    toggleConnector($runDesktop)
+                }
+                KnowledgeSourcePill(label: "Downloads", systemImage: "arrow.down.to.line", selected: runDownloads) {
+                    toggleConnector($runDownloads)
+                }
+                KnowledgeSourcePill(label: "Documents", systemImage: "doc.text", selected: runDocuments) {
+                    toggleConnector($runDocuments)
+                }
                 ForEach(customRoots, id: \.self) { url in
-                    SettingsChip(label: url.lastPathComponent, detail: "✕", on: true) {
+                    KnowledgeSourcePill(label: url.lastPathComponent, systemImage: "folder",
+                                        selected: true, trailingSymbol: "xmark") {
                         CustomRoots.remove(url)
                     }
+                    .help("Remove \(url.lastPathComponent) from analysis.")
                 }
-                SettingsChip(label: "+ Add Folder", on: false, isAction: true) { chooseFolder() }
+                KnowledgeSourcePill(label: "Add Folder", systemImage: "folder.badge.plus",
+                                    isAction: true, action: chooseFolder)
             }
         }
     }
 
     private var chatsGroup: some View {
-        SettingsGroup(label: "Chats & Notes") {
-            ChipFlow {
-                if WhatsAppSource.isInstalled {
-                    SettingsChip(label: "WhatsApp",
-                                 detail: whatsappChats.isEmpty ? nil : "\(whatsappChats.count) chats",
-                                 on: runWhatsApp && !whatsappChats.isEmpty) { showWhatsAppPicker = true }
+        SettingsGroup(label: "Your conversations") {
+            VStack(alignment: .leading, spacing: 10) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 18) { conversationPills }
+                    VStack(spacing: 10) { conversationPills }
                 }
-                SettingsChip(label: "iMessage",
-                             detail: imessageChats.isEmpty ? nil : "\(imessageChats.count) chats",
-                             on: runIMessage && !imessageChats.isEmpty) { showIMessagePicker = true }
-                SettingsChip(label: "Apple Notes", on: runNotes) { toggleConnector($runNotes) }
+                sourceNote("Understood privately using Sentient's on-device LLM. Your chats never leave this device.",
+                           symbol: "lock")
             }
         }
+    }
+
+    @ViewBuilder private var conversationPills: some View {
+        if WhatsAppSource.isInstalled {
+            KnowledgeSourcePill(label: "WhatsApp",
+                                detail: whatsappChats.isEmpty ? "Choose the chats that matter"
+                                    : "\(whatsappChats.count) chats selected · Manage",
+                                asset: "WhatsAppMark", selected: runWhatsApp && !whatsappChats.isEmpty,
+                                featured: true) { showWhatsAppPicker = true }
+                .frame(minWidth: 235)
+        }
+        KnowledgeSourcePill(label: "iMessage",
+                            detail: imessageChats.isEmpty ? "Choose the chats that matter"
+                                : "\(imessageChats.count) chats selected · Manage",
+                            asset: "IMessageMark", selected: runIMessage && !imessageChats.isEmpty,
+                            featured: true) { showIMessagePicker = true }
+            .frame(minWidth: 235)
     }
 
     // MARK: - Hosted and direct connectors
 
-    private var connectorsGroup: some View {
-        SettingsGroup(label: "Connectors") {
+    private var emailAndCalendarGroup: some View {
+        SettingsGroup(label: "Email & Calendar") {
             VStack(alignment: .leading, spacing: 12) {
-                SettingsProse("Read through your own connectors, never our servers.")
-                ChipFlow {
-                    SettingsChip(label: "Gmail", on: runGmail,
-                                 locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
-                    SettingsChip(label: "Google Calendar", on: runCalendar,
-                                 locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
-                    ForEach(connectorSources) { source in
-                        ConnectorPill(source: source,
-                                      locked: source.usesHostedConnection
-                                          ? CodexAuth.connectorsLocked : CodexAuth.knowledgeBaseOnly) {
-                            selectedConnector = source
-                        }
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 18) {
+                        emailColumn
+                        calendarColumn
                     }
-                    if context == .settings {
-                        SettingsChip(label: "+ Connect Apps", on: false, isAction: true,
-                                     locked: CodexAuth.connectorsLocked, action: connectApps)
+                    VStack(alignment: .leading, spacing: 18) {
+                        emailColumn
+                        calendarColumn
                     }
                 }
+                sourceNote("Connect through your own \(ModelBackend.current == .claude ? "Claude" : "ChatGPT") account, never our servers.",
+                           symbol: "lock")
             }
-            .animation(.easeInOut(duration: 0.35), value: connectors)
+        } trailing: {
+            Label("Recommended", systemImage: "sparkles")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.white.opacity(0.65))
         }
     }
 
-    private func connectApps() {
-        NSWorkspace.shared.open(ConnectorCensus.directoryURL)
+    private var emailColumn: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            KnowledgeSourcePill(label: "Gmail", asset: "GmailMark", selected: runGmail,
+                                featured: true, locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
+            ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
+                connectorPill(source, featured: true)
+            }
+        }
+        .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var calendarColumn: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            KnowledgeSourcePill(label: "Google Calendar", asset: "GoogleCalendarMark", selected: runCalendar,
+                                featured: true, locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
+            ForEach(connectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
+                connectorPill(source, featured: true)
+            }
+        }
+        .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var otherAppsGroup: some View {
+        SettingsGroup(label: "More of your world") {
+            VStack(alignment: .leading, spacing: 12) {
+                ChipFlow {
+                    ForEach(connectorSources.filter {
+                        !["outlook-mail", "outlook-calendar"].contains($0.serviceSlug)
+                    }) { source in
+                        connectorPill(source)
+                    }
+                    KnowledgeSourcePill(label: "Apple Notes", asset: "AppleNotesMark", selected: runNotes) {
+                        toggleConnector($runNotes)
+                    }
+                    // Connect More Apps is hidden for this release until discovery can
+                    // reliably notice new hosted connections. Curated setup remains available.
+                }
+            }
+        }
+    }
+
+    private func connectorPill(_ source: ConnectorSource, featured: Bool = false) -> some View {
+        ConnectorPill(source: source,
+                      locked: source.usesHostedConnection ? CodexAuth.connectorsLocked : CodexAuth.knowledgeBaseOnly,
+                      featured: featured) { selectedConnector = source }
+    }
+
+    private func sourceNote(_ text: String, symbol: String? = nil) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            if let symbol { Image(systemName: symbol).font(.system(size: 9)) }
+            Text(text).fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.58))
     }
 
     private func updateConnectors() {

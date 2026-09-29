@@ -2,7 +2,7 @@
 //  CuaDriverSetup.swift
 //  Sentient OS macOS  ·  Driver/
 //
-//  Puts the pinned cua-driver binary on the user's Mac — step 3 of Codex setup (CodexSetup owns
+//  Puts the pinned cua-driver binary on the user's Mac — the CUA branch of computer-use setup (ComputerUseSetup owns
 //  the flow; onboarding arms it in the background two minutes into the first analysis).
 //
 //  The chain, in order, each step able to say no:
@@ -16,6 +16,7 @@
 //  Any failure leaves the previous install untouched and the staging directory swept.
 //
 //  Key entry points: install(force:onLine:) · removeAll()
+//  Doc: Driver/Documentation - Driver (cua-driver).md
 //
 //
 
@@ -23,20 +24,6 @@ import CryptoKit
 import Foundation
 
 enum CuaDriverSetup {
-
-    enum Progress: Sendable, Equatable {
-        case downloading(Double?), verifying, unpacking, checkingSignature, checkingVersion, installing, ready
-
-        var message: String {
-            switch self {
-            case .downloading: "Downloading…"
-            case .verifying, .checkingSignature, .checkingVersion: "Verifying update…"
-            case .unpacking: "Preparing computer use…"
-            case .installing: "Finishing up…"
-            case .ready: "Computer use is up to date."
-            }
-        }
-    }
 
     enum SetupError: LocalizedError {
         case download(String), integrity(String), extract(String), signature(String), smoke(String), install(String)
@@ -58,7 +45,7 @@ enum CuaDriverSetup {
     /// version is already in place (pass `force` to re-fetch it). Streams human-readable progress to
     /// `onLine`, the same convention as every other setup step.
     static func install(force: Bool = false,
-                        onProgress: @escaping @MainActor @Sendable (Progress) -> Void = { _ in },
+                        onProgress: @escaping @MainActor @Sendable (ComputerUseSetup.Progress) -> Void = { _ in },
                         onLine: @escaping @Sendable (String) -> Void) async throws {
         if !force, CuaDriver.isInstalled { onLine("✓ Cua driver already installed"); return }
 
@@ -73,7 +60,7 @@ enum CuaDriverSetup {
         onLine("Downloading the Cua driver (~\(CuaDriver.tarballBytes / 1_048_576) MB)…")
         onProgress(.downloading(nil))
         let tarball = staging.appendingPathComponent("cua-driver.tar.gz")
-        try await download(CuaDriver.tarballURL, to: tarball) { fraction in
+        try await DependencyDownload.run(CuaDriver.tarballURL, to: tarball) { fraction in
             Task { @MainActor in onProgress(.downloading(fraction)) }
         }
         try Task.checkCancellation()
@@ -159,33 +146,6 @@ enum CuaDriverSetup {
 
     // MARK: Plumbing
 
-    /// Download with byte progress. The delegate moves the temporary file before returning from
-    /// its completion callback, then resumes the awaiting installer.
-    private static func download(_ url: URL, to dest: URL,
-                                 onProgress: @escaping @Sendable (Double?) -> Void) async throws {
-        let cfg = URLSessionConfiguration.default
-        cfg.timeoutIntervalForResource = 900   // 15 min ceiling for a ~40 MB transfer
-        cfg.timeoutIntervalForRequest = 60
-        let delegate = DownloadProgress(destination: dest, onProgress: onProgress)
-        let session = URLSession(configuration: cfg, delegate: delegate, delegateQueue: nil)
-        defer { session.finishTasksAndInvalidate() }
-        do {
-            try await withTaskCancellationHandler {
-                try Task.checkCancellation()
-                try await withCheckedThrowingContinuation { continuation in
-                    delegate.begin(continuation)
-                    session.downloadTask(with: url).resume()
-                }
-            } onCancel: {
-                session.invalidateAndCancel()
-            }
-        } catch let error as SetupError {
-            throw error
-        } catch {
-            throw SetupError.download((error as? LocalizedError)?.errorDescription ?? "\(error)")
-        }
-    }
-
     /// Streamed SHA-256 — the file never lands in memory whole.
     private static func sha256(of url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
@@ -206,56 +166,6 @@ enum CuaDriverSetup {
         return (result.status, result.stdout + result.stderr)
     }
 
-}
-
-/// URLSession retains this delegate for its async download. Byte counts are real; an unknown
-/// content length stays indeterminate. Only the UI consumer hops to the main actor.
-private final class DownloadProgress: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    let destination: URL
-    let onProgress: @Sendable (Double?) -> Void
-    private let lock = NSLock()
-    private var continuation: CheckedContinuation<Void, Error>?
-
-    init(destination: URL, onProgress: @escaping @Sendable (Double?) -> Void) {
-        self.destination = destination
-        self.onProgress = onProgress
-    }
-
-    func begin(_ continuation: CheckedContinuation<Void, Error>) {
-        lock.lock(); defer { lock.unlock() }
-        self.continuation = continuation
-    }
-
-    private func finish(_ result: Result<Void, Error>) {
-        lock.lock()
-        let pending = continuation
-        continuation = nil
-        lock.unlock()
-        pending?.resume(with: result)
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
-                    totalBytesExpectedToWrite: Int64) {
-        onProgress(totalBytesExpectedToWrite > 0
-            ? min(1, max(0, Double(totalBytesWritten) / Double(totalBytesExpectedToWrite))) : nil)
-    }
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didFinishDownloadingTo location: URL) {
-        do {
-            guard let http = downloadTask.response as? HTTPURLResponse, http.statusCode == 200 else {
-                throw CuaDriverSetup.SetupError.download("HTTP \((downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0)")
-            }
-            // The delegate's temporary file is only valid until this callback returns.
-            try FileManager.default.moveItem(at: location, to: destination)
-            finish(.success(()))
-        } catch { finish(.failure(error)) }
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        if let error { finish(.failure(error)) }
-    }
 }
 
 private extension String {

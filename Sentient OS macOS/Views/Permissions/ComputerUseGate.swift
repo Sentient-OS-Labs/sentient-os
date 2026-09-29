@@ -1,24 +1,7 @@
-//
-//  ComputerUseGate.swift
-//  Sentient OS macOS
-//
-//  The first-use permission gate for everything that acts on the Mac. Every computer-use surface
-//  (the home command bar, Sidekick's hotkey, a proactive card's fire) funnels through
-//  `intercept(_:)`: while any REQUIRED action grant is missing — Sentient's own Accessibility (the
-//  cua driver's hands) and Screen Recording (its eyes) — it stashes the pending action, raises the
-//  one-time setup window (ComputerUseGateView), and fires the action when the user taps Continue.
-//  The driver runs inside Sentient's responsibility chain, so macOS answers its checks with
-//  Sentient's grants: the user grants twice, to the app they already trust, and no helper app ever
-//  appears in System Settings. Microphone & Speech rides along as an OPTIONAL row (Sidekick's
-//  voice): missing it never gates anything — the notch's mic stays off while typed commands still
-//  work. The optional grant is offered exactly once (a persisted flag), and a MIC CLICK against a
-//  DENIED mic re-raises the window as a non-blocking fix surface (presentVoiceFixIfDenied — a
-//  denied grant has no native prompt left to show). Closing the window instead cancels the pending
-//  action. All required grants green and the optional offered means it never appears at all.
-//  Status probes reuse Permissions/VoiceCapture.
-//
-//  Key methods: intercept(_:) · refresh() · continueNow()
-//
+// Holds user-fired computer tasks until the selected runtime and its required grants are ready.
+// Native OpenAI grants and CUA's Sentient grants share the same gate; voice remains optional.
+// Key methods: intercept(), refresh(), requestAutomation(), continueNow().
+// Doc: Documentation - Permission Gate & Guide.md
 
 import AppKit
 import AVFoundation
@@ -53,10 +36,63 @@ final class ComputerUseGate {
     /// responsible app in the chain that spawned it.
     private(set) var sentientAccessibility = false
 
-    /// The REQUIRED grants — what the gate holds actions for: Sentient's Accessibility (the
-    /// driver's hands) and Screen Recording (its eyes). Microphone & Speech is optional — voice is
-    /// one of several ways to ask, never the thing that acts.
-    var allRequiredGranted: Bool { sentientAccessibility && sentientScreen }
+    /// The selected runtime's grants are separate from optional voice access.
+    private(set) var backend = ComputerUseBackend.current
+    private(set) var helperAccessibility = false
+    private(set) var helperScreen = false
+    private(set) var automation: Permissions.AutomationState = .unavailable
+    private(set) var requestingAutomation = false
+    private(set) var checkingAutomation = false
+    private(set) var nativePermissionError: String?
+    @ObservationIgnored private var automationProbe: Task<Void, Never>?
+    @ObservationIgnored private var lastAutomationProbe: Date?
+    var setup: ComputerUseSetup { .instance(for: backend) }
+
+    var allRequiredGranted: Bool {
+        guard sentientScreen else { return false }
+        switch backend {
+        case .cua:
+            // Preserve CUA's existing first-use flow. Its task runner joins any background
+            // installation before starting the daemon; the permission gate checks the grants.
+            return sentientAccessibility
+        case .openAI:
+            return setup.ready && backend.isInstalled && helperAccessibility && helperScreen && automation == .granted
+        }
+    }
+
+    /// The visible setup surface owns the native consent request. Already-granted and denied
+    /// states never raise another prompt just because the permission rows were displayed.
+    func prepareNativePermissions() async {
+        refresh()
+        guard backend == .openAI, setup.ready else { return }
+        await awaitAutomationRefresh()
+        guard !Task.isCancelled, backend == .openAI, setup.ready, automation == .notAsked else { return }
+        requestAutomation()
+    }
+
+    func requestAutomation() {
+        guard backend == .openAI, setup.ready, !requestingAutomation else { return }
+        requestingAutomation = true
+        nativePermissionError = nil
+        Task {
+            defer { requestingAutomation = false }
+            do {
+                guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
+                    throw OpenAIComputerUse.RuntimeError.incomplete
+                }
+                _ = await automationProbe?.value
+                try await OpenAIComputerUse.launchForPermissionRequest()
+                automation = await Permissions.nativeAutomationState(ask: true)
+                lastAutomationProbe = Date()
+                if automation == .unavailable {
+                    nativePermissionError = "The macOS permission could not be checked. Try again."
+                }
+                refresh()
+            } catch {
+                nativePermissionError = error.localizedDescription
+            }
+        }
+    }
 
     // MARK: The gate
 
@@ -135,8 +171,15 @@ final class ComputerUseGate {
         return true
     }
 
-    /// Re-probe all three grants (cheap; the TCC read is one tiny indexed SELECT).
+    /// Refresh the selected runtime and grant rows; Automation is checked asynchronously.
     func refresh() {
+        backend = .current
+        setup.refresh()
+        if backend == .openAI {
+            helperAccessibility = Permissions.isTCCGranted(service: "kTCCServiceAccessibility", clientBundleID: OpenAIComputerUse.bundleID)
+            helperScreen = Permissions.isTCCGranted(service: "kTCCServiceScreenCapture", clientBundleID: OpenAIComputerUse.bundleID)
+            refreshAutomation()
+        }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
         let speech = SFSpeechRecognizer.authorizationStatus()
         if mic == .authorized && speech == .authorized {
@@ -155,6 +198,27 @@ final class ComputerUseGate {
         sentientAccessibility = Permissions.hasAccessibility()
     }
 
+    /// The supported Apple Events preflight works even when macOS prevents reads of its
+    /// per-user TCC database. Starting the signed helper first avoids mistaking -600 for denial.
+    private func refreshAutomation() {
+        guard backend == .openAI, setup.ready, !requestingAutomation, automationProbe == nil,
+              lastAutomationProbe.map({ Date().timeIntervalSince($0) >= 5 }) ?? true else { return }
+        checkingAutomation = true
+        automationProbe = Task {
+            defer { automationProbe = nil; checkingAutomation = false; lastAutomationProbe = Date() }
+            do {
+                try await OpenAIComputerUse.launchForPermissionRequest()
+                automation = await Permissions.nativeAutomationState()
+                if automation == .granted { nativePermissionError = nil }
+            } catch {
+                automation = .unavailable
+            }
+        }
+    }
+
+    /// Wait for a scheduled preflight at explicit setup checkpoints, without blocking AppKit.
+    func awaitAutomationRefresh() async { _ = await automationProbe?.value }
+
     /// The window's main button — dismiss and fire the held action. Only ever fires once every
     /// required grant is green (the button is disabled until then); the re-probe + guard here make
     /// that a hard invariant, so a stale tap can never launch a feature that would just fail.
@@ -167,12 +231,15 @@ final class ComputerUseGate {
         HealthCaution.latchComputerUse()   // the gate's moment of truth — regressions may now banner
         // A grant may have landed while a cua daemon was already running, and TCC answers are cached
         // per process — so the next command must get a fresh one or it would act half-blind.
-        Task { await CuaDriverHost.shared.markGrantsChanged() }
         let action = pending
         pending = nil
         Analytics.signal("PermissionGate.continued", parameters: ["all_granted": "true"])
         dismissWindow()
-        action?()
+        let runtime = backend
+        Task {
+            if runtime == .cua { await CuaDriverHost.shared.markGrantsChanged() }
+            action?()
+        }
     }
 
     // MARK: Window lifecycle (AppKit-owned — it must be able to appear over OTHER apps, since
@@ -213,7 +280,8 @@ final class ComputerUseGate {
     private func windowClosed() {
         if let action = pending {
             pending = nil
-            if presentedBlocking {
+            refresh()
+            if presentedBlocking || !allRequiredGranted {
                 Log("ComputerUseGate: setup window closed — held action dropped (required grant missing)")
             } else {
                 Log("ComputerUseGate: optional-grants offer dismissed — firing the held command")

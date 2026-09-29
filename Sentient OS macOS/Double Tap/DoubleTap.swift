@@ -71,6 +71,7 @@ final class DoubleTap {
             guard let self else { return }
             let result = await self.perform()
             self.task = nil
+            if case .pasted = result { InviteProgram.shared.record(.doubleTap) }
             if case .pasted = result {} else { self.swirl.dissolve() }   // the light fades when nothing lands
             completion(result)
         }
@@ -104,7 +105,7 @@ final class DoubleTap {
         do {
             let outcome = try await DoubleTapInference.draft(screenshot: jpeg, vault: VaultGenerator.vaultRoot)
             let t = outcome.timing
-            lastReport = "\(DoubleTapInference.model) · capture \(captureMs) ms"
+            lastReport = "\(outcome.model) · capture \(captureMs) ms"
                 + " · first text \(t.firstToken.map { "\(Int($0 * 1000)) ms" } ?? "—")"
                 + " · total \(Int(t.total * 1000)) ms · in \(t.inputTokens ?? 0) (cached \(t.cachedTokens ?? 0))"
                 + " · out \(t.outputTokens ?? 0) · reasoning \(t.reasoningTokens ?? 0)"

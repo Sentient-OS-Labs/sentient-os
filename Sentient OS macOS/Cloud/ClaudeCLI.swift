@@ -42,12 +42,11 @@ actor ClaudeCLI {
 
     // MARK: Models
 
-    /// Claude Code model aliases — aliases on purpose (they track the recommended release, the
-    /// same way our pinned codex model ids track OpenAI's lineup by hand).
+    /// Claude Code model IDs: Opus is pinned to 5.5; Sonnet and Haiku keep their aliases.
     enum Model: String, Sendable {
-        case opus      // the heavy legs: vault build/update, proactive research
-        case sonnet    // everything else (the gpt-5.6-sol seat)
-        case haiku     // the light tier (the gpt-5.6-luna seat)
+        case opus = "claude-opus-5-5" // the heavy legs: vault build/update, proactive research
+        case sonnet    // everything else (the gpt-6-sol seat)
+        case haiku     // the light tier (the gpt-6-luna seat)
     }
 
     /// The ONE model-resolution choke point for the Claude engine — the backendTuned twin.
@@ -58,8 +57,8 @@ actor ClaudeCLI {
     static func tuned(for inv: CodexCLI.Invocation) -> (modelID: String, effortArg: String) {
         var model: Model = inv.claudeModel ?? {
             switch inv.model {
-            case .gpt6astra, .gpt56sol, .gpt56terra: return .sonnet
-            case .gpt56luna: return .haiku
+            case .gpt6astra, .gpt6sol, .gpt56terra: return .sonnet
+            case .gpt6luna: return .haiku
             }
         }()
         if model == .opus, ClaudeAuth.isPro { model = .sonnet }
@@ -780,7 +779,7 @@ actor ClaudeCLI {
             }
             guard let bin = Self.locateBinary() else { throw CodexCLI.CLIError.notAvailable(.notInstalled) }
             // Same fire-time self-heals as codex: driver on disk, then the daemon + live socket.
-            if !CuaDriver.isInstalled { await CodexSetup.shared.ensureCuaDriver() }
+            if !CuaDriver.isInstalled { await ComputerUseSetup.instance(for: .cua).ensureInstalled() }
             guard CuaDriver.isInstalled else {
                 throw CodexCLI.CLIError.notAvailable(.notWorking("the cua driver is not installed"))
             }

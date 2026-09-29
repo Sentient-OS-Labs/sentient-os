@@ -109,7 +109,7 @@ extension ProactivePane {
 /// A compact three-detent slider in the reference's proportions: a THICK pill permanently
 /// wearing its own three-stop spectrum (green → cyan → purple) at full strength, the detent
 /// dots living inside, and only the white circle moving. Drag or click; the readout underneath
-/// names the tier AND the honest spec (GPT-5.6 Sol · how hard it thinks) — live during a drag.
+/// names the tier AND the honest spec (GPT-6 Sol · how hard it thinks) — live during a drag.
 private struct SpeedIntelligenceSlider: View {
     @Binding var selection: ComputerUseSpeed
 

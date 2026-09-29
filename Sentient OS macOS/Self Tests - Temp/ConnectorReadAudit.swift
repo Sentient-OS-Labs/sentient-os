@@ -180,7 +180,7 @@ enum ConnectorReadAudit {
             let version = backend == .claude ? await ClaudeCLI.installedVersion() : await CodexCLI.installedVersion()
             let report = Report(revision: MCPSource.promptRevision(slug: slug), slug: slug, engine: backend.rawValue,
                 cliVersion: version, model: backend == .claude ? (modelName ?? (GranolaSource.isGranola(slug)
-                    ? GranolaSource.defaultClaudeModel.rawValue : (["google-drive", "slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) ? "sonnet" : "haiku"))) : "gpt-5.6-luna",
+                    ? GranolaSource.defaultClaudeModel.rawValue : (["google-drive", "slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) ? "sonnet" : "haiku"))) : "gpt-6-luna",
                 mode: mode.rawValue, seededSince: env["LAB_SINCE"], startedAt: started,
                 durationSeconds: Date().timeIntervalSince(started), succeeded: succeeded, errorKind: errorKind,
                 storePath: storePath, checkpoint: checkpoint?.mark.order, readOrigin: checkpoint?.origin,

@@ -52,9 +52,9 @@ actor CodexCLI {
     /// `codex exec` on a ChatGPT plan before adopting it [gpt-5.4-spark et al., MEASURED June 15].)
     enum Model: String, Sendable {
         case gpt6astra = "gpt-6-astra"  // computer use: Medium / Smarter
-        case gpt56sol = "gpt-5.6-sol"    // knowledge-base work + everything else (paid plans)
+        case gpt6sol = "gpt-6-sol"    // knowledge-base work + everything else (paid plans)
         case gpt56terra = "gpt-5.6-terra" // the free/go stand-in for sol (see planTuned)
-        case gpt56luna = "gpt-5.6-luna"  // Gmail connect-check + processing
+        case gpt6luna = "gpt-6-luna"  // Gmail connect-check + processing
     }
 
     /// The ONE model-resolution choke point: every run's `-m` value comes from here.
@@ -75,7 +75,7 @@ actor CodexCLI {
         if ModelBackend.current == .custom {
             return (CustomProvider.current.modelName, CustomProvider.reasoning)
         }
-        guard model == .gpt56sol || model == .gpt6astra, CodexAuth.isLimited() else {
+        guard model == .gpt6sol || model == .gpt6astra, CodexAuth.isLimited() else {
             return (model.rawValue, effort.rawValue)
         }
         return (Model.gpt56terra.rawValue, Effort.medium.rawValue)
@@ -91,8 +91,8 @@ actor CodexCLI {
     /// One headless `codex exec` call, fully specified.
     struct Invocation: Sendable {
         var prompt: String
-        var model: Model = .gpt56sol              // gpt-5.6-sol for everything except the Gmail tier
-        var effort: Effort = .high             // gpt-5.6-sol default (nothing overrides upward); Gmail tier → .medium
+        var model: Model = .gpt6sol              // gpt-6-sol for everything except the Gmail tier
+        var effort: Effort = .high             // gpt-6-sol default (nothing overrides upward); Gmail tier → .medium
         var sandbox: Sandbox = .readOnly
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd
@@ -788,33 +788,12 @@ actor CodexCLI {
         return env
     }
 
-    /// The command bar's "Let me DO stuff for you" spine — computer use (the "computer use" phrase is
-    /// built into the prompt by the caller, NOT a flag here). The hands are the cua driver
-    /// (Driver/CuaDriver): Sentient's own long-lived daemon (Driver/CuaDriverHost) clicks and types
-    /// in the background, and the agent reaches it over the HYBRID transport — the four vision
-    /// tools as a real MCP server (CuaDriver.codexOverrides: screenshots arrive inline, ~3k tokens
-    /// of schema), every action as one-shot CLI calls through the shim the
-    /// host writes (`<shim> <tool> '<json>'`, zero schema cost); the operating manual is
-    /// CuaDriverSkill.rules, spliced into the prompt by the caller. Runs a raw
-    /// `codex exec` with the prompt passed as ARGV:
-    /// `-c service_tier="fast" --dangerously-bypass-approvals-and-sandbox -m <model>
-    /// -c model_reasoning_effort=<effort> --ignore-user-config` (model and effort from the
-    /// user's ComputerUseSpeed slider; default Sol low), followed by
-    /// `--skip-git-repo-check`, NO `--json` (human-readable output, not JSONL). The bypass flag is
-    /// REQUIRED here — a headless run has no one to answer an approval, and the agent's every cua
-    /// action is now a shell call, where any Seatbelt profile would stall it (a sandboxed shell also
-    /// can't connect to the daemon's socket). Safety rides the layers that fit a GUI agent: the
-    /// fixed app-authored wrapper (content = DATA), one-declared-task, user-fired only, live
-    /// streaming + universal STOP. Each output LINE is
-    /// pumped to `onLine` AS it arrives, so the Xcode console shows codex's play-by-play live. Reuses
-    /// the sanitized-env / PATH / watchdog plumbing; the binary comes from the same discovery
-    /// (`~/.local/bin/codex` first). Returns the full output.
-    ///
-    /// `imagePaths` (optional): screenshots of the user's displays (main first), attached with
-    /// `codex exec -i <file>...` so the agent SEES what they're looking at (the notch/command-bar
-    /// path passes one per display; the proactive executor passes none). They're placed right before
-    /// `--skip-git-repo-check` so the flag terminates `-i`'s variadic `<FILE>...` and the prompt is
-    /// never mistaken for another image.
+    /// Computer-use argv for the existing streaming `codex exec` path. ChatGPT receives the
+    /// required native OpenAI MCP client; custom endpoints retain the CUA vision proxy and shim.
+    /// FrontierRun supplies the selected runtime's manual. User config stays isolated while
+    /// hosted/direct connector policies and the speed preference remain attached to each run.
+    /// Computer-use approval bypass is confined to this user-fired path, with one task and STOP.
+    /// Optional screenshots precede --skip-git-repo-check to terminate -i's variadic arguments.
     /// The computer-use argv — extracted so the connector lab can print the recipe without
     /// spawning, and so the destructive strips are one readable place. On the ChatGPT backend
     /// every known catalog id — the two pinned chip connectors plus everything the census
@@ -823,12 +802,19 @@ actor CodexCLI {
     /// delete/trash-class tools are stripped from the surface entirely. An id the account
     /// doesn't carry makes the strip an inert no-op (measured), so unlinked chips cost nothing.
     static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
-                               effortArg: String, socketPath: String) -> [String] {
+                               effortArg: String, socketPath: String?) -> [String] {
         var args = execArguments() + ["--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config"]
-        for override in CuaDriver.codexOverrides(socketPath: socketPath) { args += ["-c", override] }
+        let computerOverrides: [String]
+        if ComputerUseBackend.current == .openAI {
+            computerOverrides = OpenAIComputerUse.codexOverrides
+        } else {
+            precondition(socketPath != nil, "CUA tasks require the host-owned socket")
+            computerOverrides = CuaDriver.codexOverrides(socketPath: socketPath!)
+        }
+        for override in computerOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
             var hooks: [HostedToolPolicy.Rule] = []
@@ -882,42 +868,35 @@ actor CodexCLI {
                 throw CLIError.inputTooLarge(chars: prompt.utf8.count)
             }
             guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-            // The driver binary is the fire-time self-heal: a fresh Mac whose onboarding fetch is
-            // still mid-flight, or an install that broke, gets the 2–3 s pinned download HERE
-            // rather than a dead fire (CodexSetup.ensureCuaDriver waits on an in-flight install
-            // instead of racing it). The guard after it is the honest final check.
-            if !CuaDriver.isInstalled { await CodexSetup.shared.ensureCuaDriver() }
-            guard CuaDriver.isInstalled else {
-                throw CLIError.notAvailable(.notWorking("the cua driver is not installed"))
-            }
-            // Sentient's own daemon does the driving; the agent reaches it two ways against the
-            // same socket — the MCP eyes (codexOverrides below) and the CLI shim ensureRunning
-            // just rewrote with the live socket baked in. Started here (not at launch) so a Mac
-            // that never fires a command never runs one.
-            guard let socket = await CuaDriverHost.shared.ensureRunning() else {
-                throw CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
+            let runtime = ComputerUseBackend.current
+            guard await ComputerUseSetup.instance(for: runtime).ensureInstalled() else {
+                try Task.checkCancellation()
+                throw CLIError.notAvailable(.notWorking("computer use is not set up; open Permissions & Health"))
             }
             try Task.checkCancellation()
-            guard await CuaDriverHost.shared.beginAgentSession() else {
-                throw CodexCLI.CLIError.notAvailable(.notWorking("cua-driver session did not start"))
+            var socket: String?
+            switch runtime {
+            case .openAI:
+                break   // ensureInstalled verified the signature and MCP handshake above
+            case .cua:
+                guard let endpoint = await CuaDriverHost.shared.ensureRunning() else {
+                    throw CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
+                }
+                guard await CuaDriverHost.shared.beginAgentSession() else {
+                    throw CLIError.notAvailable(.notWorking("cua-driver session did not start"))
+                }
+                socket = endpoint
+                beganCuaSession = true
             }
-            beganCuaSession = true
+            try Task.checkCancellation()
 
-            // Hermetic on purpose — and it is the ONLY lever that works. ~/.codex still carries
-            // OpenAI's legacy computer-use PLUGIN on Macs that ran a 1.x bootstrap, and its skill
-            // advertisement makes the model announce "using the computer-use skill", shell out to
-            // read SKILL.md, and burn a turn before it touches a cua tool (field log 2026-08-19).
-            // Measured: a `-c` plugins-disable is a no-op and even disabling the plugin's MCP
-            // server leaves the skill advertised; only --ignore-user-config removes it. It is also
-            // cheaper (~14K vs ~20K tokens on the same task). The hosted Gmail/Calendar connectors
-            // SURVIVE a hermetic run on codex 0.148+ (their curated-remote plugins load outside
-            // the user config): measured 2026-08-19 — skills advertised AND a real hermetic
-            // `gmail.search_emails` completed — so an "email X" task keeps the connector route.
+            // The selected runtime is registered per run. User plugin configuration cannot
+            // replace its tool connection; hosted and direct connector policy is preserved.
             let args = Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
                                            modelID: modelID, effortArg: effortArg,
                                            socketPath: socket)
             let modelTag = ModelBackend.current == .custom ? "custom" : modelID
-            Log("codex exec: start feature=computer cua=\(CuaDriver.version) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
+            Log("codex exec: start feature=computer runtime=\(runtime.rawValue) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
             Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
@@ -927,7 +906,7 @@ actor CodexCLI {
             }
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
-            await CuaDriverHost.shared.endAgentSession()
+            if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
             beganCuaSession = false
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {

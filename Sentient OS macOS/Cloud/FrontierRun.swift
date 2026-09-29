@@ -157,7 +157,11 @@ enum FrontierRun {
                 }
                 let services = attachments.map { "- \($0.connection.displayName): \($0.connection.serverName)" }.joined(separator: "\n")
                 let guidance = Set(attachments.map { ConnectorRegistry.actionInstructions(slug: $0.connection.slug) }.filter { !$0.isEmpty }).sorted().joined(separator: "\n\n")
-                let fullPrompt = prompt + (services.isEmpty ? "" : "\n\nDIRECT CONNECTED ACCOUNTS (use these exact accounts):\n\(services)\nPrefer these tools when they fit the requested task. Never repeat an uncertain write without checking whether it already succeeded.")
+                // The selected runtime's manual belongs at the dispatch seam. Every caller,
+                // including cards and Sidekick, gets exactly one matching tool contract.
+                let computerPrompt = prompt + "\n\n" + ComputerUseBackend.selected(for: backend).promptRules
+                    + CustomProvider.computerUsePromptRules
+                let fullPrompt = computerPrompt + (services.isEmpty ? "" : "\n\nDIRECT CONNECTED ACCOUNTS (use these exact accounts):\n\(services)\nPrefer these tools when they fit the requested task. Never repeat an uncertain write without checking whether it already succeeded.")
                     + (guidance.isEmpty ? "" : "\n\n" + guidance)
                 return try await DirectMCPRuntime.execute(attachments) {
                     switch backend {

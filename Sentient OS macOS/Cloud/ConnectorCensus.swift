@@ -215,14 +215,10 @@ nonisolated enum ConnectorCensus {
 
     // MARK: Connector directory
 
-    /// The engine's connector directory page — where "+ Connect Apps" sends the user to link a
-    /// new app (GmailConnect.connectorURL's engine-switch pattern; the chatgpt anchor is the
-    /// same settings route ConnectAIsView already uses). Custom backends never reach here: the
-    /// Connectors section renders locked there.
+    /// The engine's directory, also used by the home's reconnect action. The source picker
+    /// hides Connect More Apps until newly linked apps can be detected reliably.
     static var directoryURL: URL {
-        ModelBackend.current == .claude
-            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory")!
-            : URL(string: "https://chatgpt.com/plugins#settings/Connectors")!
+        ConnectorLinks.directory()
     }
 
     // MARK: Persistence
@@ -450,7 +446,7 @@ nonisolated enum ConnectorCensus {
     static func refreshCodexCache() async {
         var invocation = CodexCLI.Invocation(prompt: "Reply with exactly: OK")
         invocation.feature = "census"
-        invocation.model = .gpt56luna
+        invocation.model = .gpt6luna
         invocation.effort = .low
         invocation.sandbox = .readOnly
         invocation.webSearch = false

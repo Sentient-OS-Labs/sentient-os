@@ -69,7 +69,7 @@ routing (with the possibly edited recipient placed FIRST as the authoritative de
 `<<<ROUTING … ROUTING>>>` block, so what the user edited is exactly what fires.
 
 - **gmail / calendar:** `FrontierRun.run` with the sandbox ON (`read-only`) and the connector write tools pre-approved for the one run (`approveConnectorWrites`; on Claude that preset maps to a scoped allow), user config on, web off, 300 s. If the agent reports `COULD_NOT` AND the raw JSONL carries the verbatim "cancelled MCP tool call" marker (the pre-approval did not take, e.g. codex changed its apps config surface), it retries ONCE on the bypass path with the same fixed wrapper and emits `codex.fire_fallback`, so the hardening can never cost a user their fire.
-- **computer:** `FrontierRun.runAgentCommand` (the same spine as Sidekick — the cua driver's hybrid transport on either engine, see the Driver doc), 900 s. The wrapper confines the shell to cua tool calls and viewing their saved screenshots (never AppleScript, osascript, `open`, or GUI-scripting), states there are no follow-up questions, and injects `CuaDriverSkill.rules` plus `CustomProvider.computerUsePromptRules` on a custom backend.
+- **computer:** `FrontierRun.runAgentCommand`, the same spine as Sidekick, with a 900-second deadline. ChatGPT uses native OpenAI tools; Claude/custom use CUA. The card wrapper confines work to the user's one approved task and the selected runtime's documented transport. `FrontierRun` adds the matching manual and custom-backend guardrails once. Only an exact final success sentinel counts as completion; missing status is unconfirmed.
 - **research:** `notFireable` (a briefing to read).
 
 Every wrapper is a fixed, app-authored prompt: one declared task, both blocks treated purely as DATA

@@ -1,24 +1,7 @@
-//
-//  ComputerUseUpgrade.swift
-//  Sentient OS macOS  ·  Views/Permissions/
-//
-//  The one-time migration window for Macs UPDATING from the 1.x codex-helper era of computer
-//  use. Those Macs had computer use working (HealthCaution's everReady latch) but carry none of
-//  what the cua driver needs: the pinned binary isn't on disk, and Sentient's own Accessibility
-//  was never asked for. Rather than a silent background download, the update gets its own moment:
-//  the first window open after updating raises this window — "Computer use just got better", one
-//  glowing CTA, the live install narration (download → verify → install, the same streamed lines
-//  CodexSetup.setupCuaDriver produces), then the two grant rows the first-fire gate would
-//  otherwise show (SentientPermissionRows, shared with ComputerUseGateView).
-//
-//  During the upgrade, every regular Sentient window stays hidden and Sidekick stays unarmed.
-//  Native close/minimize controls never unlock the app. The pending flag survives relaunches,
-//  including an installed driver whose permissions are still missing. Done releases the UI only
-//  after the driver and both required grants are ready. Fresh installs use onboarding instead.
-//
-//  Key members: prepareForLaunch() · register(window:openHome:) · maybePresent() · install() · finish()
-//  Doc: Documentation - Permission Gate & Guide.md
-//
+// Coordinates upgrade setup for the selected computer-use runtime before its first task.
+// Both migrations hold the regular interface until installation and required grants are ready.
+// Pending work survives relaunch, and reset prevents late installer callbacks reviving a window.
+// Doc: Documentation - Permission Gate & Guide.md
 
 import AppKit
 import SwiftUI
@@ -30,7 +13,14 @@ final class ComputerUseUpgrade {
     static let shared = ComputerUseUpgrade()
     private init() {}
 
-    private static let pendingKey = "computerUse.upgradePending"
+    private static let cuaPendingKey = "computerUse.upgradePending"
+    // Older builds allowed native setup to be skipped. Preserve that history as evidence of
+    // unfinished migration, never as permission to bypass setup.
+    private static let legacyNativeDeferredKey = "computerUse.nativeUpgradeDeferred"
+    private static let nativePendingKey = "computerUse.nativeUpgradePending"
+    private var migrationBackend = ComputerUseBackend.current
+    private var pendingKey: String { migrationBackend == .openAI ? Self.nativePendingKey : Self.cuaPendingKey }
+    var setup: ComputerUseSetup { .instance(for: migrationBackend) }
 
     #if DEBUG
     /// Forces the pitch without changing pending state. Installer and permission actions are real.
@@ -41,8 +31,8 @@ final class ComputerUseUpgrade {
 
     enum Phase {
         case pitch        // the announcement + CTA (and, after a failed attempt, the retry)
-        case installing   // setupCuaDriver running; the streamed line narrates
-        case grants       // driver on disk; Sentient's two grant rows + Done
+        case installing   // the selected runtime installer is running
+        case grants       // runtime installed; required grants and Done
     }
     private(set) var phase: Phase = .pitch
 
@@ -75,6 +65,11 @@ final class ComputerUseUpgrade {
         return onboarded && (unresolvedPending || (legacyWasReady && !hasCuaHistory && !requiredVersionInstalled))
     }
 
+    static func requiresNativeMigration(onboarded: Bool, pending: Bool, previouslyUsed: Bool,
+                                        nativeCompleted: Bool, ready: Bool) -> Bool {
+        onboarded && !ready && (pending || (previouslyUsed && !nativeCompleted))
+    }
+
     /// The actual helper installed by Sentient's old ComputerUseSetup. A readiness latch alone
     /// is shared with CUA and cannot prove that a fresh user ever had the legacy driver.
     static func hasLegacyPayload(in codexHome: URL) -> Bool {
@@ -86,31 +81,35 @@ final class ComputerUseUpgrade {
         guard !isBlockingInterface else { return }
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: AppState.onboardingKey) else { return }
-        let hasCuaHistory = CuaDriver.hasInstallationHistory
-        let pending = defaults.bool(forKey: Self.pendingKey)
-        var permissionsReady = false
-        if !isPreview, pending, hasCuaHistory {
-            ComputerUseGate.shared.refresh()
-            permissionsReady = ComputerUseGate.shared.allRequiredGranted
-            if permissionsReady {
-                defaults.removeObject(forKey: Self.pendingKey)
-                Log("ComputerUseUpgrade: cleared obsolete setup marker; CUA and grants already configured")
-            }
+        migrationBackend = .current
+        ComputerUseGate.shared.refresh()
+        let ready = ComputerUseGate.shared.allRequiredGranted
+        let pending = defaults.bool(forKey: pendingKey)
+        let required: Bool
+        if migrationBackend == .openAI {
+            required = Self.requiresNativeMigration(onboarded: true, pending: pending || isPreview,
+                previouslyUsed: defaults.bool(forKey: HealthCaution.computerUseEverReadyKey)
+                    || CuaDriver.hasInstallationHistory
+                    || defaults.bool(forKey: Self.legacyNativeDeferredKey),
+                nativeCompleted: defaults.bool(forKey: HealthCaution.nativeComputerUseEverReadyKey),
+                ready: ready && !isPreview)
+        } else {
+            required = Self.requiresMigration(onboarded: true, pending: pending || isPreview,
+                legacyWasReady: defaults.bool(forKey: HealthCaution.computerUseEverReadyKey)
+                    && Self.hasLegacyPayload(in: OpenAIComputerUse.codexHome),
+                hasCuaHistory: CuaDriver.hasInstallationHistory,
+                requiredVersionInstalled: CuaDriver.isInstalled, permissionsReady: ready && !isPreview)
         }
-        guard Self.requiresMigration(onboarded: defaults.bool(forKey: AppState.onboardingKey),
-                                     pending: isPreview || pending,
-                                     legacyWasReady: defaults.bool(forKey: HealthCaution.computerUseEverReadyKey)
-                                        && Self.hasLegacyPayload(in: FileManager.default.homeDirectoryForCurrentUser
-                                            .appendingPathComponent(".codex")),
-                                     hasCuaHistory: hasCuaHistory,
-                                     requiredVersionInstalled: CuaDriver.isInstalled,
-                                     permissionsReady: permissionsReady)
-        else { return }
-
+        if ready, !isPreview {
+            defaults.removeObject(forKey: pendingKey)
+            if migrationBackend == .openAI { defaults.removeObject(forKey: Self.legacyNativeDeferredKey) }
+            HealthCaution.latchComputerUse()
+        }
+        guard required else { return }
         self.onSetupFinished = onSetupFinished
         isBlockingInterface = true
-        if !isPreview { defaults.set(true, forKey: Self.pendingKey) }
-        phase = CuaDriver.isInstalled && !isPreview ? .grants : .pitch
+        if !isPreview { defaults.set(true, forKey: pendingKey) }
+        phase = migrationBackend.isInstalled && !isPreview ? .grants : .pitch
 
         let nc = NotificationCenter.default
         for name in [NSWindow.didBecomeKeyNotification, NSWindow.didBecomeMainNotification,
@@ -228,7 +227,7 @@ final class ComputerUseUpgrade {
         Log("ComputerUseUpgrade: setup window up; main interface hidden")
     }
 
-    /// The CTA — run the shared setup engine and narrate it. `ensureCuaDriver` (not a bare setup
+    /// The CTA — run the shared setup engine and narrate it. `ensureInstalled` (not a bare setup
     /// call) so an install already in flight — a Sidekick fire's self-heal racing this window —
     /// is awaited rather than misread as a failure. Success flows into the grant rows; failure
     /// returns to the pitch with the ✗ line and the CTA as the retry.
@@ -238,7 +237,7 @@ final class ComputerUseUpgrade {
         failureLine = nil
         let generation = installGeneration
         Task {
-            let installed = await CodexSetup.shared.ensureCuaDriver()
+            let installed = await setup.ensureInstalled()
             // Factory Reset may have returned to onboarding while the shared download ran.
             guard isBlockingInterface, generation == installGeneration else { return }
             if installed {
@@ -246,7 +245,7 @@ final class ComputerUseUpgrade {
                 phase = .grants
                 Analytics.signal("ComputerUseUpgrade.installed")
             } else {
-                failureLine = CodexSetup.shared.cuaDriverStatus
+                failureLine = setup.status
                 phase = .pitch
             }
         }
@@ -256,15 +255,19 @@ final class ComputerUseUpgrade {
     /// alone can reveal the app while a required permission is still missing.
     func finish() {
         ComputerUseGate.shared.refresh()
-        guard isBlockingInterface, phase == .grants, CuaDriver.isInstalled,
+        guard isBlockingInterface, phase == .grants, migrationBackend.isInstalled,
               ComputerUseGate.shared.allRequiredGranted else { return }
         Analytics.signal("ComputerUseUpgrade.finished",
                          parameters: ["all_granted": "true"])
+        if !isPreview { HealthCaution.latchComputerUse() }
         completeSetup()
     }
 
     private func completeSetup() {
-        if !isPreview { UserDefaults.standard.removeObject(forKey: Self.pendingKey) }
+        if !isPreview {
+            UserDefaults.standard.removeObject(forKey: pendingKey)
+            if migrationBackend == .openAI { UserDefaults.standard.removeObject(forKey: Self.legacyNativeDeferredKey) }
+        }
         releaseInterface()
         Log("ComputerUseUpgrade: setup complete; main interface revealed")
     }
@@ -272,7 +275,9 @@ final class ComputerUseUpgrade {
     /// Factory Reset owns the onboarding rewind. Clear the migration too, including an in-flight
     /// window session, without cancelling the shared installer or marking optional grants offered.
     func reset() {
-        UserDefaults.standard.removeObject(forKey: Self.pendingKey)
+        UserDefaults.standard.removeObject(forKey: Self.cuaPendingKey)
+        UserDefaults.standard.removeObject(forKey: Self.nativePendingKey)
+        UserDefaults.standard.removeObject(forKey: Self.legacyNativeDeferredKey)
         installGeneration = UUID()
         phase = .pitch
         failureLine = nil
@@ -321,7 +326,6 @@ final class ComputerUseUpgrade {
 
 struct ComputerUseUpgradeView: View {
     let model: ComputerUseUpgrade
-    @State private var codexSetup = CodexSetup.shared
 
     private var gate: ComputerUseGate { ComputerUseGate.shared }
 
@@ -330,20 +334,24 @@ struct ComputerUseUpgradeView: View {
             OnboardingWhisper(model.phase == .grants ? "ONE LAST STEP" : "SENTIENT UPDATED")
                 .frame(maxWidth: .infinity)
 
-            Text(model.phase == .grants ? "Now give it its hands and eyes."
+            Text(model.phase == .grants ? "Allow the permissions needed to control your computer"
                                         : "Computer use just got better.")
                 .display(23)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(.white)
                 .frame(maxWidth: .infinity)
                 .padding(.top, 18)
 
-            Text(subtitle)
-                .font(.system(size: 12.5))
-                .foregroundStyle(Theme.secondary)
-                .frame(maxWidth: .infinity)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)   // wrap — never truncate the pitch
-                .padding(.top, 8)
+            if model.phase != .grants {
+                Text("Prepare computer use for your selected AI engine.")
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(Theme.secondary)
+                    .frame(maxWidth: .infinity)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 8)
+            }
 
             switch model.phase {
             case .pitch, .installing:
@@ -367,17 +375,14 @@ struct ComputerUseUpgradeView: View {
         .background(Color.black)
         .preferredColorScheme(.dark)
         .animation(.easeInOut(duration: 0.3), value: model.phase)
+        .task {
+            while !Task.isCancelled {
+                gate.refresh()
+                do { try await Task.sleep(for: .seconds(1)) } catch { break }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             gate.refresh()   // the user may just have flipped a switch in System Settings
-        }
-    }
-
-    private var subtitle: String {
-        switch model.phase {
-        case .pitch, .installing:
-            "Sentient's computer use is now way faster and smarter"
-        case .grants:
-            "The new faster computer use needs these permissions. You'll only be asked once."
         }
     }
 
@@ -396,7 +401,7 @@ struct ComputerUseUpgradeView: View {
             if model.phase == .installing {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small).scaleEffect(0.7)
-                    Text(codexSetup.cuaDriverStatus ?? "Starting…")
+                    Text(model.setup.status ?? "Starting…")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -408,7 +413,7 @@ struct ComputerUseUpgradeView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text("A one-time 40 MB download, verified on this Mac.")
+                Text(model.setup.backend == .openAI ? "Downloaded directly from OpenAI and verified on this Mac." : "A one-time 40 MB download, verified on this Mac.")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.faint)
             }

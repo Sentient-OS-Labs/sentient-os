@@ -85,6 +85,18 @@ enum SourceSelection {
         return n
     }
 
+    /// The onboarding recommendation follows the sources selected for the first analysis.
+    /// A connected account that the user opted out of reading does not supply this context.
+    /// Use curated identities so Gmail/Google Calendar, Outlook, and mixed pairs all count.
+    static var hasEmailAndCalendar: Bool {
+        let packs = ConnectorRegistry.kbEnabledConnectors().compactMap { ConnectorRegistry.pack(for: $0) }
+        let email = (ModelBackend.connectorsAvailable && bool("dbg.run.gmail", default: false))
+            || packs.contains { $0.slug == OutlookMailConnector.slug }
+        let calendar = (ModelBackend.connectorsAvailable && bool("dbg.run.calendar", default: false))
+            || packs.contains { $0.providesCalendarContext }
+        return email && calendar
+    }
+
     static func current(fdaGranted: Bool) -> [RunSource] {
         var s: [RunSource] = []
         if bool("dbg.run.downloads", default: true) { s.append(.files(.downloads)) }

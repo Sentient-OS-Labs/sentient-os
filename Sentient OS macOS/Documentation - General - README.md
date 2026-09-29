@@ -25,7 +25,7 @@ disk join the target automatically, and the docs are stripped from the shipped b
 | `Sources/` | The readers: Files, WhatsApp, iMessage, Apple Notes (local), Gmail and Google Calendar (through the user's codex or claude.ai connectors), the shared selection and chat windowing | `Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md` · `Sources/Documentation - Sources - Cloud (Gmail, Calendar).md` |
 | `Cloud/` | The two frontier engines (`codex exec` + `claude -p`) behind FrontierRun's dispatch, the setup engines, the plan gate, bring-your-own-model, the MCP mirror client | `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md` · `… - ClaudeCLI (the claude -p engine).md` · `… - Codex Setup.md` · `… - Plan Gate (CodexAuth).md` · `… - Frontier Model Choice (BYOM).md` · `… - MCP Mirror.md` |
 | `Connectors/` | Sentient-owned OAuth for supported remote MCP services, credential lifecycle, native discovery, and per-engine tool policy | `Connectors/Documentation - Connectors (Direct MCP).md` |
-| `Driver/` | The cua driver — the hands and eyes of computer use: the pinned binary, Sentient's embedded daemon, the hybrid MCP + CLI transport, the inlined skill | `Driver/Documentation - Driver (cua-driver).md` |
+| `Driver/` | Runtime selection, the signed OpenAI helper for ChatGPT, and the embedded CUA driver for Claude/custom | `Driver/Documentation - Native Computer Use.md` · `Driver/Documentation - Driver (cua-driver).md` |
 | `Vault/` | The knowledge base: first build, nightly updates, corpus batching, the sync seam | `Vault/Documentation - Knowledge Base (Vault).md` |
 | `Proactive/` | Proactive Intelligence: the cycle, judge → research and prepare → the executor, the gift letter | `Proactive/Documentation - Proactive Intelligence.md` |
 | `Scheduling/` | The 3 AM run: the scheduler, the root wake helper and its installer, power gates, launch at login, the morning-after caution | `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md` |
@@ -55,6 +55,5 @@ disk join the target automatically, and the docs are stripped from the shipped b
 `README.md` (the public face), `SECURITY.md` (the privacy invariants as security claims, why each
 capability is needed, the hardening program), `CONTRIBUTING.md`, `LICENSING.md` + `CLA.md` (AGPL with
 a commercial exception), `Signing.xcconfig` (the ONE place the signing team lives; per-dev override in
-the gitignored `Signing.local.xcconfig`), `Info.plist` (the Sparkle keys only), the entitlements (audio
-input, for the Hardened Runtime), and `jesai.Sentient-OS-macOS.WakeHelper.plist` (the bundled daemon
+the gitignored `Signing.local.xcconfig`), `Info.plist` (the Sparkle keys only), the entitlements (audio input and Apple Events, for the Hardened Runtime), and `jesai.Sentient-OS-macOS.WakeHelper.plist` (the bundled daemon
 plist the dev cockpit's SMAppService path uses).

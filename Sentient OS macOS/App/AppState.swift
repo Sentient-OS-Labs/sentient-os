@@ -41,6 +41,7 @@ final class AppState {
 
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
+    private let inviteBanner = InviteBannerController()
     private var hasStartedInterface = false
 
     /// Drops the Dock icon whenever the home window is closed (the icon belongs to home;
@@ -82,16 +83,13 @@ final class AppState {
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
         UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
+        inviteBanner.start(appState: self)
         // Diagnostics baseline for the session (structure only, see CodexDiagnostics.swift): start
         // the network monitor now so a codex failure right after a wake never reads "unknown", and
         // leave one breadcrumb saying what codex's login looks like at launch.
         Task.detached(priority: .utility) {
             NetworkSnapshot.shared.start()
             Log(CodexAuthSnapshot.read().logLine)
-            // Legacy cleanup (Sentient 1.x → cua driver): drop the Automation TCC row the old
-            // codex-helper path wrote. Best-effort and idempotent — a quiet no-op on clean Macs,
-            // so it simply runs every launch instead of carrying a migration flag.
-            Permissions.revokeComputerUseAutomation()
             // Reap computer-use daemons leaked by previous app lives — a daemon that missed the
             // lifeline EOF would otherwise hold its screen-capture stream (and CPU) forever.
             await CuaDriverHost.sweepOrphans()
@@ -109,7 +107,7 @@ final class AppState {
         // Read the codex doc's "Keeping the CLI current" before touching this.
         if hasCompletedOnboarding {
             if !ComputerUseUpgrade.shared.isBlockingInterface {
-                CodexSetup.shared.updateCuaDriverIfNeeded()
+                ComputerUseSetup.current.updateIfNeeded()
             }
             CodexSetup.shared.startKeepingCurrent { [weak self] in
                 self?.commandCoordinator.run.isRunning ?? true

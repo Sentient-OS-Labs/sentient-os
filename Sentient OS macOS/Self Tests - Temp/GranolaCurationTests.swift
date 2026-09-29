@@ -566,7 +566,7 @@ enum GranolaCurationTests {
                     "validation": validation, "inCount": envelope.inputTokens ?? 0,
                     "cachedInCount": envelope.cachedInputTokens ?? 0, "outCount": envelope.outputTokens ?? 0,
                     "durationMS": envelope.durationMS ?? 0, "revision": MCPSource.granolaPromptRevision,
-                    "model": ModelBackend.current == .claude ? claudeModel.rawValue : "gpt-5.6-luna"]
+                    "model": ModelBackend.current == .claude ? claudeModel.rawValue : "gpt-6-luna"]
                 try DirectMCPHTTP.json(record).write(to: output.appending(path: name + ".json"), options: .atomic)
                 accepted.append("**\(name)**\n\n\(outcome?.result?.summary ?? "No summary retained.")")
                 Log("GRANOLA MODEL FIXTURE: \(passed ? "PASS" : "FAIL") \(name)")

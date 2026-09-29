@@ -60,7 +60,7 @@ enum WakeAcceptanceTests {
             guard local.text.contains("READY") else { throw FullAcceptanceTests.Failure(message: "local inference did not verify") }
             Log("PHYSICAL WAKE: on-device inference passed")
             var invocation = CodexCLI.Invocation(prompt: "Reply with exactly AWAKE. This is a fictional system test. Do not use tools.")
-            invocation.feature = "connector-lab"; invocation.model = .gpt56luna
+            invocation.feature = "connector-lab"; invocation.model = .gpt6luna
             invocation.toolsDisabled = true; invocation.includeUserConfig = false; invocation.webSearch = false
             invocation.effort = .low; invocation.timeout = 60
             let cloud = try await FrontierRun.run(invocation)

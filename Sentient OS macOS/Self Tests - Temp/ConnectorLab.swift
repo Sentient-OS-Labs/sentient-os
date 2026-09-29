@@ -587,7 +587,7 @@ enum ConnectorLab {
     private static func readInvocation(slug: String, prompt: String) -> CodexCLI.Invocation {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "connector-lab"
-        inv.model = .gpt56luna
+        inv.model = .gpt6luna
         inv.effort = .medium
         inv.sandbox = .readOnly
         inv.webSearch = false
@@ -1032,10 +1032,10 @@ enum ConnectorLab {
 
         Log("-- run() argv, codex column (recipe -c overrides emit on the chatgpt backend only; "
             + "live backend: \(ModelBackend.current.rawValue)) --")
-        showCodex("codex plain", plain, model: "gpt-5.6-sol", effort: "high")
-        showCodex("codex read", readInv, model: "gpt-5.6-luna", effort: "medium")
-        showCodex("codex act", actInv, model: "gpt-5.6-sol", effort: "medium")
-        showCodex("codex research read", researchInv, model: "gpt-5.6-sol", effort: "high")
+        showCodex("codex plain", plain, model: "gpt-6-sol", effort: "high")
+        showCodex("codex read", readInv, model: "gpt-6-luna", effort: "medium")
+        showCodex("codex act", actInv, model: "gpt-6-sol", effort: "medium")
+        showCodex("codex research read", researchInv, model: "gpt-6-sol", effort: "high")
 
         Log("-- run() argv, claude column --")
         showClaude("claude plain", plain)
@@ -1050,7 +1050,7 @@ enum ConnectorLab {
              try! ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
                                       socketPath: "/tmp/lab.sock"))
         show("codex agent",
-             CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-5.6-sol",
+             CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-6-sol",
                                      effortArg: "low", socketPath: "/tmp/lab.sock"))
 
         Log("-- connected services block (live backend: \(ModelBackend.current.rawValue)) --")

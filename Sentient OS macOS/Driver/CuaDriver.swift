@@ -268,7 +268,14 @@ enum CuaDriver {
     /// CuaDriverHost). Chosen over the Application Support root for the one property that matters
     /// here: no spaces anywhere in the path.
     private static var cachesRoot: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        #if DEBUG
+        // The signed-host lab must not replace a running production app's CLI shim.
+        if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "nativecua",
+           let root = ProcessInfo.processInfo.environment["LAB_CUA_CACHE"] {
+            return URL(fileURLWithPath: root, isDirectory: true)
+        }
+        #endif
+        return FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS",
                                     isDirectory: true)
     }
