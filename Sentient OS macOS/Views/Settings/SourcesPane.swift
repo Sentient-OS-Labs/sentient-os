@@ -10,7 +10,7 @@ import SwiftUI
 struct SourcesPane: View {
     var body: some View {
         SettingsPane(title: "Knowledge Sources",
-                     whisper: "Your files never leave your Mac. Your Sentient uses an on-device LLM to understand your life overnight.") {
+                     whisper: "The context your Sentient learns from, every night.") {
             KnowledgeSourcesPicker()
         }
     }

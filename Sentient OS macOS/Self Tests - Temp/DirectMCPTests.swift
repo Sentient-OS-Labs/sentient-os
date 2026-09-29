@@ -545,7 +545,7 @@ enum DirectMCPTests {
     static func renderConnectView() async {
         let slug = ProcessInfo.processInfo.environment["LAB_SLUG"] ?? "granola"
         guard let source = ConnectorSource.catalog(with: []).first(where: { $0.serviceSlug == slug }) else { exit(1) }
-        let view = ConnectorConnectSheet(source: source, connectors: .constant([]), onConnect: {})
+        let view = ConnectorConnectSheet(source: source, connectors: .constant([]))
             .environment(\.colorScheme, .dark)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2

@@ -2,22 +2,18 @@
 //  OnboardingTelemetryConsent.swift
 //  Sentient OS macOS
 //
-//  The film's hood-park privacy block — "We never collect your personal info." over two
-//  capsules, bottom-left on the hood Continue's row: Read More (the Settings Privacy Policy
+//  The frontier-model page's privacy block — "We never collect your personal info." over two
+//  capsules, bottom-left: Read More (the Settings Privacy Policy
 //  sheet, PrivacyPolicyView, reused verbatim) and Configure Telemetry, which blooms a small
 //  anchored card with the two anonymous-telemetry toggles (crash reports → Sentry ·
 //  analytics → TelemetryDeck): the SAME @AppStorage keys as Settings → System, applied live
 //  through CrashReporting/Analytics.applyEnabledChange(), so the choice made here IS the
-//  Settings choice. Click anywhere outside dismisses; the film stays undimmed behind it.
+//  Settings choice. Click anywhere outside dismisses; the model picker stays undimmed behind it.
 //
 
 import SwiftUI
 
 struct OnboardingTelemetryConsent: View {
-    /// The pill row's vertical center — the film view passes the hood Continue's
-    /// page-measured y, so the pill and Continue read as one composed footer row.
-    let rowCenterY: CGFloat
-
     /// Same keys as Settings → System (SystemPane) — the original `diagnosticsEnabled` name
     /// carries existing installs' crash-reports choice; analytics has its own key.
     @AppStorage("diagnosticsEnabled") private var crashReportsEnabled = true
@@ -27,32 +23,28 @@ struct OnboardingTelemetryConsent: View {
     @State private var showPrivacyPolicy = false
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .bottomLeading) {
-                // Click-outside dismiss: an invisible catcher over the film while the card
-                // is up. Sits UNDER the card/pill in this ZStack, so their controls keep
-                // their own clicks.
-                if open {
-                    Color.black.opacity(0.001)
-                        .contentShape(Rectangle())
-                        .onTapGesture { setOpen(false) }
-                }
-
-                VStack(alignment: .leading, spacing: 12) {
-                    if open {
-                        card
-                            .transition(.scale(scale: 0.96, anchor: .bottomLeading)
-                                .combined(with: .opacity))
-                    }
-                    pillBlock
-                }
-                .padding(.leading, 36)
-                // Center the ~52pt pill block on the Continue's y; the clamp keeps it
-                // on-screen if the page ever reports a band below the viewport.
-                .padding(.bottom, max(20, geo.size.height - rowCenterY - 26))
+        ZStack(alignment: .bottomLeading) {
+            // Click-outside dismiss: an invisible catcher over the picker while the card
+            // is up. Sits UNDER the card/pill in this ZStack, so their controls keep
+            // their own clicks.
+            if open {
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .onTapGesture { setOpen(false) }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+
+            VStack(alignment: .leading, spacing: 12) {
+                if open {
+                    card
+                        .transition(.scale(scale: 0.96, anchor: .bottomLeading)
+                            .combined(with: .opacity))
+                }
+                pillBlock
+            }
+            .padding(.leading, 36)
+            .padding(.bottom, 28)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         .onChange(of: crashReportsEnabled) { _, _ in CrashReporting.applyEnabledChange() }
         .onChange(of: analyticsEnabled) { _, _ in Analytics.applyEnabledChange() }
         .sheet(isPresented: $showPrivacyPolicy) { PrivacyPolicyView() }
@@ -112,16 +104,11 @@ struct OnboardingTelemetryConsent: View {
 
 #if DEBUG
 #Preview("Telemetry consent — pill + card") {
-    struct Host: View {
-        @State private var height: CGFloat = 820
-        var body: some View {
-            ZStack {
-                Theme.bg
-                OnboardingTelemetryConsent(rowCenterY: height - 60)
-            }
-            .frame(width: 1180, height: height)
-        }
+    ZStack {
+        Theme.bg
+        OnboardingTelemetryConsent()
     }
-    return Host().preferredColorScheme(.dark)
+    .frame(width: 1180, height: 820)
+    .preferredColorScheme(.dark)
 }
 #endif

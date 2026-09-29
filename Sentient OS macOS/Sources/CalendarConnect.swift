@@ -42,9 +42,7 @@ enum CalendarConnect {
     /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
     /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
     static var connectorURL: URL {
-        ModelBackend.current == .claude
-            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/google-calendar-calendarmcp")!
-            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+        ConnectorLinks.page(for: "google-calendar")
     }
 
     /// Newest-N events per read window (a busy month rarely exceeds this; a guard against a runaway list).

@@ -41,6 +41,7 @@ struct SystemPane: View {
                 overnightGroup
                 startupGroup
                 updatesGroup
+                InviteSettingsSection()
                 SettingsHairline(opacity: 0.12)
                     .padding(.vertical, -8)
                 privacyGroup

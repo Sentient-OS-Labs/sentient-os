@@ -37,9 +37,7 @@ enum GmailConnect {
     /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
     /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
     static var connectorURL: URL {
-        ModelBackend.current == .claude
-            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/gmail-gmailmcp")!
-            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_95d39881713c8191931482a62d6edff9?q=gmail")!
+        ConnectorLinks.page(for: "gmail")
     }
 
     /// Newest-N threads per read (the connector-limits doc's cap; a heavy week exceeds it).

@@ -7,12 +7,12 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ConnectorConnectSheet: View {
     let source: ConnectorSource
     @Binding var connectors: [ConnectorCensus.DetectedConnector]
     let context: KnowledgeSourcesPicker.Context
-    let onConnect: () -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var openedConnectorPage = false
@@ -25,12 +25,10 @@ struct ConnectorConnectSheet: View {
     @State private var operation: Task<Void, Never>?
 
     init(source: ConnectorSource, connectors: Binding<[ConnectorCensus.DetectedConnector]>,
-         context: KnowledgeSourcesPicker.Context = .settings,
-         onConnect: @escaping () -> Void) {
+         context: KnowledgeSourcesPicker.Context = .settings) {
         self.source = source
         _connectors = connectors
         self.context = context
-        self.onConnect = onConnect
         _boundConnectorID = State(initialValue: source.connector?.id)
     }
 
@@ -86,6 +84,9 @@ struct ConnectorConnectSheet: View {
                     bullet("icloud.slash", "Your \(reader) reads \(name), never our servers")
                     bullet("link", "Link your account on \(reader)'s connectors page")
                     bullet("lock", "Sentient never sees your password")
+                    if origin == .claude && ["outlook-mail", "outlook-calendar"].contains(source.serviceSlug) {
+                        bullet("building.2", "Uses Microsoft 365 with a work or school account")
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -206,7 +207,12 @@ struct ConnectorConnectSheet: View {
     private func connect() {
         guard !busy else { return }
         message = nil
-        guard usesDirect else { openedConnectorPage = true; onConnect(); return }
+        guard usesDirect else {
+            openedConnectorPage = true
+            NSWorkspace.shared.open(ConnectorLinks.page(for: source.serviceSlug,
+                backend: origin == .claude ? .claude : .chatgpt))
+            return
+        }
         guard let provider = direct?.provider ?? source.directProvider else { return }
         let existing = direct
         let id = existing?.id ?? newConnectionID ?? UUID()
@@ -320,14 +326,12 @@ private struct ConnectorKnowledgeControl: View {
 }
 
 #Preview("Connect Google Drive · not connected") {
-    ConnectorConnectSheet(source: ConnectorSource.catalog(with: [])[0], connectors: .constant([]),
-                          onConnect: {})
+    ConnectorConnectSheet(source: ConnectorSource.catalog(with: [])[0], connectors: .constant([]))
 }
 
 #Preview("Onboarding · connect Granola") {
     if let source = ConnectorSource.catalog(with: []).first(where: { $0.serviceSlug == "granola" }) {
-        ConnectorConnectSheet(source: source, connectors: .constant([]), context: .onboarding,
-                              onConnect: {})
+        ConnectorConnectSheet(source: source, connectors: .constant([]), context: .onboarding)
     }
 }
 
@@ -336,7 +340,6 @@ private struct ConnectorKnowledgeControl: View {
         slug: "asana", displayName: "Asana", origin: .claude,
         serverURL: nil, catalogID: nil, iconPath: nil, healthy: true, lastSeen: .now)
     if let source = ConnectorSource.catalog(with: [connector]).first(where: { $0.id == connector.id }) {
-        ConnectorConnectSheet(source: source, connectors: .constant([connector]),
-                              onConnect: {})
+        ConnectorConnectSheet(source: source, connectors: .constant([connector]))
     }
 }

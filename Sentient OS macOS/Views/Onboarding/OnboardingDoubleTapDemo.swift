@@ -6,11 +6,19 @@
 //  Doc: Documentation - Onboarding.md (this folder).
 
 import SwiftUI
+import AppKit
 
 @MainActor @Observable
 final class OnboardingDoubleTapDemo {
     enum Phase { case entering, waiting, drafting, emailReady, switching, complete }
     enum Sample { case email, message }
+
+    struct TapFeedback: Equatable {
+        let began: Date
+        let confirmed: Bool
+        let duration: TimeInterval
+    }
+    private enum TapSource { case keyboard, pointer }
 
     private(set) var phase: Phase = .entering
     private(set) var sample: Sample = .email
@@ -26,13 +34,17 @@ final class OnboardingDoubleTapDemo {
     private(set) var continueVisible = false
     private(set) var keyIsDown = false
     private(set) var reduceMotion = false
+    private(set) var tapFeedback: TapFeedback?
 
-    private var lastPress: TimeInterval?
+    private var lastTap: (source: TapSource, time: TimeInterval)?
+    private var feedbackTask: Task<Void, Never>?
     private var sequence: Task<Void, Never>?
 
     private static let flightDuration = 0.78
 
-    var instructionVisible: Bool { controlsVisible && !completionVisible }
+    var instructionVisible: Bool {
+        controlsVisible && !completionVisible && !(sample == .message && phase == .drafting)
+    }
     var nextVisible: Bool { phase == .emailReady }
 
     func start(reduceMotion: Bool, entranceRadius: Double = SwirlMath.startRadius) {
@@ -73,28 +85,54 @@ final class OnboardingDoubleTapDemo {
             keyIsDown = down
         }
         guard down, phase == .waiting else { return }
-        if let lastPress, time >= lastPress, time - lastPress <= DoubleTap.window {
+        registerTap(from: .keyboard, at: time, window: DoubleTap.window)
+    }
+
+    /// Each button activation is one click. Honor the Mac's double-click timing, while
+    /// keeping pointer and hardware pairs separate so switching input cannot complete a pair.
+    func clicked(at time: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard phase == .waiting else { return }
+        registerTap(from: .pointer, at: time, window: NSEvent.doubleClickInterval)
+    }
+
+    private func registerTap(from source: TapSource, at time: TimeInterval, window: TimeInterval) {
+        let confirmed = lastTap.map {
+            $0.source == source && time >= $0.time && time - $0.time <= window
+        } ?? false
+        showTapFeedback(confirmed: confirmed, duration: confirmed ? 0.85 : max(0.65, window + 0.2))
+        if confirmed {
             draft()
         } else {
-            lastPress = time
+            lastTap = (source, time)
+        }
+    }
+
+    private func showTapFeedback(confirmed: Bool, duration: TimeInterval) {
+        feedbackTask?.cancel()
+        tapFeedback = TapFeedback(began: Date(), confirmed: confirmed, duration: duration)
+        feedbackTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(duration))
+            guard !Task.isCancelled else { return }
+            self?.tapFeedback = nil
+            self?.feedbackTask = nil
         }
     }
 
     /// Losing the key window must not leave a depressed key or pair taps across apps.
     func resetGesture() {
-        lastPress = nil
+        lastTap = nil
+        feedbackTask?.cancel()
+        feedbackTask = nil
+        tapFeedback = nil
         withAnimation(.easeOut(duration: 0.15)) { keyIsDown = false }
     }
 
-    /// Also the keycap's accessible button action, so hardware isn't the only way forward.
-    func draft() {
+    /// Only a completed pair starts the reply; a single button activation never does.
+    private func draft() {
         guard phase == .waiting else { return }
         phase = .drafting
-        lastPress = nil
+        lastTap = nil
         sequence?.cancel()
-        if sample == .message {
-            withAnimation(.easeOut(duration: 0.35)) { completionVisible = true }
-        }
         sequence = Task { [weak self] in
             guard let self else { return }
             do {
@@ -106,8 +144,9 @@ final class OnboardingDoubleTapDemo {
                 if !self.reduceMotion { self.swirl.transition(landing: true) }
                 try await Task.sleep(for: CaretSwirl.landingDelay)
                 withAnimation(.easeOut(duration: 0.12)) { self.replyVisible = true }
-                try await Task.sleep(for: .milliseconds(420))
-                try await Task.sleep(for: .milliseconds(160))
+                // Let the landing bloom finish, then give the pasted reply a brief settle.
+                let landingTail = max(Duration.zero, .seconds(SwirlMath.landDuration) - CaretSwirl.landingDelay)
+                try await Task.sleep(for: landingTail + .milliseconds(70))
                 self.spiralVisible = false
                 self.swirl.phase = .idle
 
@@ -115,8 +154,11 @@ final class OnboardingDoubleTapDemo {
                     // Hold the reply until the user chooses Next. No timer advances this beat.
                     withAnimation(.easeOut(duration: 0.35)) { self.phase = .emailReady }
                 } else {
-                    self.phase = .complete
-                    withAnimation(.easeOut(duration: 0.4)) { self.continueVisible = true }
+                    withAnimation(.easeOut(duration: 0.4)) {
+                        self.phase = .complete
+                        self.completionVisible = true
+                        self.continueVisible = true
+                    }
                 }
                 self.sequence = nil
             } catch { /* No late reply or Continue after the scene leaves. */ }
@@ -162,7 +204,7 @@ final class OnboardingDoubleTapDemo {
                     }
                 }
                 try await Task.sleep(for: .seconds(arrivalDuration + 0.04))
-                self.lastPress = nil
+                self.lastTap = nil
                 self.phase = .waiting
                 self.sequence = nil
             } catch { /* Leaving cancels the throw and the Messages entrance. */ }
