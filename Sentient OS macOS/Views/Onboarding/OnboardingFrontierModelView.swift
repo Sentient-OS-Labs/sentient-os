@@ -59,7 +59,7 @@ struct OnboardingFrontierModelView: View {
                             .display(26)
                             .foregroundStyle(Theme.Ink.bright)
 
-                        Text("Sentient's on-device model does about 90% of the thinking. The last 10%, the reasoning behind proactive intelligence, runs on a frontier model of your choice.")
+                        Text("Sentient's on-device model understands your life. Proactive Intelligence and Sidekick run on a frontier model of your choice.")
                             .font(.system(size: 14.5))
                             .foregroundStyle(Theme.secondary)
                             .multilineTextAlignment(.center)
@@ -89,7 +89,15 @@ struct OnboardingFrontierModelView: View {
             }
             .scrollBounceBehavior(.basedOnSize)
 
-            OnboardingTrustFooter()
+            // Keep room for the persistent bottom-left privacy controls even when a tall
+            // custom-provider panel scrolls. The expanded telemetry card overlays the page.
+            Color.clear.frame(height: 160)
+        }
+        .overlay { OnboardingTelemetryConsent() }
+        .overlay(alignment: .bottomTrailing) {
+            InviteRedemptionView()
+                .frame(width: 320)
+                .padding(.trailing, 36).padding(.bottom, 28)
         }
         .onAppear {
             // Detection only — NO install kicks here (decision 2026-08-21): each engine's CLI

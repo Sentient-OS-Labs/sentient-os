@@ -73,6 +73,10 @@ struct HomeView: View {
     /// The LIVE health issue (essential perms · codex · computer use) — HealthCaution's ladder;
     /// nil = healthy or muted. Outranks the morning-after caution in the banner slot.
     @State private var liveIssue: HealthCaution.Issue?
+    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
+    private var computerSetup: ComputerUseSetup {
+        .instance(for: .selected(for: ModelBackend(rawValue: backendRaw) ?? .chatgpt))
+    }
 
     // Chat selections the Analysis popover's WhatsApp/iMessage chips pick into (same keys as SourceSelection).
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
@@ -114,11 +118,15 @@ struct HomeView: View {
             letter = nil
             letterShown = false
             model.coordinator = appState.commandCoordinator
+            appState.commandCoordinator.run.proactiveCards = { [weak model] in
+                model?.sidekickActions ?? []
+            }
             if !appState.isUninstalling { model.beginVisit(deck: deck) }
             planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
             caution = OvernightCaution.latest()
             probeHealth()
         }
+        .onDisappear { appState.commandCoordinator.run.proactiveCards = nil }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // The user may just have fixed something in System Settings (or a cycle cleared last
             // night's caution) — re-probe so the banner melts away the moment they return.
@@ -130,7 +138,9 @@ struct HomeView: View {
             guard !appState.isUninstalling else { return }
             model.beginVisit(deck: v)                               // mode flip → re-deal
         }
-        .onChange(of: CodexSetup.shared.cuaDriverReady) { _, _ in probeHealth() }
+        .onChange(of: computerSetup.ready) { _, _ in probeHealth() }
+        .onChange(of: ComputerUseGate.shared.automation) { _, _ in probeHealth() }
+        .onChange(of: backendRaw) { _, _ in probeHealth() }
         .onChange(of: appState.isUninstalling) { _, tearing in
             // Uninstall began → take every card off the table; a cancel deals them back in.
             if tearing { withAnimation(.easeInOut(duration: 0.3)) { model.clear() } }
@@ -215,8 +225,8 @@ struct HomeView: View {
                                    probeHealth()   // the muted kind may have been hiding a lower rung
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
-            } else if CodexSetup.shared.cuaUpdateNotice == .updating || CodexSetup.shared.cuaUpdateNotice == .failed {
-                cuaUpdateNotice
+            } else if computerSetup.updateNotice == .updating || computerSetup.updateNotice == .failed {
+                computerUseUpdateNotice
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else if let caution {
                 CautionCapsule(message: caution.message,
@@ -236,8 +246,8 @@ struct HomeView: View {
                                    }
                                })
                     .transition(.opacity.combined(with: .move(edge: .top)))
-            } else if CodexSetup.shared.cuaUpdateNotice == .ready {
-                cuaUpdateNotice
+            } else if computerSetup.updateNotice == .ready {
+                computerUseUpdateNotice
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else {
                 // The lowest rung — the green just-updated notice. Self-contained: draws
@@ -248,14 +258,17 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
         .padding(.trailing, 30).padding(.top, 64)
         .animation(.easeInOut(duration: 0.25), value: connectorCautionData)
-        .animation(.easeInOut(duration: 0.25), value: CodexSetup.shared.cuaUpdateNotice)
+        .animation(.easeInOut(duration: 0.25), value: computerSetup.updateNotice)
     }
 
-    private var cuaUpdateNotice: some View {
-        CuaDriverUpdateNotice(state: CodexSetup.shared.cuaUpdateNotice,
-                             progress: CodexSetup.shared.cuaDriverProgress,
-                             onRetry: CodexSetup.shared.updateCuaDriverIfNeeded,
-                             onDismiss: CodexSetup.shared.dismissCuaUpdateNotice)
+    private var computerUseUpdateNotice: some View {
+        ComputerUseUpdateNotice(state: computerSetup.updateNotice,
+                             progress: computerSetup.progress,
+                             onRetry: {
+                                 let setup = computerSetup
+                                 Task { await setup.install(force: true) }
+                             },
+                             onDismiss: computerSetup.dismissUpdateNotice)
     }
 
     /// The amber caution's one-click fix, where there is one: a signed-out codex is fixed in
@@ -561,6 +574,7 @@ struct HomeView: View {
                            fireDimmed: appState.commandCoordinator.run.isRunning
                                && model.entry(b.id)?.action.map { ProactiveExecutor.isFireable($0) } == true,
                            onCommitEdit: { model.applyEdit(b.id, content: $0, recipient: $1) },
+                           onLiveEdit: { model.updateDraft(b.id, content: $0, recipient: $1) },
                            onOffer: {
                                closeLetter()
                                model.run(b.id)   // real card → fires for real; demo → theater
@@ -635,8 +649,22 @@ final class ForYouModel {
     private var visit = 0
     /// Live real-card fires, keyed by card id, so a card's STOP can cancel exactly its run.
     private var runTasks: [String: Task<Void, Never>] = [:]
+    /// Editor values waiting for the existing autosave. Keep them separate from the saved
+    /// action so reading Sidekick context cannot change the editor's identity or its fields.
+    private var draftPreviews: [String: (content: String, recipient: String)] = [:]
 
     func entry(_ id: String) -> Entry? { entries.first { $0.id == id } }
+
+    /// Exactly the visible, pending real cards. Never resurrect dismissed cards from the
+    /// saved deck or turn a demo/gift into an executable suggestion. Preserve display order.
+    var sidekickActions: [PreparedAction] {
+        entries.compactMap { entry in
+            guard entry.dealt, entry.flight == nil, entry.phase == .offer,
+                  let action = entry.action else { return nil }
+            guard let draft = draftPreviews[entry.id] else { return action }
+            return Self.replacing(action, content: draft.content, recipient: draft.recipient)
+        }
+    }
 
     private func update(_ id: String, _ mutate: (inout Entry) -> Void) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
@@ -650,6 +678,7 @@ final class ForYouModel {
         visit += 1
         let v = visit
         runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
+        draftPreviews.removeAll()
         switch deck {
         case .real:
             // Each card's accent is a shade from its method's color family, cycled by the card's
@@ -688,6 +717,7 @@ final class ForYouModel {
         visit += 1
         runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         entries.removeAll()
+        draftPreviews.removeAll()
     }
 
     /// The welcome envelope opened: the card lives on un-sealed (the view opens the letter).
@@ -760,6 +790,7 @@ final class ForYouModel {
             else { Log("card fire blocked at launch — a task already owns the run"); return }
         }
         update(id) { $0.phase = .working(0); $0.liveLines = [] }
+        InviteProgram.shared.record(.proactive)
         let task = Task {
             let progress: @Sendable (String) -> Void = { line in
                 Task { @MainActor in
@@ -823,10 +854,18 @@ final class ForYouModel {
             guard let old = $0.action else { return }
             $0.action = Self.replacing(old, content: content, recipient: recipient)
         }
+        draftPreviews[id] = nil
         guard let result = ProactiveResearch.latest() else { return }
         ProactiveResearch.saveLatest(ReadyResult(
             ready: result.ready.map { $0.id == id ? Self.replacing($0, content: content, recipient: recipient) : $0 },
             dropped: result.dropped))
+    }
+
+    /// Keep the in-memory draft current on every edit; persistence remains debounced.
+    /// A notch request during editing must see the same response and recipient as the user.
+    func updateDraft(_ id: String, content: String, recipient: String) {
+        guard entry(id)?.action != nil else { return }
+        draftPreviews[id] = (content, recipient)
     }
 
     /// Drop a fired card from the persisted `latest` so a re-deal (next visit) won't show it again.
@@ -857,6 +896,7 @@ final class ForYouModel {
             guard self.visit == token else { return }
             withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) {
                 entries.removeAll { $0.id == id }
+                draftPreviews[id] = nil
             }
         }
     }
@@ -924,6 +964,7 @@ private struct LetterView: View {
     var liveRecipient: String = ""                   // THIS card's "To:" (seeds the recipient field); "" = no recipient
     var fireDimmed: Bool = false                     // one task at a time: another task is running → the CTA waits
     var onCommitEdit: (String, String) -> Void = { _, _ in }   // persist (edited draft, edited recipient) → what fires
+    var onLiveEdit: (String, String) -> Void = { _, _ in }     // current editor values for Sidekick context
     var onOffer: () -> Void
     var onClose: () -> Void
 
@@ -967,6 +1008,17 @@ private struct LetterView: View {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             commitEdit()
+        }
+    }
+
+    private func editChanged() {
+        guard editable else { return }
+        onLiveEdit(editedDraft, editedRecipient)
+        if isDirty {
+            everEdited = true
+            scheduleAutoSave()
+        } else {
+            saveTask?.cancel()
         }
     }
 
@@ -1047,8 +1099,8 @@ private struct LetterView: View {
             giftSaved = false; everEdited = false
         }
         // Every keystroke (draft OR recipient) reschedules the debounced commit, so edits persist without a Save click.
-        .onChange(of: editedDraft) { _, _ in if isDirty { everEdited = true; scheduleAutoSave() } }
-        .onChange(of: editedRecipient) { _, _ in if isDirty { everEdited = true; scheduleAutoSave() } }
+        .onChange(of: editedDraft) { _, _ in editChanged() }
+        .onChange(of: editedRecipient) { _, _ in editChanged() }
         .onDisappear { saveTask?.cancel() }
     }
 

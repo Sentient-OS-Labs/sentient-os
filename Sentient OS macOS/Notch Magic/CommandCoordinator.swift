@@ -20,6 +20,7 @@
 //  two presses are still a double tap. Doc: the two Documentation - Sidekick - *.md files here.
 //
 
+import AppKit
 import Foundation
 
 /// What the notch is showing. Rendered by NotchView; here it's the source of truth + logged.
@@ -80,6 +81,12 @@ final class CommandCoordinator {
     private var onboardingDemoFired: (() -> Void)?
     private var demoTask: Task<Void, Never>?
 
+    /// The native Double Tap lesson temporarily owns modifier events. Only its key window can
+    /// answer them; neither Sidekick nor the real drafting service runs during this lesson.
+    private weak var doubleTapDemoWindow: NSWindow?
+    private var doubleTapDemoID: UUID?
+    private var doubleTapDemoKeyChanged: ((Bool) -> Void)?
+
     /// What the demo is currently "typing" — NotchContent mirrors it into the field's draft, so
     /// the show runs through the REAL TextField. nil = the user owns the field.
     private(set) var demoDraft: String?
@@ -102,6 +109,7 @@ final class CommandCoordinator {
     func start() {
         hotkey.setKey(.current)                            // honor the user's Settings choice (right ⌘ / right ⌥)
         hotkey.onPress = { [weak self] in self?.hotkeyPressed() }
+        hotkey.onRelease = { [weak self] in self?.doubleTapDemoKeyChanged?(false) }
         // No global Esc: a keyDown tap is exactly what Input Monitoring gates, so the monitor
         // listens to modifiers only. Esc still cancels via the window's LOCAL monitor whenever
         // Sentient itself is frontmost; a hotkey press backs out of the type field and a live
@@ -111,7 +119,10 @@ final class CommandCoordinator {
         // rides the same key (two presses inside its window), so it follows the choice for free.
         hotkeyChangeObserver = NotificationCenter.default.addObserver(
             forName: .sidekickHotkeyChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.hotkey.setKey(.current) }
+            MainActor.assumeIsolated {
+                guard let self, self.doubleTapDemoKeyChanged == nil else { return }
+                self.hotkey.setKey(.current)
+            }
         }
         voice.prewarm()
         run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
@@ -159,6 +170,7 @@ final class CommandCoordinator {
         // always-on telemetry signals disclosed in Settings.
         Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label], tier: .core)
         run.start(trimmed, mode: mode, source: source.rawValue)
+        InviteProgram.shared.record(.sidekick)
         // Every command is computer use, which raises the notch.
         setPhase(.running)
         Log("▶︎ submit [\(source)] \(mode.label) (\(trimmed.count) chars)")   // B7: length, not the command text
@@ -231,7 +243,8 @@ final class CommandCoordinator {
     /// The window controller's gate for the hover affordance: no swell for a button that would
     /// do nothing (pre-beat silence); during the beat and after it, the swell is honest.
     var notchButtonAvailable: Bool {
-        Self.hasCompletedOnboarding || onboardingDemoArmed
+        guard doubleTapDemoKeyChanged == nil else { return false }
+        return Self.hasCompletedOnboarding || onboardingDemoArmed
             || UserDefaults.standard.bool(forKey: Self.notchDemoPlayedKey)
     }
 
@@ -250,6 +263,10 @@ final class CommandCoordinator {
     }
 
     private func hotkeyPressed() {
+        if let keyChanged = doubleTapDemoKeyChanged {
+            if NSApp.isActive, doubleTapDemoWindow?.isKeyWindow == true { keyChanged(true) }
+            return
+        }
         // While a reply is being drafted (≈2 s) every press is swallowed: a third tap must not open
         // the type field (it would take key focus and catch the ⌘V) or stop anything.
         if DoubleTap.shared.isDrafting { Log("hotkey press ignored — a reply is being drafted"); return }
@@ -507,6 +524,7 @@ final class CommandCoordinator {
     /// the field): the knowledge-base-only aside, then the first-use permission gate, then the
     /// field. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
+        guard doubleTapDemoKeyChanged == nil else { return }
         guard phase == .hidden, !run.isRunning else { return }
         notchAnchor = .builtInNotch       // the whole session lives on the bezel that was clicked
         if onboardingDemoArmed { beginNotchDemo(door: "notch click"); return }
@@ -523,6 +541,30 @@ final class CommandCoordinator {
         }
         setPhase(.typing)
         Log("notch clicked → typing")
+    }
+
+    // MARK: The native Double Tap lesson
+
+    func armOnboardingDoubleTapDemo(id: UUID, in window: NSWindow, onKeyChange: @escaping (Bool) -> Void) {
+        disarmOnboardingNotchDemo()
+        doubleTapDemoID = id
+        doubleTapDemoWindow = window
+        doubleTapDemoKeyChanged = onKeyChange
+        lastPressAt = nil
+        // Fresh installs already use right Command. A replay of onboarding teaches the same
+        // gesture without overwriting an existing user's persisted alternative key.
+        hotkey.setKey(.rightCommand)
+        if !run.isRunning { setPhase(.hidden) }
+    }
+
+    func disarmOnboardingDoubleTapDemo(id: UUID) {
+        guard doubleTapDemoID == id else { return }
+        doubleTapDemoKeyChanged?(false)
+        doubleTapDemoKeyChanged = nil
+        doubleTapDemoWindow = nil
+        doubleTapDemoID = nil
+        lastPressAt = nil
+        hotkey.setKey(.current)
     }
 
     // MARK: The onboarding notch demo (the film step's invitation beat — click or hotkey)

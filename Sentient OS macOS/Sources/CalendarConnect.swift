@@ -42,9 +42,7 @@ enum CalendarConnect {
     /// connector page on the ChatGPT backend, the claude.ai connector directory on the Claude
     /// backend. Custom backends never reach here (connectorsAvailable gates the chips).
     static var connectorURL: URL {
-        ModelBackend.current == .claude
-            ? URL(string: "https://claude.ai/new#settings/customize-connectors/directory/google-calendar-calendarmcp")!
-            : URL(string: "https://chatgpt.com/plugins/plugin_connector_1p_f8509de903288191b14a160c6c5d20b0?q=calendar")!
+        ConnectorLinks.page(for: "google-calendar")
     }
 
     /// Newest-N events per read window (a busy month rarely exceeds this; a guard against a runaway list).
@@ -170,7 +168,7 @@ enum CalendarConnect {
     static func fetchProactiveContext() async -> String? {
         var inv = CodexCLI.Invocation(prompt: proactiveFetchPrompt)
         inv.feature = "calendar-proactive"
-        inv.model = .gpt56luna
+        inv.model = .gpt6luna
         inv.effort = .medium
         inv.sandbox = .readOnly
         inv.webSearch = false
@@ -201,8 +199,8 @@ enum CalendarConnect {
     private static func read(prompt: String, window: DateInterval) async throws -> ReadResult? {
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "calendar"
-        inv.model = .gpt56luna               // light model — calendar data is small + structured
-        inv.effort = .medium                 // gpt-5.6-luna → medium
+        inv.model = .gpt6luna               // light model — calendar data is small + structured
+        inv.effort = .medium                 // gpt-6-luna → medium
         inv.sandbox = .readOnly              // we only read the calendar + return text (no writes)
         inv.webSearch = false                // the calendar is the only source this needs
         inv.outputSchema = readSchema

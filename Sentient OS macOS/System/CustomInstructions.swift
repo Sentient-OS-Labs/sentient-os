@@ -2,13 +2,12 @@
 //  CustomInstructions.swift
 //  Sentient OS macOS
 //
-//  The user's standing, free-text instructions set in Settings → Proactive & Sidekick: what to care
-//  about / skip in the morning suggestions, and standing context for Sidekick ("text via WhatsApp,
-//  my browser is Edge"). This is the ONE source of truth for those two UserDefaults keys — the pane
-//  (ProactivePane) writes them, the prompts read them here, so a rename can never silently unwire.
+//  The user's standing instructions from Settings: morning-suggestion preferences, Sidekick
+//  context, and Double Tap reply preferences. This is the shared source of truth for their
+//  UserDefaults keys; the settings panes write them and each feature's prompts read them here.
 //  (`sidekick.hotkey` is separate — it drives SidekickHotkeyMonitor, not a prompt.)
 //
-//  Consumers: Proactive.instructionsBlock (PART 1 + PART 2) · CommandRunModel.commandPrompt (Sidekick).
+//  Consumers: Proactive.instructionsBlock · CommandRunModel.commandPrompt · DoubleTapInference.
 //
 
 import Foundation
@@ -18,11 +17,15 @@ enum CustomInstructions {
     static let proactiveKey = "proactive.instructions"
     /// Standing context for Sidekick + the command bar (preferred apps, browser, norms).
     static let sidekickKey = "sidekick.context"
+    /// Reply preferences for Double Tap, independent of Sidekick's task context.
+    static let doubleTapKey = "doubletap.instructions"
+    static let doubleTapByteLimit = 16_000
 
     /// The proactive instructions, trimmed ("" when the user has set none).
     static var proactive: String { value(proactiveKey) }
     /// The Sidekick context, trimmed ("" when the user has set none).
     static var sidekick: String { value(sidekickKey) }
+    static var doubleTap: String { value(doubleTapKey) }
 
     private static func value(_ key: String) -> String {
         (UserDefaults.standard.string(forKey: key) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

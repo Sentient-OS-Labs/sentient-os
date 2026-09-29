@@ -31,6 +31,7 @@ struct HealthPane: View {
     @Environment(AppState.self) private var appState: AppState?
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
+    private var computerGate: ComputerUseGate { .shared }
     /// The live frontier-model choice — observed so switching engines re-renders the pane's
     /// engine group in place.
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
@@ -62,7 +63,7 @@ struct HealthPane: View {
     /// Claude = Claude Code + its login; custom = CLI + a proven endpoint (codex is the
     /// harness there too). The computer-use driver rides every engine.
     private var engineAllGreen: Bool {
-        guard codex.cuaDriverReady else { return false }
+        guard ComputerUseSetup.current.ready, computerGate.allRequiredGranted else { return false }
         switch backend {
         case .chatgpt: return codex.installed && !codex.outdated
                            && codex.loggedIn && plan?.tier != .limited
@@ -74,7 +75,7 @@ struct HealthPane: View {
 
     private var allGreen: Bool {
         fdaGranted && daemon == .ready && loginOn && micSpeech == .granted
-            && screenRec && accessibility
+            && screenRec && (backend == .chatgpt || accessibility)
             && (notifStatus == .authorized || notifStatus == .provisional)
             && engineAllGreen
     }
@@ -89,6 +90,7 @@ struct HealthPane: View {
                 VStack(alignment: .leading, spacing: 30) {
                     onDeviceGroup
                     sidekickGroup
+                    if backend == .chatgpt { NativeComputerUsePermissionRows(gate: computerGate) }
                     SettingsHairline(opacity: 0.12)
                         .padding(.vertical, -7)   // the brighter, tighter group splitter (matches ProactivePane's)
                         .rise(7, revealed: revealed)
@@ -208,6 +210,7 @@ struct HealthPane: View {
                     fixMicSpeech()
                 }
                 .rise(3, revealed: revealed)
+                if backend != .chatgpt {
                 StatusLine(title: "Accessibility",
                            health: accessibility ? .ok : .bad,   // the driver's hands — computer use is off without it
                            note: accessibility ? "granted" : "not granted",
@@ -216,6 +219,7 @@ struct HealthPane: View {
                     fixAccessibility()
                 }
                 .rise(4, revealed: revealed)
+                }
                 StatusLine(title: "Screen Recording",
                            health: screenRec ? .ok : .bad,   // the driver's eyes — computer use is off without it
                            note: screenRec ? "granted" : "not granted",
@@ -499,17 +503,17 @@ struct HealthPane: View {
     /// CodexSetup owns its one install path for all of them).
     @ViewBuilder private var computerUseRow: some View {
         StatusLine(title: "Computer use",
-                   health: codex.cuaDriverReady ? .ok : (codex.settingUpCuaDriver ? .warn : .bad),
-                   note: codex.settingUpCuaDriver ? "setting up…"
-                       : (codex.cuaDriverReady ? "ready" : "not set up"),
-                   tip: "The driver that clicks and types on your Mac when you fire an action — inside the app's window, in the background, without taking over your cursor.\n\nSet up downloads one pinned open-source driver (cua-driver, about 40 MB), verifies it against a known checksum and its developer's signature, and installs it for Sentient alone. Nothing is hosted by us.",
+                   health: ComputerUseSetup.current.ready ? .ok : (ComputerUseSetup.current.isInstalling ? .warn : .bad),
+                   note: ComputerUseSetup.current.isInstalling ? "setting up…"
+                       : (ComputerUseSetup.current.ready ? "ready" : "not set up"),
+                   tip: backend == .chatgpt ? "Downloads OpenAI's signed computer-use helper directly from OpenAI. Uses your existing Codex CLI and login." : "Downloads the pinned CUA driver for your selected engine and verifies its checksum and signature.",
                    fixTitle: "Set up…",
-                   fix: codex.settingUpCuaDriver ? nil : { Task { await codex.setupCuaDriver() } })
+                   fix: ComputerUseSetup.current.isInstalling ? nil : { Task { await ComputerUseSetup.current.install() } })
         // The download deserves live narration, not just an amber dot.
-        if codex.settingUpCuaDriver, let line = codex.cuaDriverStatus {
+        if ComputerUseSetup.current.isInstalling, let line = ComputerUseSetup.current.status {
             SettingsProse(line).padding(.top, 2).padding(.bottom, 6)
         } else {
-            failureLine(codex.cuaDriverStatus)
+            failureLine(ComputerUseSetup.current.status)
         }
     }
 
@@ -537,6 +541,7 @@ struct HealthPane: View {
     // MARK: - Probes
 
     private func refresh() async {
+        computerGate.refresh()
         fdaGranted = Permissions.hasFullDiskAccess()
         loginOn = LoginItem.isEnabled
         await refreshDaemon()
@@ -549,7 +554,7 @@ struct HealthPane: View {
                     clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"))
         accessibility = Permissions.hasAccessibility()
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
-        codex.refreshCuaDriver()
+        ComputerUseSetup.current.refresh()
         // Only the LIVE engine's rows are probed (the login checks shell out, seconds each).
         // Custom backends keep the codex CLI probe (codex is their harness) but skip the login
         // check — no ChatGPT account is needed there.

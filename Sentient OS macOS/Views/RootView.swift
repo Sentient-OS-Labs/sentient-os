@@ -36,8 +36,11 @@ struct RootView: View {
     // the finish closure below re-resolves so the home's Analyze Now works without a relaunch.
     @State private var modelPath = ModelLocator.resolve()
 
-    /// Observed for the global "setting up computer use" whisper (the overlay below).
-    @State private var codex = CodexSetup.shared
+    /// Observe the engine choice as well as its installer, including changes in another window.
+    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
+    private var computerSetup: ComputerUseSetup {
+        .instance(for: .selected(for: ModelBackend(rawValue: backendRaw) ?? .chatgpt))
+    }
 
     /// Observed for the bottom-left model-download whisper (same overlay slot).
     @State private var download = ModelDownload.shared
@@ -121,7 +124,7 @@ struct RootView: View {
         .overlay(alignment: .bottomLeading) {
             VStack(alignment: .leading, spacing: 10) {
                 ModelDownloadWhisper(download: download)
-                if codex.settingUpCuaDriver {
+                if computerSetup.isInstalling {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small).scaleEffect(0.6)
                         Text("Setting up computer use in the background.")
@@ -133,7 +136,7 @@ struct RootView: View {
             }
             .padding(.leading, 22).padding(.bottom, 12)
         }
-        .animation(.easeInOut(duration: 0.35), value: codex.settingUpCuaDriver)
+        .animation(.easeInOut(duration: 0.35), value: computerSetup.isInstalling)
         .animation(.easeInOut(duration: 0.35), value: download.phase)
         .animation(.easeInOut(duration: 0.35), value: download.fullScreenVisible)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a

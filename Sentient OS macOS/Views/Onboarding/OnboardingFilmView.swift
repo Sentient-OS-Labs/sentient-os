@@ -5,12 +5,11 @@
 //  Onboarding slide 1 — the website's film (sentient-os.ai/onboarding) playing inside a
 //  WKWebView. The page drives itself (its Autopilot scrolls the film) and parks at the
 //  morning-home rest (?end=0.42 in film progress); at each park it posts "parked" to the
-//  `autopilot` message handler and the native Continue button blooms in. Three legs: the
-//  night film → the Sidekick scene → the Under-the-hood exhibit (the site's architecture
-//  diagram, parked on its "hood" anchor). The webview is a movie, not a page: hit-testing
+//  `autopilot` message handler and the native Continue button blooms in. The night film leads
+//  into Sidekick, then a native Double Tap lesson before the frontier-model picker.
+//  The webview is a movie, not a page: hit-testing
 //  returns nil (no scrolling, no clicks), navigation off our host is blocked, and the view
-//  fades in black-on-black only after the page loads (no flash) — with ONE exception: the
-//  hood park is interactive (hover captions + the Read More popup), wheel still swallowed.
+//  fades in black-on-black only after the page loads (no flash).
 //  Offline or a failed load falls back to a quiet branded slide, so onboarding is never
 //  blocked on the network. Watchdogs bound every wait: 12s to load, 40s to park.
 //  DEBUG: `defaults write` the string `dev.film.url` to point the step at a local dev
@@ -24,17 +23,20 @@ import WebKit
 struct OnboardingFilmView: View {
     let onContinue: () -> Void
 
+    #if DEBUG
+    /// Publishes the active web intro to the shared dev footer; nil during native screens.
+    var onWebIntroChange: (FilmDriver?) -> Void = { _ in }
+    #endif
+
     /// For the notch demo: the film step arms the coordinator's one-shot scripted Sidekick
     /// performance while the film is parked on the invitation (click the notch / press right ⌘).
     @Environment(AppState.self) private var appState
 
-    /// The step's phases, three film legs in one webview: black until the film is really
+    /// The step's phases, two film legs in one webview: black until the film is really
     /// rendering → leg 1 (night → the morning park; Continue up) → on Continue, leg 2
     /// (the turn, "One more thing. Meet Sidekick.", the dive, the whole Sidekick scene;
-    /// same page instance, `continueTo` over evaluateJavaScript) → parked again → on
-    /// Continue, leg 3 (a short ride down to the Under-the-hood exhibit, parked on its
-    /// "hood" anchor — the film's one INTERACTIVE beat: hover captions and the Read More
-    /// popup work) → the final Continue advances onboarding. `unavailable` is the offline
+    /// same page instance, `continueTo` over evaluateJavaScript) → parked again → the native
+    /// Double Tap lesson → the final Continue advances onboarding. `unavailable` is the offline
     /// fallback slide.
     /// The loading → playing fade keys on the page's "ready" message (posted
     /// post-hydration, as the entrance starts) — WKWebView's didFinish fires long before
@@ -47,31 +49,26 @@ struct OnboardingFilmView: View {
     /// and the film rides on (.ridingSidekick).
     private enum Phase {
         case loading, playing, parked, ridingToInvitation, awaitingNotch,
-             ridingSidekick, sidekickDone, ridingToHood, hoodParked, unavailable
+             ridingSidekick, sidekickDone, doubleTap, unavailable
     }
     @State private var phase: Phase = .loading
 
     /// didFinish fired — arms the fallback fade for a "ready"-less page (older deploy).
     @State private var finishedLoad = false
+    @State private var filmUnavailable = false
 
     /// The bridge for driving the page's autopilot (leg 2's continueTo).
     @State private var driver = FilmDriver()
 
-    /// The parks' page-measured Continue centers — the middle of the free zone the
-    /// film reports (driver.morningBand / driver.hoodBand). nil until the page
-    /// answers (or an older deploy never does); each park's fallback holds until
-    /// then.
+    /// The morning park's page-measured Continue center. Its fallback holds until the
+    /// page reports the free zone between the narration and the laptop.
     @State private var morningBandCenter: CGFloat?
-    @State private var hoodBandCenter: CGFloat?
 
     /// Leg 1: the film to the morning-home rest — p 0.42 (pNight 0.76: home settled, wake
     /// line up, before the zoom at 0.477 and the turn/dive after it). The turn ("One more
     /// thing. Meet Sidekick.") belongs to LEG 2, which rides from the park to the film's
     /// final frame (0.999 — never 1.0: p ≥ 1 means the page bottom, and the site's tail +
-    /// footer must never scroll into the webview). LEG 3 parks on the Under-the-hood
-    /// exhibit via its element anchor ("hood" — the exhibit is 100svh, so the park fills
-    /// the frame exactly and the tail + footer still never appear); anchors live outside
-    /// the film's p space, so re-pacing never moves them.
+    /// footer must never scroll into the webview).
     /// ⚠️ Parked beats are ADDRESSES into the film's scroll timeline: whenever the website
     /// re-budgets FilmHero's per-scene _VH constants, these must be re-derived in lockstep
     /// (the contract lives in the site's Autopilot.tsx header; p = beat vh / SCROLL_VH —
@@ -120,24 +117,33 @@ struct OnboardingFilmView: View {
         return comps.url ?? base
     }
 
-    var body: some View {
+    private var stage: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
 
             if phase == .unavailable {
                 fallbackSlide.transition(.opacity)
             } else {
-                FilmWebView(url: Self.filmURL,
-                            driver: driver,
-                            onLoaded: { finishedLoad = true },
-                            onReady: { fadeIn() },
-                            onParked: { legParked() },
-                            onFailed: { if phase == .loading { setPhase(.unavailable) } })
-                    .ignoresSafeArea()
-                    .opacity(phase == .loading ? 0 : 1)
-                    // The movie can't be touched — except the hood park, the film's one
-                    // interactive beat (PassiveWebView gates the NSView side in lockstep).
-                    .allowsHitTesting(phase == .hoodParked)
+                if !filmUnavailable {
+                    FilmWebView(url: Self.filmURL,
+                                driver: driver,
+                                onLoaded: { finishedLoad = true },
+                                onReady: { fadeIn() },
+                                onParked: { legParked() },
+                                onFailed: { if phase == .loading { setPhase(.unavailable) } })
+                        .ignoresSafeArea()
+                        .opacity(phase == .loading || phase == .doubleTap ? 0 : 1)
+                        .accessibilityHidden(true)
+                        .allowsHitTesting(false)
+                }
+
+                // Keep the page mounted and hidden during the native lesson so a stale
+                // Sidekick frame cannot flash through the transition to the next step.
+                if phase == .doubleTap {
+                    OnboardingDoubleTapView(coordinator: appState.commandCoordinator,
+                                            onContinue: finishDoubleTap)
+                        .transition(.opacity)
+                }
 
                 // Continue blooms in whenever a leg parks. On the MORNING park the laptop
                 // fills the window's lower half, so the button sits ABOVE it — centered in
@@ -167,34 +173,13 @@ struct OnboardingFilmView: View {
                             .padding(.bottom, 44)
                     }
                     .transition(.opacity)
-                } else if phase == .hoodParked {
-                    // The hood park: page-placed like the morning's — pinned just under
-                    // the zone top the exhibit reports (its caption band, tall hover
-                    // state reserved; driver.hoodBand), re-asked on every resize and
-                    // clamped on-screen. NOT centered in the remaining zone: the
-                    // exhibit's bottom chrome leaves only slack there on height-bound
-                    // windows, so a centered button always rode the bottom clamp.
-                    // Fallback = the old bottom-hug until the page answers.
-                    // The telemetry pill shares the Continue's row, bottom-left.
-                    GeometryReader { geo in
-                        let continueY = min(hoodBandCenter ?? (geo.size.height - 68),
-                                            geo.size.height - 40)
-                        ZStack {
-                            OnboardingTelemetryConsent(rowCenterY: continueY)
-                            // The exhibit's Continue wears the AI-gradient halo — a beat
-                            // brighter than the Analyze Now popover's 0.28.
-                            OnboardingNextButton(title: "Continue", glow: 0.4,
-                                                 action: advanceFromPark)
-                                .position(x: geo.size.width / 2, y: continueY)
-                        }
-                        .onAppear { measureHoodBand() }
-                        .onChange(of: geo.size) { measureHoodBand() }
-                    }
-                    .ignoresSafeArea()
-                    .transition(.opacity)
                 }
             }
         }
+    }
+
+    var body: some View {
+        stage
         // The film step leaving (Continue, back) must never strand an armed demo — the
         // notch goes back to its real behavior the moment onboarding moves on.
         .onDisappear { appState.commandCoordinator.disarmOnboardingNotchDemo() }
@@ -210,7 +195,7 @@ struct OnboardingFilmView: View {
             fadeIn()
         }
         // Park watchdogs, one per leg: if the park signal never arrives (older deploy,
-        // JS hiccup), Continue blooms anyway. Leg 1 rides ~15s, leg 2 ~17s, leg 3 ~3s —
+        // JS hiccup), Continue blooms anyway. Leg 1 rides ~15s, leg 2 ~17s —
         // all bounded.
         .task(id: phase == .playing) {
             guard phase == .playing else { return }
@@ -221,11 +206,6 @@ struct OnboardingFilmView: View {
             guard phase == .ridingSidekick else { return }
             try? await Task.sleep(for: .seconds(45))
             if phase == .ridingSidekick { setPhase(.sidekickDone) }
-        }
-        .task(id: phase == .ridingToHood) {
-            guard phase == .ridingToHood else { return }
-            try? await Task.sleep(for: .seconds(15))
-            if phase == .ridingToHood { setPhase(.hoodParked) }
         }
         // The notch invitation was the one wait without a watchdog — the corner SKIP
         // used to be its manual exit (removed 2026-07-17). If the invitation is never
@@ -244,13 +224,24 @@ struct OnboardingFilmView: View {
             try? await Task.sleep(for: .seconds(30))
             if phase == .ridingToInvitation { armNotchBeat() }
         }
+        #if DEBUG
+        .onChange(of: phase, initial: true) { publishWebIntro() }
+        .onDisappear { onWebIntroChange(nil) }
+        #endif
     }
 
+    #if DEBUG
+    private func publishWebIntro() {
+        switch phase {
+        case .loading, .doubleTap, .unavailable: onWebIntroChange(nil)
+        default: onWebIntroChange(driver)
+        }
+    }
+    #endif
+
     private func setPhase(_ new: Phase) {
+        if new == .unavailable { filmUnavailable = true }
         withAnimation(.easeInOut(duration: 0.45)) { phase = new }
-        // The NSView-side hit-testing gate rides the phase in lockstep with the
-        // SwiftUI-side .allowsHitTesting above.
-        driver.setInteractive(new == .hoodParked)
     }
 
     /// A leg landed — route the page's "parked" by which leg was riding.
@@ -259,32 +250,27 @@ struct OnboardingFilmView: View {
         case .loading, .playing:    setPhase(.parked)
         case .ridingToInvitation:   armNotchBeat()
         case .ridingSidekick:       setPhase(.sidekickDone)
-        case .ridingToHood:         setPhase(.hoodParked)
         default: break
         }
     }
 
     /// The parked Continue: the first park rides on to the invitation beat. The Sidekick park's
-    /// Continue rides leg 3 down to the Under-the-hood exhibit; the hood park's Continue hands
-    /// onboarding to the next step.
+    /// Continue opens the native Double Tap lesson, which owns its own completion gate.
     private func advanceFromPark() {
         switch phase {
         case .parked:
             setPhase(.ridingToInvitation)
             driver.continueTo(Self.invitationEndP)
         case .sidekickDone:
-            setPhase(.ridingToHood)
-            // A deploy without the hood anchor (older site) reports unsupported —
-            // then the Continue the user just pressed keeps its old meaning and
-            // onboarding simply moves on. Never a second parked-in-place button
-            // (field-found 2026-07-17: pre-deploy, the fallback bloomed a stray
-            // bottom-right Continue over the Sidekick frame).
-            driver.continueToHood { supported in
-                if !supported { exitStep() }
-            }
+            setPhase(.doubleTap)
         default:
             exitStep()
         }
+    }
+
+    private func finishDoubleTap() {
+        guard phase == .doubleTap else { return }
+        exitStep()
     }
 
     /// Leaving the film step (Continue, the fallback slide): the notch beat is behind the
@@ -300,6 +286,7 @@ struct OnboardingFilmView: View {
     /// the moment the demo fires, the film rides on — the webview's windows play the shopping
     /// run while the real notch narrates. Disarmed on step-exit via onDisappear.
     private func armNotchBeat() {
+        driver.hideLogo()
         setPhase(.awaitingNotch)
         appState.commandCoordinator.armOnboardingNotchDemo { [self] in
             driver.continueTo(Self.sidekickEndP, seconds: Self.sidekickRideSeconds)
@@ -320,21 +307,6 @@ struct OnboardingFilmView: View {
             driver.morningBand { band in
                 guard let band else { return }
                 morningBandCenter = max((band.top + band.bottom) / 2, band.top + 30)
-            }
-        }
-    }
-
-    /// The hood park: pin the button's center a fixed beat below the reported zone
-    /// top (the caption band's reserved bottom edge). Centering in the zone itself
-    /// glued the button to the bottom of the window — the exhibit's own chrome
-    /// leaves the zone ~30px tall on height-bound windows, and on width-bound ones
-    /// the pooled slack put the center far below where the eye wants the button.
-    private func measureHoodBand() {
-        withTrailingRead {
-            driver.repark()
-            driver.hoodBand { band in
-                guard let band else { return }
-                hoodBandCenter = band.top + 30
             }
         }
     }
@@ -364,7 +336,7 @@ struct OnboardingFilmView: View {
             Spacer()
             Text("An AI that knows your life, and acts on it.")
                 .display(30)
-            OnboardingNextButton(title: "Continue", action: exitStep)
+            OnboardingNextButton(title: "Continue", action: { setPhase(.doubleTap) })
             Spacer()
             OnboardingTrustFooter()
         }
@@ -376,8 +348,23 @@ struct OnboardingFilmView: View {
 
 /// The native → page bridge: holds the webview so the step can drive the page's
 /// autopilot (window.__sentientAutopilot, installed by the site on mount).
-final class FilmDriver {
+@Observable final class FilmDriver {
+    @ObservationIgnored
     weak var webView: WKWebView?
+
+    #if DEBUG
+    private(set) var introSpedUp = false
+    @ObservationIgnored private var currentEnd = 0.42
+    @ObservationIgnored private var currentSeconds: Double?
+
+    /// Restart the remaining ride from its current scroll position at 50×. The flag also
+    /// applies to later Continue calls, without skipping any of the film's interaction stops.
+    func speedUpIntro() {
+        guard !introSpedUp else { return }
+        introSpedUp = true
+        continueTo(currentEnd, delay: 0, seconds: currentSeconds)
+    }
+    #endif
 
     /// Resume the parked ride to a new film-p address (leg 2: the Sidekick scene).
     /// delay = the breath before motion. Pace stays the site's: the film's own beat
@@ -388,34 +375,32 @@ final class FilmDriver {
     /// the site's pace).
     func continueTo(_ end: Double, delay: Double = 0.1, seconds: Double? = nil) {
         Log("Onboarding film: continueTo(\(end), delay: \(delay), seconds: \(seconds.map { "\($0)" } ?? "site pace"))")
-        let secondsArg = seconds.map { "\($0)" } ?? "undefined"
-        webView?.evaluateJavaScript(
-            "window.__sentientAutopilot?.continueTo(\(end), \(delay), undefined, \(secondsArg))")
-    }
-
-    /// Leg 3: ride to the Under-the-hood exhibit's element anchor. Guarded on the
-    /// anchor existing in the deployed page (an older deploy has no "hood" id, and
-    /// feeding its Autopilot a string would ride into NaN) — the completion reports
-    /// whether the leg actually fired.
-    func continueToHood(delay: Double = 0.1, completion: @escaping (Bool) -> Void) {
-        guard let webView else { completion(false); return }
-        Log("Onboarding film: continueTo(hood, delay: \(delay))")
-        webView.evaluateJavaScript(
-            """
+        var playbackRate = 1.0
+        var paceArg = "undefined"
+        #if DEBUG
+        currentEnd = end
+        currentSeconds = seconds
+        if introSpedUp {
+            playbackRate = 50
+            // Match Autopilot's default (30s), including a dev URL's valid duration override.
+            // Its third argument scales the normal scene pacing; the fourth pins Sidekick.
+            paceArg = """
             (() => {
-              if (!document.getElementById('hood') || !window.__sentientAutopilot) return false;
-              window.__sentientAutopilot.continueTo('hood', \(delay));
-              return true;
+              const duration = Number(new URLSearchParams(window.location.search).get('duration'));
+              return (Number.isFinite(duration) && duration >= 1 ? duration : 30) / 50;
             })()
-            """) { result, _ in
-            completion((result as? Bool) ?? false)
+            """
         }
+        #endif
+        let secondsArg = seconds.map { "\($0 / playbackRate)" } ?? "undefined"
+        webView?.evaluateJavaScript(
+            "window.__sentientAutopilot?.continueTo(\(end), \(delay / playbackRate), \(paceArg), \(secondsArg))")
     }
 
-    /// The hood park is the film's one interactive beat — this flips the webview's
-    /// hit-testing (hover captions + the Read More popup) and its wheel gate.
-    func setInteractive(_ on: Bool) {
-        (webView as? PassiveWebView)?.interactive = on
+    /// The website brings its logo back after the notch invitation. Keep it hidden for
+    /// the rest of this page's lifetime, including Sidekick's finish and the native lesson.
+    func hideLogo() {
+        webView?.evaluateJavaScript("document.documentElement.classList.add('sentient-hide-logo')")
     }
 
     /// Re-assert the page's park. The page re-snaps itself through a resize (its own
@@ -451,66 +436,21 @@ final class FilmDriver {
     func morningBand(completion: @escaping ((top: CGFloat, bottom: CGFloat)?) -> Void) {
         band("morningBand", completion: completion)
     }
-
-    /// The hood park: [under the caption band (tall hover state reserved), viewport
-    /// bottom].
-    func hoodBand(completion: @escaping ((top: CGFloat, bottom: CGFloat)?) -> Void) {
-        band("hoodBand", completion: completion)
-    }
 }
 
 /// A WKWebView that can't be interacted with, so the film can't be scrolled off its
 /// autopilot or clicked away: hitTest nil keeps the whole subtree out of event routing,
 /// the scrollWheel stub swallows anything that arrives some other way (responder chain),
 /// and refusing first-responder keeps keyboard scrolling (space, arrows) out too.
-///
-/// One sanctioned exception: the hood park (`interactive`), where the exhibit's hover
-/// captions and Read More popup come alive. Even then the WHEEL stays swallowed — one
-/// scroll would drag the parked film toward the footer — via a local event monitor. The
-/// one wheel that passes is while the page reports its popup open (`popupOpen`): the
-/// popup's internal scroller needs it, and the page locks its own scroll then (Lenis
-/// stop), so the film can't move underneath.
-///
-/// ⚠️ Both halves must yield together. The monitor gates AppKit's dispatch, but a
-/// WKWebView usually hitTests to ITSELF, so the passed event lands right back on this
-/// override — an unconditional no-op here would eat the popup's wheel even after the
-/// monitor let it by (field-found 2026-07-17: the popup wouldn't scroll). So the
-/// override forwards to super under exactly the same `popupOpen` condition.
 private final class PassiveWebView: WKWebView {
-    var interactive = false { didSet { syncWheelGate() } }
-    /// Mirrors the page's popup state ("popup-open"/"popup-closed" bridge messages).
-    var popupOpen = false
-
-    private var wheelGate: Any?
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        interactive ? super.hitTest(point) : nil
-    }
-    override func scrollWheel(with event: NSEvent) {
-        if popupOpen { super.scrollWheel(with: event) }
-    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func scrollWheel(with event: NSEvent) {}
     override var acceptsFirstResponder: Bool { false }
 
     /// No browser context menu, ever — right-click/ctrl-click "Reload Page" would restart
     /// the film and shatter the native-screen illusion. Emptying the menu shows nothing.
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         menu.removeAllItems()
-    }
-
-    private func syncWheelGate() {
-        if interactive, wheelGate == nil {
-            wheelGate = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
-                guard let self, event.window === self.window, !self.popupOpen else { return event }
-                return nil
-            }
-        } else if !interactive, let gate = wheelGate {
-            NSEvent.removeMonitor(gate)
-            wheelGate = nil
-        }
-    }
-
-    deinit {
-        if let gate = wheelGate { NSEvent.removeMonitor(gate) }
     }
 }
 
@@ -535,7 +475,10 @@ private struct FilmWebView: NSViewRepresentable {
         let hideScrollbars = WKUserScript(
             source: """
             const style = document.createElement('style');
-            style.textContent = '::-webkit-scrollbar{display:none!important} html{scrollbar-width:none}';
+            style.textContent = `
+              ::-webkit-scrollbar{display:none!important} html{scrollbar-width:none}
+              html.sentient-hide-logo .film-logo-link{visibility:hidden!important;opacity:0!important;pointer-events:none!important}
+            `;
             document.documentElement.appendChild(style);
             """,
             injectionTime: .atDocumentStart, forMainFrameOnly: true)
@@ -570,10 +513,6 @@ private struct FilmWebView: NSViewRepresentable {
             switch message.body as? String {
             case "ready":  parent.onReady()
             case "parked": parent.onParked()
-            // The exhibit's Read More popup opening/closing (hood park) — drives the
-            // wheel gate: an open popup owns the wheel, a closed one gives it back.
-            case "popup-open":   (message.webView as? PassiveWebView)?.popupOpen = true
-            case "popup-closed": (message.webView as? PassiveWebView)?.popupOpen = false
             default: break
             }
         }

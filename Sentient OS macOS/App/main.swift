@@ -12,6 +12,14 @@ import Foundation
 import SwiftUI
 
 #if DEBUG
+// Native computer-use validation starts before AppState or any production startup side effect.
+if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "nativecua",
+   CommandLine.arguments.count == 1 {
+    NSApplication.shared.setActivationPolicy(.regular)
+    Task { await NativeComputerUseLab.run(); exit(0) }
+    NSApplication.shared.run()
+    exit(0)
+}
 // Helper/wake invocations must retain their dedicated entry even if a child inherits lab env.
 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
    CommandLine.arguments.count == 1 {

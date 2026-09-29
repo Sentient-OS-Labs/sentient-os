@@ -1,38 +1,7 @@
-//
-//  CodexSetup.swift
-//  Sentient OS macOS
-//
-//  The unified Codex SETUP engine — the SINGLE code path that onboarding AND the dev tools both
-//  drive, so there's never a second, divergent copy. Getting Sentient's cloud spine plus computer
-//  use working on the user's Mac is three steps:
-//    1. INSTALL   — drop the Codex CLI binary on disk.
-//    2. AUTH      — `codex login` with the user's OpenAI account.
-//    3. DRIVER    — download + verify the pinned cua-driver, the hands of computer use
-//                   (Driver/CuaDriverSetup; needs neither the binary nor the login).
-//  Observable + a shared instance, so both UIs render the same live status off one source of truth.
-//  The actual binary install runs through CodexCLI (its Process plumbing); the driver install runs
-//  through CuaDriverSetup; this file owns the flow.
-//
-//  Key methods:
-//   - refreshInstalled()   → re-detect whether the codex binary is present (async, off-main)
-//   - ensureCurrent()      → the engine commitment gate: check, install/update, and verify
-//   - installCodex()       → step 1: run OpenAI's installer (ALWAYS runs — it doubles as the
-//                            updater over an existing install; streams progress)
-//   - startLogin/confirmLogin → step 2: interactive `codex login` (browser) + confirm
-//   - setupCuaDriver()     → step 3: fetch + verify + install the pinned driver (streams progress)
-//   - ensureCuaDriver()    → the fire-time self-heal: driver on disk before a computer-use run
-//   - whatsNeeded()        → fresh check of all three; returns the pending steps (smart-flow driver)
-//   - updateIfDue(trigger:) → keep the managed CLI current: at most one update attempt a day,
-//                            skipped when already the newest release (a 1 KB version check)
-//   - startKeepingCurrent(isBusy:) → the periodic trigger: every 15 min, when the user is away
-//                            and nothing is running codex, call updateIfDue
-//   - repairStaleClient()  → a run just failed on the stale-client signature: update now, flag
-//                            `outdated` for the health rung until the update lands
-//   - noteStaleSignal()    → the signature on a run that still succeeded: pull the next daily
-//                            update forward (hourly at most), no banner
-//
-//  Doc: Cloud/Documentation - Cloud - Codex Setup.md
-//
+// Observable Codex CLI installation, login and update flow shared by onboarding and Settings.
+// ComputerUseSetup independently prepares the selected native or CUA computer-use runtime.
+// Key methods: ensureCurrent(), ensureInstalled(), startLogin(), updateIfDue(), whatsNeeded().
+// Doc: Cloud/Documentation - Cloud - Codex Setup.md
 
 import Foundation
 
@@ -403,127 +372,10 @@ final class CodexSetup {
         }
     }
 
-    // MARK: Step 3 — the computer-use driver (cua-driver)
-    //
-    // The hands (see Driver/CuaDriver): one pinned ~40 MB binary that codex loads as an MCP server
-    // and that acts inside a single window without stealing the cursor. Unlike steps 1 and 2 it
-    // needs NO codex binary and no login — a self-contained download that can run before, during,
-    // or after the rest of setup.
-
-    /// Is the pinned cua-driver on disk?
-    private(set) var cuaDriverReady = CuaDriver.isInstalled
-    /// A cua-driver install is running (drives the spinner + disables the button).
-    private(set) var settingUpCuaDriver = false
-    /// Latest streamed progress line, or the final ✓/✗ result.
-    private(set) var cuaDriverStatus: String?
-
-    /// Cheap re-detect — call on appear and after a setup.
-    func refreshCuaDriver() { cuaDriverReady = CuaDriver.isInstalled }
-
-    enum CuaUpdateNotice: Equatable { case hidden, updating, failed, ready }
-    private(set) var cuaUpdateNotice: CuaUpdateNotice = .hidden
-    private(set) var cuaDriverProgress: CuaDriverSetup.Progress?
-    @ObservationIgnored private var cuaDriverInstallTask: Task<Bool, Never>?
-    @ObservationIgnored private var cuaInstallGeneration = UUID()
-
-    /// Existing CUA users get an ordinary background update. Legacy Codex users are handled
-    /// by ComputerUseUpgrade, and fresh installs by onboarding. One pinned version per app.
-    func updateCuaDriverIfNeeded() {
-        guard CuaDriver.hasInstallationHistory, !CuaDriver.isInstalled else { return }
-        cuaUpdateNotice = .updating
-        beginCuaDriverInstall()
-    }
-
-    func dismissCuaUpdateNotice() {
-        guard cuaUpdateNotice != .updating else { return }
-        cuaUpdateNotice = .hidden
-    }
-
-    /// All callers join ONE install, including a command arriving during a background update.
-    /// A force repair cannot race an onboarding download or swap the binary twice.
-    func setupCuaDriver(force: Bool = false) async {
-        beginCuaDriverInstall(force: force)
-        _ = await cuaDriverInstallTask?.value
-    }
-
-    private func beginCuaDriverInstall(force: Bool = false) {
-        guard cuaDriverInstallTask == nil else { return }
-        if !force, CuaDriver.isInstalled {
-            cuaDriverReady = true
-            cuaDriverStatus = "✓ Cua driver already installed"
-            return
-        }
-        if CuaDriver.hasInstallationHistory { cuaUpdateNotice = .updating }
-        settingUpCuaDriver = true
-        cuaDriverReady = false
-        cuaDriverProgress = .downloading(nil)
-        cuaDriverStatus = force ? "Re-installing…" : "Starting…"
-        let generation = UUID()
-        cuaInstallGeneration = generation
-        cuaDriverInstallTask = Task { [self] in
-            defer {
-                settingUpCuaDriver = false
-                cuaDriverInstallTask = nil
-            }
-            do {
-                try await CuaDriverSetup.install(force: force, onProgress: { [weak self] progress in
-                    guard let self, self.settingUpCuaDriver, self.cuaInstallGeneration == generation else { return }
-                    // URLSession byte callbacks may arrive after the download has completed.
-                    // Never let a late callback rewind verification or a newer progress value.
-                    if case .downloading(let next) = progress {
-                        guard case .downloading(let previous) = self.cuaDriverProgress else { return }
-                        if let previous, let next, next < previous { return }
-                    }
-                    self.cuaDriverProgress = progress
-                }) { line in
-                    Log("[cua-driver] \(line)")
-                    Task { @MainActor [weak self] in
-                        guard self?.settingUpCuaDriver == true, self?.cuaInstallGeneration == generation else { return }
-                        self?.cuaDriverStatus = line
-                    }
-                }
-                cuaDriverReady = true
-                cuaDriverStatus = "✓ Cua driver ready"
-                cuaDriverProgress = .ready
-                if cuaUpdateNotice == .updating { cuaUpdateNotice = .ready }
-                return true
-            } catch {
-                cuaDriverReady = CuaDriver.isInstalled
-                cuaDriverStatus = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
-                if cuaUpdateNotice == .updating { cuaUpdateNotice = .failed }
-                if !Task.isCancelled { stepFailed(.cuaDriver, error) }
-                return false
-            }
-        }
-    }
-
-    /// STOP cancels this waiter immediately, without canceling the shared background download.
-    /// The install's own network deadline is authoritative; a slow connection must not hit the
-    /// former two-minute waiter ceiling while the same download legitimately continues.
-    @discardableResult
-    func ensureCuaDriver() async -> Bool {
-        if !settingUpCuaDriver, CuaDriver.isInstalled { cuaDriverReady = true; return true }
-        beginCuaDriverInstall()
-        while settingUpCuaDriver {
-            do { try await Task.sleep(for: .milliseconds(100)) }
-            catch { return false }
-        }
-        guard !Task.isCancelled else { return false }
-        refreshCuaDriver()
-        return cuaDriverReady
-    }
-
-    /// Uninstall must drain the installer before deleting the managed dependency directory.
-    func cancelCuaDriverInstall() async {
-        cuaDriverInstallTask?.cancel()
-        _ = await cuaDriverInstallTask?.value
-        cuaUpdateNotice = .hidden
-    }
-
     // MARK: Onboarding driver (one source of truth for BOTH a dumb-sequential and a smart flow)
 
     /// The three setup steps, in order.
-    enum Step: String, Sendable { case install, login, cuaDriver }
+    enum Step: String, Sendable { case install, login, computerUse }
 
     /// §7.24: a setup step failed — error TYPE only (never the streamed installer/login lines, which
     /// embed paths/account hints). `binary_found` on install is the specific "installer ran, binary
@@ -540,15 +392,15 @@ final class CodexSetup {
     /// `codex login status`, and re-checks the driver install — then returns the steps still
     /// PENDING, in order. A smart onboarding calls this to decide what to render/run; a dumb
     /// "just run all three in order" driver can ignore it because every action (installCodex /
-    /// startLogin / setupCuaDriver) already self-guards and no-ops when its step is done.
+    /// startLogin / ComputerUseSetup.install) already self-guards and no-ops when its step is done.
     func whatsNeeded() async -> [Step] {
         await refreshInstalled()
         await refreshLoginStatus()
-        refreshCuaDriver()
+        ComputerUseSetup.current.refresh()
         var pending: [Step] = []
         if !installed      { pending.append(.install) }
         if !loggedIn       { pending.append(.login) }
-        if !cuaDriverReady { pending.append(.cuaDriver) }
+        if !ComputerUseSetup.current.ready { pending.append(.computerUse) }
         return pending
     }
 }

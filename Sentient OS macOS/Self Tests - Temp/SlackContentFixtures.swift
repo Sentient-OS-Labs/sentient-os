@@ -77,7 +77,7 @@ enum SlackContentFixtures {
                 \(fixture.evidence)
                 """
                 var invocation = CodexCLI.Invocation(prompt: prompt)
-                invocation.model = .gpt56luna
+                invocation.model = .gpt6luna
                 invocation.claudeModel = .sonnet
                 invocation.effort = .medium
                 invocation.feature = "connector-lab"

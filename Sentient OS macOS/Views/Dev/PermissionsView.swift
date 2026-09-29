@@ -1,27 +1,13 @@
-//
-//  PermissionsView.swift
-//  Sentient OS macOS
-//
-//  Dev-tools PERMISSIONS panel (a sheet behind DEV TOOLS → PERMISSIONS). A home for every macOS
-//  privacy grant Sentient asks for — all Sentient's OWN (the cua driver acts inside Sentient's
-//  TCC chain, so there is no helper app with grants of its own):
-//
-//  Full Disk Access (read the DB sources) · Microphone+Speech (hold right-⌘ to speak) ·
-//  Accessibility (the driver's hands — background clicks and typing) · Screen Recording (the
-//  driver's eyes + the fire-time screen snapshot) · the overnight wake daemon (root, for the
-//  3am wake).
-//
-//  Accessibility and Screen Recording live in the SIP-protected SYSTEM TCC db — no app can write
-//  those, so their panes ask via the native prompt where one exists and deep-link to Settings
-//  otherwise. Mic uses the normal request API; the daemon uses SMAppService. Every pane also has
-//  a re-check.
-//
+// Developer permission checks reuse the selected computer-use runtime's native grant rows.
+// Doc: Views/Permissions/Documentation - Permission Gate & Guide.md
 
 import SwiftUI
 import ServiceManagement   // SMAppService.Status — the wake daemon's registration state
 
 struct PermissionsView: View {
     @Environment(\.dismiss) private var dismiss
+
+    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
 
     // Sentient's own grants
     @State private var fdaGranted = false
@@ -45,8 +31,11 @@ struct PermissionsView: View {
                     sectionHeader("SENTIENT")
                     fdaPane
                     micPane
-                    accessibilityPane
+                    if backendRaw != ModelBackend.chatgpt.rawValue { accessibilityPane }
                     screenRecordingPane
+                    if backendRaw == ModelBackend.chatgpt.rawValue {
+                        NativeComputerUsePermissionRows(gate: .shared)
+                    }
                     wakeDaemonPane
                 }
                 .padding(24)
@@ -66,6 +55,7 @@ struct PermissionsView: View {
 
     /// Re-read every live status. Cheap; called on appear and after each grant/re-check.
     private func refreshAll() {
+        ComputerUseGate.shared.refresh()
         fdaGranted = Permissions.hasFullDiskAccess()
         micGranted = VoiceCapture.isAuthorized
         srGranted = Permissions.hasScreenRecording()
@@ -76,7 +66,7 @@ struct PermissionsView: View {
     // MARK: - Shared pane chrome
 
     /// Icon + title + GRANTED/NEEDED badge, a description, a row of action buttons, and an optional
-    /// monospace receipt line. Used by every pane except the bespoke Automation one (long copy + revoke).
+    /// monospace receipt line. Native helper rows are shared with the production permission gate.
     @ViewBuilder
     private func pane(icon: String, iconColor: Color, title: String, granted: Bool,
                       description: String, receipt: String? = nil,
@@ -147,7 +137,7 @@ struct PermissionsView: View {
     private var screenRecordingPane: some View {
         pane(icon: "rectangle.dashed.badge.record", iconColor: srGranted ? Theme.verdictColor(.survivor) : Theme.accent,
              title: "Screen Recording", granted: srGranted,
-             description: "The cua driver's eyes (per-window screenshots), plus the fire-time capture so computer use knows what you're looking at. Granted to Sentient itself. Takes effect after an app restart.") {
+             description: "Lets Sidekick see the screen you are asking about; CUA also uses it for window screenshots. Granted to Sentient itself. Takes effect after an app restart.") {
             Button("Grant screen recording…") { _ = Permissions.requestScreenRecording(); refreshAll() }
                 .buttonStyle(.bordered).tint(Theme.accent)
             Button("Open Screen Recording Settings") { Permissions.openScreenRecordingSettings() }

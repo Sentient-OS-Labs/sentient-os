@@ -27,7 +27,7 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
     /// The Codex model and effort, ordered from fastest to most intelligent.
     var codexModelAndEffort: (model: CodexCLI.Model, effort: CodexCLI.Effort) {
         switch self {
-        case .faster: (.gpt56sol, .low)
+        case .faster: (.gpt6sol, .low)
         case .medium: (.gpt6astra, .low)
         case .smarter: (.gpt6astra, .medium)
         }
@@ -66,7 +66,7 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
         case .claude:
             let (model, effort) = claudeModelAndEffort
             let name = (model == .opus && ClaudeAuth.isPro) ? ClaudeCLI.Model.sonnet : model
-            let display = name == .opus ? "Opus" : "Sonnet"
+            let display = name == .opus ? "Opus 5.5" : "Sonnet"
             let level = switch effort {
             case .low: "low"
             case .medium: "med"
@@ -75,7 +75,7 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
             return "Claude \(display) · \(level) thinking"
         case .chatgpt:
             let (model, effort) = codexModelAndEffort
-            let name = model == .gpt6astra ? "GPT-6 Astra" : "GPT-5.6 Sol"
+            let name = model == .gpt6astra ? "GPT-6 Astra" : "GPT-6 Sol"
             let thinking = effort == .medium ? "med" : effort.rawValue
             return "\(name) · \(thinking) thinking"
         }

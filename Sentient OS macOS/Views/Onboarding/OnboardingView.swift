@@ -41,6 +41,10 @@ struct OnboardingView: View {
     /// launch, so a pause → resume never spawns a second timer.
     @State private var computerUseArmed = false
 
+    #if DEBUG
+    @State private var introFilm: FilmDriver?
+    #endif
+
     // The same run flags the home's Analyze Now reads (RootView).
     @AppStorage(BriefingDeck.key) private var deckRaw = BriefingDeck.defaultRaw
     @AppStorage("dbg.run.gmail")           private var runGmail = false
@@ -72,7 +76,12 @@ struct OnboardingView: View {
             case 0:
                 // Step 1 is the website's film in a webview — it plays to the morning-home
                 // rest and blooms its own Continue (OnboardingFilmView owns the choreography).
+                #if DEBUG
+                OnboardingFilmView(onContinue: advance, onWebIntroChange: { introFilm = $0 })
+                    .transition(.opacity)
+                #else
                 OnboardingFilmView(onContinue: advance).transition(.opacity)
+                #endif
             case 1:
                 OnboardingFrontierModelView(onContinue: advance).transition(.opacity)
             case 2:
@@ -154,20 +163,18 @@ struct OnboardingView: View {
         #if DEBUG
         .overlay(alignment: .bottomTrailing) {
             if !analyzing {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "forward.end").font(.system(size: 8.5))
-                        Text("SKIP TO HOME")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.6)
+                HStack(spacing: 10) {
+                    if step == 0, let introFilm {
+                        OnboardingDevButton(
+                            title: introFilm.introSpedUp ? "INTRO ANIMATIONS: 50×" : "SPEED UP INTRO ANIMATIONS",
+                            icon: "forward.fill", action: introFilm.speedUpIntro)
+                            .disabled(introFilm.introSpedUp)
+                            .help("Play the remaining web intro at 50× speed.")
                     }
-                    .foregroundStyle(Theme.Ink.deepMuted)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
-                    .contentShape(Capsule())
+                    OnboardingDevButton(title: "SKIP TO HOME", icon: "forward.end") {
+                        withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
+                    }
                 }
-                .buttonStyle(.plain)
                 .opacity(0.6)
                 .padding(.trailing, 22).padding(.bottom, 13)
                 .transition(.opacity)
@@ -180,7 +187,7 @@ struct OnboardingView: View {
     /// silently in the background — so it's ready by the time the home's cards and Sidekick need
     /// it, with no onboarding screen of its own. Armed when the analysis takeover APPEARS (not at
     /// Start Analysis), so it never races the model download still finishing behind the
-    /// downloading screen. setupCuaDriver() self-guards (no-op when the pinned version is already
+    /// downloading screen. ComputerUseSetup.install() self-guards (no-op when the pinned version is already
     /// there; needs neither codex nor a login), so a quit-and-relaunch that restarts the analysis
     /// just re-arms harmlessly; failures land in the log + Sentry, never in the UI.
     private func armComputerUseSetup() {
@@ -188,11 +195,11 @@ struct OnboardingView: View {
         computerUseArmed = true
         // An unstructured Task on purpose — pausing or leaving the analysis must not cancel the
         // download mid-flight. If the user somehow fires a command before it lands, the fire-time
-        // self-heal (CodexSetup.ensureCuaDriver) waits on this very install instead of racing it.
+        // self-heal (ComputerUseSetup.ensureInstalled) waits on this very install instead of racing it.
         Task {
             try? await Task.sleep(for: .seconds(120))
             Log("Onboarding: 2 min into first analysis — fetching the computer-use driver")
-            await CodexSetup.shared.setupCuaDriver()
+            await ComputerUseSetup.current.install()
         }
     }
 
@@ -211,9 +218,33 @@ struct OnboardingView: View {
 
 }
 
+#if DEBUG
+/// The unobtrusive dev controls share one row and are entirely absent from Release.
+private struct OnboardingDevButton: View {
+    let title: String
+    let icon: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 8.5))
+                Text(title)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced)).tracking(1.6)
+            }
+            .foregroundStyle(Theme.Ink.deepMuted)
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+#endif
+
 /// The onboarding CTA — a quiet white capsule, shared across the onboarding screens.
 /// `glow` adds the rotating AI-gradient halo (GlowHalo intensity) — off by default, reserved
-/// for the one deliberate jewelry moment (the film's hood-park Continue).
+/// for the model picker's ready Continue.
 struct OnboardingNextButton: View {
     let title: String
     var enabled: Bool = true

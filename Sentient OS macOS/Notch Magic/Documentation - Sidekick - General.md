@@ -22,7 +22,7 @@ screen stills, and the prompt. The window, the click-through mechanics, and the 
 | `ScreenCapture.swift` | A still of EVERY display at fire time (main first), attached to the codex run so "finish this" resolves against real pixels. |
 | `NotchWindowController.swift` · `NotchView.swift` · `NotchShape.swift` · `NotchSpace.swift` · `SpinningLogo.swift` | The window and visual (the other doc). |
 
-`AppState` owns one `CommandCoordinator` and one `NotchWindowController`. It starts both once at normal launch, or defers both until an eligible pending computer-use upgrade finishes. Closing/minimizing setup cannot start them.
+`AppState` owns one `CommandCoordinator` and one `NotchWindowController`. It starts both once at normal launch, or defers both until an eligible pending computer-use upgrade finishes. Closing/minimizing setup cannot start them; native migration can explicitly defer setup while first-use gates remain enforced.
 
 ## The doors, and where they meet
 
@@ -76,7 +76,7 @@ a keyDown tap is Input-Monitoring-gated). `stop()` unifies STOP, Esc, and the ho
 **Completion.** `run.onFinished` → `.finishing(outcome)`: ✓ and stopped flourish for 1.5 s, a failure
 holds 5 s (its caption carries the ✗ reason). Completion is sentinel-honest: the command prompt demands
 a final `STATUS: DONE` / `STATUS: COULD_NOT` line; `AgentStatus.parse` routes DONE → "✓ done", no
-sentinel → "✓ done" but flagged to the scoreboard, COULD_NOT → a real failure with "✗ codex's reason".
+sentinel → an unconfirmed failed attempt; COULD_NOT → a real failure with the reported reason.
 
 `setPhase` bumps a token that every delayed transition checks, so a stale timer can never clobber a
 newer phase.
@@ -115,7 +115,7 @@ nothing real underneath (no codex, no screenshots, no scoreboard).
 "Using computer use, <task>", then: a spoken-transcript note when the task came by voice (use common
 sense for mis-transcriptions but do not act on a guess when the outcome is non-trivial); a screenshot
 line when frames are attached (resolve "this" / "here" against the pixels; with several displays, the
-first is the main one); the instruction to drive real apps and websites through the cua tools and never
+first is the main one); the instruction to drive real apps and websites through the selected computer-use tools and never
 fake it with AppleScript or osascript; **`CuaDriverSkill.rules`** — the driver's full operating manual
 (the hybrid MCP + CLI transport, the snapshot → act → verify loop, the no-foreground law; see the
 Driver doc); `CustomProvider.computerUsePromptRules` on a custom backend (a safety stop-list and an
@@ -175,3 +175,5 @@ done; only sizes are logged. The proactive executor passes no frames.
 ## Related docs
 
 `Notch Magic/Documentation - Sidekick - Notch Window & Visual.md`, `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Proactive/Documentation - Proactive Intelligence.md` (card fires), `Views/Documentation - Views - Home, Processing & Shared UI.md` (`PromptBar`).
+
+Computer-use runtime selection and its manual live in `FrontierRun`: native OpenAI tools for ChatGPT, CUA for Claude/custom. See `Driver/Documentation - Native Computer Use.md`.

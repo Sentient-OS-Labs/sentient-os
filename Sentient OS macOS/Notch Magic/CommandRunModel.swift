@@ -38,6 +38,10 @@ final class CommandRunModel {
     /// alone doesn't need it.
     var onFinished: ((Outcome) -> Void)?
 
+    /// Supplied by the mounted home through a weak model capture. Read once at launch so
+    /// edits, dismissals, or a new deck cannot change context halfway through this request.
+    @ObservationIgnored var proactiveCards: (() -> [PreparedAction])?
+
     /// True while the onboarding notch demo is performing — the notch hides STOP (scripted
     /// theater has nothing to stop). Cleared the moment a REAL run starts.
     private(set) var isDemo = false
@@ -84,6 +88,7 @@ final class CommandRunModel {
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
         // History: read the block BEFORE recording this run — a task must never see itself.
         let history = SidekickHistory.promptBlock()
+        let cardContext = SidekickCardContext.promptBlock(for: proactiveCards?() ?? [])
         SidekickHistory.record(task0)
         let started = Date()
         ModelBackend.$runOverride.withValue(ModelBackend.current) {
@@ -98,6 +103,7 @@ final class CommandRunModel {
                 defer { ScreenCapture.discard(shots) }
                 let kb = await Self.knowledgeContext()
                 do {
+                    try Task.checkCancellation()
                     // The router: a command whose ENTIRE task fits one connector's tools takes the
                     // screen-free spine; everything else — and any router doubt, error, or timeout —
                     // is computer use. Skipped (no run, no latency) with zero detected connectors.
@@ -105,11 +111,11 @@ final class CommandRunModel {
                     // every leg; card fires never pass through here (beginExternalRun skips start()).
                     let routerRan = CommandRouter.isActive   // skipped → no telemetry row either
                     let routerStart = Date()
-                    if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation) = await CommandRouter.route(task0) {
+                    if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation) = await CommandRouter.route(task0, cardContext: cardContext) {
                         let routerMs = Int(Date().timeIntervalSince(routerStart) * 1000)
                         try Task.checkCancellation()   // a STOP during routing must never keep going
                         if try await self?.connectorLeg(task0, slug: slug, name: name, operation: operation, mailOperation: mailOperation, calendarOperation: calendarOperation,
-                                                        screenshots: shots, kbContext: kb,
+                                                        screenshots: shots, kbContext: kb, cardContext: cardContext,
                                                         started: started) != false {
                             CommandRouter.recordOutcome(route: "connector", slug: slug,
                                                         ms: routerMs, fellBack: false)
@@ -123,8 +129,12 @@ final class CommandRunModel {
                                                     ms: Int(Date().timeIntervalSince(routerStart) * 1000),
                                                     fellBack: false)
                     }
+                    // A canceled router also returns .computer. STOP must end the request
+                    // before that fallback can start a new computer-use invocation.
+                    try Task.checkCancellation()
                     let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
-                                                    spoken: source == "voice", kbContext: kb, history: history)
+                                                    spoken: source == "voice", kbContext: kb, history: history,
+                                                    cardContext: cardContext)
                         + (self?.connectorRecoveryContext ?? "")
                     Log("CMD: launching agent command (\(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
                     #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
@@ -148,8 +158,8 @@ final class CommandRunModel {
                     Log("CMD: final → \(out.suffix(1200))")
                     #endif
                     // Honesty gate: codex exiting 0 is NOT success — the run's own STATUS sentinel is.
-                    // A clean give-up (COULD_NOT) surfaces its reason in the notch/bar; a missing
-                    // sentinel stays optimistic but is flagged to the scoreboard (statusPresent: false).
+                    // A clean give-up surfaces its reason. Missing or malformed confirmation
+                    // remains unconfirmed rather than becoming a successful action.
                     switch AgentStatus.parse(out) {
                     case .couldNot(let reason):
                         Log("──────── 🤖 ⚠️ COULD NOT after \(secs)s (\(reason.count)-char reason) ────────")
@@ -163,8 +173,9 @@ final class CommandRunModel {
                         Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
                         self?.complete(.success, line: "✓ done")
                     case .none:
-                        Log("──────── 🤖 ✓ DONE in \(secs)s (no STATUS sentinel) ────────")
-                        self?.complete(.success, line: "✓ done", statusPresent: false)
+                        Log("CMD: computer task completion was not confirmed")
+                        self?.complete(.failed, line: AgentStatus.unconfirmedComputerMessage,
+                                       board: .refused, statusPresent: false)
                     }
                 } catch {
                     let secs = Int(Date().timeIntervalSince(started))
@@ -191,12 +202,12 @@ final class CommandRunModel {
     /// caller continues the SAME run into computer use, reusing the screenshots already
     /// captured. A user STOP rethrows so the caller's catch keeps its honest "stopped".
     private func connectorLeg(_ task0: String, slug: String, name: String, operation: SlackConnector.Operation?, mailOperation: OutlookMailConnector.Operation?, calendarOperation: OutlookCalendarConnector.Operation?,
-                              screenshots: [URL], kbContext: String,
+                              screenshots: [URL], kbContext: String, cardContext: String,
                               started: Date) async throws -> Bool {
         executedMethod = "mcp"
         statusLine = "Using \(name)'s tools…"
         let prompt = Self.connectorPrompt(task: task0, name: name,
-                                          screenshots: screenshots.count, kbContext: kbContext)
+                                          screenshots: screenshots.count, kbContext: kbContext, cardContext: cardContext)
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "sidekick-mcp"
         inv.effort = .medium
@@ -613,11 +624,12 @@ final class CommandRunModel {
     /// the run appends its own screenshots block too — the same harmless doubling as the
     /// shipped computer path.)
     nonisolated static func connectorPrompt(task: String, name: String, screenshots: Int,
-                                            kbContext: String) -> String {
+                                            kbContext: String, cardContext: String = "") -> String {
         """
         You are Sentient's Sidekick. The user just asked for ONE thing. Do it now using their "\(name)" connector tools.
 
         THE REQUEST: \(task)
+        \(cardContext.isEmpty ? "" : "\n\(cardContext)\n")
 
         \(knowledgeBlock(kbContext))
         \(screenshotsLine(count: screenshots))
@@ -632,8 +644,9 @@ final class CommandRunModel {
         """
     }
 
-    /// Build the command prompt: `mode.promptPhrase` ("computer use") leads and the typed/spoken task fills
-    /// the rest. The agent is told to do the TASK via computer use (not AppleScript GUI-scripting), and to
+    /// Build the command prompt around the user's typed/spoken task. App actions use the
+    /// selected computer-use tools; questions about supplied context can be answered directly.
+    /// The agent is told to avoid AppleScript GUI-scripting, and to
     /// read the knowledge base (path resolved from `~`) with its shell/file tools — NOT by opening it in a
     /// GUI app like Obsidian. `kbContext` (from `knowledgeContext()`) inlines the vault's README + note
     /// list so the agent starts oriented; "" falls back to the bare folder pointer. With Gmail linked
@@ -648,7 +661,7 @@ final class CommandRunModel {
     /// "finish this" / "try again" can resolve against the last run; "" leaves the prompt unchanged.
     nonisolated static func commandPrompt(task: String, mode: AgentMode, screenshots: Int,
                                           spoken: Bool = false, kbContext: String = "",
-                                          history: String = "") -> String {
+                                          history: String = "", cardContext: String = "") -> String {
         let voiceLine = spoken
             ? "\nThe task above was spoken by me and transcribed with speech-to-text. Use common sense for anything that may have been mis-transcribed; but if picking the wrong reading could have a non-trivial outcome, don't act on a guess.\n"
             : ""
@@ -673,15 +686,17 @@ final class CommandRunModel {
             ? "\nMy email is also available to you through the Gmail tools. Reach for it when you're missing context — the task mentions a person, company, order, booking, or thread you don't recognize from my screens or my knowledge base — and read just enough to ground yourself before acting. Don't send, label, or modify anything in Gmail unless the task itself asks for that.\n"
             : ""
         return """
-        Using \(mode.promptPhrase), \(task)
-        \(voiceLine)\(screenLine)
-        Carry out the task itself with \(mode.promptPhrase) — drive the real apps and websites directly (open them, click, type, navigate) through the cua tools described below. Do NOT fake it with AppleScript, osascript, or other GUI-scripting shortcuts.
+        You are Sentient's Sidekick.
 
-        \(CuaDriverSkill.rules)\(CustomProvider.computerUsePromptRules)
+        THE REQUEST: \(task)
+        \(voiceLine)\(screenLine)
+        Use \(mode.promptPhrase) for steps that require inspecting or operating an app or website. If the request can be answered entirely from supplied context or reasoning without an app action, answer directly; do not invent a computer-use step or fail just because tools were unnecessary. When an app action is needed, drive the real apps and websites through the computer-use tools provided for this run. Do NOT fake app actions with AppleScript, osascript, or other GUI-scripting shortcuts.
+
         \(servicesLine)\(Self.injectionGuard)
 
         You will not be able to ask me follow-up questions to clarify: in this harness, the moment you stop responding I see the task attempt as completed. So don't stop to ask trivial follow-up questions. Either do the task, or if it's genuinely way too ambiguous to act on (like in case of critical TTS fumble), just stop. No follow-up questions are possible.
         \(contextLine)\(history.isEmpty ? "" : "\n\(history)\n")
+        \(cardContext.isEmpty ? "" : "\n\(cardContext)\n")
         \(Self.knowledgeBlock(kbContext))
         \(gmailLine)
         \(Self.sentinelBlock)

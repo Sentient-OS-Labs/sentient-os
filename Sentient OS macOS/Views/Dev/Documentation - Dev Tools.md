@@ -13,7 +13,7 @@ seams the shipping UI uses; nothing has its own processing path.
 | `ProactiveExecuteView.swift` | PART 3's bench: the real ready-to-fire `PreparedAction`s from the last research run, each with a working FIRE button through `ProactiveExecutor`. |
 | `ProactiveItemsView.swift` | The last judge run's items in full detail. |
 | `SummariesView.swift` | The current cycle's survivor summaries in `CycleStore`, with Export / Import (dump the whole set to JSON, or load one to REPLACE this machine's set, backing up first; pointers are never touched). |
-| `PermissionsView.swift` | Every macOS grant Sentient cares about (all its own now), with re-checks and the legacy Automation-row cleanup. |
+| `PermissionsView.swift` | Sentient's grants plus the selected native helper grants, using the shared permission rows and official Automation request. |
 | `HotkeyLabView.swift` | The bench that proved the permission-free hotkey (NSEvent `flagsChanged` monitors). Superseded by `SidekickHotkeyMonitor`; kept for feel-testing. |
 | `../CodexSetupView.swift` | The three-step Codex setup window over the shared `CodexSetup` engine (in `Views/`). |
 

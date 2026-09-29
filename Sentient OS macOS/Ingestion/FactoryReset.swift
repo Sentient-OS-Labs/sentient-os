@@ -40,6 +40,7 @@ enum FactoryReset {
         // should come back up on the same engine. Uninstall is what destroys it.
         d.removeObject(forKey: AppState.onboardingKey)
         d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)         // re-offer the optional voice grant on rebuild
+        d.removeObject(forKey: HealthCaution.nativeComputerUseEverReadyKey)
         d.removeObject(forKey: HealthCaution.computerUseEverReadyKey)       // the home's computer-use banner re-arms at the rebuild's own gate
         d.removeObject(forKey: SidekickHistory.key)                         // recent Sidekick requests are learnings — a rebuild starts blank
         // The overnight scheduler starts over too: the 14h clock re-stamps at the REBUILD's first

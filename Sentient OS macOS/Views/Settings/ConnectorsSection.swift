@@ -91,12 +91,14 @@ struct ConnectorSource: Identifiable {
 struct ConnectorPill: View {
     let source: ConnectorSource
     let locked: Bool
+    let featured: Bool
     let action: () -> Void
     @AppStorage private var knowledgeEnabled: Bool
 
-    init(source: ConnectorSource, locked: Bool, action: @escaping () -> Void) {
+    init(source: ConnectorSource, locked: Bool, featured: Bool = false, action: @escaping () -> Void) {
         self.source = source
         self.locked = locked
+        self.featured = featured
         self.action = action
         _knowledgeEnabled = AppStorage(wrappedValue: false,
             ConnectorRegistry.kbKey(source.connector?.slug ?? source.serviceSlug))
@@ -109,7 +111,7 @@ struct ConnectorPill: View {
     private var detail: String? {
         guard !locked else { return nil }
         if !ConnectorRegistry.kbEligible(source.connector?.slug ?? source.serviceSlug) { return "Tasks only" }
-        return selected ? nil : "Not selected"
+        return nil
     }
 
     private var status: String {
@@ -119,10 +121,9 @@ struct ConnectorPill: View {
     }
 
     var body: some View {
-        SettingsChip(label: source.displayName, detail: detail,
-                     on: selected,
-                     locked: locked,
-                     action: action)
+        KnowledgeSourcePill(label: source.displayName, detail: detail,
+                            asset: source.logoAsset, iconPath: source.connector?.iconPath,
+                            selected: selected, featured: featured, locked: locked, action: action)
         .accessibilityValue(status)
         .help(status)
     }

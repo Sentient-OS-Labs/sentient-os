@@ -55,7 +55,7 @@ enum ConnectorReadPolicyTests {
             return inv
         }
         func args(_ inv: CodexCLI.Invocation) throws -> [String] {
-            try CodexCLI.arguments(for: inv, modelID: "gpt-5.6-luna", effortArg: "medium", schemaFile: nil)
+            try CodexCLI.arguments(for: inv, modelID: "gpt-6-luna", effortArg: "medium", schemaFile: nil)
         }
         func refuses(_ inv: CodexCLI.Invocation) -> Bool {
             do { _ = try args(inv); return false } catch { return true }

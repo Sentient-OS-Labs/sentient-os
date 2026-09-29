@@ -181,7 +181,7 @@ actor DirectMCPConnections {
         [\(inventory)]
         """)
         inv.feature = "classify"
-        inv.model = .gpt56luna
+        inv.model = .gpt6luna
         inv.effort = .low
         inv.includeUserConfig = false
         inv.toolsDisabled = true

@@ -8,7 +8,7 @@ user's standing instructions, the app-support root, and the full uninstall teard
 
 | File | Job |
 |---|---|
-| `Permissions.swift` | Full Disk Access detection + deep link + relaunch; Sentient's own Accessibility and Screen Recording status (the cua driver's action grants); TCC status reads; the legacy 1.x Automation-row cleanup; the System Settings deep links. |
+| `Permissions.swift` | Full Disk Access detection + deep link + relaunch; Sentient's own Accessibility and Screen Recording status (the cua driver's action grants); TCC status reads; official Automation preflight/request and scoped uninstall reset; the System Settings deep links. |
 | `HealthCaution.swift` | The home's LIVE health banner: probes current state, most severe first, and reports the worst un-muted issue. |
 | `Notify.swift` | The notification permission ask and `now(title:body:)`. |
 | `DisplayAwake.swift` | Keeps the screen on during long foreground work (onboarding, a home-launched first analysis) via `ProcessInfo.beginActivity`. Not the root `pmset` path. |
@@ -43,15 +43,21 @@ Recording also gates Sidekick's fire-time screen stills.
 service (the SIP-protected system database for Accessibility, ScreenCapture, AllFiles, ListenEvent,
 PostEvent; the user database otherwise).
 
-## Legacy cleanup: the 1.x Automation row
+## Native computer-use grants
 
-Sentient 1.x drove computer use through OpenAI's bundled "Codex Computer Use" helper and wrote itself
-a `kTCCServiceAppleEvents` row (Sentient → the helper) into the user's TCC database so headless runs
-never stalled on a consent macOS had no prompt for. The cua driver sends no Apple Events, so on an
-updated Mac that row is dead weight — and ours to sweep. `revokeComputerUseAutomation()` deletes
-exactly that row: called once per launch (cheap, idempotent — `AppState.init`) and by Uninstall. The
-helper's own rows live in the SIP-protected system TCC database and are not ours to remove; with
-nothing driving the helper they are inert.
+ChatGPT computer use runs through OpenAI's signed helper. Sentient carries the Apple Events
+entitlement and uses `AEDeterminePermissionToAutomateTarget` off the main thread to check or request
+Automation access. The helper is started through LaunchServices before querying, so a stopped target
+is not mistaken for denied access. Background checks do not prompt. Visible permission setup requests unasked consent through the macOS dialog, with no redundant Automation row; the user chooses Allow in that dialog.
+
+The helper's Accessibility and Screen Recording status is read from the system TCC database when
+Full Disk Access is available. Its grant rows carry the helper bundle to System Settings. Sentient's
+own Screen Recording remains required for screen context; native actions do not require Sentient's
+CUA-specific Accessibility grant. Native permission rows are shared by setup, upgrade and Health.
+
+Normal startup and Factory Reset preserve Automation consent. Uninstall uses the supported `tccutil`
+reset for Sentient's own Apple Events grants. No code edits a TCC database or resets another app's
+permissions. The shared native helper and the user's Codex home remain intact.
 
 ## The live health ladder (`HealthCaution.probe`)
 
@@ -60,7 +66,7 @@ appear and every app foreground, and returns the worst un-muted issue:
 
 1. **Essential permissions off:** Full Disk Access; the overnight wake helper (`WakeHelperClient.isReachable()`, the XPC ground truth a file check cannot fake); launch at login. All three were green in onboarding, so any red here is drift.
 2. **Codex gone or signed out** (the login check shells out, so its verdict is cached ~5 min; the home passes `forceCodexRecheck` while a codex banner is up so a fix clears on the next foreground). Signed-out is ChatGPT-backend only.
-3. **Computer use regressed:** the cua-driver binary vanished, or Sentient's own Accessibility / Screen Recording grants did — but ONLY once the `computerUse.everReady` latch is set (by the probe when everything reads healthy, and by the permission gate at its moment of truth; cleared by FactoryReset), so a user who never set it up is never nagged. The binary-missing case stays quiet while the `ComputerUseUpgrade` window is presenting on that exact state (the same message twice helps no one) and still covers the window-less case (the driver vanishing mid-session).
+3. **Computer use regressed:** the selected runtime became unavailable, or its required grants did — but ONLY once the selected runtime's readiness latch is set (`computerUse.nativeEverReady` for OpenAI; the existing `computerUse.everReady` for CUA) (by the probe when everything reads healthy, and by the permission gate at its moment of truth; cleared by FactoryReset), so a user who never set it up is never nagged. The binary-missing case stays quiet while the `ComputerUseUpgrade` window is presenting on that exact state (the same message twice helps no one) and still covers the window-less case (the driver vanishing mid-session).
 
 Nothing persists; broken shows, fixed melts away. ✕ mutes an issue KIND for the session (a lower rung may
 then surface). Nothing at all on the free-plan home. The banner's Open Settings lands on Permissions &
@@ -83,7 +89,7 @@ the sheet: the wake helper FIRST (the only stage that can be declined at its pas
 cancel aborts before anything irreversible; Try Again / Skip / Cancel), then the cloud copy (while the
 Keychain password still exists to authorize the DELETE), the Keychain identity + the frontier-model
 choice and its key, the knowledge base + orphan staging + the cycle store, the on-device model (all of
-`~/Library/Application Support/SentientOS`), and the traces (the TCC Automation row, caches, saved
+`~/Library/Application Support/SentientOS`), and the traces (Sentient's Apple Events reset, caches, saved
 state, logs, and the whole defaults domain LAST so a live observer cannot re-persist a key). It raises
 `AppState.isUninstalling` first so the home clears its cards and refuses to re-deal off the defaults
 wipe. `finishAndQuit()` spawns a detached sweeper for the files a dying process resurrects on the way
@@ -97,8 +103,8 @@ Support and caches sweeps.
 
 ## Rules
 
-- Never write anything outside `URL.sentientSupport`, the app's caches dir, the knowledge base folder, and the temp dir.
-- The legacy Automation cleanup only ever DELETES its one row; the app never writes TCC grants again.
+- Managed data lives in `URL.sentientSupport`, app caches, the knowledge base and temporary staging. The native helper has the explicit shared location in the existing Codex home; computer-use setup never rewrites Codex configuration or login.
+- Permission writes belong to macOS. Requests use its APIs; uninstall resets only Sentient's Apple Events access through `tccutil`.
 - Health verdicts must come from ground truth (an XPC probe, a TCC read), never a cached file check.
 - Two destructive sequences (`FactoryReset`, `Uninstall`) live in exactly one place each; never duplicate them.
 

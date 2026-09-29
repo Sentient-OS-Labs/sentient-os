@@ -116,9 +116,11 @@ final class SwirlModel {
     var phase: Phase = .idle
     private(set) var began = Date()
     private(set) var orbit = 18.0
+    private(set) var initialRadius = SwirlMath.startRadius
 
-    func begin(orbit: Double) {
+    func begin(orbit: Double, initialRadius: Double = SwirlMath.startRadius) {
         self.orbit = orbit
+        self.initialRadius = initialRadius
         began = Date()
         phase = .gathering
     }
@@ -126,7 +128,7 @@ final class SwirlModel {
     /// Leave the gather from exactly where the ring is now, so the motion never jumps.
     func transition(landing: Bool) {
         let now = Date()
-        let from = SwirlMath.gather(t: now.timeIntervalSince(began), orbit: orbit)
+        let from = SwirlMath.gather(t: now.timeIntervalSince(began), orbit: orbit, initialRadius: initialRadius)
         phase = landing ? .landing(since: now, from: from) : .dissolving(since: now, from: from)
     }
 }
@@ -136,11 +138,17 @@ final class SwirlModel {
 struct CaretSwirlView: View {
     let model: SwirlModel
 
+    private var paused: Bool {
+        if case .idle = model.phase { return true }
+        return false
+    }
+
     var body: some View {
-        TimelineView(.animation) { context in
+        TimelineView(.animation(paused: paused)) { context in
             Canvas { graphics, size in
                 guard let frame = SwirlMath.frame(phase: model.phase, began: model.began,
-                                                  orbit: model.orbit, at: context.date) else { return }
+                                                  orbit: model.orbit, at: context.date,
+                                                  initialRadius: model.initialRadius) else { return }
                 SwirlPainter.draw(frame, in: &graphics, size: size)
             }
         }
@@ -185,24 +193,25 @@ enum SwirlMath {
     private static let cometSpeed = [1.0, 1.11, 0.93]
     private static let sparkCount = 14
 
-    static func gather(t: Double, orbit: Double) -> State {
+    static func gather(t: Double, orbit: Double, initialRadius: Double = startRadius) -> State {
         let e = exp(-kRadius * t)
         let tighten = 1 - e
-        let radius = orbit + (startRadius - orbit) * e + 2.2 * tighten * sin(2 * .pi * 1.7 * t)
+        let radius = orbit + (initialRadius - orbit) * e + 2.2 * tighten * sin(2 * .pi * 1.7 * t)
         let es = exp(-kSpeed * t)
         let omega = omegaMax - (omegaMax - omega0) * es
         let angle = 2 * .pi * (omegaMax * t - (omegaMax - omega0) / kSpeed * (1 - es))
         return State(radius: radius, angle: angle, omega: omega, tighten: tighten)
     }
 
-    static func frame(phase: SwirlModel.Phase, began: Date, orbit: Double, at now: Date) -> Frame? {
+    static func frame(phase: SwirlModel.Phase, began: Date, orbit: Double, at now: Date,
+                      initialRadius: Double = startRadius) -> Frame? {
         let t = now.timeIntervalSince(began)
         switch phase {
         case .idle:
             return nil
 
         case .gathering:
-            let base = gather(t: t, orbit: orbit)
+            let base = gather(t: t, orbit: orbit, initialRadius: initialRadius)
             let intro = min(t / 0.12, 1)
             return Frame(comets: comets(base, opacity: intro),
                          sparks: sparks(base, t: t, radiusScale: 1, opacity: min(t / 0.25, 1)),
