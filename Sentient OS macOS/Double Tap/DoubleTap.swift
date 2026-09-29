@@ -71,6 +71,7 @@ final class DoubleTap {
             guard let self else { return }
             let result = await self.perform()
             self.task = nil
+            if case .pasted = result { InviteProgram.shared.record(.doubleTap) }
             if case .pasted = result {} else { self.swirl.dissolve() }   // the light fades when nothing lands
             completion(result)
         }

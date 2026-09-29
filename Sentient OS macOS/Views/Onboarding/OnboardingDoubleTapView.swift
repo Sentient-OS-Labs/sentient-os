@@ -1,6 +1,6 @@
 //  OnboardingDoubleTapView.swift
-//  Native Mail and Messages, a physical-feeling Command key, and the real caret spiral teach
-//  Double Tap between the film's Sidekick and Under-the-hood scenes.
+//  Native Mail and Messages, a face-on keyboard invitation, and the real caret spiral teach
+//  Double Tap after the film's Sidekick scene, before frontier-model selection.
 //  DoubleTapDemoInput connects only this key window to the coordinator's existing key monitor.
 //  Doc: Documentation - Onboarding.md (this folder).
 
@@ -36,10 +36,10 @@ struct OnboardingDoubleTapView: View {
                 Color.black.ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    Spacer(minLength: 32)
+                    Spacer(minLength: 10)
 
                     sampleWindow
-                        .frame(width: windowWidth, height: 440)
+                        .frame(width: windowWidth, height: demo.sample == .message ? 350 : 440)
                         .scaleEffect(demo.sample == .email && !demo.windowVisible && !reduceMotion ? 0.97 : 1)
                         .offset(y: demo.sample == .email && !demo.windowVisible && !reduceMotion ? 16 : 0)
                         .opacity(demo.sample == .message && !reduceMotion ? 1 : (demo.windowVisible ? 1 : 0))
@@ -47,49 +47,61 @@ struct OnboardingDoubleTapView: View {
                                                    side: demo.sample == .email ? .right : .left,
                                                    viewport: geometry.size))
                         .accessibilityHidden(!demo.windowVisible || demo.emailDeparture > 0)
+                        // Both windows occupy the same stage. Messages is shorter within it,
+                        // so changing samples cannot move the instruction or keyboard below.
+                        .frame(height: 440)
 
-                    VStack(spacing: 16) {
-                        Text("Double tap right command key")
-                            .font(Self.instructionFont)
-                            .foregroundStyle(.white)
-                            .opacity(demo.instructionVisible ? (demo.phase == .waiting ? 1 : 0.42) : 0)
-                            .animation(.easeOut(duration: 0.3), value: demo.instructionVisible)
-                            .animation(.easeOut(duration: 0.35), value: demo.phase)
-                            .accessibilityHidden(!demo.instructionVisible)
-
-                        DemoCommandKey(pressed: demo.keyIsDown, inviting: demo.phase == .waiting,
-                                       reduceMotion: reduceMotion, action: demo.draft)
-                            .disabled(demo.phase != .waiting)
-                            .opacity(demo.controlsVisible ? (demo.phase == .complete ? 0.55 : 1) : 0)
-                            .animation(.easeOut(duration: 0.35), value: demo.phase)
-                            .accessibilityHidden(!demo.controlsVisible)
-                    }
-                    .padding(.top, 26)
-
-                    ZStack {
-                        Text("Your replies, drafted instantly with two taps")
-                            .font(Self.instructionFont)
-                            .foregroundStyle(.white)
+                    Text("Double tap your right command key")
+                        .font(Self.instructionFont)
+                        .foregroundStyle(.white)
+                        .opacity(demo.instructionVisible ? (demo.phase == .waiting ? 1 : 0.42) : 0)
+                        .accessibilityHidden(!demo.instructionVisible)
+                        .animation(.easeOut(duration: 0.18), value: demo.instructionVisible)
+                        .animation(.easeOut(duration: 0.35), value: demo.phase)
+                        .frame(width: windowWidth, height: 38)
+                        .overlay(alignment: .bottom) {
+                            // The completion copy uses the space freed above this fixed row
+                            // by the shorter Messages window. It never adds layout height.
+                            VStack(spacing: 10) {
+                                Text("Your replies, drafted instantly with two taps")
+                                    .font(Self.instructionFont)
+                                    .foregroundStyle(.white)
+                                personalContextLine
+                            }
+                            .fixedSize(horizontal: false, vertical: true)
                             .opacity(demo.completionVisible ? 1 : 0)
                             .accessibilityHidden(!demo.completionVisible)
+                            .animation(.easeOut(duration: 0.4), value: demo.completionVisible)
+                        }
+                        .padding(.top, 16)
 
+                    OnboardingDoubleTapKeyboard(pressed: demo.keyIsDown, inviting: demo.phase == .waiting,
+                                                reduceMotion: reduceMotion, tapFeedback: demo.tapFeedback,
+                                                action: { demo.clicked() })
+                        .disabled(demo.phase != .waiting)
+                        .opacity(demo.controlsVisible ? (demo.phase == .complete ? 0.55 : 1) : 0)
+                        .animation(.easeOut(duration: 0.35), value: demo.phase)
+                        .accessibilityHidden(!demo.controlsVisible)
+                        .padding(.top, 12)
+
+                    // Both actions occupy the same reserved row, leaving room for the keyboard
+                    // at the minimum window size without shrinking or shifting the sample reply.
+                    ZStack {
                         DemoNextSampleButton(action: demo.showMessages)
                             .disabled(!demo.nextVisible)
                             .opacity(demo.nextVisible ? 1 : 0)
                             .animation(.easeOut(duration: 0.3), value: demo.nextVisible)
                             .accessibilityHidden(!demo.nextVisible)
+
+                        OnboardingNextButton(title: "Continue", enabled: demo.continueVisible, action: onContinue)
+                            .opacity(demo.continueVisible ? 1 : 0)
+                            .allowsHitTesting(demo.continueVisible)
+                            .accessibilityHidden(!demo.continueVisible)
                     }
-                    .padding(.top, 24)
+                    .frame(height: 44)
+                    .padding(.top, 14)
 
-                    // Reserve the exact space from the first frame. Revealing Continue never
-                    // moves the windows, changes their line wraps, or shifts the user's gaze.
-                    OnboardingNextButton(title: "Continue", enabled: demo.continueVisible, action: onContinue)
-                        .padding(.top, 22)
-                        .opacity(demo.continueVisible ? 1 : 0)
-                        .allowsHitTesting(demo.continueVisible)
-                        .accessibilityHidden(!demo.continueVisible)
-
-                    Spacer(minLength: 32)
+                    Spacer(minLength: 10)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlayPreferenceValue(DoubleTapDemoCaretAnchor.self) { anchor in
@@ -132,6 +144,27 @@ struct OnboardingDoubleTapView: View {
         .onChange(of: reduceMotion) { demo.setReduceMotion(reduceMotion) }
         .onDisappear { demo.stop() }
         .preferredColorScheme(.dark)
+    }
+
+    private var personalContextLine: some View {
+        Text("From your entire personal context")
+            .font(.system(size: 17, weight: .medium))
+            .foregroundStyle(.white.opacity(0.95))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .background {
+                HStack(spacing: -12) {
+                    ForEach([0, 1, 3, 4, 6], id: \.self) { index in
+                        Circle()
+                            .fill(RadialGradient(colors: [GlowHalo.stops[index].opacity(0.32), .clear],
+                                                 center: .center, startRadius: 0, endRadius: 32))
+                            .frame(width: 64, height: 64)
+                            .scaleEffect(x: 1.35, y: 0.7)
+                    }
+                }
+                    .frame(height: 32)
+                    .accessibilityHidden(true)
+            }
     }
 
     @ViewBuilder private var sampleWindow: some View {
@@ -189,7 +222,7 @@ private struct DoubleTapInferenceInfo: View {
     }
 }
 
-/// A quiet secondary action; the bright Continue remains reserved for finishing both demos.
+/// The first demo's primary action, as prominent as the final Continue.
 private struct DemoNextSampleButton: View {
     let action: () -> Void
     @State private var hovering = false
@@ -197,13 +230,14 @@ private struct DemoNextSampleButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Text("Next").font(.system(size: 13, weight: .medium))
-                Image(systemName: "arrow.right").font(.system(size: 10, weight: .medium))
+                Text("Next").font(.system(size: 15, weight: .semibold))
+                Image(systemName: "arrow.right").font(.system(size: 11, weight: .semibold))
             }
-            .foregroundStyle(.white.opacity(hovering ? 0.85 : 0.5))
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .contentShape(Rectangle())
+            .foregroundStyle(.black)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 12)
+            .background(Capsule().fill(.white.opacity(hovering ? 0.9 : 1)))
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
@@ -239,59 +273,6 @@ private struct DemoWindowFlight: GeometryEffect {
             .scaledBy(x: scale, y: scale)
             .translatedBy(x: -size.width / 2, y: -size.height / 2)
         return ProjectionTransform(transform)
-    }
-}
-
-private struct DemoCommandKey: View {
-    let pressed: Bool
-    let inviting: Bool
-    let reduceMotion: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !inviting || reduceMotion)) { context in
-                let breath = inviting ? (reduceMotion ? 0.5 : 0.5 + 0.5 * sin(context.date.timeIntervalSinceReferenceDate * .pi * 2 / 2.6)) : 0
-                ZStack {
-                    RoundedRectangle(cornerRadius: 15)
-                        .fill(.white.opacity(0.035 + breath * 0.035))
-                        .blur(radius: 13)
-                        .padding(-7)
-
-                    RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .fill(Color(white: 0.06))
-                        .offset(y: 4)
-
-                    VStack(alignment: .trailing, spacing: 8) {
-                        Image(systemName: "command")
-                            .font(.system(size: 27, weight: .regular))
-                        Text("command")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundStyle(.white.opacity(pressed ? 1 : 0.72 + breath * 0.18))
-                    .frame(width: 96, height: 73)
-                    .background {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(LinearGradient(colors: [Color(white: pressed ? 0.14 : 0.105), Color(white: 0.055)],
-                                                 startPoint: .top, endPoint: .bottom))
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(LinearGradient(colors: [.white.opacity(pressed ? 0.5 : 0.2 + breath * 0.12), .white.opacity(0.08)],
-                                                         startPoint: .top, endPoint: .bottom), lineWidth: 1)
-                    }
-                    .shadow(color: .black.opacity(0.45), radius: pressed ? 1 : 3, y: pressed ? 0 : 3)
-                    .offset(y: pressed && !reduceMotion ? 3 : 0)
-                    .scaleEffect(pressed && !reduceMotion ? 0.985 : 1)
-                }
-                .frame(width: 96, height: 77)
-            }
-            .animation(reduceMotion ? nil : .spring(duration: pressed ? 0.1 : 0.2, bounce: pressed ? 0 : 0.12),
-                       value: pressed)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Try Double Tap")
-        .accessibilityHint("Double tap the right Command key, or activate this button to fill the sample reply.")
     }
 }
 

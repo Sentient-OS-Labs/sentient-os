@@ -118,11 +118,15 @@ struct HomeView: View {
             letter = nil
             letterShown = false
             model.coordinator = appState.commandCoordinator
+            appState.commandCoordinator.run.proactiveCards = { [weak model] in
+                model?.sidekickActions ?? []
+            }
             if !appState.isUninstalling { model.beginVisit(deck: deck) }
             planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
             caution = OvernightCaution.latest()
             probeHealth()
         }
+        .onDisappear { appState.commandCoordinator.run.proactiveCards = nil }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             // The user may just have fixed something in System Settings (or a cycle cleared last
             // night's caution) — re-probe so the banner melts away the moment they return.
@@ -570,6 +574,7 @@ struct HomeView: View {
                            fireDimmed: appState.commandCoordinator.run.isRunning
                                && model.entry(b.id)?.action.map { ProactiveExecutor.isFireable($0) } == true,
                            onCommitEdit: { model.applyEdit(b.id, content: $0, recipient: $1) },
+                           onLiveEdit: { model.updateDraft(b.id, content: $0, recipient: $1) },
                            onOffer: {
                                closeLetter()
                                model.run(b.id)   // real card → fires for real; demo → theater
@@ -644,8 +649,22 @@ final class ForYouModel {
     private var visit = 0
     /// Live real-card fires, keyed by card id, so a card's STOP can cancel exactly its run.
     private var runTasks: [String: Task<Void, Never>] = [:]
+    /// Editor values waiting for the existing autosave. Keep them separate from the saved
+    /// action so reading Sidekick context cannot change the editor's identity or its fields.
+    private var draftPreviews: [String: (content: String, recipient: String)] = [:]
 
     func entry(_ id: String) -> Entry? { entries.first { $0.id == id } }
+
+    /// Exactly the visible, pending real cards. Never resurrect dismissed cards from the
+    /// saved deck or turn a demo/gift into an executable suggestion. Preserve display order.
+    var sidekickActions: [PreparedAction] {
+        entries.compactMap { entry in
+            guard entry.dealt, entry.flight == nil, entry.phase == .offer,
+                  let action = entry.action else { return nil }
+            guard let draft = draftPreviews[entry.id] else { return action }
+            return Self.replacing(action, content: draft.content, recipient: draft.recipient)
+        }
+    }
 
     private func update(_ id: String, _ mutate: (inout Entry) -> Void) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
@@ -659,6 +678,7 @@ final class ForYouModel {
         visit += 1
         let v = visit
         runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
+        draftPreviews.removeAll()
         switch deck {
         case .real:
             // Each card's accent is a shade from its method's color family, cycled by the card's
@@ -697,6 +717,7 @@ final class ForYouModel {
         visit += 1
         runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         entries.removeAll()
+        draftPreviews.removeAll()
     }
 
     /// The welcome envelope opened: the card lives on un-sealed (the view opens the letter).
@@ -769,6 +790,7 @@ final class ForYouModel {
             else { Log("card fire blocked at launch — a task already owns the run"); return }
         }
         update(id) { $0.phase = .working(0); $0.liveLines = [] }
+        InviteProgram.shared.record(.proactive)
         let task = Task {
             let progress: @Sendable (String) -> Void = { line in
                 Task { @MainActor in
@@ -832,10 +854,18 @@ final class ForYouModel {
             guard let old = $0.action else { return }
             $0.action = Self.replacing(old, content: content, recipient: recipient)
         }
+        draftPreviews[id] = nil
         guard let result = ProactiveResearch.latest() else { return }
         ProactiveResearch.saveLatest(ReadyResult(
             ready: result.ready.map { $0.id == id ? Self.replacing($0, content: content, recipient: recipient) : $0 },
             dropped: result.dropped))
+    }
+
+    /// Keep the in-memory draft current on every edit; persistence remains debounced.
+    /// A notch request during editing must see the same response and recipient as the user.
+    func updateDraft(_ id: String, content: String, recipient: String) {
+        guard entry(id)?.action != nil else { return }
+        draftPreviews[id] = (content, recipient)
     }
 
     /// Drop a fired card from the persisted `latest` so a re-deal (next visit) won't show it again.
@@ -866,6 +896,7 @@ final class ForYouModel {
             guard self.visit == token else { return }
             withAnimation(.spring(response: 0.55, dampingFraction: 0.8)) {
                 entries.removeAll { $0.id == id }
+                draftPreviews[id] = nil
             }
         }
     }
@@ -933,6 +964,7 @@ private struct LetterView: View {
     var liveRecipient: String = ""                   // THIS card's "To:" (seeds the recipient field); "" = no recipient
     var fireDimmed: Bool = false                     // one task at a time: another task is running → the CTA waits
     var onCommitEdit: (String, String) -> Void = { _, _ in }   // persist (edited draft, edited recipient) → what fires
+    var onLiveEdit: (String, String) -> Void = { _, _ in }     // current editor values for Sidekick context
     var onOffer: () -> Void
     var onClose: () -> Void
 
@@ -976,6 +1008,17 @@ private struct LetterView: View {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
             commitEdit()
+        }
+    }
+
+    private func editChanged() {
+        guard editable else { return }
+        onLiveEdit(editedDraft, editedRecipient)
+        if isDirty {
+            everEdited = true
+            scheduleAutoSave()
+        } else {
+            saveTask?.cancel()
         }
     }
 
@@ -1056,8 +1099,8 @@ private struct LetterView: View {
             giftSaved = false; everEdited = false
         }
         // Every keystroke (draft OR recipient) reschedules the debounced commit, so edits persist without a Save click.
-        .onChange(of: editedDraft) { _, _ in if isDirty { everEdited = true; scheduleAutoSave() } }
-        .onChange(of: editedRecipient) { _, _ in if isDirty { everEdited = true; scheduleAutoSave() } }
+        .onChange(of: editedDraft) { _, _ in editChanged() }
+        .onChange(of: editedRecipient) { _, _ in editChanged() }
         .onDisappear { saveTask?.cancel() }
     }
 

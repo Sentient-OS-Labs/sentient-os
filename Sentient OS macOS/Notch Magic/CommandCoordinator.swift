@@ -170,6 +170,7 @@ final class CommandCoordinator {
         // always-on telemetry signals disclosed in Settings.
         Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label], tier: .core)
         run.start(trimmed, mode: mode, source: source.rawValue)
+        InviteProgram.shared.record(.sidekick)
         // Every command is computer use, which raises the notch.
         setPhase(.running)
         Log("▶︎ submit [\(source)] \(mode.label) (\(trimmed.count) chars)")   // B7: length, not the command text

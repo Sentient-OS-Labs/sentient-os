@@ -41,6 +41,7 @@ final class AppState {
 
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
+    private let inviteBanner = InviteBannerController()
     private var hasStartedInterface = false
 
     /// Drops the Dock icon whenever the home window is closed (the icon belongs to home;
@@ -82,6 +83,7 @@ final class AppState {
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
         UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
+        inviteBanner.start(appState: self)
         // Diagnostics baseline for the session (structure only, see CodexDiagnostics.swift): start
         // the network monitor now so a codex failure right after a wake never reads "unknown", and
         // leave one breadcrumb saying what codex's login looks like at launch.
