@@ -1,6 +1,6 @@
 // MailAccountProbe.swift
 // Reads hosted mail identities through CLI control protocols without starting a model turn.
-// Codex uses connection metadata; Claude Microsoft 365 uses only get_me; Gmail asks the user.
+// Codex uses connection metadata; Claude uses get_me or one Gmail sent-metadata lookup.
 // Doc: Documentation - Connected Email Accounts.md
 
 import Foundation
@@ -26,7 +26,7 @@ nonisolated enum MailAccountProbe {
         guard let binary else { throw MailAccountError.unavailable }
         let session = MailProbeProcess()
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
+            let values: [MailAccountCandidate] = try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .utility).async {
                     defer { session.stop() }
                     do {
@@ -38,6 +38,8 @@ nonisolated enum MailAccountProbe {
                     } catch { continuation.resume(throwing: error) }
                 }
             }
+            try Task.checkCancellation()
+            return values
         } onCancel: { session.stop() }
     }
 
@@ -100,7 +102,19 @@ nonisolated enum MailAccountProbe {
                   let key = config["id"] as? String, !key.isEmpty, key.count <= 256 else { continue }
             if config["url"] as? String == "https://gmailmcp.googleapis.com/mcp/v1" {
                 if provider == .outlook { continue }
-                values.append(MailAccountCandidate(engine: .claude, provider: .gmail, connectionKey: key, email: nil))
+                var email: String?
+                if let name = server["name"] as? String,
+                   (server["tools"] as? [[String: Any]] ?? []).contains(where: { $0["name"] as? String == "search_threads" }) {
+                    let normalized = name.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
+                    // This control channel is trusted: keep the tool and arguments fixed here.
+                    // Failure does not broaden the query or read a message body; the user can type the address.
+                    if let result = try? session.request(["subtype": "mcp_call",
+                        "tool": "mcp__\(normalized)__search_threads", "arguments": GmailSenderMetadata.searchArguments], claude: true) {
+                        email = GmailSenderMetadata.email(from: result)
+                    }
+                }
+                values.append(MailAccountCandidate(engine: .claude, provider: .gmail, connectionKey: key,
+                                                   email: email, reportedVia: .sentMailMetadata))
             } else {
                 if provider == .gmail { continue }
                 guard let name = server["name"] as? String,

@@ -38,7 +38,9 @@ struct MailAccountSettingsGroup: View {
         }
         .task { await reload() }
         .sheet(isPresented: $showSetup, onDismiss: { Task { await reload() } }) {
-            if let engine = MailAccount.Engine(rawValue: ModelBackend.current.rawValue) { MailAccountSetupSheet(engine: engine) }
+            if let engine = MailAccount.Engine(rawValue: ModelBackend.current.rawValue) {
+                MailAccountSetupSheet(engine: engine, automaticallySaveDetectedGmail: true)
+            }
         }
         .alert("Delete saved email addresses?", isPresented: $confirmDelete) {
             Button("Cancel", role: .cancel) {}

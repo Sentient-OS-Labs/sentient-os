@@ -10,7 +10,11 @@ nonisolated struct MailAccount: Codable, Sendable, Equatable, Identifiable {
         case gmail, outlook
         var title: String { self == .gmail ? "Gmail" : "Outlook" }
     }
-    enum Source: String, Codable, Sendable { case connectorProfile = "connector_profile", userEntered = "user_entered" }
+    enum Source: String, Codable, Sendable {
+        case connectorProfile = "connector_profile"
+        case sentMailMetadata = "sent_mail_metadata"
+        case userEntered = "user_entered"
+    }
 
     let engine: Engine
     let provider: Provider
@@ -30,6 +34,9 @@ nonisolated struct MailAccount: Codable, Sendable, Equatable, Identifiable {
         guard let address = Self.normalizedEmail(email), (1...256).contains(connectionKey.count) else {
             throw MailAccountError.invalidAddress
         }
+        guard reportedVia != .sentMailMetadata || (engine == .claude && provider == .gmail) else {
+            throw MailAccountError.invalidResponse
+        }
         self.engine = engine; self.provider = provider; self.connectionKey = connectionKey
         self.email = address; self.reportedVia = reportedVia; consentVersion = 1
     }
@@ -48,10 +55,26 @@ nonisolated struct MailAccountCandidate: Sendable, Identifiable {
     let provider: MailAccount.Provider
     let connectionKey: String
     let email: String?
+    let reportedVia: MailAccount.Source
+
+    init(engine: MailAccount.Engine, provider: MailAccount.Provider, connectionKey: String,
+         email: String?, reportedVia: MailAccount.Source = .connectorProfile) {
+        self.engine = engine; self.provider = provider; self.connectionKey = connectionKey
+        self.email = email; self.reportedVia = reportedVia
+    }
+
     var id: String { "\(engine.rawValue):\(provider.rawValue):\(connectionKey)" }
     func confirmed(email supplied: String? = nil) throws -> MailAccount {
         try MailAccount(engine: engine, provider: provider, connectionKey: connectionKey,
-                        email: email ?? supplied ?? "", reportedVia: email == nil ? .userEntered : .connectorProfile)
+                        email: email ?? supplied ?? "", reportedVia: email == nil ? .userEntered : reportedVia)
+    }
+
+    /// Explicit connection/update actions can complete without an address-confirmation step.
+    /// An unresolved account keeps the manual fallback visible; inferred values keep their source.
+    static func canAutomaticallySaveGmail(_ candidates: [Self]) -> Bool {
+        !candidates.isEmpty
+            && candidates.allSatisfy { $0.engine == .claude && $0.email.flatMap(MailAccount.normalizedEmail) != nil }
+            && candidates.contains { $0.engine == .claude && $0.provider == .gmail && $0.reportedVia == .sentMailMetadata }
     }
 }
 

@@ -29,10 +29,11 @@ OpenAI's hosted connector page on ChatGPT, claude.ai's connector directory on Cl
 copy follows, and the sources group header reads "Through Your ChatGPT" / "Through Your Claude")
 where the user links Google. Calendar's **Done** saves the user's declaration and selects the source.
 Gmail's **Done** opens the connected-email confirmation sheet: Codex discovers the address from its
-connector metadata; Claude Gmail asks the user for the linked address. The sheet discloses Supabase
-storage before saving. A confirmed address is persisted securely on the Mac and synced, with an
-explicit pending state when offline, before the source selection finishes. No email message is read
-for identity collection. "Stop reading" turns off knowledge selection; it does not unlink the provider
+connector metadata; Claude Gmail reads one sent thread's metadata directly, without a model turn.
+The connection flow discloses Supabase storage before Done. One distinct sender from messages marked
+SENT is saved automatically, with manual entry only when detection is empty, ambiguous or unavailable.
+No message bodies, subjects or snippets are requested. Addresses persist securely on the Mac and sync
+in the background if offline, before the source selection finishes. "Stop reading" turns off knowledge selection; it does not unlink the provider
 or delete saved contact metadata.
 
 Outlook Mail's connector popup uses the same confirmation sheet, reading Codex metadata or Claude

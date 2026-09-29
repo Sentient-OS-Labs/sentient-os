@@ -1,38 +1,45 @@
 # Connected email accounts
 
-This feature records the Gmail and Outlook addresses a user confirms in Sentient. It is separate
+This feature records Gmail and Outlook addresses during disclosed connection setup in Sentient. It is separate
 from message ingestion, anonymous diagnostics and the encrypted knowledge-base mirror. The address,
 provider, engine and connection key are contact metadata, not proof of mailbox ownership.
 
 ## Collection and confirmation
 
 `MailAccountProbe` starts the user's installed CLI in a temporary working directory with a sanitized
-environment. It sends control-protocol requests only; no model turn or message read is started.
+environment. It sends control-protocol requests only; no model turn or message-body read is started.
 
 - Codex: `mcpServerStatus/list` returns tools whose `_meta.link_owner_profile.email` identifies the
   connected account. Only the reviewed Gmail and Outlook Email connector IDs are accepted. Results
   are deduplicated by link ID. Missing metadata fails visibly; there is no email-header inference.
-- Claude: `mcp_status` locates the hosted Gmail and Microsoft 365 installations. The only tool call
-  allowed by this implementation is Microsoft 365 `get_me` with empty arguments, reading `mail`.
-  `userPrincipalName` is not used as a mailbox-address substitute. Gmail returns an addressless
-  candidate so `MailAccountSetupSheet` asks the user for the address.
+- Claude: `mcp_status` locates the hosted Gmail and Microsoft 365 installations. Microsoft 365
+  uses `get_me` with empty arguments, reading `mail`; `userPrincipalName` is not substituted.
+  Gmail calls `search_threads` once with `query: "in:sent"`, `pageSize: 1` and
+  `view: "THREAD_VIEW_METADATA_ONLY"`. `GmailSenderMetadata` reads senders only on messages labeled
+  `SENT`, ignoring received replies and recipient addresses. It accepts the structured, JSON-string
+  and MCP text-block response forms. One distinct normalized sender becomes the candidate; an
+  empty, ambiguous, failed or malformed result leaves manual entry available. It refuses inference
+  if the result contains message bodies, subjects or snippets. It never falls back to a broader
+  search, an LLM prompt or scraping conversation history.
 
 Codex metadata and Claude's direct `mcp_call` control request are CLI-version-sensitive surfaces.
 Protocol drift produces an actionable error rather than guessing an identity. Discovery has bounded
 response size, pagination and time, and cancellation terminates its subprocess. No CLI credentials
 or mailbox contents are copied to Supabase.
 
-Gmail and Outlook connection sheets use the same confirmation sheet. Existing installations are
-offered the disclosure when the home opens; dismissing it does not upload anything. Settings → System
-allows users to confirm addresses later, retry pending sync and delete their records. Other
-connections and knowledge-source toggles are independent.
+The Gmail connection flow discloses cloud storage before Done. A clear Claude Gmail result then
+saves automatically with no address-confirmation step, including when the cloud sync must queue for
+retry. Settings' explicit Add or update addresses action also uses this automatic path when all
+addresses resolve. Missing or ambiguous Gmail results ask for an address. Existing installations
+retain the initial storage disclosure; discovery alone does not silently enroll them in storage.
+Other connections and knowledge-source toggles are independent.
 
 ## Persistence and ownership
 
 `MailAccountCloud` holds the local snapshot and Supabase Auth session in a dedicated, device-only
 Keychain item. Anonymous Auth provides a unique authenticated owner without a login form. There is
 no cross-device account merge and no association with the mirror secret or analytics identifier.
-The first confirmation creates the Auth identity; discovery alone does not.
+The first save creates the Auth identity; discovery alone does not.
 
 Only `MailAccountCloudConfiguration`'s public project URL and publishable key are embedded. All
 access is subject to database RLS. Never add a service-role key or database password to the app.
@@ -58,6 +65,9 @@ The project is `sentient-os-app-data` (`hjqedlalhfoxwehxhton`, us-west-2). The t
 - No public/anon table grants. Authenticated clients cannot write owner IDs or server timestamps.
 - A unique owner/engine/provider/connection key; addresses are not globally unique.
 - Bounded, validated email/provider/source fields and a disclosure-version field.
+- `sent_mail_metadata` provenance for the inferred Claude Gmail sender, restricted to that
+  engine/provider pair. Profile reads remain `connector_profile`; manual fallback remains
+  `user_entered`. A sending alias is not represented as a verified primary mailbox.
 
 `sync_connected_email_accounts` is an invoker RPC, validates a maximum 32-entry snapshot, rejects
 duplicates and unknown fields, and applies RLS inside one transaction. The parameterless
@@ -80,3 +90,13 @@ and two disposable anonymous identities, verifies cross-owner denial and atomici
 test identities afterward. The temporary app acceptance harness additionally exercised the actual
 Swift probe, Auth, snapshot, refresh, concurrency, offline-persistence and deletion paths. No test
 records or acceptance credentials belong in production app configuration or version control.
+
+Parser and flow-decision fixtures can be run without network or credentials:
+
+```sh
+xcrun --sdk macosx swiftc -target arm64-apple-macos15.0 -swift-version 5 \
+  -parse-as-library "Sentient OS macOS/Cloud/Mail Accounts/MailAccount.swift" \
+  "Sentient OS macOS/Cloud/Mail Accounts/GmailSenderMetadata.swift" \
+  Scripts/test_gmail_sender_metadata.swift -o /tmp/sentient-gmail-sender-tests
+/tmp/sentient-gmail-sender-tests
+```

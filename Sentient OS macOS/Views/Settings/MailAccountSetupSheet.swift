@@ -1,13 +1,16 @@
 // MailAccountSetupSheet.swift
-// Shows the exact connected addresses before saving; Claude Gmail is entered by the user.
+// Discovers connected addresses, automatically saving a clear Claude Gmail sender when the
+// caller has already shown the storage disclosure. Manual entry is only a fallback.
 // The same disclosure and validation apply to onboarding, Settings and existing installations.
 // Doc: ../../Cloud/Mail Accounts/Documentation - Connected Email Accounts.md
 
 import SwiftUI
 
 struct MailAccountSetupSheet: View {
+    static let gmailStorageDisclosure = "By pressing Done, you save your email address to Sentient's cloud database. Claude Gmail uses sender details from sent mail; message bodies stay out of this lookup."
     let engine: MailAccount.Engine
     var provider: MailAccount.Provider?
+    var automaticallySaveDetectedGmail = false
     var onSaved: () -> Void = {}
     @Environment(\.dismiss) private var dismiss
     @State private var candidates: [MailAccountCandidate] = []
@@ -21,8 +24,10 @@ struct MailAccountSetupSheet: View {
     private var previewOnly = false
     #endif
 
-    init(engine: MailAccount.Engine, provider: MailAccount.Provider? = nil, onSaved: @escaping () -> Void = {}) {
+    init(engine: MailAccount.Engine, provider: MailAccount.Provider? = nil,
+         automaticallySaveDetectedGmail: Bool = false, onSaved: @escaping () -> Void = {}) {
         self.engine = engine; self.provider = provider; self.onSaved = onSaved
+        self.automaticallySaveDetectedGmail = automaticallySaveDetectedGmail
     }
 
     #if DEBUG
@@ -68,7 +73,7 @@ struct MailAccountSetupSheet: View {
                                     set: { entered[candidate.id] = $0 }), prompt: Text(verbatim: "you@example.com"))
                                     .textFieldStyle(.roundedBorder).autocorrectionDisabled()
                                     .accessibilityLabel("Gmail address connected to Claude")
-                                Text("Claude doesn't share this address with Sentient. Enter the account you linked.")
+                                Text("We couldn't find one clear sending address. Enter the Gmail account you linked.")
                                     .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.body)
                             }
                         }
@@ -88,7 +93,7 @@ struct MailAccountSetupSheet: View {
                     Button("Try again") { checkID = UUID() }.disabled(saving)
                 }
                 Button(saved ? "Done" : (saving ? "Saving…" : "Save email addresses")) {
-                    if saved { onSaved(); dismiss() } else { save() }
+                    if saved { onSaved(); dismiss() } else { Task { await save() } }
                 }
                 .buttonStyle(.borderedProminent).tint(.white).foregroundStyle(.black)
                 .disabled(!saved && (!valid || loading || saving))
@@ -104,6 +109,12 @@ struct MailAccountSetupSheet: View {
             defer { loading = false }
             do {
                 candidates = try await MailAccountProbe.discover(engine: engine, provider: provider)
+                try Task.checkCancellation()
+                if automaticallySaveDetectedGmail && MailAccountCandidate.canAutomaticallySaveGmail(candidates) {
+                    loading = false
+                    await save(automatically: true)
+                    return
+                }
                 let prior = try await MailAccountCloud.shared.savedAccounts()
                 for candidate in candidates where candidate.email == nil {
                     entered[candidate.id] = prior.first { $0.id == candidate.id }?.email ?? ""
@@ -113,30 +124,36 @@ struct MailAccountSetupSheet: View {
         }
     }
 
-    private func save() {
+    private func save(automatically: Bool = false) async {
         #if DEBUG
         if previewOnly { return }
         #endif
+        guard !saving else { return }
         saving = true; message = nil
-        Task {
-            defer { saving = false }
-            do {
-                let accounts = try candidates.map { try $0.confirmed(email: entered[$0.id]) }
-                let synced = try await MailAccountCloud.shared.save(accounts, engine: engine, provider: provider)
-                if synced { onSaved(); dismiss() }
-                else {
-                    saved = true
-                    message = "Saved securely on this Mac. Cloud sync is pending and will retry when Sentient is active."
-                }
-            } catch { message = (error as? MailAccountError)?.errorDescription ?? "The addresses couldn't be saved. Please try again." }
-        }
+        defer { saving = false }
+        do {
+            try Task.checkCancellation()
+            let accounts = try candidates.map { try $0.confirmed(email: entered[$0.id]) }
+            let synced = try await MailAccountCloud.shared.save(accounts, engine: engine, provider: provider)
+            try Task.checkCancellation()
+            if synced || automatically { onSaved(); dismiss() }
+            else {
+                saved = true
+                message = "Saved securely on this Mac. Cloud sync is pending and will retry when Sentient is active."
+            }
+        } catch is CancellationError { return }
+        catch { message = (error as? MailAccountError)?.errorDescription ?? "The addresses couldn't be saved. Please try again." }
     }
 }
 
 #if DEBUG
-#Preview("Claude Gmail address") {
+#Preview("Claude Gmail fallback") {
     MailAccountSetupSheet(previewCandidates: [MailAccountCandidate(engine: .claude, provider: .gmail,
         connectionKey: "preview", email: nil)], engine: .claude)
+}
+#Preview("Claude Gmail detected sender") {
+    MailAccountSetupSheet(previewCandidates: [MailAccountCandidate(engine: .claude, provider: .gmail,
+        connectionKey: "preview", email: "you@example.com", reportedVia: .sentMailMetadata)], engine: .claude)
 }
 #Preview("Detected mail addresses") {
     MailAccountSetupSheet(previewCandidates: [MailAccountCandidate(engine: .chatgpt, provider: .gmail,

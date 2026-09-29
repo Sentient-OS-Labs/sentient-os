@@ -86,6 +86,12 @@ struct CloudConnectSheet: View {
             }
             .padding(.top, 14)
 
+            if service == .gmail {
+                Text(MailAccountSetupSheet.gmailStorageDisclosure)
+                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
+            }
+
             connectButton.padding(.top, 26)
             doneButton.padding(.top, 10)
 
@@ -105,7 +111,7 @@ struct CloudConnectSheet: View {
         .onChange(of: backendRaw) { dismiss() }
         .sheet(isPresented: $showMailAccountSetup) {
             if let engine = mailSetupEngine {
-                MailAccountSetupSheet(engine: engine, provider: .gmail) {
+                MailAccountSetupSheet(engine: engine, provider: .gmail, automaticallySaveDetectedGmail: true) {
                     guard ModelBackend.current.rawValue == engine.rawValue else { return }
                     confirmDone()
                 }

@@ -93,6 +93,12 @@ struct ConnectorConnectSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 14)
 
+            if !usesDirect && source.serviceSlug == "gmail" {
+                Text(MailAccountSetupSheet.gmailStorageDisclosure)
+                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
+            }
+
             if let direct {
                 VStack(spacing: 4) {
                     Text(direct.label).foregroundStyle(Theme.Ink.bright)
@@ -145,7 +151,8 @@ struct ConnectorConnectSheet: View {
         .onDisappear(perform: cancelOperation)
         .sheet(isPresented: $showMailAccountSetup) {
             if let engine = mailSetupEngine {
-                MailAccountSetupSheet(engine: engine, provider: source.serviceSlug == "gmail" ? .gmail : .outlook) {
+                MailAccountSetupSheet(engine: engine, provider: source.serviceSlug == "gmail" ? .gmail : .outlook,
+                                      automaticallySaveDetectedGmail: source.serviceSlug == "gmail") {
                     guard ModelBackend.current.rawValue == engine.rawValue else { return }
                     confirmDone()
                 }

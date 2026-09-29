@@ -21,7 +21,7 @@ measure, one green.
 | `ShareKnowledgePane.swift` | Give AIs Knowledge. |
 | `SystemPane.swift` | System. |
 | `HealthPane.swift` | Permissions & Health. |
-| `MailAccountSetupSheet.swift` · `MailAccountSettingsGroup.swift` · `MailAccountMigration.swift` | Shared email-address disclosure, Claude Gmail entry, saved-address management and existing-installation prompt. Storage and security: `Cloud/Mail Accounts/Documentation - Connected Email Accounts.md`. |
+| `MailAccountSetupSheet.swift` · `MailAccountSettingsGroup.swift` · `MailAccountMigration.swift` | Shared email-address disclosure, automatic Claude Gmail sender lookup with manual fallback, saved-address management and existing-installation prompt. Storage and security: `Cloud/Mail Accounts/Documentation - Connected Email Accounts.md`. |
 | `UninstallView.swift` · `PrivacyPolicyView.swift` | The farewell sheet and the one-screen privacy policy. |
 
 ## The panes
