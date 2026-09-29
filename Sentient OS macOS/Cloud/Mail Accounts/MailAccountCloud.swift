@@ -46,14 +46,20 @@ actor MailAccountCloud {
 
     /// A confirmation replaces only the provider/engine displayed in the sheet. Other
     /// engines remain independent; identical email addresses never merge installation owners.
-    func save(_ accounts: [MailAccount], engine: MailAccount.Engine, provider: MailAccount.Provider? = nil) async throws -> Bool {
+    func save(_ accounts: [MailAccount], engine: MailAccount.Engine, provider: MailAccount.Provider? = nil,
+              preservingConnectionIDs: Set<String> = []) async throws -> Bool {
         guard !deleting else { throw MailAccountError.busy }
         guard !accounts.isEmpty, accounts.count <= 32,
               accounts.allSatisfy({ $0.engine == engine && (provider == nil || $0.provider == provider)
                   && $0.consentVersion == 1 && MailAccount.normalizedEmail($0.email) == $0.email }),
               Set(accounts.map(\.id)).count == accounts.count else { throw MailAccountError.invalidAddress }
         var next = try load()
-        next.accounts.removeAll { $0.engine == engine && (provider == nil || $0.provider == provider) }
+        let incomingIDs = Set(accounts.map(\.id))
+        // A skipped lookup must not erase a previously saved address for that connection.
+        next.accounts.removeAll {
+            $0.engine == engine && (provider == nil || $0.provider == provider)
+                && (!preservingConnectionIDs.contains($0.id) || incomingIDs.contains($0.id))
+        }
         next.accounts += accounts
         guard next.accounts.count <= 32 else { throw MailAccountError.invalidResponse }
         next.pending = true; next.revision += 1

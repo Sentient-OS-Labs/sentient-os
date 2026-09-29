@@ -18,7 +18,7 @@ environment. It sends control-protocol requests only; no model turn or message-b
   `view: "THREAD_VIEW_METADATA_ONLY"`. `GmailSenderMetadata` reads senders only on messages labeled
   `SENT`, ignoring received replies and recipient addresses. It accepts the structured, JSON-string
   and MCP text-block response forms. One distinct normalized sender becomes the candidate; an
-  empty, ambiguous, failed or malformed result leaves manual entry available. It refuses inference
+  empty, ambiguous, failed or malformed result skips address collection. It refuses inference
   if the result contains message bodies, subjects or snippets. It never falls back to a broader
   search, an LLM prompt or scraping conversation history.
 
@@ -29,9 +29,12 @@ or mailbox contents are copied to Supabase.
 
 The Gmail connection flow discloses cloud storage before Done. A clear Claude Gmail result then
 saves automatically with no address-confirmation step, including when the cloud sync must queue for
-retry. Settings' explicit Add or update addresses action also uses this automatic path when all
-addresses resolve. Missing or ambiguous Gmail results ask for an address. Existing installations
-retain the initial storage disclosure; discovery alone does not silently enroll them in storage.
+retry. Settings' explicit Add or update addresses action also uses this automatic path for detected
+Gmail senders; unresolved peers are skipped. Missing or ambiguous results are skipped without an email-entry field. A connected
+mailbox with no detectable address can still be selected as a knowledge source. If discovery finds no
+connection, the connection popup returns to the picker without marking a new connection as linked.
+Existing installations retain the initial storage disclosure; discovery alone does not silently
+enroll them in storage.
 Other connections and knowledge-source toggles are independent.
 
 ## Persistence and ownership
@@ -44,7 +47,15 @@ The first save creates the Auth identity; discovery alone does not.
 Only `MailAccountCloudConfiguration`'s public project URL and publishable key are embedded. All
 access is subject to database RLS. Never add a service-role key or database password to the app.
 
-Saving one provider preserves records for other providers and engines. Concurrent saves are
+The onboarding source picker uses these same connection sheets. Lookup starts on **Done** after the
+user has linked/selected their account on the provider's page; merely opening the picker does not run
+it. Settings uses the same trigger. This is not a separate check on Start Analysis. Completing the explicit Gmail flow also records
+that its storage disclosure was already shown, so a skipped address does not immediately reopen
+the migration sheet on the home screen.
+
+Saving one provider preserves records for other providers and engines. In a mixed result, detected
+addresses can save while unresolved connection IDs retain any previously saved records. An entirely
+skipped result does not call the cloud save path or create a cloud identity. Concurrent saves are
 serialized into atomic cloud snapshots; revisions prevent a completed old request from clearing a
 newer pending edit. Offline data remains pending in Keychain and retries on launch, foreground or the
 Settings retry action. A pending save also retries in the background with backoff up to five minutes,
@@ -66,8 +77,8 @@ The project is `sentient-os-app-data` (`hjqedlalhfoxwehxhton`, us-west-2). The t
 - A unique owner/engine/provider/connection key; addresses are not globally unique.
 - Bounded, validated email/provider/source fields and a disclosure-version field.
 - `sent_mail_metadata` provenance for the inferred Claude Gmail sender, restricted to that
-  engine/provider pair. Profile reads remain `connector_profile`; manual fallback remains
-  `user_entered`. A sending alias is not represented as a verified primary mailbox.
+  engine/provider pair. Profile reads remain `connector_profile`; legacy `user_entered` records remain readable,
+  but current setup never asks the user to type an email address. A sending alias is not represented as a verified primary mailbox.
 
 `sync_connected_email_accounts` is an invoker RPC, validates a maximum 32-entry snapshot, rejects
 duplicates and unknown fields, and applies RLS inside one transaction. The parameterless

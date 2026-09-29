@@ -152,7 +152,8 @@ struct ConnectorConnectSheet: View {
         .sheet(isPresented: $showMailAccountSetup) {
             if let engine = mailSetupEngine {
                 MailAccountSetupSheet(engine: engine, provider: source.serviceSlug == "gmail" ? .gmail : .outlook,
-                                      automaticallySaveDetectedGmail: source.serviceSlug == "gmail") {
+                                      automaticallySaveDetectedGmail: source.serviceSlug == "gmail",
+                                      onUnavailable: { dismiss() }) {
                     guard ModelBackend.current.rawValue == engine.rawValue else { return }
                     confirmDone()
                 }

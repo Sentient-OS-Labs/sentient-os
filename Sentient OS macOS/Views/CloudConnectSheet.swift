@@ -111,7 +111,8 @@ struct CloudConnectSheet: View {
         .onChange(of: backendRaw) { dismiss() }
         .sheet(isPresented: $showMailAccountSetup) {
             if let engine = mailSetupEngine {
-                MailAccountSetupSheet(engine: engine, provider: .gmail, automaticallySaveDetectedGmail: true) {
+                MailAccountSetupSheet(engine: engine, provider: .gmail, automaticallySaveDetectedGmail: true,
+                                      onUnavailable: { dismiss() }) {
                     guard ModelBackend.current.rawValue == engine.rawValue else { return }
                     confirmDone()
                 }

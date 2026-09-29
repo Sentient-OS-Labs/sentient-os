@@ -107,7 +107,7 @@ nonisolated enum MailAccountProbe {
                    (server["tools"] as? [[String: Any]] ?? []).contains(where: { $0["name"] as? String == "search_threads" }) {
                     let normalized = name.replacingOccurrences(of: "[^a-zA-Z0-9_-]", with: "_", options: .regularExpression)
                     // This control channel is trusted: keep the tool and arguments fixed here.
-                    // Failure does not broaden the query or read a message body; the user can type the address.
+                    // Failure skips this address; never broaden the query or read a message body.
                     if let result = try? session.request(["subtype": "mcp_call",
                         "tool": "mcp__\(normalized)__search_threads", "arguments": GmailSenderMetadata.searchArguments], claude: true) {
                         email = GmailSenderMetadata.email(from: result)

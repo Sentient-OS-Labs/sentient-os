@@ -31,7 +31,8 @@ where the user links Google. Calendar's **Done** saves the user's declaration an
 Gmail's **Done** opens the connected-email confirmation sheet: Codex discovers the address from its
 connector metadata; Claude Gmail reads one sent thread's metadata directly, without a model turn.
 The connection flow discloses Supabase storage before Done. One distinct sender from messages marked
-SENT is saved automatically, with manual entry only when detection is empty, ambiguous or unavailable.
+SENT is saved automatically. Empty, ambiguous or unavailable results are skipped without asking for
+an email address. A missing connection returns to the picker without being marked linked.
 No message bodies, subjects or snippets are requested. Addresses persist securely on the Mac and sync
 in the background if offline, before the source selection finishes. "Stop reading" turns off knowledge selection; it does not unlink the provider
 or delete saved contact metadata.

@@ -25,10 +25,10 @@ import Foundation
         check(GmailSenderMetadata.email(from: ["structured_content": mixed]) == "me@example.com", "alternate structured-content spelling")
         check(GmailSenderMetadata.email(from: ["structuredContent": mixed, "content": "someone-else@example.com"]) == "me@example.com", "typed result takes precedence over prose")
         check(GmailSenderMetadata.email(from: result([message("Me@Example.com"), message("Person <me@example.com>")])) == "me@example.com", "normalize repeated sender representations")
-        check(GmailSenderMetadata.email(from: result([own, message("alias@example.com")])) == nil, "multiple sending addresses require fallback")
-        check(GmailSenderMetadata.email(from: ["structuredContent": ["threads": []]]) == nil, "empty mailbox requires fallback")
+        check(GmailSenderMetadata.email(from: result([own, message("alias@example.com")])) == nil, "multiple sending addresses skip collection")
+        check(GmailSenderMetadata.email(from: ["structuredContent": ["threads": []]]) == nil, "empty mailbox skips collection")
         check(GmailSenderMetadata.email(from: result([message("other@example.com", ["INBOX"])])) == nil, "never infer an address from received mail")
-        check(GmailSenderMetadata.email(from: result([["sender": "me@example.com"]])) == nil, "missing SENT evidence requires fallback")
+        check(GmailSenderMetadata.email(from: result([["sender": "me@example.com"]])) == nil, "missing SENT evidence skips collection")
         check(GmailSenderMetadata.email(from: result([own, message("not-an-email")])) == nil, "malformed sent sender invalidates inference")
         check(GmailSenderMetadata.email(from: result([message("me@example.com\r\nBcc: other@example.com")])) == nil, "reject header injection")
         check(GmailSenderMetadata.email(from: result([message("me@example.com, other@example.com")])) == nil, "reject mailbox lists")
@@ -37,7 +37,7 @@ import Foundation
         check(GmailSenderMetadata.email(from: result([message("One <one@example.com>, Two <two@example.com>")])) == nil, "reject multiple named mailboxes")
         check(GmailSenderMetadata.email(from: ["isError": true, "structuredContent": mixed]) == nil, "tool failures cannot produce an identity")
         check(GmailSenderMetadata.email(from: ["content": "The account is me@example.com"]) == nil, "never scrape an address from prose")
-        check(GmailSenderMetadata.email(from: ["content": "{bad-json"]) == nil, "malformed JSON requires fallback")
+        check(GmailSenderMetadata.email(from: ["content": "{bad-json"]) == nil, "malformed JSON skips collection")
         for key in ["plaintextBody", "htmlBody", "subject", "snippet"] {
             var body = own; body[key] = "Unexpected content"
             check(GmailSenderMetadata.email(from: result([body])) == nil, "reject ignored metadata-only mode: \(key)")
@@ -48,12 +48,13 @@ import Foundation
 
         let candidate = MailAccountCandidate(engine: .claude, provider: .gmail, connectionKey: "test", email: "me@example.com", reportedVia: .sentMailMetadata)
         let fallback = MailAccountCandidate(engine: .claude, provider: .gmail, connectionKey: "other", email: nil, reportedVia: .sentMailMetadata)
-        let account = try candidate.confirmed()
+        guard let account = candidate.detectedAccount else { fatalError("Detected account missing") }
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(account)) as! [String: Any]
         check(encoded["reported_via"] as? String == "sent_mail_metadata", "persist sending-address provenance")
-        check(try fallback.confirmed(email: "typed@example.com").reportedVia == .userEntered, "manual fallback retains user-entered provenance")
+        check(fallback.detectedAccount == nil, "missing address is skipped without accepting manual input")
         check(MailAccountCandidate.canAutomaticallySaveGmail([candidate]), "clear Gmail result skips address confirmation")
-        check(!MailAccountCandidate.canAutomaticallySaveGmail([candidate, fallback]), "unresolved account keeps manual entry visible")
+        check(MailAccountCandidate.canAutomaticallySaveGmail([candidate, fallback]), "resolved account can save while unresolved accounts are skipped")
+        check(!MailAccountCandidate.canAutomaticallySaveGmail([fallback]), "unresolved-only discovery does not save")
         check(!MailAccountCandidate.canAutomaticallySaveGmail([]), "empty discovery cannot automatically save")
         let otherEngine = MailAccountCandidate(engine: .chatgpt, provider: .gmail, connectionKey: "codex", email: "codex@example.com")
         check(!MailAccountCandidate.canAutomaticallySaveGmail([candidate, otherEngine]), "mixed engines cannot automatically save")

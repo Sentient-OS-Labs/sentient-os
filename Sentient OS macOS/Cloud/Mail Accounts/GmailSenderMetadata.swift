@@ -1,6 +1,6 @@
 // GmailSenderMetadata.swift
 // Reads a single sending-address candidate from Gmail's metadata-only search response.
-// Empty, ambiguous, failed or malformed results leave the manual-address fallback available.
+// Empty, ambiguous, failed or malformed results skip address collection.
 // Doc: Documentation - Connected Email Accounts.md
 
 import Foundation

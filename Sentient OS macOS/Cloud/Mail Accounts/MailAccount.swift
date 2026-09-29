@@ -13,7 +13,7 @@ nonisolated struct MailAccount: Codable, Sendable, Equatable, Identifiable {
     enum Source: String, Codable, Sendable {
         case connectorProfile = "connector_profile"
         case sentMailMetadata = "sent_mail_metadata"
-        case userEntered = "user_entered"
+        case userEntered = "user_entered" // Decode records saved by earlier builds; new setup has no entry field.
     }
 
     let engine: Engine
@@ -64,17 +64,19 @@ nonisolated struct MailAccountCandidate: Sendable, Identifiable {
     }
 
     var id: String { "\(engine.rawValue):\(provider.rawValue):\(connectionKey)" }
-    func confirmed(email supplied: String? = nil) throws -> MailAccount {
-        try MailAccount(engine: engine, provider: provider, connectionKey: connectionKey,
-                        email: email ?? supplied ?? "", reportedVia: email == nil ? .userEntered : reportedVia)
+    var detectedAccount: MailAccount? {
+        guard let email else { return nil }
+        return try? MailAccount(engine: engine, provider: provider, connectionKey: connectionKey,
+                                email: email, reportedVia: reportedVia)
     }
 
     /// Explicit connection/update actions can complete without an address-confirmation step.
-    /// An unresolved account keeps the manual fallback visible; inferred values keep their source.
+    /// Unresolved accounts are skipped; inferred values keep their source.
     static func canAutomaticallySaveGmail(_ candidates: [Self]) -> Bool {
-        !candidates.isEmpty
-            && candidates.allSatisfy { $0.engine == .claude && $0.email.flatMap(MailAccount.normalizedEmail) != nil }
-            && candidates.contains { $0.engine == .claude && $0.provider == .gmail && $0.reportedVia == .sentMailMetadata }
+        let detected = candidates.compactMap(\.detectedAccount)
+        return !detected.isEmpty
+            && detected.allSatisfy { $0.engine == .claude }
+            && detected.contains { $0.provider == .gmail && $0.reportedVia == .sentMailMetadata }
     }
 }
 
@@ -82,7 +84,7 @@ nonisolated enum MailAccountError: Error, LocalizedError {
     case invalidAddress, unavailable, timedOut, invalidResponse, keychain, signedOut, requestFailed, busy
     var errorDescription: String? {
         switch self {
-        case .invalidAddress: "Enter a complete email address, such as you@example.com."
+        case .invalidAddress: "A valid email address couldn't be detected."
         case .unavailable: "Connect your email account through your AI, then try again."
         case .timedOut: "The account check timed out. Please try again."
         case .invalidResponse: "Your AI couldn't confirm the connected account. Please try again."
