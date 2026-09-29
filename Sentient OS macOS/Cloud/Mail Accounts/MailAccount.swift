@@ -69,15 +69,6 @@ nonisolated struct MailAccountCandidate: Sendable, Identifiable {
         return try? MailAccount(engine: engine, provider: provider, connectionKey: connectionKey,
                                 email: email, reportedVia: reportedVia)
     }
-
-    /// Explicit connection/update actions can complete without an address-confirmation step.
-    /// Unresolved accounts are skipped; inferred values keep their source.
-    static func canAutomaticallySaveGmail(_ candidates: [Self]) -> Bool {
-        let detected = candidates.compactMap(\.detectedAccount)
-        return !detected.isEmpty
-            && detected.allSatisfy { $0.engine == .claude }
-            && detected.contains { $0.provider == .gmail && $0.reportedVia == .sentMailMetadata }
-    }
 }
 
 nonisolated enum MailAccountError: Error, LocalizedError {

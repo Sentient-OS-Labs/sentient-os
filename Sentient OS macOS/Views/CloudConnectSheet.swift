@@ -7,7 +7,7 @@
 //  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
-//    Done       → Gmail confirms and saves the connected email address; Calendar saves selection.
+//    Done       → Gmail reads and saves the connected email address; Calendar saves selection.
 //    ✕ (top-left) → closes without saving.
 //  Already connected → "Stop reading …" clears selection, not the provider connection.
 //
@@ -50,8 +50,9 @@ struct CloudConnectSheet: View {
 
     private enum Phase { case idle, connected }
     @State private var openedConnectorPage = false
-    @State private var showMailAccountSetup = false
-    @State private var mailSetupEngine: MailAccount.Engine?
+    @State private var checkingEmail = false
+    @State private var emailCheck: Task<Void, Never>?
+    @State private var emailCheckError: String?
     @State private var phase: Phase
 
     init(_ service: Service) {
@@ -87,13 +88,13 @@ struct CloudConnectSheet: View {
             .padding(.top, 14)
 
             if service == .gmail {
-                Text(MailAccountSetupSheet.gmailStorageDisclosure)
+                Text(MailAccountCollection.storageDisclosure)
                     .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             }
 
-            connectButton.padding(.top, 26)
-            doneButton.padding(.top, 10)
+            connectButton.padding(.top, 26).disabled(checkingEmail)
+            doneButton.padding(.top, 10).disabled(checkingEmail)
 
             statusLine
                 .padding(.top, 14)
@@ -109,15 +110,7 @@ struct CloudConnectSheet: View {
         .background(Theme.bg)
         .overlay(alignment: .topLeading) { closeButton.padding(12) }
         .onChange(of: backendRaw) { dismiss() }
-        .sheet(isPresented: $showMailAccountSetup) {
-            if let engine = mailSetupEngine {
-                MailAccountSetupSheet(engine: engine, provider: .gmail, automaticallySaveDetectedGmail: true,
-                                      onUnavailable: { dismiss() }) {
-                    guard ModelBackend.current.rawValue == engine.rawValue else { return }
-                    confirmDone()
-                }
-            }
-        }
+        .onDisappear { emailCheck?.cancel() }
     }
 
     // MARK: - The two buttons (+ the ✕)
@@ -143,7 +136,7 @@ struct CloudConnectSheet: View {
     private var doneButton: some View {
         Button(action: done) {
             HStack(spacing: 7) {
-                Text("Done")
+                Text(checkingEmail ? "Checking…" : "Done")
                     .font(.system(size: 13.5, weight: .medium))
             }
             .foregroundStyle(Theme.Ink.bright)
@@ -163,11 +156,14 @@ struct CloudConnectSheet: View {
 
     private var statusLine: some View {
         Group {
-            switch phase {
-            case .connected:
+            if checkingEmail {
+                Text("Checking your connected email…").foregroundStyle(Theme.Ink.body)
+            } else if let emailCheckError {
+                Text(emailCheckError).foregroundStyle(Theme.Ink.amber)
+            } else if phase == .connected {
                 Label(service.connectedLine, systemImage: "checkmark.seal.fill")
                     .foregroundStyle(Theme.Ink.green)
-            default:
+            } else {
                 Text("Linked it on the page? Press Done to use it in Sentient.")
                     .foregroundStyle(Theme.faint)
             }
@@ -185,12 +181,22 @@ struct CloudConnectSheet: View {
             .foregroundStyle(Theme.Ink.deepMuted)
     }
 
-    // MARK: - Done: accept the user's confirmation
+    // MARK: - Done: collect the address and select the source
 
     private func done() {
         if service == .gmail {
-            mailSetupEngine = MailAccount.Engine(rawValue: ModelBackend.current.rawValue)
-            showMailAccountSetup = mailSetupEngine != nil
+            guard !checkingEmail, let engine = MailAccount.Engine(rawValue: ModelBackend.current.rawValue) else { return }
+            checkingEmail = true; emailCheckError = nil
+            emailCheck = Task {
+                defer { checkingEmail = false }
+                do {
+                    let result = try await MailAccountCollection.collect(engine: engine, provider: .gmail)
+                    try Task.checkCancellation()
+                    guard ModelBackend.current.rawValue == engine.rawValue else { return }
+                    if result.connectionAvailable { confirmDone() } else { dismiss() }
+                } catch is CancellationError { return }
+                catch { emailCheckError = (error as? MailAccountError)?.errorDescription ?? "Account details couldn't be saved. Please try again." }
+            }
             return
         }
         confirmDone()

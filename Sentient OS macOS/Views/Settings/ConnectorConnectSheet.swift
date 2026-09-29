@@ -23,8 +23,7 @@ struct ConnectorConnectSheet: View {
     @State private var disconnecting = false
     @State private var message: String?
     @State private var operation: Task<Void, Never>?
-    @State private var showMailAccountSetup = false
-    @State private var mailSetupEngine: MailAccount.Engine?
+    @State private var checkingEmail = false
 
     init(source: ConnectorSource, connectors: Binding<[ConnectorCensus.DetectedConnector]>,
          context: KnowledgeSourcesPicker.Context = .settings,
@@ -56,7 +55,7 @@ struct ConnectorConnectSheet: View {
 
     private var selectionSlug: String { connector?.slug ?? source.serviceSlug }
     private var connecting: Bool { connectionPhase != nil }
-    private var busy: Bool { connecting || disconnecting }
+    private var busy: Bool { connecting || disconnecting || checkingEmail }
     private var connectTitle: String {
         switch connectionPhase {
         case .openingBrowser: "Opening sign-in…"
@@ -93,8 +92,8 @@ struct ConnectorConnectSheet: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 14)
 
-            if !usesDirect && source.serviceSlug == "gmail" {
-                Text(MailAccountSetupSheet.gmailStorageDisclosure)
+            if !usesDirect && (source.serviceSlug == "gmail" || OutlookMailConnector.isMail(source.serviceSlug)) {
+                Text(MailAccountCollection.storageDisclosure)
                     .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
             }
@@ -127,7 +126,7 @@ struct ConnectorConnectSheet: View {
                          primary: true, external: !connecting, action: connect)
                 .padding(.top, 26)
                 .disabled(busy)
-            actionButton("Done", action: done)
+            actionButton(checkingEmail ? "Checking…" : "Done", action: done)
                 .padding(.top, 10).disabled(busy)
 
             statusLine.padding(.top, 14).frame(minHeight: 42, alignment: .top)
@@ -149,16 +148,6 @@ struct ConnectorConnectSheet: View {
             if boundConnectorID == nil { boundConnectorID = id }
         }
         .onDisappear(perform: cancelOperation)
-        .sheet(isPresented: $showMailAccountSetup) {
-            if let engine = mailSetupEngine {
-                MailAccountSetupSheet(engine: engine, provider: source.serviceSlug == "gmail" ? .gmail : .outlook,
-                                      automaticallySaveDetectedGmail: source.serviceSlug == "gmail",
-                                      onUnavailable: { dismiss() }) {
-                    guard ModelBackend.current.rawValue == engine.rawValue else { return }
-                    confirmDone()
-                }
-            }
-        }
     }
 
     @ViewBuilder private var serviceIcon: some View {
@@ -198,7 +187,9 @@ struct ConnectorConnectSheet: View {
 
     private var statusLine: some View {
         Group {
-            if let message {
+            if checkingEmail {
+                Text("Checking your connected email…").foregroundStyle(Theme.Ink.body)
+            } else if let message {
                 Text(message).foregroundStyle(Theme.Ink.amber)
             } else if let connectionPhase {
                 switch connectionPhase {
@@ -289,8 +280,19 @@ struct ConnectorConnectSheet: View {
 
     private func done() {
         if !usesDirect && (source.serviceSlug == "gmail" || OutlookMailConnector.isMail(source.serviceSlug)) {
-            mailSetupEngine = MailAccount.Engine(rawValue: origin?.rawValue ?? "")
-            showMailAccountSetup = mailSetupEngine != nil
+            guard !busy, let engine = MailAccount.Engine(rawValue: origin?.rawValue ?? "") else { return }
+            checkingEmail = true; message = nil
+            operation = Task {
+                defer { checkingEmail = false }
+                do {
+                    let result = try await MailAccountCollection.collect(engine: engine,
+                        provider: source.serviceSlug == "gmail" ? .gmail : .outlook)
+                    try Task.checkCancellation()
+                    guard ModelBackend.current.rawValue == engine.rawValue else { return }
+                    if result.connectionAvailable { confirmDone() } else { dismiss() }
+                } catch is CancellationError { return }
+                catch { message = (error as? MailAccountError)?.errorDescription ?? "Account details couldn't be saved. Please try again." }
+            }
             return
         }
         confirmDone()

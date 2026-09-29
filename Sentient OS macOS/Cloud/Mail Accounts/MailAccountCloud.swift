@@ -44,7 +44,7 @@ actor MailAccountCloud {
     func savedAccounts() throws -> [MailAccount] { try load().accounts }
     func hasPendingSync() throws -> Bool { try load().pending }
 
-    /// A confirmation replaces only the provider/engine displayed in the sheet. Other
+    /// Collection replaces only the requested provider/engine. Other
     /// engines remain independent; identical email addresses never merge installation owners.
     func save(_ accounts: [MailAccount], engine: MailAccount.Engine, provider: MailAccount.Provider? = nil,
               preservingConnectionIDs: Set<String> = []) async throws -> Bool {

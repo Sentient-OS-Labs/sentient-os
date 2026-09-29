@@ -28,16 +28,16 @@ connector page (`GmailConnect.connectorURL` / `CalendarConnect.connectorURL` pic
 OpenAI's hosted connector page on ChatGPT, claude.ai's connector directory on Claude; the sheet's
 copy follows, and the sources group header reads "Through Your ChatGPT" / "Through Your Claude")
 where the user links Google. Calendar's **Done** saves the user's declaration and selects the source.
-Gmail's **Done** opens the connected-email confirmation sheet: Codex discovers the address from its
+Gmail's **Done** reads and saves the connected email address directly: Codex discovers the address from its
 connector metadata; Claude Gmail reads one sent thread's metadata directly, without a model turn.
-The connection flow discloses Supabase storage before Done. One distinct sender from messages marked
+The connection flow discloses cloud storage inline before Done; no additional popup appears. One distinct sender from messages marked
 SENT is saved automatically. Empty, ambiguous or unavailable results are skipped without asking for
 an email address. A missing connection returns to the picker without being marked linked.
 No message bodies, subjects or snippets are requested. Addresses persist securely on the Mac and sync
 in the background if offline, before the source selection finishes. "Stop reading" turns off knowledge selection; it does not unlink the provider
 or delete saved contact metadata.
 
-Outlook Mail's connector popup uses the same confirmation sheet, reading Codex metadata or Claude
+Outlook Mail's connector popup uses the same automatic collection flow on Done, reading Codex metadata or Claude
 Microsoft 365 `get_me`. Settings → System can review or delete saved addresses. Account storage,
 RLS, retention and deletion are documented in `Cloud/Mail Accounts/Documentation - Connected Email
 Accounts.md`. Message ingestion and its existing per-run identity checks remain independent.

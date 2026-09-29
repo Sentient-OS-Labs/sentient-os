@@ -69,7 +69,9 @@ full-brightness Start Analysis glow. Start presents the real `ProcessingView` (`
 `fullCycle` when the deck is real). If the on-device model has not finished downloading, the
 downloading screen (`OnboardingModelDownloadView`: the signature glow bar, GB of GB, Try Again on
 failure) covers the tail and hands off to the analysis by itself the moment the model verifies. Only a
-finished run calls `onFinished`.
+finished run calls `onFinished`. Gmail and Outlook Mail collect and save the detected address when
+the user presses Done in the connection sheet, with an inline storage notice and no extra popup.
+Missing connections or undetectable addresses are skipped without asking for manual entry.
 
 ## Things that happen around the steps
 

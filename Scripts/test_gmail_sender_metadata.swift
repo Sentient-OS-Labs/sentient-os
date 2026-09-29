@@ -52,12 +52,10 @@ import Foundation
         let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(account)) as! [String: Any]
         check(encoded["reported_via"] as? String == "sent_mail_metadata", "persist sending-address provenance")
         check(fallback.detectedAccount == nil, "missing address is skipped without accepting manual input")
-        check(MailAccountCandidate.canAutomaticallySaveGmail([candidate]), "clear Gmail result skips address confirmation")
-        check(MailAccountCandidate.canAutomaticallySaveGmail([candidate, fallback]), "resolved account can save while unresolved accounts are skipped")
-        check(!MailAccountCandidate.canAutomaticallySaveGmail([fallback]), "unresolved-only discovery does not save")
-        check(!MailAccountCandidate.canAutomaticallySaveGmail([]), "empty discovery cannot automatically save")
+        check([candidate, fallback].compactMap(\.detectedAccount).count == 1, "resolved account is retained while unresolved accounts are skipped")
+        check([fallback].compactMap(\.detectedAccount).isEmpty, "unresolved-only discovery does not save")
         let otherEngine = MailAccountCandidate(engine: .chatgpt, provider: .gmail, connectionKey: "codex", email: "codex@example.com")
-        check(!MailAccountCandidate.canAutomaticallySaveGmail([candidate, otherEngine]), "mixed engines cannot automatically save")
+        check(otherEngine.detectedAccount?.reportedVia == .connectorProfile, "Codex keeps profile provenance")
         do {
             _ = try MailAccount(engine: .chatgpt, provider: .outlook, connectionKey: "invalid", email: "a@example.com", reportedVia: .sentMailMetadata)
             check(false, "reject incompatible provenance")

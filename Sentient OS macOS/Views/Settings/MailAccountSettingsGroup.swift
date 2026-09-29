@@ -7,7 +7,7 @@ import SwiftUI
 struct MailAccountSettingsGroup: View {
     @State private var accounts: [MailAccount] = []
     @State private var pending = false
-    @State private var showSetup = false
+    @State private var updating = false
     @State private var confirmDelete = false
     @State private var deleting = false
     @State private var message: String?
@@ -15,7 +15,7 @@ struct MailAccountSettingsGroup: View {
     var body: some View {
         SettingsGroup(label: "Saved email addresses") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Sentient stores the email addresses you confirm in Supabase. Each installation can access only its own records. Your mailbox content and provider credentials are not stored there.")
+                SettingsProse("Sentient stores your connected email addresses in its cloud database. Each installation can access only its own records. Your mailbox content and provider credentials are not stored there.")
                 ForEach(accounts.sorted { $0.id < $1.id }) { account in
                     Text("\(account.email) · \(account.provider.title) · \(account.engine == .claude ? "Claude" : "ChatGPT")")
                         .font(.system(size: 12)).foregroundStyle(Theme.Ink.bright).textSelection(.enabled)
@@ -23,11 +23,11 @@ struct MailAccountSettingsGroup: View {
                 if pending { Text("Cloud sync pending").font(.system(size: 11)).foregroundStyle(Theme.Ink.amber) }
                 if let message { Text(message).font(.system(size: 11)).foregroundStyle(Theme.Ink.amber) }
                 HStack {
-                    SettingsPillButton(title: "Add or update addresses") { showSetup = true }
-                        .disabled(deleting || ModelBackend.current == .custom)
+                    SettingsPillButton(title: updating ? "Updating…" : "Add or update addresses", action: update)
+                        .disabled(deleting || updating || ModelBackend.current == .custom)
                     if !accounts.isEmpty {
                         SettingsPillButton(title: deleting ? "Deleting…" : "Delete saved addresses", tint: Theme.Ink.red) { confirmDelete = true }
-                            .disabled(deleting)
+                            .disabled(deleting || updating)
                     }
                 }
                 if pending {
@@ -37,11 +37,6 @@ struct MailAccountSettingsGroup: View {
             }
         }
         .task { await reload() }
-        .sheet(isPresented: $showSetup, onDismiss: { Task { await reload() } }) {
-            if let engine = MailAccount.Engine(rawValue: ModelBackend.current.rawValue) {
-                MailAccountSetupSheet(engine: engine, automaticallySaveDetectedGmail: true)
-            }
-        }
         .alert("Delete saved email addresses?", isPresented: $confirmDelete) {
             Button("Cancel", role: .cancel) {}
             Button("Delete", role: .destructive) {
@@ -54,6 +49,23 @@ struct MailAccountSettingsGroup: View {
             }
         } message: {
             Text("Removes this installation's email records from Supabase and this Mac. Your Gmail and Outlook connections stay connected.")
+        }
+    }
+
+    private func update() {
+        guard !updating, let engine = MailAccount.Engine(rawValue: ModelBackend.current.rawValue) else { return }
+        updating = true; message = nil
+        Task {
+            defer { updating = false }
+            do {
+                let outcome = try await MailAccountCollection.collect(engine: engine)
+                switch outcome {
+                case .noConnection: message = "No connected email accounts were found."
+                case .noAddress: message = "No email address was detected. Nothing was saved."
+                case .saved, .pending: break
+                }
+                await reload()
+            } catch { message = (error as? MailAccountError)?.errorDescription ?? "Account details couldn't be saved. Please try again." }
         }
     }
 

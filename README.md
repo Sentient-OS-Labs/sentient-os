@@ -16,7 +16,7 @@ By morning, Sentient offers your grunt work done in one click: that reply you fo
 
 And anywhere on your Mac, click the notch and tell Sidekick: "Finish this for me". It uses your apps like you would, even in the background while you carry on.
 
-No extra sign-in. Your files and message content stay out of our account database; connected email addresses are stored only after you confirm them. Free, forever. And every word of this is verifiable right here in this codebase :)
+No extra sign-in. Your files and message content stay out of our account database; connected email addresses are saved when you finish connecting email in Sentient. Free, forever. And every word of this is verifiable right here in this codebase :)
 
 <br/>
 

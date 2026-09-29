@@ -4,14 +4,14 @@ This feature records Gmail and Outlook addresses during disclosed connection set
 from message ingestion, anonymous diagnostics and the encrypted knowledge-base mirror. The address,
 provider, engine and connection key are contact metadata, not proof of mailbox ownership.
 
-## Collection and confirmation
+## Collection during connection setup
 
 `MailAccountProbe` starts the user's installed CLI in a temporary working directory with a sanitized
 environment. It sends control-protocol requests only; no model turn or message-body read is started.
 
 - Codex: `mcpServerStatus/list` returns tools whose `_meta.link_owner_profile.email` identifies the
   connected account. Only the reviewed Gmail and Outlook Email connector IDs are accepted. Results
-  are deduplicated by link ID. Missing metadata fails visibly; there is no email-header inference.
+  are deduplicated by link ID. Missing metadata skips collection; there is no email-header inference.
 - Claude: `mcp_status` locates the hosted Gmail and Microsoft 365 installations. Microsoft 365
   uses `get_me` with empty arguments, reading `mail`; `userPrincipalName` is not substituted.
   Gmail calls `search_threads` once with `query: "in:sent"`, `pageSize: 1` and
@@ -23,18 +23,19 @@ environment. It sends control-protocol requests only; no model turn or message-b
   search, an LLM prompt or scraping conversation history.
 
 Codex metadata and Claude's direct `mcp_call` control request are CLI-version-sensitive surfaces.
-Protocol drift produces an actionable error rather than guessing an identity. Discovery has bounded
+Protocol drift skips collection rather than guessing an identity. Discovery has bounded
 response size, pagination and time, and cancellation terminates its subprocess. No CLI credentials
 or mailbox contents are copied to Supabase.
 
-The Gmail connection flow discloses cloud storage before Done. A clear Claude Gmail result then
-saves automatically with no address-confirmation step, including when the cloud sync must queue for
-retry. Settings' explicit Add or update addresses action also uses this automatic path for detected
-Gmail senders; unresolved peers are skipped. Missing or ambiguous results are skipped without an email-entry field. A connected
+Gmail and Outlook connection flows disclose cloud storage inline before Done. `MailAccountCollection`
+then reads and saves detected addresses automatically, including when cloud sync must queue for retry.
+There is no extra address popup, confirmation step or migration prompt. Settings' explicit Add or
+update addresses action uses the same collection path. Missing or ambiguous results are skipped
+without an email-entry field. A connected
 mailbox with no detectable address can still be selected as a knowledge source. If discovery finds no
 connection, the connection popup returns to the picker without marking a new connection as linked.
-Existing installations retain the initial storage disclosure; discovery alone does not silently
-enroll them in storage.
+Existing installations collect addresses when the user next completes a connection flow or chooses
+Add or update addresses. Merely opening the app does not start new collection.
 Other connections and knowledge-source toggles are independent.
 
 ## Persistence and ownership
@@ -49,9 +50,7 @@ access is subject to database RLS. Never add a service-role key or database pass
 
 The onboarding source picker uses these same connection sheets. Lookup starts on **Done** after the
 user has linked/selected their account on the provider's page; merely opening the picker does not run
-it. Settings uses the same trigger. This is not a separate check on Start Analysis. Completing the explicit Gmail flow also records
-that its storage disclosure was already shown, so a skipped address does not immediately reopen
-the migration sheet on the home screen.
+it. Settings uses the same trigger. This is not a separate check on Start Analysis.
 
 Saving one provider preserves records for other providers and engines. In a mixed result, detected
 addresses can save while unresolved connection IDs retain any previously saved records. An entirely
@@ -62,7 +61,7 @@ Settings retry action. A pending save also retries in the background with backof
 including while only the menu bar is open. Expired access tokens are refreshed and rotated credentials are persisted.
 A rejected refresh credential is an error, never permission to silently mint a replacement owner.
 
-Addresses are refreshed when the user confirms a connection or chooses Add or update addresses.
+Addresses are refreshed when the user presses Done in a connection flow or chooses Add or update addresses.
 Disconnecting at the upstream provider does not automatically erase saved contact metadata. The
 Settings delete action, Reset and Uninstall delete the remote identity and its records before
 discarding the only credential that authorizes deletion; offline deletion remains retryable.
