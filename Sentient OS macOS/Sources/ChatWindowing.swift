@@ -131,6 +131,7 @@ enum ChatWindowing {
         case 0:  return "Group chat"
         case 1:  return participants[0]
         case 2:  return "\(participants[0]) & \(participants[1])"
+        case 3:  return "\(participants[0]), \(participants[1]) & 1 other"
         default: return "\(participants[0]), \(participants[1]) & \(participants.count - 2) others"
         }
     }
