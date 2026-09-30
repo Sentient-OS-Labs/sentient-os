@@ -1,5 +1,5 @@
 // InviteViews.swift
-// The onboarding redemption field, Settings invitation section, and floating offer content.
+// The onboarding redemption field, Settings invitation section, and in-app offer content.
 // All surfaces use InviteProgram; presentation-only pieces also support offline previews.
 
 import SwiftUI
@@ -176,7 +176,7 @@ struct InviteBannerView: View {
             .accessibilityLabel("Dismiss invitation")
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.black.opacity(0.94), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.18)))
         .preferredColorScheme(.dark)

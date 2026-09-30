@@ -92,6 +92,13 @@ notice uses real byte progress when the total is known, an indeterminate bar for
 verification, and Retry after failure. It does not block the home. The legacy Codex-to-CUA migration
 remains a separate setup window; see the Driver and Permission Gate docs.
 
+**Invitation offer.** `Invitations/InviteBanner.swift` presents the limited-time offer inside the
+home's top-right banner slot, after all health and update notices have cleared. It waits for real-use
+eligibility and an active, idle home with no sheet, popover, or expanded letter. The code is verified
+before the offer is marked as shown. The offer appears once, closes after 20 seconds or dismissal,
+and stays inside the app window. The reusable code remains available in Settings → System →
+Invitations; any number of people can redeem it.
+
 ## The cards (`Briefing`, `BriefingCard`)
 
 `Briefing`: kicker (mono caps, `METHOD · TARGET`), serif title, preview body, the full `letter` or the
