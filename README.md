@@ -16,7 +16,7 @@ By morning, Sentient offers your grunt work done in one click: that reply you fo
 
 And anywhere on your Mac, click the notch and tell Sidekick: "Finish this for me". It uses your apps like you would, even in the background while you carry on.
 
-No accounts, and your raw personal data never leaves your Mac. Free, forever. And every word of this is verifiable right here in this codebase :)
+No extra sign-in. Your files and message content stay out of our account database; connected email addresses are saved when you finish connecting email in Sentient. Free, forever. And every word of this is verifiable right here in this codebase :)
 
 <br/>
 
@@ -66,7 +66,7 @@ Somewhere along the way we realized the knowledge base is too useful to keep to 
 
 Connect it, then ask your ChatGPT: *"what do you know about me?"* Et voila.
 
-Your Mac seals the knowledge base with AES-256-GCM before anything leaves. This is zero-access encryption: the key lives only on your Mac and in your private link, never on our servers, which hold nothing but ciphertext and no key to unlock it. Hack our relay and all you'd find is scrambled bytes; unlike a normal cloud backup, where the company keeps your keys and can be compelled to decrypt, we have nothing to hand over. There is no account: turn sharing off and the cloud copy is deleted on the spot, and if your Mac simply stops syncing, the copy self-destructs after 30 days. The relay is open source too: [sentient-os-mcp](https://github.com/Sentient-OS-Labs/sentient-os-mcp).
+Your Mac seals the knowledge base with AES-256-GCM before anything leaves. This is zero-access encryption: the key lives only on your Mac and in your private link, never stored alongside the ciphertext on the knowledge-base mirror. Hack our relay and all you'd find is scrambled bytes; unlike a normal cloud backup, where the company keeps your keys and can be compelled to decrypt, we have nothing to hand over. There is no account: turn sharing off and the cloud copy is deleted on the spot, and if your Mac simply stops syncing, the copy self-destructs after 30 days. The relay is open source too: [sentient-os-mcp](https://github.com/Sentient-OS-Labs/sentient-os-mcp).
 
 <div align="center"><img src=".github/readme/mcp.png" alt="The cloud MCP: sealed on your Mac, ciphertext on the relay, no accounts" width="680" /></div>
 
@@ -111,25 +111,16 @@ And about that cloud brain. Sentient uses your own Codex CLI, Claude Code, or ch
 
 <sub><samp>SIX CORE ELEMENTS · BUILT SO WE DON'T GET A CHOICE</samp></sub>
 
-Most privacy pages are a company promising to behave. This one is a tour of why we don't get the option. Unlike most privacy policies, ours can be summarized in one line:
+Sentient separates the content it processes from the account details you choose to save.
 
-**We don't collect your private info, ever.**
+1. **Files and message content are not stored in the account database.** The on-device pipeline produces PII-stripped summaries for your chosen frontier AI. Sensitive items are dropped before entering the knowledge base.
+2. **Connected email addresses are disclosed before upload.** Sentient reads Gmail and Outlook addresses from your AI's connectors. Claude Gmail uses sender metadata from one sent thread and saves a single unambiguous sending address automatically; if detection fails or is ambiguous, address collection is skipped. The connection flow discloses cloud storage before Done. During setup, the addresses, provider, engine, connection identifier and timestamps are saved in Supabase under a private installation identity. These records contain no messages, passwords or provider access tokens and do not verify mailbox ownership.
+3. **Database access is isolated by installation.** Supabase Auth supplies an anonymous authenticated identity without an extra sign-in. Row-level security limits client reads and writes to that identity's records. Authorized Sentient administrators can access the database. Separate Macs are separate installations; matching email addresses do not merge them.
+4. **Saved addresses are removable.** Settings → System → Saved email addresses deletes this installation's records and cloud identity. Reset and Uninstall do the same before discarding their credentials; an internet connection is needed to complete cloud deletion. Failed uploads remain pending in this Mac's Keychain and retry when Sentient is active.
+5. **The knowledge-base mirror is separate and opt-in.** It stores AES-256-GCM ciphertext using zero-access encryption. Its secret link and key are not sent to the email database. Its existing one-click deletion and 30-day lease remain separate from email-record retention.
+6. **Diagnostics remain separate.** Sentry crash reports and TelemetryDeck usage signals carry structure and counts, never connected email addresses or mailbox content. Their existing Settings controls still apply.
 
-Here's the machinery that makes that true whether we behave or not:
-
-1. **Raw data never leaves the Mac.** The cloud only ever sees short, PII-stripped, third-person summaries. And behind the model sits a deterministic regex backstop: anything carrying an SSN, card number, or passport number is dropped outright, no appeal.
-2. **Junk and sensitive items leave zero trace.** Judged on-device, dropped, gone. Not encrypted, not archived. Nonexistent.
-3. **No accounts. Ever.** A random token in your Mac's Keychain is your entire identity to the mirror. We cannot tie a knowledge base to a human being. Can't, not won't.
-4. **Deletion is total and boring.** One click removes the cloud copy. Stop syncing and it deletes itself within 30 days anyway.
-5. **Your Mac's copy is the real one.** Every cloud copy is disposable by design, and no Sentient server stores anything at rest except the opt-in mirror's ciphertext.
-6. **The whole stack is open source.** The app, the relay, all of it, under AGPL-3.0.
-
-Only two optional features ever touch a server at all, and neither bends the line above:
-
-- **The cloud MCP mirror is opt-in, and off by default.** It exists only if you turn it on to give your ChatGPT and Claude your knowledge base. Your Mac seals everything with AES-256-GCM before anything uploads, the key lives only on your Mac and in your private link, and the relay stores only ciphertext with no key to unlock it. The relay's code is open source too.
-- **Anonymous diagnostics, and nothing else.** Crash reports (Sentry) and usage analytics (TelemetryDeck), both privacy-focused, open-source frameworks, both structure-only by construction: counts, enums, stack traces, never your content. Your files, summaries, and knowledge base never leave your Mac as part of either. Each has its own off switch in Settings; crash reports turn off completely, and analytics keeps only a handful of extremely anonymized usage-count pings (how many people use Sentient, and how often Sidekick, proactive cards, overnight runs, and the home screen are used), tied to nothing and no one, disclosed right under the toggle.
-
-And one line most companies would bury: features that run through your own Codex CLI are governed by OpenAI's privacy policy, the same one your ChatGPT account already lives under. Your existing relationship with OpenAI, not a new one with us. What's more, even OpenAI never sees your raw life: only the PII-stripped summaries, scrubbed on-device by the model and again by dedicated PII-stripping passes, before anything leaves the Mac.
+Saving an address does not subscribe you to marketing. Your chosen AI provider's privacy policy applies when it processes connected services. The app, database migrations and access-control tests are available in this repository.
 
 <br/>
 
@@ -141,7 +132,7 @@ And one line most companies would bury: features that run through your own Codex
 
 Sentient costs us nothing to run. Your Mac does about 90% of the compute, and the cloud part runs through your own ChatGPT subscription.
 
-As for how we ever make money: enterprise, later. The same engine, with the consumer connectors swapped for work ones like Slack, Granola, Linear, and Notion, becomes a personal intelligence layer for every employee, and companies pay for a license. But nobody has built AI like this before; it's a genuinely new frontier, so we're perfecting it with consumers first. Your data is never the product; we couldn't sell it if we wanted to, because we never have it.
+As for how we ever make money: enterprise, later. The same engine, with the consumer connectors swapped for work ones like Slack, Granola, Linear, and Notion, becomes a personal intelligence layer for every employee, and companies pay for a license. But nobody has built AI like this before; it's a genuinely new frontier, so we're perfecting it with consumers first. Your data is not the product, and we do not sell it.
 
 Open source is also personal. [Writing Tools](https://github.com/theJayTea/WritingTools), a repo I built 2 years ago at 17, grew to 2,300 stars, 150 forks, and coverage in over 30 publications. The future of AI, one where it proactively helps you, should be accessible to everyone; that's why all of Sentient is AGPL.
 

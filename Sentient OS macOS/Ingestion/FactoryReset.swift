@@ -23,6 +23,8 @@ enum FactoryReset {
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil) async -> Bool {
+        do { try await MailAccountCloud.shared.erase() }
+        catch { Log("FactoryReset: connected-email deletion needs retry"); return false }
         do { try await DirectMCPConnections.shared.removeAll() }
         catch { Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false }
         await CycleStore.shared.wipeEverything()
@@ -32,6 +34,9 @@ enum FactoryReset {
         LifetimeStats.reset()
         try? await MirrorClient.shared.deleteRemote()   // best-effort — offline reset still works
         let d = UserDefaults.standard
+        for key in d.dictionaryRepresentation().keys where key.hasPrefix("connectedEmail.") {
+            d.removeObject(forKey: key)
+        }
         d.removeObject(forKey: "onboarding.step")
         d.removeObject(forKey: CodexAuth.kbOnlyKey)     // the crossroads re-detects the plan fresh
         d.removeObject(forKey: CodexAuth.assertedPlusKey)   // …and asks again before trusting

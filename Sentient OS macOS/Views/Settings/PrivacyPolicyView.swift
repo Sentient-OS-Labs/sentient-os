@@ -4,7 +4,8 @@
 //
 //  The Privacy Policy sheet (Settings → System → How We Protect Your Data → Read More).
 //  Shared with onboarding. Scrollable policy copy covers the pledge, optional encrypted MCP
-//  mirror, Double Tap inference, anonymous diagnostics, and the frontier-provider policies.
+//  mirror, connected-email storage, Double Tap inference, invitations, anonymous diagnostics,
+//  and the frontier-provider policies.
 //  The title and Done button stay visible while the policy scrolls.
 //  Static app-voice copy; Done or Esc closes it.
 //
@@ -21,8 +22,8 @@ struct PrivacyPolicyView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    prose("Unlike most privacy policies, ours can be summarized in one line:")
-                    Text("We don't collect your private info, ever.")
+                    prose("Your content and connected-account details are handled separately:")
+                    Text("Your files and messages are not stored in our account database.")
                         .font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
                         .padding(.top, 8)
 
@@ -30,6 +31,9 @@ struct PrivacyPolicyView: View {
                         .padding(.top, 16)
                     bullet("An optional, **opt-in** cloud MCP so your ChatGPT and Claude can read your knowledge base. It uses **zero-access encryption**: the key is held only by your Mac and your private link, never on our servers, which hold nothing but ciphertext they have no key to unlock. Hack them and there's nothing to read. And the whole cloud backend is open source, so you never have to take our word for it.")
                         .padding(.top, 12)
+
+                    bullet("**Connected email addresses:** the connection flow explains that Sentient stores addresses in **Supabase**, together with the email provider, AI engine, connection identifier and a private installation ID. Claude Gmail uses sender details from one sent thread, without message bodies, subjects or snippets. A single sending address is saved automatically; collection is skipped if detection is unavailable or ambiguous. It may be a sending alias. Each installation can access only its own records; authorized Sentient administrators can access the database. We do not upload messages, passwords or provider access tokens to this database. Delete these records in **Settings → System → Saved email addresses**. Reset and Uninstall also delete them and require an internet connection to finish that deletion. Separate Macs have separate installation identities.")
+                        .padding(.top, 16)
 
                     bullet("**Double Tap:** by default, Double Tap uses the **OpenAI API with Zero Data Retention** to draft a response using your knowledge base, a screenshot of the screen you’re replying on, and your instructions. This context passes through Sentient’s relay to OpenAI to generate the reply. You can change the inference provider anytime in **Settings → Double Tap**. If you choose your own provider, its privacy and data retention policies apply.")
                         .padding(.top, 16)
@@ -44,7 +48,7 @@ struct PrivacyPolicyView: View {
                     bullet("**Privacy-preserving analytics (open-source TelemetryDeck):** anonymous usage signals, never anything personal.\n**Off:** only five usage counts still send, so we can see Sentient is being used at all: how many people use it, Sidekick fires, proactive cards (made and fired), overnight runs, and home opens; counts only.\n**On:** those five, plus a fuller anonymous picture: onboarding progress, how long features run, and sync and health signals. Always just counts and categories, and nothing can be traced back to you.")
                         .padding(.top, 12)
 
-                    prose("Features that use your own Codex CLI or Claude Code are governed by OpenAI’s or Anthropic’s privacy policy, respectively.")
+                    prose("Features that use your own Codex CLI or Claude Code are governed by OpenAI’s or Anthropic’s privacy policy, respectively. Saving an email address does not subscribe you to marketing or verify ownership of that address.")
                         .padding(.top, 16)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

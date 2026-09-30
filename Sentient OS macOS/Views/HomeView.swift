@@ -128,6 +128,9 @@ struct HomeView: View {
         }
         .onDisappear { appState.commandCoordinator.run.proactiveCards = nil }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil {
+                Task { await MailAccountCloud.shared.retryPendingSync() }
+            }
             // The user may just have fixed something in System Settings (or a cycle cleared last
             // night's caution) — re-probe so the banner melts away the moment they return.
             withAnimation(.easeInOut(duration: 0.25)) { caution = OvernightCaution.latest() }

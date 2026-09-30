@@ -17,7 +17,7 @@ Full Disk Access requires resumes exactly where the user left off.
 | `OnboardingPermissionsView.swift` | Step 3: overnight wake → launch at login → Full Disk Access, unlocking sequentially. |
 | `OnboardingReadyView.swift` | Step 4: the source tiles and the big Start Analysis glow. |
 | `OnboardingModelDownloadView.swift` | Shown between Start Analysis and the takeover if the model has not finished landing. |
-| `OnboardingTelemetryConsent.swift` | The film's final park: "We never collect your personal info." with Read More (the privacy policy) and Configure Telemetry (the two toggles, the same keys as Settings). |
+| `OnboardingTelemetryConsent.swift` | The film's final park: "Your content stays private. See what we store." with Read More (the privacy policy) and Configure Telemetry (the two toggles, the same keys as Settings). |
 
 ## The steps
 
@@ -69,7 +69,9 @@ full-brightness Start Analysis glow. Start presents the real `ProcessingView` (`
 `fullCycle` when the deck is real). If the on-device model has not finished downloading, the
 downloading screen (`OnboardingModelDownloadView`: the signature glow bar, GB of GB, Try Again on
 failure) covers the tail and hands off to the analysis by itself the moment the model verifies. Only a
-finished run calls `onFinished`.
+finished run calls `onFinished`. Gmail and Outlook Mail collect and save the detected address when
+the user presses Done in the connection sheet, with an inline storage notice and no extra popup.
+Missing connections or undetectable addresses are skipped without asking for manual entry.
 
 ## Things that happen around the steps
 

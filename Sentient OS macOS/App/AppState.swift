@@ -70,6 +70,8 @@ final class AppState {
         // very real admin-password dialog. Same convention as Notify.swift's self-test silence.
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
 
+        Task { await MailAccountCloud.shared.retryPendingSync() }
+
         CuaDriver.rememberExistingInstallation()
         ComputerUseUpgrade.shared.prepareForLaunch { [weak self] in
             self?.startInterfaceIfReady()
