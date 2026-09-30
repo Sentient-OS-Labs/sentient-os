@@ -293,7 +293,7 @@ struct DevToolsView: View {
                     .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("\(provider.model) · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Rides Sidekick's key (\(SidekickHotkey.current.label), the Settings choice): one tap opens Sidekick, two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. On by default (Release has no way off); with this switch off, two taps just open Sidekick sooner.")
+            Text("\(provider.model) · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Rides Sidekick's key (\(SidekickHotkey.current.label), the Settings choice): one tap opens Sidekick, two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. On by default (Release has no way off); with this switch off, two taps just open Sidekick sooner.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }

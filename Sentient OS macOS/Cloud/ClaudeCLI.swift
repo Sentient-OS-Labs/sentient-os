@@ -42,10 +42,10 @@ actor ClaudeCLI {
 
     // MARK: Models
 
-    /// Claude Code model IDs: Opus is pinned to 5.5; Sonnet and Haiku keep their aliases.
+    /// Claude Code model IDs: Opus and Sonnet are pinned to 5.5; Haiku keeps its alias.
     enum Model: String, Sendable {
         case opus = "claude-opus-5-5" // the heavy legs: vault build/update, proactive research
-        case sonnet    // everything else (the gpt-6-sol seat)
+        case sonnet = "claude-sonnet-5-5" // everything else (the gpt-6-sol seat)
         case haiku     // the light tier (the gpt-6-luna seat)
     }
 

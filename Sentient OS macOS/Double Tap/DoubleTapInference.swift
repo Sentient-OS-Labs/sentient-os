@@ -8,9 +8,9 @@
 //  user's own Keychain key and chosen model; the relay owns its model and per-user caps. All
 //  routes carry the user's custom reply instructions and stream the Responses API. They bypass
 //  the FrontierRun seam on purpose: a `codex exec` spawn costs seconds and this feature is judged
-//  on feel. Every call is COLD by construction: the screenshot is the first thing in the prompt and
-//  differs on every press, so no prefix cache can ever match. `store: false` keeps OpenAI from
-//  retaining a copy.
+//  on feel. Reusable text comes before the changing screenshot. Known OpenAI models explicitly
+//  cache through the text, avoiding cache writes for the screenshot. `store: false` disables
+//  response retrieval storage; prompt-cache retention is separate.
 //
 //  Key methods: draft(screenshot:vault:) · relayIdentity · configurationProblem ·
 //  verdict(from:) · packVault(_:).
@@ -81,6 +81,7 @@ enum DoubleTapInference {
         var total: TimeInterval = 0
         var inputTokens: Int?
         var cachedTokens: Int?
+        var cacheWriteTokens: Int?
         var outputTokens: Int?
         var reasoningTokens: Int?
     }
@@ -205,7 +206,7 @@ enum DoubleTapInference {
         let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !reply.isEmpty else { throw Failure.empty }
         let verdict = verdict(from: reply)
-        Log("⌘⌘ \(provider.rawValue): first text \(ms(timing.firstToken)) · total \(ms(timing.total)) · in \(timing.inputTokens ?? -1) (cached \(timing.cachedTokens ?? 0)) · out \(timing.outputTokens ?? -1) · reasoning \(timing.reasoningTokens ?? 0) · \(verdict == .notAMessage ? "not a reply box" : "reply")")
+        Log("⌘⌘ \(provider.rawValue): first text \(ms(timing.firstToken)) · total \(ms(timing.total)) · in \(timing.inputTokens ?? -1) (cached \(timing.cachedTokens ?? 0), cache writes \(timing.cacheWriteTokens.map { String($0) } ?? "—")) · out \(timing.outputTokens ?? -1) · reasoning \(timing.reasoningTokens ?? 0) · \(verdict == .notAMessage ? "not a reply box" : "reply")")
         #if DEBUG
         if case .reply(let r) = verdict { Log("⌘⌘ reply:\n\(r)") }   // content — DEBUG only
         #endif
@@ -279,6 +280,15 @@ enum DoubleTapInference {
         // Known presets support disabling reasoning. Other models retain their own defaults;
         // reserve a larger output budget for models that require reasoning tokens.
         let reasoningOff = DoubleTapProvider.modelPresets.contains { provider.modelID($0.id) == model }
+        // Explicit caching is verified for these models on OpenAI's own endpoint. Other
+        // providers and custom models retain their default caching behavior.
+        let explicitCaching = provider == .openAI && reasoningOff
+        var text: [String: Any] = [
+            "type": "input_text",
+            "text": instructions + customInstructionsBlock(customInstructions)
+                + "\n\n=== KNOWLEDGE BASE (everything Sentient knows about the user) ===\n\n" + knowledgeBase,
+        ]
+        if explicitCaching { text["prompt_cache_breakpoint"] = ["mode": "explicit"] }
         var body: [String: Any] = [
             "model": model,
             "stream": true,
@@ -287,14 +297,14 @@ enum DoubleTapInference {
             "input": [[
                 "role": "user",
                 "content": [
+                    text,
                     ["type": "input_image", "detail": "auto",
                      "image_url": "data:image/jpeg;base64," + image.base64EncodedString()],
-                    ["type": "input_text", "text": instructions + customInstructionsBlock(customInstructions)
-                        + "\n\n=== KNOWLEDGE BASE (everything Sentient knows about the user) ===\n\n" + knowledgeBase],
                 ],
             ]],
         ]
         if reasoningOff { body["reasoning"] = ["effort": "none"] }
+        if explicitCaching { body["prompt_cache_options"] = ["mode": "explicit", "ttl": "30m"] }
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = idleTimeout
@@ -316,7 +326,9 @@ enum DoubleTapInference {
             let usage = (event["response"] as? [String: Any])?["usage"] as? [String: Any]
             timing.inputTokens = usage?["input_tokens"] as? Int
             timing.outputTokens = usage?["output_tokens"] as? Int
-            timing.cachedTokens = (usage?["input_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int
+            let inputDetails = usage?["input_tokens_details"] as? [String: Any]
+            timing.cachedTokens = inputDetails?["cached_tokens"] as? Int
+            timing.cacheWriteTokens = inputDetails?["cache_write_tokens"] as? Int
             timing.reasoningTokens = (usage?["output_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int
             return nil
         case "response.failed", "error":

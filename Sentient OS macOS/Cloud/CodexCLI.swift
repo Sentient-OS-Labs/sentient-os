@@ -1545,6 +1545,13 @@ actor CodexCLI {
                 proc.standardError = errPipe
 
                 let outSink = LineSink(), errSink = LineSink()
+                // Codex can warn when it cannot sweep an old arg0 helper directory, then
+                // continue normally. Keep stderr for diagnostics, but do not show this one
+                // startup cleanup warning in live computer-use progress.
+                let showLine: @Sendable (String) -> Void = { line in
+                    guard !line.hasPrefix("stderr: WARNING: failed to clean up stale arg0 temp dirs:") else { return }
+                    onLine(line)
+                }
                 let group = DispatchGroup()
                 for (pipe, sink, prefix) in [(outPipe, outSink, ""), (errPipe, errSink, "stderr: ")] {
                     group.enter()
@@ -1559,13 +1566,13 @@ actor CodexCLI {
                                 let line = String(decoding: buf[..<nl], as: UTF8.self)
                                 buf = Data(buf[buf.index(after: nl)...])   // fresh 0-based remainder
                                 sink.append(line + "\n")
-                                onLine(prefix + line)
+                                showLine(prefix + line)
                             }
                         }
                         if !buf.isEmpty {                          // trailing partial line (no newline)
                             let line = String(decoding: buf, as: UTF8.self)
                             sink.append(line)
-                            onLine(prefix + line)
+                            showLine(prefix + line)
                         }
                         group.leave()
                     }
