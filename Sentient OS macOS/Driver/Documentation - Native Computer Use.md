@@ -11,7 +11,9 @@ progress stream and STOP path.
 |---|---|
 | `ComputerUseBackend.swift` | Maps the selected model backend to OpenAI or CUA and selects its operating instructions. |
 | `ComputerUseSetup.swift` | One observable installer instance per runtime, shared by onboarding, Settings, repair and task startup. |
-| `OpenAIComputerUse.swift` | Finds and validates the native helper, launches it for permission checks, and builds its per-run MCP configuration. |
+| `OpenAIComputerUse.swift` | Finds and validates the native helper and defines the selected CLI, environment and per-run MCP configuration. |
+| `OpenAIComputerUseRuntime.swift` | Coordinates helper launch, service readiness, task use and explicit restart. |
+| `OpenAIComputerUseProbe.swift` | Checks the actual native service through a bounded, model-free Codex protocol connection. |
 | `OpenAIComputerUseSetup.swift` | Downloads the official installer, extracts the signed helper, and publishes it atomically. |
 | `DependencyDownload.swift` | Cancellable, streamed downloads with byte progress and HTTP validation for both runtimes. |
 
@@ -32,7 +34,8 @@ installer to extract this dependency; Sentient does not host a copy.
 
 Validation requires the expected helper identity, an executable service and nested client, a supported
 build and macOS version, OpenAI's signing team on both bundles, and a successful native MCP initialize
-handshake. The handshake is local and does not inspect any app or consume a model call.
+handshake. The handshake does not inspect any app or consume a model call. Installation completion
+means the dependency is installed; service readiness is checked separately after Automation consent.
 
 The complete helper is staged beside its destination. Publication uses an exclusive rename for a
 fresh installation or an atomic directory exchange for replacement. The previous bundle remains
@@ -59,15 +62,36 @@ prepares the CUA daemon only for custom endpoints. Claude always prepares CUA.
 
 Native tools are registered directly for that invocation as `sentient_native`, using the nested
 client executable with the `mcp` argument. Registration is required, so a missing or incompatible
-client fails startup. No app-server integration or permanent plugin configuration is involved.
+client fails startup. Tasks continue to run through `codex exec`; no permanent plugin configuration
+is involved.
 The existing model/speed choice, connector policy, direct MCP connections, streaming and computer-use
 approval mode are preserved. Ordinary structured runs do not receive these computer-use tools.
+
+The task resolves its CLI once. The native configuration resolves the managed install's current-version
+symlink and supplies `CODEX_CLI_PATH`, `CODEX_HOME`, an appropriate `PATH`, and GUI-session values to
+the helper and native client. MCP environment values are explicit because Codex filters inherited
+variables. Setup discovery runs off the main thread because npm/nvm discovery can invoke a login
+shell. Helper startup uses LaunchServices to preserve its signed identity and permission attribution.
+
+Before the model starts, the runtime checks Automation consent and makes a real `list_apps` request.
+The probe uses a short Codex app-server connection with an isolated temporary profile and an ephemeral
+thread. It does not submit a model turn, copy login credentials, retain the returned app list, or
+change the user's configuration. A raw native-client call does not provide Codex's authenticated
+request context, so an MCP initialization handshake alone cannot substitute for this check.
+The probe has a bounded deadline and cleans up its own process and temporary state on failure or
+cancellation. Unsupported protocol versions fail with an update instruction.
+
+Concurrent readiness checks share work. Settings checks may reuse a recent successful check only
+for the same configuration and live helper; task startup requests a fresh check. A running task
+holds a runtime lease that prevents restart or a different CLI configuration from replacing its
+setup. A healthy existing helper at the expected bundle path can be reused without changing its
+startup environment. A different installed helper bundle is left alone.
 
 The native instructions explain app-state reads, tool discovery, fresh-state verification and the
 background interaction path. Sidekick and card wrappers stay runtime-neutral. App contents remain
 data, never instructions that can expand the user's task.
 
-STOP cancels the owned CLI process and closes its client connection. It does not terminate a shared
+STOP cancels the owned readiness/CLI process and closes its client connection. It does not terminate a shared
 OpenAI helper used by another app. An explicit final `STATUS: DONE` is required for completion;
 missing or malformed status is unconfirmed, and `STATUS: COULD_NOT` is a failure even if the CLI exits
 zero. Cancellation remains a separate stopped outcome.
@@ -84,6 +108,13 @@ LaunchServices. A stopped target is not treated as denied permission. Visible se
 separate Automation row; the user still chooses Allow in the system prompt. Denial exposes a Settings
 action without another automatic prompt. Background checks never request consent and no TCC database is written. Normal startup and Factory Reset preserve
 the grant. Uninstall uses `tccutil` to reset only Sentient's Apple Events access.
+
+The permission gate also requires a successful service check. Backend failures are shown separately
+from permission denial, and Settings cannot report the engine healthy merely because grants exist.
+When a running helper needs recovery, the visible Restart computer use action asks the user to finish
+other apps' computer-use tasks first. Restart is explicit, refuses while Sentient has an active task
+or check, and gracefully terminates only the helper at the expected installed path. It never force-kills
+the shared helper. The next startup supplies the selected configuration again.
 
 `ComputerUseGate`, its shared permission rows, Settings health and migration all select the same
 runtime. An engine switch from Settings prepares the selected dependency. Onboarding retains its
@@ -106,5 +137,5 @@ backend switching and final-result parsing. Debug and Release builds both enforc
 A successful helper extraction on an existing Mac is not a clean-Mac permissions test. New macOS
 versions, a new helper layout, first installation without existing desktop components/grants,
 additional displays and Safari need their own coverage. Treat the extracted bundle layout and its
-native MCP interface as compatibility boundaries, not as a promise that every future OpenAI build
+native MCP interface and Codex's model-free tool-call protocol as compatibility boundaries, not as a promise that every future OpenAI build
 will have the same shape.

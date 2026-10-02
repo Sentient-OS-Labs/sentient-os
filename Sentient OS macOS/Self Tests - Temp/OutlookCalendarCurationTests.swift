@@ -296,7 +296,7 @@ enum OutlookCalendarCurationTests {
                         if kind == "computer" {
                             args = backend == .claude
                                 ? try ClaudeCLI.agentArguments(prompt: "Synthetic policy fixture", modelID: "sonnet", effortArg: "low", socketPath: "/tmp/calendar-fixture.sock")
-                                : CodexCLI.agentArguments(prompt: "Synthetic policy fixture", imagePaths: [], modelID: "gpt-6-luna", effortArg: "low", socketPath: "/tmp/calendar-fixture.sock")
+                                : try CodexCLI.agentArguments(prompt: "Synthetic policy fixture", imagePaths: [], modelID: "gpt-6-luna", effortArg: "low", socketPath: "/tmp/calendar-fixture.sock")
                         } else {
                             args = backend == .claude ? try ClaudeCLI.arguments(for: inv, modelID: "sonnet", effortArg: "low")
                                 : try CodexCLI.arguments(for: inv, modelID: "gpt-6-luna", effortArg: "low", schemaFile: nil)

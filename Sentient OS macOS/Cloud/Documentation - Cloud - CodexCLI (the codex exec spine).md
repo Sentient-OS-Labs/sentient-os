@@ -32,7 +32,11 @@ the custom-endpoint key variable). Optional `onLine:` streams a humanized play-b
 prompt rides in **argv**, output is human-readable (no `--json`), and every line is pumped to `onLine`
 as it arrives. `ComputerUseSetup` prepares the selected runtime. On ChatGPT, the signed OpenAI
 helper is validated and its native client is registered directly as the required `sentient_native`
-MCP server. Custom endpoints retain `CuaDriverHost` and its four-tool vision registration plus CLI
+MCP server. A captured native configuration supplies the selected executable, Codex home and runtime
+environment consistently to validation, helper launch and the task. `OpenAIComputerUseRuntime`
+checks an actual native service request before starting the model and holds a task lease until
+completion or cancellation; restart and configuration changes are refused while the task is active.
+Custom endpoints retain `CuaDriverHost` and its four-tool vision registration plus CLI
 shim. Claude's sibling runner continues to use CUA.
 
 The run remains hermetic (`--ignore-user-config`) and preserves its hosted/direct connector policies.

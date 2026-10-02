@@ -43,6 +43,13 @@ Visible permission setup requests unasked consent through the macOS Apple Events
 with the helper bundle, while Sentient's rows carry Sentient itself. Full Disk Access permits read-only
 helper grant checks; there are no direct permission-database writes.
 
+The native gate also waits for a real service readiness check after Automation is granted. The
+configured helper and client receive the selected CLI path and Codex home. While that check runs the
+gate shows checking progress; a backend failure is distinct from a denied permission. Explicit
+Restart computer use recovery asks the user to finish other apps' computer-use tasks and refuses
+while Sentient is active. A successful restart is followed by the same permission and service checks.
+These checks and shared-helper lifecycle rules live in `Driver/OpenAIComputerUseRuntime.swift`.
+
 Native first-use setup also checks the helper installation and exposes the shared installer when
 files are missing. CUA retains its existing grant-only gate; its task runner joins the background
 installer before starting the daemon. Existing grants are reused. `SentientPermissionRows` and

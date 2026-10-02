@@ -22,6 +22,68 @@ nonisolated enum OpenAIComputerUse {
     static var appURL: URL { codexHome.appendingPathComponent("computer-use/Codex Computer Use.app", isDirectory: true) }
     static var clientURL: URL { appURL.appendingPathComponent(clientRelativePath) }
 
+    /// One executable choice for the model, native client, and GUI service. Resolve the managed
+    /// install's symlink so switching its current-version link cannot redirect an in-flight task.
+    struct Configuration: Equatable, Sendable {
+        let cliURL: URL
+        let home: URL
+        let environment: [String: String]
+        var appURL: URL { home.appendingPathComponent("computer-use/Codex Computer Use.app", isDirectory: true) }
+        var clientURL: URL { appURL.appendingPathComponent(clientRelativePath) }
+
+        init(cliPath: String, home: URL = OpenAIComputerUse.codexHome,
+             environment inherited: [String: String] = ProcessInfo.processInfo.environment) throws {
+            let original = URL(fileURLWithPath: cliPath).standardizedFileURL
+            let resolved = original.resolvingSymlinksInPath()
+            guard FileManager.default.isExecutableFile(atPath: resolved.path),
+                  (try? resolved.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                throw RuntimeError.cliUnavailable
+            }
+            cliURL = resolved
+            self.home = home.standardizedFileURL.resolvingSymlinksInPath()
+            var environment = inherited
+            let userHome = inherited["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
+            // Keep the shim's original directory too: npm/nvm may keep node beside the shim.
+            let directories = [resolved.deletingLastPathComponent().path, original.deletingLastPathComponent().path,
+                "\(userHome)/.local/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin",
+                "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+            environment["HOME"] = userHome
+            environment["TMPDIR"] = inherited["TMPDIR"] ?? NSTemporaryDirectory()
+            environment["PATH"] = (directories + [inherited["PATH"] ?? ""]).filter { !$0.isEmpty }.joined(separator: ":")
+            environment["CODEX_HOME"] = self.home.path
+            environment["CODEX_CLI_PATH"] = resolved.path
+            self.environment = environment
+        }
+
+        static func resolve() throws -> Self {
+            guard let binary = CodexCLI.locateBinary() else { throw RuntimeError.cliUnavailable }
+            return try Self(cliPath: binary)
+        }
+
+        /// Discovery can invoke a login shell for npm/nvm installs; never block a permission UI.
+        static func resolveForSetup() async throws -> Self {
+            let configuration = try await Task.detached(priority: .utility) { try resolve() }.value
+            try Task.checkCancellation()
+            return configuration
+        }
+
+        /// Codex filters MCP environments. Explicitly forward routing and GUI-session values;
+        /// do not forward unrelated provider keys or the entire parent environment to the client.
+        var clientEnvironment: [String: String] {
+            environment.filter { ["HOME", "USER", "LOGNAME", "TMPDIR", "PATH", "CODEX_HOME", "CODEX_CLI_PATH"].contains($0.key) }
+        }
+
+        var codexOverrides: [String] {
+            ["mcp_servers.sentient_native.command=\(tomlString(clientURL.path))",
+             "mcp_servers.sentient_native.args=[\"mcp\"]",
+             "mcp_servers.sentient_native.required=true",
+             "mcp_servers.sentient_native.startup_timeout_sec=30",
+             "mcp_servers.sentient_native.tool_timeout_sec=120"] + clientEnvironment.sorted { $0.key < $1.key }.map {
+                "mcp_servers.sentient_native.env.\($0.key)=\(tomlString($0.value))"
+            }
+        }
+    }
+
     struct Installation: Equatable, Sendable, Codable {
         let version: String
         let build: Int
@@ -45,8 +107,9 @@ nonisolated enum OpenAIComputerUse {
 
     static var isInstalled: Bool { installation(at: appURL) != nil }
 
-    enum RuntimeError: LocalizedError {
+    enum RuntimeError: LocalizedError, Equatable {
         case incomplete, invalidSignature, unsupportedSystem, helperRunning, changedInstallation, launchFailed
+        case cliUnavailable, unsupportedCLI, backendUnavailable, permissionRequired, restartRequired
         var errorDescription: String? {
             switch self {
             case .incomplete: "OpenAI computer use is missing or incomplete. Set it up again in Permissions & Health."
@@ -55,12 +118,20 @@ nonisolated enum OpenAIComputerUse {
             case .helperRunning: "Computer use is currently running. Finish the active task, then try the repair again."
             case .changedInstallation: "Another app updated computer use during setup. Try again to use the new installation."
             case .launchFailed: "OpenAI computer use could not start. Try again in Permissions & Health."
+            case .cliUnavailable: "Codex could not be found. Set up Codex in Permissions & Health."
+            case .unsupportedCLI: "This Codex version cannot check computer use. Check for updates to Codex and Sentient, then try again."
+            case .backendUnavailable: "Computer use could not connect to Codex. Finish any computer-use tasks in other apps, then restart computer use."
+            case .permissionRequired: "Allow Sentient to control computer use in Permissions & Health."
+            case .restartRequired: "Computer use needs to restart. Finish any computer-use tasks in other apps, then choose Restart computer use."
             }
         }
     }
 
     @discardableResult
-    static func validate(at app: URL) async throws -> Installation {
+    static func validate(at app: URL, configuration supplied: Configuration? = nil) async throws -> Installation {
+        let configuration: Configuration
+        if let selected = supplied { configuration = selected }
+        else { configuration = try await .resolveForSetup() }
         guard let installation = installation(at: app) else { throw RuntimeError.incomplete }
         if let data = try? Data(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
            let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
@@ -80,7 +151,8 @@ nonisolated enum OpenAIComputerUse {
         // model call. It catches a signed but incompatible/missing client at setup time.
         let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sentient-setup","version":"1"}}}"# + "\n"
         let probe = try await CodexCLI.executeAsync(binary: app.appendingPathComponent(clientRelativePath).path,
-            args: ["mcp"], stdinText: initialize, cwd: nil, timeout: 15)
+            args: ["mcp"], stdinText: initialize, cwd: nil, timeout: 15,
+            extraEnv: configuration.clientEnvironment)
         let initialized = probe.stdout.split(separator: "\n").contains { line in
             guard let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   message["id"] as? Int == 1, let result = message["result"] as? [String: Any],
@@ -90,25 +162,6 @@ nonisolated enum OpenAIComputerUse {
         guard probe.status == 0, initialized else { throw RuntimeError.incomplete }
         try Task.checkCancellation()
         return installation
-    }
-
-    /// LaunchServices preserves the helper's own identity and macOS permissions. Running its
-    /// service executable directly changes permission attribution and is deliberately avoided.
-    @MainActor static func launchForPermissionRequest() async throws {
-        try await validate(at: appURL)
-        if !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty { return }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = false
-        do { _ = try await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) }
-        catch { throw RuntimeError.launchFailed }
-    }
-
-    static var codexOverrides: [String] {
-        ["mcp_servers.sentient_native.command=\(tomlString(clientURL.path))",
-         "mcp_servers.sentient_native.args=[\"mcp\"]",
-         "mcp_servers.sentient_native.required=true",
-         "mcp_servers.sentient_native.startup_timeout_sec=30",
-         "mcp_servers.sentient_native.tool_timeout_sec=120"]
     }
 
     /// JSON's ordinary quoted strings are TOML-compatible only without slash escaping.

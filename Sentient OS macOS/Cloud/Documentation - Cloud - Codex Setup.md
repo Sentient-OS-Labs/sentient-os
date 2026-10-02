@@ -46,6 +46,12 @@ service and client plus a local MCP initialization handshake before use. CLI and
 versions are independent; updating the CLI does not automatically redownload the helper. A newer
 compatible helper is preserved if the public installer carries an older build.
 
+The selected Codex executable and home are supplied explicitly to helper launch and native-client
+checks. Installation completion is distinct from runtime readiness: after Automation consent, the
+permission gate checks an actual native service request, and a computer-use task checks again before
+starting the model. Startup, cancellation and explicit restart are owned by `OpenAIComputerUseRuntime`;
+see the native Driver doc for the shared-helper rules and the model-free readiness probe.
+
 The onboarding analysis takeover retains its two-minute deferred computer-use setup. The selected
 runtime is resolved when that work starts. A Settings commitment to another engine prepares that
 engine's dependency; browsing tabs does not. First-use permission gates remain responsible for

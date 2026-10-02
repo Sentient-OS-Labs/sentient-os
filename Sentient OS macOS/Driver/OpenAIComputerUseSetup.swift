@@ -37,8 +37,9 @@ enum OpenAIComputerUseSetup {
     static func install(force: Bool = false, receipt: URL? = nil, sourceURL: URL? = nil,
                         onProgress: @escaping @MainActor @Sendable (ComputerUseSetup.Progress) -> Void,
                         onLine: @escaping @Sendable (String) -> Void) async throws {
-        if !force, (try? await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL)) != nil {
-            onLine("✓ OpenAI computer use is ready")
+        let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
+        if !force, (try? await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL, configuration: configuration)) != nil {
+            onLine("✓ OpenAI computer use is installed")
             onProgress(.ready)
             return
         }
@@ -80,7 +81,7 @@ enum OpenAIComputerUseSetup {
                 ["attach", dmg.path, "-nobrowse", "-readonly", "-mountpoint", mount.path], stage: "opening the installer", timeout: 120)
             let source = try payload(in: mount)
             onProgress(.checkingSignature)
-            try await OpenAIComputerUse.validate(at: source)
+            try await OpenAIComputerUse.validate(at: source, configuration: configuration)
             try await command("/usr/bin/ditto", [source.path, candidate.path], stage: "copying the helper", timeout: 120)
         } catch {
             preserveStaging = await !detach(mount)
@@ -90,11 +91,11 @@ enum OpenAIComputerUseSetup {
             preserveStaging = true
             throw SetupError.installer("closing the installer")
         }
-        let incoming = try await OpenAIComputerUse.validate(at: candidate)
+        let incoming = try await OpenAIComputerUse.validate(at: candidate, configuration: configuration)
         try Task.checkCancellation()
 
         // Reuse a newer verified desktop installation. The public DMG may lag the desktop updater.
-        let current = try? await OpenAIComputerUse.validate(at: destination)
+        let current = try? await OpenAIComputerUse.validate(at: destination, configuration: configuration)
         try Task.checkCancellation()
         if let current, current.build > incoming.build {
             onLine("✓ A newer OpenAI computer-use helper is already installed")
@@ -111,7 +112,7 @@ enum OpenAIComputerUseSetup {
         // After a swap the old complete bundle is still at candidate, so a validation failure
         // can restore it without any window where the working destination disappears.
         do {
-            _ = try await OpenAIComputerUse.validate(at: destination)
+            _ = try await OpenAIComputerUse.validate(at: destination, configuration: configuration)
         } catch {
             if existed {
                 do { try publish(candidate: candidate, destination: destination, replacing: true) }
@@ -132,7 +133,7 @@ enum OpenAIComputerUseSetup {
             try JSONEncoder().encode(installationReceipt).write(to: receiptURL, options: .atomic)
         } catch { Log("OpenAIComputerUseSetup: helper verified; receipt unavailable (\(ErrorLabel(error)))") }
         onProgress(.ready)
-        onLine("✓ OpenAI computer use is ready")
+        onLine("✓ OpenAI computer use is installed")
     }
 
     /// Recognize the payload by structure, not the desktop app's changing display name.
