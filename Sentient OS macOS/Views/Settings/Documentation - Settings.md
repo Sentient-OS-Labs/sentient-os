@@ -40,7 +40,7 @@ Apple Calendar appears in the shared **Email & Calendar** group and opens
 presses Allow Calendar Access, then saves an explicit per-calendar selection. It supports refresh,
 clear, missing-calendar recovery, and a System Settings link after denial. Saving is disabled during
 analysis. The local source works on every frontier backend and does not require Full Disk Access.
-The sheet explains the read-only behavior and warns about duplicate hosted-calendar selections.
+The permission explanation clarifies that Sentient only reads the calendars the user chooses.
 
 **Frontier Model Choice.** Which engine powers the cloud ~10%: the shared engine pills and per-engine
 panels (`FrontierEnginePicker`, layout `.settingsGrid`); Settings' own ChatGPT panel activates with Use

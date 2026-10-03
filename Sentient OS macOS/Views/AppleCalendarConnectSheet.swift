@@ -26,8 +26,6 @@ struct AppleCalendarConnectSheet: View {
             }
             Text("Choose the calendars Sentient reads on this Mac.")
                 .font(.system(size: 13)).foregroundStyle(Theme.secondary)
-            Text("Events from the last 7 days and the next 30 days are understood on your device. Only privacy-filtered summaries enter your knowledge base.")
-                .font(.system(size: 12)).foregroundStyle(Theme.secondary)
             if authorization == .fullAccess {
                 if loading { ProgressView().controlSize(.small) }
                 else if loaded && calendars.isEmpty {
@@ -73,8 +71,6 @@ struct AppleCalendarConnectSheet: View {
                 Text(issue).font(.system(size: 12)).foregroundStyle(Theme.Ink.amber)
             }
             if let message { Text(message).font(.system(size: 12)).foregroundStyle(Theme.Ink.amber) }
-            Text("This connection only reads events. If Google or Outlook already reads the same calendar, choose one source to avoid duplicate context.")
-                .font(.system(size: 11)).foregroundStyle(Theme.secondary)
             if PipelineActivity.shared.isRunning {
                 Text("You can change calendar selections after analysis finishes.")
                     .font(.system(size: 11)).foregroundStyle(Theme.secondary)
