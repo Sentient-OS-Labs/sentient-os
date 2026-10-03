@@ -253,11 +253,11 @@ struct KnowledgeSourcesPicker: View {
         .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
     }
 
-    private var appleCalendarDetail: String {
+    private var appleCalendarDetail: String? {
         let count = AppleCalendarSource.selectedIDs.count
         if count > 0 && !AppleCalendarSource.hasAccess { return "Calendar access needed · Manage" }
         if count > 0 && !calendarReadIssue.isEmpty && !PipelineActivity.shared.isRunning { return "Analysis needs attention · Manage" }
-        return count > 0 ? "\(count) calendars selected · On this Mac" : "Choose calendars on this Mac"
+        return count > 0 ? "\(count) calendars selected · On this Mac" : nil
     }
 
     private var otherAppsGroup: some View {
