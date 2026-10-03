@@ -95,7 +95,7 @@ struct OnboardingFrontierModelView: View {
         }
         .overlay { OnboardingTelemetryConsent() }
         .overlay(alignment: .bottomTrailing) {
-            InviteRedemptionView()
+            InviteRedemptionView(startsCollapsed: true)
                 .frame(width: 320)
                 .padding(.trailing, 36).padding(.bottom, 28)
         }

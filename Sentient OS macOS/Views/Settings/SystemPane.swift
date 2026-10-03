@@ -45,7 +45,6 @@ struct SystemPane: View {
                 SettingsHairline(opacity: 0.12)
                     .padding(.vertical, -8)
                 privacyGroup
-                MailAccountSettingsGroup()
                 protectionGroup
                 SettingsHairline(color: Theme.Ink.red, opacity: 0.25)
                     .padding(.vertical, -8)
@@ -130,7 +129,7 @@ struct SystemPane: View {
     private var privacyGroup: some View {
         SettingsGroup(label: "Privacy") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Your files and message content stay out of Sentient's account database. When you confirm a connected email account, Sentient stores its address in Supabase. You can review and delete those records below. Diagnostics remain separate and contain no email addresses.")
+                SettingsProse("Diagnostics help us improve Sentient without including your files, messages, or email addresses.")
                     .padding(.bottom, 6)
                 SettingToggleLine(title: "Share anonymous crash reports",
                                   sub: "Privacy-friendly, structure-only reports that help us fix your bugs; never your content.",

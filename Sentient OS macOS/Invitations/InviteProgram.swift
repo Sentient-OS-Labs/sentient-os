@@ -8,8 +8,8 @@ import Observation
 @MainActor @Observable
 final class InviteProgram {
     static let shared = InviteProgram()
-    static let offerTitle = "Limited-time offer!"
-    static let offerMessage = "Give your friends Sentient OS free for life."
+    static let offerTitle = "Exclusive offer"
+    static let offerMessage = "Invite your friends to enjoy Sentient OS free\u{00A0}for\u{00A0}life."
 
     enum Use { case doubleTap, sidekick, proactive }
     private(set) var snapshot: InviteSnapshot?
