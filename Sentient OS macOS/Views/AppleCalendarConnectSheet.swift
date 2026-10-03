@@ -20,7 +20,7 @@ struct AppleCalendarConnectSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
-                Image(systemName: "calendar").font(.system(size: 24)).foregroundStyle(.white.opacity(0.8))
+                ConnectorLogo(asset: "AppleCalendarMark", size: 32)
                 Text("Apple Calendar").display(26)
                 Spacer()
             }

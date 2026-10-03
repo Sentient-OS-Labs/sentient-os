@@ -242,7 +242,7 @@ struct KnowledgeSourcesPicker: View {
     private var calendarColumn: some View {
         VStack(alignment: .leading, spacing: 9) {
             KnowledgeSourcePill(label: "Apple Calendar", detail: appleCalendarDetail,
-                                systemImage: "calendar", selected: AppleCalendarSource.isEnabled,
+                                asset: "AppleCalendarMark", selected: AppleCalendarSource.isEnabled,
                                 featured: true) { showAppleCalendarConnect = true }
             KnowledgeSourcePill(label: "Google Calendar", asset: "GoogleCalendarMark", selected: runCalendar,
                                 featured: true, locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }

@@ -16,7 +16,7 @@ struct ConnectorLogo: View {
     /// about 19% transparent padding; the solid square marks need a little breathing room.
     private var artworkScale: CGFloat {
         switch asset {
-        case "WhatsAppMark", "IMessageMark", "AppleNotesMark", "AppleMailMark": 1.11
+        case "WhatsAppMark", "IMessageMark", "AppleNotesMark", "AppleMailMark", "AppleCalendarMark": 1.11
         case "GoogleCalendarMark", "GranolaMark": 0.9
         case "OutlookMark": 0.95
         default: 1
@@ -41,7 +41,7 @@ struct ConnectorLogo: View {
     HStack(alignment: .top, spacing: 28) {
         ForEach(["GmailMark", "GoogleCalendarMark", "GoogleDriveMark", "SlackMark",
                  "OutlookMark", "NotionMark", "GranolaMark", "WhatsAppMark", "IMessageMark",
-                 "AppleNotesMark", "AppleMailMark"], id: \.self) { asset in
+                 "AppleNotesMark", "AppleMailMark", "AppleCalendarMark"], id: \.self) { asset in
             VStack(spacing: 16) {
                 ConnectorLogo(asset: asset)
                 Text(asset.replacingOccurrences(of: "Mark", with: ""))
