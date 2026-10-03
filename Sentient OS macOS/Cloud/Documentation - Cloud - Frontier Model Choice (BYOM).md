@@ -29,9 +29,9 @@ Custom (any `/v1/responses` endpoint; runs through the translator). The two subs
 the hosted connectors; `CustomProvider.needsTranslator` is true for every preset except OpenRouter,
 whose server speaks codex's dialect natively.
 
-**Installs are lazy and commitment-only** (field-hardened 2026-08-22): browsing tabs downloads
-nothing; the sign-in buttons, "Use ChatGPT", and Test & Select (which needs codex for the vision
-probe and ensures it first) are the download moments.
+**Codex CLI and native computer use prepare at app launch for every backend.** Browsing tabs starts
+no additional installation. Claude Code remains lazy, prepared by the Claude commitment/sign-in
+actions. ChatGPT sign-in and Test & Select join or retry shared Codex preparation as needed.
 
 ## The invocation recipe
 

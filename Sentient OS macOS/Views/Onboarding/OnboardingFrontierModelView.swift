@@ -100,9 +100,8 @@ struct OnboardingFrontierModelView: View {
                 .padding(.trailing, 36).padding(.bottom, 28)
         }
         .onAppear {
-            // Detection only — NO install kicks here (decision 2026-08-21): each engine's CLI
-            // downloads lazily when the user actually picks it (a pill click or a panel's
-            // sign-in action), so a Claude user never downloads codex, and vice versa.
+            // Observe the shared Codex setup already started by AppState. Claude Code is
+            // prepared by its commitment/sign-in action; appearing here only refreshes status.
             Task { await codex.refreshInstalled() }
             Task { await codex.refreshLoginStatus() }
             Task {

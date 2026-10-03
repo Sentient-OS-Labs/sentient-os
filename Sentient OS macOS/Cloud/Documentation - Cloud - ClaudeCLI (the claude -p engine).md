@@ -110,9 +110,9 @@ never touches `~/.claude` or the Keychain credential. Only a good availability v
 
 ## Setup (`ClaudeSetup`)
 
-Two steps, lazy: **nothing installs at first launch** (decided 2026-08-21) — each engine's CLI
-downloads at a COMMITMENT action only (the Claude panel's "Sign in with Claude", ChatGPT's sign-in /
-"Use ChatGPT", a custom tab's Test & Select), never on tab browsing. Install runs Anthropic's official
+Claude Code remains a two-step, lazy setup: its CLI downloads when the user commits to Claude,
+never just from browsing tabs. Shared Codex CLI and native computer-use setup already start in the
+background at app launch for every backend. Claude Code install runs Anthropic's official
 installer (`claude.ai/install.sh`, non-interactive, lands at `~/.local/bin/claude` — the same
 managed-binary convention as codex) with codex-parity retries and the give-up panel; login is
 `claude auth login` (browser OAuth, auto-noticed by polling). The daily update

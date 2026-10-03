@@ -39,8 +39,9 @@ onboarding's ready screen) guards toggle-offs on the 4 → 3 drop and flashes th
 **Frontier Model Choice.** Which engine powers the cloud ~10%: the shared engine pills and per-engine
 panels (`FrontierEnginePicker`, layout `.settingsGrid`); Settings' own ChatGPT panel activates with Use
 ChatGPT and points at Permissions & Health for login and plan; the Claude panel is self-contained
-(lazy install on "Sign in with Claude", the plan chip, Use Claude). Installs fire only on those
-commitment actions, never on tab browsing. See the BYOM and ClaudeCLI docs.
+(lazy install on "Sign in with Claude", the plan chip, Use Claude). Shared Codex CLI and native
+computer-use setup start at app launch; commitment actions join or retry that work as needed.
+Browsing tabs starts no additional installation. See the BYOM and ClaudeCLI docs.
 
 **Proactive & Sidekick.** The user's standing proactive instructions (`proactive.instructions`, fed to
 both proactive prompts), the Sidekick key (right ⌘ / right ⌥; toggling posts `.sidekickHotkeyChanged`

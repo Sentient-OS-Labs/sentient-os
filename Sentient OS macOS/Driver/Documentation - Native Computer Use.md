@@ -28,6 +28,10 @@ without requiring a ChatGPT login. The helper installer does not install the des
 files. It never
 rewrites Codex configuration, skills, notification hooks or authentication.
 
+Every normal app launch starts shared dependency preparation in the background, before model
+selection and without waiting for onboarding or analysis. Compatible CLIs and helpers are reused.
+Settings and computer tasks join the same installation; a routine startup check stays quiet.
+
 A valid existing helper is reused. Otherwise the installer downloads OpenAI's desktop DMG directly
 from its official CDN, mounts it read-only, and locates the helper by its bundle layout rather than
 the desktop app's display name. The public distribution currently requires downloading the complete
@@ -91,8 +95,8 @@ action without another automatic prompt. Background checks never request consent
 the grant. Uninstall uses `tccutil` to reset only Sentient's Apple Events access.
 
 `ComputerUseGate`, its shared permission rows, Settings health and migration all select the same
-runtime. An engine switch from Settings prepares the selected dependency. Onboarding retains its
-existing deferred computer-use setup. Existing CUA users on every backend complete a mandatory native
+runtime. An engine switch from Settings joins the shared preparation if needed. Onboarding uses the
+setup already started by AppState at launch. Existing CUA users on every backend complete a mandatory native
 migration before the regular interface and Sidekick start. CUA installation history and earlier
 deferred migrations are recognized even without the old readiness flag. Setup remains pending across
 window closure and relaunch until installation and required grants are ready. Native readiness has

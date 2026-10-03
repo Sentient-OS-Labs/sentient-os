@@ -64,7 +64,7 @@ final class CodexSetup {
     }
 
     /// Every computer-use engine needs Codex, but only ChatGPT needs a Codex login.
-    /// Callers can stop waiting while the shared, explicitly requested installation finishes.
+    /// Callers can stop waiting while the shared background installation finishes.
     func ensureComputerUseCLI() async -> Bool {
         if let version = await CodexCLI.installedVersion(),
            !CodexCLI.isNewer(Self.computerUseMinimumVersion, than: version), await CodexCLI.isRunnable() {
@@ -86,8 +86,8 @@ final class CodexSetup {
         return computerPreparationSucceeded && !Task.isCancelled
     }
 
-    /// Called only when the user commits to a Codex-backed engine, including Continue for an
-    /// existing login. An old brew/npm install gets a standalone copy; its package is untouched.
+    /// Used by engine commitment and by startup when computer use needs a compatible CLI.
+    /// An old brew/npm install gets a standalone copy; its package is untouched.
     /// Concurrent callers await the same preparation, and failed preparation is always retryable.
     func ensureCurrent() async -> Bool {
         if let preparationTask { return await preparationTask.value }

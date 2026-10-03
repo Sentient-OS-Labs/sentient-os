@@ -142,6 +142,7 @@ struct HomeView: View {
             model.beginVisit(deck: v)                               // mode flip → re-deal
         }
         .onChange(of: computerSetup.ready) { _, _ in probeHealth() }
+        .onChange(of: computerSetup.isInstalling) { _, _ in probeHealth() }
         .onChange(of: ComputerUseGate.shared.automation) { _, _ in probeHealth() }
         .onChange(of: backendRaw) { _, _ in probeHealth() }
         .onChange(of: appState.isUninstalling) { _, tearing in

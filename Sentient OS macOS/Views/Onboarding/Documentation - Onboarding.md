@@ -10,9 +10,9 @@ Full Disk Access requires resumes exactly where the user left off.
 
 | File | Job |
 |---|---|
-| `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, the DEBUG "SKIP TO HOME" handle, and the two-minutes-in selected-runtime download. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
+| `OnboardingView.swift` | The step switchboard, the whole-onboarding screen-awake hold, the Back button, the GitHub mark, the right-click blocker, and the DEBUG "SKIP TO HOME" handle. Also `OnboardingNextButton`, `OnboardingBackButton`, `OnboardingTrustFooter`. |
 | `OnboardingFilmView.swift` | Step 0: the website's film in a `WKWebView`. |
-| `OnboardingFrontierModelView.swift` · `OnboardingCodexSteps.swift` | Step 1: the engine picker with the codex login as the ChatGPT panel; the lazy install-on-commitment kicks, the `codex --help` confirmation poll (skipped until a codex install exists), the manual-install panel; the shared onboarding bits (`OnboardingWhisper`, `OnboardingDoneLine`, `MonoWaitLine`, `OnboardingStatusText`). |
+| `OnboardingFrontierModelView.swift` · `OnboardingCodexSteps.swift` | Step 1: the engine picker with the codex login as the ChatGPT panel; engine preparation and login, the `codex --help` confirmation poll (skipped until a codex install exists), the manual-install panel; the shared onboarding bits (`OnboardingWhisper`, `OnboardingDoneLine`, `MonoWaitLine`, `OnboardingStatusText`). |
 | `OnboardingPlanView.swift` | Step 2: the plan crossroads. |
 | `OnboardingPermissionsView.swift` | Step 3: overnight wake → launch at login → Full Disk Access, unlocking sequentially. |
 | `OnboardingReadyView.swift` | Step 4: the source tiles and the big Start Analysis glow. |
@@ -36,11 +36,10 @@ points the step at a local dev server.
 
 **1 · Choose your frontier model.** The shared `FrontierEnginePicker` in a single centered row over
 the per-engine panels, with `OnboardingCodexLoginPanel` as the ChatGPT panel and the picker's own
-self-contained Claude panel. **Installs are lazy** (decided 2026-08-21): nothing downloads at launch
-or on screen appear — "Log in with ChatGPT" is the codex download moment (mid-install the button
-greys and the streamed progress narrates; the sign-in follows on its own the moment the install
-lands), "Sign in with Claude" is Claude Code's, and a custom tab's Test & Select installs codex
-before probing (the CLI is the engine room even for custom endpoints). Both login panels notice the
+self-contained Claude panel. **Shared computer-use setup starts at app launch:** Codex CLI and the
+native helper prepare while the film plays, regardless of the eventual engine choice. "Log in with
+ChatGPT" joins CLI preparation before sign-in; "Sign in with Claude" prepares Claude Code; a custom
+tab's Test & Select ensures Codex is ready before probing. Both login panels notice the
 finished browser sign-in on their own (a 2 s status poll plus a foreground re-check). If an
 automatic install gave up (no network, a reset connection, a region block), the panels show the
 manual-install fallback (`CodexInstallFailedPanel` links the official guide and suggests a VPN; the
@@ -75,7 +74,7 @@ Missing connections or undetectable addresses are skipped without asking for man
 
 ## Things that happen around the steps
 
-- Frontier CLIs install at engine commitment. The on-device model starts downloading after the post-FDA relaunch; the selected computer-use runtime is prepared two minutes into the first analysis. ChatGPT prepares OpenAI's signed helper; Claude/custom prepare CUA. The unstructured shared installation is not canceled by pausing analysis.
+- AppState starts shared Codex CLI and native helper preparation on every normal launch, before model selection. Compatible installations are reused; setup is shared with Settings and task startup and is not canceled by pausing analysis. Claude Code remains an engine-specific install. The on-device model starts downloading after the post-FDA relaunch.
 - `DisplayAwake` holds the screen on for the whole flow (the download and the first analysis run behind the slides).
 - Right-clicks are swallowed for onboarding's whole lifetime (the film's webview would offer a browser context menu).
 - Sidekick is home-only: before the film's notch beat a press does nothing; after it, the honest "finish onboarding to use Sidekick" aside; the notch's hover swell is off before the beat too.

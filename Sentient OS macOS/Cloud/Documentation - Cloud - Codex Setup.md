@@ -1,8 +1,8 @@
 # Codex setup
 
-Sentient prepares the user's frontier CLI, login and selected computer-use dependency through shared
-setup code. Browsing engine tabs downloads nothing; installation starts at an engine commitment,
-onboarding's existing background setup, an explicit repair, or a computer-use task that needs it.
+Sentient starts shared Codex CLI and native computer-use preparation in the background on every
+normal app launch, including the first onboarding screen and before model selection. Compatible
+installations are reused. Claude Code and model sign-in remain tied to the selected engine.
 
 ## Owners
 
@@ -10,7 +10,7 @@ onboarding's existing background setup, an explicit repair, or a computer-use ta
 |---|---|
 | `CodexSetup` | Discover, install/update and log in to Codex CLI; expose shared progress and retry state. |
 | `ClaudeSetup` | The equivalent CLI and login flow for Claude Code. |
-| `ComputerUseSetup` | Prepare the selected computer-use runtime, independently of either CLI's installation. |
+| `ComputerUseSetup` | Own shared startup preparation of Codex CLI and the native helper, plus repair and task-time checks. |
 
 Every model backend uses OpenAI's signed native helper through Codex CLI. Claude users keep their
 Claude login for inference and need no ChatGPT login. The helper is extracted from OpenAI's official
@@ -36,7 +36,7 @@ not silently modified by the background updater.
 
 ## Computer-use preparation
 
-`ComputerUseSetup.instance(for:)` owns one installation task per runtime. Onboarding, Settings,
+`ComputerUseSetup.instance(for:)` owns one installation task per runtime. App launch, Settings,
 upgrade, repair and task startup join the same work. Progress distinguishes downloading, preparation,
 verification and publication. STOP cancels a task's wait without canceling a shared background
 installation. Uninstall cancels and drains both installers before removing managed support files.
@@ -48,10 +48,15 @@ service and client plus a local MCP initialization handshake before use. CLI and
 versions are independent; updating the CLI does not automatically redownload the helper. A newer
 compatible helper is preserved if the public installer carries an older build.
 
-The onboarding analysis takeover retains its two-minute deferred computer-use setup. The selected
-runtime is resolved when that work starts. A Settings commitment to another engine prepares that
-engine's dependency; browsing tabs does not. First-use permission gates remain responsible for
-macOS consent, and a task waits for unfinished installation.
+`AppState` calls `prepareForLaunch()` after the headless self-test guard and migration detection.
+It registers the shared installation immediately and returns without waiting for network or CLI
+work. Onboarding has no deferred setup timer. A routine launch check does not show an update banner;
+Health also waits for the shared installation to finish before reporting a broken runtime, and
+rechecks on completion or failure. An established runtime missing required components retains its
+repair notice. Failed setup remains
+retryable through Settings, first use, or a later launch. First-use permission gates remain
+responsible for macOS consent, and a task waits for unfinished installation. Browsing engine tabs
+does not start another download or a login.
 
 ## Invariants
 

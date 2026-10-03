@@ -64,12 +64,11 @@ final class ComputerUseSetup {
     @ObservationIgnored private var installTask: Task<Bool, Never>?
     @ObservationIgnored private var installGeneration = UUID()
 
-    /// Repair an established runtime whose required components vanished or became too old.
-    /// Fresh installs and first-time engine migrations retain their own setup entry points.
-    func updateIfNeeded() {
-        guard hasInstallationHistory, !backend.isInstalled else { return }
-        updateNotice = .updating
-        beginInstall()
+    /// Start shared dependency preparation on every normal app launch, including onboarding.
+    /// Existing installs are validated and reused. Routine checks stay quiet; an established
+    /// runtime missing required components retains its repair notice. No login or grants here.
+    func prepareForLaunch() {
+        beginInstall(announceUpdate: hasInstallationHistory && !backend.isInstalled)
     }
 
     func dismissUpdateNotice() {
@@ -84,7 +83,7 @@ final class ComputerUseSetup {
         _ = await installTask?.value
     }
 
-    private func beginInstall(force: Bool = false) {
+    private func beginInstall(force: Bool = false, announceUpdate: Bool = true) {
         guard installTask == nil else { return }
         if !force, backend == .cua, backend.isInstalled {
             ready = true
@@ -92,7 +91,7 @@ final class ComputerUseSetup {
             status = "✓ Computer use already installed"
             return
         }
-        if hasInstallationHistory { updateNotice = .updating }
+        if announceUpdate, hasInstallationHistory { updateNotice = .updating }
         isInstalling = true
         lastInstallSucceeded = false
         failure = nil

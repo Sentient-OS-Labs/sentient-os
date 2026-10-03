@@ -167,7 +167,10 @@ enum HealthCaution {
                 // banner behind it would be the same message twice. The banner still covers the
                 // window-less case (the driver vanishing mid-session; the next home open raises
                 // the window and this rung goes quiet again).
-                if computerUseEverReady, !ComputerUseUpgrade.shared.isPresenting,
+                // Startup verification is pending, not a broken installation. Home rechecks
+                // when the shared installer finishes, including after a failed download.
+                if computerUseEverReady, !ComputerUseSetup.current.isInstalling,
+                   !ComputerUseUpgrade.shared.isPresenting,
                    ComputerUseSetup.current.updateNotice == .hidden {
                     return .computerUseBroken(payloadGone: true)
                 }

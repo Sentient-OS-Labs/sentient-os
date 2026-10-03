@@ -64,6 +64,9 @@ appear and every app foreground, and returns the worst un-muted issue:
 2. **Codex gone or signed out** (the login check shells out, so its verdict is cached ~5 min; the home passes `forceCodexRecheck` while a codex banner is up so a fix clears on the next foreground). Signed-out is ChatGPT-backend only.
 3. **Computer use regressed:** the selected runtime became unavailable, or its required grants did — but ONLY once the selected runtime's readiness latch is set (`computerUse.nativeEverReady` for OpenAI; the existing `computerUse.everReady` for CUA) (by the probe when everything reads healthy, and by the permission gate at its moment of truth; cleared by FactoryReset), so a user who never set it up is never nagged. The binary-missing case stays quiet while the `ComputerUseUpgrade` window is presenting on that exact state (the same message twice helps no one) and still covers the window-less case (the driver vanishing mid-session).
 
+Shared startup installation and verification do not count as a broken runtime while in progress.
+Home rechecks health when installation finishes, including after a failure.
+
 Nothing persists; broken shows, fixed melts away. ✕ mutes an issue KIND for the session (a lower rung may
 then surface). Nothing at all on the free-plan home. The banner's Open Settings lands on Permissions &
 Health.
