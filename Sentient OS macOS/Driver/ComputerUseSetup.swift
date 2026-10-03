@@ -48,6 +48,7 @@ final class ComputerUseSetup {
     private(set) var isInstalling = false
     /// Latest streamed progress line, or the final ✓/✗ result.
     private(set) var status: String?
+    private(set) var failure: Error?
     private var lastInstallSucceeded = false
     private var verificationFailed = false
 
@@ -94,6 +95,7 @@ final class ComputerUseSetup {
         if hasInstallationHistory { updateNotice = .updating }
         isInstalling = true
         lastInstallSucceeded = false
+        failure = nil
         ready = false
         progress = .downloading(nil)
         status = force ? "Re-installing…" : "Starting…"
@@ -129,6 +131,7 @@ final class ComputerUseSetup {
                 if updateNotice == .updating { updateNotice = .ready }
                 return true
             } catch {
+                failure = error
                 ready = backend.isInstalled && !verificationFailed
                 status = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
                 if updateNotice == .updating { updateNotice = .failed }
@@ -143,11 +146,17 @@ final class ComputerUseSetup {
     /// former two-minute waiter ceiling while the same download legitimately continues.
     @discardableResult
     func ensureInstalled() async -> Bool {
+        if backend == .openAI, await !CodexSetup.shared.ensureComputerUseCLI() {
+            failure = OpenAIComputerUse.RuntimeError.codexUnavailable
+            status = "Computer use needs Codex CLI. Prepare it in Permissions & Health."
+            return false
+        }
         if !isInstalling, backend.isInstalled {
             if backend == .openAI {
                 do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL) }
                 catch {
                     if !Task.isCancelled {
+                        failure = error
                         verificationFailed = true
                         ready = false
                         status = "✗ " + error.localizedDescription
@@ -156,6 +165,7 @@ final class ComputerUseSetup {
                 }
             }
             verificationFailed = false
+            failure = nil
             ready = true
             return !Task.isCancelled
         }
@@ -182,6 +192,9 @@ final class ComputerUseSetup {
                                   onLine: @escaping @Sendable (String) -> Void) async throws {
         switch backend {
         case .openAI:
+            guard await CodexSetup.shared.ensureComputerUseCLI() else {
+                throw OpenAIComputerUse.RuntimeError.codexUnavailable
+            }
             try await OpenAIComputerUseSetup.install(force: force, onProgress: onProgress, onLine: onLine)
         case .cua:
             try await CuaDriverSetup.install(force: force, onProgress: onProgress, onLine: onLine)

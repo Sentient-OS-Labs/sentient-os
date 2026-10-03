@@ -1,5 +1,5 @@
 // Observable Codex CLI installation, login and update flow shared by onboarding and Settings.
-// ComputerUseSetup independently prepares the selected native or CUA computer-use runtime.
+// ComputerUseSetup prepares native computer use and requests Codex without a ChatGPT login for Claude.
 // Key methods: ensureCurrent(), ensureInstalled(), startLogin(), updateIfDue(), whatsNeeded().
 // Doc: Cloud/Documentation - Cloud - Codex Setup.md
 
@@ -56,6 +56,35 @@ final class CodexSetup {
     /// Avoid repeating the release check between sign-in and Continue. A different binary
     /// version (including a downgrade outside Sentient) must pass preparation again.
     private var preparedVersion: String?
+    private var computerPreparation: Task<Void, Never>?
+    private var computerPreparationSucceeded = false
+    static let computerUseMinimumVersion = "0.160.0"
+    var computerUseReady: Bool {
+        installed && version.map { !CodexCLI.isNewer(Self.computerUseMinimumVersion, than: $0) } == true
+    }
+
+    /// Every computer-use engine needs Codex, but only ChatGPT needs a Codex login.
+    /// Callers can stop waiting while the shared, explicitly requested installation finishes.
+    func ensureComputerUseCLI() async -> Bool {
+        if let version = await CodexCLI.installedVersion(),
+           !CodexCLI.isNewer(Self.computerUseMinimumVersion, than: version), await CodexCLI.isRunnable() {
+            self.version = version; installed = true
+            return !Task.isCancelled
+        }
+        if computerPreparation == nil {
+            computerPreparationSucceeded = false
+            computerPreparation = Task {
+                let prepared = await ensureCurrent()
+                computerPreparationSucceeded = prepared && computerUseReady
+                computerPreparation = nil
+            }
+        }
+        while computerPreparation != nil {
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return false }
+        }
+        return computerPreparationSucceeded && !Task.isCancelled
+    }
 
     /// Called only when the user commits to a Codex-backed engine, including Continue for an
     /// existing login. An old brew/npm install gets a standalone copy; its package is untouched.
@@ -230,9 +259,7 @@ final class CodexSetup {
     /// the installer runs and resolves on its own — the pre-1.4 behavior. `trigger` names the
     /// caller in the log ("idle" · "overnight").
     func updateIfDue(trigger: String) async {
-        // An engine out of service earns no background downloads: while Claude is the backend,
-        // codex sits idle (chatgpt AND custom both run through codex, so only .claude skips).
-        guard ModelBackend.current != .claude else { return }
+        // Claude keeps its own model login, while Sidekick also uses this managed CLI.
         guard installed, !installing, !preparing else { return }
         guard CodexCLI.usingManagedBinary else { return }   // not ours to update
         // Once a day; a stale-client signal on a successful run pulls the next attempt forward,
@@ -286,10 +313,10 @@ final class CodexSetup {
         // The one idle tick keeps EVERY managed engine CLI current — ClaudeSetup self-guards
         // (only while Claude is the backend, only the managed binary, once a day).
         Task { await ClaudeSetup.shared.updateIfDue(trigger: "idle") }
-        // …and keeps the computer-use attach set classified (task 1.6): the chips + every
+        // Keep the dedicated connector action policies classified: the chips + every
         // detected connector. Self-guards (Claude backend only) and cache hits are free, so
         // this is one-time work per CLI version, done while the user is away.
-        Task { await ConnectorClassifier.sweepComputerUseAttachables() }
+        Task { await ConnectorClassifier.sweepActionConnectors() }
     }
 
     /// A codex run just failed on the stale-client signature (CodexCLI classified it). Flag it for

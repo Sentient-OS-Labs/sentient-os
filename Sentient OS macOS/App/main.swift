@@ -34,7 +34,10 @@ if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
 }
 #endif
 
-if CommandLine.arguments.dropFirst().first == "--outlook-tool-policy" {
+if CommandLine.arguments.dropFirst().first == ClaudeSubscriptionProcess.argument {
+    Task.detached { exit(await ClaudeSubscriptionProcess.run()) }
+    dispatchMain()
+} else if CommandLine.arguments.dropFirst().first == "--outlook-tool-policy" {
     exit(OutlookToolPolicy.runHelper(arguments: CommandLine.arguments))
 } else if CommandLine.arguments.dropFirst().first == "--slack-tool-policy" {
     exit(SlackToolPolicy.runHelper(arguments: CommandLine.arguments))

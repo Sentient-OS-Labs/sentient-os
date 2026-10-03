@@ -1,9 +1,12 @@
 # The Cua Driver (Driver/): the hands and eyes of computer use
 
-CUA powers computer use for Claude and custom endpoints. It is the pinned open-source driver from
-[trycua/cua](https://github.com/trycua/cua), embedded as Sentient's own daemon. Its background native
-window input, cursor overlay, four MCP vision tools, CLI shim and manual remain shared by those two
-CLI paths. ChatGPT uses the separate OpenAI helper described in `Documentation - Native Computer Use.md`.
+This document describes the retained legacy CUA implementation and its cleanup contract. Active
+computer tasks now use the signed OpenAI helper through `codex exec` for every model backend.
+See `Documentation - Native Computer Use.md` for the current runtime and permissions.
+
+The legacy runtime uses the pinned open-source driver from [trycua/cua](https://github.com/trycua/cua),
+embedded as a Sentient-owned daemon. Its catalog, installer, manual and lifecycle code remain for
+compatibility checks, migration history and cleanup of older installations.
 
 ## Files
 

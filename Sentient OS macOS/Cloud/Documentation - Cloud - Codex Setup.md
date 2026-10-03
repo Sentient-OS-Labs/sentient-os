@@ -12,10 +12,10 @@ onboarding's existing background setup, an explicit repair, or a computer-use ta
 | `ClaudeSetup` | The equivalent CLI and login flow for Claude Code. |
 | `ComputerUseSetup` | Prepare the selected computer-use runtime, independently of either CLI's installation. |
 
-ChatGPT uses OpenAI's signed native helper. Claude and custom model endpoints use CUA. The native
-helper is extracted from OpenAI's official installer into the existing Codex home; no new CLI,
-desktop app installation, plugin configuration or login copy is needed. CUA keeps its pinned,
-checksum-verified download. Details live in the two Driver docs.
+Every model backend uses OpenAI's signed native helper through Codex CLI. Claude users keep their
+Claude login for inference and need no ChatGPT login. The helper is extracted from OpenAI's official
+installer into the existing Codex home; Sentient installs no desktop app or permanent plugin config.
+Legacy CUA installation records are used only for migration and cleanup.
 
 ## CLI preparation
 
@@ -30,7 +30,7 @@ completion through `loginStatus`; the dev surface also has an explicit confirmat
 URLs are elided from diagnostics. Sentient reuses the existing Codex authentication.
 
 The managed CLI updater checks at most daily, when the user is away and no task is active. It runs
-only for a Codex-backed engine; Claude's updater self-guards for its own backend. The existing
+for every backend that has a managed Codex installation; Claude's updater self-guards for its own backend. The existing
 stale-client repair and health signals remain the reactive paths. A package-manager installation is
 not silently modified by the background updater.
 
@@ -41,7 +41,9 @@ upgrade, repair and task startup join the same work. Progress distinguishes down
 verification and publication. STOP cancels a task's wait without canceling a shared background
 installation. Uninstall cancels and drains both installers before removing managed support files.
 
-ChatGPT preparation verifies the existing native helper or installs one. It verifies the signed
+`ensureComputerUseCLI()` requires Codex 0.160.0 or newer and a runnable binary, sharing any needed
+preparation. It never initiates ChatGPT sign-in. Computer-use preparation then verifies the existing
+native helper or installs one. It verifies the signed
 service and client plus a local MCP initialization handshake before use. CLI and native-helper
 versions are independent; updating the CLI does not automatically redownload the helper. A newer
 compatible helper is preserved if the public installer carries an older build.

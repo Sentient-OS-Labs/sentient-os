@@ -1,5 +1,5 @@
 #if DEBUG
-// Signed-app validation of native Codex and the existing Claude/TryCua path.
+// Signed-app validation of native Codex and the Claude subscription provider.
 // Uses the real CLI process plumbing without normal app startup, production data writes, or TCC edits.
 // Doc: Documentation - General - Self-Testing (Eval Harness).md
 import AppKit
@@ -86,7 +86,7 @@ nonisolated enum NativeComputerUseLab {
                 let began = Date()
                 let task = Task {
                     try await ModelBackend.$runOverride.withValue(.claude) {
-                        try await ClaudeCLI.shared.runAgentCommand(prompt + "\n\n" + CuaDriverSkill.rules,
+                        try await FrontierRun.runAgentCommand(prompt,
                             timeout: 180, onLine: { line in appendLine(line) })
                     }
                 }
@@ -113,21 +113,11 @@ nonisolated enum NativeComputerUseLab {
                     result["status"] = status(AgentStatus.parse(text))
                 } catch { result["error"] = String(describing: error); result["cancelled"] = task.isCancelled }
                 result["seconds"] = Date().timeIntervalSince(began)
-                if let socket = await CuaDriverHost.shared.socketPath {
-                    result["socketAfterTask"] = socket
-                    if env["LAB_PROBE_SESSION"] != "0" {
-                      let probe = try? await CodexCLI.executeAsync(binary: CuaDriver.binaryURL.path,
-                        args: ["--socket", socket, "list_sessions", "{}"], stdinText: nil, cwd: nil,
-                        timeout: 10, extraEnv: ["CUA_DRIVER_EMBEDDED": "1", "CUA_DRIVER_RS_TELEMETRY_ENABLED": "false",
-                            "CUA_TELEMETRY_ENABLED": "false", "CUA_DRIVER_RS_UPDATE_CHECK": "false"])
-                      result["sessionsAfterTask"] = probe?.stdout ?? "probe failed"
-                    }
-                }
                 if command == "claude-stop-recover", let file = env["LAB_RECOVERY_PROMPT_FILE"] {
                     let recoveryPrompt = try String(contentsOfFile: file, encoding: .utf8)
                     do {
                         result["recoveryReply"] = try await ModelBackend.$runOverride.withValue(.claude) {
-                            try await ClaudeCLI.shared.runAgentCommand(recoveryPrompt + "\n\n" + CuaDriverSkill.rules,
+                            try await FrontierRun.runAgentCommand(recoveryPrompt,
                                 timeout: 120, onLine: { appendLine("RECOVERY: " + $0) })
                         }
                     } catch {
@@ -135,14 +125,12 @@ nonisolated enum NativeComputerUseLab {
                         try? await Task.sleep(for: .seconds(3))
                         do {
                             result["delayedRecoveryReply"] = try await ModelBackend.$runOverride.withValue(.claude) {
-                                try await ClaudeCLI.shared.runAgentCommand(recoveryPrompt + "\n\n" + CuaDriverSkill.rules,
+                                try await FrontierRun.runAgentCommand(recoveryPrompt,
                                     timeout: 120, onLine: { appendLine("DELAYED RECOVERY: " + $0) })
                             }
                         } catch { result["delayedRecoveryError"] = String(describing: error) }
                     }
-                    result["socketAfterRecovery"] = await CuaDriverHost.shared.socketPath
                 }
-                await CuaDriverHost.shared.stop()
             default: result["error"] = "Unknown LAB_COMMAND"
             }
         } catch { result["error"] = String(describing: error) }

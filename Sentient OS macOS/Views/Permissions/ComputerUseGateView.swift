@@ -40,7 +40,7 @@ struct ComputerUseGateView: View {
             // No bypass: while any required grant is red the button is disabled and says so, so a
             // feature can never be fired half-granted. It enables the instant every row goes green
             // (the rows re-probe on foreground + after the mic prompt).
-            OnboardingNextButton(title: gate.allRequiredGranted ? "Continue" : "Grant permissions to continue",
+            OnboardingNextButton(title: gate.allRequiredGranted ? "Continue" : "Finish setup to continue",
                                  enabled: gate.allRequiredGranted) {
                 gate.continueNow()
             }
@@ -49,7 +49,7 @@ struct ComputerUseGateView: View {
 
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 10)).foregroundStyle(Theme.Ink.label)
-                Text("Private by design. Your files never leave this Mac.")
+                Text("Screenshots go to your selected AI, never a Sentient server.")
                     .font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
             }
             .frame(maxWidth: .infinity)
@@ -109,7 +109,7 @@ struct SentientPermissionRows: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            if gate.backend == .openAI, !gate.setup.ready {
+            if gate.backend == .openAI, !gate.setup.ready || !CodexSetup.shared.computerUseReady {
                 SettingsGroup(label: "Computer use") {
                     StatusLine(title: "Set up computer use",
                                health: gate.setup.isInstalling ? .warn : .bad,

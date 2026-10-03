@@ -56,7 +56,8 @@ final class ComputerUseGate {
             // installation before starting the daemon; the permission gate checks the grants.
             return sentientAccessibility
         case .openAI:
-            return setup.ready && backend.isInstalled && helperAccessibility && helperScreen && automation == .granted
+            return CodexSetup.shared.computerUseReady && setup.ready && backend.isInstalled
+                && helperAccessibility && helperScreen && automation == .granted
         }
     }
 

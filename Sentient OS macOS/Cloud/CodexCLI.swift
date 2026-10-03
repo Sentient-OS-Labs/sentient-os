@@ -24,6 +24,7 @@
 
 import Foundation
 import os
+import Darwin
 
 actor CodexCLI {
 
@@ -788,9 +789,8 @@ actor CodexCLI {
         return env
     }
 
-    /// Computer-use argv for the existing streaming `codex exec` path. ChatGPT receives the
-    /// required native OpenAI MCP client; custom endpoints retain the CUA vision proxy and shim.
-    /// FrontierRun supplies the selected runtime's manual. User config stays isolated while
+    /// Computer-use argv for the shared streaming `codex exec` path and required native MCP client.
+    /// FrontierRun supplies the native runtime's manual. User config stays isolated while
     /// hosted/direct connector policies and the speed preference remain attached to each run.
     /// Computer-use approval bypass is confined to this user-fired path, with one task and STOP.
     /// Optional screenshots precede --skip-git-repo-check to terminate -i's variadic arguments.
@@ -802,19 +802,13 @@ actor CodexCLI {
     /// delete/trash-class tools are stripped from the surface entirely. An id the account
     /// doesn't carry makes the strip an inert no-op (measured), so unlinked chips cost nothing.
     static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
-                               effortArg: String, socketPath: String?) -> [String] {
-        var args = execArguments() + ["--dangerously-bypass-approvals-and-sandbox",
+                               effortArg: String,
+                               providerOverrides: [String] = []) -> [String] {
+        var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
-                    "--ignore-user-config"]
-        let computerOverrides: [String]
-        if ComputerUseBackend.current == .openAI {
-            computerOverrides = OpenAIComputerUse.codexOverrides
-        } else {
-            precondition(socketPath != nil, "CUA tasks require the host-owned socket")
-            computerOverrides = CuaDriver.codexOverrides(socketPath: socketPath!)
-        }
-        for override in computerOverrides { args += ["-c", override] }
+                    "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
+        for override in OpenAIComputerUse.codexOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
             var hooks: [HostedToolPolicy.Rule] = []
@@ -845,6 +839,7 @@ actor CodexCLI {
         if ModelBackend.current == .custom {
             for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
         }
+        for override in providerOverrides { args += ["-c", override] }
         if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
         args += ["--skip-git-repo-check", prompt]
         return args
@@ -853,51 +848,49 @@ actor CodexCLI {
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
-        var beganCuaSession = false
-        // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
-        // per run, so a change applies to the very next fire with no restart. backendTuned: on the
-        // custom backend the user's endpoint model + its ONE reasoning level drive computer use
-        // (verified end-to-end via OpenRouter 2026-07-24); on ChatGPT, computer use is Plus-gated
-        // but dev tools can still reach this on a free account — same downshift.
+        let backend = ModelBackend.current
         let (model, effort) = ComputerUseSpeed.current.codexModelAndEffort
-        let (modelID, effortArg) = Self.backendTuned(model: model, effort: effort)
+        let (modelID, effortArg) = backend == .claude ? ClaudeCLI.agentTuned() : Self.backendTuned(model: model, effort: effort)
+        var bridge: ClaudeSubscriptionBridge?
         do {
-            // Same pre-spawn guard as `run` — this spine passes the prompt as ARGV, where an
-            // oversized prompt dies even earlier (ARG_MAX) with an unhelpful spawn error.
-            if prompt.utf8.count > Self.promptByteCap {
-                throw CLIError.inputTooLarge(chars: prompt.utf8.count)
-            }
-            guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-            let runtime = ComputerUseBackend.current
-            guard await ComputerUseSetup.instance(for: runtime).ensureInstalled() else {
+            if prompt.utf8.count > Self.promptByteCap { throw CLIError.inputTooLarge(chars: prompt.utf8.count) }
+            guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
                 try Task.checkCancellation()
-                throw CLIError.notAvailable(.notWorking("computer use is not set up; open Permissions & Health"))
+                let error = await ComputerUseSetup.instance(for: .openAI).failure
+                throw error ?? OpenAIComputerUse.RuntimeError.incomplete
             }
             try Task.checkCancellation()
-            var socket: String?
-            switch runtime {
-            case .openAI:
-                break   // ensureInstalled verified the signature and MCP handshake above
-            case .cua:
-                guard let endpoint = await CuaDriverHost.shared.ensureRunning() else {
-                    throw CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
-                }
-                guard await CuaDriverHost.shared.beginAgentSession() else {
-                    throw CLIError.notAvailable(.notWorking("cua-driver session did not start"))
-                }
-                socket = endpoint
-                beganCuaSession = true
+            guard let bin = Self.locateBinary() else {
+                throw CLIError.notAvailable(.notWorking("Codex CLI is required for computer use; prepare it in Permissions & Health"))
             }
-            try Task.checkCancellation()
-
-            // The selected runtime is registered per run. User plugin configuration cannot
-            // replace its tool connection; hosted and direct connector policy is preserved.
+            var overrides: [String] = []
+            var environment: [String: String] = [:]
+            if backend == .claude {
+                guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+                let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName })
+                let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
+                    timeout: timeout, namespaces: namespaces, onProgress: onLine)
+                bridge = relay
+                let configuration = try await relay.start()
+                overrides = configuration.overrides
+                environment = configuration.environment
+            }
             let args = Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
-                                           modelID: modelID, effortArg: effortArg,
-                                           socketPath: socket)
-            let modelTag = ModelBackend.current == .custom ? "custom" : modelID
-            Log("codex exec: start feature=computer runtime=\(runtime.rawValue) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
-            let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
+                modelID: modelID, effortArg: effortArg, providerOverrides: overrides)
+            let modelTag = backend == .custom ? "custom" : modelID
+            Log("codex exec: start feature=computer runtime=openAI model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
+            let ownedBridge = bridge
+            let out = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await Self.executeStreaming(binary: bin, args: args, timeout: timeout,
+                    extraEnv: environment, onLine: onLine)
+            } onCancel: {
+                // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
+                Task { await ownedBridge?.stop() }
+            }
+            try Task.checkCancellation()
+            if let error = await bridge?.failure { throw error }
+            await bridge?.stop()
             Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
                 let detail = Self.failureDetail(out)
@@ -906,22 +899,14 @@ actor CodexCLI {
             }
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
-            if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
-            beganCuaSession = false
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
-            if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
-            // §7.9: computer-use is the full-capability path (bypass-sandbox, user-fired), so a
-            // genuine failure is worth a structured event. Case name only — and never on a cancelled
-            // Task (the user's STOP kills codex → non-zero exit, which is not a failure; field-found
-            // polluting Sentry 2026-07-12).
-            if !Task.isCancelled {
-                let ms = Int(Date().timeIntervalSince(t0) * 1000)
-                Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
-                emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                 modelID: modelID, effort: effortArg, resumed: false, durationMS: ms,
-                                 timeoutS: Int(timeout))
-            }
+            await bridge?.stop()
+            if Task.isCancelled { throw CancellationError() }
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
+            emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
+                modelID: modelID, effort: effortArg, resumed: false, durationMS: ms, timeoutS: Int(timeout))
             throw error
         }
     }
@@ -1390,14 +1375,19 @@ actor CodexCLI {
     static func executeAsync(binary: String, args: [String], stdinText: String?,
                              cwd: String?, timeout: TimeInterval,
                              extraEnv: [String: String] = [:],
+                             includeCustomProviderKey: Bool = true,
+                             terminationGrace: TimeInterval = 1,
+                             retainStdoutLine: (@Sendable (String) -> Bool)? = nil,
                              onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
-        let holder = ProcHolder()
+        let holder = ProcHolder(terminationGrace: terminationGrace)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
                     do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
                                                             cwd: cwd, timeout: timeout, extraEnv: extraEnv,
+                                                            includeCustomProviderKey: includeCustomProviderKey,
+                                                            retainStdoutLine: retainStdoutLine,
                                                             onStdoutLine: onStdoutLine, procHolder: holder)) }
                     catch { cont.resume(throwing: error) }
                 }
@@ -1411,6 +1401,8 @@ actor CodexCLI {
     private static func execute(binary: String, args: [String], stdinText: String?,
                                 cwd: String?, timeout: TimeInterval,
                                 extraEnv: [String: String] = [:],
+                                includeCustomProviderKey: Bool = true,
+                                retainStdoutLine: (@Sendable (String) -> Bool)? = nil,
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,
                                 procHolder: ProcHolder? = nil) throws -> ExecResult {
         let proc = Process()
@@ -1429,12 +1421,15 @@ actor CodexCLI {
         // the pane's pre-activation Test Connection probes the custom path while ChatGPT is
         // still the active backend. (codex hard-errors on an unset/empty env_key var; a value
         // here also blocks the ChatGPT-token fallthrough on keyless local servers.)
-        env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
+        if includeCustomProviderKey { env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue }
         env.merge(extraEnv) { _, new in new }
         proc.environment = env
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
+        // STOP or a failed launch can close stdin while a large image prompt is still writing.
+        // Treat that as a failed write on this owned pipe, never SIGPIPE in the app process.
+        _ = fcntl(inPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         proc.standardInput = inPipe
         proc.standardOutput = outPipe
         proc.standardError = errPipe
@@ -1452,7 +1447,7 @@ actor CodexCLI {
         drained.enter()
         DispatchQueue.global(qos: .utility).async {
             let handle = outPipe.fileHandleForReading
-            guard let onStdoutLine else {
+            guard onStdoutLine != nil || retainStdoutLine != nil else {
                 outDrain.set(handle.readDataToEndOfFile())     // no streaming → drain whole
                 drained.leave(); return
             }
@@ -1460,18 +1455,30 @@ actor CodexCLI {
             while true {
                 let chunk = handle.availableData
                 if chunk.isEmpty { break }
-                buf.append(chunk); all.append(chunk)
+                buf.append(chunk)
+                if retainStdoutLine == nil { all.append(chunk) }
                 while let nl = buf.firstIndex(of: 0x0A) {
-                    onStdoutLine(String(decoding: buf[..<nl], as: UTF8.self))
+                    let line = String(decoding: buf[..<nl], as: UTF8.self)
+                    onStdoutLine?(line)
+                    if retainStdoutLine?(line) == true { all.append(Data((line + "\n").utf8)) }
                     buf = Data(buf[buf.index(after: nl)...])
                 }
             }
-            if !buf.isEmpty { onStdoutLine(String(decoding: buf, as: UTF8.self)) }
+            if !buf.isEmpty {
+                let line = String(decoding: buf, as: UTF8.self)
+                onStdoutLine?(line)
+                if retainStdoutLine?(line) == true { all.append(buf) }
+            }
             outDrain.set(all)
             drained.leave()
         }
 
-        do { try proc.run() } catch { throw CLIError.launchFailed("\(error)") }
+        do { try proc.run() } catch {
+            try? inPipe.fileHandleForWriting.close()
+            try? outPipe.fileHandleForWriting.close()
+            try? errPipe.fileHandleForWriting.close()
+            throw CLIError.launchFailed("\(error)")
+        }
         procHolder?.set(proc)   // expose to the cancellation handler (a card's STOP)
 
         // Feed the prompt over stdin on its own queue: prompts can be hundreds of KB (whole
@@ -1487,11 +1494,12 @@ actor CodexCLI {
         let timedOut = OSAllocatedUnfairLock(initialState: false)
         let watchdog = DispatchWorkItem { [weak proc] in
             timedOut.withLock { $0 = true }
-            proc?.terminate()
+            if let procHolder { procHolder.terminate() } else { proc?.terminate() }
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
         proc.waitUntilExit()
+        procHolder?.clear()
         watchdog.cancel()
         drained.wait()
 
@@ -1512,8 +1520,23 @@ actor CodexCLI {
     private final class ProcHolder: @unchecked Sendable {
         private let lock = NSLock()
         private var proc: Process?
-        func set(_ p: Process) { lock.lock(); proc = p; lock.unlock() }
-        func terminate() { lock.lock(); let p = proc; lock.unlock(); if let p, p.isRunning { p.terminate() } }
+        private var cancelled = false
+        private let terminationGrace: TimeInterval
+        init(terminationGrace: TimeInterval = 1) { self.terminationGrace = terminationGrace }
+        func set(_ p: Process) {
+            lock.lock(); proc = p; let shouldStop = cancelled; lock.unlock()
+            if shouldStop { terminate() }
+        }
+        func clear() { lock.lock(); proc = nil; lock.unlock() }
+        func terminate() {
+            lock.lock(); cancelled = true; let p = proc; lock.unlock()
+            guard let p, p.isRunning else { return }
+            p.terminate()
+            // A provider or MCP client must not hold STOP indefinitely by ignoring SIGTERM.
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + terminationGrace) { [weak p] in
+                if let p, p.isRunning { kill(p.processIdentifier, SIGKILL) }
+            }
+        }
     }
 
     /// Streaming sibling of `execute`: same env / PATH / watchdog, but it pumps each output LINE
@@ -1578,16 +1601,21 @@ actor CodexCLI {
                     }
                 }
 
-                do { try proc.run() } catch { cont.resume(throwing: CLIError.launchFailed("\(error)")); return }
+                do { try proc.run() } catch {
+                    try? outPipe.fileHandleForWriting.close()
+                    try? errPipe.fileHandleForWriting.close()
+                    cont.resume(throwing: CLIError.launchFailed("\(error)")); return
+                }
                 holder.set(proc)        // expose to the cancellation handler (STOP)
 
                 let timedOut = OSAllocatedUnfairLock(initialState: false)
-                let watchdog = DispatchWorkItem { [weak proc] in
-                    timedOut.withLock { $0 = true }; proc?.terminate()
+                let watchdog = DispatchWorkItem {
+                    timedOut.withLock { $0 = true }; holder.terminate()
                 }
                 DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
                 proc.waitUntilExit()
+                holder.clear()
                 watchdog.cancel()
                 group.wait()
 

@@ -51,7 +51,9 @@ enum HealthCaution {
                 case .launchAtLogin:  return "Launch at login is off, so I won't be awake for the 3 AM run."
                 }
             case .codexMissing:
-                return "Codex is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
+                return ModelBackend.current == .claude
+                    ? "Computer use needs Codex CLI. A quick setup in Permissions & Health fixes it."
+                    : "Codex is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
             case .codexSignedOut:
                 return "Codex is signed out, so proactive work is paused. Log back in and I'll catch up tonight."
             case .codexOutdated:
@@ -144,6 +146,8 @@ enum HealthCaution {
             if engineIsClaude {
                 if !engineBinaryPresent { return .claudeMissing }
                 if await !claudeLoggedIn(force: forceCodexRecheck) { return .claudeSignedOut }
+                if computerUseEverReady, CodexCLI.locateBinary() == nil { return .codexMissing }
+                if CodexSetup.shared.outdated { return .codexOutdated }
             } else {
                 if !engineBinaryPresent { return .codexMissing }
                 if ModelBackend.current == .chatgpt,

@@ -8,7 +8,7 @@ user's standing instructions, the app-support root, and the full uninstall teard
 
 | File | Job |
 |---|---|
-| `Permissions.swift` | Full Disk Access detection + deep link + relaunch; Sentient's own Accessibility and Screen Recording status (the cua driver's action grants); TCC status reads; official Automation preflight/request and scoped uninstall reset; the System Settings deep links. |
+| `Permissions.swift` | Full Disk Access detection + deep link + relaunch; Sentient screen-context permission and legacy Accessibility status; TCC status reads; official Automation preflight/request and scoped uninstall reset; the System Settings deep links. |
 | `HealthCaution.swift` | The home's LIVE health banner: probes current state, most severe first, and reports the worst un-muted issue. |
 | `Notify.swift` | The notification permission ask and `now(title:body:)`. |
 | `DisplayAwake.swift` | Keeps the screen on during long foreground work (onboarding, a home-launched first analysis) via `ProcessInfo.beginActivity`. Not the root `pmset` path. |
@@ -27,17 +27,13 @@ fresh process, `relaunch()` (`open -n` the bundle, then terminate). FDA can read
 launched from Terminal (TCC attribution). Onboarding's Grant… uses the floating drag panel with Sentient
 itself as the card (see the Permission Gate doc).
 
-## Sentient's own action grants (the cua driver's hands and eyes)
+## Sentient's screen context
 
-The cua driver runs inside Sentient's TCC responsibility chain (see the Driver doc), so acting on the
-Mac needs exactly two grants and both are **Sentient's own**: **Accessibility** (click, type — probed
-live with `AXIsProcessTrusted`, granted through the native system prompt) and **Screen Recording**
-(see the screen — `hasScreenRecording()` via `CGPreflightScreenCaptureAccess`, never prompts; granted
-through the drag panel with Sentient as the card, since `CGRequestScreenCaptureAccess` does not
-reliably add the app to the list on Tahoe). A preflight stays false until the process is replaced, so
-the FDA-backed TCC read (`isTCCGranted`) rides along as the live truth the health rows use — and a
-grant landing marks the daemon for replacement, because macOS caches TCC answers per process. Screen
-Recording also gates Sidekick's fire-time screen stills.
+Sentient's own Screen Recording grant supplies Sidekick's screen snapshots. `hasScreenRecording()`
+uses a non-prompting system preflight; the floating guide carries the Sentient app into System
+Settings. The FDA-backed read supplements a preflight that can remain stale until relaunch.
+Sentient's old CUA Accessibility grant is retained only in legacy permission and cleanup code.
+Active computer tasks use the native helper's action grants for every model backend.
 
 `isTCCGranted(service:clientBundleID:)` reads `auth_value == 2` from the right database for the
 service (the SIP-protected system database for Accessibility, ScreenCapture, AllFiles, ListenEvent,
@@ -45,7 +41,7 @@ PostEvent; the user database otherwise).
 
 ## Native computer-use grants
 
-ChatGPT computer use runs through OpenAI's signed helper. Sentient carries the Apple Events
+Every active model backend runs computer use through OpenAI's signed helper. Sentient carries the Apple Events
 entitlement and uses `AEDeterminePermissionToAutomateTarget` off the main thread to check or request
 Automation access. The helper is started through LaunchServices before querying, so a stopped target
 is not mistaken for denied access. Background checks do not prompt. Visible permission setup requests unasked consent through the macOS dialog, with no redundant Automation row; the user chooses Allow in that dialog.
