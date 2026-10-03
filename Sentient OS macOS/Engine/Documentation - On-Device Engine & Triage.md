@@ -12,7 +12,7 @@ except `ModelDownload` (the one-time model fetch from Hugging Face).
 | File | Job |
 |---|---|
 | `Engine.swift` | The `Engine` actor: one native `LiteRTLM.Engine` per batch, `load()` / `generate()` / `reload()` / `unload()`. The only place that imports `LiteRTLM`. |
-| `Triage.swift` | Builds the per-item prompt (file, DM chat, group chat), parses the JSON reply, and maps it to a `Verdict` plus title and summary. Fail-closed. |
+| `Triage.swift` | Builds the per-item prompt (file, DM chat, group chat, Apple Calendar), parses the JSON reply, and maps it to a `Verdict` plus title and summary. Fail-closed. |
 | `Verdict.swift` | `survivor` / `junk` / `sensitive`. |
 | `PIIScan.swift` | Regex backstop behind the model: SSN, Luhn-valid card number, passport number in a would-be survivor's summary or title drops the whole item as sensitive. |
 | `ModelLocator.swift` | Finds `gemma-4-E4B-it.litertlm` on this Mac (env override in DEBUG → app bundle → Application Support → the repo root in DEBUG). |
@@ -55,12 +55,26 @@ Every item (a file, a note, or a chat window) becomes one prompt and one JSON re
 {"summary":"…","title":"…","junk":true|false}   optionally followed by  ,"sensitive":true
 ```
 
-The model is asked to write the summary FIRST, then judge. Three prompt flavours, all sharing this
+The model is asked to write the summary FIRST, then judge. Four prompt flavours, all sharing this
 contract so `parse()` / `decide()` are shared:
 
 - **File prompt** (files and Apple Notes): judges one document by path, creation date, and either the extracted text or the attached image. Explains that "junk" only means "not worth the knowledge base", never deletion.
 - **DM chat prompt**: one slice of a 1:1 conversation. "Me" is the user; the other party's "I" is never the user. Default to junk; keep only durable life knowledge.
 - **Group chat prompt**: much stricter. Attribution is the whole game: other members' introductions, jobs, wins, and news are never the user's. Deep participation in a discussion is still junk unless "Me" stated a concrete fact about their own life. Every fact in the summary must name whose it is.
+
+- **Apple Calendar prompt**: one native event as untrusted JSON. Keep concrete scheduled commitments,
+  preserve date/status uncertainty, and reject generic holidays and instruction-only text. Medical,
+  intimate, credential-bearing, and other highly private events are dropped in full. Dates alone do
+  not justify a retained summary.
+
+The pipeline calls `decide(_:for:)`. For Apple Calendar, it checks raw input for high-risk identifiers
+and labelled credentials, checks output for credentials, and rejects explicit classifier overrides.
+JSON fields are decoded before these checks. Calendar replies require a complete JSON object with
+string summary/title and explicit boolean junk/sensitive flags; missing or mistyped fields fail closed.
+Sensitive calendar outcomes also discard their title
+and summary in memory. These narrow deterministic checks supplement the model; they are not a
+complete detector for arbitrary secrets or prompt injection. Other sources keep their mixed-content
+policy. Calendar parse failures invalidate the pending snapshot instead of advancing its checkpoint.
 
 Shared privacy rules in every flavour: the summary is kept and may be shared with the user's other AIs,
 so it must omit raw private specifics (card, SSN, passport, account numbers, passwords, exact medical

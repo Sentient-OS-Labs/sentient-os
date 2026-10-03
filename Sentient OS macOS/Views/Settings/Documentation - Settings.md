@@ -26,15 +26,21 @@ measure, one green.
 
 ## The panes
 
-**Knowledge Sources.** The real source picker on the SAME keys as the home popover, onboarding, Dev
-Tools, and the 3 AM run (`SourceSelection`, `CustomRoots`). Folders (Desktop / Downloads / Documents
-toggles, persistent custom roots with ✕, "+ Add Folder" through an `NSOpenPanel`), Chats & Notes
-(WhatsApp, hidden when not installed, and iMessage open the shared `ChatPicker` with chat counts inline;
-Apple Notes toggles), and Through Your ChatGPT / Through Your Claude (the header follows the live
-engine; Gmail, Google Calendar → `CloudConnectSheet`, which opens the engine's own connector page —
-see the Sources Cloud doc; locked chips with a hover tip on free/go plans and custom backends). A fix-it line appears when Full Disk
-Access is missing. The **four-selection minimum** (`SourceSelection.selectionCount`, shared with
-onboarding's ready screen) guards toggle-offs on the 4 → 3 drop and flashes the whisper amber.
+**Knowledge Sources.** The shared picker uses the same preferences as onboarding, the home,
+Dev Tools, and scheduled runs (`SourceSelection`, `CustomRoots`). Email & Calendar groups Gmail,
+Google Calendar, Apple Calendar, and curated Outlook connections. Chats opens the shared WhatsApp
+and iMessage pickers; More of your world includes Apple Notes and other curated connections. Folders
+provides standard-folder toggles and persistent custom roots through an `NSOpenPanel`. Hosted
+connection sheets follow the chosen frontier engine and its availability. A fix-it line appears when
+Full Disk Access is missing. The shared four-selection minimum guards direct toggle-offs in Settings
+and the onboarding ready step; an enabled Apple Calendar selection counts as one source.
+
+Apple Calendar appears in the shared **Email & Calendar** group and opens
+`Views/AppleCalendarConnectSheet.swift`. The sheet requests native permission only after the user
+presses Allow Calendar Access, then saves an explicit per-calendar selection. It supports refresh,
+clear, missing-calendar recovery, and a System Settings link after denial. Saving is disabled during
+analysis. The local source works on every frontier backend and does not require Full Disk Access.
+The sheet explains the read-only behavior and warns about duplicate hosted-calendar selections.
 
 **Frontier Model Choice.** Which engine powers the cloud ~10%: the shared engine pills and per-engine
 panels (`FrontierEnginePicker`, layout `.settingsGrid`); Settings' own ChatGPT panel activates with Use

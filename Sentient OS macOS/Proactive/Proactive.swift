@@ -235,9 +235,10 @@ actor Proactive {
         // The user's LIVE calendar (last 7 days + next 24h, ALL events), pre-fetched as text so PART 1
         // stays tool-free/hermetic. Only present when Calendar is connected (CalendarConnect.fetch…).
         let calendarBlock: String = {
-            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return "" }
-            if calendarContextScoped { return CalendarContext.promptBlock(ctx) }
-            return """
+            let localPolicy = recent.contains { $0.kind == .appleCalendar } ? CalendarContext.localSnapshotPolicy : ""
+            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return localPolicy }
+            if calendarContextScoped { return localPolicy + CalendarContext.promptBlock(ctx) }
+            return localPolicy + """
 
             ## THE USER'S LIVE CALENDAR (every event — last 7 days + next 24 hours)
             This is the user's actual calendar right now (not a summary). Use it to ground \
