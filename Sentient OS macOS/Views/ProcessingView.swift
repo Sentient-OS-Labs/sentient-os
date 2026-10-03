@@ -27,6 +27,7 @@ enum RunSource: Hashable {
     case whatsapp(chatJIDs: Set<String>)    // the opt-in chats to analyze
     case imessage(chatGUIDs: Set<String>)   // the opt-in chats to analyze
     case notes                              // all notes (newest-1000 cap inside the source)
+    case appleMail(accounts: Set<String>)
 
     var label: String {
         switch self {
@@ -34,6 +35,7 @@ enum RunSource: Hashable {
         case .whatsapp:        return "WhatsApp"
         case .imessage:        return "iMessage"
         case .notes:           return "Apple Notes"
+        case .appleMail:       return "Apple Mail"
         }
     }
 
@@ -49,6 +51,7 @@ enum RunSource: Hashable {
             case .whatsapp(let jids):  connectors.append(WhatsAppConnector(chatJIDs: jids))
             case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
             case .notes:               connectors.append(NotesConnector())
+            case .appleMail(let accounts): connectors.append(AppleMailConnector(accounts: accounts))
             case .files:               break   // rolled into FilesConnector(roots:)
             }
         }
@@ -460,9 +463,13 @@ struct ProcessingView: View {
             Image(systemName: "checkmark.circle.fill").font(.system(size: 58))
                 .foregroundStyle(Theme.verdictColor(.survivor))
             VStack(spacing: 6) {
-                Text("Analysis complete").display(28).foregroundStyle(.white)
+                Text(progress.mailIncomplete || progress.mailDeferred > 0 ? "Analysis saved" : "Analysis complete").display(28).foregroundStyle(.white)
                 Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.failed) failed")
                     .font(.subheadline).foregroundStyle(.white.opacity(0.55))
+                if progress.mailIncomplete || progress.mailDeferred > 0 {
+                    Text(UserDefaults.standard.string(forKey: AppleMailHealth.key) ?? "Apple Mail will resume during the next analysis.")
+                        .font(.caption).foregroundStyle(Theme.secondary).frame(maxWidth: 430)
+                }
             }
             Button(action: onDone) {
                 Text("Done").font(.headline).foregroundStyle(.black)
@@ -1044,4 +1051,3 @@ extension ProcessingView {
         .frame(width: 1160, height: 780)
 }
 #endif
-

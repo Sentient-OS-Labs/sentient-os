@@ -113,8 +113,16 @@ actor ProactiveExecutor {
                 r = .notFireable("This card's connector isn't connected anymore; nothing was fired.")
             }
         case .computer:
-            r = hasRecipe(recipe) ? await fireComputer(routing: routing, content: content, progress: progress)
-                                  : .notFireable("No computer-use recipe to fire.")
+            if let references = action.appleMailReferences,
+               !(await AppleMailEvidence.canExecute(references)) {
+                r = .notFireable("The Apple Mail message changed or is unavailable. Analyze again before using this card.")
+            } else if action.target.localizedCaseInsensitiveContains("apple mail") && action.appleMailReferences == nil {
+                r = .notFireable("This Apple Mail card has no current local evidence. Analyze again to prepare it.")
+            } else {
+                let mailCheck = action.appleMailReferences == nil ? "" : "In Apple Mail, first verify the current thread, sending account and recipient, and check whether this was already handled. If ambiguous, stop. Never open attachments. "
+                r = hasRecipe(recipe) ? await fireComputer(routing: mailCheck + routing, content: content, progress: progress)
+                                      : .notFireable("No computer-use recipe to fire.")
+            }
         case .research:
             r = .notFireable("This is a briefing to read; there's nothing to fire.")
         }
