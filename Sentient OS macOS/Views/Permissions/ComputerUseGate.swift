@@ -44,6 +44,9 @@ final class ComputerUseGate {
     private(set) var requestingAutomation = false
     private(set) var checkingAutomation = false
     private(set) var nativePermissionError: String?
+    private(set) var nativeRestartRequired = false
+    private(set) var restartingNative = false
+    var nativeRuntimeReady: Bool { OpenAIComputerUseRuntime.shared.isReady }
     @ObservationIgnored private var automationProbe: Task<Void, Never>?
     @ObservationIgnored private var lastAutomationProbe: Date?
     var setup: ComputerUseSetup { .instance(for: backend) }
@@ -57,7 +60,7 @@ final class ComputerUseGate {
             return sentientAccessibility
         case .openAI:
             return CodexSetup.shared.computerUseReady && setup.ready && backend.isInstalled
-                && helperAccessibility && helperScreen && automation == .granted
+                && helperAccessibility && helperScreen && automation == .granted && nativeRuntimeReady
         }
     }
 
@@ -76,23 +79,60 @@ final class ComputerUseGate {
         requestingAutomation = true
         nativePermissionError = nil
         Task {
-            defer { requestingAutomation = false }
+            defer { requestingAutomation = false; lastAutomationProbe = Date() }
             do {
-                guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
+                let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
+                guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled(nativeConfiguration: configuration) else {
                     throw OpenAIComputerUse.RuntimeError.incomplete
                 }
                 _ = await automationProbe?.value
-                try await OpenAIComputerUse.launchForPermissionRequest()
-                automation = await Permissions.nativeAutomationState(ask: true)
-                lastAutomationProbe = Date()
-                if automation == .unavailable {
-                    nativePermissionError = "The macOS permission could not be checked. Try again."
-                }
+                try await checkNativeAccess(ask: true, configuration: configuration)
                 refresh()
             } catch {
-                nativePermissionError = error.localizedDescription
+                recordNativeFailure(error)
             }
         }
+    }
+
+    /// Explicit recovery for an existing helper with stale startup settings. The runtime checks
+    /// that Sentient is idle and never force-kills or stops a different installed helper bundle.
+    func restartComputerUse() {
+        guard backend == .openAI, !requestingAutomation, !restartingNative else { return }
+        requestingAutomation = true
+        restartingNative = true
+        Task {
+            defer { requestingAutomation = false; restartingNative = false; lastAutomationProbe = Date() }
+            _ = await automationProbe?.value
+            do {
+                let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
+                try await OpenAIComputerUseRuntime.shared.restart(configuration: configuration)
+                try await checkNativeAccess(ask: true, configuration: configuration)
+            } catch { recordNativeFailure(error) }
+        }
+    }
+
+    private func checkNativeAccess(ask: Bool, configuration supplied: OpenAIComputerUse.Configuration? = nil) async throws {
+        let configuration: OpenAIComputerUse.Configuration
+        if let supplied { configuration = supplied }
+        else { configuration = try await OpenAIComputerUse.Configuration.resolveForSetup() }
+        _ = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration)
+        automation = await Permissions.nativeAutomationState(ask: ask)
+        if automation == .granted {
+            try await OpenAIComputerUseRuntime.shared.check(configuration: configuration)
+            nativePermissionError = nil
+            nativeRestartRequired = false
+        } else {
+            nativeRestartRequired = false
+            nativePermissionError = automation == .unavailable ? "The macOS permission could not be checked. Try again." : nil
+        }
+    }
+
+    private func recordNativeFailure(_ error: Error) {
+        guard !Task.isCancelled, !(error is CancellationError) else { return }
+        OpenAIComputerUseRuntime.shared.invalidate()
+        nativePermissionError = error.localizedDescription
+        let failure = error as? OpenAIComputerUse.RuntimeError
+        nativeRestartRequired = failure == .restartRequired || failure == .backendUnavailable
     }
 
     // MARK: The gate
@@ -208,11 +248,9 @@ final class ComputerUseGate {
         automationProbe = Task {
             defer { automationProbe = nil; checkingAutomation = false; lastAutomationProbe = Date() }
             do {
-                try await OpenAIComputerUse.launchForPermissionRequest()
-                automation = await Permissions.nativeAutomationState()
-                if automation == .granted { nativePermissionError = nil }
+                try await checkNativeAccess(ask: false)
             } catch {
-                automation = .unavailable
+                recordNativeFailure(error)
             }
         }
     }

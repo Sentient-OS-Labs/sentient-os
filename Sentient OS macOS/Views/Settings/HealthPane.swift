@@ -410,9 +410,9 @@ struct HealthPane: View {
                                health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
                                note: codex.loggedIn ? "logged in"
                                    : codex.loggingIn ? "finish in your browser" : "not logged in",
-                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
+                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Your Codex login stays in Sentient’s private folder on this Mac.",
                                fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
-                               fix: codex.loggedIn ? nil : { codex.startLogin() })
+                               fix: codex.loggedIn ? nil : { Task { await codex.startLogin() } })
                     failureLine(codex.loginStatusLine)
                     if codex.loggedIn, let plan {
                         StatusLine(title: "ChatGPT plan",
@@ -466,8 +466,8 @@ struct HealthPane: View {
                        : (codex.version.map { "installed · \($0)" } ?? "installed"),
                    tip: backend == .claude
                        ? "Runs Sidekick's computer actions using your Claude subscription. A ChatGPT account is not required."
-                       : "OpenAI's official Codex command line tool. Runs Sentient's requests using your selected frontier model. Sentient keeps its managed installation up to date.",
-                   fixTitle: codex.installed ? "Update…" : "Install…",
+                       : "Sentient’s verified copy of Codex, using your selected frontier model. New versions arrive with Sentient updates. Repair preserves your login and saved tasks.",
+                   fixTitle: codex.installed ? "Repair…" : "Install…",
                    fix: codex.installing ? nil : { Task { await codex.installCodex() } })
         failureLine(codex.installStatus)
     }

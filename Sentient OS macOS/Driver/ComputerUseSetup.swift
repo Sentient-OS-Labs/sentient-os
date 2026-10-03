@@ -125,7 +125,7 @@ final class ComputerUseSetup {
                 verificationFailed = false
                 ready = true
                 lastInstallSucceeded = true
-                status = "✓ Computer use ready"
+                status = backend == .openAI ? "✓ Computer use installed" : "✓ Computer use ready"
                 progress = .ready
                 if updateNotice == .updating { updateNotice = .ready }
                 return true
@@ -144,19 +144,19 @@ final class ComputerUseSetup {
     /// The install's own network deadline is authoritative; a slow connection must not hit the
     /// former two-minute waiter ceiling while the same download legitimately continues.
     @discardableResult
-    func ensureInstalled() async -> Bool {
+    func ensureInstalled(nativeConfiguration: OpenAIComputerUse.Configuration? = nil) async -> Bool {
         if backend == .openAI, await !CodexSetup.shared.ensureComputerUseCLI() {
-            failure = OpenAIComputerUse.RuntimeError.codexUnavailable
+            failure = OpenAIComputerUse.RuntimeError.cliUnavailable
             status = "Computer use needs Codex CLI. Prepare it in Permissions & Health."
             return false
         }
         if !isInstalling, backend.isInstalled {
             if backend == .openAI {
-                do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL) }
+                do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL, configuration: nativeConfiguration) }
                 catch {
                     if !Task.isCancelled {
                         failure = error
-                        verificationFailed = true
+                        verificationFailed = (error as? OpenAIComputerUse.RuntimeError) != .cliUnavailable
                         ready = false
                         status = "✗ " + error.localizedDescription
                     }
@@ -192,7 +192,7 @@ final class ComputerUseSetup {
         switch backend {
         case .openAI:
             guard await CodexSetup.shared.ensureComputerUseCLI() else {
-                throw OpenAIComputerUse.RuntimeError.codexUnavailable
+                throw OpenAIComputerUse.RuntimeError.cliUnavailable
             }
             try await OpenAIComputerUseSetup.install(force: force, onProgress: onProgress, onLine: onLine)
         case .cua:

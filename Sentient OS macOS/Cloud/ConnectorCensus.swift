@@ -227,7 +227,10 @@ nonisolated enum ConnectorCensus {
     private static func storageKey(for origin: DetectedConnector.Origin) -> String? {
         switch origin {
         case .claude:  return "mcp.connectors.claude"
-        case .chatgpt: return "mcp.connectors.chatgpt"
+        case .chatgpt:
+            if CodexRuntimeMigration.isPending { return "mcp.connectors.chatgpt" }
+            guard let account = CodexRuntime.accountIdentity else { return nil }
+            return "mcp.connectors.chatgpt.bundled.\(account)"
         case .direct:  return nil   // DirectMCPStore owns this tier; it is not a CLI census.
         }
     }
@@ -350,13 +353,13 @@ nonisolated enum ConnectorCensus {
     /// Where codex records the account's linked apps. The sibling `created-by-me-remote/` holds
     /// the user's own custom apps and is skipped entirely (hidden in v1).
     private static var codexCacheRoot: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/plugins/cache/openai-curated-remote")
+        CodexRuntime.plugins
     }
 
     /// Scan the plugins cache. Presence IS the verdict — codex has no health probe — so every
     /// connector found reads healthy. Pure disk reads: no subprocess, no model, microseconds.
     static func listCodex(cacheRoot: URL = codexCacheRoot) -> [DetectedConnector] {
+        if cacheRoot == codexCacheRoot, !CodexRuntime.connectorCacheMatchesAccount { return [] }
         let fm = FileManager.default
         guard let slugs = try? fm.contentsOfDirectory(atPath: cacheRoot.path) else { return [] }
         let now = Date()

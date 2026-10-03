@@ -36,7 +36,8 @@ enum ConnectorReadPolicyTests {
                  .init(slug: "slack", displayName: "Slack", origin: .chatgpt,
                        serverURL: nil, catalogID: slackID, iconPath: nil, healthy: true, lastSeen: Date())]
             } ?? []
-            domain["mcp.connectors.chatgpt"] = try! JSONEncoder().encode(connectors)
+            let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.bundled." + $0 } ?? "mcp.connectors.chatgpt"
+            domain[codexKey] = try! JSONEncoder().encode(connectors)
             domain["mcp.connectors.claude"] = try! JSONEncoder().encode([
                 ConnectorCensus.DetectedConnector(slug: "slack", displayName: "Slack", origin: .claude,
                     serverURL: "https://mcp.slack.com/mcp", catalogID: nil, iconPath: nil, healthy: true, lastSeen: Date())])
@@ -157,7 +158,7 @@ enum ConnectorReadPolicyTests {
                     }
                 }
                 fixture["claude-slack-computer"] = try ModelBackend.$runOverride.withValue(.claude) {
-                    CodexCLI.agentArguments(prompt: "Synthetic fixture", imagePaths: [], modelID: "claude-sonnet-5-5", effortArg: "low")
+                    try CodexCLI.agentArguments(prompt: "Synthetic fixture", imagePaths: [], modelID: "claude-sonnet-5-5", effortArg: "low")
                 }
                 // Exercise the production action and computer-use deny recipes for the new
                 // reviewed mutation modes, using volatile synthetic inventories only.
@@ -182,7 +183,7 @@ enum ConnectorReadPolicyTests {
                         try ClaudeCLI.arguments(for: action, modelID: "haiku", effortArg: "low")
                     }
                     fixture["claude-" + slug + "-computer"] = try ModelBackend.$runOverride.withValue(.claude) {
-                        CodexCLI.agentArguments(prompt: "Synthetic fixture", imagePaths: [], modelID: "claude-sonnet-5-5", effortArg: "low")
+                        try CodexCLI.agentArguments(prompt: "Synthetic fixture", imagePaths: [], modelID: "claude-sonnet-5-5", effortArg: "low")
                     }
                     let computer = fixture["claude-" + slug + "-computer"]!
                     check(computer.first == "exec" && !computer.contains("--disallowedTools"), "Claude computer tasks use Codex; hosted connector actions retain Claude policy")

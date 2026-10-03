@@ -4,6 +4,7 @@
 // Doc: Documentation - Connected Email Accounts.md
 
 import Foundation
+import os
 
 nonisolated enum MailAccountProbe {
     static func discover(engine: MailAccount.Engine, provider: MailAccount.Provider? = nil) async throws -> [MailAccountCandidate] {
@@ -148,7 +149,9 @@ nonisolated enum MailAccountProbe {
 /// A bounded control channel. No model prompts or arbitrary tool calls are accepted.
 private nonisolated final class MailProbeProcess: @unchecked Sendable {
     private let condition = NSCondition()
+    private let cancellation = OSAllocatedUnfairLock(initialState: false)
     private let process = Process()
+    private var runtimeLease: CodexRuntime.FileLock?
     private let input = Pipe(), output = Pipe()
     private var replies: [String: [String: Any]] = [:]
     private var stopped = false
@@ -162,15 +165,19 @@ private nonisolated final class MailProbeProcess: @unchecked Sendable {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("sentient-mail-probe-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         self.directory = directory
-        process.executableURL = URL(fileURLWithPath: binary); process.arguments = arguments
+        runtimeLease = try CodexRuntime.executionLease(for: binary, cancelled: { self.cancellation.withLock { $0 } })
+        let binary = CodexRuntime.binaryAfterLease(binary)
+        if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = CodexRuntime.arguments(arguments, binary: binary)
         let env = ProcessInfo.processInfo.environment
         var sanitized = ["HOME": NSHomeDirectory(), "USER": env["USER"] ?? "",
                          "PATH": "\((binary as NSString).deletingLastPathComponent):/usr/bin:/bin:/usr/sbin:/sbin"]
         sanitized.merge(extraEnvironment) { _, new in new }
-        process.environment = sanitized; process.currentDirectoryURL = directory
+        process.environment = CodexRuntime.environment(sanitized, binary: binary); process.currentDirectoryURL = directory
         process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
-        process.terminationHandler = { [weak self] _ in self?.didExit() }
-        try process.run()
+        process.terminationHandler = { [weak self, runtimeLease] _ in runtimeLease?.unlock(); self?.didExit() }
+        do { try process.run() } catch { runtimeLease?.unlock(); throw error }
         DispatchQueue.global(qos: .utility).async { [self] in
             var buffer = Data()
             while true {
@@ -227,6 +234,7 @@ private nonisolated final class MailProbeProcess: @unchecked Sendable {
     }
     private func didExit() { condition.lock(); stopped = true; condition.broadcast(); condition.unlock() }
     func stop() {
+        cancellation.withLock { $0 = true }
         condition.lock(); stopped = true; let running = process.isRunning; condition.broadcast(); condition.unlock()
         if running {
             process.terminate()

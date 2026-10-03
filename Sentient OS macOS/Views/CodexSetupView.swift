@@ -53,14 +53,14 @@ struct CodexSetupView: View {
     private var installCard: some View {
         stepCard(1, "Install the Codex CLI", done: codex.installed) {
             Button { Task { await codex.installCodex() } } label: {
-                buttonLabel("arrow.down.circle.fill", codex.installed ? "Update Codex CLI" : "Install Codex CLI",
+                buttonLabel("arrow.down.circle.fill", codex.installed ? "Repair Codex CLI" : "Install Codex CLI",
                             busy: codex.installing)
             }
             .buttonStyle(.bordered).tint(Theme.Ink.green)
             .disabled(codex.installing)
 
             statusLine(codex.installStatus)
-            hint("Runs OpenAI's official installer (curl … | sh) → ~/.local/bin/codex. Updates in place if codex is already there.")
+            hint("Downloads Sentient’s verified Codex package into its own private folder. Repair preserves your login and saved tasks.")
         }
     }
 
@@ -70,7 +70,7 @@ struct CodexSetupView: View {
         stepCard(2, "Log in to Codex", done: codex.loggedIn) {
             if codex.loggedIn {
                 hint("Signed in with your OpenAI account. Codex is in every plan, free included, so there's no subscription to check.")
-                Button { codex.startLogin(force: true) } label: {
+                Button { Task { await codex.startLogin(force: true) } } label: {
                     buttonLabel("arrow.triangle.2.circlepath", "Log in again", busy: false)
                 }
                 .buttonStyle(.bordered).tint(Theme.secondary).controlSize(.small)
@@ -81,7 +81,7 @@ struct CodexSetupView: View {
                 }
                 .buttonStyle(.borderedProminent).tint(Theme.Ink.green)
             } else {
-                Button { codex.startLogin() } label: {
+                Button { Task { await codex.startLogin() } } label: {
                     buttonLabel("person.crop.circle.badge.checkmark", "Log in to Codex", busy: false)
                 }
                 .buttonStyle(.bordered).tint(Theme.Ink.green)
@@ -111,7 +111,7 @@ struct CodexSetupView: View {
             }
             statusLine(ComputerUseSetup.current.status)
             hint(ComputerUseBackend.current == .openAI
-                 ? "Downloads OpenAI's signed computer-use helper directly from OpenAI and reuses your Codex login."
+                 ? "Downloads the verified, signed computer-use helper from Sentient into its private Codex folder."
                  : "Downloads the pinned CUA driver, verifies its checksum and signature, and installs it for Sentient.")
         }
     }

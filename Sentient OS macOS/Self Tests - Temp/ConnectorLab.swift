@@ -1047,7 +1047,7 @@ enum ConnectorLab {
 
         Log("-- computer-use argv (placeholder prompt/socket; the 1.6 wall is live) --")
         show("codex agent",
-             CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-6-sol",
+             try! CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-6-sol",
                                      effortArg: "low"))
 
         Log("-- connected services block (live backend: \(ModelBackend.current.rawValue)) --")

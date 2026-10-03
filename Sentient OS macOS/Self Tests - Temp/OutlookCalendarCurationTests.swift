@@ -294,7 +294,7 @@ enum OutlookCalendarCurationTests {
                         }
                         let args: [String]
                         if kind == "computer" {
-                            args = CodexCLI.agentArguments(prompt: "Synthetic policy fixture", imagePaths: [],
+                            args = try CodexCLI.agentArguments(prompt: "Synthetic policy fixture", imagePaths: [],
                                 modelID: backend == .claude ? "claude-sonnet-5-5" : "gpt-6-luna", effortArg: "low")
                         } else {
                             args = backend == .claude ? try ClaudeCLI.arguments(for: inv, modelID: "sonnet", effortArg: "low")
