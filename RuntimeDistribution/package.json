@@ -1,0 +1,12 @@
+{
+  "name": "sentient-runtime-downloads",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "publish:archives": "node scripts/publish.mjs"
+  },
+  "devDependencies": { "wrangler": "4.135.0" }
+}

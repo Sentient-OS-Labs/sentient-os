@@ -428,10 +428,10 @@ struct HealthPane: View {
                            health: codex.installing ? .warn : (codex.installed && !codex.outdated ? .ok : .bad),
                            note: codex.installing ? (codex.installed ? "updating…" : "installing…")
                                : !codex.installed ? "not installed"
-                               : codex.outdated ? "needs an update"
+                               : codex.outdated ? "needs attention"
                                : (codex.version.map { "installed · \($0)" } ?? "installed"),
-                           tip: "OpenAI's official Codex command line tool. Sentient runs its cloud thinking through it, using your own ChatGPT subscription.\n\nSentient keeps it up to date on its own, quietly, at most once a day while you're away from the app. Install runs OpenAI's own installer; if codex is already there it simply updates in place, and your login and settings are untouched.",
-                           fixTitle: codex.installed ? "Update…" : "Install…",
+                           tip: "Sentient’s verified copy of the Codex command line tool, using your own ChatGPT subscription.\n\nCodex and its login are stored in Sentient’s private folder. New versions arrive with Sentient updates. Repair restores the approved software and preserves your login and saved tasks.",
+                           fixTitle: codex.installed ? "Repair…" : "Install…",
                            fix: codex.installing ? nil : { Task { await codex.installCodex() } })
                 failureLine(codex.installStatus)
                 if backend == .custom {
@@ -452,9 +452,9 @@ struct HealthPane: View {
                                health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
                                note: codex.loggedIn ? "logged in"
                                    : codex.loggingIn ? "finish in your browser" : "not logged in",
-                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
+                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Your Codex login stays in Sentient’s private folder on this Mac.",
                                fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
-                               fix: codex.loggedIn ? nil : { codex.startLogin() })
+                               fix: codex.loggedIn ? nil : { Task { await codex.startLogin() } })
                     failureLine(codex.loginStatusLine)
                     if codex.loggedIn, let plan {
                         StatusLine(title: "ChatGPT plan",
@@ -506,7 +506,7 @@ struct HealthPane: View {
                    health: ComputerUseSetup.current.ready ? .ok : (ComputerUseSetup.current.isInstalling ? .warn : .bad),
                    note: ComputerUseSetup.current.isInstalling ? "setting up…"
                        : (ComputerUseSetup.current.ready ? "ready" : "not set up"),
-                   tip: backend == .chatgpt ? "Downloads OpenAI's signed computer-use helper directly from OpenAI. Uses your existing Codex CLI and login." : "Downloads the pinned CUA driver for your selected engine and verifies its checksum and signature.",
+                   tip: backend == .chatgpt ? "Downloads the approved OpenAI-signed computer-use helper from Sentient and verifies it on this Mac." : "Downloads the pinned CUA driver for your selected engine and verifies its checksum and signature.",
                    fixTitle: "Set up…",
                    fix: ComputerUseSetup.current.isInstalling ? nil : { Task { await ComputerUseSetup.current.install() } })
         // The download deserves live narration, not just an amber dot.

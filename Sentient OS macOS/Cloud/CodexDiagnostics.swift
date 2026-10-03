@@ -15,7 +15,7 @@
 //                            onboarding / probe / sidekick / card), set once by each driver and
 //                            inherited by every child task, so a failure can be attributed
 //                            without threading a parameter through every call.
-//   - CodexAuthSnapshot    → what ~/.codex/auth.json says right now: auth mode, plan, whether
+//   - CodexAuthSnapshot    → what the private CODEX_HOME/auth.json says right now: auth mode, plan, whether
 //                            the access token's `exp` claim has passed, minutes since codex last
 //                            refreshed. Key presence + JWT claims only; no token bytes.
 //   - NetworkSnapshot      → one process-wide NWPathMonitor, read synchronously: satisfied /
@@ -153,7 +153,7 @@ nonisolated enum CodexTrigger: String, Sendable {
     @TaskLocal static var current: CodexTrigger = .unknown
 }
 
-// MARK: - Auth snapshot (~/.codex/auth.json, keys + claims only)
+// MARK: - Auth snapshot (the private CODEX_HOME/auth.json, keys + claims only)
 
 /// What codex's own login file says right now. Every field is an enum/bool/int — the file's
 /// values (tokens, key, account id) are read only to test presence and decode the JWT `exp`
@@ -169,7 +169,7 @@ nonisolated struct CodexAuthSnapshot: Sendable {
 
     /// Read the file once. Cheap (a small JSON), synchronous, safe from any executor.
     static func read() -> CodexAuthSnapshot {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
+        let url = CodexRuntime.activeAuth
         guard FileManager.default.fileExists(atPath: url.path) else {
             return CodexAuthSnapshot(mode: .none, plan: "unknown", accessExpired: nil,
                                      hasRefreshToken: false, minutesSinceRefresh: nil)

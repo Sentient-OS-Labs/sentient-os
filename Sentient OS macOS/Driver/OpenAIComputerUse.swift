@@ -1,5 +1,5 @@
 // OpenAI's signed native computer-use dependency and its per-run Codex MCP connection.
-// Uses the existing Codex home/login; never writes user config, plugins, or authentication.
+// Uses Sentient’s private Codex home; never writes configuration, plugins or authentication.
 // Doc: Driver/Documentation - Native Computer Use.md
 
 import AppKit
@@ -8,16 +8,10 @@ import Foundation
 nonisolated enum OpenAIComputerUse {
     static let bundleID = "com.openai.sky.CUAService"
     static let signingTeamID = "2DC432GLL2"
-    static let minimumBuild = 1_001_093
     static let serviceRelativePath = "Contents/MacOS/SkyComputerUseService"
     static let clientRelativePath = "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
 
-    static var codexHome: URL {
-        if let path = ProcessInfo.processInfo.environment["CODEX_HOME"], !path.isEmpty {
-            return URL(fileURLWithPath: NSString(string: path).expandingTildeInPath, isDirectory: true)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex", isDirectory: true)
-    }
+    static var codexHome: URL { CodexRuntime.activeHome }
 
     static var appURL: URL { codexHome.appendingPathComponent("computer-use/Codex Computer Use.app", isDirectory: true) }
     static var clientURL: URL { appURL.appendingPathComponent(clientRelativePath) }
@@ -39,28 +33,34 @@ nonisolated enum OpenAIComputerUse {
               info["CFBundleIdentifier"] as? String == bundleID,
               let version = info["CFBundleShortVersionString"] as? String,
               let buildString = info["CFBundleVersion"] as? String,
-              let build = Int(buildString), build >= minimumBuild else { return nil }
+              let build = Int(buildString) else { return nil }
+        let legacy = CodexRuntimeMigration.isPending && app.resolvingSymlinksInPath() == CodexRuntimeMigration.legacyHelper.resolvingSymlinksInPath()
+        guard legacy ? build >= 1_001_093 : (build == CodexRuntime.release.helperBuild && version == CodexRuntime.release.helper.version) else { return nil }
         return Installation(version: version, build: build)
     }
 
     static var isInstalled: Bool { installation(at: appURL) != nil }
 
     enum RuntimeError: LocalizedError {
-        case incomplete, invalidSignature, unsupportedSystem, helperRunning, changedInstallation, launchFailed
+        case incomplete, invalidSignature, unsupportedSystem, helperRunning, changedInstallation, launchFailed, conflictingHelper
         var errorDescription: String? {
             switch self {
             case .incomplete: "OpenAI computer use is missing or incomplete. Set it up again in Permissions & Health."
             case .invalidSignature: "OpenAI computer use could not be verified. Repair it in Permissions & Health."
             case .unsupportedSystem: "This OpenAI computer-use version needs a newer version of macOS."
             case .helperRunning: "Computer use is currently running. Finish the active task, then try the repair again."
-            case .changedInstallation: "Another app updated computer use during setup. Try again to use the new installation."
+            case .changedInstallation: "Computer use changed during setup. Repair it in Permissions & Health."
+            case .conflictingHelper: "Another Codex installation is using computer use. Finish its task and quit its computer-use helper, then try again in Sentient."
             case .launchFailed: "OpenAI computer use could not start. Try again in Permissions & Health."
             }
         }
     }
 
     @discardableResult
-    static func validate(at app: URL) async throws -> Installation {
+    @concurrent static func validate(at app: URL) async throws -> Installation {
+        if !(CodexRuntimeMigration.isPending && app.resolvingSymlinksInPath() == CodexRuntimeMigration.legacyHelper.resolvingSymlinksInPath()) {
+            try CodexRuntime.verify(CodexRuntime.release.helper, at: app)
+        }
         guard let installation = installation(at: app) else { throw RuntimeError.incomplete }
         if let data = try? Data(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
            let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
@@ -80,7 +80,8 @@ nonisolated enum OpenAIComputerUse {
         // model call. It catches a signed but incompatible/missing client at setup time.
         let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sentient-setup","version":"1"}}}"# + "\n"
         let probe = try await CodexCLI.executeAsync(binary: app.appendingPathComponent(clientRelativePath).path,
-            args: ["mcp"], stdinText: initialize, cwd: nil, timeout: 15)
+            args: ["mcp"], stdinText: initialize, cwd: nil, timeout: 15,
+            extraEnv: ["CODEX_HOME": codexHome.path])
         let initialized = probe.stdout.split(separator: "\n").contains { line in
             guard let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   message["id"] as? Int == 1, let result = message["result"] as? [String: Any],
@@ -95,12 +96,58 @@ nonisolated enum OpenAIComputerUse {
     /// LaunchServices preserves the helper's own identity and macOS permissions. Running its
     /// service executable directly changes permission attribution and is deliberately avoided.
     @MainActor static func launchForPermissionRequest() async throws {
+        try CodexRuntime.prepareHome()
+        let acquisition = Task.detached {
+            try CodexRuntime.FileLock(CodexRuntime.root.appendingPathComponent(".runtime.lock"), exclusive: false,
+                                      wait: true, cancelled: { Task.isCancelled })
+        }
+        let lease = try await withTaskCancellationHandler { try await acquisition.value }
+            onCancel: { acquisition.cancel() }
+        defer { lease.unlock() }
         try await validate(at: appURL)
+        try checkRunningHelper()
         if !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty { return }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
-        do { _ = try await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) }
+        configuration.allowsRunningApplicationSubstitution = false
+        configuration.environment = ["CODEX_HOME": codexHome.path]
+        do {
+            let running = try await NSWorkspace.shared.openApplication(at: appURL, configuration: configuration)
+            guard running.bundleURL?.resolvingSymlinksInPath() == appURL.resolvingSymlinksInPath() else {
+                throw RuntimeError.conflictingHelper
+            }
+            try checkRunningHelper()
+        }
+        catch let error as RuntimeError { throw error }
         catch { throw RuntimeError.launchFailed }
+    }
+
+    @MainActor static func checkRunningHelper() throws {
+        for running in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
+            guard let url = running.bundleURL else { throw RuntimeError.conflictingHelper }
+            let own = url.resolvingSymlinksInPath() == appURL.resolvingSymlinksInPath()
+            let retained = CodexRuntimeMigration.completed && url.resolvingSymlinksInPath() == CodexRuntimeMigration.legacyHelper.resolvingSymlinksInPath()
+                && (try? CodexRuntime.verify(CodexRuntime.release.helper, at: url)) != nil
+            guard (own || retained), installation(at: url) != nil else { throw RuntimeError.conflictingHelper }
+        }
+    }
+
+    /// Uninstall stops only the helper launched from Sentient's directory.
+    @MainActor static func stopOwnedHelper() async throws {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).filter {
+            $0.bundleURL?.resolvingSymlinksInPath() == CodexRuntime.helper.resolvingSymlinksInPath()
+        }
+        for app in running { app.terminate() }
+        for _ in 0..<30 {
+            if running.allSatisfy(\.isTerminated) { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        for app in running where !app.isTerminated { app.forceTerminate() }
+        for _ in 0..<20 {
+            if running.allSatisfy(\.isTerminated) { return }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        throw RuntimeError.helperRunning
     }
 
     static var codexOverrides: [String] {

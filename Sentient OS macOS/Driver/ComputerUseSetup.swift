@@ -66,6 +66,7 @@ final class ComputerUseSetup {
     /// Repair an established runtime whose required components vanished or became too old.
     /// Fresh installs and first-time engine migrations retain their own setup entry points.
     func updateIfNeeded() {
+        guard !(backend == .openAI && CodexRuntimeMigration.isPending) else { return }
         guard hasInstallationHistory, !backend.isInstalled else { return }
         updateNotice = .updating
         beginInstall()

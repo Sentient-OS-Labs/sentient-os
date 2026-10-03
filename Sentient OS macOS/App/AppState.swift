@@ -72,6 +72,7 @@ final class AppState {
 
         Task { await MailAccountCloud.shared.retryPendingSync() }
 
+        CodexRuntimeMigration.start(existingUser: hasCompletedOnboarding && ModelBackend.current != .claude)
         CuaDriver.rememberExistingInstallation()
         ComputerUseUpgrade.shared.prepareForLaunch { [weak self] in
             self?.startInterfaceIfReady()
