@@ -1,7 +1,7 @@
 # Frontier Model Choice: bring your own model (Cloud/)
 
 How Sentient runs its cloud ~10% on an engine of the user's choosing: their ChatGPT subscription (the
-default), their **Claude subscription** (`claude -p` as the harness — the ClaudeCLI doc), or ANY
+default), their **Claude subscription** (`claude -p` for structured work, Codex for computer use; see the ClaudeCLI doc), or ANY
 endpoint that speaks the OpenAI **Responses API** (OpenRouter, LM Studio, something self-hosted; those
 still run through the `codex exec` spine). Same computer use everywhere. A custom endpoint unlocks the
 full experience minus the hosted Gmail/Calendar connectors, which ride subscription-account auth
@@ -12,6 +12,7 @@ full experience minus the hosted Gmail/Calendar connectors, which ride subscript
 | File | Job |
 |---|---|
 | `ModelBackend.swift` | `ModelBackend` (`.chatgpt` / `.claude` / `.custom`, key `model.backend`) and `CustomProvider` (the saved endpoint: preset, base URL, model name, reasoning level, the Keychain API key, the vision-verified flag, and the per-run `-c` overrides). |
+| `LoopbackHTTP.swift` | Shared bounded HTTP framing for the local translator and Claude subscription provider. |
 | `ResponsesTranslator.swift` | A loopback HTTP proxy between codex and a naive Responses server, translating codex's proprietary tool dialect both ways so MCP tools (computer use included) work there. |
 | `Views/FrontierEnginePicker.swift` | The shared UI (Settings pane and onboarding's frontier-model step): the engine pills and per-engine panels, Test & Select, the local-models warning. |
 
@@ -28,9 +29,9 @@ Custom (any `/v1/responses` endpoint; runs through the translator). The two subs
 the hosted connectors; `CustomProvider.needsTranslator` is true for every preset except OpenRouter,
 whose server speaks codex's dialect natively.
 
-**Installs are lazy and commitment-only** (field-hardened 2026-08-22): browsing tabs downloads
-nothing; the sign-in buttons, "Use ChatGPT", and Test & Select (which needs codex for the vision
-probe and ensures it first) are the download moments.
+**Codex CLI and native computer use prepare at app launch for every backend.** Browsing tabs starts
+no additional installation. Claude Code remains lazy, prepared by the Claude commitment/sign-in
+actions. ChatGPT sign-in and Test & Select join or retry shared Codex preparation as needed.
 
 ## The invocation recipe
 
@@ -82,8 +83,8 @@ but honest.
 
 ## Prompt rules for weaker models
 
-Every backend now gets the cua driver's full operating manual inline (`CuaDriverSkill.rules`, see the
-Driver doc). `CustomProvider.computerUsePromptRules` adds what weaker custom models measurably need on
+Every backend gets the native OpenAI computer-use instructions inline (`OpenAIComputerUse.promptRules`;
+see the Native Computer Use doc). `CustomProvider.computerUsePromptRules` adds what weaker custom models measurably need on
 top, on the custom backend ONLY: a hard safety stop-list (deleting data, payments, passwords,
 accounts, installing software, sending sensitive data anywhere the task did not name → stop with
 COULD_NOT) and an anti-stall rule (keep going until done; no narrating turns, no check-ins — nobody

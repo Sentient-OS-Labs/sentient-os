@@ -39,8 +39,9 @@ onboarding's ready screen) guards toggle-offs on the 4 → 3 drop and flashes th
 **Frontier Model Choice.** Which engine powers the cloud ~10%: the shared engine pills and per-engine
 panels (`FrontierEnginePicker`, layout `.settingsGrid`); Settings' own ChatGPT panel activates with Use
 ChatGPT and points at Permissions & Health for login and plan; the Claude panel is self-contained
-(lazy install on "Sign in with Claude", the plan chip, Use Claude). Installs fire only on those
-commitment actions, never on tab browsing. See the BYOM and ClaudeCLI docs.
+(lazy install on "Sign in with Claude", the plan chip, Use Claude). Shared Codex CLI and native
+computer-use setup start at app launch; commitment actions join or retry that work as needed.
+Browsing tabs starts no additional installation. See the BYOM and ClaudeCLI docs.
 
 **Proactive & Sidekick.** The user's standing proactive instructions (`proactive.instructions`, fed to
 both proactive prompts), the Sidekick key (right ⌘ / right ⌥; toggling posts `.sidekickHotkeyChanged`
@@ -72,18 +73,18 @@ start of onboarding and dismisses Settings; locked while `PipelineActivity` repo
 (fix = the drag panel with Sentient as the card + a relaunch link), Overnight wake (green only when the
 daemon answers over XPC; `notSetUp` fixes with the password installer, `disabled` gets a Turn On… into
 Login Items), Launch at login (needs-approval gets the guide's instruction panel). SIDEKICK &
-PROACTIVE: Microphone & Speech (one row, native prompts; only an explicit denial goes red), then the
-selected computer-use runtime's grants:
-Accessibility (fix = the real system prompt, falling back to the Settings pane) and Screen Recording
-(fix = the drag panel with Sentient as the card), and Notifications. THE ENGINE GROUP follows the
-live frontier choice: SET UP CODEX on ChatGPT (Codex CLI, ChatGPT account, ChatGPT plan with its
-Re-check), SET UP CLAUDE on the Claude backend (Claude Code CLI, Claude account with the plan named
-in its note), and on custom backends SET UP CODEX with a Frontier model row in place of the account
-rows (codex is the harness there too); every variant ends with Computer use (the selected native or CUA runtime
-binary; its fix streams the download's progress under the row). The fixes drive the shared setup
-engines INLINE (amber = working on it; the browser logins are auto-noticed by a 2 s poll), only the
-live engine's rows are probed, and switching engines re-probes in place. When the whole engine stack
-is green it collapses to one summary line. Statuses re-probe on every foreground.
+PROACTIVE: Microphone & Speech, Sentient Screen Recording, and Notifications. A shared Computer Use
+group shows the native helper's Accessibility and Screen Recording grants for every model backend;
+visible setup handles Automation consent through the macOS prompt.
+
+The engine group follows the frontier choice. ChatGPT shows Codex CLI, ChatGPT account and plan.
+Claude shows Claude Code CLI, the Claude account, and Codex CLI for computer use, with no ChatGPT
+sign-in requirement. Custom endpoints show Codex CLI and the configured frontier model. All variants
+end with the signed native helper's installation status and shared progress.
+
+Fixes run inline through the existing setup engines. Claude health checks both CLIs while retaining
+Claude's own login status. A healthy engine group collapses to one summary line; foreground changes
+refresh its state. CLI compatibility and native permissions also gate the first computer task.
 
 ## The Uninstall sheet (`UninstallView`)
 
@@ -103,4 +104,4 @@ stays on the Mac), and a tip that appears on several surfaces carries the same c
 
 `Sources/Documentation - Sources - Local (Files, WhatsApp, iMessage, Notes).md`, `Cloud/Documentation - Cloud - Frontier Model Choice (BYOM).md`, `Cloud/Documentation - Cloud - Plan Gate (CodexAuth).md`, `Cloud/Documentation - Cloud - MCP Mirror.md`, `System/Documentation - System (Permissions, Health, Uninstall).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md`.
 
-ChatGPT shows Automation and the OpenAI helper's Accessibility/Screen Recording grants. Claude/custom retain Sentient's own action grants. Changing engines prepares the selected dependency without rewriting Codex configuration or login.
+All engines show the native helper's Accessibility and Screen Recording grants, with Automation consent handled by the macOS prompt. Changing engines prepares the selected dependency without rewriting Codex configuration or login.

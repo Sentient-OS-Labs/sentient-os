@@ -4,7 +4,8 @@
 see its doc). Every cloud feature — the knowledge base build and updates, the Gmail/Calendar reads,
 the gift letter, the proactive judge and research, and every computer-use run — calls
 **`FrontierRun`**, the one dispatch switch on `ModelBackend.current`: `.chatgpt` and `.custom` land
-here, `.claude` lands on ClaudeCLI. This file is also the REFERENCE engine: the shared types
+here for structured work, while `.claude` uses ClaudeCLI. Computer tasks from every backend land
+on CodexCLI; Claude subscriptions provide inference through ClaudeSubscriptionBridge. This file is also the REFERENCE engine: the shared types
 (`Invocation`, `Envelope`, `CLIError`) and the engine-neutral process plumbing (`executeAsync` /
 `executeStreaming` — sanitized env, watchdog, cancellation, line streaming) live here and ClaudeCLI
 reuses them verbatim. It runs the user's own Codex CLI as a subprocess; their ChatGPT subscription
@@ -30,12 +31,14 @@ the custom-endpoint key variable). Optional `onLine:` streams a humanized play-b
 
 **`runAgentCommand(prompt, imagePaths:, timeout:, onLine:) → String`** is the computer-use path. The
 prompt rides in **argv**, output is human-readable (no `--json`), and every line is pumped to `onLine`
-as it arrives. `ComputerUseSetup` prepares the selected runtime. On ChatGPT, the signed OpenAI
-helper is validated and its native client is registered directly as the required `sentient_native`
-MCP server. Custom endpoints retain `CuaDriverHost` and its four-tool vision registration plus CLI
-shim. Claude's sibling runner continues to use CUA.
+as it arrives. `ComputerUseSetup` prepares Codex and the signed OpenAI helper for every backend.
+The native client is registered directly as the required `sentient_native` MCP server. Claude uses
+a per-task local Responses provider backed by the official Claude CLI; custom endpoints retain their
+provider overrides. No active computer task launches CUA.
 
-The run remains hermetic (`--ignore-user-config`) and preserves its hosted/direct connector policies.
+The run remains hermetic (`--ignore-user-config`). ChatGPT hosted connector policies and prepared
+direct MCP accounts remain attached. Claude-hosted connector tasks use the separate structured path.
+
 `FrontierRun` adds exactly one runtime manual after capturing the selected backend. Native setup
 writes no plugin or global Codex configuration. See `Driver/Documentation - Native Computer Use.md`
 for installation, permissions and compatibility checks. Computer-use flags remain
@@ -113,7 +116,8 @@ workspace root is the PROCESS cwd (so `Process.currentDirectoryURL` is set from 
 the sandbox rides `-c sandbox_mode=…` instead. Verified live.
 
 Every Codex exec builder starts with `execArguments`: probes, fresh/resumed structured runs, and
-computer use. Fast service tier is a per-invocation configuration override, never a global config edit.
+computer use on OpenAI models. Claude subscription computer tasks omit OpenAI service tiers.
+Fast service tier is a per-invocation configuration override, never a global config edit.
 The resume ID precedes the fast override. Caller/provider overrides, sandbox differences, and the
 flag terminating the variadic image list retain their ordering.
 

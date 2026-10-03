@@ -133,9 +133,24 @@ enum Uninstall {
         await beat()
 
         progress(.model)
+        await CodexRuntimeMigration.cancel()
+        await CodexSetup.shared.cancelInstallation()
         await ComputerUseSetup.cancelAll()
         await CuaDriverHost.shared.stop()
-        try? FileManager.default.removeItem(at: URL.sentientSupport)   // model + download staging + the store + the cua driver
+        do {
+            let lease = FileManager.default.fileExists(atPath: CodexRuntime.root.path)
+                ? try CodexRuntime.FileLock(CodexRuntime.root.appendingPathComponent(".runtime.lock"), exclusive: true) : nil
+            defer { lease?.unlock() }
+            try await OpenAIComputerUse.stopOwnedHelper()
+            try CodexRuntimeMigration.restoreLegacyAuthentication()
+            if FileManager.default.fileExists(atPath: URL.sentientSupport.path) {
+                try FileManager.default.removeItem(at: URL.sentientSupport)
+            }
+        } catch {
+            lastFailure = "Uninstall paused because Sentient's runtime is still in use or couldn't be removed. Finish active tasks and retry."
+            appState?.isUninstalling = false
+            return false
+        }
         await beat()
 
         progress(.traces)

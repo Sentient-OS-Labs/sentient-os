@@ -71,9 +71,7 @@ struct OnboardingCodexLoginPanel: View {
                 .foregroundStyle(Theme.Ink.body)
             MonoWaitLine("waiting for the browser sign-in…")
         } else if codex.installGaveUp && !codex.installed {
-            // The auto-install couldn't finish (no network, connection reset, or Codex is
-            // unavailable in this region). Point the user to install it themselves; the
-            // foreground refresh notices a manual install when the user returns to Sentient.
+            // Failed downloads remain retryable through the same verified installer.
             CodexInstallFailedPanel()
             SettingsPillButton(title: "Try again", action: prepareAndLogin)
                 .disabled(codex.preparing || codex.installing)
@@ -94,37 +92,20 @@ struct OnboardingCodexLoginPanel: View {
     private func prepareAndLogin() {
         preparationTask = Task {
             guard await codex.ensureCurrent(), !Task.isCancelled else { return }
-            codex.startLogin()
+            await codex.startLogin()
         }
     }
 }
 
 /// Shown on the ChatGPT panel when the automatic install has clearly failed (retries exhausted):
-/// no network, a connection reset, or Codex being unavailable in the user's region. It points the
-/// user to install Codex themselves; the step refreshes detection on foreground, and a relaunch
-/// resumes right here (onboarding persists its step). Copy approved 2026-07-24.
+/// preserves the pending onboarding step and explains how to retry the approved download.
 private struct CodexInstallFailedPanel: View {
-    private let guideURL = URL(string: "https://learn.chatgpt.com/docs/codex/cli#getting-started")!
-
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Sentient couldn't finish installing Codex automatically.")
+            Text("Sentient couldn't finish downloading Codex.")
                 .font(.system(size: 14, weight: .medium))
                 .foregroundStyle(Theme.Ink.body)
-
-            SettingsProse("You can install it yourself in a minute. Once you do that, you can restart Sentient and pick up right where you left off.")
-
-            OnboardingNextButton(title: "Open the Codex install guide") {
-                NSWorkspace.shared.open(guideURL)
-            }
-            .frame(maxWidth: .infinity)
-
-            SettingsProse("We also suggest connecting through a VPN.")
-
-            Text("Codex isn't available in a few countries.")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .kerning(0.5)
-                .foregroundStyle(Theme.faint)
+            SettingsProse("Check your internet connection and available disk space, then try again. Your saved login and tasks are preserved.")
         }
     }
 }

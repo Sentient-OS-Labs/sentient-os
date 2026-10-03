@@ -1,5 +1,5 @@
 // Observable Codex CLI installation, login and update flow shared by onboarding and Settings.
-// ComputerUseSetup independently prepares the selected native or CUA computer-use runtime.
+// ComputerUseSetup prepares native computer use and requests Codex without a ChatGPT login for Claude.
 // Key methods: ensureCurrent(), ensureInstalled(), startLogin(), updateIfDue(), whatsNeeded().
 // Doc: Cloud/Documentation - Cloud - Codex Setup.md
 
@@ -22,26 +22,21 @@ final class CodexSetup {
 
     // MARK: Step 1 — install
 
-    /// Is the Codex CLI binary present on disk? (NOT whether it's logged in — that's step 2.)
-    /// Starts `false`; warmed up asynchronously OFF the main thread by `init`. This must NEVER be
-    /// computed inside this singleton's lazy initializer: `locateBinary()`'s last-resort fallback
-    /// spawns a login shell (a blocking `Process`), and inside the `@MainActor` `dispatch_once`
-    /// that lets `waitUntilExit` pump the main runloop and re-enter the same once-block — a
-    /// recursive-lock trap. Detection stays off the initializer, always.
+    /// Presence in Sentient's private runtime, independently of sign-in.
     private(set) var installed: Bool = false
-    /// The installed CLI's version ("0.147.0"), refreshed with `installed`; nil until probed.
+    /// The installed CLI's version ("0.160.0"), refreshed with `installed`; nil until probed.
     private(set) var version: String?
     /// An install is currently running (drives the spinner + disables the button).
     private(set) var installing = false
     /// Latest streamed progress line, or the final ✓/✗ result.
     private(set) var installStatus: String?
     /// True once install RETRIES are exhausted and codex still isn't on disk — drives onboarding's
-    /// "install it yourself" panel. Reset when a fresh `ensureInstalled` run begins; any positive
+    /// download retry panel. Reset when a fresh `ensureInstalled` run begins; any positive
     /// detection (`refreshInstalled`) clears it.
     private(set) var installGaveUp = false
 
     /// Cheap re-detect of step 1's status — call on appear and after an install. Runs the probe
-    /// off the main thread (`locateBinary()` can spawn a login shell), so it never blocks the UI.
+    /// off the main thread (package validation may touch disk), so it never blocks the UI.
     func refreshInstalled() async {
         installed = await Task.detached { CodexCLI.locateBinary() != nil }.value
         if installed { installGaveUp = false }
@@ -56,11 +51,43 @@ final class CodexSetup {
     /// Avoid repeating the release check between sign-in and Continue. A different binary
     /// version (including a downgrade outside Sentient) must pass preparation again.
     private var preparedVersion: String?
+    private var computerPreparation: Task<Void, Never>?
+    private var computerPreparationSucceeded = false
+    static let computerUseMinimumVersion = "0.160.0"
+    var computerUseReady: Bool {
+        installed && version.map { !CodexCLI.isNewer(Self.computerUseMinimumVersion, than: $0) } == true
+    }
 
-    /// Called only when the user commits to a Codex-backed engine, including Continue for an
-    /// existing login. An old brew/npm install gets a standalone copy; its package is untouched.
+    /// Every computer-use engine needs Codex, but only ChatGPT needs a Codex login.
+    /// Callers can stop waiting while the shared background installation finishes.
+    func ensureComputerUseCLI() async -> Bool {
+        if let version = await CodexCLI.installedVersion(),
+           !CodexCLI.isNewer(Self.computerUseMinimumVersion, than: version), await CodexCLI.isRunnable() {
+            self.version = version; installed = true
+            return !Task.isCancelled
+        }
+        if computerPreparation == nil {
+            computerPreparationSucceeded = false
+            computerPreparation = Task {
+                let prepared = await ensureCurrent()
+                computerPreparationSucceeded = prepared && computerUseReady
+                computerPreparation = nil
+            }
+        }
+        while computerPreparation != nil {
+            do { try await Task.sleep(for: .milliseconds(100)) }
+            catch { return false }
+        }
+        return computerPreparationSucceeded && !Task.isCancelled
+    }
+
+    /// Used by engine commitment and by startup when computer use needs a compatible CLI.
+    /// Downloads the approved private runtime; a user-managed CLI is untouched.
     /// Concurrent callers await the same preparation, and failed preparation is always retryable.
     func ensureCurrent() async -> Bool {
+        guard !shuttingDown else { return false }
+        CodexRuntimeMigration.start(existingUser: true)
+        if CodexRuntimeMigration.isPending { return await CodexRuntimeMigration.finishCurrentAttempt() }
         if let preparationTask { return await preparationTask.value }
         preparing = true
         let task = Task { await prepareCurrent() }
@@ -77,28 +104,25 @@ final class CodexSetup {
         if let version, version == preparedVersion, await CodexCLI.isRunnable() { return true }
 
         installStatus = "Checking Codex CLI…"
-        let latest = await CodexCLI.latestReleasedVersion()
-        if let version, let latest, !CodexCLI.isNewer(latest, than: version),
+        let latest = await CodexCLI.approvedVersion()
+        if let version, let latest, latest == version,
            await CodexCLI.isRunnable() {
             preparedVersion = version
             installStatus = "✓ Codex CLI up to date"
             return true
         }
-        if let version, let latest, CodexCLI.isNewer(latest, than: version) { outdated = true }
-        // An unavailable feed falls back to the installer's own release resolution. The
-        // installer still has to succeed and produce a runnable managed binary.
+        if let version, let latest, latest != version { outdated = true }
         return await installWithRetries(expectedVersion: latest)
     }
 
-    /// Step 1 — install OR update the Codex CLI via OpenAI's official installer. Always runs the
-    /// script, even over an existing install. Only a verified installer result counts as success;
-    /// preserving an old executable on failure does not mean it was updated.
+    /// Install or repair the approved private CLI. Only a fully verified package counts as success.
     @discardableResult
     func installCodex(expectedVersion: String? = nil) async -> Bool {
+        guard !shuttingDown else { return false }
         if let installTask {
             guard await installTask.value else { return false }
             // A caller may have learned of a newer release while another install was running.
-            if let expectedVersion, let version, CodexCLI.isNewer(expectedVersion, than: version) {
+            if let expectedVersion, let version, expectedVersion != version {
                 outdated = true
                 preparedVersion = nil
                 installStatus = "✗ Codex CLI still needs an update. Try again."
@@ -126,11 +150,11 @@ final class CodexSetup {
         do {
             let target: String?
             if let expectedVersion { target = expectedVersion }
-            else { target = await CodexCLI.latestReleasedVersion() }
-            let verifiedVersion = try await CodexCLI.install(expectedVersion: target) { [weak self] line in
-                Log("[codex-install] \(line)")
-                Task { @MainActor in
-                    if self?.installProgressID == progressID { self?.installStatus = line }
+            else { target = await CodexCLI.approvedVersion() }
+            let verifiedVersion = try await CodexCLI.install(expectedVersion: target) { [self] line in
+                Task { @MainActor [self] in
+                    Log("[codex-install] \(line)")
+                    if installProgressID == progressID { installStatus = line }
                 }
             }
             installProgressID = nil
@@ -139,8 +163,7 @@ final class CodexSetup {
             version = verifiedVersion
             preparedVersion = verifiedVersion
             installStatus = updating ? "✓ Codex CLI up to date" : "✓ Codex CLI installed"
-            // The installer resolves and lays down the newest release, so a run counts as today's
-            // update: stamp the daily cap, clear the stale-client flag, and learn the new version.
+            // A verified repair satisfies today’s check and clears the stale-client flag.
             Self.stampUpdateAttempt()
             outdated = false
             if updating, let before, let after = version, before != after {
@@ -165,7 +188,7 @@ final class CodexSetup {
     }
 
     /// One retry policy for fresh installs and updates. A surviving old binary is never a
-    /// successful attempt. Fresh-install exhaustion also exposes the manual-install guide.
+    /// successful attempt. Fresh-install exhaustion also exposes the download retry panel.
     private func installWithRetries(attempts: Int = 3, expectedVersion: String? = nil) async -> Bool {
         installGaveUp = false
         guard attempts > 0 else { return false }
@@ -179,19 +202,13 @@ final class CodexSetup {
             }
         }
         installGaveUp = !installed
-        if installGaveUp { Log("CodexSetup: install gave up after \(attempts) attempts — surfacing the manual-install panel") }
+        if installGaveUp { Log("CodexSetup: install gave up after \(attempts) attempts — surfacing the download retry panel") }
         return false
     }
 
-    // MARK: Keeping the CLI current (the daily update)
-    //
-    // Sentient's managed CLI shares `~/.codex` with every other codex on the Mac, and the ChatGPT
-    // desktop app updates itself: when its newer CLI rewrites a shared cache in a schema ours can't
-    // read, our runs start logging errors and can fail (the 1.3 field report: `failed to renew
-    // cache TTL: missing field \`base_instructions\``). So the CLI we install is also the CLI we
-    // keep current — silently, at most once a day, only when the user is away and nothing is
-    // running codex, and only for the managed copy (a brew/npm codex is the user's package
-    // manager's job).
+    // MARK: Approved runtime health
+    // The daily idle check repairs only this app's pinned version. It never reads an upstream
+    // release channel, adopts another Codex, or changes versions while a task holds the runtime.
 
     private static let lastUpdateAttemptKey = "codex.lastUpdateAttempt"
 
@@ -219,46 +236,40 @@ final class CodexSetup {
     }
 
     private var keepCurrentTimer: Timer?
+    private var shuttingDown = false
     /// "Is the one-task-at-a-time lock held?" — supplied by AppState, which owns the coordinator.
     private var runLockHeld: (@MainActor () -> Bool)?
 
-    /// The daily update, self-guarding: only over the managed install, at most one attempt per
-    /// 24 h (hourly at most when a run just showed the stale-client signature), and only when a
-    /// newer release actually exists (a 1 KB feed read + `codex --version`;
-    /// re-running the installer over the current version would re-download and re-stage the same
-    /// release for nothing). If the version check itself can't decide (offline, feed shape drift),
-    /// the installer runs and resolves on its own — the pre-1.4 behavior. `trigger` names the
-    /// caller in the log ("idle" · "overnight").
+    /// Verify the pinned runtime at most daily, while idle. Repair a missing or modified package.
     func updateIfDue(trigger: String) async {
-        // An engine out of service earns no background downloads: while Claude is the backend,
-        // codex sits idle (chatgpt AND custom both run through codex, so only .claude skips).
-        guard ModelBackend.current != .claude else { return }
-        guard installed, !installing, !preparing else { return }
-        guard CodexCLI.usingManagedBinary else { return }   // not ours to update
+        // Every engine uses the private Codex runtime for computer tasks.
+        guard !shuttingDown, !CodexRuntimeMigration.isPending else { return }
+        guard !installing, !preparing, !PipelineActivity.shared.isRunning, runLockHeld?() != true else { return }
+        guard FileManager.default.fileExists(atPath: CodexRuntime.root.path) else { return }
         // Once a day; a stale-client signal on a successful run pulls the next attempt forward,
         // but never more often than hourly (each attempt is at least a version check).
         guard Self.sinceLastUpdateAttempt >= 86_400
                 || (staleSignalSeen && Self.sinceLastUpdateAttempt >= 3_600) else { return }
         staleSignalSeen = false
         Self.stampUpdateAttempt()
-        await updateToLatest(trigger: trigger)
+        await repairApprovedRuntime(trigger: trigger)
     }
 
     private static var sinceLastUpdateAttempt: TimeInterval {
         lastUpdateAttempt.map { Date().timeIntervalSince($0) } ?? .infinity
     }
 
-    /// The version pre-check, then the installer only if a newer release exists.
-    private func updateToLatest(trigger: String) async {
+    /// Keep the signed app’s approved version; a version change requires a Sentient release.
+    private func repairApprovedRuntime(trigger: String) async {
         let current = await CodexCLI.installedVersion()
         version = current
-        let latest = await CodexCLI.latestReleasedVersion()
-        if let current, let latest, !CodexCLI.isNewer(latest, than: current) {
-            Log("CodexSetup: update (\(trigger)) — Codex CLI \(current) is already the newest release")
+        let latest = await CodexCLI.approvedVersion()
+        if let current, let latest, latest == current, await CodexCLI.isRunnable() {
+            Log("CodexSetup: update (\(trigger)) — Codex CLI \(current) matches the approved release")
             return
         }
         Log("CodexSetup: update (\(trigger)) — \(current ?? "?") → \(latest ?? "latest"), running the installer")
-        if let current, let latest, CodexCLI.isNewer(latest, than: current) { outdated = true }
+        if let current, let latest, latest != current { outdated = true }
         await installCodex(expectedVersion: latest)
     }
 
@@ -280,36 +291,49 @@ final class CodexSetup {
     }
 
     private func keepCurrentTick() {
-        guard !installing, UserPresence.isAwayFromApp, !PipelineActivity.shared.isRunning,
+        guard !shuttingDown, !installing, UserPresence.isAwayFromApp, !PipelineActivity.shared.isRunning,
               runLockHeld?() != true else { return }
         Task { await updateIfDue(trigger: "idle") }
         // The one idle tick keeps EVERY managed engine CLI current — ClaudeSetup self-guards
         // (only while Claude is the backend, only the managed binary, once a day).
         Task { await ClaudeSetup.shared.updateIfDue(trigger: "idle") }
-        // …and keeps the computer-use attach set classified (task 1.6): the chips + every
+        // Keep the dedicated connector action policies classified: the chips + every
         // detected connector. Self-guards (Claude backend only) and cache hits are free, so
         // this is one-time work per CLI version, done while the user is away.
-        Task { await ConnectorClassifier.sweepComputerUseAttachables() }
+        Task { await ConnectorClassifier.sweepActionConnectors() }
     }
 
-    /// A codex run just failed on the stale-client signature (CodexCLI classified it). Flag it for
-    /// the health rung, and if the binary is ours, update right now — outside the daily cap, but
-    /// still behind the version pre-check and an hourly floor, so a Mac whose shared `~/.codex` is
-    /// ahead of the newest RELEASE (the desktop app runs alphas) doesn't re-download the same CLI
-    /// on every failed run. Not ours (brew/npm): the flag alone speaks, and the Health row's
-    /// "Update…" lays down a managed copy if the user wants one. `outdated` clears only when an
-    /// install actually lands, so an unfixable state keeps saying so.
+    /// A compatibility failure remains visible until a repair succeeds. An intact pinned release
+    /// cannot be upgraded here; a newer CLI must come with a newer Sentient release.
     func repairStaleClient() async {
         outdated = true
-        let managed = CodexCLI.usingManagedBinary
-        Log("CodexSetup: a run failed on the stale-client signature (managed=\(managed)) — \(managed ? "updating now" : "not our binary; flagging only")")
-        guard managed, !installing else { return }
+        let managed = FileManager.default.fileExists(atPath: CodexRuntime.root.path)
+        Log("CodexSetup: a run failed on the stale-client signature (managed=\(managed)) — \(managed ? "checking the approved release" : "not our binary; flagging only")")
+        guard managed, !installing, !PipelineActivity.shared.isRunning, runLockHeld?() != true else { return }
         guard Self.sinceLastUpdateAttempt >= 3_600 else {
             Log("CodexSetup: an update was already attempted within the hour — not retrying")
             return
         }
         Self.stampUpdateAttempt()
-        await updateToLatest(trigger: "stale-client")
+        await repairApprovedRuntime(trigger: "stale-client")
+    }
+
+    /// Uninstall drains all CLI setup work before removing the private home.
+    func cancelInstallation() async {
+        shuttingDown = true
+        keepCurrentTimer?.invalidate()
+        loginGeneration = UUID()
+        connectorRefreshTask?.cancel()
+        _ = await connectorRefreshTask?.value
+        if let process = loginProcess, process.isRunning {
+            process.terminate()
+            await Task.detached { process.waitUntilExit() }.value
+        }
+        loginProcess = nil
+        preparationTask?.cancel()
+        installTask?.cancel()
+        _ = await preparationTask?.value
+        _ = await installTask?.value
     }
 
     // MARK: Step 2 — auth (codex login)
@@ -324,27 +348,42 @@ final class CodexSetup {
     /// The running `codex login` process (the localhost OAuth callback server) — kept so we can
     /// terminate it on restart/cleanup. It self-exits once auth.json is written.
     private var loginProcess: Process?
+    private var startingLogin = false
+    private var loginGeneration = UUID()
+    private var connectorRefreshTask: Task<Void, Never>?
+    private var refreshedAccount: String?
+    private var lastConnectorRefresh: Date?
 
     /// Re-check login status via `codex login status` — call on appear and after a confirm.
     func refreshLoginStatus() async {
         loggedIn = await CodexCLI.loginStatus()
-        if loggedIn { loggingIn = false }
+        if loggedIn {
+            loggingIn = false
+            refreshConnectorsAfterLogin()
+        }
     }
 
     /// Step 2a — start the interactive login. Spawns `codex login` (opens the browser) and flips into
     /// the "awaiting browser" state; the user finishes in the browser, then taps "Finished logging
     /// into codex" → `confirmLogin()`. Both onboarding and the dev button call THIS.
-    func startLogin(force: Bool = false) {
+    func startLogin(force: Bool = false) async {
+        guard !shuttingDown, !startingLogin else { return }
+        startingLogin = true
+        defer { startingLogin = false }
+        let generation = loginGeneration
         guard installed else { loginStatusLine = "✗ Install the Codex CLI first"; return }
         if !force, loggedIn { loginStatusLine = "✓ Already logged in"; return }   // self-guard; "Log in again" passes force
-        loginProcess?.terminate()          // kill any stale attempt before re-opening
+        if let process = loginProcess, process.isRunning {
+            process.terminate()
+            await Task.detached { process.waitUntilExit() }.value
+        }
+        guard !Task.isCancelled, generation == loginGeneration else { return }
         loginProcess = nil
         do {
-            // URLs elided from the stream: the login flow prints the OAuth auth URL (PKCE/state
-            // params), and every Log() line ships as a Release breadcrumb.
-            loginProcess = try CodexCLI.startLogin { line in
-                Log("[codex-signin] \(line.contains("://") ? "<url elided>" : line)")
-            }
+            loginProcess = try CodexCLI.startLogin()
+            loggedIn = false
+            refreshedAccount = nil
+            lastConnectorRefresh = nil
             loggingIn = true
             // UI-neutral on purpose: onboarding and Settings → Health both auto-notice the
             // finished sign-in (no confirm button); only the dev sheet still has one.
@@ -367,8 +406,29 @@ final class CodexSetup {
             loginProcess?.terminate()      // the OAuth callback server already did its job
             loginProcess = nil
             loginStatusLine = "✓ Logged in to Codex"
+            refreshConnectorsAfterLogin()
         } else {
             loginStatusLine = "✗ Not logged in yet; finish in the browser, then tap again."
+        }
+    }
+
+    private func refreshConnectorsAfterLogin() {
+        guard !shuttingDown, !CodexRuntimeMigration.isPending, let account = CodexRuntime.accountIdentity, account != refreshedAccount,
+              connectorRefreshTask == nil, loginProcess?.isRunning != true,
+              lastConnectorRefresh.map({ Date().timeIntervalSince($0) >= 60 }) ?? true else { return }
+        lastConnectorRefresh = Date()
+        connectorRefreshTask = Task {
+            defer { connectorRefreshTask = nil }
+            do {
+                let changed = try CodexRuntime.prepareAccountCache()
+                if changed || !FileManager.default.fileExists(atPath: CodexRuntime.plugins.path) {
+                    await ConnectorCensus.refreshCodexCache()
+                }
+                guard !Task.isCancelled, CodexRuntime.accountIdentity == account else { return }
+                _ = ConnectorCensus.persist(ConnectorCensus.listCodex(), for: .chatgpt)
+                // A network failure leaves the empty cache retryable on the next status refresh.
+                if FileManager.default.fileExists(atPath: CodexRuntime.plugins.path) { refreshedAccount = account }
+            } catch { Log("CodexSetup: connector refresh deferred (\(ErrorLabel(error)))") }
         }
     }
 

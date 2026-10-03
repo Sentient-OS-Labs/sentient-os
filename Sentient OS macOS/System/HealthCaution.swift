@@ -51,11 +51,13 @@ enum HealthCaution {
                 case .launchAtLogin:  return "Launch at login is off, so I won't be awake for the 3 AM run."
                 }
             case .codexMissing:
-                return "Codex is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
+                return ModelBackend.current == .claude
+                    ? "Computer use needs Codex CLI. A quick setup in Permissions & Health fixes it."
+                    : "Codex is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
             case .codexSignedOut:
                 return "Codex is signed out, so proactive work is paused. Log back in and I'll catch up tonight."
             case .codexOutdated:
-                return "You are running an older version of Codex. Click to update in Settings"
+                return "Codex needs attention. Open Settings to repair it or check for a Sentient update."
             case .claudeMissing:
                 return "Claude Code is missing from this Mac, so my cloud work is paused. A quick reinstall fixes it."
             case .claudeSignedOut:
@@ -140,10 +142,12 @@ enum HealthCaution {
         let engineIsClaude = ModelBackend.current == .claude
         let engineBinaryPresent = engineIsClaude ? ClaudeCLI.locateBinary() != nil
                                                  : CodexCLI.locateBinary() != nil
-        if !dismissed.contains("codex") {
+        if !CodexRuntimeMigration.isPending, !dismissed.contains("codex") {
             if engineIsClaude {
                 if !engineBinaryPresent { return .claudeMissing }
                 if await !claudeLoggedIn(force: forceCodexRecheck) { return .claudeSignedOut }
+                if computerUseEverReady, CodexCLI.locateBinary() == nil { return .codexMissing }
+                if CodexSetup.shared.outdated { return .codexOutdated }
             } else {
                 if !engineBinaryPresent { return .codexMissing }
                 if ModelBackend.current == .chatgpt,
@@ -156,14 +160,17 @@ enum HealthCaution {
         // so its hands and eyes are Sentient's own grants: probed directly, no FDA needed
         // (AXIsProcessTrusted answers live; the Screen Recording preflight is this process's view,
         // so the FDA-backed TCC read rides along as the live truth when it's available).
-        if engineBinaryPresent, !dismissed.contains("computerUse") {
+        if !CodexRuntimeMigration.isPending, engineBinaryPresent, !dismissed.contains("computerUse") {
             if !ComputerUseBackend.current.isInstalled || !ComputerUseSetup.current.ready {
                 // The update-migration window (ComputerUseUpgrade) presents on this exact state at
                 // home open, with the download as ITS one glowing fix — while it's up, a red
                 // banner behind it would be the same message twice. The banner still covers the
                 // window-less case (the driver vanishing mid-session; the next home open raises
                 // the window and this rung goes quiet again).
-                if computerUseEverReady, !ComputerUseUpgrade.shared.isPresenting,
+                // Startup verification is pending, not a broken installation. Home rechecks
+                // when the shared installer finishes, including after a failed download.
+                if computerUseEverReady, !ComputerUseSetup.current.isInstalling,
+                   !ComputerUseUpgrade.shared.isPresenting,
                    ComputerUseSetup.current.updateNotice == .hidden {
                     return .computerUseBroken(payloadGone: true)
                 }

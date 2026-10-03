@@ -675,13 +675,9 @@ final class CommandRunModel {
         let context = CustomInstructions.sidekick
         let contextLine = context.isEmpty ? ""
             : "\nStanding preferences I've set for you (apply them wherever they're relevant to this task): \(context)\n"
-        // Email as a second context source — only when the user's Gmail is linked AND the engine
-        // has connectors (ChatGPT: the hosted connector rides the hermetic run, see
-        // CodexCLI.runAgentCommand; Claude: the wall admits it, see ClaudeCLI.agentArguments;
-        // BYOM has neither). Without the link the line would send the agent hunting for tools
-        // that don't exist. Complements the CONNECTED SERVICES block: this teaches WHEN to read
-        // email for grounding; the block lists what's attached and prefers tools over UI.
-        let gmailLine = (ModelBackend.connectorsAvailable
+        // Only ChatGPT carries its hosted Gmail tools into the Codex computer task.
+        // Claude's dedicated connector tasks still run separately through claude -p.
+        let gmailLine = (ModelBackend.current == .chatgpt
                          && UserDefaults.standard.bool(forKey: "dbg.gmail.connected"))
             ? "\nMy email is also available to you through the Gmail tools. Reach for it when you're missing context — the task mentions a person, company, order, booking, or thread you don't recognize from my screens or my knowledge base — and read just enough to ground yourself before acting. Don't send, label, or modify anything in Gmail unless the task itself asks for that.\n"
             : ""

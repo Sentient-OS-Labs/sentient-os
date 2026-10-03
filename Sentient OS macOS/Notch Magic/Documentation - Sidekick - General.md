@@ -176,4 +176,5 @@ done; only sizes are logged. The proactive executor passes no frames.
 
 `Notch Magic/Documentation - Sidekick - Notch Window & Visual.md`, `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Proactive/Documentation - Proactive Intelligence.md` (card fires), `Views/Documentation - Views - Home, Processing & Shared UI.md` (`PromptBar`).
 
-Computer-use runtime selection and its manual live in `FrontierRun`: native OpenAI tools for ChatGPT, CUA for Claude/custom. See `Driver/Documentation - Native Computer Use.md`.
+Computer-use runtime selection and its manual live in `FrontierRun`: native OpenAI tools through `codex exec` for every backend. Claude subscriptions use the local
+ClaudeSubscriptionBridge for inference; dedicated connector tasks stay on the structured Claude path. See `Driver/Documentation - Native Computer Use.md`.

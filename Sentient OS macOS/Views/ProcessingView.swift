@@ -504,7 +504,7 @@ struct ProcessingView: View {
                             .buttonStyle(.borderedProminent).tint(.white)
                             .disabled(claude.loggingIn)
                     } else {
-                        Button("Log in to Codex") { loginStarted = true; codex.startLogin(force: true) }
+                        Button("Log in to Codex") { loginStarted = true; Task { await codex.startLogin(force: true) } }
                             .buttonStyle(.borderedProminent).tint(.white)
                             .disabled(codex.loggingIn)
                     }

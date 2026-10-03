@@ -48,6 +48,7 @@ final class ComputerUseSetup {
     private(set) var isInstalling = false
     /// Latest streamed progress line, or the final ✓/✗ result.
     private(set) var status: String?
+    private(set) var failure: Error?
     private var lastInstallSucceeded = false
     private var verificationFailed = false
 
@@ -63,12 +64,11 @@ final class ComputerUseSetup {
     @ObservationIgnored private var installTask: Task<Bool, Never>?
     @ObservationIgnored private var installGeneration = UUID()
 
-    /// Repair an established runtime whose required components vanished or became too old.
-    /// Fresh installs and first-time engine migrations retain their own setup entry points.
-    func updateIfNeeded() {
-        guard hasInstallationHistory, !backend.isInstalled else { return }
-        updateNotice = .updating
-        beginInstall()
+    /// Start shared dependency preparation on every normal app launch, including onboarding.
+    /// Existing installs are validated and reused. Routine checks stay quiet; an established
+    /// runtime missing required components retains its repair notice. No login or grants here.
+    func prepareForLaunch() {
+        beginInstall(announceUpdate: hasInstallationHistory && !backend.isInstalled)
     }
 
     func dismissUpdateNotice() {
@@ -83,7 +83,7 @@ final class ComputerUseSetup {
         _ = await installTask?.value
     }
 
-    private func beginInstall(force: Bool = false) {
+    private func beginInstall(force: Bool = false, announceUpdate: Bool = true) {
         guard installTask == nil else { return }
         if !force, backend == .cua, backend.isInstalled {
             ready = true
@@ -91,9 +91,10 @@ final class ComputerUseSetup {
             status = "✓ Computer use already installed"
             return
         }
-        if hasInstallationHistory { updateNotice = .updating }
+        if announceUpdate, hasInstallationHistory { updateNotice = .updating }
         isInstalling = true
         lastInstallSucceeded = false
+        failure = nil
         ready = false
         progress = .downloading(nil)
         status = force ? "Re-installing…" : "Starting…"
@@ -124,11 +125,12 @@ final class ComputerUseSetup {
                 verificationFailed = false
                 ready = true
                 lastInstallSucceeded = true
-                status = "✓ Computer use ready"
+                status = backend == .openAI ? "✓ Computer use installed" : "✓ Computer use ready"
                 progress = .ready
                 if updateNotice == .updating { updateNotice = .ready }
                 return true
             } catch {
+                failure = error
                 ready = backend.isInstalled && !verificationFailed
                 status = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
                 if updateNotice == .updating { updateNotice = .failed }
@@ -142,13 +144,19 @@ final class ComputerUseSetup {
     /// The install's own network deadline is authoritative; a slow connection must not hit the
     /// former two-minute waiter ceiling while the same download legitimately continues.
     @discardableResult
-    func ensureInstalled() async -> Bool {
+    func ensureInstalled(nativeConfiguration: OpenAIComputerUse.Configuration? = nil) async -> Bool {
+        if backend == .openAI, await !CodexSetup.shared.ensureComputerUseCLI() {
+            failure = OpenAIComputerUse.RuntimeError.cliUnavailable
+            status = "Computer use needs Codex CLI. Prepare it in Permissions & Health."
+            return false
+        }
         if !isInstalling, backend.isInstalled {
             if backend == .openAI {
-                do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL) }
+                do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL, configuration: nativeConfiguration) }
                 catch {
                     if !Task.isCancelled {
-                        verificationFailed = true
+                        failure = error
+                        verificationFailed = (error as? OpenAIComputerUse.RuntimeError) != .cliUnavailable
                         ready = false
                         status = "✗ " + error.localizedDescription
                     }
@@ -156,6 +164,7 @@ final class ComputerUseSetup {
                 }
             }
             verificationFailed = false
+            failure = nil
             ready = true
             return !Task.isCancelled
         }
@@ -182,6 +191,9 @@ final class ComputerUseSetup {
                                   onLine: @escaping @Sendable (String) -> Void) async throws {
         switch backend {
         case .openAI:
+            guard await CodexSetup.shared.ensureComputerUseCLI() else {
+                throw OpenAIComputerUse.RuntimeError.cliUnavailable
+            }
             try await OpenAIComputerUseSetup.install(force: force, onProgress: onProgress, onLine: onLine)
         case .cua:
             try await CuaDriverSetup.install(force: force, onProgress: onProgress, onLine: onLine)
