@@ -263,6 +263,7 @@ actor ClaudeSubscriptionBridge {
                 calls[owner] = Call(fingerprint: fingerprint, waiters: [continuation])
                 callOwners[callID] = owner
                 queue.append(item)
+                onProgress(Self.toolProgress(tool, arguments: arguments))
                 flush()
             }
         default:
@@ -303,14 +304,42 @@ actor ClaudeSubscriptionBridge {
                     args: [ClaudeSubscriptionProcess.argument], stdinText: invocationJSON,
                     cwd: directory.path, timeout: timeout + 5, includeCustomProviderKey: false,
                     terminationGrace: 3, retainStdoutLine: ClaudeSubscriptionProcess.retainEnvelopeLine) { line in
-                        for progress in ClaudeCLI.humanLines(fromStreamJSON: line)
-                            where !progress.hasPrefix("→ sentient_relay.") { onProgress(progress) }
+                        for progress in Self.narrationLines(fromStreamJSON: line) { onProgress(progress) }
                     }
                 try Task.checkCancellation()
                 if result.status == 124 { throw CodexCLI.CLIError.timedOut(after: timeout) }
                 let envelope = try ClaudeCLI.parseEnvelope(result, durationMS: Int(Date().timeIntervalSince(began) * 1_000))
                 complete(envelope)
             } catch { fail(error) }
+        }
+    }
+
+    /// Only assistant narration reaches the notch. Relay activity is emitted when a validated
+    /// tool call is queued, so retries, tool results, arguments, and thinking never become logs.
+    nonisolated static func narrationLines(fromStreamJSON line: String) -> [String] {
+        ClaudeCLI.humanLines(fromStreamJSON: line)
+            .filter { !$0.hasPrefix("→ sentient_relay.") }
+            .flatMap { $0.components(separatedBy: .newlines) }
+    }
+
+    nonisolated static func toolProgress(_ tool: Wire.Tool, arguments: [String: Any]) -> String {
+        guard tool.namespace == "mcp__sentient_native" else {
+            if ["exec_command", "shell_command", "write_stdin"].contains(tool.name) {
+                return tool.name == "write_stdin" ? "Continuing a command" : "Running a command"
+            }
+            return "→ \(tool.namespace.replacingOccurrences(of: "mcp__", with: "")).\(tool.name)"
+        }
+        let app = (arguments["app"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = app.flatMap { $0.isEmpty ? nil : String($0.prefix(80)) }
+        switch tool.name {
+        case "get_app_state": return target.map { "Looking at \($0)" } ?? "Looking at the app"
+        case "get_desktop_state", "list_apps": return "Looking at your Mac"
+        case "click", "double_click", "right_click": return target.map { "Clicking in \($0)" } ?? "Clicking"
+        case "set_value", "type_text": return target.map { "Entering text in \($0)" } ?? "Entering text"
+        case "press_key": return target.map { "Using the keyboard in \($0)" } ?? "Using the keyboard"
+        case "scroll": return target.map { "Scrolling in \($0)" } ?? "Scrolling"
+        case "drag": return target.map { "Dragging in \($0)" } ?? "Dragging"
+        default: return "→ computer.\(tool.name)"
         }
     }
 

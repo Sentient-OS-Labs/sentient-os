@@ -757,6 +757,10 @@ actor CodexCLI {
             var environment = nativeConfiguration.clientEnvironment
             if backend == .claude {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+                // Claude supplies the readable progress for this run. Keep one producer:
+                // Codex's prompt echo otherwise leaves the notch in its hidden `user` section
+                // while Claude is narrating and the native tools are already working.
+                onLine("codex")
                 let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName })
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
                     timeout: timeout, namespaces: namespaces, onProgress: onLine)
@@ -774,7 +778,9 @@ actor CodexCLI {
             let out = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
                 return try await Self.executeStreaming(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
-                    extraEnv: environment, onLine: onLine)
+                    extraEnv: environment) { line in
+                        if backend != .claude { onLine(line) }
+                    }
             } onCancel: {
                 // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
                 Task { await ownedBridge?.stop() }
