@@ -1050,7 +1050,7 @@ enum ConnectorLab {
              try! ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
                                       socketPath: "/tmp/lab.sock"))
         show("codex agent",
-             CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-6-sol",
+             try! CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-6-sol",
                                      effortArg: "low", socketPath: "/tmp/lab.sock"))
 
         Log("-- connected services block (live backend: \(ModelBackend.current.rawValue)) --")

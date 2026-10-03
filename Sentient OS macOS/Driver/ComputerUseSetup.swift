@@ -125,7 +125,7 @@ final class ComputerUseSetup {
                 verificationFailed = false
                 ready = true
                 lastInstallSucceeded = true
-                status = "✓ Computer use ready"
+                status = backend == .openAI ? "✓ Computer use installed" : "✓ Computer use ready"
                 progress = .ready
                 if updateNotice == .updating { updateNotice = .ready }
                 return true
@@ -143,13 +143,15 @@ final class ComputerUseSetup {
     /// The install's own network deadline is authoritative; a slow connection must not hit the
     /// former two-minute waiter ceiling while the same download legitimately continues.
     @discardableResult
-    func ensureInstalled() async -> Bool {
+    func ensureInstalled(nativeConfiguration: OpenAIComputerUse.Configuration? = nil) async -> Bool {
         if !isInstalling, backend.isInstalled {
             if backend == .openAI {
-                do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL) }
+                do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL, configuration: nativeConfiguration) }
                 catch {
                     if !Task.isCancelled {
-                        verificationFailed = true
+                        // A missing CLI does not make the installed helper corrupt. Once Codex
+                        // is restored, refresh can reuse the bundle without a redundant download.
+                        verificationFailed = (error as? OpenAIComputerUse.RuntimeError) != .cliUnavailable
                         ready = false
                         status = "✗ " + error.localizedDescription
                     }

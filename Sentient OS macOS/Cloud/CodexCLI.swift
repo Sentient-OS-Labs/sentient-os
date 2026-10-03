@@ -687,14 +687,15 @@ actor CodexCLI {
     /// delete/trash-class tools are stripped from the surface entirely. An id the account
     /// doesn't carry makes the strip an inert no-op (measured), so unlinked chips cost nothing.
     static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
-                               effortArg: String, socketPath: String?) -> [String] {
+                               effortArg: String, socketPath: String?,
+                               nativeConfiguration: OpenAIComputerUse.Configuration? = nil) throws -> [String] {
         var args = execArguments() + ["--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config"]
         let computerOverrides: [String]
         if ComputerUseBackend.current == .openAI {
-            computerOverrides = OpenAIComputerUse.codexOverrides
+            computerOverrides = try (nativeConfiguration ?? .resolve()).codexOverrides
         } else {
             precondition(socketPath != nil, "CUA tasks require the host-owned socket")
             computerOverrides = CuaDriver.codexOverrides(socketPath: socketPath!)
@@ -739,6 +740,9 @@ actor CodexCLI {
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         var beganCuaSession = false
+        var nativeTask: UUID?
+        var nativeLease: CodexRuntime.FileLock?
+        defer { nativeLease?.unlock() }
         // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
         // per run, so a change applies to the very next fire with no restart. backendTuned: on the
         // custom backend the user's endpoint model + its ONE reasoning level drive computer use
@@ -759,10 +763,12 @@ actor CodexCLI {
                 throw CLIError.notAvailable(.notWorking("computer use is not set up; open Permissions & Health"))
             }
             try Task.checkCancellation()
+            if runtime == .openAI { nativeLease = try await CodexRuntime.sharedRuntimeLease() }
+            let nativeConfiguration = runtime == .openAI ? try OpenAIComputerUse.Configuration.resolve() : nil
             var socket: String?
             switch runtime {
             case .openAI:
-                try await OpenAIComputerUse.launchForPermissionRequest()
+                nativeTask = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: nativeConfiguration!)
             case .cua:
                 guard let endpoint = await CuaDriverHost.shared.ensureRunning() else {
                     throw CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
@@ -777,12 +783,13 @@ actor CodexCLI {
 
             // The selected runtime is registered per run. User plugin configuration cannot
             // replace its tool connection; hosted and direct connector policy is preserved.
-            let args = Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
+            let args = try Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
                                            modelID: modelID, effortArg: effortArg,
-                                           socketPath: socket)
+                                           socketPath: socket, nativeConfiguration: nativeConfiguration)
             let modelTag = ModelBackend.current == .custom ? "custom" : modelID
             Log("codex exec: start feature=computer runtime=\(runtime.rawValue) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
-            let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
+            let out = try await Self.executeStreaming(binary: nativeConfiguration?.cliURL.path ?? bin,
+                args: args, timeout: timeout, extraEnv: nativeConfiguration?.clientEnvironment ?? [:], onLine: onLine)
             Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
                 let detail = Self.failureDetail(out)
@@ -793,9 +800,11 @@ actor CodexCLI {
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
             beganCuaSession = false
+            if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
             if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
+            if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             // §7.9: computer-use is the full-capability path (bypass-sandbox, user-fired), so a
             // genuine failure is worth a structured event. Case name only — and never on a cancelled
             // Task (the user's STOP kills codex → non-zero exit, which is not a failure; field-found

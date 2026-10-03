@@ -195,6 +195,18 @@ nonisolated enum CodexRuntime {
         }
         deinit { unlock() }
     }
+    /// Covers native readiness and the complete computer-use task, including helper child
+    /// processes, so a migration or repair cannot change its chosen CLI or home mid-task.
+    static func sharedRuntimeLease() async throws -> FileLock {
+        let acquisition = Task.detached {
+            try prepareHome()
+            return try FileLock(root.appendingPathComponent(".runtime.lock"), exclusive: false,
+                                wait: true, cancelled: { Task.isCancelled })
+        }
+        return try await withTaskCancellationHandler { try await acquisition.value }
+            onCancel: { acquisition.cancel() }
+    }
+
     static func executionLease(for binary: String, exclusive: Bool = false, cancelled: () -> Bool = { false }) throws -> FileLock? {
         guard isCodex(binary) else { return nil }
         try prepareHome()
