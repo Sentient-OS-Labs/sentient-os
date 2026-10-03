@@ -81,7 +81,8 @@ actor ProactiveCycle {
              onLine: (@Sendable (String) -> Void)? = nil) async -> CycleFailure? {
         PipelineActivity.begin()                 // Settings' Reset is disabled while the tail runs
         defer { PipelineActivity.end() }
-        let notes = await CycleStore.shared.notes().map(CloudNote.init)
+        let pending = await CycleStore.shared.notes()
+        let notes = await AppleMailEvidence.validated(pending).map(CloudNote.init)
         // Initial processing can finish an interrupted Double Tap setup even without new summaries.
         if notes.isEmpty, FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) {
             await Self.publishWritingStyle(await Self.collectWritingStyle())
@@ -106,6 +107,7 @@ actor ProactiveCycle {
         }
 
         let giftPreexisted = GiftLetter.latest() != nil
+        var consumedSourceIDs = Set<String>()
         if !notes.isEmpty {
             // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
             let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
@@ -126,6 +128,7 @@ actor ProactiveCycle {
             do {
                 if exists { _ = try await VaultCloud.shared.update(notes: notes, onProgress: phase, onLine: onLine) }
                 else      { _ = try await VaultCloud.shared.create(notes: notes, onProgress: phase, onLine: onLine) }
+                consumedSourceIDs = await VaultCloud.shared.lastConsumedSourceIDs
                 Analytics.signal(exists ? "KnowledgeBase.updated" : "KnowledgeBase.built",
                                  parameters: ["newSummaries": "\(notes.count)"])
             } catch {
@@ -202,7 +205,7 @@ actor ProactiveCycle {
         }
 
         // 4) Wipe this cycle's summaries — the knowledge base is the durable memory now. Success only.
-        await CycleStore.shared.wipeAllNotes()
+        await CycleStore.shared.wipeNotes(sourceIDs: consumedSourceIDs)
         OvernightCaution.clear()                             // a full success retires any morning-after banner
         UserDefaults.standard.set(Date(), forKey: Self.lastCycleKey)
         OvernightScheduler.noteFirstCycleCompleted()   // "initial processing ended" → start the 14h auto-enable clock (once)

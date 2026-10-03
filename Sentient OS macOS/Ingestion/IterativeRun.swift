@@ -92,6 +92,8 @@ struct RunProgress: Sendable {
     /// halt is saved (marks are per-item atomic); nothing after it was read. The caller shows the
     /// disk-full screen / morning caution instead of running the cloud tail (which writes too).
     var diskFull = false
+    var mailDeferred = 0
+    var mailIncomplete = false
 }
 
 struct IterativeRun {
@@ -129,7 +131,7 @@ struct IterativeRun {
         // §7.22: if this run includes a DB source (WhatsApp/iMessage/Notes need Full Disk Access),
         // report the FDA probe when it isn't cleanly granted — the top "empty morning" signal (a 3am
         // run that silently reads nothing because TCC denied us). Once per run, structure only.
-        if connectors.contains(where: { [.whatsapp, .imessage, .notes].contains($0.kind) }) {
+        if connectors.contains(where: { [.whatsapp, .imessage, .notes, .appleMail].contains($0.kind) }) {
             Permissions.reportProbe()
         }
 
@@ -143,6 +145,10 @@ struct IterativeRun {
                 tags: ["error": String(describing: type(of: error))],
                 extra: ["model_present": String(ModelLocator.resolve() != nil)],
                 fingerprint: ["engine", "load_failed"])
+            if connectors.contains(where: { $0.kind == .appleMail }) {
+                p.failed = 1; p.mailIncomplete = true
+                UserDefaults.standard.set("Apple Mail is waiting for the on-device model. Try analysis again.", forKey: AppleMailHealth.key)
+            }
             return p
         }
 
@@ -215,6 +221,28 @@ struct IterativeRun {
 
         runLoop: for connector in connectors {
             if Task.isCancelled { break }
+            if let mail = connector as? AppleMailConnector {
+                let base = p
+                let result = await runMail(mail, engine: engine) { update in
+                    var combined = base
+                    combined.total += update.total; combined.done += update.done
+                    combined.survivors += update.survivors; combined.junk += update.junk; combined.sensitive += update.sensitive
+                    combined.failed += update.failed; combined.parseFailures += update.parseFailures
+                    combined.totalSeconds += update.totalSeconds; combined.lastSeconds = update.lastSeconds
+                    combined.mailDeferred = update.mailDeferred; combined.mailIncomplete = update.mailIncomplete
+                    combined.lastPath = update.lastPath; combined.lastTitle = update.lastTitle; combined.lastSummary = update.lastSummary
+                    combined.lastPrompt = nil; combined.lastFilePath = nil; combined.lastVerdict = update.lastVerdict
+                    onProgress(combined)
+                }
+                p.total += result.total; p.done += result.done; p.survivors += result.survivors
+                p.junk += result.junk; p.sensitive += result.sensitive; p.failed += result.failed
+                p.parseFailures += result.parseFailures; p.mailDeferred += result.mailDeferred
+                p.totalSeconds += result.totalSeconds; p.lastSeconds = result.lastSeconds
+                p.mailIncomplete = result.mailIncomplete; p.diskFull = result.diskFull
+                p.lastPrompt = nil; p.lastPath = "Apple Mail"; p.lastTitle = result.lastTitle; p.lastSummary = result.lastSummary
+                if result.diskFull { break runLoop }
+                continue
+            }
             let buckets: [Bucket]
             do { buckets = try connector.buckets(since: marks) }
             catch {
@@ -339,6 +367,7 @@ struct IterativeRun {
                     // ONE atomic store write per item: optional survivor note + marker advance — no gap
                     // for a crash to land in. Iterative climbs the mark; initial sinks the floor.
                     let outcome: CycleStore.CommitOutcome
+                    if Task.isCancelled { break runLoop }
                     switch effective {
                     case .iterative: outcome = await store.advance(bucketKey: bucket.key, note: draft, to: w.key)
                     case .initial:   outcome = await store.sinkFloor(bucketKey: bucket.key, note: draft, top: top!, floor: w.key)
@@ -354,6 +383,7 @@ struct IterativeRun {
                         p.diskFull = true
                         break runLoop
                     }
+                    if outcome == .failed { p.failed += 1; break runLoop }
                     sinceReload += 1; p.done += 1; processedThisConnector += 1
                     onProgress(p)
                 }

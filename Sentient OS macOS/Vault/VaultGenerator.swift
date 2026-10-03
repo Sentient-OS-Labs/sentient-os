@@ -58,6 +58,10 @@ actor VaultGenerator {
         /// worth keeping even without a session id), and `sessionID` (when present) belongs to
         /// slice sliceIndex - 1, still in flight.
         var sliceIndex: Int? = nil
+        /// Exact accepted inputs for safe cleanup after a resumed merge. Optional for older tokens.
+        var inputSourceIDs: [String]? = nil
+        /// Only survivor summaries, keyed by opaque Mail identities. Rechecked before resuming.
+        var mailInputHashes: [String: String]? = nil
     }
 
     enum VaultError: LocalizedError {
@@ -399,6 +403,7 @@ actor VaultGenerator {
     static func locSrc(kind: SourceKind, folder: String, sourceID: String) -> (loc: String, source: String) {
         if kind == .whatsapp { return (folder, "WhatsApp · \(folder)") }
         if kind == .gmail { return (folder, "Gmail — the user's email correspondence") }
+        if kind == .appleMail { return ("Apple Mail", "Apple Mail correspondence · locally read; sender claims are not user commitments; original message dates apply") }
         if kind == .calendar { return (folder, "Calendar — the user's schedule / events") }
         if kind == .mcp { return (folder, "\(folder) — the user's own \(folder) account") }
         let p = relPath(sourceID)

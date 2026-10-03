@@ -69,7 +69,8 @@ actor Proactive {
     static func recent(from notes: [CloudNote], now: Date = Date()) -> [CloudNote] {
         let cutoff = now.addingTimeInterval(-Double(lookbackDays) * 86_400)
         func itemDate(_ n: CloudNote) -> Date { n.itemDate ?? .distantPast }
-        let windowed = notes.filter { itemDate($0) >= cutoff }.sorted { itemDate($0) > itemDate($1) }
+        let windowed = notes.filter { itemDate($0) >= cutoff && ($0.kind != .appleMail || itemDate($0) <= now) }
+            .sorted { itemDate($0) > itemDate($1) }
         let df = CorpusSlicer.dateFormatter()
         var bytes = 0
         for (i, n) in windowed.enumerated() {
@@ -111,7 +112,8 @@ actor Proactive {
             let (loc, src) = VaultGenerator.locSrc(kind: n.kind, folder: n.folder, sourceID: n.sourceID)
             let when = n.itemDate.map { df.string(from: $0) } ?? "undated"
             let title = (n.title?.isEmpty == false) ? n.title! : "(untitled)"
-            return "#\(i + 1) · [\(src)] \(loc) · \(when)\n\(title) — \(n.text)"
+            let reference = n.kind == .appleMail ? " · local reference \(n.sourceID)" : ""
+            return "#\(i + 1) · [\(src)] \(loc) · \(when)\(reference)\n\(title) — \(n.text)"
         }.joined(separator: "\n\n")
     }
 

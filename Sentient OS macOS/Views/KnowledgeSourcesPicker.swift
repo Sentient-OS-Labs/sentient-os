@@ -40,6 +40,8 @@ struct KnowledgeSourcesPicker: View {
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
     @State private var showCalendarConnect = false
+    @State private var showAppleMailPicker = false
+    @AppStorage(AppleMailSelection.key) private var appleMailAccounts = ""
     @State private var flashMinimum = false
 
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
@@ -110,6 +112,11 @@ struct KnowledgeSourcesPicker: View {
         }
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
+        .sheet(isPresented: $showAppleMailPicker) {
+            AppleMailPicker(initialSelection: AppleMailSelection.accounts) { accounts in
+                appleMailAccounts = accounts.sorted().joined(separator: ",")
+            }
+        }
         .sheet(item: $selectedConnector) { source in
             ConnectorConnectSheet(source: source, connectors: $connectors, context: context)
         }
@@ -121,7 +128,7 @@ struct KnowledgeSourcesPicker: View {
 
     private var fdaLine: some View {
         VStack(alignment: .leading, spacing: 8) {
-            StatusLine(title: "Full Disk Access is off, so WhatsApp, iMessage & Notes can't be read.",
+            StatusLine(title: "Full Disk Access is off, so Mail, WhatsApp, iMessage & Notes can't be read.",
                        health: .warn, note: "not granted", fixTitle: "Grant…") {
                 Permissions.openFullDiskAccessSettings()
             }
@@ -201,7 +208,7 @@ struct KnowledgeSourcesPicker: View {
                         calendarColumn
                     }
                 }
-                sourceNote("Connect through your own \(ModelBackend.current == .claude ? "Claude" : "ChatGPT") account, never our servers.",
+                sourceNote("Gmail, Outlook and calendars connect through your own \(ModelBackend.current == .claude ? "Claude" : "ChatGPT") account, never our servers.",
                            symbol: "lock")
             }
         } trailing: {
@@ -218,6 +225,13 @@ struct KnowledgeSourcesPicker: View {
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
                 connectorPill(source, featured: true)
             }
+            KnowledgeSourcePill(label: "Apple Mail", asset: "AppleMailMark",
+                                selected: !appleMailAccounts.isEmpty, featured: true) {
+                showAppleMailPicker = true
+            }
+            .accessibilityValue(appleMailAccounts.isEmpty ? "Not selected"
+                : "\(AppleMailSelection.accounts.count) \(AppleMailSelection.accounts.count == 1 ? "account" : "accounts") selected for analysis")
+            .help("Choose which Apple Mail accounts to include.")
         }
         .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
     }
