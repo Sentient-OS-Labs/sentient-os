@@ -70,6 +70,13 @@ tag is what the prompt keys its trust on: `Obsidian — USER'S OWN NOTE`, `<fold
 user's schedule / events`, or the plain folder for screenshots, photos, and PDFs. Proactive's prompts
 render the same lines.
 
+Apple Calendar has its own local-schedule source tag. Its app-authored coverage note carries the
+capture time and fixed window. Build/update prompts reconcile earlier schedule claims against the
+current summaries across all parts of the cycle, preserve uncertainty, and treat older claims as
+historical. A missing summary does not prove an event was deleted or that time is free. Native and
+hosted sources can describe the same meeting, so consumers must deduplicate them and verify live
+state before proposing calendar changes.
+
 ## Rules
 
 - Never edit the live vault in place from a cloud run; stage, then swap.

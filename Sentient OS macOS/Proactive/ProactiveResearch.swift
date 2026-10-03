@@ -412,9 +412,10 @@ actor ProactiveResearch {
         // grounding surface for verify/prepare — confirm free/busy, an event's real time, what's
         // imminent. Only present when Calendar is connected (CalendarConnect.fetchProactiveContext).
         let calendarBlock: String = {
-            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return "" }
-            if calendarContextScoped { return CalendarContext.promptBlock(ctx) }
-            return """
+            let localPolicy = recent.contains { $0.kind == .appleCalendar } ? CalendarContext.localSnapshotPolicy : ""
+            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return localPolicy }
+            if calendarContextScoped { return localPolicy + CalendarContext.promptBlock(ctx) }
+            return localPolicy + """
 
             ## THE USER'S LIVE CALENDAR (every event — last 7 days + next 24 hours)
             The user's actual calendar right now (already fetched for you). Use it as a grounding \

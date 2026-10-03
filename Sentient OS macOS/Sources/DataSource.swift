@@ -28,6 +28,7 @@ enum SourceKind: String, Codable, Sendable, CaseIterable {
     case gmail
     case appleMail
     case calendar
+    case appleCalendar
     case mcp
 }
 
@@ -44,7 +45,7 @@ struct Candidate: Sendable, Identifiable {
     let itemDate: Date                // the artifact's OWN date (drives ordering + the summary's date)
     let metadata: [String: String]
 
-    init(id: String, kind: SourceKind, cursorKey: String = "", cursorValue: String = "",
+    nonisolated init(id: String, kind: SourceKind, cursorKey: String = "", cursorValue: String = "",
          itemDate: Date, metadata: [String: String] = [:]) {
         self.id = id
         self.kind = kind

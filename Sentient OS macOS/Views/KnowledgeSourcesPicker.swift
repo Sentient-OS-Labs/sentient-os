@@ -29,6 +29,7 @@ struct KnowledgeSourcesPicker: View {
     @AppStorage("dbg.run.gmail")       private var runGmail = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
+    @AppStorage(AppleCalendarSource.issueKey) private var calendarReadIssue = ""
     // Re-renders the connector catalog and availability when the engine changes,
     // and keys the census reload below.
     @AppStorage(ModelBackend.key) private var backendRaw = ""
@@ -42,6 +43,7 @@ struct KnowledgeSourcesPicker: View {
     @State private var showCalendarConnect = false
     @State private var showAppleMailPicker = false
     @AppStorage(AppleMailSelection.key) private var appleMailAccounts = ""
+    @State private var showAppleCalendarConnect = false
     @State private var flashMinimum = false
 
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
@@ -117,6 +119,7 @@ struct KnowledgeSourcesPicker: View {
                 appleMailAccounts = accounts.sorted().joined(separator: ",")
             }
         }
+        .sheet(isPresented: $showAppleCalendarConnect) { AppleCalendarConnectSheet() }
         .sheet(item: $selectedConnector) { source in
             ConnectorConnectSheet(source: source, connectors: $connectors, context: context)
         }
@@ -208,7 +211,7 @@ struct KnowledgeSourcesPicker: View {
                         calendarColumn
                     }
                 }
-                sourceNote("Gmail, Outlook and calendars connect through your own \(ModelBackend.current == .claude ? "Claude" : "ChatGPT") account, never our servers.",
+                sourceNote("Apple Mail and Apple Calendar are read on this Mac. Other connections use your own \(ModelBackend.current == .claude ? "Claude" : "ChatGPT") account, never our servers.",
                            symbol: "lock")
             }
         } trailing: {
@@ -238,6 +241,9 @@ struct KnowledgeSourcesPicker: View {
 
     private var calendarColumn: some View {
         VStack(alignment: .leading, spacing: 9) {
+            KnowledgeSourcePill(label: "Apple Calendar", detail: appleCalendarDetail,
+                                systemImage: "calendar", selected: AppleCalendarSource.isEnabled,
+                                featured: true) { showAppleCalendarConnect = true }
             KnowledgeSourcePill(label: "Google Calendar", asset: "GoogleCalendarMark", selected: runCalendar,
                                 featured: true, locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
@@ -245,6 +251,13 @@ struct KnowledgeSourcesPicker: View {
             }
         }
         .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var appleCalendarDetail: String {
+        let count = AppleCalendarSource.selectedIDs.count
+        if count > 0 && !AppleCalendarSource.hasAccess { return "Calendar access needed · Manage" }
+        if count > 0 && !calendarReadIssue.isEmpty && !PipelineActivity.shared.isRunning { return "Analysis needs attention · Manage" }
+        return count > 0 ? "\(count) calendars selected · On this Mac" : "Choose calendars on this Mac"
     }
 
     private var otherAppsGroup: some View {

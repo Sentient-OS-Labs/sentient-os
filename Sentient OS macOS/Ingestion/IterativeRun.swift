@@ -115,6 +115,11 @@ struct IterativeRun {
              onProgress: @Sendable @escaping (RunProgress) -> Void = { _ in }) async -> RunProgress {
         var p = RunProgress()
         guard !connectors.isEmpty else { return p }
+        // Even an engine-load failure must invalidate an earlier pending calendar snapshot.
+        if connectors.contains(where: { $0.kind == .appleCalendar }) {
+            await store.invalidateCalendarSnapshot()
+            AppleCalendarSource.recordIssue()
+        }
         // Free-space pre-flight: a run's results live on disk (the cycle store, the WAL-safe chat
         // database copies, later the knowledge-base staging copy). Below the floor nothing we read
         // could be kept, so don't wake the engine at all; the caller shows the disk-full screen.
@@ -185,12 +190,13 @@ struct IterativeRun {
                 let prompt = Triage.prompt(for: artifact, currentDate: Date())
                 p.lastPrompt = prompt
                 let result = try await engine.generate(prompt: prompt, imageData: artifact.imageData)
-                let outcome = Triage.decide(result.text)
+                let outcome = Triage.decide(result.text, for: artifact)
                 var draft: NoteDraft?
                 if outcome.verdict == .survivor {
                     draft = NoteDraft(kind: connector.kind, sourceID: cand.id,
                                       folder: cand.metadata["folder"] ?? "", itemDate: cand.itemDate,
-                                      text: outcome.summary, title: outcome.title, reminderFlagged: false)
+                                      text: outcome.summary + (cand.metadata["calendarSchedule"].map { "\n" + $0 } ?? ""),
+                                      title: outcome.title, reminderFlagged: false)
                 }
                 LifetimeStats.bump(outcome.verdict)
                 switch outcome.verdict {
@@ -207,6 +213,7 @@ struct IterativeRun {
                 #if DEBUG
                 Log("• \(cand.metadata["displayPath"] ?? cand.id) → \(outcome.verdict)")
                 #endif
+                if connector.kind == .appleCalendar, outcome.reason == .parseFailed { return .generateFailed }
                 return .ok(draft)
             } catch {
                 p.lastSummary = "(generate skipped: \(error))"
@@ -244,14 +251,20 @@ struct IterativeRun {
                 continue
             }
             let buckets: [Bucket]
-            do { buckets = try connector.buckets(since: marks) }
+            do {
+                buckets = try await withExtractionTimeout(Self.extractionTimeoutSeconds) {
+                    try connector.buckets(since: marks)
+                }
+            }
             catch {
                 // §7.1/F2: this drops the ENTIRE source silently (FDA denied / DB-copy failed). Event
                 // with the source + error TYPE only (the message can embed a path).
-                Log("IterativeRun: buckets() failed for \(connector.kind) — \(error)")
+                Log("IterativeRun: buckets() failed for \(connector.kind) — \(ErrorLabel(error))")
                 CrashReporting.captureEvent("source.dropped", level: .error,
                     tags: ["source": connector.kind.rawValue, "error": String(describing: type(of: error))],
                     fingerprint: ["source", "dropped", connector.kind.rawValue])
+                p.failed += 1
+                if connector.kind == .appleCalendar { AppleCalendarSource.recordIssue(error) }
                 continue
             }
 
@@ -270,6 +283,7 @@ struct IterativeRun {
                 // first run was interrupted, RESUME it; collapsed (floor nil) → everyday catch-up.
                 let effective: Mode
                 switch mode {
+                case _ where bucket.snapshot != nil: effective = .iterative
                 case .auto:      effective = (state == nil || state?.floor != nil) ? .initial : .iterative
                 case .initial:   effective = .initial
                 case .iterative: effective = .iterative
@@ -279,6 +293,9 @@ struct IterativeRun {
                 let work: [(key: ItemKey, item: Candidate)]
                 let top: ItemKey?
                 switch effective {
+                case _ where bucket.snapshot != nil:
+                    top = nil
+                    work = bucket.items.sorted { $0.key < $1.key }
                 case .initial:
                     // Explicit INITIAL = full reset (re-summarize everything). An .auto-chosen initial
                     // (fresh first run OR resuming an interrupted one) keeps its partial progress.
@@ -311,6 +328,7 @@ struct IterativeRun {
                 onProgress(p)
 
                 var finished = true
+                var snapshotNotes: [NoteDraft] = []
                 for w in work {
                     if Task.isCancelled { finished = false; break runLoop }
                     // §5: source over its 60-min budget → stop this source (all its buckets), next source.
@@ -364,6 +382,16 @@ struct IterativeRun {
                     case .generateFailed:   p.failed += 1; draft = nil
                     }
 
+                    if bucket.snapshot != nil {
+                        // Calendar events are mutable and deletions have no change cursor. Never
+                        // advance per event, nor publish survivors from an incomplete snapshot.
+                        if case .ok = result {} else { finished = false }
+                        if let draft { snapshotNotes.append(draft) }
+                        sinceReload += 1; p.done += 1; processedThisConnector += 1
+                        onProgress(p)
+                        continue
+                    }
+
                     // ONE atomic store write per item: optional survivor note + marker advance — no gap
                     // for a crash to land in. Iterative climbs the mark; initial sinks the floor.
                     let outcome: CycleStore.CommitOutcome
@@ -385,6 +413,22 @@ struct IterativeRun {
                     }
                     if outcome == .failed { p.failed += 1; break runLoop }
                     sinceReload += 1; p.done += 1; processedThisConnector += 1
+                    onProgress(p)
+                }
+
+                if let snapshot = bucket.snapshot, finished, !Task.isCancelled {
+                    do {
+                        try await withExtractionTimeout(Self.extractionTimeoutSeconds) { try snapshot.validate() }
+                        try Task.checkCancellation()
+                        let result = await store.commitCalendarSnapshot(snapshot, notes: snapshotNotes)
+                        if result == .diskFull { p.diskFull = true; break runLoop }
+                        if result == .failed { p.failed += 1 }
+                        if result == .saved { UserDefaults.standard.removeObject(forKey: AppleCalendarSource.issueKey) }
+                    } catch {
+                        p.failed += 1
+                        AppleCalendarSource.recordIssue(error)
+                        Log("Apple Calendar snapshot not published: \(ErrorLabel(error))")
+                    }
                     onProgress(p)
                 }
 

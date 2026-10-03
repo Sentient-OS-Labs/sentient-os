@@ -36,6 +36,12 @@ UI renders; `onLine` streams codex's humanized play-by-play from every cloud sta
 "THINKING" trail; the scheduler passes nothing). `resetAll()` forgets the judge items, the prepared
 deck, the gift, and the last-cycle stamp.
 
+Apple Calendar summaries are dated local snapshots, distinct from hosted live-calendar context.
+When they are present, both judge and research receive `CalendarContext.localSnapshotPolicy`: do
+not infer free time or attendance, do not pass local occurrence IDs to hosted APIs, and do not treat
+this read-only connection as write access. Any native-calendar action must be prepared for explicit
+user-triggered computer use and verify the live calendar first.
+
 ## PART 1: the judge (`Proactive.findActionItems`)
 
 - **Input:** the last 7 days of summaries from every source (`Proactive.recent`: windowed by item date, byte-budgeted to `CorpusSlicer.budget`, oldest dropped first), plus the pre-fetched live calendar block, plus the user's standing instructions from Settings (`Proactive.instructionsBlock`, from `CustomInstructions.proactive`), plus the clock ("Right now it is Thursday, July 17, 2026 at 1:05 PM (PDT)", since a hermetic run cannot even run `date`).

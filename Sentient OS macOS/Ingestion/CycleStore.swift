@@ -169,6 +169,8 @@ struct NoteDraft: Sendable {
 
 @ModelActor
 actor CycleStore {
+    private var calendarSnapshotReady = false
+    func invalidateCalendarSnapshot() { calendarSnapshotReady = false }
 
     func mailCheckpoint(_ bucketKey: String) throws -> AppleMailCheckpoint? {
         guard let data = try fetchRow(bucketKey)?.appleMailState else { return nil }
@@ -415,6 +417,28 @@ actor CycleStore {
         })
     }
 
+    /// A complete local calendar snapshot replaces pending summaries and its coverage checkpoint
+    /// together, including an empty result. A crash never publishes half a schedule. Rejected event
+    /// IDs and raw content are absent from both the notes and the checkpoint.
+    func commitCalendarSnapshot(_ snapshot: AppleCalendarSource.Snapshot, notes: [NoteDraft]) -> CommitOutcome {
+        let key = AppleCalendarSource.bucketKey
+        let mark = ItemKey(order: snapshot.capturedAt.timeIntervalSince1970, tiebreak: snapshot.coverage.encoded)
+        let result = commit(bucketKey: key, note: nil, prepare: {
+            guard AppleCalendarSource.isEnabled, snapshot.coverage.matchesSelection else {
+                throw AppleCalendarSource.ReadError.changed
+            }
+            let previous = try self.modelContext.fetch(FetchDescriptor<CycleNote>(
+                predicate: #Predicate { $0.bucketKey == key }))
+            for note in previous { self.modelContext.delete(note) }
+            for note in notes + [snapshot.marker] { self.insertNote(bucketKey: key, note: note) }
+        }, apply: { r in
+            r.order = mark.order; r.tiebreak = mark.tiebreak
+            r.floorOrder = nil; r.floorTiebreak = nil; r.mcpReadOrigin = nil; r.updatedAt = Date()
+        }, make: { BucketPointer(bucketKey: key, mark: mark) })
+        calendarSnapshotReady = result == .saved
+        return result
+    }
+
     /// FIRST RUN (initial descent) — record an optional survivor note AND sink the floor to `floor`
     /// (top stays fixed), in one save. Creates the row with `top` on the first step. A crash leaves an
     /// honest floor → the next run resumes strictly below it.
@@ -445,7 +469,10 @@ actor CycleStore {
     func notes() -> [CycleNoteItem] {
         let rows = (try? modelContext.fetch(FetchDescriptor<CycleNote>(
             sortBy: [SortDescriptor(\.itemDateEpoch, order: .reverse)]))) ?? []
-        return rows.map(item(from:))
+        let calendarMark = pointer(AppleCalendarSource.bucketKey)
+        let calendarAllowed = calendarSnapshotReady && AppleCalendarSource.isEnabled
+            && calendarMark.flatMap { AppleCalendarSource.Coverage.decode($0.tiebreak) }?.matchesSelection == true
+        return rows.filter { $0.kind != SourceKind.appleCalendar.rawValue || calendarAllowed }.map(item(from:))
     }
 
     /// End-of-cycle wipe (fired by the proactive button) — pointers persist, notes do not.
