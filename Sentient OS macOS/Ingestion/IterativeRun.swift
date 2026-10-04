@@ -206,6 +206,7 @@ struct IterativeRun {
                     combined.total += update.total; combined.done += update.done
                     combined.survivors += update.survivors; combined.junk += update.junk; combined.sensitive += update.sensitive
                     combined.failed += update.failed; combined.parseFailures += update.parseFailures
+                    combined.extractionFailed += update.extractionFailed
                     combined.totalSeconds += update.totalSeconds
                     combined.mailDeferred = update.mailDeferred; combined.mailIncomplete = update.mailIncomplete
                     combined.updateLastItem(from: update)
@@ -213,7 +214,8 @@ struct IterativeRun {
                 }
                 p.total += result.total; p.done += result.done; p.survivors += result.survivors
                 p.junk += result.junk; p.sensitive += result.sensitive; p.failed += result.failed
-                p.parseFailures += result.parseFailures; p.mailDeferred += result.mailDeferred
+                p.parseFailures += result.parseFailures; p.extractionFailed += result.extractionFailed
+                p.mailDeferred += result.mailDeferred
                 p.totalSeconds += result.totalSeconds
                 p.mailIncomplete = result.mailIncomplete; p.diskFull = result.diskFull
                 p.updateLastItem(from: result)

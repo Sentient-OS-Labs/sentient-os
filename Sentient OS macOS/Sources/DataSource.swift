@@ -68,7 +68,7 @@ struct Artifact: Sendable, Identifiable {
     let metadata: [String: String]
 
     /// Build an Artifact from its Candidate plus extracted content.
-    init(candidate: Candidate, text: String? = nil, imageData: Data? = nil) {
+    nonisolated init(candidate: Candidate, text: String? = nil, imageData: Data? = nil) {
         self.id = candidate.id
         self.kind = candidate.kind
         self.cursorKey = candidate.cursorKey

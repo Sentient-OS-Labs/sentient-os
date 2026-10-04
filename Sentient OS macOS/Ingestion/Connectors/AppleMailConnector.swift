@@ -14,9 +14,12 @@ nonisolated enum AppleMailSelection {
 
 struct AppleMailConnector: Connector {
     nonisolated static let maximumMessagesPerPass = 600
+    // The 12 KB input plus prompt, retry instruction and 1K reply fit even at one piece/byte.
+    nonisolated static let contextSize = 16_384
+    nonisolated static let maximumInputBytes = 12_000
     let accounts: Set<String>
     var kind: SourceKind { .appleMail }
-    var maxTokens: Int { 8192 }
+    var maxTokens: Int { Self.contextSize }
     // The generic ItemKey Double cannot represent arbitrary Mail rowids. Mail uses its Int64
     // checkpoint path in IterativeRun, never generic timestamp pointers.
     func buckets(since marks: [String: ItemKey]) throws -> [Bucket] { throw AppleMailError.unsupportedSchema }
@@ -52,7 +55,7 @@ nonisolated struct AppleMailCheckpoint: Codable, Sendable {
             self = AppleMailCheckpoint(generation: generation, top: top)
             salt = savedSalt
         }
-        let existing = Set(rows.filter { !$0.excluded }.map(\.id))
+        let existing = Set(rows.filter { !$0.excluded || $0.previewJunk }.map(\.id))
         deferred.formIntersection(existing)
         let budget = min(AppleMailConnector.maximumMessagesPerPass, max(0, limit))
         let fresh = rows.filter { $0.id > highWater }.reversed().prefix(budget).map { Work(row: $0, phase: .discovery) }

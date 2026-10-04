@@ -4,6 +4,8 @@
 
 import Foundation
 
+private enum MailRunFailure: Error { case deadline, model, storage }
+
 extension IterativeRun {
     /// Uses the run's single local engine; all disk work is on a utility task, away from UI work.
     func runMail(_ connector: AppleMailConnector, engine: Engine,
@@ -40,54 +42,78 @@ extension IterativeRun {
                         ?? ($0.generation != snapshot.generation || !eligible.contains($0.rowID))
                 }.map(\.identity))
                 let start = await store.commitMail(bucketKey: bucket, state: state, remove: invalid)
-                guard start == .saved else { p.diskFull = start == .diskFull; throw AppleMailError.database }
+                guard start == .saved else { p.diskFull = start == .diskFull; throw MailRunFailure.storage }
                 for identity in invalid { receipts.removeValue(forKey: identity) }
                 try await Task.detached(priority: .utility) { try snapshot.indexFiles(account: account) }.value
+                p.mailDeferred += state.deferred.count
                 p.total += work.count
                 onProgress(p)
                 for item in work {
                     try Task.checkCancellation()
-                    if Date() >= deadline { throw AppleMailError.busy }
+                    if Date() >= deadline { throw MailRunFailure.deadline }
                     let row = item.row
                     var retry = false, draft: NoteDraft?, receipt: AppleMailReceiptValue?
                     var remove = Set<String>()
                     var decision: Triage.Outcome?
                     var seconds: Double?
                     var loadedBody = false
-                    if !row.excluded {
+                    var failureReason: String?
+                    if !row.excluded || row.previewJunk {
                         do {
-                            let message = try await Task.detached(priority: .utility) { try snapshot.body(row) }.value
+                            let message = try await Task.detached(priority: .utility) { try snapshot.body(row, includeJunkPreview: true) }.value
                             loadedBody = true
+                            let forcedJunk = row.excluded || AppleMailMIME.excluded(message.headers)
                             let identity = AppleMailSource.identity(salt: state.salt, row: row, message: message)
                             remove = Set(receipts.values.filter {
                                 $0.generation == snapshot.generation && $0.rowID == row.id && $0.identity != identity
                             }.map(\.identity))
+                            if forcedJunk { remove.insert(identity) }
                             let hash = AppleMailSource.contentDigest(message, sent: row.sent)
                             receipt = AppleMailReceiptValue(identity: identity, contentHash: hash,
                                 generation: snapshot.generation, rowID: row.id,
                                 messageKey: AppleMailSource.messageKey(salt: state.salt, row: row))
-                            if receipts[identity]?.contentHash != hash {
-                                if generations > 0 && generations % 40 == 0 { try await engine.reload() }
-                                let metadata = ["folder": "Apple Mail", "sent": row.sent ? "1" : "0"]
-                                let candidate = Candidate(id: identity, kind: .appleMail, itemDate: row.date, metadata: metadata)
-                                // Only body + attribution headers reach the on-device model. Bcc,
-                                // routing headers, attachments and original .emlx paths do not.
-                                let header = ["from", "to", "subject", "date"].map { "\($0): \(message.headers[$0, default: ""] .prefix(1000))" }.joined(separator: "\n")
-                                let body = String(decoding: message.text.utf8.prefix(12_000), as: UTF8.self)
-                                let artifact = Artifact(candidate: candidate, text: header + "\n\n" + body)
-                                let response = try await engine.generate(prompt: Triage.prompt(for: artifact, currentDate: Date()), imageData: nil)
-                                generations += 1
-                                guard let outcome = Triage.decideMail(response.text) else {
-                                    p.parseFailures += 1; throw AppleMailError.missingBody
+                            if forcedJunk || receipts[identity]?.contentHash != hash {
+                                if generations >= 40 {
+                                    do { try await engine.reload(); generations = 0 }
+                                    catch { throw MailRunFailure.model }
                                 }
+                                // Raw routing headers, attachments and paths stay outside the model input.
+                                let artifact = AppleMailSource.artifact(row: row, identity: identity, message: message)
+                                let prompt = Triage.prompt(for: artifact, currentDate: Date())
+                                var parsed: Triage.Outcome?
+                                // One fresh attempt can recover transient formatting failures. Never guess
+                                // missing privacy decisions or save a partially parsed response.
+                                for attempt in 0..<2 {
+                                    try Task.checkCancellation()
+                                    let response = try await engine.generate(prompt: prompt + (attempt == 0 ? "" : Triage.mailRetryInstruction))
+                                    generations += 1
+                                    seconds = (seconds ?? 0) + response.totalTime
+                                    switch Triage.mailReply(response.text) {
+                                    case .success(let result): parsed = result
+                                    case .failure(let reason):
+                                        Log("Apple Mail reply deferred: \(reason.rawValue), attempt=\(attempt + 1), bytes=\(response.text.utf8.count)")
+                                        if attempt == 1 { throw reason }
+                                    }
+                                    if parsed != nil { break }
+                                }
+                                guard let parsed else { throw Triage.MailReplyFailure.invalidJSON }
+                                // Metadata policy wins even if the model calls a promotion useful.
+                                // Sensitive always wins over junk; only safe previews reach the card.
+                                let outcome = forcedJunk && parsed.verdict != .sensitive
+                                    ? Triage.Outcome(verdict: .junk, title: parsed.title, summary: parsed.summary, reason: .modelJunk)
+                                    : parsed
                                 decision = outcome
                                 modelFailures = 0
-                                seconds = response.totalTime
                                 if outcome.verdict == .survivor {
                                     draft = NoteDraft(kind: .appleMail, sourceID: identity, folder: "Apple Mail", itemDate: row.date,
                                         text: outcome.summary, title: outcome.title, reminderFlagged: false)
                                 } else { remove.insert(identity); receipt = nil }
                             }
+                        } catch AppleMailMIME.Failure.noText {
+                            // A fully decoded empty body has nothing to classify. Download stubs
+                            // have a separate unavailable error and stay in the deferred queue.
+                            decision = Triage.Outcome(verdict: .junk, title: nil, summary: "", reason: .emptySummary)
+                            remove = Set(receipts.values.filter { $0.generation == snapshot.generation && $0.rowID == row.id }.map(\.identity))
                         } catch AppleMailMIME.Failure.excluded {
                             // Header policy rejection stores neither headers nor an identity.
                             remove = Set(receipts.values.filter { $0.generation == snapshot.generation && $0.rowID == row.id }.map(\.identity))
@@ -98,8 +124,24 @@ extension IterativeRun {
                                 p.failed += 1
                                 // Malformed JSON is a deferred classification, not a broken GPU.
                                 // Repeated bad outputs must not starve all remaining message bodies.
-                                if case AppleMailError.missingBody = error { modelFailures = 0 }
-                                else { modelFailures += 1 }
+                                if let reason = error as? Triage.MailReplyFailure {
+                                    p.parseFailures += 1; modelFailures = 0
+                                    failureReason = "The local model returned an incomplete answer. This email remains queued for another analysis."
+                                    Log("Apple Mail analysis deferred: \(reason.rawValue)")
+                                } else {
+                                    modelFailures += 1
+                                    failureReason = "The on-device model could not finish. This email remains queued for another analysis."
+                                    Log("Apple Mail generation failed: \(String(describing: type(of: error)))")
+                                }
+                            } else {
+                                p.extractionFailed += 1
+                                let reason = (error as? AppleMailMIME.Failure).map { String(describing: $0) }
+                                    ?? (error as? AppleMailError).map { String(describing: $0) } ?? "readError"
+                                if let mime = error as? AppleMailMIME.Failure,
+                                   [.malformed, .unsupported, .invalidTransferEncoding, .invalidText].contains(mime) {
+                                    failureReason = "This message uses an unsupported or damaged format. It remains queued; the rest of your mail can still be analyzed."
+                                }
+                                Log("Apple Mail body deferred: \(reason)")
                             }
                         }
                     }
@@ -107,11 +149,12 @@ extension IterativeRun {
                     var next = state
                     next.finish(item, retry: retry)
                     let outcome = await store.commitMail(bucketKey: bucket, state: next, note: draft, receipt: receipt, remove: remove)
-                    guard outcome == .saved else { p.diskFull = outcome == .diskFull; throw AppleMailError.database }
+                    guard outcome == .saved else { p.diskFull = outcome == .diskFull; throw MailRunFailure.storage }
+                    p.mailDeferred += next.deferred.count - state.deferred.count
                     state = next
                     for identity in remove { receipts.removeValue(forKey: identity) }
                     if let receipt { receipts[receipt.identity] = receipt }
-                    // Display/counters only after a successful commit; no rejected content in UI.
+                    // Display/counters only after a successful commit. Junk text stays in this ephemeral card.
                     // Keep the previous card intact if this attempt is cancelled or cannot be saved.
                     p.lastPath = "Apple Mail"; p.lastFilePath = nil; p.lastPrompt = nil
                     p.lastTitle = nil; p.lastSummary = nil; p.lastVerdict = nil
@@ -120,41 +163,55 @@ extension IterativeRun {
                         LifetimeStats.bump(decision.verdict)
                         switch decision.verdict {
                         case .survivor: p.survivors += 1; p.lastTitle = decision.title; p.lastSummary = decision.summary
-                        case .junk: p.junk += 1
+                        case .junk: p.junk += 1; p.lastTitle = decision.title; p.lastSummary = decision.summary
                         case .sensitive: p.sensitive += 1
                         }
                         p.lastVerdict = decision.verdict
+                        if decision.reason == .emptySummary {
+                            p.lastTitle = "No message text"
+                            p.lastSummary = "This email has no readable body text. Attachments are not analyzed."
+                        }
                     } else if retry {
                         p.lastTitle = loadedBody ? "Analysis deferred" : "Message unavailable"
                         p.lastSummary = loadedBody
-                            ? "This email will be analyzed again on the next run."
-                            : "The message body could not be read. Open Mail, then try analysis again."
+                            ? failureReason ?? "This email will be analyzed again on the next run."
+                            : failureReason ?? "The message body could not be read. Open Mail, then try analysis again."
                     } else if receipt != nil {
                         p.lastTitle = "Already analyzed"
                         p.lastSummary = "No changes since the previous analysis."
                     } else {
                         p.junk += 1
                         p.lastVerdict = .junk
+                        p.lastTitle = "Message skipped"
+                        p.lastSummary = "Deleted messages and drafts are not analyzed."
                     }
                     p.done += 1
                     onProgress(p)
                     if modelFailures == 3 || modelFailures >= 6 {
-                        try await engine.reload()
+                        do { try await engine.reload() }
+                        catch { throw MailRunFailure.model }
                         // Leave remaining rows untouched if inference keeps failing after reload.
-                        if modelFailures >= 6 { throw AppleMailError.busy }
+                        if modelFailures >= 6 { throw MailRunFailure.model }
                     }
                 }
                 state.completePass(rows: rows, now: Date())
                 let end = await store.commitMail(bucketKey: bucket, state: state)
-                guard end == .saved else { p.diskFull = end == .diskFull; throw AppleMailError.database }
-                p.mailDeferred += state.deferred.count
+                guard end == .saved else { p.diskFull = end == .diskFull; throw MailRunFailure.storage }
                 if state.backfillBefore != nil || rows.contains(where: { $0.id > state.highWater }) { p.mailIncomplete = true }
             }
             AppleMailHealth.save(deferred: p.mailDeferred, incomplete: p.mailIncomplete, failed: false)
-        } catch is CancellationError { p.mailIncomplete = true }
-        catch {
+        } catch is CancellationError {
+            p.mailIncomplete = true
+            AppleMailHealth.save(deferred: p.mailDeferred, incomplete: true, failed: false)
+        }
+        catch MailRunFailure.deadline {
+            p.mailIncomplete = true
+            AppleMailHealth.save(deferred: p.mailDeferred, incomplete: true, failed: false)
+        } catch {
             p.failed += 1; p.mailIncomplete = true
-            AppleMailHealth.save(deferred: p.mailDeferred, incomplete: true, failed: true)
+            let issue: AppleMailHealth.Issue = error is MailRunFailure
+                ? (error as? MailRunFailure == .storage ? .storage : .model) : .read
+            AppleMailHealth.save(deferred: p.mailDeferred, incomplete: true, failed: true, issue: issue)
             Log("Apple Mail read incomplete: \(String(describing: type(of: error)))")
         }
         onProgress(p)
@@ -165,11 +222,18 @@ extension IterativeRun {
 /// Structural health only; no message identifiers, subjects, paths or bodies in preferences.
 nonisolated enum AppleMailHealth {
     static let key = "sources.appleMail.health"
-    static func save(deferred: Int, incomplete: Bool, failed: Bool) {
-        let text = failed ? "Apple Mail could not be read. Check Full Disk Access and open Mail, then try again."
+    enum Issue { case read, model, storage }
+    static func save(deferred: Int, incomplete: Bool, failed: Bool, issue: Issue = .read) {
+        let failureText: String
+        switch issue {
+        case .read: failureText = "Apple Mail could not be read. Check Full Disk Access and open Mail, then try again."
+        case .model: failureText = "The on-device model could not finish Apple Mail analysis. Saved progress will resume next time."
+        case .storage: failureText = "Apple Mail analysis could not save progress. Check available disk space, then try again."
+        }
+        let text = failed ? failureText
             : deferred > 0 ? "\(deferred) messages need a download or another local analysis. Open Mail to finish downloading, then analyze again."
             : incomplete ? "Apple Mail has more history to read. Analysis will resume next time."
-            : "Downloaded mail is up to date. Attachments, junk and promotions are excluded."
+            : "Downloaded mail is up to date. Junk previews are not saved; attachments are not analyzed."
         UserDefaults.standard.set(text, forKey: key)
     }
 }

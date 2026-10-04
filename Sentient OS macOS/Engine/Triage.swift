@@ -34,30 +34,73 @@ enum Triage {
             : chatPrompt(for: artifact, currentDate: currentDate)
     }
 
-    /// Mail has a strict classification-first contract. Never recover missing privacy flags.
-    static func decideMail(_ text: String) -> Outcome? {
-        struct Reply: Decodable { let junk: Bool; let sensitive: Bool; let summary: String; let title: String }
-        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let data = clean.data(using: .utf8), let reply = try? JSONDecoder().decode(Reply.self, from: data) else { return nil }
-        if reply.sensitive { return Outcome(verdict: .sensitive, title: nil, summary: "", reason: .sensitive) }
-        if reply.junk { return Outcome(verdict: .junk, title: nil, summary: "", reason: .modelJunk) }
-        let decision = decide(clean)
-        guard decision.reason != .emptySummary, decision.reason != .parseFailed else { return nil }
-        return decision
+    /// Mail never infers a missing privacy flag. A complete outer Markdown fence is just
+    /// transport formatting; prose, partial objects and guessed field recovery are not accepted.
+    enum MailReplyFailure: String, Error { case empty, invalidJSON, invalidFields, emptySummary, emptyTitle }
+
+    static func mailReply(_ text: String) -> Result<Outcome, MailReplyFailure> {
+        struct Flags: Decodable { let junk: Bool; let sensitive: Bool }
+        struct Preview: Decodable { let summary: String; let title: String }
+        var clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return .failure(.empty) }
+        if clean.hasPrefix("```") {
+            let lines = clean.components(separatedBy: "\n")
+            guard lines.count >= 3, ["```", "```json"].contains(lines[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()),
+                  lines.last?.trimmingCharacters(in: .whitespacesAndNewlines) == "```" else { return .failure(.invalidJSON) }
+            clean = lines.dropFirst().dropLast().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let data = Data(clean.utf8)
+        guard (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else { return .failure(.invalidJSON) }
+        // JSON decoders disagree about duplicate keys. Reject ambiguity, including escaped key
+        // spellings; matching whole JSON strings prevents quoted content being mistaken for keys.
+        let strings = try! NSRegularExpression(pattern: #""(?:\\.|[^"\\])*"(\s*:)?"#)
+        let ns = clean as NSString
+        var keys = Set<String>()
+        for match in strings.matches(in: clean, range: NSRange(location: 0, length: ns.length)) where match.range(at: 1).location != NSNotFound {
+            let length = match.range(at: 1).location - match.range.location
+            let literal = ns.substring(with: NSRange(location: match.range.location, length: length))
+            guard let key = try? JSONDecoder().decode(String.self, from: Data(literal.utf8)), keys.insert(key).inserted else {
+                return .failure(.invalidFields)
+            }
+        }
+        guard let flags = try? JSONDecoder().decode(Flags.self, from: data) else { return .failure(.invalidFields) }
+        // Sensitive text is never displayed. Every other verdict needs a safe local preview;
+        // junk previews are ephemeral and never become knowledge-base notes.
+        if flags.sensitive { return .success(Outcome(verdict: .sensitive, title: nil, summary: "", reason: .sensitive)) }
+        guard let reply = try? JSONDecoder().decode(Preview.self, from: data) else { return .failure(.invalidFields) }
+        let summary = reply.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = reply.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !summary.isEmpty else { return .failure(.emptySummary) }
+        guard !title.isEmpty else { return .failure(.emptyTitle) }
+        if PIIScan.containsHighRiskPII(summary) || PIIScan.containsHighRiskPII(title) {
+            return .success(Outcome(verdict: .sensitive, title: nil, summary: "", reason: .sensitive))
+        }
+        return .success(Outcome(verdict: flags.junk ? .junk : .survivor, title: title, summary: summary,
+                                reason: flags.junk ? .modelJunk : .survivor))
     }
+
+    static func decideMail(_ text: String) -> Outcome? { try? mailReply(text).get() }
+
+    /// A fresh attempt over the same source, without feeding a malformed answer back to the model.
+    static let mailRetryInstruction = "\nYour previous attempt did not satisfy the output format. Return exactly one JSON object, no Markdown or commentary. Include junk and sensitive as explicit booleans. For every non-sensitive message, including junk, include a nonempty factual summary and short title. Only sensitive messages have empty text. Never omit either privacy flag."
 
     private static func mailPrompt(for artifact: Artifact, currentDate: Date) -> String {
         """
         Curate a private knowledge base from ONE Apple Mail message, locally on the user's Mac.
-        First classify it. Junk, spam, marketing, promotions, newsletters, sales pitches and bulk
-        announcements MUST be junk=true with empty summary and title. Never summarize those messages.
+        Junk means exclude from saved knowledge, not hide its local processing preview.
+        Junk, spam, marketing, promotions, newsletters, sales pitches and bulk announcements
+        MUST be junk=true. Still write a brief factual summary and short title for non-sensitive junk.
+        Mail metadata already marks this message as junk/bulk: \(artifact.metadata["junkPreview"] == "1" ? "yes; junk MUST remain true" : "no").
         Routine sign-in alerts, account-security notices, payment-contact-change notifications,
         generic product onboarding and delivery-status updates are junk, not durable life knowledge.
         A useful personal booking, appointment, receipt or real correspondence may be retained.
         Sensitive messages (credentials, verification codes, IDs, account numbers, medical records,
         financial statements) MUST be sensitive=true with empty summary and title.
-        For a useful safe message only, write a brief sanitized summary. Omit private amounts, account
-        numbers, addresses, authentication links, tracking URLs and medical specifics.
+        For EVERY non-sensitive message, write a brief sanitized summary of what it actually says
+        and a short title. For junk, describe the promotion, newsletter or notice; do not merely say
+        "junk" or "nothing worth keeping". A junk preview is displayed locally and then discarded.
+        Omit private amounts, account numbers, addresses, authentication links, tracking URLs and
+        medical specifics from all previews. Never repeat an unsolicited claim as a fact about the user.
         Attribute statements to the sender. An incoming request is NOT a promise by the user.
         Sent-folder membership: \(artifact.metadata["sent"] == "1" ? "yes" : "no or unknown").
         Unknown ownership must stay unknown; never infer that every sender is the user.
@@ -74,9 +117,10 @@ enum Triage {
         </email_data>
 
         Return ONLY strict JSON, every key required, booleans must be true or false:
-        {"junk":true,"sensitive":false,"summary":"","title":""}
-        For a safe keeper use junk=false, sensitive=false, a short third-person factual summary
-        and a short title. If there is nothing durable and safe, use junk=true.
+        {"junk":true,"sensitive":false,"summary":"The sender advertises a seasonal sale on outdoor clothing.","title":"Seasonal Clothing Sale"}
+        Use your own title and summary based on this message. Every non-sensitive message requires
+        both nonempty text fields, including junk. A safe keeper uses junk=false. If there is nothing
+        durable and safe, use junk=true. Only sensitive=true requires empty summary and title.
         """
     }
 

@@ -21,6 +21,13 @@ nonisolated struct AppleMailRow: Sendable {
     let date: Date
     let excluded: Bool
     let sent: Bool
+    /// Junk may be read for an ephemeral preview; deleted messages and drafts may not.
+    let previewJunk: Bool
+
+    init(id: Int64, account: String, messageID: String, date: Date, excluded: Bool, sent: Bool, previewJunk: Bool = false) {
+        self.id = id; self.account = account; self.messageID = messageID; self.date = date
+        self.excluded = excluded; self.sent = sent; self.previewJunk = previewJunk
+    }
 }
 
 /// All queries run against a private temporary SQLite backup. A bounded backup gives a transactionally
@@ -42,7 +49,7 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
             generation = try Self.query(db, "SELECT value FROM properties WHERE key='UUID'").first?.first ?? ""
             guard !generation.isEmpty else { throw AppleMailError.unsupportedSchema }
             let boxes = try Self.query(db, "SELECT ROWID,url FROM mailboxes")
-            var mailboxAccounts: [Int64: String] = [:], deniedBoxes = Set<Int64>(), sentBoxes = Set<Int64>()
+            var mailboxAccounts: [Int64: String] = [:], deniedBoxes = Set<Int64>(), hiddenBoxes = Set<Int64>(), sentBoxes = Set<Int64>()
             var found = Set<String>()
             for box in boxes {
                 guard let id = Int64(box[0]), let url = URL(string: box[1]), let host = url.host,
@@ -51,6 +58,7 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
                 mailboxAccounts[id] = account; found.insert(account)
                 let segments = url.pathComponents.map { $0.removingPercentEncoding?.lowercased() ?? $0.lowercased() }
                 if segments.contains(where: Self.excludedMailbox) { deniedBoxes.insert(id) }
+                if segments.contains(where: Self.hiddenMailbox) { hiddenBoxes.insert(id) }
                 if segments.contains(where: { ["sent", "sent mail", "sent messages"].contains($0) }) { sentBoxes.insert(id) }
             }
             let labels = Self.accountLabels(found)
@@ -67,26 +75,32 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
                 SELECT m.ROWID,m.mailbox,COALESCE(g.message_id_header,''),COALESCE(NULLIF(m.date_sent,0),m.date_received,0),
                        m.deleted,COALESCE(g.model_category,0),
                        EXISTS(SELECT 1 FROM server_messages s WHERE s.message=m.ROWID AND
-                         (s.deleted!=0 OR s.draft!=0 OR s.junk_level>0)),
-                       COALESCE(m.unsubscribe_type,0),COALESCE(m.list_id_hash,0)
+                         (s.deleted!=0 OR s.draft!=0)),
+                       COALESCE(m.unsubscribe_type,0),COALESCE(m.list_id_hash,0),
+                       EXISTS(SELECT 1 FROM server_messages s WHERE s.message=m.ROWID AND s.junk_level>0)
                 FROM messages m LEFT JOIN message_global_data g ON g.ROWID=m.global_message_id
                 ORDER BY m.ROWID DESC
                 """) { r in
                 guard let id = Int64(r[0]), let box = Int64(r[1]), let account = mailboxAccounts[box],
                       selected == nil || selected!.contains(account) else { return }
                 let labels = memberships[id, default: []].union([box])
+                let hidden = r[4] != "0" || r[6] != "0" || !labels.isDisjoint(with: hiddenBoxes)
+                let junk = r[5] == "3" || r[7] != "0" || r[8] != "0" || r[9] != "0" || !labels.isDisjoint(with: deniedBoxes)
                 indexed.append(AppleMailRow(id: id, account: account, messageID: r[2],
                     date: Date(timeIntervalSince1970: Double(r[3]) ?? 0),
-                    excluded: r[4] != "0" || r[5] == "3" || r[6] != "0" || r[7] != "0" || r[8] != "0"
-                        || !labels.isDisjoint(with: deniedBoxes),
-                    sent: !labels.isDisjoint(with: sentBoxes)))
+                    excluded: hidden || junk, sent: !labels.isDisjoint(with: sentBoxes),
+                    previewJunk: junk && !hidden))
             }
             // Duplicate physical copies are not independent privacy decisions. If a copy is in
             // Junk/Promotions, exclude all copies of that Message-ID in the same account.
             let deniedIDs = Set(indexed.filter { $0.excluded && !$0.messageID.isEmpty }.map { $0.account + "\u{0}" + $0.messageID })
+            let hiddenIDs = Set(indexed.filter { $0.excluded && !$0.previewJunk && !$0.messageID.isEmpty }.map { $0.account + "\u{0}" + $0.messageID })
             rows = indexed.map { r in
-                AppleMailRow(id: r.id, account: r.account, messageID: r.messageID, date: r.date,
-                    excluded: r.excluded || deniedIDs.contains(r.account + "\u{0}" + r.messageID), sent: r.sent)
+                let key = r.account + "\u{0}" + r.messageID
+                let excluded = r.excluded || deniedIDs.contains(key)
+                let hidden = (r.excluded && !r.previewJunk) || hiddenIDs.contains(key)
+                return AppleMailRow(id: r.id, account: r.account, messageID: r.messageID, date: r.date,
+                    excluded: excluded, sent: r.sent, previewJunk: excluded && !hidden)
             }
             sqlite3_close(db); db = nil
         } catch { sqlite3_close(db); db = nil; throw error }
@@ -115,6 +129,13 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
             guard status == SQLITE_DONE, finish == SQLITE_OK else { throw AppleMailError.busy }
             return destination
         } catch { sqlite3_close(destination); throw error }
+    }
+
+    private static func hiddenMailbox(_ component: String) -> Bool {
+        ["trash", "bin", "deleted messages", "deleted items", "draft", "drafts", "corbeille",
+         "brouillons", "papierkorb", "entwürfe", "papelera", "borradores", "cestino", "bozze",
+         "lixo", "rascunhos", "prullenmand", "concepten", "ゴミ箱", "下書き", "草稿", "废纸篓",
+         "휴지통", "임시보관함"].contains(component)
     }
 
     private static func excludedMailbox(_ component: String) -> Bool {
@@ -212,8 +233,8 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
         files[account] = mapping
     }
 
-    func body(_ row: AppleMailRow) throws -> AppleMailMIME.Message {
-        guard !row.excluded else { throw AppleMailMIME.Failure.excluded }
+    func body(_ row: AppleMailRow, includeJunkPreview: Bool = false) throws -> AppleMailMIME.Message {
+        guard !row.excluded || (includeJunkPreview && row.previewJunk) else { throw AppleMailMIME.Failure.excluded }
         let matches = files[row.account]?[row.id] ?? []
         var lastError: Error = AppleMailError.missingBody
         for url in matches.sorted(by: { !$0.lastPathComponent.contains(".partial.") && $1.lastPathComponent.contains(".partial.") }) {
@@ -222,12 +243,7 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
                 let resolved = url.resolvingSymlinksInPath().standardizedFileURL
                 guard resolved == url.standardizedFileURL,
                       resolved.path.hasPrefix(root.appendingPathComponent(row.account).path + "/") else { throw AppleMailError.filesystem }
-                let message = try AppleMailMIME.read(url)
-                // A row number is only a locator. Never consume a different message after index rebuild.
-                let actualID = message.headers["message-id", default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !row.messageID.isEmpty, actualID == row.messageID || actualID.trimmingCharacters(in: CharacterSet(charactersIn: "<>")) == row.messageID else {
-                    throw AppleMailError.missingBody
-                }
+                let message = try AppleMailMIME.read(url, expectedMessageID: row.messageID, includeJunkPreview: includeJunkPreview)
                 return message
             } catch AppleMailMIME.Failure.excluded { throw AppleMailMIME.Failure.excluded }
             catch { lastError = error }
@@ -248,6 +264,18 @@ nonisolated enum AppleMailSource {
         return root
     }
     static func accounts() throws -> [AppleMailAccount] { try AppleMailSnapshot(root: root(), selected: []).accounts }
+    /// Body and decoded attribution only; the cap includes headers as well as body text.
+    static func artifact(row: AppleMailRow, identity: String, message: AppleMailMIME.Message) -> Artifact {
+        let candidate = Candidate(id: identity, kind: .appleMail, itemDate: row.date,
+                                  metadata: ["folder": "Apple Mail", "sent": row.sent ? "1" : "0",
+                                             "junkPreview": row.excluded || AppleMailMIME.excluded(message.headers) ? "1" : "0"])
+        let header = ["from", "to", "subject", "date"].map {
+            "\($0): \(AppleMailMIME.prefixUTF8(AppleMailMIME.decodedHeader(message.headers[$0, default: ""]), limit: 1000))"
+        }.joined(separator: "\n")
+        let text = AppleMailMIME.prefixUTF8(header + "\n\n" + message.text, limit: AppleMailConnector.maximumInputBytes)
+        return Artifact(candidate: candidate, text: text)
+    }
+
     static func digest(_ value: String) -> String {
         SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
     }
