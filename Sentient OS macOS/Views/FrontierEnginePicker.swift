@@ -137,7 +137,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         .alert("A note on local frontier models", isPresented: $showLocalWarning) {
             Button("Understood") {}
         } message: {
-            Text("Most models you can run locally are far too weak for computer use; in our testing only Kimi K3 performed well enough, and most other open-weights models aren't multimodal (can't see), which computer use requires.\n\nIf you can somehow run Kimi K3 locally, this preset is all yours.\n\nOtherwise run it through OpenRouter, or if privacy is the concern, both OpenAI and Claude subscriptions let you turn off training on your data in your account settings on their own site. Those frontier options remain the best way to use Sentient.")
+            Text("Computer use needs a model that understands screenshots and uses tools reliably. Larger local models may need more memory. Choose the model and provider that fit your Mac and preferences. Cloud providers process your context under their own policies and your account settings.")
         }
     }
 
@@ -352,7 +352,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 }
 
                 SettingsHairline()
-                SettingsProse("Gmail and Calendar ride a ChatGPT or Claude subscription, so they sit out while a custom model is active. Everything else works, and your data still never leaves this Mac except what the model itself is sent.")
+                SettingsProse(PrivacyCopy.customProvider)
             }
         }
     }

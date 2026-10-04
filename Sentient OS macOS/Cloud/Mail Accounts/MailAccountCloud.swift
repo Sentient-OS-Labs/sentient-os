@@ -1,6 +1,6 @@
 // MailAccountCloud.swift
-// Saves disclosed mail addresses and a private installation session in Keychain, then syncs
-// an atomic owner-scoped snapshot to Supabase. A failed sync stays pending across launches.
+// Queues only disclosed email addresses in Keychain until Supabase accepts them.
+// The feedback list stores addresses alone; its Auth session is never attached to a contact row.
 // Doc: Documentation - Connected Email Accounts.md
 
 import Foundation
@@ -14,14 +14,37 @@ actor MailAccountCloud {
     private var syncTask: Task<Void, Error>?
     private var retryTask: Task<Void, Never>?
     private var retryGeneration = 0
-    private var deleting = false
+    private var forgetting = false
 
     private struct State: Codable {
-        var accounts: [MailAccount] = []
+        var pendingEmails: [String] = []
         var auth: AuthSession?
-        var pending = false
-        var revision = 0
-        var remoteDeleted = false
+
+        init() {}
+
+        private enum CodingKeys: String, CodingKey { case pendingEmails, auth, accounts }
+        private struct LegacyAddress: Decodable { let email: String }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            auth = try container.decodeIfPresent(AuthSession.self, forKey: .auth)
+            let addresses: [String]
+            if container.contains(.pendingEmails) {
+                addresses = try container.decode([String].self, forKey: .pendingEmails)
+            } else {
+                // Discard all old connector metadata, including for already-synced contacts.
+                addresses = try container.decodeIfPresent([LegacyAddress].self, forKey: .accounts)?.map(\.email) ?? []
+            }
+            let normalized = addresses.compactMap(MailAccount.normalizedEmail)
+            guard normalized.count == addresses.count else { throw MailAccountError.invalidAddress }
+            pendingEmails = Set(normalized).sorted()
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode(pendingEmails, forKey: .pendingEmails)
+            try container.encodeIfPresent(auth, forKey: .auth)
+        }
     }
     private struct AuthSession: Codable {
         let accessToken: String
@@ -41,48 +64,37 @@ actor MailAccountCloud {
         self.session = session; self.storageKey = storageKey
     }
 
-    func savedAccounts() throws -> [MailAccount] { try load().accounts }
-    func hasPendingSync() throws -> Bool { try load().pending }
+    func hasPendingSync() throws -> Bool { try !load().pendingEmails.isEmpty }
 
-    /// Collection replaces only the requested provider/engine. Other
-    /// engines remain independent; identical email addresses never merge installation owners.
-    func save(_ accounts: [MailAccount], engine: MailAccount.Engine, provider: MailAccount.Provider? = nil,
-              preservingConnectionIDs: Set<String> = []) async throws -> Bool {
-        guard !deleting else { throw MailAccountError.busy }
-        guard !accounts.isEmpty, accounts.count <= 32,
-              accounts.allSatisfy({ $0.engine == engine && (provider == nil || $0.provider == provider)
-                  && $0.consentVersion == 1 && MailAccount.normalizedEmail($0.email) == $0.email }),
-              Set(accounts.map(\.id)).count == accounts.count else { throw MailAccountError.invalidAddress }
-        var next = try load()
-        let incomingIDs = Set(accounts.map(\.id))
-        // A skipped lookup must not erase a previously saved address for that connection.
-        next.accounts.removeAll {
-            $0.engine == engine && (provider == nil || $0.provider == provider)
-                && (!preservingConnectionIDs.contains($0.id) || incomingIDs.contains($0.id))
+    /// Add addresses without retaining their connector, source, or installation identity in the list.
+    func save(_ emails: [String]) async throws -> Bool {
+        guard !forgetting else { throw MailAccountError.busy }
+        let normalized = emails.compactMap(MailAccount.normalizedEmail)
+        guard !emails.isEmpty, emails.count <= 32, normalized.count == emails.count else {
+            throw MailAccountError.invalidAddress
         }
-        next.accounts += accounts
-        guard next.accounts.count <= 32 else { throw MailAccountError.invalidResponse }
-        next.pending = true; next.revision += 1
+        var next = try load()
+        next.pendingEmails = Set(next.pendingEmails + normalized).sorted()
         try persist(next)
         do { try await sync(); return true }
         catch { scheduleRetry(); return false }
     }
 
     func retryPendingSync() async {
-        guard !deleting, (try? load().pending) == true else { return }
+        guard !forgetting, (try? hasPendingSync()) == true else { return }
         do { try await sync() } catch { scheduleRetry() }
     }
 
     private func scheduleRetry() {
-        guard retryTask == nil, !deleting else { return }
+        guard retryTask == nil, !forgetting, (try? hasPendingSync()) == true else { return }
         retryGeneration += 1
         let generation = retryGeneration
         retryTask = Task {
             var delay: UInt64 = 5
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: delay * 1_000_000_000) } catch { break }
-                guard !deleting, (try? load().pending) == true else { break }
-                do { try await sync() } catch { /* Keep the encrypted local snapshot pending. */ }
+                guard !forgetting, (try? hasPendingSync()) == true else { break }
+                do { try await sync() } catch { /* Keep only the queued addresses for retry. */ }
                 delay = min(delay * 3, 300)
             }
             if retryGeneration == generation { retryTask = nil }
@@ -91,39 +103,37 @@ actor MailAccountCloud {
 
     private func sync() async throws {
         if let syncTask { try await syncTask.value; return }
-        let task = Task { try await drain() }
+        let task = Task {
+            // Clear the shared task before waking callers, so a new save cannot join an
+            // already-completed drain and leave its address stranded until the next launch.
+            defer { syncTask = nil }
+            try await drain()
+        }
         syncTask = task
-        defer { syncTask = nil }
         try await task.value
     }
 
     private func drain() async throws {
-        while try load().pending {
-            let snapshot = try load()
-            let data = try JSONEncoder().encode(snapshot.accounts)
-            let accounts = try JSONSerialization.jsonObject(with: data)
-            _ = try await authenticatedRequest(path: "rest/v1/rpc/sync_connected_email_accounts", body: ["accounts": accounts])
-            // A newer edit made while the request was in flight must remain pending.
+        while try hasPendingSync() {
+            try Task.checkCancellation()
+            let emails = Array(try load().pendingEmails.prefix(32))
+            _ = try await authenticatedRequest(path: "rest/v1/rpc/add_feedback_emails", body: ["emails": emails])
+            try Task.checkCancellation()
+            // New addresses queued during the request remain pending for the next batch.
             var current = try load()
-            if current.revision == snapshot.revision { current.pending = false; try persist(current) }
+            current.pendingEmails.removeAll { emails.contains($0) }
+            try persist(current)
         }
     }
 
-    /// Remote deletion must succeed before the only credential that can authorize it is lost.
-    /// Reset/uninstall can retry this operation without claiming an offline deletion succeeded.
-    func erase() async throws {
-        guard !deleting else { throw MailAccountError.busy }
-        deleting = true; defer { deleting = false }
+    /// Uninstall clears this Mac's contact snapshot and credentials without deleting cloud records.
+    /// Stop outstanding work first so a late response cannot restore the removed Keychain item.
+    func forgetLocalState() async throws {
+        guard !forgetting else { throw MailAccountError.busy }
+        forgetting = true; defer { forgetting = false }
         retryGeneration += 1; retryTask?.cancel(); retryTask = nil
+        syncTask?.cancel()
         if let syncTask { _ = try? await syncTask.value }
-        var current = try load()
-        if !current.remoteDeleted, current.auth != nil {
-            _ = try await authenticatedRequest(path: "rest/v1/rpc/delete_connected_email_identity", body: [:])
-            current = try load(); current.remoteDeleted = true
-            // Preserve a successful remote deletion even if a later Keychain operation fails.
-            state = current
-            try persist(current)
-        }
         try MailAccountKeychain.remove(storageKey)
         state = State()
     }
@@ -185,7 +195,11 @@ actor MailAccountCloud {
     private func load() throws -> State {
         if let state { return state }
         let value: State
-        if let data = try MailAccountKeychain.read(storageKey) { value = try JSONDecoder().decode(State.self, from: data) }
+        if let data = try MailAccountKeychain.read(storageKey) {
+            value = try JSONDecoder().decode(State.self, from: data)
+            // Rewrite legacy snapshots immediately so old connector details do not linger locally.
+            try MailAccountKeychain.write(storageKey, data: JSONEncoder().encode(value))
+        }
         else { value = State() }
         state = value; return value
     }

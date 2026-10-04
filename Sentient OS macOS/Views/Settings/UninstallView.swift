@@ -63,7 +63,7 @@ struct UninstallView: View {
             prose("Something here didn’t land for you, and we would love to hear what. We read every note.")
                 .padding(.top, 10)
 
-            MonoCaps("Uninstalling removes", size: 9, tracking: 2.2, color: Theme.Ink.label, weight: .semibold)
+            MonoCaps("Uninstalling includes", size: 9, tracking: 2.2, color: Theme.Ink.label, weight: .semibold)
                 .padding(.top, 22)
             Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 9) {
                 GridRow {
@@ -71,11 +71,13 @@ struct UninstallView: View {
                     manifestRow("book.closed", "Your knowledge base")
                 }
                 GridRow {
-                    manifestRow("cloud", "The private cloud copy")
+                    manifestRow("cloud", "Cloud-copy deletion request")
                     manifestRow("moon.zzz", "The overnight wake helper")
                 }
             }
             .padding(.top, 12)
+            prose("Saved contact addresses and invitation or lifetime-access records are retained.")
+                .padding(.top, 12)
 
             HStack(spacing: 10) {
                 FarewellPill(title: "Keep Sentient", style: .quiet) { dismiss() }
@@ -129,7 +131,7 @@ struct UninstallView: View {
             Text("Taking Sentient apart, gently.")
                 .display(24).foregroundStyle(.white)
                 .padding(.top, 12)
-            prose("Give us a moment. We are cleaning up after ourselves so nothing of ours is left behind.")
+            prose("Give us a moment. We’re removing Sentient’s local data and saved connections.")
                 .padding(.top, 14)
             ProgressView()
                 .controlSize(.small)

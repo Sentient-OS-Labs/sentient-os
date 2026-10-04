@@ -95,11 +95,12 @@ enum Uninstall {
         await LoginItem.disable()
         await beat()
 
-        // The cloud copy dies while the Keychain password still exists to authorize the DELETE.
+        // Request knowledge-mirror deletion while its credential remains. Contact records are
+        // retained remotely; only their local snapshot and credentials are removed.
         progress(.cloud)
-        do { try await MailAccountCloud.shared.erase() }
+        do { try await MailAccountCloud.shared.forgetLocalState() }
         catch {
-            lastFailure = "Uninstall paused because saved email addresses couldn't be deleted. Connect to the internet, unlock your Mac, and retry."
+            lastFailure = "Uninstall paused because local contact credentials couldn't be removed. Unlock your Mac and retry."
             appState?.isUninstalling = false
             return false
         }

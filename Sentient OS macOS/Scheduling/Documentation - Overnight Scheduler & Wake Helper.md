@@ -1,7 +1,15 @@
 # The Overnight Scheduler & the Wake Helper (Scheduling/)
 
-At 3 AM the Mac wakes itself (lid shut is fine), reads what is new, updates the knowledge base,
-prepares the morning cards, and goes back to sleep. This folder is the whole story: the in-app
+**Your Mac does the understanding while you sleep.** At 3 AM, with Sentient running in the menu bar
+and overnight wake configured, the Mac can wake with the lid closed, analyze new local sources,
+update knowledge with your chosen AI, prepare morning suggestions, and return to sleep.
+It runs plugged in by default; battery runs require the user's opt-in and the power/thermal gates
+below. Cloud models and connected services need their corresponding network access.
+
+The local model analyzes enabled files, messages, notes, Apple Mail and Apple Calendar. A supported
+larger local model can also handle knowledge organization and proactive preparation; a hosted model
+processes the context for those stages under the user's chosen provider. Overnight preparation does
+not send the proposed reply or execute the card's computer task. The user starts that action. This folder is the whole story: the in-app
 scheduler, the tiny root helper that can wake and hold the Mac awake, its installer and XPC client,
 the go/no-go gates, launch at login, and the classification of a failed night into an honest morning
 banner. There is no scheduler-specific processing path: the run uses the same source selection, the

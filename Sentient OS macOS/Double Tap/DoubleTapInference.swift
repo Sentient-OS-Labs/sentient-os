@@ -4,9 +4,10 @@
 //
 //  The one model call behind Double Tap: a screenshot of the user's screen + the ENTIRE knowledge
 //  base + the drafting instructions → either the reply to paste or a "not a reply box" verdict.
-//  Settings selects Sentient's relay (default), OpenAI, or OpenRouter. Direct providers use the
-//  user's own Keychain key and chosen model; the relay owns its model and per-user caps. All
-//  routes carry the user's custom reply instructions and stream the Responses API. They bypass
+//  Settings selects Sentient's relay (default), OpenAI, OpenRouter, or a compatible endpoint
+//  (including Ollama and LM Studio). Direct providers use their own optional Keychain key and
+//  model; the relay owns its model and caps. Routes stream Responses or Chat Completions with
+//  the same screenshot, knowledge and custom reply instructions. They bypass
 //  the FrontierRun seam on purpose: a `codex exec` spawn costs seconds and this feature is judged
 //  on feel. Reusable text comes before the changing screenshot. Known OpenAI models explicitly
 //  cache through the text, avoiding cache writes for the screenshot. `store: false` disables
@@ -57,8 +58,9 @@ enum DoubleTapInference {
         let provider = DoubleTapProvider.current
         switch provider {
         case .sentient: return relayURL == nil ? "relay URL not set (Dev Tools)" : nil
-        case .openAI, .openRouter:
-            if provider.apiKey == nil { return Failure.noKey(provider).label }
+        case .openAI, .openRouter, .ollama, .lmStudio, .custom:
+            if provider.endpoint == nil { return Failure.invalidEndpoint.label }
+            if provider.requiresKey && provider.apiKey == nil { return Failure.noKey(provider).label }
             return validModel(provider.model) ? nil : Failure.invalidModel.label
         }
     }
@@ -95,6 +97,7 @@ enum DoubleTapInference {
     enum Failure: Error {
         case noKey(DoubleTapProvider)
         case invalidModel
+        case invalidEndpoint
         case instructionsTooLarge
         case noVault(String)
         case noWritingStyle
@@ -111,6 +114,7 @@ enum DoubleTapInference {
             switch self {
             case .noKey(let provider): return "add your \(provider.name) key in Settings"
             case .invalidModel: return "choose a model in Double Tap Settings"
+            case .invalidEndpoint: return "check the base URL in Double Tap Settings"
             case .instructionsTooLarge: return "shorten your Double Tap instructions"
             case .noVault(let path): return "no knowledge base at \(path)"
             case .noWritingStyle: return "open Sentient to set up Double Tap"
@@ -137,6 +141,7 @@ enum DoubleTapInference {
     /// base root. Throws `Failure`; a cancelled Task surfaces as `.cancelled`.
     static func draft(screenshot: Data, vault: URL, session: URLSession = .shared) async throws -> Outcome {
         let provider = DoubleTapProvider.current
+        let api = provider.api
         let model = provider.model
         let customInstructions = CustomInstructions.doubleTap
         guard customInstructions.utf8.count <= CustomInstructions.doubleTapByteLimit else {
@@ -148,9 +153,8 @@ enum DoubleTapInference {
 
         let request: URLRequest
         switch provider {
-        case .openAI, .openRouter:
-            guard let key = provider.apiKey else { throw Failure.noKey(provider) }
-            request = try directRequest(provider: provider, model: model, key: key, image: screenshot,
+        case .openAI, .openRouter, .ollama, .lmStudio, .custom:
+            request = try directRequest(provider: provider, model: model, key: provider.apiKey, image: screenshot,
                                         knowledgeBase: packed.text, customInstructions: customInstructions)
         case .sentient:
             guard let base = relayURL else { throw Failure.relay("relay URL not set (Dev Tools)") }
@@ -183,13 +187,24 @@ enum DoubleTapInference {
             for try await line in bytes.lines {
                 guard line.hasPrefix("data:") else { continue }
                 let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
+                if json == "[DONE]" { break }
+                guard !json.isEmpty else { continue }
                 guard let data = json.data(using: .utf8),
-                      let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-                if let delta = try delta(event, timing: &timing), !delta.isEmpty {
-                    if timing.firstToken == nil { timing.firstToken = Date().timeIntervalSince(started) }
-                    text += delta
+                      let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    throw Failure.api("invalid stream event")
                 }
-                if event["type"] as? String == "response.completed" { completed = true }
+                let added: String?
+                switch api {
+                case .responses:
+                    added = try delta(event, timing: &timing)
+                    if event["type"] as? String == "response.completed" { completed = true }
+                case .chatCompletions:
+                    added = try chatDelta(event, timing: &timing, completed: &completed)
+                }
+                if let added, !added.isEmpty {
+                    if timing.firstToken == nil { timing.firstToken = Date().timeIntervalSince(started) }
+                    text += added
+                }
             }
         } catch is CancellationError {
             throw Failure.cancelled
@@ -268,48 +283,63 @@ enum DoubleTapInference {
         }
     }
 
-    // MARK: Direct Responses API request + the stream all providers share
+    // MARK: Direct requests + streams
 
     static func validModel(_ model: String) -> Bool {
         !model.isEmpty && model.utf8.count <= 200 && !model.contains(where: \.isWhitespace)
     }
 
-    static func directRequest(provider: DoubleTapProvider, model: String, key: String, image: Data,
+    static func directRequest(provider: DoubleTapProvider, model: String, key: String?, image: Data,
                               knowledgeBase: String, customInstructions: String) throws -> URLRequest {
-        guard let endpoint = provider.endpoint, validModel(model) else { throw Failure.invalidModel }
+        guard let endpoint = provider.endpoint else { throw Failure.invalidEndpoint }
+        guard validModel(model) else { throw Failure.invalidModel }
+        let key = key?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if provider.requiresKey && (key?.isEmpty ?? true) { throw Failure.noKey(provider) }
         // Known presets support disabling reasoning. Other models retain their own defaults;
         // reserve a larger output budget for models that require reasoning tokens.
-        let reasoningOff = DoubleTapProvider.modelPresets.contains { provider.modelID($0.id) == model }
+        let reasoningOff = provider.hasModelPresets
+            && DoubleTapProvider.modelPresets.contains { provider.modelID($0.id) == model }
         // Explicit caching is verified for these models on OpenAI's own endpoint. Other
         // providers and custom models retain their default caching behavior.
         let explicitCaching = provider == .openAI && reasoningOff
-        var text: [String: Any] = [
-            "type": "input_text",
-            "text": instructions + customInstructionsBlock(customInstructions)
-                + "\n\n=== KNOWLEDGE BASE (everything Sentient knows about the user) ===\n\n" + knowledgeBase,
-        ]
-        if explicitCaching { text["prompt_cache_breakpoint"] = ["mode": "explicit"] }
-        var body: [String: Any] = [
-            "model": model,
-            "stream": true,
-            "store": false,
-            "max_output_tokens": reasoningOff ? maxOutputTokens : 4096,
-            "input": [[
+        let prompt = instructions + customInstructionsBlock(customInstructions)
+            + "\n\n=== KNOWLEDGE BASE (everything Sentient knows about the user) ===\n\n" + knowledgeBase
+        let imageURL = "data:image/jpeg;base64," + image.base64EncodedString()
+        var body: [String: Any] = ["model": model, "stream": true]
+        switch provider.api {
+        case .responses:
+            var text: [String: Any] = ["type": "input_text", "text": prompt]
+            if explicitCaching { text["prompt_cache_breakpoint"] = ["mode": "explicit"] }
+            body["store"] = false
+            body["max_output_tokens"] = reasoningOff ? maxOutputTokens : 4096
+            body["input"] = [[
                 "role": "user",
                 "content": [
                     text,
                     ["type": "input_image", "detail": "auto",
-                     "image_url": "data:image/jpeg;base64," + image.base64EncodedString()],
+                     "image_url": imageURL],
                 ],
-            ]],
-        ]
-        if reasoningOff { body["reasoning"] = ["effort": "none"] }
-        if explicitCaching { body["prompt_cache_options"] = ["mode": "explicit", "ttl": "30m"] }
+            ]]
+            if reasoningOff { body["reasoning"] = ["effort": "none"] }
+            if explicitCaching { body["prompt_cache_options"] = ["mode": "explicit", "ttl": "30m"] }
+        case .chatCompletions:
+            // Keep to the common vision/streaming API. No OpenAI-only caching or reasoning
+            // fields, and no mandatory stream_options extension on third-party servers.
+            body["max_tokens"] = 4096
+            body["messages"] = [[
+                "role": "user",
+                "content": [
+                    ["type": "text", "text": prompt],
+                    ["type": "image_url", "image_url": ["url": imageURL]],
+                ],
+            ]]
+        }
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = idleTimeout
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        if let key, !key.isEmpty { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         return request
     }
@@ -317,6 +347,7 @@ enum DoubleTapInference {
     /// One SSE event → the text it adds (nil for bookkeeping events). Fills usage from
     /// `response.completed`; a failure event throws.
     static func delta(_ event: [String: Any], timing: inout Timing) throws -> String? {
+        if let error = event["error"], !(error is NSNull) { throw Failure.api("provider error") }
         switch event["type"] as? String {
         case "response.output_text.delta":
             return event["delta"] as? String
@@ -338,6 +369,33 @@ enum DoubleTapInference {
         default:
             return nil
         }
+    }
+
+    /// Chat Completions ends with finish_reason=stop, then optionally usage and [DONE].
+    /// A dropped stream, token limit, refusal or tool call must never paste a partial draft.
+    /// Only visible content is collected; reasoning_content/thinking never becomes a reply.
+    static func chatDelta(_ event: [String: Any], timing: inout Timing,
+                          completed: inout Bool) throws -> String? {
+        if let error = event["error"], !(error is NSNull) { throw Failure.api("provider error") }
+        if let usage = event["usage"] as? [String: Any] {
+            timing.inputTokens = usage["prompt_tokens"] as? Int
+            timing.outputTokens = usage["completion_tokens"] as? Int
+            timing.cachedTokens = (usage["prompt_tokens_details"] as? [String: Any])?["cached_tokens"] as? Int
+            timing.reasoningTokens = (usage["completion_tokens_details"] as? [String: Any])?["reasoning_tokens"] as? Int
+        }
+        guard let choices = event["choices"] as? [[String: Any]],
+              let choice = choices.first(where: { ($0["index"] as? Int ?? 0) == 0 }) else { return nil }
+        let delta = choice["delta"] as? [String: Any]
+        if let refusal = delta?["refusal"] as? String, !refusal.isEmpty {
+            throw Failure.api("provider refusal")
+        }
+        if let calls = delta?["tool_calls"] as? [Any], !calls.isEmpty { throw Failure.incomplete }
+        if let call = delta?["function_call"] as? [String: Any], !call.isEmpty { throw Failure.incomplete }
+        if let reason = choice["finish_reason"] as? String {
+            guard reason == "stop" else { throw Failure.incomplete }
+            completed = true
+        }
+        return delta?["content"] as? String
     }
 
     // MARK: The knowledge base, whole

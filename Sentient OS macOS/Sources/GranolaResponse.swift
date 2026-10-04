@@ -81,11 +81,15 @@ struct GranolaResponse {
             case 1:
                 guard stack == ["meetings_data"], name == "meeting", row == nil,
                       rows.count < GranolaSource.inventoryCap,
-                      Set(attributes.keys).isSubset(of: ["id", "title", "date", "captured_by_me", "listed_as_participant", "is_workspace_visible"]),
+                      Set(attributes.keys).isSubset(of: ["id", "title", "date", "url", "captured_by_me", "listed_as_participant", "is_workspace_visible"]),
                       let id = attributes["id"], UUID(uuidString: id) != nil,
                       let title = attributes["title"], title.utf8.count <= 2_000,
                       let rawDate = attributes["date"], let date = GranolaSource.date(rawDate) else { reject(parser); return }
                 var value: [String: Any] = ["id": id, "title": title, "date": MCPSource.timestamp(date)]
+                if let rawURL = attributes["url"],
+                   let url = GranolaSource.verifiedURL(rawURL, id: id.lowercased()) {
+                    value["url"] = url
+                }
                 for key in ["captured_by_me", "listed_as_participant", "is_workspace_visible"] {
                     if let raw = attributes[key] {
                         guard ["true", "false"].contains(raw) else { reject(parser); return }

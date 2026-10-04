@@ -93,10 +93,17 @@ struct OnboardingDoubleTapView: View {
                             .animation(.easeOut(duration: 0.3), value: demo.nextVisible)
                             .accessibilityHidden(!demo.nextVisible)
 
-                        OnboardingNextButton(title: "Continue", enabled: demo.continueVisible, action: onContinue)
-                            .opacity(demo.continueVisible ? 1 : 0)
-                            .allowsHitTesting(demo.continueVisible)
-                            .accessibilityHidden(!demo.continueVisible)
+                        HStack(spacing: 12) {
+                            // Balance the info button so Continue stays centered on the lesson.
+                            Color.clear.frame(width: 32, height: 32)
+                                .accessibilityHidden(true)
+                            OnboardingNextButton(title: "Continue", enabled: demo.continueVisible, action: onContinue)
+                            DoubleTapInferenceInfo()
+                        }
+                        .opacity(demo.continueVisible ? 1 : 0)
+                        .disabled(!demo.continueVisible)
+                        .allowsHitTesting(demo.continueVisible)
+                        .accessibilityHidden(!demo.continueVisible)
                     }
                     .frame(height: 44)
                     .padding(.top, 14)
@@ -118,13 +125,6 @@ struct OnboardingDoubleTapView: View {
                             .accessibilityHidden(true)
                     }
                     .allowsHitTesting(false)
-                }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if demo.continueVisible {
-                    DoubleTapInferenceInfo()
-                        .padding(24)
-                        .transition(.opacity)
                 }
             }
             .clipped()
@@ -179,33 +179,37 @@ struct OnboardingDoubleTapView: View {
     }
 }
 
-/// The final beat's quiet disclosure, placed above the icon without moving the lesson.
+/// Hover for a quick explanation, or click to keep a native popover open for reading.
 private struct DoubleTapInferenceInfo: View {
     @State private var hovering = false
+    @State private var showingPopover = false
 
-    private static let text = """
-    Due to latency requirements, Double Tap uses the OpenAI API with Zero Data Retention for maximum privacy.
-    We’re covering the cost for all our first users :)
-    If you’d like, in Double Tap settings, you can change the inference provider to your own.
-    """
+    private static let text = PrivacyCopy.doubleTapInfo
 
     var body: some View {
-        Image(systemName: "info.circle")
-            .font(.system(size: 16))
-            .foregroundStyle(.white.opacity(hovering ? 0.8 : 0.4))
-            .frame(width: 32, height: 32)
-            .contentShape(Rectangle())
+        Button {
+            hovering = false
+            showingPopover.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .font(.system(size: 16))
+                .foregroundStyle(.white.opacity(hovering || showingPopover ? 0.8 : 0.5))
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+            .buttonStyle(.plain)
             .onHover { hovering = $0 }
             .accessibilityLabel("About Double Tap inference")
-            .accessibilityHint(Self.text)
-            .overlay(alignment: .bottomLeading) {
-                if hovering {
-                    Text(Self.text)
-                        .font(.system(size: 12.5))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .lineSpacing(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: 310, alignment: .leading)
+            .accessibilityHint("Learn how drafts are processed and how to choose a provider in Settings.")
+            .popover(isPresented: $showingPopover, arrowEdge: .bottom) {
+                explanation
+                    .textSelection(.enabled)
+                    .padding(16)
+                    .preferredColorScheme(.dark)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if hovering && !showingPopover {
+                    explanation
                         .padding(16)
                         .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 12))
                         .overlay {
@@ -215,10 +219,20 @@ private struct DoubleTapInferenceInfo: View {
                         .shadow(color: .black.opacity(0.35), radius: 16, y: 6)
                         .offset(y: -40)
                         .allowsHitTesting(false)
+                        .accessibilityHidden(true)
                         .transition(.opacity)
                 }
             }
             .animation(.easeOut(duration: 0.15), value: hovering)
+    }
+
+    private var explanation: some View {
+        Text(Self.text)
+            .font(.system(size: 12.5))
+            .foregroundStyle(.white.opacity(0.8))
+            .lineSpacing(4)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(width: 310, alignment: .leading)
     }
 }
 

@@ -97,7 +97,7 @@ actor MirrorClient {
         You have access to the user's personal knowledge base through the Sentient OS MCP: an \
         Obsidian-style vault of markdown notes created just for you, to give you context about their \
         entire life (work, projects, plans, relationships, places, preferences, history…). It was \
-        built by Sentient OS privately on their own device from their notes, messages, emails, and files.
+        built by Sentient OS from local analysis and their chosen AI, using their notes, messages, emails, and files.
 
         At the start of any conversation where knowing the user could help (that's most of them!), \
         call `get_structure`. It returns the vault's folder and file index, plus the README: a \

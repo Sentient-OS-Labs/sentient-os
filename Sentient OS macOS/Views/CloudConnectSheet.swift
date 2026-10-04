@@ -27,12 +27,12 @@ struct CloudConnectSheet: View {
         var connectTitle: String { self == .gmail ? "Connect Gmail" : "Connect Calendar" }
         var bullets: [(icon: String, text: String)] {
             let claude = ModelBackend.current == .claude
-            let reader = claude ? "Your Claude" : "Your ChatGPT"
+            let reader = claude ? "your Claude" : "your ChatGPT"
             let page = claude ? "Claude's page" : "OpenAI's page"
-            return [("icloud.slash", self == .gmail ? "\(reader) reads your email, never our servers"
-                                                    : "\(reader) reads your calendar, never our servers"),
+            return [("person.crop.circle", self == .gmail ? "Read email through \(reader)"
+                                                          : "Read calendar through \(reader)"),
                     ("link", "Link your Google account on \(page)"),
-                    ("lock", "Sentient never sees your password")]
+                    ("lock", "Sign in directly with your provider")]
         }
         var connectedLine: String { self == .gmail ? "Gmail selected" : "Calendar selected" }
         var stopLine: String { self == .gmail ? "Stop reading Gmail" : "Stop reading Google Calendar" }

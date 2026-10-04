@@ -21,9 +21,9 @@ struct FrontierModelPane: View {
 
     var body: some View {
         SettingsPane(title: "Frontier Model Choice",
-                     whisper: "Sentient's on-device model does about 90% of the thinking. This is the engine behind the last 10%.") {
+                     whisper: PrivacyCopy.frontierSummary) {
             VStack(alignment: .leading, spacing: 26) {
-                SettingsProse("Everything Sentient reads stays on this Mac. For the heavy cloud reasoning, the knowledge base, the morning cards, Sidekick, it taps one frontier model of your choosing: your ChatGPT subscription, your Claude subscription, or a model endpoint of your own.")
+                SettingsProse(PrivacyCopy.frontierDetail)
 
                 FrontierEnginePicker {
                     chatgptPanel

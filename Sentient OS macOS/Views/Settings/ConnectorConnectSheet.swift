@@ -82,9 +82,9 @@ struct ConnectorConnectSheet: View {
                     bullet("lock", "Your connection stays in this Mac's Keychain")
                     bullet("sparkles", "Your selected AI processes the content you request")
                 } else {
-                    bullet("icloud.slash", "Your \(reader) reads \(name), never our servers")
+                    bullet("person.crop.circle", "Read \(name) through your own \(reader) account")
                     bullet("link", "Link your account on \(reader)'s connectors page")
-                    bullet("lock", "Sentient never sees your password")
+                    bullet("lock", "Sign in directly with your provider")
                     if origin == .claude && ["outlook-mail", "outlook-calendar"].contains(source.serviceSlug) {
                         bullet("building.2", "Uses Microsoft 365 with a work or school account")
                     }

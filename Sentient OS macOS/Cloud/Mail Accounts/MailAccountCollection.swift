@@ -25,9 +25,8 @@ nonisolated enum MailAccountCollection {
         try Task.checkCancellation()
         let accounts = candidates.compactMap(\.detectedAccount)
         guard !accounts.isEmpty else { return .noAddress }
-        let skipped = Set(candidates.filter { $0.detectedAccount == nil }.map(\.id))
-        let synced = try await MailAccountCloud.shared.save(accounts, engine: engine, provider: provider,
-                                                           preservingConnectionIDs: skipped)
+        // Connector details are used only during discovery. Persist and send addresses alone.
+        let synced = try await MailAccountCloud.shared.save(accounts.map(\.email))
         return synced ? .saved : .pending
     }
 }

@@ -137,7 +137,8 @@ enum SlackSource {
         Include a separate heading exactly ACTION ITEMS only when has_action_items=true.
         Otherwise omit that heading. A successful quiet read is notable=false,
         has_action_items=false, summary="" and tool_failure="". Never add filler to avoid quiet.
-        A quiet result still requires successful discovery. Missing tools or broken discovery
+        Every attempted search and selected-thread read must succeed before reporting success.
+        A quiet result still requires successful discovery. Missing tools or broken reads
         mean tool_failure="other"; sign-in/expired account failures mean "auth". For either
         failure use notable=false, has_action_items=false and summary="". A permission error
         on one thread does not prove the entire account is logged out. Do not bypass it.
@@ -193,7 +194,7 @@ enum SlackSource {
                 if call.status == .succeeded, let body = SlackConnector.text(call), body.hasPrefix("# Search Results for:") {
                     successfulSearches += 1
                     lanes.insert(query)
-                    if body.contains("\nNo results found.") { emptySearches += 1 }
+                    if isEmptySearch(body) { emptySearches += 1 }
                 }
             } else {
                 threads += 1
@@ -208,7 +209,7 @@ enum SlackSource {
                     try reject("slack_thread_arguments")
                 }
             }
-            if call.status == .pending { try reject("slack_incomplete_read") }
+            guard call.status == .succeeded else { try reject("slack_incomplete_read") }
             if let body = SlackConnector.text(call) { evidenceText += body + "\n" }
         }
         guard searches <= discoveryCap(mode), threads <= threadCap(mode), successfulSearches > 0,
@@ -265,12 +266,21 @@ enum SlackSource {
         return references
     }
 
+    /// An empty page contains only its search heading and the provider's empty-result line.
+    /// The same words inside a message body are content, never discovery metadata.
+    private static func isEmptySearch(_ body: String) -> Bool {
+        let lines = body.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return lines.count == 2 && lines[0].hasPrefix("# Search Results for:")
+            && lines[1] == "No results found."
+    }
+
     static func discoveredThreadCount(raw: String, backend: ModelBackend) throws -> Int {
         var threads = Set<String>()
         for call in MCPCallEvidence.receipts(raw: raw, backend: backend)
             where SlackConnector.bareName(call, backend: backend) == "slack_search_public_and_private" && call.status == .succeeded {
             guard let body = SlackConnector.text(call) else { continue }
-            if body.contains("\nNo results found.") { continue }
+            if isEmptySearch(body) { continue }
             let pattern = #"(?m)^Message_ts: [0-9]+\.[0-9]{6}\nPermalink: ([^\n]+)\nText:"#
             let regex = try NSRegularExpression(pattern: pattern)
             let records = regex.matches(in: body, range: NSRange(body.startIndex..., in: body))

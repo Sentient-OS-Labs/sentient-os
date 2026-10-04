@@ -321,7 +321,7 @@ private struct RightClickBlocker: NSViewRepresentable {
 /// The trust footer — on every onboarding surface, like everywhere else in the app.
 struct OnboardingTrustFooter: View {
     var body: some View {
-        Text("Private by design. Your files never leave this Mac.")
+        Text(PrivacyCopy.trustRibbon)
             .font(.system(size: 12))
             .foregroundStyle(Theme.faint)
             .padding(.bottom, 28)

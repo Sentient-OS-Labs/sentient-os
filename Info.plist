@@ -5,8 +5,8 @@
 	<!--
 	  Sparkle auto-update configuration.
 
-	  This partial Info.plist carries ONLY the Sparkle keys. Everything else (bundle id, name,
-	  versions, the NS*UsageDescription strings) is still synthesized by GENERATE_INFOPLIST_FILE=YES
+	  This partial Info.plist carries Sparkle keys and Double Tap's local-network policy. Bundle id,
+	  name, versions, and the other permission descriptions are synthesized by GENERATE_INFOPLIST_FILE=YES
 	  and the INFOPLIST_KEY_* build settings — Xcode MERGES the generated keys on top of this file
 	  (that's why INFOPLIST_FILE + GENERATE_INFOPLIST_FILE coexist here). Do NOT duplicate generated
 	  keys in this file. Doc: Sentient OS macOS/Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md
@@ -19,6 +19,16 @@
 	  strands every user with no upgrade path. Rotating it means first shipping a build carrying a new
 	  key, so treat it as forever.
 	-->
+
+	<!-- Double Tap calls user-selected Ollama / LM Studio servers through URLSession.
+	     Permit local HTTP servers without relaxing ATS for cloud-provider domains. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Connect to the model server you choose on your local network to draft Double Tap replies.</string>
 
 	<!-- The appcast Sparkle polls. Hosted on our own domain (Vercel) — a permanent contract, since
 	     every shipped build bakes this URL in forever. The DMG downloads live on GitHub Releases. -->

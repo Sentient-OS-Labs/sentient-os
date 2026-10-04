@@ -22,7 +22,7 @@ enum NotionSource {
         let properties: String
         let content: String
     }
-    enum Coverage: String, Codable, Sendable { case editedSample, activitySample }
+    enum Coverage: String, Codable, Sendable { case historicalSample, editedSample, activitySample }
     struct Discovery: Sendable { let candidates: [Candidate]; let coverage: Coverage }
     struct Content: Sendable {
         let pages: [Page]
@@ -99,15 +99,19 @@ enum NotionSource {
 
         // Exact filters force Notion-only search, even when AI search is available. Raw search
         // results never enter the model; their entity types and URLs are checked first.
-        let edited = try await call(search, searchArguments(window: window, edited: true))
+        let edited = try await call(search, searchArguments(window: window, edited: true, mode: mode))
         let discovery: Discovery
         if isEntitlementFailure(edited) {
-            let created = try await call(search, searchArguments(window: window, edited: false))
+            let created = try await call(search, searchArguments(window: window, edited: false, mode: mode))
             let recent = try await call("notion-list-recent-pages", ["limit": candidateCap])
-            discovery = Discovery(candidates: unique(try candidates(created, search: true) + candidates(recent, search: false)),
-                                  coverage: .activitySample)
+            let createdCandidates = try candidates(created, search: true)
+            let recentCandidates = try candidates(recent, search: false)
+            discovery = Discovery(candidates: unique(mode == .initial
+                ? recentCandidates + createdCandidates : createdCandidates + recentCandidates),
+                coverage: mode == .initial ? .historicalSample : .activitySample)
         } else {
-            discovery = Discovery(candidates: try candidates(edited, search: true), coverage: .editedSample)
+            discovery = Discovery(candidates: try candidates(edited, search: true),
+                                  coverage: mode == .initial ? .historicalSample : .editedSample)
         }
         Log("Notion read: coverage=\(discovery.coverage.rawValue), candidates=\(discovery.candidates.count)")
         onReceipt?(nil, nil, 1, "", "native_" + discovery.coverage.rawValue, calls)
@@ -116,7 +120,7 @@ enum NotionSource {
         let cap = mode == .initial ? 6 : 3
         let selected = try await select(discovery.candidates, cap: cap, slug: connection.slug,
                                         claudeModel: claudeModel, onReceipt: onReceipt)
-        let content = try await collectPages(selected, window: window) { candidate in
+        let content = try await collectPages(selected, window: window, mode: mode) { candidate in
             try await call("notion-fetch", ["id": candidate.url,
                 "include_transcript": false, "include_discussions": false])
         }
@@ -186,6 +190,7 @@ enum NotionSource {
     /// The fixed content-read loop is independently exercised with synthetic MCP responses.
     /// A skipped page cannot become evidence that a window is quiet.
     static func collectPages(_ selected: [Candidate], window: MCPSource.Window,
+                             mode: MCPSource.ReadMode = .iterative,
                              fetch: (Candidate) async throws -> [String: Any]) async throws -> Content {
         var pages: [Page] = [], skipped = 0
         guard selected.count <= 6 else { throw DirectMCPError.tooLarge }
@@ -194,7 +199,7 @@ enum NotionSource {
             do {
                 let result = try await fetch(candidate)
                 if isInaccessible(result) { skipped += 1; continue }
-                if let page = try page(result, candidate: candidate, window: window) { pages.append(page) }
+                if let page = try page(result, candidate: candidate, window: window, mode: mode) { pages.append(page) }
             } catch DirectMCPError.tooLarge { skipped += 1 }
         }
         return Content(pages: pages, inspectedCount: selected.count - skipped, skippedCount: skipped)
@@ -234,12 +239,15 @@ enum NotionSource {
         return selection.ids.compactMap { id in candidates.first { $0.id == id } }
     }
 
-    static func searchArguments(window: MCPSource.Window, edited: Bool) -> [String: Any] {
+    static func searchArguments(window: MCPSource.Window, edited: Bool,
+                                mode: MCPSource.ReadMode = .iterative) -> [String: Any] {
         // UTC calendar envelope covers exact instants; native page parsing applies [lower, upper).
         let formatter = ISO8601DateFormatter(); formatter.formatOptions = [.withFullDate]
         formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        let range = ["start_date": formatter.string(from: window.lower.addingTimeInterval(-86_400)),
-                     "end_date": formatter.string(from: window.upper.addingTimeInterval(86_400))]
+        // Initial discovery has no age cutoff. An effective end-date filter keeps AI search
+        // restricted to Notion; removing filters entirely would also search connected services.
+        var range = ["end_date": formatter.string(from: window.upper.addingTimeInterval(86_400))]
+        if mode == .iterative { range["start_date"] = formatter.string(from: window.lower.addingTimeInterval(-86_400)) }
         var result: [String: Any] = ["query": "", "page_size": candidateCap, "max_highlight_length": 0,
             "filters": [edited ? "last_edited_date_range" : "created_date_range": range]]
         if edited { result["sort"] = "last_edited" }
@@ -343,14 +351,15 @@ enum NotionSource {
 
     static func stableURL(_ id: String) -> String { "https://www.notion.so/" + id }
 
-    static func page(_ result: [String: Any], candidate: Candidate, window: MCPSource.Window) throws -> Page? {
+    static func page(_ result: [String: Any], candidate: Candidate, window: MCPSource.Window,
+                     mode: MCPSource.ReadMode = .iterative) throws -> Page? {
         let object = try payload(result)
         guard (object["metadata"] as? [String: Any])?["type"] as? String == "page",
               let url = object["url"] as? String, pageID(url) == candidate.id,
               let timestamp = object["page_last_edited_at"] as? String, let edited = date(timestamp) else {
             throw DirectMCPError.invalidResponse
         }
-        guard edited >= window.lower, edited < window.upper else { return nil }
+        guard (mode == .initial || edited >= window.lower), edited < window.upper else { return nil }
         guard let text = object["text"] as? String else { throw DirectMCPError.invalidResponse }
         // Complete pages omit these fields; any explicit omitted-subtree signal is partial.
         let partial = (object["truncated"].map { $0 as? Bool ?? true } ?? false)

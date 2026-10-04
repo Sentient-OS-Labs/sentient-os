@@ -128,7 +128,7 @@ instruction), and Settings → Health (FDA, Accessibility, Screen Recording).
 
 ## Related docs
 
-`Driver/Documentation - Driver (cua-driver).md` (why the grants are Sentient's own),
+`Driver/Documentation - Native Computer Use.md` (the helper grants and Sentient’s screen-context permission),
 `System/Documentation - System (Permissions, Health, Uninstall).md` (the probes),
 `Notch Magic/Documentation - Sidekick - General.md`, `Views/Settings/Documentation - Settings.md`,
 `Views/Onboarding/Documentation - Onboarding.md`.

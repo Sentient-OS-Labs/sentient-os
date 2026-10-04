@@ -24,7 +24,7 @@ final class ComputerUseGate {
     private(set) var micSpeech: MicSpeechState = .notAsked
 
     /// The Microphone & Speech row's hover tip — one string for the gate window and Settings → Health.
-    static let micSpeechTip = "Optional but recommended.\nLets Sidekick hear you."
+    static let micSpeechTip = PrivacyCopy.voiceInput
 
     /// Sentient's own Screen Recording — the cua driver's EYES (per-window screenshots) and the
     /// screen-context snapshot at fire time, since the driver runs inside Sentient's TCC chain and

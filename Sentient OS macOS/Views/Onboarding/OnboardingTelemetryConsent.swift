@@ -2,7 +2,7 @@
 //  OnboardingTelemetryConsent.swift
 //  Sentient OS macOS
 //
-//  The frontier-model page's privacy block — "We never collect your personal info." over two
+//  The frontier-model page’s privacy promise over two
 //  capsules, bottom-left: Read More (the Settings Privacy Policy
 //  sheet, PrivacyPolicyView, reused verbatim) and Configure Telemetry, which blooms a small
 //  anchored card with the two anonymous-telemetry toggles (crash reports → Sentry ·
@@ -54,7 +54,7 @@ struct OnboardingTelemetryConsent: View {
 
     private var pillBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("We never collect your personal info.")
+            Text(PrivacyCopy.headline)
                 .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
             HStack(spacing: 10) {
                 SettingsPillButton(title: "Read More") { showPrivacyPolicy = true }
@@ -67,20 +67,20 @@ struct OnboardingTelemetryConsent: View {
 
     private var card: some View {
         VStack(alignment: .leading, spacing: 4) {
-            MonoCaps("Anonymous telemetry", size: 9.5, tracking: 2.4,
+            MonoCaps("Privacy-preserving diagnostics", size: 9.5, tracking: 2.4,
                      color: .white.opacity(0.7), weight: .semibold)
                 .padding(.bottom, 8)
             SettingToggleLine(title: "Crash reports · Sentry",
-                              sub: "Privacy-friendly, structure-only reports that help us fix your bugs; never your content.",
+                              sub: PrivacyCopy.crashReports,
                               isOn: $crashReportsEnabled)
             SettingsHairline()
-            SettingToggleLine(title: "Analytics · TelemetryDeck",
-                              sub: "Anonymous usage signals through a privacy-first, open-source framework; never anything personal.",
+            SettingToggleLine(title: "Extended analytics · TelemetryDeck",
+                              sub: PrivacyCopy.extendedAnalytics,
                               isOn: $analyticsEnabled)
             if !analyticsEnabled {
                 // The core-tier disclosure — keeps the switch honest (Analytics.swift,
                 // Tier.core), same caption as Settings shows on opt-out.
-                Text("Even with this off, Sentient still sends a handful of extremely anonymized usage-count pings: how many people use Sentient, and how often core features fire (Sidekick, proactive cards, overnight runs, home opens). Counts only, through a privacy-first, open-source tool, so a two-person team can see our work is being used. Never your content, never anything personal.")
+                Text(PrivacyCopy.coreAnalytics)
                     .font(.system(size: 10.5))
                     .foregroundStyle(Theme.Ink.body)
                     .fixedSize(horizontal: false, vertical: true)

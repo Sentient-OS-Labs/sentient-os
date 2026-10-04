@@ -147,7 +147,7 @@ struct HealthPane: View {
                     StatusLine(title: "Full Disk Access",
                                health: fdaGranted ? .ok : .bad,
                                note: fdaGranted ? "granted" : "not granted",
-                               tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac.\n\nEverything is read right here on your Mac; your data never leaves it.",
+                               tip: PrivacyCopy.fullDiskAccess,
                                fixTitle: "Grant…") {
                         PermissionGuide.shared.guide(.fullDiskAccess, dragging: Bundle.main.bundleURL)
                     }
@@ -204,7 +204,7 @@ struct HealthPane: View {
                 StatusLine(title: "Screen Recording",
                            health: screenRec ? .ok : .bad,   // the driver's eyes — computer use is off without it
                            note: screenRec ? "granted" : "not granted",
-                           tip: "Lets Sentient see the window it's working in, so it acts on the right thing — and see your screen the moment you summon Sidekick (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}).\n\nGranted to Sentient itself. Screenshots are read on this Mac and passed to your selected model; they never reach a Sentient server.",
+                           tip: PrivacyCopy.screenCapture,
                            fixTitle: "Allow…") {
                     fixScreenRecording()
                 }
@@ -448,7 +448,7 @@ struct HealthPane: View {
                            note: claude.loggedIn
                                ? (claude.plan.map { "signed in · \($0.lowercased()) plan" } ?? "signed in")
                                : claude.loggingIn ? "finish in your browser" : "not signed in",
-                           tip: "Your own Claude login for Claude Code (Pro, Max, or Team).\n\n\u{201C}Sign in\u{201D} asks Claude Code to open your browser. Sentient never sees your credentials, and the login is shared with any Claude Code you already use on this Mac.",
+                           tip: "Sign in directly through Claude Code in your browser. Its login is kept in your Mac’s Keychain and shared with your existing Claude Code setup.",
                            fixTitle: claude.loggingIn ? "Re-open…" : "Sign in…",
                            fix: claude.loggedIn ? nil : { claude.startLogin() })
                 failureLine(claude.loginStatusLine)

@@ -67,35 +67,6 @@ private func withExtractionTimeout<T: Sendable>(_ seconds: Double,
     }
 }
 
-/// Live progress for one analysis run — the bar, the verdict counts, and the most-recently-processed
-/// item (its prompt/title/summary/verdict). Every snapshot is internally consistent: all the `last*`
-/// fields describe the SAME item, so a UI can show them together without desync. Read by ProcessingView.
-struct RunProgress: Sendable {
-    var total = 0
-    var done = 0
-    var survivors = 0
-    var junk = 0
-    var sensitive = 0
-    var failed = 0
-    var parseFailures = 0          // §7.13: junk that was actually a garbled/unparseable model reply
-    var extractionFailed = 0       // §7.8/B10: item whose CONTENT extraction failed (corrupt file), not the engine
-    var lastPath: String?
-    var lastFilePath: String?      // absolute path (for the thumbnail)
-    var lastPrompt: String?        // the EXACT prompt fed to the model for this item (dev prompt pane)
-    var lastTitle: String?
-    var lastSummary: String?
-    var lastVerdict: Verdict?
-    var lastSeconds: Double?
-    var totalSeconds: Double = 0   // sum over successful generations (for avg)
-    /// The run stopped early because the Mac's disk is full: either the free-space pre-flight
-    /// refused to start, or a per-item commit reported `.diskFull` mid-run. Everything up to the
-    /// halt is saved (marks are per-item atomic); nothing after it was read. The caller shows the
-    /// disk-full screen / morning caution instead of running the cloud tail (which writes too).
-    var diskFull = false
-    var mailDeferred = 0
-    var mailIncomplete = false
-}
-
 struct IterativeRun {
     let modelPath: String
     var store: CycleStore = .shared
@@ -235,18 +206,17 @@ struct IterativeRun {
                     combined.total += update.total; combined.done += update.done
                     combined.survivors += update.survivors; combined.junk += update.junk; combined.sensitive += update.sensitive
                     combined.failed += update.failed; combined.parseFailures += update.parseFailures
-                    combined.totalSeconds += update.totalSeconds; combined.lastSeconds = update.lastSeconds
+                    combined.totalSeconds += update.totalSeconds
                     combined.mailDeferred = update.mailDeferred; combined.mailIncomplete = update.mailIncomplete
-                    combined.lastPath = update.lastPath; combined.lastTitle = update.lastTitle; combined.lastSummary = update.lastSummary
-                    combined.lastPrompt = nil; combined.lastFilePath = nil; combined.lastVerdict = update.lastVerdict
+                    combined.updateLastItem(from: update)
                     onProgress(combined)
                 }
                 p.total += result.total; p.done += result.done; p.survivors += result.survivors
                 p.junk += result.junk; p.sensitive += result.sensitive; p.failed += result.failed
                 p.parseFailures += result.parseFailures; p.mailDeferred += result.mailDeferred
-                p.totalSeconds += result.totalSeconds; p.lastSeconds = result.lastSeconds
+                p.totalSeconds += result.totalSeconds
                 p.mailIncomplete = result.mailIncomplete; p.diskFull = result.diskFull
-                p.lastPrompt = nil; p.lastPath = "Apple Mail"; p.lastTitle = result.lastTitle; p.lastSummary = result.lastSummary
+                p.updateLastItem(from: result)
                 if result.diskFull { break runLoop }
                 continue
             }

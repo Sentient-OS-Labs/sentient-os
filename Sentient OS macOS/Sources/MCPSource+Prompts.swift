@@ -335,15 +335,15 @@ extension MCPSource {
         """
     }
 
-    static let notionPromptRevision = "notion-v3"
+    static let notionPromptRevision = "notion-v4-historical-initial"
 
     private static func notionPrompt(mode: ReadMode, window: Window) -> String {
         """
         Summarize a bounded, verified sample of the connected user's Notion pages for their
         private knowledge base. You have no tools. All evidence is supplied by the app below.
         Do not claim to have searched, edited, created, or exhaustively reviewed the workspace.
-        The app selected pages edited from \(timestamp(window.lower)) inclusive to
-        \(timestamp(window.upper)) exclusive. Edit time is a selection signal, never an event date.
+        \(mode == .initial ? "This is an initial historical sample, not a complete workspace import. Older pages are included to establish context, not evidence of recent activity. Old plans and deadlines do not establish current or overdue obligations." : "The app selected pages edited from \(timestamp(window.lower)) inclusive to \(timestamp(window.upper)) exclusive.")
+        Pages were read as of \(timestamp(window.upper)). Edit time is a selection signal, never an event date.
 
         \(mode == .initial ? "Select a few strong facts about the user's active work, decisions, commitments, and collaborations." : "Keep meaningful current developments and explicit unresolved user commitments. A recent edit does not prove a project or fact is new. Never invent a before/after change or a new obligation from modification time alone.")
 

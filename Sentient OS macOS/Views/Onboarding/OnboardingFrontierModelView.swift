@@ -59,7 +59,7 @@ struct OnboardingFrontierModelView: View {
                             .display(26)
                             .foregroundStyle(Theme.Ink.bright)
 
-                        Text("Sentient's on-device model understands your life. Proactive Intelligence and Sidekick run on a frontier model of your choice.")
+                        Text(PrivacyCopy.frontierSummary)
                             .font(.system(size: 14.5))
                             .foregroundStyle(Theme.secondary)
                             .multilineTextAlignment(.center)

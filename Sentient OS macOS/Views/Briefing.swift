@@ -349,7 +349,7 @@ struct Briefing: Identifiable {
             letter: """
             Supabase flagged your **sentient-os** project: it's set to pause this **Friday**. Free-tier projects pause after 7 days of inactivity, and once paused the database goes offline until you restore it, and this is the one holding your **2,500+ waitlist signups**, so I'd rather not let it lapse.
 
-            I'll handle it the way you would: open your Supabase dashboard in your own logged-in browser, go to **sentient-os**, and restore it; nothing touched but the renew button, and nothing leaves this Mac. One tap and you're back online.
+            I'll handle it the way you would: open your Supabase dashboard in your own logged-in browser, go to **sentient-os**, and restore it; only the requested renewal action, in your own browser. One tap and you're back online.
             """,
             draft: "Open your Supabase dashboard → project 'sentient-os' → restore project → confirm it's back on the free tier.",
             draftLabel: "What I'll do · Computer use",

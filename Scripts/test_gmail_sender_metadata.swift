@@ -49,8 +49,7 @@ import Foundation
         let candidate = MailAccountCandidate(engine: .claude, provider: .gmail, connectionKey: "test", email: "me@example.com", reportedVia: .sentMailMetadata)
         let fallback = MailAccountCandidate(engine: .claude, provider: .gmail, connectionKey: "other", email: nil, reportedVia: .sentMailMetadata)
         guard let account = candidate.detectedAccount else { fatalError("Detected account missing") }
-        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(account)) as! [String: Any]
-        check(encoded["reported_via"] as? String == "sent_mail_metadata", "persist sending-address provenance")
+        check(account.email == "me@example.com", "resolve the sending address for the email-only contact list")
         check(fallback.detectedAccount == nil, "missing address is skipped without accepting manual input")
         check([candidate, fallback].compactMap(\.detectedAccount).count == 1, "resolved account is retained while unresolved accounts are skipped")
         check([fallback].compactMap(\.detectedAccount).isEmpty, "unresolved-only discovery does not save")

@@ -173,7 +173,7 @@ struct KnowledgeSourcesPicker: View {
                     HStack(spacing: 18) { conversationPills }
                     VStack(spacing: 10) { conversationPills }
                 }
-                sourceNote("Understood privately using Sentient's on-device LLM. Your chats never leave this device.",
+                sourceNote(PrivacyCopy.conversationSources,
                            symbol: "lock")
             }
         }
@@ -211,7 +211,7 @@ struct KnowledgeSourcesPicker: View {
                         calendarColumn
                     }
                 }
-                sourceNote("Apple Mail and Apple Calendar are read on this Mac. Other connections use your own \(ModelBackend.current == .claude ? "Claude" : "ChatGPT") account, never our servers.",
+                sourceNote(PrivacyCopy.emailSources,
                            symbol: "lock")
             }
         } trailing: {

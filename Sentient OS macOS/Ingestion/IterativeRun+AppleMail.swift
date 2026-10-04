@@ -49,11 +49,10 @@ extension IterativeRun {
                     try Task.checkCancellation()
                     if Date() >= deadline { throw AppleMailError.busy }
                     let row = item.row
-                    p.lastPath = "Apple Mail"; p.lastFilePath = nil; p.lastPrompt = nil
-                    p.lastTitle = nil; p.lastSummary = nil; p.lastVerdict = nil
                     var retry = false, draft: NoteDraft?, receipt: AppleMailReceiptValue?
                     var remove = Set<String>()
                     var decision: Triage.Outcome?
+                    var seconds: Double?
                     var loadedBody = false
                     if !row.excluded {
                         do {
@@ -83,7 +82,7 @@ extension IterativeRun {
                                 }
                                 decision = outcome
                                 modelFailures = 0
-                                p.lastSeconds = response.totalTime; p.totalSeconds += response.totalTime
+                                seconds = response.totalTime
                                 if outcome.verdict == .survivor {
                                     draft = NoteDraft(kind: .appleMail, sourceID: identity, folder: "Apple Mail", itemDate: row.date,
                                         text: outcome.summary, title: outcome.title, reminderFlagged: false)
@@ -113,6 +112,10 @@ extension IterativeRun {
                     for identity in remove { receipts.removeValue(forKey: identity) }
                     if let receipt { receipts[receipt.identity] = receipt }
                     // Display/counters only after a successful commit; no rejected content in UI.
+                    // Keep the previous card intact if this attempt is cancelled or cannot be saved.
+                    p.lastPath = "Apple Mail"; p.lastFilePath = nil; p.lastPrompt = nil
+                    p.lastTitle = nil; p.lastSummary = nil; p.lastVerdict = nil
+                    p.lastSeconds = seconds; p.totalSeconds += seconds ?? 0
                     if let decision {
                         LifetimeStats.bump(decision.verdict)
                         switch decision.verdict {
@@ -121,7 +124,18 @@ extension IterativeRun {
                         case .sensitive: p.sensitive += 1
                         }
                         p.lastVerdict = decision.verdict
-                    } else if !retry && receipt == nil { p.junk += 1 }
+                    } else if retry {
+                        p.lastTitle = loadedBody ? "Analysis deferred" : "Message unavailable"
+                        p.lastSummary = loadedBody
+                            ? "This email will be analyzed again on the next run."
+                            : "The message body could not be read. Open Mail, then try analysis again."
+                    } else if receipt != nil {
+                        p.lastTitle = "Already analyzed"
+                        p.lastSummary = "No changes since the previous analysis."
+                    } else {
+                        p.junk += 1
+                        p.lastVerdict = .junk
+                    }
                     p.done += 1
                     onProgress(p)
                     if modelFailures == 3 || modelFailures >= 6 {

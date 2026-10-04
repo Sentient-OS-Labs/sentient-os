@@ -1,10 +1,11 @@
 // MailAccount.swift
-// Connected-mail metadata and validation, shared by collection, storage and the setup UI.
+// Transient connector discovery and address validation. Connector details are never serialized
+// into the feedback contact list; collection passes only resolved email strings to storage.
 // Doc: Documentation - Connected Email Accounts.md
 
 import Foundation
 
-nonisolated struct MailAccount: Codable, Sendable, Equatable, Identifiable {
+nonisolated struct MailAccount: Sendable, Equatable, Identifiable {
     enum Engine: String, Codable, Sendable, CaseIterable { case chatgpt, claude }
     enum Provider: String, Codable, Sendable, CaseIterable {
         case gmail, outlook
@@ -13,7 +14,6 @@ nonisolated struct MailAccount: Codable, Sendable, Equatable, Identifiable {
     enum Source: String, Codable, Sendable {
         case connectorProfile = "connector_profile"
         case sentMailMetadata = "sent_mail_metadata"
-        case userEntered = "user_entered" // Decode records saved by earlier builds; new setup has no entry field.
     }
 
     let engine: Engine
@@ -21,14 +21,8 @@ nonisolated struct MailAccount: Codable, Sendable, Equatable, Identifiable {
     let connectionKey: String
     let email: String
     let reportedVia: Source
-    let consentVersion: Int
 
     var id: String { "\(engine.rawValue):\(provider.rawValue):\(connectionKey)" }
-
-    enum CodingKeys: String, CodingKey {
-        case engine, provider, email
-        case connectionKey = "connection_key", reportedVia = "reported_via", consentVersion = "consent_version"
-    }
 
     init(engine: Engine, provider: Provider, connectionKey: String, email: String, reportedVia: Source) throws {
         guard let address = Self.normalizedEmail(email), (1...256).contains(connectionKey.count) else {
@@ -38,7 +32,7 @@ nonisolated struct MailAccount: Codable, Sendable, Equatable, Identifiable {
             throw MailAccountError.invalidResponse
         }
         self.engine = engine; self.provider = provider; self.connectionKey = connectionKey
-        self.email = address; self.reportedVia = reportedVia; consentVersion = 1
+        self.email = address; self.reportedVia = reportedVia
     }
 
     static func normalizedEmail(_ value: String) -> String? {

@@ -165,7 +165,8 @@ nonisolated enum SlackConnector {
                let result = value["result"] as? String { return result }
             if let data = piece.data(using: .utf8), let value = object(data),
                let result = value["results"] as? String {
-                return result + "\n" + (value["pagination_info"] as? String ?? "")
+                // Keep search content separate from the provider's pagination metadata.
+                return result
             }
             if let data = piece.data(using: .utf8), let value = object(data),
                let messages = value["messages"] as? String { return messages }

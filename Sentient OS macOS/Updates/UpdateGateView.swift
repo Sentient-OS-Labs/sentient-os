@@ -221,7 +221,7 @@ struct UpdateGateView: View {
     private var footer: some View {
         HStack(spacing: 8) {
             Image(systemName: "shield").font(.system(size: 10.5)).foregroundStyle(Theme.Ink.label)
-            Text("Private by design. Your files never leave this Mac.")
+            Text(PrivacyCopy.trustRibbon)
                 .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.label)
         }
         .frame(maxWidth: .infinity)

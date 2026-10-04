@@ -62,7 +62,8 @@ enum OutlookCalendarCurationTests {
         check(projected.map(\.slug) == ["outlook-mail", slug], "one suite produces two logical services")
         check(ConnectorCensus.logicalServices(projected + [suite]) == projected, "repeated projection is idempotent")
         domain["mcp.connectors.claude"] = try! JSONEncoder().encode([suite])
-        domain["mcp.connectors.chatgpt"] = try! JSONEncoder().encode([
+        let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.bundled." + $0 } ?? "mcp.connectors.chatgpt"
+        domain[codexKey] = try! JSONEncoder().encode([
             ConnectorCensus.DetectedConnector(slug: slug, displayName: "Outlook Calendar", origin: .chatgpt,
                 serverURL: nil, catalogID: "connector_e6a7394682e24467ac68c60696f275a4", iconPath: nil, healthy: true, lastSeen: Date()),
             ConnectorCensus.DetectedConnector(slug: OutlookMailConnector.slug, displayName: "Outlook Mail", origin: .chatgpt,
@@ -102,6 +103,15 @@ enum OutlookCalendarCurationTests {
                 do {
                     let result = try OutlookCalendarSource.evidence(raw: native, backend: backend, purpose: .initial, window: window)
                     check(result.events.count == 1 && result.complete, "\(backend) native event evidence")
+                    let sensitive = #"{"item_count":1,"notable":true,"has_action_items":false,"summary":"Synthetic card fixture: 4111 1111 1111 1111","tool_failure":""}"#
+                    let filtered = try MCPSource.parse(sensitive, slug: slug)
+                    let verified = try OutlookCalendarSource.validate(raw: native, backend: backend, mode: .initial, window: window, outcome: filtered)
+                    check(verified == .quiet(itemCount: 1), "\(backend) privacy discard keeps native coverage without retained text")
+                    let wrongCount = try MCPSource.parse(sensitive.replacingOccurrences(of: "\"item_count\":1", with: "\"item_count\":2"), slug: slug)
+                    check(rejects { _ = try OutlookCalendarSource.validate(raw: native, backend: backend, mode: .initial, window: window, outcome: wrongCount) },
+                          "\(backend) privacy discard cannot bypass native event-count validation")
+                    check(rejects { _ = try OutlookCalendarSource.validate(raw: "", backend: backend, mode: .initial, window: window, outcome: filtered) },
+                          "\(backend) privacy discard still requires successful native read evidence")
                     let empty = try OutlookCalendarSource.evidence(raw: trace(backend, name: name, arguments: args, values: []), backend: backend, purpose: .initial, window: window)
                     check(empty.events.isEmpty && empty.complete, "\(backend) actual empty discovery succeeds")
                     let boundary = [event(id: "LOWER", start: "2026-09-01T00:00:00", end: "2026-09-01T01:00:00"),

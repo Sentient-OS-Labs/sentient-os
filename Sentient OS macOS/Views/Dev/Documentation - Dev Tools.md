@@ -25,7 +25,7 @@ seams the shipping UI uses; nothing has its own processing path.
 - **PROACTIVE CARDS:** the 3-way deck (`real` / `jesai` / `launch`; `real` is the shipping default; the demo decks are pitch mode). Two screen-recording knobs for the takeover: a resizable analysis window (drops the min frame and the Stop footer) and a demo bar baseline (opens the bar mid-run; display-only).
 - **SOURCES:** the same `dbg.*` selection Settings uses (custom roots, chat pickers, Gmail / Calendar connect sheets).
 - **MCP:** toggle, Copy MCP Link, Copy System Prompt, MCP SYNC (a forced push), Stats.
-- **DOUBLE TAP:** the on/off switch, the route (Sentient relay, the shipped default, with a URL override for previews or `wrangler dev`; or a dev OpenAI key saved to the Keychain, never to defaults), and the last run's timing line (capture, first text, total, token counts, verdict). See `Double Tap/Documentation - Double Tap.md`.
+- **DOUBLE TAP:** the on/off switch, the route (Sentient relay, the shipped default, with a URL override for previews or `wrangler dev`; or an OpenAI key saved to Keychain, never to defaults), and the last run's timing line (capture, first text, total, token counts, verdict). The full production provider choices, including compatible local endpoints, are in Settings → Double Tap. See `Double Tap/Documentation - Double Tap.md`.
 - Full Disk Access re-check / grant / relaunch, and **Reset everything** (the shared `FactoryReset`).
 
 Console visibility: `Log()` tees to `/tmp/sentient-dev.log` in DEBUG; `tail -f` it while clicking

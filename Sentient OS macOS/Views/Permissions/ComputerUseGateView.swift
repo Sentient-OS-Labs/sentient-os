@@ -49,7 +49,7 @@ struct ComputerUseGateView: View {
 
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 10)).foregroundStyle(Theme.Ink.label)
-                Text("Screenshots go to your selected AI, never a Sentient server.")
+                Text(PrivacyCopy.screenFooter)
                     .font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
             }
             .frame(maxWidth: .infinity)
@@ -141,7 +141,7 @@ struct SentientPermissionRows: View {
                     StatusLine(title: "Screen Recording (see the screen)",
                                health: gate.sentientScreen ? .ok : .bad,
                                note: gate.sentientScreen ? "granted" : "not granted",
-                               tip: "Lets Sidekick understand the screen you are asking about. Screenshots go to your selected AI engine, never a Sentient server.",
+                               tip: PrivacyCopy.screenCapture,
                                fixTitle: "Allow…") { fixSentientScreen() }
                 }
             }

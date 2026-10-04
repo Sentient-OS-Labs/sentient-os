@@ -7,6 +7,8 @@
 //
 
 import Foundation
+import SwiftData
+import os
 
 enum NotionCurationTests {
     // Metadata reviewed 2026-09-14; upload-skill addition reviewed 2026-09-16.
@@ -258,6 +260,13 @@ enum NotionCurationTests {
             } catch { check(true, "native content cap enforced before requests") }
             check(try NotionSource.page(page(["page_last_edited_at": "2026-09-14T13:00:00Z"]), candidate: candidate, window: window) == nil, "upper bound excluded")
             check(try NotionSource.page(page(["page_last_edited_at": "2026-03-01T12:00:00Z"]), candidate: candidate, window: window) == nil, "old viewed page is not recent evidence")
+            let historicalRead = try await NotionSource.collectPages([candidate], window: window, mode: .initial) { _ in
+                try page(["page_last_edited_at": "2024-03-01T12:00:00Z"])
+            }
+            check(historicalRead.pages.count == 1 && historicalRead.pages[0].content == "A proposed project.",
+                  "initial read retains historical content before summarization")
+            check(try NotionSource.page(page(["page_last_edited_at": "2026-09-14T13:00:00Z"]),
+                  candidate: candidate, window: window, mode: .initial) == nil, "initial read still excludes future edits")
             check(try NotionSource.page(page(["truncated": true]), candidate: candidate, window: window)?.partial == true, "partial content stays explicitly partial")
             var completeObject = try NotionSource.payload(page())
             completeObject.removeValue(forKey: "truncated")
@@ -294,6 +303,12 @@ enum NotionCurationTests {
             check((args["filters"] as? [String: Any])?["last_edited_date_range"] != nil, "last-edited discovery actually filters edits")
             let fallback = NotionSource.searchArguments(window: window, edited: false)
             check(fallback["sort"] == nil && (fallback["filters"] as? [String: Any])?["created_date_range"] != nil, "fallback uses supported creation range without expensive sorting")
+            for edited in [true, false] {
+                let initialArgs = NotionSource.searchArguments(window: window, edited: edited, mode: .initial)
+                let range = (initialArgs["filters"] as? [String: Any])?[edited ? "last_edited_date_range" : "created_date_range"] as? [String: String]
+                check(range?["start_date"] == nil && range?["end_date"] != nil,
+                      "initial discovery has no lower cutoff and retains a Notion-only filter")
+            }
 
             var connection = DirectMCPConnection(id: UUID(), providerSlug: "notion", label: "Synthetic", generation: UUID(), state: .ready)
             connection.tools = try ["notion-fetch", "notion-create-pages", "notion-spawn-session", "notion-send-message-to-session", "notion-update-page", "unexpected-danger"].map { name in
@@ -309,7 +324,7 @@ enum NotionCurationTests {
             check(verdictSchema["additionalProperties"] as? Bool == false, "classifier schema refuses invented tool names")
             check(connection.actionNames == ["notion-create-pages", "notion-fetch"], "old write verdict cannot enable reviewed destructive or agent tools")
             check(connection.readNames == ["notion-fetch"], "native read policy remains narrow")
-            check(!connection.kbEligible, "a Notion connection missing required discovery reads stays ineligible")
+            check(connection.kbEligible && !connection.kbPolicyReady, "Notion remains selectable while missing discovery reads prevents execution")
             var eligible = connection
             eligible.tools = try ["notion-fetch", "notion-search", "notion-list-recent-pages"].map { name in
                 .init(name: name, description: "Synthetic read", definition: try DirectMCPHTTP.json(["name": name,
@@ -317,10 +332,10 @@ enum NotionCurationTests {
             }
             eligible.policy = Dictionary(uniqueKeysWithValues: eligible.tools.map { ($0.name, DirectMCPTool.Category.read) })
             eligible.policyFingerprint = DirectMCPTool.fingerprint(eligible.tools)
-            check(eligible.kbEligible, "accepted Notion reader is available only with its complete reviewed read surface")
+            check(eligible.kbPolicyReady, "accepted Notion reader is ready with its complete reviewed read surface")
             eligible.tools[1] = .init(name: "notion-search", description: "Changed", definition: try DirectMCPHTTP.json(["name": "notion-search", "inputSchema": ["type": "object"]]))
             eligible.policyFingerprint = DirectMCPTool.fingerprint(eligible.tools)
-            check(!eligible.kbEligible, "missing read-only annotation hides knowledge eligibility")
+            check(!eligible.kbPolicyReady, "missing read-only annotation prevents knowledge execution")
             let inherited = DirectMCPRuntime.Attachment(connection: connection, allowed: ["notion-fetch"], deadline: Date().addingTimeInterval(30))
             let empty = try await DirectMCPRuntime.$current.withValue([inherited]) {
                 try await DirectMCPRuntime.execute([]) { DirectMCPRuntime.current.isEmpty }
@@ -351,6 +366,49 @@ enum NotionCurationTests {
             check(claude.contains("--strict-mcp-config") && claude.contains(#"{"mcpServers":{}}"#), "Claude summarizer has no MCP servers")
             let prompt = MCPSource.prompt(slug: "notion", name: "Notion", backend: .claude, mode: .initial, window: window)
             check(prompt.contains("You have no tools") && prompt.contains("partial") && prompt.contains("ACTION ITEMS"), "provider prompt carries native-evidence and attribution contract")
+            check(prompt.contains("initial historical sample") && prompt.contains("Older pages"), "initial prompt does not frame old context as recent activity")
+
+            // Exercise checkpoint migration through the production orchestrator and an isolated store.
+            let defaults = UserDefaults.standard
+            let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+            defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
+            var fixture = saved
+            fixture[DirectMCPStore.preferencesKey] = try JSONEncoder().encode([connection])
+            fixture[CodexAuth.kbOnlyKey] = false
+            defaults.setVolatileDomain(fixture, forName: UserDefaults.argumentDomain)
+            let storeSchema = Schema([BucketPointer.self, CycleNote.self])
+            let container = try ModelContainer(for: storeSchema, configurations: ModelConfiguration(schema: storeSchema, isStoredInMemoryOnly: true))
+            let store = CycleStore(modelContainer: container)
+            let bucket = MCPSource.bucketKey(connection.slug)
+            let legacyOrigin = ConnectorRegistry.readOrigin(slug: connection.slug, backend: .chatgpt)
+            let pending = NoteDraft(kind: .mcp, sourceID: "notion-pending", folder: "Notion", itemDate: lower,
+                text: "Previously accepted context.", title: "Existing summary", reminderFlagged: false)
+            _ = await store.commitMCPRead(bucketKey: bucket, notes: [pending], through: ItemKey(order: lower.timeIntervalSince1970, tiebreak: ""),
+                origin: legacyOrigin, replaceNotes: false)
+            let observedModes = OSAllocatedUnfairLock(initialState: [MCPSource.ReadMode]())
+            try await ModelBackend.$runOverride.withValue(.chatgpt) {
+                let failing: MCPSource.Reader = { _, _, mode, _ in
+                    observedModes.withLock { $0.append(mode) }
+                    throw MCPSource.MCPError.toolFailure(slug: "notion")
+                }
+                do {
+                    _ = try await MCPSource.run(slug: connection.slug, mode: .iterative, store: store, now: upper, reader: failing)
+                    check(false, "failed historical catch-up throws")
+                } catch { check(true, "failed historical catch-up throws") }
+                let failedCheckpoint = try await store.mcpCheckpoint(bucket)
+                let failedNotes = await store.notes()
+                check(failedCheckpoint?.origin == legacyOrigin && failedNotes.count == 1,
+                      "failed catch-up preserves old checkpoint and pending summary")
+                let reader: MCPSource.Reader = { _, _, mode, _ in
+                    observedModes.withLock { $0.append(mode) }; return summary
+                }
+                _ = try await MCPSource.run(slug: connection.slug, mode: .iterative, store: store, now: upper, reader: reader)
+                check((await store.notes()).count == 2, "automatic catch-up appends without deleting pending knowledge")
+                _ = try await MCPSource.run(slug: connection.slug, mode: .iterative, store: store,
+                    now: upper.addingTimeInterval(60), reader: reader)
+                check(observedModes.withLock { $0 } == [.initial, .initial, .iterative],
+                      "legacy checkpoint retries historical import until success, then returns to incremental reads")
+            }
         } catch { check(false, "unexpected fixture error: \(ErrorLabel(error))") }
         Log("NOTION CHECKS: \(count) checks, \(failures) failures")
         if failures > 0 { exit(1) }

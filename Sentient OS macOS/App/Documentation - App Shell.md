@@ -8,7 +8,7 @@ this is the wiring.
 
 | File | Job |
 |---|---|
-| `main.swift` | The real entry point. The same binary is also the root "wake helper": when launchd relaunches it with `--wake-helper`, `main.swift` branches into `WakeHelper.run()` before SwiftUI ever exists. Otherwise it starts crash reporting, analytics, the one-time anonymous install ping, and the GUI app. |
+| `main.swift` | The real entry point. The same binary is also the root "wake helper": when launchd relaunches it with `--wake-helper`, `main.swift` branches into `WakeHelper.run()` before SwiftUI ever exists. Otherwise it starts crash reporting, analytics, the one-time minimal install-count ping, and the GUI app. |
 | `Sentient_OS_macOSApp.swift` | The `App` struct (no `@main`, because `main.swift` is the entry). Declares every window scene and the menu bar item. |
 | `AppState.swift` | `@Observable` app-wide state and the launch sequence. Owns the scheduler, the Sidekick coordinator, the notch window controller, the Dock policy, and the updater. |
 | `DockPolicy.swift` | Shows the Dock icon while the home window is open or computer-use setup is pending (`.regular` vs `.accessory`). Auxiliary windows float like a menu-bar app's panels. |
@@ -31,7 +31,7 @@ this is the wiring.
 3. Prepare `ComputerUseUpgrade` before mounting regular scenes or starting Sidekick. A previously ready, onboarded Mac missing the pinned driver enters persistent setup; an existing pending upgrade resumes even after installation. Fresh onboarding and already-configured users retain their normal startup.
 4. Start the scheduler as before. `startInterfaceIfReady()` starts the Sidekick coordinator and notch once, immediately on a normal launch or after setup releases the interface. During setup there are no Sidekick hotkey monitors or notch startup.
 5. Start Dock policy, Sparkle, update notices, diagnostics, notification checks, and managed CLI maintenance. The detached startup task also sweeps orphaned managed computer-use daemons, preserving daemons whose Sentient host is still alive. These services retain their own guards; the setup window does not pause background scheduling or connector classification maintenance.
-6. During onboarding, the existing FDA-dependent model download remains available. Engine CLIs install lazily at the user's engine commitment, never simply because the app launched.
+6. During onboarding, the existing FDA-dependent model download remains available. Shared Codex CLI and native computer-use preparation start at app launch for all backends. Claude Code preparation is tied to the Claude commitment/sign-in flow.
 
 ## Exclusive computer-use setup
 

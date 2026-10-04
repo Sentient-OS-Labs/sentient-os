@@ -76,7 +76,7 @@ requires the normal task's verified `STATUS: DONE` result.
 
 ## Models and effort
 
-The tier map (`tuned(for:)`, the backendTuned twin): `gpt6astra`/`gpt56sol`/`gpt56terra` → `sonnet`, `gpt56luna` →
+The tier map (`tuned(for:)`, the backendTuned twin): `gpt6astra`/`gpt6sol`/`gpt56terra` → `sonnet`, `gpt6luna` →
 `haiku`; a caller that earns Opus says so with `Invocation.claudeModel = .opus` (the vault legs via
 `runCodexInStaging`, and proactive research). On a **Pro** plan every Opus pick downshifts to Sonnet
 (`ClaudeAuth.isPro` — Pro's Opus window is tiny; the terra-downshift twin; unknown plans fail open).

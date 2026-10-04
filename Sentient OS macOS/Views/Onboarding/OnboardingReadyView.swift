@@ -120,7 +120,7 @@ private struct OnboardingConnectorRecommendation: View {
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Sentient works best when its knowledge base can learn from your email and calendar.\n\nPrivacy is at its core. The developers of Sentient OS cannot see your email nor calendar, as you connect them directly through OpenAI or Anthropic's email or calendar connectors.")
+            Text(PrivacyCopy.emailRecommendation)
                 .font(.system(size: 13))
                 .foregroundStyle(Theme.Ink.body)
                 .lineSpacing(4)

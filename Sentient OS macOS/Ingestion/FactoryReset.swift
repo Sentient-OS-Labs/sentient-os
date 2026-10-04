@@ -23,8 +23,8 @@ enum FactoryReset {
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil) async -> Bool {
-        do { try await MailAccountCloud.shared.erase() }
-        catch { Log("FactoryReset: connected-email deletion needs retry"); return false }
+        // Retain contact records and their local identity, like invitation access. Reset clears
+        // learned knowledge and app connections, not the founders' feedback contact list.
         do { try await DirectMCPConnections.shared.removeAll() }
         catch { Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false }
         await CycleStore.shared.wipeEverything()

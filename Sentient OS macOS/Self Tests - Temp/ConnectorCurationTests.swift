@@ -23,6 +23,42 @@ enum ConnectorCurationTests {
             Log("\(condition ? "PASS" : "FAIL")  \(message)")
             if !condition { failures += 1 }
         }
+        var progress = RunProgress()
+        progress.lastTitle = "Previous source title"; progress.lastSummary = "Previous source summary"
+        progress.lastVerdict = .junk; progress.lastFilePath = "/synthetic/previous.pdf"; progress.lastSeconds = 3
+        progress.beginSourceRead(name: "Granola", label: "recent note sample", prompt: "Synthetic")
+        check(progress.sourceRead?.status == .reading && progress.lastTitle == "Reading Granola",
+              "connector start displays an explicit reading state")
+        check(progress.lastVerdict == nil && progress.lastFilePath == nil && progress.lastSeconds == nil
+            && progress.lastSummary != "Previous source summary", "connector start clears stale source content and verdict")
+        progress.finishSourceRead(name: "Granola", label: "recent note sample", summary: nil, items: 0)
+        check(progress.sourceRead?.status == .quiet && progress.lastVerdict == nil && progress.junk == 0,
+              "quiet connector results are not classified as junk")
+        progress.failSourceRead(name: "Granola", message: "Could not read this source.")
+        check(progress.failed == 1 && progress.sourceReadFailures["Granola"] != nil && progress.lastVerdict == nil,
+              "connector failure increments failed count and remains visible separately from junk")
+        var resumed = RunProgress()
+        resumed.beginSourceRead(name: "Notion", label: "initial page sample", prompt: "Synthetic")
+        resumed.mergeSourceResults(from: progress)
+        check(resumed.sourceReadFailures["Granola"] != nil, "another source cannot clear an earlier failure")
+        resumed.finishSourceRead(name: "Granola", label: "recent note sample", summary: "Verified summary.", items: 1)
+        resumed.mergeSourceResults(from: progress)
+        check(resumed.sourceReadFailures.isEmpty && resumed.lastSummary == "Verified summary." && resumed.lastVerdict == .survivor,
+              "successful retry replaces the loading copy and clears the carried source failure")
+        resumed.finishSourceRead(name: "Granola", label: "older quiet window", summary: nil, items: 4)
+        check(resumed.sourceRead?.status == .summarized && resumed.lastSummary == "Verified summary."
+            && resumed.lastPath == "recent note sample · 1 item checked" && resumed.lastVerdict == .survivor,
+              "quiet older windows preserve the complete saved summary card")
+        resumed.beginSourceRead(name: "Granola", label: "next run", prompt: "Synthetic")
+        resumed.finishSourceRead(name: "Granola", label: "next run", summary: nil, items: 0)
+        check(resumed.sourceRead?.status == .quiet && resumed.lastTitle == "No new summary",
+              "a new quiet read of the same source does not reuse its previous summary")
+        resumed.finishSourceRead(name: "Granola", label: "window", summary: "Verified summary.", items: 1)
+        resumed.beginSourceRead(name: "Notion", label: "page sample", prompt: "Synthetic")
+        resumed.finishSourceRead(name: "Notion", label: "page sample", summary: nil, items: 0)
+        check(resumed.sourceRead?.name == "Notion" && resumed.sourceRead?.status == .quiet,
+              "a different quiet source does not inherit another source's summary")
+
         let inventoryPrefix = "mcp__claude_ai_Fixture__"
         let inventoryNames = [inventoryPrefix + "read_item", inventoryPrefix + "create_item"]
         func inventory(_ status: String = "connected", tools: [String]? = nil, server: String = "claude.ai Fixture") -> String {
@@ -47,9 +83,21 @@ enum ConnectorCurationTests {
         let defaults = UserDefaults.standard
         let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
         defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
+        // The hosted census is account-bound. Keep these checks independent of the user's login.
+        let runtime = FileManager.default.temporaryDirectory.appending(path: "curation-runtime-\(UUID().uuidString)")
+        let savedRuntime = ProcessInfo.processInfo.environment["SENTIENT_CODEX_RUNTIME_ROOT"]
+        try! FileManager.default.createDirectory(at: runtime.appending(path: ".codex"), withIntermediateDirectories: true)
+        try! Data(#"{"tokens":{"account_id":"synthetic-curation-account"}}"#.utf8)
+            .write(to: runtime.appending(path: ".codex/auth.json"))
+        setenv("SENTIENT_CODEX_RUNTIME_ROOT", runtime.path, 1)
+        defer {
+            if let savedRuntime { setenv("SENTIENT_CODEX_RUNTIME_ROOT", savedRuntime, 1) }
+            else { unsetenv("SENTIENT_CODEX_RUNTIME_ROOT") }
+            try? FileManager.default.removeItem(at: runtime)
+        }
         let slug = "google-drive"
         var fixture = saved
-        fixture["mcp.connectors.chatgpt"] = try! JSONEncoder().encode([
+        fixture["mcp.connectors.chatgpt.bundled.\(CodexRuntime.accountIdentity!)"] = try! JSONEncoder().encode([
             ConnectorCensus.DetectedConnector(slug: slug, displayName: "Google Drive", origin: .chatgpt,
                 serverURL: nil, catalogID: "connector_5f3c8c41a1e54ad7a76272c89e2554fa", iconPath: nil,
                 healthy: true, lastSeen: Date())])
@@ -91,7 +139,7 @@ enum ConnectorCurationTests {
                       "reported \(health) failure cannot pass as quiet")
             }
             let sensitive = #"{"item_count":1,"notable":true,"has_action_items":false,"summary":"Synthetic card fixture: 4111 1111 1111 1111","tool_failure":""}"#
-            check(try MCPSource.parse(sensitive, slug: slug) == .quiet(itemCount: 0), "high-risk text is dropped before observation or storage")
+            check(try MCPSource.parse(sensitive, slug: slug) == .quiet(itemCount: 1), "high-risk text is dropped while anonymous coverage stays intact")
 
             func codexReadTrace(_ name: String, failed: Bool = false, completed: Bool = true) throws -> String {
                 let value: [String: Any] = ["type": "item.completed", "item": [

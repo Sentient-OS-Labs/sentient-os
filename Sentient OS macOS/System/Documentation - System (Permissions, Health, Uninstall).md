@@ -32,7 +32,8 @@ itself as the card (see the Permission Gate doc).
 Sentient's own Screen Recording grant supplies Sidekick's screen snapshots. `hasScreenRecording()`
 uses a non-prompting system preflight; the floating guide carries the Sentient app into System
 Settings. The FDA-backed read supplements a preflight that can remain stale until relaunch.
-Sentient's old CUA Accessibility grant is retained only in legacy permission and cleanup code.
+Sentient's Accessibility grant is also used by Double Tap to paste the unsent draft. Its old
+CUA action path remains only for legacy migration/cleanup.
 Active computer tasks use the native helper's action grants for every model backend.
 
 `isTCCGranted(service:clientBundleID:)` reads `auth_value == 2` from the right database for the
@@ -83,7 +84,7 @@ the dialog).
 
 ## Uninstall (`Uninstall.run`)
 
-FactoryReset also clears the persistent computer-use upgrade and its live coordination state after rewinding onboarding. Its MCP connector-state sweep excludes `mcp.mirror.*`; mirror settings remain intact. Uninstall is FactoryReset's strict superset, driven by `UninstallView`. Stages, in order, each with a whisper for
+FactoryReset also clears the persistent computer-use upgrade and its live coordination state after rewinding onboarding. Its MCP connector-state sweep excludes `mcp.mirror.*`; mirror settings remain intact. Uninstall removes local setup as well as generated knowledge, driven by `UninstallView`. Stages, in order, each with a whisper for
 the sheet: the wake helper FIRST (the only stage that can be declined at its password prompt, so a
 cancel aborts before anything irreversible; Try Again / Skip / Cancel), then the cloud copy (while the
 Keychain password still exists to authorize the DELETE), the Keychain identity + the frontier-model
@@ -94,6 +95,10 @@ state, logs, and the whole defaults domain LAST so a live observer cannot re-per
 wipe. `finishAndQuit()` spawns a detached sweeper for the files a dying process resurrects on the way
 out (the preferences plist, the support dir, saved state) and hard-exits with `exit(0)` (graceful
 termination invites the frameworks to write state back and can wedge behind the presented sheet).
+
+`MailAccountCloud.forgetLocalState()` cancels contact retries and removes local queue/auth data.
+Neither reset nor uninstall deletes the email-only founder-feedback list or invitation/lifetime-access
+records. Mirror deletion is attempted separately and can be delayed by network failure.
 
 Deliberately untouched: the `.app` bundle (the gone screen asks the user to drag it to the Trash), all
 of `~/.codex` (the user's own codex config and login), the Desktop gift keepsakes, and the
@@ -109,4 +114,4 @@ Support and caches sweeps.
 
 ## Related docs
 
-`Views/Permissions/Documentation - Permission Gate & Guide.md` (how grants are actually acquired), `Driver/Documentation - Driver (cua-driver).md` (the daemon those grants power), `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Settings/Documentation - Settings.md` (the Health pane and the Uninstall sheet), `Cloud/Documentation - Cloud - Codex Setup.md`.
+`Views/Permissions/Documentation - Permission Gate & Guide.md` (how grants are actually acquired), `Driver/Documentation - Native Computer Use.md` (the active helper and its grants), `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Settings/Documentation - Settings.md` (the Health pane and the Uninstall sheet), `Cloud/Documentation - Cloud - Codex Setup.md`.

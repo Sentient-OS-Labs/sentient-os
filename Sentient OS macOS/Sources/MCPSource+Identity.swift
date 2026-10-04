@@ -10,8 +10,11 @@ import CryptoKit
 import os
 
 extension MCPSource {
-    static func checkpointOrigin(backend: ModelBackend, fingerprint: String?, fallback: String) -> String {
-        fingerprint.map { "v2:\(backend.rawValue):account:\($0)" } ?? fallback
+    static func checkpointOrigin(slug: String, backend: ModelBackend, fingerprint: String?, fallback: String) -> String {
+        let origin = fingerprint.map { "v2:\(backend.rawValue):account:\($0)" } ?? fallback
+        // One successful bounded backfill upgrades old Notion checkpoints. The revision is
+        // committed with the summaries, so failures retry and pending knowledge is preserved.
+        return ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" ? origin + ":notion-history-v1" : origin
     }
 
     static func readIdentity(slug: String, onReceipt: ReceiptObserver? = nil) async throws -> String? {
