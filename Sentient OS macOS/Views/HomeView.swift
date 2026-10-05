@@ -101,7 +101,7 @@ struct HomeView: View {
                     }
                     bottomDock
                     chrome                     // on top → the nav stays clickable
-                    cautionBanner              // the morning-after caution, in the blank top-right
+                    cautionBanner              // health, updates, then invitations in the top-right
                     #if DEBUG
                     devToolsOverlay
                     #endif
@@ -128,6 +128,9 @@ struct HomeView: View {
         }
         .onDisappear { appState.commandCoordinator.run.proactiveCards = nil }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil {
+                Task { await MailAccountCloud.shared.retryPendingSync() }
+            }
             // The user may just have fixed something in System Settings (or a cycle cleared last
             // night's caution) — re-probe so the banner melts away the moment they return.
             withAnimation(.easeInOut(duration: 0.25)) { caution = OvernightCaution.latest() }
@@ -139,6 +142,7 @@ struct HomeView: View {
             model.beginVisit(deck: v)                               // mode flip → re-deal
         }
         .onChange(of: computerSetup.ready) { _, _ in probeHealth() }
+        .onChange(of: computerSetup.isInstalling) { _, _ in probeHealth() }
         .onChange(of: ComputerUseGate.shared.automation) { _, _ in probeHealth() }
         .onChange(of: backendRaw) { _, _ in probeHealth() }
         .onChange(of: appState.isUninstalling) { _, tearing in
@@ -250,9 +254,14 @@ struct HomeView: View {
                 computerUseUpdateNotice
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else {
-                // The lowest rung — the green just-updated notice. Self-contained: draws
-                // nothing unless UpdateNotice armed one at launch.
-                UpdateNoticeCapsule()
+                ZStack(alignment: .topTrailing) {
+                    UpdateNoticeCapsule()
+                    // The offer waits until update notices are dismissed and the home is
+                    // active. Keeping it here also postpones it behind every caution above.
+                    if deck == .real && !letterShown && !showAnalysis && !showShareKnowledge {
+                        InviteBanner()
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)

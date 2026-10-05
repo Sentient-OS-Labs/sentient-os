@@ -56,9 +56,11 @@ struct PreparedAction: Sendable, Identifiable, Codable {
     var calendarOperation: OutlookCalendarConnector.Operation? = nil
     /// Identifies cards produced without new summaries, so a calendar refresh cannot erase mail tasks.
     var calendarContextOnly: Bool? = nil
+    /// Opaque survivor references captured by the app, rechecked locally before execution.
+    var appleMailReferences: [String]? = nil
     let urgency: ActionItem.Urgency
     let dueDate: String?
-    let status: Status             // the verify verdict (confirmed / updated / unverified)
+    var status: Status             // the verify verdict (confirmed / updated / unverified)
     let verification: String       // WHAT was checked + WHAT each live source said (receipts)
     let cardSummary: String        // human-facing: what this is + what the fire button will do
     var preparedContent: String    // the VERBATIM sendable artifact the user reviews + EDITS (the drafted
@@ -76,7 +78,7 @@ struct PreparedAction: Sendable, Identifiable, Codable {
     let buttonText: String         // LLM-written fire CTA ("Should I send it for you?"); "" = no fire (research)
     let detailLabel: String        // LLM-written "read the …" link ("read the draft", "read the brief")
     let sources: [String]          // grounding receipts (vault notes, the thread, web results)
-    let reviewNote: String         // what to double-check/decide before firing; "" if fully ready
+    var reviewNote: String         // what to double-check/decide before firing; "" if fully ready
 
     enum Status: String, Sendable, Codable { case confirmed, updated, unverified }
 
@@ -187,6 +189,22 @@ actor ProactiveResearch {
                                                           calendarContext: calendarContext, calendarContextScoped: calendarContextScoped,
                                                           channels: channels,
                                                           readNames: kbReads.map { ConnectorRegistry.displayName(slug: $0) }))
+        if recent.contains(where: { $0.kind == .appleMail }) {
+            inv.prompt += """
+
+            APPLE MAIL LOCAL EVIDENCE POLICY (takes precedence over generic email guidance):
+            Apple Mail summaries came from downloaded messages and are not a live server view.
+            Never read ~/Library/Mail, original .emlx files, attachments or Internet Accounts data.
+            Never assume Apple Mail is the connected Gmail or Outlook account.
+            Use method=computer, target=Apple Mail for a Mail action. Cite its exact opaque
+            appleMail: reference in sources. Always mark it unverified: later replies or offline
+            changes may exist. The recipe must verify the current thread, account and recipient
+            in Apple Mail after the user clicks, before acting. Do not invent missing addresses.
+            If the recipient or intended action cannot be established, produce a research briefing.
+            Do not infer that newly downloaded historical mail is newly urgent. Attachments are
+            unavailable and must never be requested, read or used as evidence.
+            """
+        }
         inv.feature = "proactive-research"
         inv.effort = .high                  // gpt-6-sol → high (accuracy + the prepared draft are the product)
         inv.sandbox = .readOnly             // verifies + stages — never sends, drafts into a provider, or acts
@@ -217,7 +235,20 @@ actor ProactiveResearch {
             #endif
             let parsed = Self.parse(env.jsonResult, slackIdentity: slackIdentity, outlookIdentity: outlookIdentity, calendarIdentity: calendarIdentity)
             // Backstop the prompt's prune: PART 2 returns at most maxReady (5) of the strongest cards.
-            let result = ReadyResult(ready: Array(parsed.ready.prefix(Self.maxReady)), dropped: parsed.dropped)
+            let knownMail = Set(recent.filter { $0.kind == .appleMail }.map(\.sourceID))
+            let routed = parsed.ready.compactMap { action -> PreparedAction? in
+                var copy = action
+                let references = knownMail.filter { id in action.sources.contains { $0.contains(id) } }.sorted()
+                let targetsMail = action.target.localizedCaseInsensitiveContains("apple mail")
+                if !references.isEmpty || targetsMail {
+                    guard !references.isEmpty, action.method == .research || (action.method == .computer && targetsMail) else { return nil }
+                    copy.appleMailReferences = references
+                    copy.status = .unverified
+                    copy.reviewNote = "Check the current thread, sending account and recipient in Apple Mail before acting. " + action.reviewNote
+                }
+                return copy
+            }
+            let result = ReadyResult(ready: Array(routed.prefix(Self.maxReady)), dropped: parsed.dropped)
             Log("ProactiveResearch: ✅ ready \(result.ready.count), dropped \(result.dropped.count) (turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
             #if DEBUG   // B7: the per-item detail carries preparedContent/titles/recipes (the user's life) —
                         // DEBUG-only so it can NEVER become a Release breadcrumb (Sentry is Release-only).
@@ -381,9 +412,10 @@ actor ProactiveResearch {
         // grounding surface for verify/prepare — confirm free/busy, an event's real time, what's
         // imminent. Only present when Calendar is connected (CalendarConnect.fetchProactiveContext).
         let calendarBlock: String = {
-            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return "" }
-            if calendarContextScoped { return CalendarContext.promptBlock(ctx) }
-            return """
+            let localPolicy = recent.contains { $0.kind == .appleCalendar } ? CalendarContext.localSnapshotPolicy : ""
+            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return localPolicy }
+            if calendarContextScoped { return localPolicy + CalendarContext.promptBlock(ctx) }
+            return localPolicy + """
 
             ## THE USER'S LIVE CALENDAR (every event — last 7 days + next 24 hours)
             The user's actual calendar right now (already fetched for you). Use it as a grounding \
@@ -533,7 +565,7 @@ actor ProactiveResearch {
 
         ## THE \(channels.isEmpty ? "FOUR" : "FIVE") METHODS (set `method`) — pick the ONE channel that fires this action
         You decide HOW Sentient carries out each action. Pick exactly one method:
-        - **gmail** — anything in the user's email (a reply or a brand-new message). \
+        - **gmail** — email verified in the user's connected Gmail service (a reply or a brand-new message). \
         `prepared_content` = the full draft (subject + body); `execution_recipe` = recipient(s) + the \
         exact thread it belongs to.
         - **calendar** — add or change an event on the user's \(channels.contains(where: { $0.slug == OutlookCalendarConnector.slug }) ? "Google Calendar" : "calendar"). `prepared_content` = the event \
@@ -561,7 +593,7 @@ actor ProactiveResearch {
         lists. This light Markdown is for research briefings ONLY — every other method's \
         `prepared_content` fires verbatim, so it stays plain text.\(mcpChannels)
 
-        **Which method:** email → **gmail**; \(channels.contains(where: { $0.slug == OutlookCalendarConnector.slug }) ? "Google Calendar events → **calendar**; Outlook Calendar events → **mcp/outlook-calendar**;" : "calendar events → **calendar**;") everything Sentient ACTS \
+        **Which method:** connected Gmail email → **gmail**; Apple Mail → **computer**, target="Apple Mail"; \(channels.contains(where: { $0.slug == OutlookCalendarConnector.slug }) ? "Google Calendar events → **calendar**; Outlook Calendar events → **mcp/outlook-calendar**;" : "calendar events → **calendar**;") everything Sentient ACTS \
         on for the user — a native Mac app, a chat message (WhatsApp/iMessage via Messages), or a \
         logged-in website — → **computer**.\(channels.isEmpty ? "" : " A task that ONE of the connected services above completes start to finish → **mcp**.") A real task only the user can do by hand with nothing to \
         automate (e.g. a phone call) → **research** (surface it; don't drop it).

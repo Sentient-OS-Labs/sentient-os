@@ -27,7 +27,7 @@ serif italic display, no borrowed brand hues.
 | `CautionCapsule.swift` | The banner capsule (amber / red / green) and the self-contained `UpdateNoticeCapsule`. |
 | `LetterBody.swift` · `LetterPaper.swift` · `PlanEditor.swift` · `GiftShareImage.swift` | The letter renderer (the light Markdown subset), the dog-eared page for research notes, the mono step-plan editor, and the gift's Save-to-Desktop poster. |
 | `ConnectAIsView.swift` | The guided "Connect your AIs" window (its own scene). |
-| `CloudConnectSheet.swift` · `ChatPicker.swift` | The Gmail/Calendar connect sheet and the WhatsApp/iMessage chat picker. |
+| `CloudConnectSheet.swift` · `ChatPicker.swift` · `AppleMailPicker.swift` · `AppleCalendarConnectSheet.swift` | Hosted Gmail/Calendar, selected conversations, and native Mail/Calendar source controls. |
 | `Theme.swift` · `GlowButton.swift` · `Orb.swift` · `GlowProgressBar.swift` · `FileThumbnail.swift` · `ModelDownloadWhisper.swift` · `MenuBarView.swift` · `FrontierEnginePicker.swift` · `CodexSetupView.swift` | Shared design pieces and small surfaces (below). |
 
 ## `RootView`
@@ -92,6 +92,13 @@ notice uses real byte progress when the total is known, an indeterminate bar for
 verification, and Retry after failure. It does not block the home. The legacy Codex-to-CUA migration
 remains a separate setup window; see the Driver and Permission Gate docs.
 
+**Invitation offer.** `Invitations/InviteBanner.swift` presents the limited-time offer inside the
+home's top-right banner slot, after all health and update notices have cleared. It waits for real-use
+eligibility and an active, idle home with no sheet, popover, or expanded letter. The code is verified
+before the offer is marked as shown. The offer appears once, closes after 20 seconds or dismissal,
+and stays inside the app window. The reusable code remains available in Settings → System →
+Invitations; any number of people can redeem it.
+
 ## The cards (`Briefing`, `BriefingCard`)
 
 `Briefing`: kicker (mono caps, `METHOD · TARGET`), serif title, preview body, the full `letter` or the
@@ -132,8 +139,11 @@ with honest copy: "Codex isn't logged in" gets an inline Log in to Codex whose a
 the cycle by itself; usage limit and no internet get progress-is-saved lines; anything else shows the
 step's message with Back / Retry).
 
-The run: one progress stream carries `IterativeRun` then the Gmail and Calendar legs (each window mapped
-onto the same bar and card), then `ProactiveCycle.run` when `fullCycle`. A generation token makes a
+The run: one progress stream carries `IterativeRun`, the Gmail and Calendar legs, and the selected
+`MCPSource` connectors, then `ProactiveCycle.run` when `fullCycle`. Hosted connector reads have
+explicit loading, summary, quiet and failure states. Each MCP connector occupies one bar slot;
+its committed windows update the card. Quiet later windows preserve a useful summary from that
+source, while a new source or run resets the card. A generation token makes a
 paused, stopped, or superseded run stale so it can never fire the tail; onboarding's `pausable` mode
 freezes in place and, on resume, waits for the old run to drain and composes carried counts so the bar
 never restarts. `DisplayAwake` holds the screen on for the initial ingest. The dev buttons pass
@@ -148,8 +158,13 @@ under a consent veil ("Connect your AIs?", the trust pillars, a "Yes, use the cl
 enables the mirror and pushes, "Not now"); sharing on → tabs for Claude, ChatGPT, and Other AIs, each
 step a bundled looping tutorial clip (`Media/connect-<ai>-<n>.mp4`; a missing file renders a glass
 placeholder) with a take-me-there deep link into that AI's own settings, the masked link + Copy, the
-system prompt + Copy, and the top-right MCP pill (last synced time; turning off confirms and deletes).
+system prompt + Copy, and the top-right MCP pill (last synced time; turning off confirms, stops syncing and requests remote deletion).
 `CloudConnectSheet` and `ChatPicker` are documented with the sources.
+
+Privacy explanations use `Views/Settings/PrivacyCopy.swift` wherever shared wording applies.
+The sharing consent explains on-Mac encryption, no persisted relay key and in-memory decryption for
+requests through the private link. Processing copy scopes local-only claims to on-device source
+analysis; chosen-model consolidation and task inference follow the selected provider.
 
 ## Shared design pieces
 

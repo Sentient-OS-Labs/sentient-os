@@ -1,9 +1,12 @@
-# The Cua Driver (Driver/): the hands and eyes of computer use
+# Legacy CUA driver: retained implementation and cleanup
 
-CUA powers computer use for Claude and custom endpoints. It is the pinned open-source driver from
-[trycua/cua](https://github.com/trycua/cua), embedded as Sentient's own daemon. Its background native
-window input, cursor overlay, four MCP vision tools, CLI shim and manual remain shared by those two
-CLI paths. ChatGPT uses the separate OpenAI helper described in `Documentation - Native Computer Use.md`.
+This document describes the retained legacy CUA implementation and its cleanup contract. Active
+computer tasks now use the signed OpenAI helper through `codex exec` for every model backend.
+See `Documentation - Native Computer Use.md` for the current runtime and permissions.
+
+The legacy runtime uses the pinned open-source driver from [trycua/cua](https://github.com/trycua/cua),
+embedded as a Sentient-owned daemon. Its catalog, installer, manual and lifecycle code remain for
+compatibility checks, migration history and cleanup of older installations.
 
 ## Files
 
@@ -12,7 +15,7 @@ CLI paths. ChatGPT uses the separate OpenAI helper described in `Documentation -
 | `CuaDriver.swift` | The driver as Sentient sees it: the pinned release (version, tarball URL, SHA-256, signing team), the install location, the MCP tool subset (`mcpTools`), the per-engine wiring (codex `-c` overrides · claude `--mcp-config` JSON + the named deny list), the CLI shim + screenshot paths, the full tool allowlist (`enabledTools`), and versioned installation history. |
 | `CuaDriverHost.swift` | The daemon's lifecycle: spawn, readiness, liveness, replacement on permission changes, teardown. Also writes the per-generation CLI shim. |
 | `CuaDriverSetup.swift` | Puts the pinned binary on disk: download → SHA-256 → extract → codesign verify → smoke run → atomic install. |
-| `CuaDriverSkill.swift` | The operating manual spliced into every computer-use prompt — the model's teaching for the whole tool surface. |
+| `CuaDriverSkill.swift` | The retained legacy CUA manual, not the manual used by current native computer tasks. |
 
 ## Why Sentient hosts the daemon itself
 
@@ -83,7 +86,7 @@ Unix socket, and a headless run has no one to answer approvals; safety rides the
 ## The inlined manual (`CuaDriverSkill`)
 
 `CuaDriverSkill.rules` is curated from the pinned release's MIT-licensed SKILL.md and MACOS.md.
-`FrontierRun` adds it once to CUA tasks after capturing the selected engine.
+The retained CUA backend exposes this manual; current `FrontierRun` dispatch selects native OpenAI tools for every model backend.
 It identifies the skill as already loaded, so the model does not fetch another copy through MCP
 resources or read a skill file. Action schemas remain available through CLI `describe` only when
 needed.
@@ -102,7 +105,7 @@ text and checking the live release's behavior remain part of reviewing a pin cha
 
 ## Installation and ordinary updates
 
-Each Sentient release selects one tested CUA release, currently **0.20.0**. It downloads that exact
+The retained legacy implementation pins CUA **0.20.0**. It downloads that exact
 bare-binary tarball from Cua's release assets into a staging directory under
 `~/Library/Application Support/SentientOS/CuaDriver/`. CUA is not bundled in the app, and Sentient does
 not use Cua's standalone installer or change the user's shell PATH.
@@ -112,30 +115,15 @@ rename into `<version>/cua-driver`. Only then are previous installed versions sw
 interrupted download leaves the previous binary intact. Local verification processes have deadlines
 and honor cancellation; telemetry and upstream update checks are disabled there too.
 
-`ComputerUseSetup` owns the shared CUA installation task for Claude and custom endpoints. Existing CUA users whose
-required version is missing get a background update after launch. The home's top-right notice shows
-actual download progress, an indeterminate verification phase, completion, or a retry action. The rest
-of Sentient remains usable. Computer-use commands join the same download; STOP cancels their wait
-without canceling the background update. The new app requires its pinned runtime and does not silently
-pair the new manual with an older binary. Uninstall cancels and drains an installer before deleting its
-files.
-
-The required pin is authoritative in both directions: a deliberate rollback from 0.28.2 to 0.20.0
-uses the same verified background installation, completion notice, and receipt. It does not replay
-the Codex-to-CUA migration. The 0.20.0 rollback restores its original curated tool contract while
-retaining the explicit inlined-skill notice, safe shell quoting, structured MCP handles, final-result
-verification, and the host-owned lifecycle confirmed against that binary. The independent Debug
-Sparkle guard remains in place.
-
-A `.installed-version` receipt, plus detection of earlier installed version directories, distinguishes
-an existing CUA setup from the legacy Codex helper. Launch adopts older installations that predate the
-receipt. The receipt survives a missing binary and Factory Reset, and Uninstall removes it with the
-managed directory. Fresh users retain onboarding. Users with the old Codex helper and no CUA history
-retain the explicit migration window described in the Permission Gate doc.
+Current startup prepares the native OpenAI helper for **every** model backend. Retained CUA
+installation code and `.installed-version` history support legacy state and cleanup; they do not
+select CUA for Claude or custom models. Uninstall removes managed CUA files and caches. The active
+setup, migration and permission behavior is documented in the Native Computer Use and Permission
+Gate guides.
 
 ## Per-command lifecycle
 
-Both CUA-backed CLI paths ask `CuaDriverHost` to start or revive the CLI label `sentient` before running
+The retained CUA lifecycle asks `CuaDriverHost` to start or revive the CLI label `sentient` before running
 the model. They await its cleanup after success, failure, or STOP before releasing the command. This
 releases the action cursor owned by that run. The host checks the
 structured lifecycle result, not just the subprocess exit code. The model never manages sessions.

@@ -51,10 +51,10 @@ struct ShareKnowledgePane: View {
                 .lineSpacing(3)
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: 9) {
-                pillar("lock.shield", "Your real files never leave this Mac. Your AIs only see short summaries, personal details stripped.")
-                pillar("lock.fill", "Zero-access encryption: the key is held only by your Mac and your private link, never on our servers. Hack them and all you'd find is ciphertext with no key to unlock it.")
-                pillar("key.fill", "No account. One secret link only you hold; leave Sentient and the cloud copy deletes itself in 30 days.")
-                pillar("chevron.left.forwardslash.chevron.right", "Even the cloud backend is open source. Everything's verifiable.")
+                pillar("lock.shield", PrivacyCopy.sharingContents)
+                pillar("lock.fill", PrivacyCopy.sharingEncryption)
+                pillar("key.fill", PrivacyCopy.sharingControl)
+                pillar("chevron.left.forwardslash.chevron.right", PrivacyCopy.sharingOpenSource)
             }
         }
     }
@@ -80,7 +80,7 @@ struct ShareKnowledgePane: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Offer your knowledge base to your AIs")
                         .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
-                    Text("ChatGPT and Claude read it over MCP. No account, just a private link that only you hold.")
+                    Text("ChatGPT and Claude read your shared knowledge over MCP using the private link you give them.")
                         .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -116,8 +116,8 @@ struct ShareKnowledgePane: View {
     // MARK: - Local-only (shown when sharing is off)
 
     private var localOnlyProse: some View {
-        SettingsGroup(label: "Prefer fully offline?") {
-            SettingsProse("Your knowledge base is a plain markdown folder on this Mac; point Claude Code or any local AI at it directly. Sharing above is only for the AIs that live in the cloud.")
+        SettingsGroup(label: "Use your knowledge locally") {
+            SettingsProse(PrivacyCopy.localKnowledge)
         }
     }
 

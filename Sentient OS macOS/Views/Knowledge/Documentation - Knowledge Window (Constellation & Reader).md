@@ -12,6 +12,17 @@ discoverable) swap between them; ⌘⇧G either way; Esc leaves the sky. Clickin
 the reader; Back walks the wikilink trail, and one more Back returns to the sky with that star glowing
 for a beat.
 
+## Knowledge you can inspect and keep
+
+These views show ordinary Markdown files, so the user can understand what Sentient knows, correct
+a detail, add context or use a preferred editor. The graph is another view of the same notes, not a
+separate hidden memory store. Local storage and chosen-model inference are separate: a hosted
+frontier model can process notes to organize knowledge or carry out a task even when MCP sharing is off.
+
+The root `writingstyle.md` support file is excluded from the tree, search and graph. Its one-time
+writing examples remain editable through **Settings → Double Tap → Show writing examples in Finder**.
+They are included in Double Tap requests and in the folder if optional MCP sharing is enabled.
+
 ## Files
 
 | File | Job |

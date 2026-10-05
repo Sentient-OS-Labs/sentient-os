@@ -2,7 +2,7 @@
 // ConnectorLogo.swift
 // Shared brand artwork for source pills and connection sheets. Keep original colors and
 // alpha; Granola's square artwork uses a continuous squircle mask at every size.
-// Apple Notes, Messages and WhatsApp artwork is exported from the installed macOS apps.
+// Apple Mail, Apple Notes, Messages and WhatsApp artwork is exported from the installed macOS apps.
 // Doc: Documentation - Views - Home, Processing & Shared UI.md
 //
 
@@ -16,7 +16,7 @@ struct ConnectorLogo: View {
     /// about 19% transparent padding; the solid square marks need a little breathing room.
     private var artworkScale: CGFloat {
         switch asset {
-        case "WhatsAppMark", "IMessageMark", "AppleNotesMark": 1.11
+        case "WhatsAppMark", "IMessageMark", "AppleNotesMark", "AppleMailMark", "AppleCalendarMark": 1.11
         case "GoogleCalendarMark", "GranolaMark": 0.9
         case "OutlookMark": 0.95
         default: 1
@@ -41,7 +41,7 @@ struct ConnectorLogo: View {
     HStack(alignment: .top, spacing: 28) {
         ForEach(["GmailMark", "GoogleCalendarMark", "GoogleDriveMark", "SlackMark",
                  "OutlookMark", "NotionMark", "GranolaMark", "WhatsAppMark", "IMessageMark",
-                 "AppleNotesMark"], id: \.self) { asset in
+                 "AppleNotesMark", "AppleMailMark", "AppleCalendarMark"], id: \.self) { asset in
             VStack(spacing: 16) {
                 ConnectorLogo(asset: asset)
                 Text(asset.replacingOccurrences(of: "Mark", with: ""))

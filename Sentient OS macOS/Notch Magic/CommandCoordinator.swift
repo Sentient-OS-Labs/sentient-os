@@ -319,12 +319,13 @@ final class CommandCoordinator {
             Log("hotkey blocked — knowledge-base-only plan (Sidekick needs Plus)")
             return
         }
-        // First-use permission gate — BEFORE the notch opens. If any required action grant is
-        // missing, the setup window takes the press; the notch never drops open (which would only
-        // meet the gate at submit, after the whole type-or-talk dance). The user grants, then
-        // presses again. Same window the command bar + proactive cards raise.
-        if ComputerUseGate.shared.interceptBeforeStart() {
-            Log("hotkey press intercepted — computer-use permissions missing, gate up")
+        // A quiet native preflight or visible setup holds this tap. Once it is ready, open the
+        // field without replaying the hotkey (which could otherwise count as another double tap).
+        let permissionToken = phaseToken
+        if ComputerUseGate.shared.interceptBeforeStart({ [weak self] in
+            self?.resumeTypingAfterPermissions(token: permissionToken, anchor: .mainDisplay)
+        }) {
+            Log("hotkey press held for computer-use readiness")
             return
         }
         setPhase(.opening)                                // you're pulling it open — reveal the instant you press
@@ -535,12 +536,26 @@ final class CommandCoordinator {
             Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
             return
         }
-        if ComputerUseGate.shared.interceptBeforeStart() {
-            Log("notch click intercepted — computer-use permissions missing, gate up")
+        let permissionToken = phaseToken
+        if ComputerUseGate.shared.interceptBeforeStart({ [weak self] in
+            self?.resumeTypingAfterPermissions(token: permissionToken, anchor: .builtInNotch)
+        }) {
+            Log("notch click held for computer-use readiness")
             return
         }
         setPhase(.typing)
         Log("notch clicked → typing")
+    }
+
+    /// Permission checks can finish after another interaction, task or onboarding transition.
+    /// Resume only the still-current typing intent, on the display where it was requested.
+    private func resumeTypingAfterPermissions(token: Int, anchor: NotchAnchor) {
+        guard phaseToken == token, !run.isRunning, !DoubleTap.shared.isDrafting,
+              doubleTapDemoKeyChanged == nil, !onboardingDemoArmed,
+              !interceptForOnboarding(), !CodexAuth.knowledgeBaseOnly else { return }
+        notchAnchor = anchor
+        setPhase(.typing)
+        Log("notch → typing after computer-use readiness")
     }
 
     // MARK: The native Double Tap lesson
@@ -658,7 +673,7 @@ final class CommandCoordinator {
             Log("notch transcript cancelled (Esc) — immediate dismiss")
             return true
         default:
-            return false
+            return ComputerUseGate.shared.cancelBeforePresentation()
         }
     }
 

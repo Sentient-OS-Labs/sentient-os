@@ -343,72 +343,24 @@ final class ResponsesTranslator: @unchecked Sendable {
 
     // MARK: - Minimal HTTP plumbing
 
-    private struct RequestHead {
-        let method: String
-        let path: String
-        let headers: [String: String]   // lowercased keys
-    }
+    private typealias RequestHead = LoopbackHTTP.Request
 
-    /// Read one HTTP/1.1 request (head + Content-Length body) off the connection.
     private static func readRequest(_ conn: NWConnection) async throws -> (RequestHead, Data?) {
-        var buf = Data()
-        let headEnd = Data("\r\n\r\n".utf8)
-        while buf.range(of: headEnd) == nil {
-            guard let chunk = try await receive(conn), !chunk.isEmpty else { break }
-            buf.append(chunk)
-            if buf.count > 4_000_000 { throw URLError(.dataLengthExceedsMaximum) }
-        }
-        guard let split = buf.range(of: headEnd) else { throw URLError(.badServerResponse) }
-        let headData = buf[..<split.lowerBound]
-        var body = Data(buf[split.upperBound...])
-
-        let lines = String(decoding: headData, as: UTF8.self).split(separator: "\r\n").map(String.init)
-        guard let requestLine = lines.first else { throw URLError(.badServerResponse) }
-        let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2 else { throw URLError(.badServerResponse) }
-        var headers: [String: String] = [:]
-        for line in lines.dropFirst() {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            headers[line[..<colon].lowercased()] =
-                line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
-        }
-        let head = RequestHead(method: String(parts[0]), path: String(parts[1]), headers: headers)
-
-        let expected = Int(headers["content-length"] ?? "0") ?? 0
-        while body.count < expected {
-            guard let chunk = try await receive(conn), !chunk.isEmpty else { break }
-            body.append(chunk)
-        }
-        return (head, body.isEmpty ? nil : body)
-    }
-
-    private static func receive(_ conn: NWConnection) async throws -> Data? {
-        try await withCheckedThrowingContinuation { cont in
-            conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { data, _, complete, error in
-                if let error { cont.resume(throwing: error) }
-                else if let data { cont.resume(returning: data) }
-                else if complete { cont.resume(returning: nil) }
-                else { cont.resume(returning: Data()) }
-            }
-        }
+        let request = try await LoopbackHTTP.read(conn)
+        return (request, request.body.isEmpty ? nil : request.body)
     }
 
     private static func write(_ conn: NWConnection, _ data: Data) async throws {
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            conn.send(content: data, completion: .contentProcessed { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
-            })
-        }
+        try await LoopbackHTTP.write(conn, data)
     }
 
     private static func plainResponse(status: Int, contentType: String = "text/plain",
                                       body: String? = nil, bodyData: Data? = nil) -> Data {
-        let payload = bodyData ?? Data((body ?? "").utf8)
-        var head = "HTTP/1.1 \(status) \(status == 200 ? "OK" : "Error")\r\n"
-        head += "Content-Type: \(contentType.isEmpty ? "application/octet-stream" : contentType)\r\n"
-        head += "Content-Length: \(payload.count)\r\nConnection: close\r\n\r\n"
-        return Data(head.utf8) + payload
+        LoopbackHTTP.response(status: status,
+            contentType: contentType.isEmpty ? "application/octet-stream" : contentType,
+            body: bodyData ?? Data((body ?? "").utf8))
     }
+
 }
 
 private extension NSLock {

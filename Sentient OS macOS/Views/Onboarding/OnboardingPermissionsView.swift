@@ -78,7 +78,7 @@ struct OnboardingPermissionsView: View {
                               StatusLine(title: "Full Disk Access",
                                          health: fdaGranted ? .ok : .bad,
                                          note: fdaGranted ? "granted" : "not granted",
-                                         tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac.\n\nEverything is read right here on your Mac; your data never leaves it.",
+                                         tip: PrivacyCopy.fullDiskAccess,
                                          fixTitle: "Grant…") {
                             // The floating guide carries Sentient itself as the drag card — no
                             // hunting through the "+" file picker.

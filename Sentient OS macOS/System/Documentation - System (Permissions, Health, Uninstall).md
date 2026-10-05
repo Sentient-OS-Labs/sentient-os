@@ -8,7 +8,7 @@ user's standing instructions, the app-support root, and the full uninstall teard
 
 | File | Job |
 |---|---|
-| `Permissions.swift` | Full Disk Access detection + deep link + relaunch; Sentient's own Accessibility and Screen Recording status (the cua driver's action grants); TCC status reads; official Automation preflight/request and scoped uninstall reset; the System Settings deep links. |
+| `Permissions.swift` | Full Disk Access detection + deep link + relaunch; Sentient screen-context permission and legacy Accessibility status; TCC status reads; official Automation preflight/request and scoped uninstall reset; the System Settings deep links. |
 | `HealthCaution.swift` | The home's LIVE health banner: probes current state, most severe first, and reports the worst un-muted issue. |
 | `Notify.swift` | The notification permission ask and `now(title:body:)`. |
 | `DisplayAwake.swift` | Keeps the screen on during long foreground work (onboarding, a home-launched first analysis) via `ProcessInfo.beginActivity`. Not the root `pmset` path. |
@@ -27,17 +27,14 @@ fresh process, `relaunch()` (`open -n` the bundle, then terminate). FDA can read
 launched from Terminal (TCC attribution). Onboarding's Grant… uses the floating drag panel with Sentient
 itself as the card (see the Permission Gate doc).
 
-## Sentient's own action grants (the cua driver's hands and eyes)
+## Sentient's screen context
 
-The cua driver runs inside Sentient's TCC responsibility chain (see the Driver doc), so acting on the
-Mac needs exactly two grants and both are **Sentient's own**: **Accessibility** (click, type — probed
-live with `AXIsProcessTrusted`, granted through the native system prompt) and **Screen Recording**
-(see the screen — `hasScreenRecording()` via `CGPreflightScreenCaptureAccess`, never prompts; granted
-through the drag panel with Sentient as the card, since `CGRequestScreenCaptureAccess` does not
-reliably add the app to the list on Tahoe). A preflight stays false until the process is replaced, so
-the FDA-backed TCC read (`isTCCGranted`) rides along as the live truth the health rows use — and a
-grant landing marks the daemon for replacement, because macOS caches TCC answers per process. Screen
-Recording also gates Sidekick's fire-time screen stills.
+Sentient's own Screen Recording grant supplies Sidekick's screen snapshots. `hasScreenRecording()`
+uses a non-prompting system preflight; the floating guide carries the Sentient app into System
+Settings. The FDA-backed read supplements a preflight that can remain stale until relaunch.
+Sentient's Accessibility grant is also used by Double Tap to paste the unsent draft. Its old
+CUA action path remains only for legacy migration/cleanup.
+Active computer tasks use the native helper's action grants for every model backend.
 
 `isTCCGranted(service:clientBundleID:)` reads `auth_value == 2` from the right database for the
 service (the SIP-protected system database for Accessibility, ScreenCapture, AllFiles, ListenEvent,
@@ -45,7 +42,7 @@ PostEvent; the user database otherwise).
 
 ## Native computer-use grants
 
-ChatGPT computer use runs through OpenAI's signed helper. Sentient carries the Apple Events
+Every active model backend runs computer use through OpenAI's signed helper. Sentient carries the Apple Events
 entitlement and uses `AEDeterminePermissionToAutomateTarget` off the main thread to check or request
 Automation access. The helper is started through LaunchServices before querying, so a stopped target
 is not mistaken for denied access. Background checks do not prompt. Visible permission setup requests unasked consent through the macOS dialog, with no redundant Automation row; the user chooses Allow in that dialog.
@@ -68,6 +65,9 @@ appear and every app foreground, and returns the worst un-muted issue:
 2. **Codex gone or signed out** (the login check shells out, so its verdict is cached ~5 min; the home passes `forceCodexRecheck` while a codex banner is up so a fix clears on the next foreground). Signed-out is ChatGPT-backend only.
 3. **Computer use regressed:** the selected runtime became unavailable, or its required grants did — but ONLY once the selected runtime's readiness latch is set (`computerUse.nativeEverReady` for OpenAI; the existing `computerUse.everReady` for CUA) (by the probe when everything reads healthy, and by the permission gate at its moment of truth; cleared by FactoryReset), so a user who never set it up is never nagged. The binary-missing case stays quiet while the `ComputerUseUpgrade` window is presenting on that exact state (the same message twice helps no one) and still covers the window-less case (the driver vanishing mid-session).
 
+Shared startup installation and verification do not count as a broken runtime while in progress.
+Home rechecks health when installation finishes, including after a failure.
+
 Nothing persists; broken shows, fixed melts away. ✕ mutes an issue KIND for the session (a lower rung may
 then surface). Nothing at all on the free-plan home. The banner's Open Settings lands on Permissions &
 Health.
@@ -84,7 +84,7 @@ the dialog).
 
 ## Uninstall (`Uninstall.run`)
 
-FactoryReset also clears the persistent computer-use upgrade and its live coordination state after rewinding onboarding. Its MCP connector-state sweep excludes `mcp.mirror.*`; mirror settings remain intact. Uninstall is FactoryReset's strict superset, driven by `UninstallView`. Stages, in order, each with a whisper for
+FactoryReset also clears the persistent computer-use upgrade and its live coordination state after rewinding onboarding. Its MCP connector-state sweep excludes `mcp.mirror.*`; mirror settings remain intact. Uninstall removes local setup as well as generated knowledge, driven by `UninstallView`. Stages, in order, each with a whisper for
 the sheet: the wake helper FIRST (the only stage that can be declined at its password prompt, so a
 cancel aborts before anything irreversible; Try Again / Skip / Cancel), then the cloud copy (while the
 Keychain password still exists to authorize the DELETE), the Keychain identity + the frontier-model
@@ -95,6 +95,10 @@ state, logs, and the whole defaults domain LAST so a live observer cannot re-per
 wipe. `finishAndQuit()` spawns a detached sweeper for the files a dying process resurrects on the way
 out (the preferences plist, the support dir, saved state) and hard-exits with `exit(0)` (graceful
 termination invites the frameworks to write state back and can wedge behind the presented sheet).
+
+`MailAccountCloud.forgetLocalState()` cancels contact retries and removes local queue/auth data.
+Neither reset nor uninstall deletes the email-only founder-feedback list or invitation/lifetime-access
+records. Mirror deletion is attempted separately and can be delayed by network failure.
 
 Deliberately untouched: the `.app` bundle (the gone screen asks the user to drag it to the Trash), all
 of `~/.codex` (the user's own codex config and login), the Desktop gift keepsakes, and the
@@ -110,4 +114,4 @@ Support and caches sweeps.
 
 ## Related docs
 
-`Views/Permissions/Documentation - Permission Gate & Guide.md` (how grants are actually acquired), `Driver/Documentation - Driver (cua-driver).md` (the daemon those grants power), `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Settings/Documentation - Settings.md` (the Health pane and the Uninstall sheet), `Cloud/Documentation - Cloud - Codex Setup.md`.
+`Views/Permissions/Documentation - Permission Gate & Guide.md` (how grants are actually acquired), `Driver/Documentation - Native Computer Use.md` (the active helper and its grants), `Scheduling/Documentation - Overnight Scheduler & Wake Helper.md`, `Views/Settings/Documentation - Settings.md` (the Health pane and the Uninstall sheet), `Cloud/Documentation - Cloud - Codex Setup.md`.

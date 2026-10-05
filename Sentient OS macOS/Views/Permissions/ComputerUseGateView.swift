@@ -40,7 +40,7 @@ struct ComputerUseGateView: View {
             // No bypass: while any required grant is red the button is disabled and says so, so a
             // feature can never be fired half-granted. It enables the instant every row goes green
             // (the rows re-probe on foreground + after the mic prompt).
-            OnboardingNextButton(title: gate.allRequiredGranted ? "Continue" : "Grant permissions to continue",
+            OnboardingNextButton(title: continueTitle,
                                  enabled: gate.allRequiredGranted) {
                 gate.continueNow()
             }
@@ -49,7 +49,7 @@ struct ComputerUseGateView: View {
 
             HStack(spacing: 8) {
                 Image(systemName: "shield").font(.system(size: 10)).foregroundStyle(Theme.Ink.label)
-                Text("Private by design. Your files never leave this Mac.")
+                Text(PrivacyCopy.screenFooter)
                     .font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
             }
             .frame(maxWidth: .infinity)
@@ -73,6 +73,14 @@ struct ComputerUseGateView: View {
     }
 
     // MARK: Sentient's grants — native prompts first, the guide as the fallback
+
+    private var continueTitle: String {
+        if gate.allRequiredGranted { return "Continue" }
+        if gate.backend == .openAI {
+            return gate.checkingAutomation ? "Checking computer use…" : "Finish setup to continue"
+        }
+        return "Grant permissions to continue"
+    }
 
     private var micSpeechNote: String {
         switch gate.micSpeech {
@@ -109,7 +117,7 @@ struct SentientPermissionRows: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            if gate.backend == .openAI, !gate.setup.ready {
+            if gate.backend == .openAI, !gate.setup.ready || !CodexSetup.shared.computerUseReady {
                 SettingsGroup(label: "Computer use") {
                     StatusLine(title: "Set up computer use",
                                health: gate.setup.isInstalling ? .warn : .bad,
@@ -133,7 +141,7 @@ struct SentientPermissionRows: View {
                     StatusLine(title: "Screen Recording (see the screen)",
                                health: gate.sentientScreen ? .ok : .bad,
                                note: gate.sentientScreen ? "granted" : "not granted",
-                               tip: "Lets Sidekick understand the screen you are asking about. Screenshots go to your selected AI engine, never a Sentient server.",
+                               tip: PrivacyCopy.screenCapture,
                                fixTitle: "Allow…") { fixSentientScreen() }
                 }
             }
@@ -185,14 +193,24 @@ struct NativeComputerUsePermissionRows: View {
                            fix: !gate.setup.ready || gate.helperScreen ? nil : {
                     PermissionGuide.shared.guide(.screenRecording, dragging: OpenAIComputerUse.appURL)
                 })
-                if gate.requestingAutomation {
-                    SettingsProse("Choose Allow in the macOS permission prompt.")
+                if gate.restartingNative {
+                    SettingsProse("Restarting computer use…")
+                } else if gate.requestingAutomation {
+                    SettingsProse(gate.automation == .granted ? "Checking computer use…" : "Choose Allow in the macOS permission prompt.")
                 } else if gate.automation == .denied {
                     SettingsProse("Allow Sentient in System Settings to finish setup.")
                     SettingsPillButton(title: "Open Settings") { Permissions.openAutomationSettings() }
-                } else if gate.setup.ready, !gate.checkingAutomation, gate.automation == .unavailable {
-                    SettingsProse(gate.nativePermissionError ?? "The macOS permission could not be checked.")
-                    SettingsPillButton(title: "Try again") { gate.requestAutomation() }
+                } else if gate.setup.ready, let error = gate.nativePermissionError {
+                    SettingsProse(error)
+                    if gate.nativeRestartRequired {
+                        SettingsPillButton(title: "Restart computer use") { gate.restartComputerUse() }
+                            .disabled(gate.checkingAutomation)
+                    } else {
+                        SettingsPillButton(title: "Try again") { gate.requestAutomation() }
+                            .disabled(gate.checkingAutomation)
+                    }
+                } else if gate.setup.ready, gate.checkingAutomation, !gate.nativeRuntimeReady {
+                    SettingsProse("Checking computer use…")
                 }
             }
         }

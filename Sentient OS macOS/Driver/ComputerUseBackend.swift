@@ -1,6 +1,6 @@
 // Chooses the computer-use runtime independently of the CLI harness.
-// ChatGPT uses OpenAI's native helper; Claude and custom endpoints keep the CUA driver.
-// Doc: Driver/Documentation - Driver (cua-driver).md
+// All active engines use OpenAI's native helper. CUA remains an identity for legacy cleanup.
+// Doc: Documentation - Native Computer Use.md
 
 import Foundation
 
@@ -8,7 +8,7 @@ nonisolated enum ComputerUseBackend: String, CaseIterable, Sendable {
     case openAI, cua
 
     static func selected(for model: ModelBackend) -> Self {
-        model == .chatgpt ? .openAI : .cua
+        .openAI
     }
 
     static var current: Self { selected(for: ModelBackend.current) }

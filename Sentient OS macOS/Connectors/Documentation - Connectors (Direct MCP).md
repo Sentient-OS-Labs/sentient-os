@@ -1,7 +1,7 @@
 # Direct MCP connections
 
 Sentient can own a user's OAuth connection to a supported remote MCP service and use that connection
-through either frontier engine. The provider handles browser sign-in; Sentient stores the grant in
+with the selected frontier backend, including compatible custom models. The provider handles browser sign-in; Sentient stores the grant in
 the Mac's Keychain and supplies access headers to the selected CLI for each run. The catalog
 contains Granola and Notion. Provider definitions live in the existing registry packs.
 
@@ -58,9 +58,9 @@ inventory. No tool is attached until verification succeeds and a nonempty permit
 Reconnects retain a valid cached policy for this comparison; the new account and grant are still
 checked independently. Unchanged inventories reuse that policy without another model call.
 
-Codex receives `mcp_servers` definitions with explicit `enabled_tools` and scoped approval. Claude
-normal runs use named allows under `dontAsk`. Its computer-use mode additionally uses explicit ask
-rules and a `PermissionRequest` hook: only a matching captured tool receives approval, and a missing
+Codex receives `mcp_servers` definitions with explicit `enabled_tools` and scoped approval, including
+current computer tasks on all model backends. Claude structured runs use named allows under
+`dontAsk`. The retained Claude policy helper also supports explicit ask rules and a `PermissionRequest` hook: only a matching captured tool receives approval, and a missing
 or failed hook leaves a headless request denied. Known excluded tools are also removed by name.
 
 The same app executable handles `--direct-mcp-headers` and `--direct-mcp-policy` before SwiftUI or

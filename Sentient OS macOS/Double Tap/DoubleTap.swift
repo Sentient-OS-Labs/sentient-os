@@ -4,7 +4,7 @@
 //
 //  The run behind a DOUBLE TAP of Sidekick's key (right ⌘ by default; the Settings choice): the
 //  cursor sits in a reply box, the user taps the key twice, and a reply written in their voice
-//  lands in the box. One screenshot of the display under the cursor → one cold call with the
+//  lands in the box. One screenshot of the display under the cursor → one model call with the
 //  ENTIRE knowledge base in context (DoubleTapInference) → the reply is pasted into the focused
 //  field (pasteboard + ⌘V, the user's clipboard put back after). A screenshot that isn't an email
 //  or message reply box pastes nothing. Nothing about a run ever shows on the notch: the feedback
@@ -107,7 +107,7 @@ final class DoubleTap {
             let t = outcome.timing
             lastReport = "\(outcome.model) · capture \(captureMs) ms"
                 + " · first text \(t.firstToken.map { "\(Int($0 * 1000)) ms" } ?? "—")"
-                + " · total \(Int(t.total * 1000)) ms · in \(t.inputTokens ?? 0) (cached \(t.cachedTokens ?? 0))"
+                + " · total \(Int(t.total * 1000)) ms · in \(t.inputTokens ?? 0) (cached \(t.cachedTokens ?? 0), cache writes \(t.cacheWriteTokens.map { String($0) } ?? "—"))"
                 + " · out \(t.outputTokens ?? 0) · reasoning \(t.reasoningTokens ?? 0)"
                 + " · \(outcome.verdict == .notAMessage ? "not a reply box" : "reply pasted")"
                 + " · light at the \(target.source.rawValue)"

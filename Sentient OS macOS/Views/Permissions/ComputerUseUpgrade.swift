@@ -78,7 +78,7 @@ final class ComputerUseUpgrade {
     }
 
     func prepareForLaunch(onSetupFinished: @escaping @MainActor () -> Void) {
-        guard !isBlockingInterface else { return }
+        guard !isBlockingInterface, !CodexRuntimeMigration.isPending else { return }
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: AppState.onboardingKey) else { return }
         migrationBackend = .current
@@ -413,7 +413,7 @@ struct ComputerUseUpgradeView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                Text(model.setup.backend == .openAI ? "Downloaded directly from OpenAI and verified on this Mac." : "A one-time 40 MB download, verified on this Mac.")
+                Text(model.setup.backend == .openAI ? "Downloaded from Sentient and verified on this Mac." : "A one-time 40 MB download, verified on this Mac.")
                     .font(.system(size: 11))
                     .foregroundStyle(Theme.faint)
             }

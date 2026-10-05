@@ -1,17 +1,29 @@
 # Frontier Model Choice: bring your own model (Cloud/)
 
-How Sentient runs its cloud ~10% on an engine of the user's choosing: their ChatGPT subscription (the
-default), their **Claude subscription** (`claude -p` as the harness — the ClaudeCLI doc), or ANY
-endpoint that speaks the OpenAI **Responses API** (OpenRouter, LM Studio, something self-hosted; those
-still run through the `codex exec` spine). Same computer use everywhere. A custom endpoint unlocks the
-full experience minus the hosted Gmail/Calendar connectors, which ride subscription-account auth
-(ChatGPT's inside codex, or claude.ai's inside Claude Code) and cannot exist on a bare endpoint.
+Sentient separates local understanding from the model that puts it to work. Choose your ChatGPT
+subscription (the default), your **Claude subscription**, or a compatible **Responses API** endpoint
+such as OpenRouter, LM Studio or a self-hosted server. Claude uses `claude -p` for structured work
+and its subscription bridge for computer tasks; ChatGPT and custom models use the Codex runtime.
+All three choices power knowledge organization, proactive intelligence and Sidekick through the same
+computer-use runtime. **A ChatGPT or Claude subscription is optional:** Apple Mail and Apple Calendar
+supply locally analyzed email and schedule context on every backend.
+
+Hosted Gmail/Calendar connectors still require their supported subscription account. Direct MCP
+connections have their own service and backend support. A local model's capability, context capacity
+and speed determine the quality of the experience; shared features do not promise identical model
+performance. Double Tap has an independent provider setting, and cloud knowledge sharing is a
+separate opt-in.
+
+Useful summaries, task context and screenshots are processed by the selected model. Choose a
+compatible local endpoint to keep that inference on the Mac, or use a hosted model under your chosen
+provider's settings. API keys are stored in Keychain, not in knowledge notes.
 
 ## Files
 
 | File | Job |
 |---|---|
 | `ModelBackend.swift` | `ModelBackend` (`.chatgpt` / `.claude` / `.custom`, key `model.backend`) and `CustomProvider` (the saved endpoint: preset, base URL, model name, reasoning level, the Keychain API key, the vision-verified flag, and the per-run `-c` overrides). |
+| `LoopbackHTTP.swift` | Shared bounded HTTP framing for the local translator and Claude subscription provider. |
 | `ResponsesTranslator.swift` | A loopback HTTP proxy between codex and a naive Responses server, translating codex's proprietary tool dialect both ways so MCP tools (computer use included) work there. |
 | `Views/FrontierEnginePicker.swift` | The shared UI (Settings pane and onboarding's frontier-model step): the engine pills and per-engine panels, Test & Select, the local-models warning. |
 
@@ -21,16 +33,15 @@ Uninstall destroys it; FactoryReset keeps it (a setup choice, not a learning).
 
 ## The five engines
 
-ChatGPT Subscription (recommended) · Claude Subscription (live since the claude-engine work,
-2026-08; `claude -p` as the harness, its own sign-in panel and plan chip — the ClaudeCLI doc) ·
+ChatGPT Subscription (recommended) · Claude Subscription (its own sign-in panel and plan chip; see the ClaudeCLI doc) ·
 OpenRouter (base URL pinned; Kimi K3 pre-entered) · LM Studio (local; runs through the translator) ·
 Custom (any `/v1/responses` endpoint; runs through the translator). The two subscription engines have
 the hosted connectors; `CustomProvider.needsTranslator` is true for every preset except OpenRouter,
 whose server speaks codex's dialect natively.
 
-**Installs are lazy and commitment-only** (field-hardened 2026-08-22): browsing tabs downloads
-nothing; the sign-in buttons, "Use ChatGPT", and Test & Select (which needs codex for the vision
-probe and ensures it first) are the download moments.
+**Codex CLI and native computer use prepare at app launch for every backend.** Browsing tabs starts
+no additional installation. Claude Code remains lazy, prepared by the Claude commitment/sign-in
+actions. ChatGPT sign-in and Test & Select join or retry shared Codex preparation as needed.
 
 ## The invocation recipe
 
@@ -51,8 +62,8 @@ every codex spawn (a dummy value when no key is saved). Rules that were each lea
 
 - **Always set `env_key`.** Without it codex falls through to the ChatGPT token in `auth.json` and would send the user's real credentials to their custom base URL. The dummy value also covers keyless local servers (codex hard-errors on an unset variable).
 - **Never use codex's built-in `openai` / `lmstudio` / `ollama` provider ids** (reserved, no auth fields, fixed ports). Always our own `sentient` table.
-- **Responses API only.** codex removed the Chat Completions wire; chat-only endpoints cannot be supported.
-- **`features.apps = false`.** Hosted-connector tool schemas attach via `auth.json`, not config, so on a ChatGPT-logged-in Mac every custom run would drag hundreds of KB of connector schemas along (and some strict validators reject them). Connectors are ChatGPT-only anyway.
+- **Responses API for the main frontier backend.** This Codex path does not support chat-only endpoints. Double Tap has a separate API client with both formats.
+- **`features.apps = false`.** Hosted-connector tool schemas attach via `auth.json`, not config, so on a ChatGPT-logged-in Mac every custom run would drag hundreds of KB of connector schemas along (and some strict validators reject them). This disables ChatGPT-hosted tools for custom runs; it does not disable local Apple Mail/Calendar or separately prepared direct MCP connections.
 - **`--output-schema` is unreliable off-OpenAI**, so custom runs fold the schema into the prompt and decode through `Envelope.jsonResult`; consumers keep their fail-closed decoding.
 - **One free-form reasoning level for everything** (`CustomProvider.reasoning`: `low`, `none`, `xhigh`, `adaptive`, whatever the model speaks, sanitized to a bare token). Providers have hard, opposite quirks (Claude-class breaks with reasoning on, Gemini rejects off, Kimi wants low), so per-call effort tuning and the Speed slider belong to the subscription engines (ChatGPT and Claude); the slider dims on a custom backend.
 - Corpus slicing shrinks to the endpoint's tier: 280 KB parts remote, 130 KB local (`corpusSliceBudget`), against 700 KB on ChatGPT.
@@ -82,8 +93,8 @@ but honest.
 
 ## Prompt rules for weaker models
 
-Every backend now gets the cua driver's full operating manual inline (`CuaDriverSkill.rules`, see the
-Driver doc). `CustomProvider.computerUsePromptRules` adds what weaker custom models measurably need on
+Every backend gets the native OpenAI computer-use instructions inline (`OpenAIComputerUse.promptRules`;
+see the Native Computer Use doc). `CustomProvider.computerUsePromptRules` adds what weaker custom models measurably need on
 top, on the custom backend ONLY: a hard safety stop-list (deleting data, payments, passwords,
 accounts, installing software, sending sensitive data anywhere the task did not name → stop with
 COULD_NOT) and an anti-stall rule (keep going until done; no narrating turns, no check-ins — nobody
@@ -91,11 +102,14 @@ can reply). The ChatGPT-backend prompts carry only the shared manual.
 
 ## Model reality
 
-Computer use is a much harder bar than chat or coding. Of ~10 models driven through real Mac tasks
-(survey, July 2026): GPT-5.6 Sol (low), Claude Sonnet 5 (reasoning off), and Kimi K3 (low) clear it
-reliably; a local Qwen 3.6 35B completed a real Sidekick task through the translator, slowly and weak at
-verifying dark UI; most others fail on tool mechanics or agentic stamina. Hence the honest pane copy and
-the "note on local frontier models" popup on the LM Studio tab.
+Computer use needs vision, reliable tool calls and the ability to verify a sequence of actions.
+Passing Test & Select verifies a small vision task, not every workflow. The local-model explanation
+in Settings sets expectations about hardware and performance. Check the configured model against
+representative tasks rather than relying on an old model ranking.
+
+The main frontier endpoint currently requires Responses compatibility. Double Tap separately supports
+both Responses and Chat Completions, with explicit Ollama and LM Studio presets; those drafting
+presets do not imply every server works as the main frontier backend.
 
 ## Health, cautions, telemetry
 

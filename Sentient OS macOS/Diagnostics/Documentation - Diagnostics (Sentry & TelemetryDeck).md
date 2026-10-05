@@ -1,10 +1,13 @@
 # Diagnostics (Diagnostics/): crash reporting, structured events, and product analytics
 
-The smoke detector and the funnel. **Sentry** reports crashes, app hangs, caught errors, and a curated
-set of structured, PII-free failure events, so we find out when a source silently breaks. **TelemetryDeck**
-reports product signals (does setup finish, does the overnight run happen, does Sidekick fire). Both are
-Release-only, both have their own opt-out in Settings → System, both are structure-only by
-construction, and both share one anonymous per-install id that is never the mirror token.
+Basic usage counts and optional technical reports help us improve this open-source app without
+collecting people's knowledge or task content for product analytics. **Sentry** reports crashes,
+hangs and structured errors. **TelemetryDeck** reports counts, timings, setup progress and app health.
+
+Both run in Release builds. Crash reports and extended analytics have separate Settings → System
+controls, enabled by default. Turning crash reports off stops Sentry. Turning extended analytics off
+leaves basic usage, launch/session and install/uninstall counts enabled. The services use a generated
+per-install identifier, separate from the mirror secret and feedback list, rather than a name or email.
 
 ## Files
 
@@ -12,7 +15,7 @@ construction, and both share one anonymous per-install id that is never the mirr
 |---|---|
 | `Log.swift` | `Log()`: the codebase-wide replacement for `print()`. Console output, a Sentry breadcrumb, and in DEBUG a timestamped tee to `/tmp/sentient-dev.log`. Plus `ErrorLabel(error)`: the content-safe way to log an error. |
 | `CrashReporting.swift` | Sentry: the two gates, `captureEvent`, `capture(error)`, breadcrumbs, the PII scrubber, the forced-off SDK defaults. |
-| `Analytics.swift` | TelemetryDeck: `start`, `signal` (with the two consent tiers), the one anonymous install ping and its uninstall twin. |
+| `Analytics.swift` | TelemetryDeck: `start`, `signal` (with the two consent tiers), the one minimal install-count ping and its uninstall twin. |
 | `ExecutorScoreboard.swift` | The health sink for "AI that DOES things": one Sentry event per DEFECT-shaped fire (failed / refused / not fireable / fired without the STATUS sentinel). Successes go to TelemetryDeck. |
 | `SourceHealth.swift` | The sensors' memory: run-over-run listing counts per source (a healthy count that craters to zero = `<source>.listing_collapsed`) and a rolling 7-day file-extraction rate. |
 
@@ -20,26 +23,30 @@ construction, and both share one anonymous per-install id that is never the mirr
 
 Nothing reaches Sentry unless BOTH hold: a **Release build** (`start` no-ops in DEBUG; there is no
 debug bypass, so verify from a Release build) and the **crash-reports opt-out** (`diagnosticsEnabled`,
-default on, the "Share anonymous crash reports" toggle). TelemetryDeck boots in Release
-unconditionally, because its always-on core tier must send; the "Share anonymous analytics" toggle
+default on, the "Share crash reports" toggle). TelemetryDeck boots in Release
+unconditionally, because its always-on core tier must send; the "Share extended usage analytics" toggle
 (`analyticsEnabled`, default on) gates the extended tier per signal. Flipping either toggle calls
 `applyEnabledChange()` live. `main.swift` starts Sentry in BOTH process roles (the GUI app and the root
 wake helper, tagged `process: app` / `wakeHelper`) and TelemetryDeck in the GUI role only.
 
-## The PII firewall
+## Keeping content out of reports
 
-Reports contain STRUCTURE only: counts, ratios, booleans, enums, durations, byte buckets, HTTP / exit /
+The reporting contract permits structured technical fields: counts, ratios, booleans, enums, durations, byte buckets, HTTP / exit /
 sqlite codes, error type or case names, versions, fingerprints. Never message or note text, file names
-or paths, contact names, chat ids, drafts, codex output, transcripts, or the mirror token. Two defenses:
+or paths, contact names, chat ids, drafts, codex output, transcripts, or the mirror token. The implementation uses these defenses:
 
 - **Clean at the source.** `captureEvent` takes only enums and counts the caller controls. Content-bearing `Log()` lines are `#if DEBUG` (Sentry never boots in DEBUG, so they can never become a breadcrumb). Error paths log `ErrorLabel(error)`, never `\(error)` or `localizedDescription`: in Release it renders the enum case or type name only ("CLIError.exitFailure"), because error payloads embed content (codex stderr, note titles in file paths). The pipeline logs only a bucket key's scheme (`CycleStore.scheme`), never the key.
 - **The scrubber backstop** (`beforeSend` / `beforeBreadcrumb`): redacts home-directory paths (the WHOLE remainder, since a folder name is PII), external-volume paths, the mirror password's `/p_…` URL segment, emails, phone runs, and high-entropy long tokens (≥1 uppercase or digit, so snake_case event names survive) from message, exception, and breadcrumb text and breadcrumb `data` strings. It does NOT touch `tags` / `extra`; those are structure-only by contract, so never put free text there.
 - **The SDK's URL-capturing defaults are forced OFF** (`enableNetworkBreadcrumbs = false`, `enableCaptureFailedRequests = false`) and must stay off: both record full request URLs, and the mirror URL carries the user's password in its path (the "request paths are never logged" invariant, enforced on the server too). Re-check what new SDK defaults capture on every update.
-- Auto session tracking is deliberately OFF: all "how many people use Sentient" counting belongs to the analytics toggle, never the crash toggle. App-hang detection is at 10 s (2 s paged us for harmless onboarding stalls); `enableUncaughtNSExceptionReporting` is explicitly on (it defaults off on macOS); no tracing or profiling.
+- Auto session tracking is deliberately OFF: usage counting belongs to TelemetryDeck and its core/extended tiers, not the crash-report toggle. App-hang detection is at 10 s (2 s paged us for harmless onboarding stalls); `enableUncaughtNSExceptionReporting` is explicitly on (it defaults off on macOS); no tracing or profiling.
 
 Identity: `CrashReporting.installID`, a random UUID minted once in UserDefaults, set as Sentry's user id
 and TelemetryDeck's default user (which hashes it again). Every event is auto-stamped with the OS and app
 version.
+
+These filters are designed to exclude private content; they are not a proof that all possible
+third-party exception strings are harmless. Keep new event fields in a closed vocabulary, review
+SDK upgrades, and never rely on the text scrubber to sanitize arbitrary structured payloads.
 
 ## `captureEvent` and the event catalog
 
@@ -69,7 +76,7 @@ Plus native crashes and 10 s hangs from the SDK, and `capture(error)` on the cri
 ## Analytics signals (`Analytics.signal`)
 
 Two consent tiers. The **core** tier keeps sending when analytics are opted out and is disclosed in the
-toggle's own off-state caption; it is exactly five buckets: how many people use Sentient (the install
+toggle's own off-state caption; the current core categories include how many people use Sentient (the install
 ping + the SDK's session signals), `Command.submitted` (Sidekick / command-bar fires), `Proactive.prepared`
 and `Proactive.actionFired` (cards made and fired), `Scheduler.overnightCompleted`, and `Home.opened`.
 Everything else is **extended**: `Onboarding.completed`, `Processing.completed` (counts), `Engine.reloaded`,
@@ -79,10 +86,10 @@ Everything else is **extended**: `Onboarding.completed`, `Processing.completed` 
 `Source.connected`, `Model.downloadCompleted`, `PermissionGate.shown` / `.continued`, `PlanGate.*`,
 `Notify.notAuthorized`. Every signal auto-stamps the model file name.
 
-**The anonymous install ping** (`countInstallOnce`): one direct POST to TelemetryDeck's ingest with a
-throwaway random hash (correlatable to nothing), an empty payload, and no device info, fired at most once
+**The minimal install ping** (`countInstallOnce`): one direct POST to TelemetryDeck's ingest with a
+throwaway random hash, separate from the persistent diagnostics identifier, an empty payload, and no device info, fired at most once
 per install (latched only after a 2xx) even when analytics are opted out; the one number that is
-complete across every install. `countUninstall` is its farewell twin, fired as the teardown begins.
+attempted across installs independently of the extended-analytics setting. `countUninstall` is its farewell twin, fired as the teardown begins.
 
 The App ID and the Sentry DSN are ingest-only and safe in the public repo; the Sentry Auth Token used for
 dSYM upload is a real secret and lives only in the gitignored `.sentryclirc`.

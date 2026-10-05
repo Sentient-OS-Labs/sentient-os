@@ -34,18 +34,16 @@ The required grants follow the selected runtime:
 
 | Runtime | Required grants |
 |---|---|
-| ChatGPT / OpenAI | Sentient-to-helper Automation; OpenAI helper Accessibility and Screen Recording; Sentient Screen Recording for screen context. |
-| Claude / custom / CUA | Sentient's own Accessibility and Screen Recording. |
-| Both | Microphone and Speech are optional; typed commands work without them. |
+| All active backends / OpenAI | Sentient-to-helper Automation; OpenAI helper Accessibility and Screen Recording; Sentient Screen Recording for screen context. |
+| All | Microphone and Speech are optional; typed commands work without them. |
 
 OpenAI Automation is checked through Apple's asynchronous API after launching the signed helper.
 Visible permission setup requests unasked consent through the macOS Apple Events dialog; the user chooses Allow there. Granted and denied states are not re-prompted automatically. Automation remains an internal readiness check rather than a separate permission row. Denied or unavailable consent exposes a contextual Settings/retry action. The helper's own Accessibility/Screen Recording rows use the floating drag guide
 with the helper bundle, while Sentient's rows carry Sentient itself. Full Disk Access permits read-only
 helper grant checks; there are no direct permission-database writes.
 
-Native first-use setup also checks the helper installation and exposes the shared installer when
-files are missing. CUA retains its existing grant-only gate; its task runner joins the background
-installer before starting the daemon. Existing grants are reused. `SentientPermissionRows` and
+Native first-use setup checks both the compatible Codex CLI and helper installation, and exposes
+the shared installer when either needs preparation. Claude users are not asked for a ChatGPT login. Existing grants are reused. `SentientPermissionRows` and
 `NativeComputerUsePermissionRows` keep first-use, migration and Settings consistent.
 
 ## The gate (`ComputerUseGate`)
@@ -66,9 +64,7 @@ a surface that must not even OPEN while a grant is missing (the Sidekick hotkey 
 never drops open to listen and only meets the gate at submit). `presentVoiceFixIfDenied()` raises the
 window as a non-blocking fix surface when a voice HOLD hits a DENIED mic/speech grant (a denied grant
 has no native prompt left to show). Passing the required checks latches
-the selected runtime's `HealthCaution` readiness latch, so only a later regression can banner; a CUA grant landing also
-marks its daemon for replacement (macOS caches TCC answers per process, so the running daemon would
-keep believing the old answer).
+the native runtime's `HealthCaution` readiness latch, so only a later regression can banner.
 
 The window is AppKit-owned (a floating `NSWindow`, black, hidden title) so it can appear over OTHER
 apps; Sidekick fires from anywhere and a SwiftUI `Window` scene cannot be raised from the coordinator.
@@ -77,15 +73,14 @@ Analytics: `PermissionGate.shown` / `.continued`.
 ## The upgrade window (`ComputerUseUpgrade`)
 
 Migration is prepared by `AppState` before regular scenes and Sidekick start. Fresh installs retain
-onboarding. CUA retains its existing legacy migration predicate and persistent marker; ordinary CUA
-version changes use the nonblocking shared updater. ChatGPT has separate native pending, deferred and
-ready state, so CUA installation history cannot incorrectly mark native setup as complete.
-An onboarded ChatGPT user enters native migration when prior computer-use readiness, a CUA
-installation receipt or binary, or an earlier deferred migration establishes existing setup history.
+onboarding. All active backends share native pending, deferred and ready state. CUA history is
+recognized as a reason to migrate, never as proof that native permissions are ready.
+An onboarded user enters native migration when prior computer-use readiness, a CUA installation
+receipt or binary, or an earlier deferred migration establishes existing setup history.
 Earlier deferral is treated as unfinished setup. Native completion remains separate from CUA history.
 
 The flow is pitch → shared installation → required grants. Failure is retryable. Completing it
-requires a fresh readiness check and an explicit Done action. Both migration paths are mandatory:
+requires a fresh readiness check and an explicit Done action. Native migration is mandatory:
 the regular interface stays unavailable until installation and required permissions are ready.
 Closing or minimizing setup does not release the interface, and quitting preserves pending setup for
 the next launch. Errors and permission fixes remain in the setup window. Already-ready installations
@@ -133,7 +128,7 @@ instruction), and Settings → Health (FDA, Accessibility, Screen Recording).
 
 ## Related docs
 
-`Driver/Documentation - Driver (cua-driver).md` (why the grants are Sentient's own),
+`Driver/Documentation - Native Computer Use.md` (the helper grants and Sentient’s screen-context permission),
 `System/Documentation - System (Permissions, Health, Uninstall).md` (the probes),
 `Notch Magic/Documentation - Sidekick - General.md`, `Views/Settings/Documentation - Settings.md`,
 `Views/Onboarding/Documentation - Onboarding.md`.

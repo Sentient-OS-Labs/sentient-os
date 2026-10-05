@@ -15,11 +15,8 @@
 //  it 2s after the post-FDA-relaunch launch), Start Analysis shows the downloading-model screen
 //  first and the analysis takes over by itself the moment the model verifies. The current step
 //  persists (UserDefaults "onboarding.step") so a quit-and-relaunch mid-onboarding — which
-//  granting Full Disk Access requires — resumes exactly where the user left. The background
-//  codex install is NOT here: AppState kicks it off 1s after launch while the film plays.
-//  The computer-use driver (codex step 3) IS here: the analysis takeover appearing arms a
-//  silent one-shot that downloads it 2 minutes in (armComputerUseSetup) — armed at analysis
-//  start, not at Start Analysis, so it never competes with the model download's tail.
+//  granting Full Disk Access requires — resumes exactly where the user left. AppState starts
+//  shared Codex CLI and native computer-use setup at launch while onboarding continues.
 //
 
 import SwiftUI
@@ -36,10 +33,6 @@ struct OnboardingView: View {
     /// Start Analysis pressed — the ProcessingView takeover is up. Not persisted: a quit
     /// mid-run relaunches to the ready screen, and the durable marks resume the analysis.
     @State private var analyzing = false
-
-    /// One-shot: the deferred background computer-use setup (codex step 3) has been armed this
-    /// launch, so a pause → resume never spawns a second timer.
-    @State private var computerUseArmed = false
 
     #if DEBUG
     @State private var introFilm: FilmDriver?
@@ -106,7 +99,6 @@ struct OnboardingView: View {
                                    onExitEarly: { withAnimation(.easeInOut(duration: 0.3)) { analyzing = false } },
                                    onDone: onFinished)
                         .transition(.opacity)
-                        .onAppear(perform: armComputerUseSetup)
                 } else if analyzing {
                     // Start Analysis outran the model download — the honest wait, never a dead
                     // button. The `modelPath` read above re-resolves when the phase flips, so
@@ -181,26 +173,6 @@ struct OnboardingView: View {
             }
         }
         #endif
-    }
-
-    /// Two minutes into the first analysis, download the computer-use driver (setup step 3)
-    /// silently in the background — so it's ready by the time the home's cards and Sidekick need
-    /// it, with no onboarding screen of its own. Armed when the analysis takeover APPEARS (not at
-    /// Start Analysis), so it never races the model download still finishing behind the
-    /// downloading screen. ComputerUseSetup.install() self-guards (no-op when the pinned version is already
-    /// there; needs neither codex nor a login), so a quit-and-relaunch that restarts the analysis
-    /// just re-arms harmlessly; failures land in the log + Sentry, never in the UI.
-    private func armComputerUseSetup() {
-        guard !computerUseArmed else { return }
-        computerUseArmed = true
-        // An unstructured Task on purpose — pausing or leaving the analysis must not cancel the
-        // download mid-flight. If the user somehow fires a command before it lands, the fire-time
-        // self-heal (ComputerUseSetup.ensureInstalled) waits on this very install instead of racing it.
-        Task {
-            try? await Task.sleep(for: .seconds(120))
-            Log("Onboarding: 2 min into first analysis — fetching the computer-use driver")
-            await ComputerUseSetup.current.install()
-        }
     }
 
     private func advance() {
@@ -349,7 +321,7 @@ private struct RightClickBlocker: NSViewRepresentable {
 /// The trust footer — on every onboarding surface, like everywhere else in the app.
 struct OnboardingTrustFooter: View {
     var body: some View {
-        Text("Private by design. Your files never leave this Mac.")
+        Text(PrivacyCopy.trustRibbon)
             .font(.system(size: 12))
             .foregroundStyle(Theme.faint)
             .padding(.bottom, 28)

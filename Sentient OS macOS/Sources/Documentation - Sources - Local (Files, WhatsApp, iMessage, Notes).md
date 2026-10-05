@@ -1,18 +1,21 @@
 # Sources: the local readers (Sources/)
 
-The four sources that are read straight off the Mac's disk: **Files**, **WhatsApp**, **iMessage**, and
-**Apple Notes**. Plus the shared pieces every source uses (the value types, the persisted source
-selection, the WAL-safe SQLite copy, chat windowing, and contact-name resolution). The two cloud
-sources (Gmail, Calendar) have their own doc in this folder.
+The local readers cover **Files**, **WhatsApp**, **iMessage**, **Apple Notes**, **Apple Mail**, and **Apple Calendar**.
+Shared pieces provide source selection, value types, WAL-safe SQLite copies, chat windowing, and
+contact-name resolution. Hosted sources have their own doc in this folder.
 
-The three database sources need **Full Disk Access**; the Files source reads the standard folders and
-any custom roots. All of it is on-device; nothing here touches the network.
+The message, Notes and Mail database readers need **Full Disk Access**; Files reads standard folders and custom roots.
+Apple Calendar reads the Mac's synced calendars through EventKit with a separate Calendar grant.
+These readers and their first-pass model analysis run on-device. Mail and Calendar use data already
+synced to the Mac, so neither requires a ChatGPT or Claude subscription. Your chosen frontier AI then
+consolidates useful summaries into knowledge and prepares suggestions. If that model is hosted, it
+processes those summaries; the raw source material is not uploaded for this local analysis.
 
 ## Files
 
 | File | Job |
 |---|---|
-| `DataSource.swift` | The shared value types: `SourceKind` (file / whatsapp / imessage / notes / gmail / calendar), `Candidate` (a cheap, content-free work item), `Artifact` (a candidate plus its extracted text or image). |
+| `DataSource.swift` | The shared value types: `SourceKind` (file / whatsapp / imessage / notes / appleMail / appleCalendar / gmail / calendar / mcp), `Candidate` (a cheap, content-free work item), `Artifact` (a candidate plus its extracted text or image). |
 | `SourceSelection.swift` | The ONE reader of the source-selection preferences and `CustomRoots` (persisted user-added folders). Settings, the home popover, onboarding, Dev Tools, and the 3 AM run all read the same keys. |
 | `SQLiteDB.swift` | `walSafeCopy(of:)` and the small `SQLiteReader`. Live databases are open by their owning apps in WAL mode, so we never read them in place. |
 | `ChatWindowing.swift` | Shared by WhatsApp and iMessage: `ChatMessage`, `ChatInfo`, the byte-budgeted window slicing, the prompt framing, and the limits. |
@@ -21,6 +24,8 @@ any custom roots. All of it is on-device; nothing here touches the network.
 | `WhatsAppSource.swift` | ChatStorage.sqlite reader: session whitelist, group naming, per-chat windows. |
 | `iMessageSource.swift` | chat.db reader: the typedstream body decoder, hidden-chat filtering, per-chat windows. |
 | `NotesSource.swift` | NoteStore.sqlite reader: gunzip + protobuf walk to the note text. |
+| `AppleMailSource.swift` · `AppleMailMIME.swift` | Selected Mail accounts, safe index snapshots, bounded body extraction and local identity checks. |
+| `AppleCalendarSource.swift` | User-selected EventKit calendars, bounded occurrence snapshots, opaque local IDs, and validation before publication. |
 
 The connectors that adapt these to the pipeline are in `Ingestion/Connectors/`.
 
@@ -34,8 +39,8 @@ production keys, persisted on user machines: `dbg.run.downloads` / `desktop` / `
 one newline-joined string under `files.customRoots` so any view can watch it with `@AppStorage`.
 `SourceSelection.current(fdaGranted:)` builds the run's `[RunSource]`; `selectionCount` counts armed
 selections for the shared **four-selection minimum** that onboarding's ready screen and Settings both
-enforce (each folder, each chat source with chats picked, Notes, and each connected cloud source count
-as one; cloud sources only count on the ChatGPT backend).
+enforce (each folder, each chat source with chats picked, Notes, Apple Mail, Apple Calendar, and each connected cloud source count
+as one; hosted sources require a supported subscription backend).
 
 **WAL-safe copy (`SQLiteDB`).** Copy the database plus its `-wal` and `-shm` siblings into a fresh temp
 directory, open the COPY read-write so SQLite replays the WAL, read, and delete the directory the moment
@@ -110,9 +115,61 @@ column name varies by macOS version, hence the `COALESCE`.
 - **One note = one item**, through the file-flavoured triage prompt (a note is a document the user wrote). Newest 1,000 by creation date, no time floor (old notes are often the most valuable). Keyed on **creation date**, so an edited note is not re-summarized.
 - One bucket, `notes`.
 
+## Apple Mail (`AppleMailSource`, `AppleMailMIME`)
+
+Choose accounts in the shared **Email & Calendar** source picker. Sentient reads the local Mail
+Envelope Index and downloaded message bodies with Full Disk Access. It does not need a separate
+mailbox password or perform a provider login. This works with accounts already set up in Apple Mail,
+including supported third-party mail accounts synced there.
+
+The reader takes a bounded SQLite backup of the index, validates its schema, and matches messages
+to files inside the selected account directories. MIME extraction reads body text only: it does not
+execute HTML, load remote content, or analyze attachments and embedded messages. Mailbox/header
+filters exclude junk, trash, drafts and recognized bulk mail before inference. The dedicated local
+triage prompt classifies each message first and requires explicit privacy flags.
+
+Unavailable bodies remain retryable, so Mail may need to finish downloading a message before it can
+be analyzed. A read problem is not treated as evidence that the mailbox is empty. Knowledge summaries
+retain useful correspondence and dates, without turning someone else's request into a promise by
+the user. See the ingestion guide for the separate backfill/retry checkpoint path.
+
+This regular analysis is separate from founder-feedback email collection and from Double Tap's
+one-time writing-style setup. The current writing-style collector does not use Apple Mail.
+
+## Apple Calendar (`AppleCalendarSource`)
+
+The explicit Allow Calendar Access button requests EventKit **Full Access**. macOS has no read-only
+event grant; this integration only reads and never calls save or remove. It needs the calendar
+entitlement and `NSCalendarsFullAccessUsageDescription`, not Full Disk Access, OAuth, or a provider
+sign-in. Permission is never requested by background ingestion. The picker lists calendars already
+synced to this Mac, including iCloud, Google, and subscribed calendars.
+
+No calendar is selected by default. `appleCalendar.selectedIDs` stores a JSON array of local calendar
+IDs. A nonempty selection with permission counts as one source on every frontier backend. Clearing
+the selection disables the source. Selection is independent of the hosted Google/Outlook connections;
+the picker asks users to avoid selecting the same calendar through both paths.
+
+Each run reads the last seven local calendar days, today, and the next thirty days. The upper bound
+is exclusive. Calendar arithmetic preserves local-day boundaries across daylight-saving changes.
+EventKit expands recurring events; occurrence IDs hash the calendar ID, item ID, and original
+occurrence date so separate instances do not collapse when one instance moves. These are local
+provenance IDs, not portable Google/Outlook event IDs; a full provider resync can change them.
+
+Raw title, notes, location, and schedule data are bounded and remain in memory for on-device triage.
+Dedicated attendee, organizer, and conferencing URL fields are omitted. Retained summaries receive
+native start/end, time zone, all-day, status, availability, and participation metadata. A scheduled
+event is not evidence of attendance. Calendar/account names and raw provider IDs are not downstream
+tags. Rejected events leave no per-event durable record.
+
+A fresh EventKit store is created on a serial queue for each read. Missing selected calendars,
+permission loss, conflicting occurrence identities, or more than 2,000 events fail the whole snapshot;
+none is treated as an empty calendar. The fixed window is reread before commit and must match.
+Structure-only health codes under `appleCalendar.readIssue` explain retry, scope, and permission
+problems in the picker. See the ingestion doc for the atomic coverage checkpoint and stale-note gate.
+
 ## Rules
 
-- Never read a live database in place; always `walSafeCopy` and delete the copy immediately.
+- Use the source’s safe snapshot path: WAL-safe temporary copies for chat/Notes readers and SQLite backup for Apple Mail. Release snapshots and temporary copies after extraction.
 - Never log a chat JID, a chat GUID, or a file path in a line that ships in Release.
 - The `dbg.*` preference keys are production keys; do not rename them.
 - The date-added key for files and the creation-date key for notes are deliberate; do not switch either to modification time.

@@ -1,15 +1,15 @@
 # CodexCLI: the `codex exec` spine (Cloud/)
 
-`CodexCLI` is one of the two frontier harnesses (the other is `ClaudeCLI`, the `claude -p` engine —
-see its doc). Every cloud feature — the knowledge base build and updates, the Gmail/Calendar reads,
-the gift letter, the proactive judge and research, and every computer-use run — calls
-**`FrontierRun`**, the one dispatch switch on `ModelBackend.current`: `.chatgpt` and `.custom` land
-here, `.claude` lands on ClaudeCLI. This file is also the REFERENCE engine: the shared types
-(`Invocation`, `Envelope`, `CLIError`) and the engine-neutral process plumbing (`executeAsync` /
-`executeStreaming` — sanitized env, watchdog, cancellation, line streaming) live here and ClaudeCLI
-reuses them verbatim. It runs the user's own Codex CLI as a subprocess; their ChatGPT subscription
-(or their own endpoint, see the BYOM doc) pays. There is no Sentient-hosted compute and no API key in
-the app.
+`CodexCLI` is one of the two frontier runtimes; `ClaudeCLI` is the other. Features dispatch through
+`FrontierRun` using the selected backend. ChatGPT and custom models use Codex for structured work;
+Claude uses ClaudeCLI. Computer tasks on every backend use Codex and the signed native helper, with
+Claude subscriptions supplying inference through `ClaudeSubscriptionBridge`.
+
+The shared `Invocation`, `Envelope` and `CLIError` types and process plumbing live here. Provider
+credentials follow the selected setup: the user's subscription login or their custom endpoint/key.
+A compatible local endpoint runs inference locally. **Double Tap has its own API client and provider
+setting**, including the covered relay; its data path is documented separately. This runtime should
+not be used to make a product-wide claim that all inference goes through a ChatGPT account.
 
 ## Files
 
@@ -30,12 +30,14 @@ the custom-endpoint key variable). Optional `onLine:` streams a humanized play-b
 
 **`runAgentCommand(prompt, imagePaths:, timeout:, onLine:) → String`** is the computer-use path. The
 prompt rides in **argv**, output is human-readable (no `--json`), and every line is pumped to `onLine`
-as it arrives. `ComputerUseSetup` prepares the selected runtime. On ChatGPT, the signed OpenAI
-helper is validated and its native client is registered directly as the required `sentient_native`
-MCP server. Custom endpoints retain `CuaDriverHost` and its four-tool vision registration plus CLI
-shim. Claude's sibling runner continues to use CUA.
+as it arrives. `ComputerUseSetup` prepares Codex and the signed OpenAI helper for every backend.
+The native client is registered directly as the required `sentient_native` MCP server. Claude uses
+a per-task local Responses provider backed by the official Claude CLI; custom endpoints retain their
+provider overrides. No active computer task launches CUA.
 
-The run remains hermetic (`--ignore-user-config`) and preserves its hosted/direct connector policies.
+The run remains hermetic (`--ignore-user-config`). ChatGPT hosted connector policies and prepared
+direct MCP accounts remain attached. Claude-hosted connector tasks use the separate structured path.
+
 `FrontierRun` adds exactly one runtime manual after capturing the selected backend. Native setup
 writes no plugin or global Codex configuration. See `Driver/Documentation - Native Computer Use.md`
 for installation, permissions and compatibility checks. Computer-use flags remain
@@ -51,7 +53,7 @@ this.
 | Field | Default | Meaning |
 |---|---|---|
 | `prompt` | | over stdin |
-| `model` | `.gpt56sol` | Sol remains the structured default; `.gpt6astra` is the upper computer-use tier, `.gpt56luna` the light tier, and `.gpt56terra` the limited-plan fallback |
+| `model` | `.gpt6sol` | Sol remains the structured default; `.gpt6astra` is the upper computer-use tier, `.gpt6luna` the light tier, and `.gpt56terra` the limited-plan fallback |
 | `effort` | `.high` | reasoning effort; the connector reads use `.medium`; nothing uses `.xhigh` |
 | `sandbox` | `.readOnly` | Seatbelt profile: `read-only` or `workspace-write` (writes confined to `cwd` + `addDirs`) |
 | `cwd`, `addDirs` | | the agent's working root and extra writable roots |
@@ -86,7 +88,7 @@ spawning:
 - **Custom backend** (Settings → Frontier Model Choice): the user's endpoint model rides EVERY call and their single free-form reasoning level replaces the caller's effort. `run()` also injects the provider overrides, turns web search off, forces a hermetic run (`includeUserConfig = false`, since hosted-connector schemas would bloat every prompt), and turns `--output-schema` into a prompt instruction (naive endpoints ignore the schema); consumers then decode from `Envelope.jsonResult`.
 - **ChatGPT backend:** on a positive free/go plan read (`CodexAuth.isLimited()`), a Sol or Astra call downshifts to Terra at medium. Unknown plans retain the requested model, asserted Plus preserves the existing override, and Luna is untouched. Re-read per run.
 
-The computer-use slider reads `sidekick.speed` at each run: `faster` selects `gpt-5.6-sol`/low,
+The computer-use slider reads `sidekick.speed` at each run: `faster` selects `gpt-6-sol`/low,
 `medium` selects `gpt-6-astra`/low, and `smarter` selects `gpt-6-astra`/medium. Stored values and the
 Faster default are unchanged. Custom model/reasoning settings override that tuple.
 
@@ -113,7 +115,8 @@ workspace root is the PROCESS cwd (so `Process.currentDirectoryURL` is set from 
 the sandbox rides `-c sandbox_mode=…` instead. Verified live.
 
 Every Codex exec builder starts with `execArguments`: probes, fresh/resumed structured runs, and
-computer use. Fast service tier is a per-invocation configuration override, never a global config edit.
+computer use on OpenAI models. Claude subscription computer tasks omit OpenAI service tiers.
+Fast service tier is a per-invocation configuration override, never a global config edit.
 The resume ID precedes the fast override. Caller/provider overrides, sandbox differences, and the
 flag terminating the variadic image list retain their ordering.
 

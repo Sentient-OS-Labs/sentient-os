@@ -1046,12 +1046,9 @@ enum ConnectorLab {
         showClaude("claude research read", researchInv)
 
         Log("-- computer-use argv (placeholder prompt/socket; the 1.6 wall is live) --")
-        show("claude agent",
-             try! ClaudeCLI.agentArguments(prompt: "<PROMPT>", modelID: "sonnet", effortArg: "low",
-                                      socketPath: "/tmp/lab.sock"))
         show("codex agent",
-             CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-6-sol",
-                                     effortArg: "low", socketPath: "/tmp/lab.sock"))
+             try! CodexCLI.agentArguments(prompt: "<PROMPT>", imagePaths: [], modelID: "gpt-6-sol",
+                                     effortArg: "low"))
 
         Log("-- connected services block (live backend: \(ModelBackend.current.rawValue)) --")
         let block = ConnectorRegistry.connectedServicesBlock()

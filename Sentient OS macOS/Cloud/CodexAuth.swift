@@ -2,7 +2,7 @@
 //  CodexAuth.swift
 //  Sentient OS macOS
 //
-//  ChatGPT plan identity, read from the user's own codex login (~/.codex/auth.json).
+//  ChatGPT plan identity, read from Sentient's private Codex login.
 //  The file's OAuth tokens are JWTs whose claims carry `chatgpt_plan_type` — so the app can
 //  tell a free/go account (tiny MONTHLY codex quota, no Gmail/Calendar connectors) from a
 //  plus/pro one without any network call. Codex itself only re-mints the token every 8 days,
@@ -100,8 +100,7 @@ enum CodexAuth {
 
     /// nonisolated: read from the CodexCLI actor and background diagnostics too (pure file path).
     private nonisolated static var authURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".codex/auth.json")
+        CodexRuntime.activeAuth
     }
 
     /// Decode the plan from auth.json's JWT claims. Pure file read — safe to call every launch,
@@ -177,6 +176,10 @@ enum CodexAuth {
     }
 
     private static func performRefresh() async throws -> Plan? {
+        // Token rotation and browser sign-in must not race a CLI task or each other.
+        try CodexRuntime.prepareHome()
+        let lease = try CodexRuntime.FileLock(CodexRuntime.root.appendingPathComponent(".runtime.lock"), exclusive: true)
+        defer { lease.unlock() }
         // The server told us when the next refresh is allowed — before that, the claim on disk
         // is as fresh as a POST would mint anyway.
         let earliest = UserDefaults.standard.double(forKey: earliestRefreshKey)
@@ -238,11 +241,14 @@ enum CodexAuth {
 
         let out = try JSONSerialization.data(withJSONObject: updated,
                                              options: [.prettyPrinted, .withoutEscapingSlashes])
-        let tmp = authURL.deletingLastPathComponent()
+        // A migrated standalone path is a compatibility link. Always replace its backing
+        // file so a refresh during migration recovery cannot detach the two installations.
+        let target = authURL.resolvingSymlinksInPath()
+        let tmp = target.deletingLastPathComponent()
             .appendingPathComponent("auth.json.sentient-\(UUID().uuidString.prefix(8))")
         try out.write(to: tmp)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: tmp.path)
-        _ = try FileManager.default.replaceItemAt(authURL, withItemAt: tmp)
+        _ = try FileManager.default.replaceItemAt(target, withItemAt: tmp)
     }
 
     /// `earliest_refresh_at` arrives as epoch seconds or an ISO string depending on the server's

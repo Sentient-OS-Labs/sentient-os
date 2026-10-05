@@ -16,8 +16,6 @@
 //                                           (every recipe builder resolves through it; Step D
 //                                           extends it with the direct tier)
 //   - claudeIdentity(slug:)               → name + server URL + tool prefix (the classifier's input)
-//   - computerUseAttachable()             → the candidate list a computer-use run may attach
-//   - computerUseAttachments()            → the FINAL attach set + deny lists (fail-closed)
 //   - connectedServicesBlock()            → the prompt teaching both computer-use wrappers splice
 //   - readToolNames / destructiveToolNames / allKnownToolNames → full tool names, per policy
 //   - kbEligible / isKBEnabled / setKBEnabled / kbEnabledConnectors → the `mcp.<slug>.kb` toggle
@@ -237,84 +235,6 @@ nonisolated enum ConnectorRegistry {
         return (name, url, prefix)
     }
 
-    /// The connectors a widened computer-use run may attach on the Claude engine (task 1.6
-    /// flips the attachment on; 1.4 builds it dormant): every detected claude-origin connector
-    /// that is curated or classified (unclassified = excluded, fail-closed), PLUS the two
-    /// dedicated-chip connectors when healthy (kept out of the generic attachment list so
-    /// each service attaches once — gmail riding into computer use is shipped
-    /// behavior this must preserve). Order: chips first, then detected, so argv stays stable.
-    static func computerUseAttachable() -> [ResolvedServer] {
-        var slugs: [String] = []
-        if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }
-        if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { slugs.append("google-calendar") }
-        slugs += ConnectorCensus.cached(for: .claude)
-            .filter { !ConnectorCensus.dedicatedSourceSlugs.contains($0.slug) }
-            .filter { pack(for: $0)?.readTools != nil || isClassified($0.slug) }
-            .map(\.slug)
-        return slugs.compactMap { server(for: $0) }
-    }
-
-    /// One connector as a computer-use run actually attaches it: the resolved server, the deny
-    /// list its bypass run carries, and whether it rides read-only (the unclassified-gmail
-    /// fallback described on computerUseAttachments).
-    struct ComputerUseAttachment: Sendable {
-        let server: ResolvedServer
-        let denies: [String]
-        let readOnly: Bool
-    }
-
-    /// The FINAL attach set for a computer-use run (task 1.6): computerUseAttachable() gated
-    /// fail-closed through the one deny-list rule. A bypass run auto-approves every tool it can
-    /// see, so a connector may only attach when a REAL deny list can be built for it:
-    ///  · classified → its destructive verdicts are denied and constructive writes stay LIVE
-    ///    (the deliberate posture change, README decision #13);
-    ///  · unclassified gmail → the hand-curated write-deny complement
-    ///    (ClaudeCLI.ConnectorTools.gmailWriteDenies): gmail keeps riding in read-only, exactly
-    ///    the shipped posture, until the classifier sweep catches up;
-    ///  · anything else unclassified → NOT attached, counted in `excluded` (transient: the
-    ///    idle-tick sweep, ConnectorClassifier.sweepComputerUseAttachables, classifies the whole
-    ///    candidate list within minutes of launch).
-    /// Both consumers — the Claude wall in agentArguments and the CONNECTED SERVICES prompt
-    /// block — read THIS function, so the prompt can never promise a server the wall excluded.
-    static func computerUseAttachments() -> (attached: [ComputerUseAttachment], excluded: Int) {
-        var attached: [ComputerUseAttachment] = []
-        var excluded = 0
-        for server in computerUseAttachable() {
-            guard server.claudeServerURL != nil else { excluded += 1; continue }
-            if isClassified(server.slug) {
-                let denies = server.slug == OutlookMailConnector.slug
-                    ? OutlookMailConnector.claudeCategories.keys.filter { !OutlookMailConnector.actionTools(.claude, operation: .write).contains($0) }
-                        .map { OutlookMailConnector.claudePrefix + $0 }.sorted()
-                    : destructiveToolNames(slug: server.slug)
-                attached.append(.init(server: server,
-                                      denies: denies,
-                                      readOnly: false))
-            } else if server.slug == "gmail" {
-                attached.append(.init(server: server,
-                                      denies: ClaudeCLI.ConnectorTools.gmailWriteDenies,
-                                      readOnly: true))
-            } else {
-                excluded += 1
-            }
-        }
-        // A shared physical server needs one complement of the union of requested services.
-        let suite = attached.filter { Microsoft365Connector.contains($0.server.slug) }
-        if !suite.isEmpty {
-            let allowed = suite.flatMap { attachment in
-                (attachment.server.slug == OutlookMailConnector.slug
-                    ? OutlookMailConnector.actionTools(.claude, operation: .write)
-                    : OutlookCalendarConnector.actionTools(.claude, operation: .read))
-                    .map { Microsoft365Connector.prefix + $0 }
-            }
-            let denied = Microsoft365Connector.denied(except: allowed)
-            attached = attached.map { attachment in
-                guard Microsoft365Connector.contains(attachment.server.slug) else { return attachment }
-                return .init(server: attachment.server, denies: denied, readOnly: attachment.server.slug == OutlookCalendarConnector.slug)
-            }
-        }
-        return (attached, excluded)
-    }
-
     /// A connector's user-facing name: the curated pack's, else the census's, else the slug
     /// title-cased.
     static func displayName(slug: String) -> String {
@@ -378,9 +298,7 @@ nonisolated enum ConnectorRegistry {
     /// The teaching both computer-use wrappers splice in: which services' tools are REALLY in
     /// this run, and the standing instruction to prefer them over driving an app's UI. Built
     /// per run from the live attach set, per engine:
-    ///  · claude → computerUseAttachments() (the exact set the wall admits, so the prompt and
-    ///    the argv can never disagree; a read-only fallback entry says so on its line, and the
-    ///    send-email example only appears when gmail's writes are actually live);
+    ///  · claude → no hosted attachments in Codex; dedicated connector tasks still use Claude.
     ///  · chatgpt → the chips when connected + every census codex-origin connector (hosted
     ///    connectors ride hermetic codex runs whole; only destructive tools are stripped);
     ///  · custom → "" (BYOM has no account to carry connectors).
@@ -391,17 +309,8 @@ nonisolated enum ConnectorRegistry {
         var entries: [Entry] = []
         var gmailWritesLive = false
         switch ModelBackend.current {
-        case .custom:
+        case .custom, .claude:
             return ""
-        case .claude:
-            for attachment in computerUseAttachments().attached {
-                let slug = attachment.server.slug
-                if slug == "gmail", !attachment.readOnly { gmailWritesLive = true }
-                entries.append(Entry(slug: slug, name: displayName(slug: slug),
-                                     note: attachment.readOnly
-                                         ? "read-only in this run"
-                                         : pack(forSlug: slug)?.routerDescription))
-            }
         case .chatgpt:
             var slugs: [String] = []
             if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }

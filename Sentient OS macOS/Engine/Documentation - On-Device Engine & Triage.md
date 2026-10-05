@@ -4,15 +4,17 @@ Everything that runs the on-device model: the LiteRT-LM wrapper around Gemma 4 E
 prompts and verdict parsing (the "bouncer" that decides keep / junk / sensitive), the deterministic PII
 backstop, where the model file lives, and how it gets downloaded during onboarding.
 
-This is the ~90% of compute that never leaves the Mac. Nothing in this folder talks to the network
-except `ModelDownload` (the one-time model fetch from Hugging Face).
+This is the high-volume understanding stage: analysis runs on the Mac rather than uploading each
+source item for inference. It makes rich personal context practical while keeping the first pass
+local. `ModelDownload` fetches the model; `Engine` performs inference on-device. The useful summaries
+are later processed by the user's chosen frontier model, which can be local or hosted.
 
 ## Files
 
 | File | Job |
 |---|---|
 | `Engine.swift` | The `Engine` actor: one native `LiteRTLM.Engine` per batch, `load()` / `generate()` / `reload()` / `unload()`. The only place that imports `LiteRTLM`. |
-| `Triage.swift` | Builds the per-item prompt (file, DM chat, group chat), parses the JSON reply, and maps it to a `Verdict` plus title and summary. Fail-closed. |
+| `Triage.swift` | Builds the per-item prompt (file, DM chat, group chat, Apple Mail, Apple Calendar), parses the JSON reply, and maps it to a `Verdict` plus title and summary. Fail-closed. |
 | `Verdict.swift` | `survivor` / `junk` / `sensitive`. |
 | `PIIScan.swift` | Regex backstop behind the model: SSN, Luhn-valid card number, passport number in a would-be survivor's summary or title drops the whole item as sensitive. |
 | `ModelLocator.swift` | Finds `gemma-4-E4B-it.litertlm` on this Mac (env override in DEBUG → app bundle → Application Support → the repo root in DEBUG). |
@@ -49,18 +51,35 @@ engine, and a hard stop after 4 reloads with no progress). See `Ingestion/Docume
 
 ## Triage: the on-device bouncer (`Triage.swift`)
 
-Every item (a file, a note, or a chat window) becomes one prompt and one JSON reply:
+Files, notes and conversation windows use a summary-first prompt and a JSON reply:
 
 ```
 {"summary":"…","title":"…","junk":true|false}   optionally followed by  ,"sensitive":true
 ```
 
-The model is asked to write the summary FIRST, then judge. Three prompt flavours, all sharing this
-contract so `parse()` / `decide()` are shared:
+The prompt variants preserve attribution and use source-specific privacy rules:
 
 - **File prompt** (files and Apple Notes): judges one document by path, creation date, and either the extracted text or the attached image. Explains that "junk" only means "not worth the knowledge base", never deletion.
 - **DM chat prompt**: one slice of a 1:1 conversation. "Me" is the user; the other party's "I" is never the user. Default to junk; keep only durable life knowledge.
 - **Group chat prompt**: much stricter. Attribution is the whole game: other members' introductions, jobs, wins, and news are never the user's. Deep participation in a discussion is still junk unless "Me" stated a concrete fact about their own life. Every fact in the summary must name whose it is.
+
+- **Apple Mail prompt**: classification first. `decideMail` requires strict JSON with explicit
+  boolean `junk` and `sensitive` fields, plus string `summary` and `title`; missing privacy flags are
+  not recovered. Rejected messages have empty content. A valid keeper then goes through the shared
+  output checks. Invalid output remains retryable in the Mail pipeline.
+- **Apple Calendar prompt**: one native event as untrusted JSON. Keep concrete scheduled commitments,
+  preserve date/status uncertainty, and reject generic holidays and instruction-only text. Medical,
+  intimate, credential-bearing, and other highly private events are dropped in full. Dates alone do
+  not justify a retained summary.
+
+The pipeline calls `decide(_:for:)`. For Apple Calendar, it checks raw input for high-risk identifiers
+and labelled credentials, checks output for credentials, and rejects explicit classifier overrides.
+JSON fields are decoded before these checks. Calendar replies require a complete JSON object with
+string summary/title and explicit boolean junk/sensitive flags; missing or mistyped fields fail closed.
+Sensitive calendar outcomes also discard their title
+and summary in memory. These narrow deterministic checks supplement the model; they are not a
+complete detector for arbitrary secrets or prompt injection. Other sources keep their mixed-content
+policy. Calendar parse failures invalidate the pending snapshot instead of advancing its checkpoint.
 
 Shared privacy rules in every flavour: the summary is kept and may be shared with the user's other AIs,
 so it must omit raw private specifics (card, SSN, passport, account numbers, passwords, exact medical
@@ -69,7 +88,7 @@ few private specifics is kept with those specifics omitted.
 
 **`decide()` is fail-closed**, in this order:
 
-1. Unparseable reply → junk (`reason: .parseFailed`). Nothing is ever leaked by a garbled reply.
+1. Unparseable reply → junk (`reason: .parseFailed`). No knowledge summary is retained from that parse failure.
 2. `sensitive: true` → sensitive.
 3. `junk: true` → junk.
 4. Empty summary → junk (`.emptySummary`).
@@ -80,8 +99,10 @@ few private specifics is kept with those specifics omitted.
 otherwise-valid keeper. `Outcome.reason` lets diagnostics tell "garbled reply" from "genuine junk"
 (a run where ≥20% of items were parse failures emits a Sentry warning; see the Diagnostics doc).
 
-Junk and sensitive store nothing: no summary, no tombstone. Only the lifetime counters
-(`LifetimeStats`) remember that an item was ever looked at.
+Junk and sensitive outcomes do not become knowledge summaries. The pipeline still retains the
+progress needed to avoid reprocessing, and Mail has dedicated checkpoint/retry state. Lifetime
+counters record verdict totals. Do not describe these filters as complete de-identification: useful
+summaries are personal, and narrow pattern checks cannot detect every kind of sensitive content.
 
 ## The PII backstop (`PIIScan.swift`)
 

@@ -11,10 +11,10 @@
 //  the doc below).
 //
 //  Key methods:
-//   - CodexCLI.locateBinary()  → binary discovery (managed install first, then cache/known paths/which)
-//   - install(onLine:)         → run OpenAI's standalone installer (the codex-setup onboarding step;
-//                                it doubles as the updater — CodexSetup.updateIfDue runs it daily)
-//   - installedVersion / latestReleasedVersion / isNewer → the daily update's cheap version pre-check
+//   - CodexCLI.locateBinary()  → select Sentient’s private, pinned CLI
+//   - install(onLine:)         → download and verify the approved package (the onboarding step;
+//                                also repairs a damaged private installation)
+//   - installedVersion / approvedVersion → the private runtime health check
 //   - startLogin / loginStatus → step 2: interactive `codex login` (browser) + the status check
 //   - validate(force:)         → Availability via ping (only a good verdict is cached)
 //   - run(_:)                  → Envelope (blocking JSONL mode)
@@ -24,6 +24,7 @@
 
 import Foundation
 import os
+import Darwin
 
 actor CodexCLI {
 
@@ -97,7 +98,7 @@ actor CodexCLI {
         var cwd: String? = nil                 // the agent's working root (vault/staging dir)
         var addDirs: [String] = []             // extra writable roots beyond cwd
         var webSearch = true                   // native web_search tool — available to EVERY call
-        var includeUserConfig = true           // load the user's ~/.codex config + MCP servers (e.g.
+        var includeUserConfig = true           // load Sentient's private config + MCP servers (e.g.
                                                // their Gmail MCP) for EVERY call. Set false for a
                                                // hermetic run (then we pass --ignore-user-config).
         var bypassApprovals = false            // --dangerously-bypass-approvals-and-sandbox: NO
@@ -217,7 +218,7 @@ actor CodexCLI {
 
         /// The global marketplace catalog ids for the two dedicated-chip connectors — the SAME
         /// for every user (see OpenAI's public `openai/plugins` repo, or
-        /// `~/.codex/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). One source of
+        /// `CODEX_HOME/plugins/cache/openai-curated-remote/<app>/<ver>/.app.json`). One source of
         /// truth: ConnectorRegistry's packs read these, and every recipe strip resolves through
         /// the registry back to them.
         static let gmailCatalogID = "connector_2128aebfecb84f64a069897515042a44"
@@ -268,11 +269,9 @@ actor CodexCLI {
         /// turn/start before the model runs). Thrown by the pre-spawn guard in both spines;
         /// with corpus slicing in place this is a canary that should never fire.
         case inputTooLarge(chars: Int)
-        /// The installed CLI is older than the files in the shared `~/.codex` (a newer codex,
-        /// typically the ChatGPT desktop app, rewrote `models_cache.json` in a schema this binary
-        /// can't read). `autoUpdating` = the binary is our managed install and CodexSetup is
-        /// already updating it; false means the user's own brew/npm codex, which we don't touch.
-        case staleClient(autoUpdating: Bool)
+        /// The pinned client could not read a runtime cache. Repair checks the approved release;
+        /// adopting a newer upstream CLI requires a Sentient update.
+        case staleClient
 
         var description: String {
             // BOTH engines throw this type (ClaudeCLI reuses it), and these lines reach
@@ -292,64 +291,26 @@ actor CodexCLI {
             case .inputTooLarge(let c):           return claude
                 ? "Prompt too large for Claude Code: \(c) chars"
                 : "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
-            case .staleClient(let auto):
-                return auto ? "Codex was out of date. Updating it now; try again in a moment."
-                            : "Codex is out of date and can't read its newer files. Update it, then try again."
+            case .staleClient:
+                return "Codex couldn't read its runtime files. Repair it in Settings; if that persists, update Sentient."
             }
         }
     }
 
     // MARK: Discovery
 
-    private static let pathCacheKey = "codexcli.binaryPath"
-
-    /// Where OpenAI's standalone installer puts the CLI: a symlink into
-    /// `~/.codex/packages/standalone/current/`. The ONE copy Sentient installs and keeps current.
-    static let managedBinaryPath = FileManager.default.homeDirectoryForCurrentUser.path + "/.local/bin/codex"
-
-    /// Is the binary every run resolves to OUR managed install (vs. the user's own brew/npm/nvm
-    /// codex)? The daily updater only ever touches the managed copy: a package-managed codex is
-    /// the user's package manager's business.
-    static var usingManagedBinary: Bool { locateBinary() == managedBinaryPath }
-
-    /// The managed install first (unconditionally), then known locations, then a login-shell
-    /// `which` (GUI apps don't inherit the user's PATH). Discovery results are cached in
-    /// UserDefaults and re-verified on every read.
+    /// The only CLI Sentient adopts. Global, Homebrew and desktop installations stay independent.
+    static var managedBinaryPath: String { CodexRuntime.executable.path }
     static func locateBinary() -> String? {
-        let fm = FileManager.default
-        let home = fm.homeDirectoryForCurrentUser.path
-        // The standalone installer's symlink — the ONE copy our installer keeps current — wins
-        // over everything, INCLUDING the cache: on a Mac that also has a brew/npm codex, a cached
-        // brew path would otherwise field every run with a stale binary while the fresh install
-        // sat unused. `isExecutableFile` resolves the symlink, so a dangling link (e.g. a wiped
-        // `~/.codex/packages`) falls through to the fallbacks instead of being returned.
-        if fm.isExecutableFile(atPath: managedBinaryPath) { return managedBinaryPath }
-        if let cached = UserDefaults.standard.string(forKey: pathCacheKey),
-           fm.isExecutableFile(atPath: cached) {
-            return cached
-        }
-        var known = [
-            "/opt/homebrew/bin/codex",         // brew / npm -g (Apple Silicon)
-            "/usr/local/bin/codex",
-        ]
-        // npm-under-nvm (`npm i -g @openai/codex` with nvm-managed node): the binary lives in
-        // a VERSIONED dir invisible to fixed paths AND to non-interactive shells (nvm inits in
-        // .zshrc). Newest node version first. [MEASURED on Aditya's Mac — the app saw
-        // "notInstalled" for a fully working, logged-in codex.]
-        let nvmBin = "\(home)/.nvm/versions/node"
-        if let versions = try? fm.contentsOfDirectory(atPath: nvmBin) {
-            known += versions.sorted(by: >).map { "\(nvmBin)/\($0)/bin/codex" }
-        }
-        let found = known.first(where: { fm.isExecutableFile(atPath: $0) }) ?? whichViaLoginShell()
-        if let found { UserDefaults.standard.set(found, forKey: pathCacheKey) }
-        return found
+        if CodexRuntimeMigration.isPending, let legacy = CodexRuntimeMigration.legacyBinary { return legacy }
+        return CodexRuntime.cliPresent ? managedBinaryPath : nil
     }
 
     /// `zsh -lic` (INTERACTIVE login shell — `-lc` never sources .zshrc, where nvm/asdf/volta
     /// init). Interactive shells print theme noise, so the output is scanned line-by-line for
     /// something that is actually an executable path. Watchdog-bounded; can't hang.
     /// Internal (not private): ClaudeCLI's discovery runs the same probe for its own binary.
-    static func whichViaLoginShell(_ command: String = "which codex") -> String? {
+    static func whichViaLoginShell(_ command: String) -> String? {
         guard let out = try? execute(binary: "/bin/zsh", args: ["-lic", command],
                                      stdinText: nil, cwd: nil, timeout: 5) else { return nil }
         let fm = FileManager.default
@@ -361,96 +322,33 @@ actor CodexCLI {
 
     // MARK: Install
 
-    /// Install the Codex CLI via OpenAI's official standalone installer (the codex-setup
-    /// onboarding step). Runs `curl … install.sh | CODEX_NON_INTERACTIVE=1 sh` as ONE shell pipeline
-    /// (the `|` only exists inside a shell) and streams every output line to `onLine` (the console +
-    /// the setup UI). The script drops the binary at `~/.local/bin/codex` — the first path
-    /// `locateBinary()` checks. Every pipeline stage must succeed, and the managed binary must
-    /// answer both --version and --help afterward. When the release feed supplied an expected
-    /// version, an older binary is a failed update even if the installer exited successfully.
-    ///
-    /// ⚠️ The sed stage is a working workaround for an UPSTREAM bug [MEASURED 2026-07-08]: GitHub's
-    /// API began serving MINIFIED JSON to requests without an explicit Accept header, and OpenAI's
-    /// installer parses the release JSON line-by-line — so every vanilla `curl … | sh` run now dies
-    /// with "Could not find Codex package or platform npm release assets". Injecting
-    /// `Accept: application/json` into the script's curl calls makes GitHub pretty-print again
-    /// (verified end-to-end); it's harmless on the script's binary downloads. Drop the sed once
-    /// OpenAI fixes install.sh.
     static func install(expectedVersion: String? = nil,
                         onLine: @escaping @Sendable (String) -> Void) async throws -> String {
-        // Survive a slow connection, fail fast on a dead one. The outer curl (the tiny install.sh)
-        // caps at 60s; the sed injects matching resilience into the script's OWN curl calls (the
-        // real binary download): abort only if throughput stays under ~8 KB/s for 30s, so a
-        // stalled transfer dies in seconds instead of burning the whole budget while a slow-but-
-        // moving download keeps going. The outer timeout is generous (15 min) so a genuinely slow
-        // link can finish — the old 300s ceiling was SIGTERM-ing in-progress downloads on slow
-        // connections [MEASURED from install traces, 2026-07-24].
-        let pipeline = #"curl -fsSL --connect-timeout 30 --max-time 60 https://chatgpt.com/codex/install.sh | sed 's|curl -fsSL|curl -fsSL -H "Accept: application/json" --connect-timeout 30 --speed-limit 8192 --speed-time 30|g' | CODEX_NON_INTERACTIVE=1 sh"#
-        // pipefail preserves a failed curl/sed even when the trailing sh receives no script
-        // and exits zero. Pin the destination so inherited installer settings cannot put the
-        // fresh binary somewhere other than the path Sentient will use.
-        let out = try await executeStreaming(binary: "/bin/bash", args: ["-o", "pipefail", "-c", pipeline],
-                                             timeout: 900,
-                                             extraEnv: ["CODEX_INSTALL_DIR": (managedBinaryPath as NSString).deletingLastPathComponent],
-                                             onLine: onLine)
-        UserDefaults.standard.removeObject(forKey: pathCacheKey)   // force a fresh discovery scan
-        guard out.status == 0 else {
-            let detail = out.stderr.isEmpty ? out.stdout : out.stderr
-            let msg = detail.isEmpty
-                ? "The Codex installer failed; check your network connection and try again."
-                : String(detail.trimmingCharacters(in: .whitespacesAndNewlines).prefix(600))
-            throw CLIError.exitFailure(code: out.status, message: msg)
+        if let expectedVersion, expectedVersion != CodexRuntime.release.cli.version {
+            throw CodexRuntime.Failure.invalidPackage
         }
-        guard FileManager.default.isExecutableFile(atPath: managedBinaryPath),
-              let version = await installedVersion(binary: managedBinaryPath),
-              await isRunnable(binary: managedBinaryPath) else {
-            throw CLIError.notAvailable(.notWorking("The installed Codex CLI could not be verified. Try again."))
-        }
-        if let expectedVersion, isNewer(expectedVersion, than: version) {
-            throw CLIError.notAvailable(.notWorking("Codex CLI is still at \(version); version \(expectedVersion) or newer is needed. Try updating again."))
-        }
-        return version
+        try await CodexRuntimeInstall.install(.cli, force: true, onLine: onLine)
+        return CodexRuntime.release.cli.version
     }
 
     // MARK: Login (setup step 2)
 
-    /// Begin the interactive login. Launches `codex login` as a BACKGROUND process: it starts a
-    /// localhost OAuth callback server and opens the user's browser to the OpenAI sign-in, then
-    /// self-exits once the redirect lands and `~/.codex/auth.json` is written. Streams its output to
-    /// `onLine` (the auth URL prints here as a fallback if the browser auto-open ever fails). Returns
-    /// the running Process so the caller can terminate it on cancel/restart. MUST NOT be awaited to
-    /// completion — the flow waits on the user finishing in the browser, then `loginStatus()`.
-    /// Inherits the app's full env + rich PATH (`richEnvironment`) so the browser launch + GUI
-    /// session vars are intact, exactly like a Terminal `codex login`.
-    static func startLogin(onLine: @escaping @Sendable (String) -> Void) throws -> Process {
+    /// Open the browser login against Sentient's private home. Login holds an exclusive lease
+    /// so an account cannot change underneath a running task or connector refresh.
+    /// OAuth URLs and account details are discarded rather than sent to diagnostics.
+    static func startLogin() throws -> Process {
         guard let bin = locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+        let lease = try CodexRuntime.executionLease(for: bin, exclusive: true)
+        if bin == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: bin)
-        proc.arguments = ["login"]
-        proc.environment = richEnvironment(binDir: (bin as NSString).deletingLastPathComponent)
+        proc.terminationHandler = { _ in lease?.unlock() }
+        proc.arguments = CodexRuntime.arguments(["login"], binary: bin)
+        proc.environment = CodexRuntime.environment(richEnvironment(binDir: (bin as NSString).deletingLastPathComponent), binary: bin)
         proc.standardInput = FileHandle.nullDevice
-        let outPipe = Pipe(), errPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = errPipe
-        // Drain both pipes line-by-line until the process exits (EOF). No await: the queues simply
-        // finish on their own when `codex login` ends. Byte-level split keeps multibyte UTF-8 intact.
-        for (pipe, prefix) in [(outPipe, ""), (errPipe, "stderr: ")] {
-            DispatchQueue.global(qos: .utility).async {
-                var buf = Data()
-                let handle = pipe.fileHandleForReading
-                while true {
-                    let chunk = handle.availableData
-                    if chunk.isEmpty { break }
-                    buf.append(chunk)
-                    while let nl = buf.firstIndex(of: 0x0A) {
-                        onLine(prefix + String(decoding: buf[..<nl], as: UTF8.self))
-                        buf = Data(buf[buf.index(after: nl)...])
-                    }
-                }
-                if !buf.isEmpty { onLine(prefix + String(decoding: buf, as: UTF8.self)) }
-            }
-        }
-        do { try proc.run() } catch { throw CLIError.launchFailed("\(error)") }
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { lease?.unlock(); throw CLIError.launchFailed("\(error)") }
         return proc
     }
 
@@ -465,7 +363,7 @@ actor CodexCLI {
     }
 
     /// Step 2 ground-truth check: `codex login status`, with exit status as the primary signal
-    /// and an output scan as a backstop. Reads `~/.codex/auth.json` via the bare HOME environment.
+    /// and an output scan as a backstop. Reads auth.json through the private CODEX_HOME and explicit file credential store.
     static func loginStatus() async -> Bool {
         guard let bin = locateBinary() else { return false }
         guard let out = try? await executeAsync(binary: bin, args: ["login", "status"],
@@ -490,21 +388,8 @@ actor CodexCLI {
         return version
     }
 
-    /// The newest released CLI version, from the same channel feed OpenAI's installer resolves
-    /// against (`releases.openai.com/codex/channels/latest`, `tag_name` = "rust-v0.147.0"). nil
-    /// when offline or the feed's shape changed; the caller then falls back to just running the
-    /// installer, which does its own resolution.
-    static func latestReleasedVersion() async -> String? {
-        guard let url = URL(string: "https://releases.openai.com/codex/channels/latest") else { return nil }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
-        request.httpMethod = "GET"
-        guard let (data, response) = try? await URLSession.shared.data(for: request),
-              (response as? HTTPURLResponse)?.statusCode == 200,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tag = obj["tag_name"] as? String else { return nil }
-        let version = tag.hasPrefix("rust-v") ? String(tag.dropFirst("rust-v".count)) : tag
-        return version.isEmpty ? nil : version
-    }
+    /// Approved by this signed Sentient release; never resolves an upstream "latest" channel.
+    static func approvedVersion() async -> String? { CodexRuntime.release.cli.version }
 
     /// Is `candidate` a newer release than `installed`? Semver-shaped: numeric core compared
     /// component-wise; when cores tie, a final release beats a prerelease ("0.147.0" is newer than
@@ -600,9 +485,10 @@ actor CodexCLI {
     }
 
     private static func backendFingerprint() -> String {
-        guard ModelBackend.current == .custom else { return "chatgpt" }
+        let runtime = "\(locateBinary() ?? "")|\(CodexRuntime.activeHome.path)|\(CodexRuntime.accountIdentity ?? "")"
+        guard ModelBackend.current == .custom else { return "chatgpt|\(runtime)" }
         let p = CustomProvider.current
-        return "custom|\(p.baseURL)|\(p.modelName)"
+        return "custom|\(p.baseURL)|\(p.modelName)|\(runtime)"
     }
 
     /// The Frontier Model Choice pane's "Test Connection" — one call that settles BOTH questions
@@ -788,9 +674,8 @@ actor CodexCLI {
         return env
     }
 
-    /// Computer-use argv for the existing streaming `codex exec` path. ChatGPT receives the
-    /// required native OpenAI MCP client; custom endpoints retain the CUA vision proxy and shim.
-    /// FrontierRun supplies the selected runtime's manual. User config stays isolated while
+    /// Computer-use argv for the shared streaming `codex exec` path and required native MCP client.
+    /// FrontierRun supplies the native runtime's manual. User config stays isolated while
     /// hosted/direct connector policies and the speed preference remain attached to each run.
     /// Computer-use approval bypass is confined to this user-fired path, with one task and STOP.
     /// Optional screenshots precede --skip-git-repo-check to terminate -i's variadic arguments.
@@ -802,19 +687,14 @@ actor CodexCLI {
     /// delete/trash-class tools are stripped from the surface entirely. An id the account
     /// doesn't carry makes the strip an inert no-op (measured), so unlinked chips cost nothing.
     static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
-                               effortArg: String, socketPath: String?) -> [String] {
-        var args = execArguments() + ["--dangerously-bypass-approvals-and-sandbox",
+                               effortArg: String,
+                               providerOverrides: [String] = [],
+                               nativeConfiguration: OpenAIComputerUse.Configuration? = nil) throws -> [String] {
+        var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
-                    "--ignore-user-config"]
-        let computerOverrides: [String]
-        if ComputerUseBackend.current == .openAI {
-            computerOverrides = OpenAIComputerUse.codexOverrides
-        } else {
-            precondition(socketPath != nil, "CUA tasks require the host-owned socket")
-            computerOverrides = CuaDriver.codexOverrides(socketPath: socketPath!)
-        }
-        for override in computerOverrides { args += ["-c", override] }
+                    "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
+        for override in try (nativeConfiguration ?? .resolve()).codexOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
             var hooks: [HostedToolPolicy.Rule] = []
@@ -845,6 +725,7 @@ actor CodexCLI {
         if ModelBackend.current == .custom {
             for override in CustomProvider.current.providerOverrides() { args += ["-c", override] }
         }
+        for override in providerOverrides { args += ["-c", override] }
         if !imagePaths.isEmpty { args += ["-i"] + imagePaths }   // followed by a flag → the variadic stops here
         args += ["--skip-git-repo-check", prompt]
         return args
@@ -853,51 +734,62 @@ actor CodexCLI {
     func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
-        var beganCuaSession = false
-        // The user's speed-vs-intelligence slider (Settings → Proactive & Sidekick) — read fresh
-        // per run, so a change applies to the very next fire with no restart. backendTuned: on the
-        // custom backend the user's endpoint model + its ONE reasoning level drive computer use
-        // (verified end-to-end via OpenRouter 2026-07-24); on ChatGPT, computer use is Plus-gated
-        // but dev tools can still reach this on a free account — same downshift.
+        let backend = ModelBackend.current
+        var nativeTask: UUID?
+        var nativeLease: CodexRuntime.FileLock?
+        defer { nativeLease?.unlock() }
         let (model, effort) = ComputerUseSpeed.current.codexModelAndEffort
-        let (modelID, effortArg) = Self.backendTuned(model: model, effort: effort)
+        let (modelID, effortArg) = backend == .claude ? ClaudeCLI.agentTuned() : Self.backendTuned(model: model, effort: effort)
+        var bridge: ClaudeSubscriptionBridge?
         do {
-            // Same pre-spawn guard as `run` — this spine passes the prompt as ARGV, where an
-            // oversized prompt dies even earlier (ARG_MAX) with an unhelpful spawn error.
-            if prompt.utf8.count > Self.promptByteCap {
-                throw CLIError.inputTooLarge(chars: prompt.utf8.count)
-            }
-            guard let bin = Self.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-            let runtime = ComputerUseBackend.current
-            guard await ComputerUseSetup.instance(for: runtime).ensureInstalled() else {
+            if prompt.utf8.count > Self.promptByteCap { throw CLIError.inputTooLarge(chars: prompt.utf8.count) }
+            guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
                 try Task.checkCancellation()
-                throw CLIError.notAvailable(.notWorking("computer use is not set up; open Permissions & Health"))
+                let error = await ComputerUseSetup.instance(for: .openAI).failure
+                throw error ?? OpenAIComputerUse.RuntimeError.incomplete
             }
             try Task.checkCancellation()
-            var socket: String?
-            switch runtime {
-            case .openAI:
-                break   // ensureInstalled verified the signature and MCP handshake above
-            case .cua:
-                guard let endpoint = await CuaDriverHost.shared.ensureRunning() else {
-                    throw CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
-                }
-                guard await CuaDriverHost.shared.beginAgentSession() else {
-                    throw CLIError.notAvailable(.notWorking("cua-driver session did not start"))
-                }
-                socket = endpoint
-                beganCuaSession = true
+            nativeLease = try await CodexRuntime.sharedRuntimeLease()
+            let nativeConfiguration = try OpenAIComputerUse.Configuration.resolve()
+            nativeTask = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: nativeConfiguration)
+            try Task.checkCancellation()
+            var overrides: [String] = []
+            var environment = nativeConfiguration.clientEnvironment
+            if backend == .claude {
+                guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
+                // Claude supplies the readable progress for this run. Keep one producer:
+                // Codex's prompt echo otherwise leaves the notch in its hidden `user` section
+                // while Claude is narrating and the native tools are already working.
+                onLine("codex")
+                let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName })
+                let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
+                    timeout: timeout, namespaces: namespaces, onProgress: onLine)
+                bridge = relay
+                let configuration = try await relay.start()
+                overrides = configuration.overrides
+                environment.merge(configuration.environment) { _, new in new }
+            }
+            let args = try Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
+                modelID: modelID, effortArg: effortArg, providerOverrides: overrides,
+                nativeConfiguration: nativeConfiguration)
+            let modelTag = backend == .custom ? "custom" : modelID
+            Log("codex exec: start feature=computer runtime=openAI model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
+            let ownedBridge = bridge
+            let out = try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                return try await Self.executeStreaming(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
+                    extraEnv: environment) { line in
+                        if backend != .claude { onLine(line) }
+                    }
+            } onCancel: {
+                // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
+                Task { await ownedBridge?.stop() }
             }
             try Task.checkCancellation()
-
-            // The selected runtime is registered per run. User plugin configuration cannot
-            // replace its tool connection; hosted and direct connector policy is preserved.
-            let args = Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
-                                           modelID: modelID, effortArg: effortArg,
-                                           socketPath: socket)
-            let modelTag = ModelBackend.current == .custom ? "custom" : modelID
-            Log("codex exec: start feature=computer runtime=\(runtime.rawValue) model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
-            let out = try await Self.executeStreaming(binary: bin, args: args, timeout: timeout, onLine: onLine)
+            if let error = await bridge?.failure { throw error }
+            await bridge?.stop()
+            if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
+            nativeTask = nil
             Self.noteStaleSignatureIfPresent(out.stderr)
             guard out.status == 0 else {
                 let detail = Self.failureDetail(out)
@@ -906,22 +798,15 @@ actor CodexCLI {
             }
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
-            if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
-            beganCuaSession = false
             return out.stdout.isEmpty ? out.stderr : out.stdout
         } catch {
-            if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
-            // §7.9: computer-use is the full-capability path (bypass-sandbox, user-fired), so a
-            // genuine failure is worth a structured event. Case name only — and never on a cancelled
-            // Task (the user's STOP kills codex → non-zero exit, which is not a failure; field-found
-            // polluting Sentry 2026-07-12).
-            if !Task.isCancelled {
-                let ms = Int(Date().timeIntervalSince(t0) * 1000)
-                Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
-                emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
-                                 modelID: modelID, effort: effortArg, resumed: false, durationMS: ms,
-                                 timeoutS: Int(timeout))
-            }
+            await bridge?.stop()
+            if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
+            if Task.isCancelled { throw CancellationError() }
+            let ms = Int(Date().timeIntervalSince(t0) * 1000)
+            Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
+            emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
+                modelID: modelID, effort: effortArg, resumed: false, durationMS: ms, timeoutS: Int(timeout))
             throw error
         }
     }
@@ -966,11 +851,8 @@ actor CodexCLI {
             (caseName, level) = ("exitFailure", .error)
             extra["exit_code"] = String(code)
         case CLIError.badEnvelope:  (caseName, level) = ("badEnvelope", .error)
-        case CLIError.staleClient(let auto):
-            // Environment drift (a newer codex rewrote the shared cache), self-healed when the
-            // binary is ours — counted so we can see how often the field hits it.
+        case CLIError.staleClient:
             (caseName, level) = ("staleClient", .warning)
-            extra["auto_updating"] = String(auto)
         case CLIError.inputTooLarge(let chars):
             // The canary: every prompt path is byte-budgeted, so this should stay at zero.
             (caseName, level) = ("inputTooLarge", .error)
@@ -1230,15 +1112,12 @@ actor CodexCLI {
         Task { @MainActor in CodexSetup.shared.noteStaleSignal() }
     }
 
-    /// Classify a FAILED run as a stale client if any of `texts` carries the signature, and kick
-    /// the repair: CodexSetup updates the managed binary right away (a no-op for a brew/npm
-    /// codex, which stays the user's to update) and raises the health rung so the home and
-    /// Settings say what happened. Returns nil when it's some other failure.
+    /// Flag a failed run with the cache signature and check the approved private package.
+    /// Returns nil when the failure has another cause.
     private static func staleClientError(in texts: String...) -> CLIError? {
         guard texts.contains(where: isStaleClientSignature) else { return nil }
-        let managed = usingManagedBinary
         Task { @MainActor in await CodexSetup.shared.repairStaleClient() }   // logs there
-        return .staleClient(autoUpdating: managed)
+        return .staleClient
     }
 
     private static func parseEnvelope(_ out: ExecResult, durationMS: Int) throws -> Envelope {
@@ -1390,14 +1269,19 @@ actor CodexCLI {
     static func executeAsync(binary: String, args: [String], stdinText: String?,
                              cwd: String?, timeout: TimeInterval,
                              extraEnv: [String: String] = [:],
+                             includeCustomProviderKey: Bool = true,
+                             terminationGrace: TimeInterval = 1,
+                             retainStdoutLine: (@Sendable (String) -> Bool)? = nil,
                              onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
-        let holder = ProcHolder()
+        let holder = ProcHolder(terminationGrace: terminationGrace)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
                     do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
                                                             cwd: cwd, timeout: timeout, extraEnv: extraEnv,
+                                                            includeCustomProviderKey: includeCustomProviderKey,
+                                                            retainStdoutLine: retainStdoutLine,
                                                             onStdoutLine: onStdoutLine, procHolder: holder)) }
                     catch { cont.resume(throwing: error) }
                 }
@@ -1406,16 +1290,23 @@ actor CodexCLI {
     }
 
     /// Blocking runner (call off-main). GUI-spawned `Process` works with a SANITIZED env —
-    /// just HOME/USER + the system PATH and the absolute binary path; codex's auth lives in
-    /// ~/.codex (resolved via HOME), no TTY needed (measured — receipts in the CodexCLI doc).
+    /// HOME/USER + the system PATH and the absolute binary path. Codex additionally receives
+    /// the private CODEX_HOME and explicit credential settings; no TTY is needed.
     private static func execute(binary: String, args: [String], stdinText: String?,
                                 cwd: String?, timeout: TimeInterval,
                                 extraEnv: [String: String] = [:],
+                                includeCustomProviderKey: Bool = true,
+                                retainStdoutLine: (@Sendable (String) -> Bool)? = nil,
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,
                                 procHolder: ProcHolder? = nil) throws -> ExecResult {
+        let lease = try CodexRuntime.executionLease(for: binary, cancelled: { procHolder?.isCancelled == true })
+        defer { lease?.unlock() }
+        let binary = CodexRuntime.binaryAfterLease(binary)
+        if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
+        if procHolder?.isCancelled == true { throw CancellationError() }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binary)
-        proc.arguments = args
+        proc.arguments = CodexRuntime.arguments(args, binary: binary)
         // The binary's OWN directory leads the sanitized PATH: npm installs are
         // `#!/usr/bin/env node` shims, and (in the nvm layout) `node` sits right next to
         // them — without this, the shim exec-fails even when found.
@@ -1429,12 +1320,15 @@ actor CodexCLI {
         // the pane's pre-activation Test Connection probes the custom path while ChatGPT is
         // still the active backend. (codex hard-errors on an unset/empty env_key var; a value
         // here also blocks the ChatGPT-token fallthrough on keyless local servers.)
-        env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
+        if includeCustomProviderKey { env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue }
         env.merge(extraEnv) { _, new in new }
-        proc.environment = env
+        proc.environment = CodexRuntime.environment(env, binary: binary)
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
+        // STOP or a failed launch can close stdin while a large image prompt is still writing.
+        // Treat that as a failed write on this owned pipe, never SIGPIPE in the app process.
+        _ = fcntl(inPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         proc.standardInput = inPipe
         proc.standardOutput = outPipe
         proc.standardError = errPipe
@@ -1452,7 +1346,7 @@ actor CodexCLI {
         drained.enter()
         DispatchQueue.global(qos: .utility).async {
             let handle = outPipe.fileHandleForReading
-            guard let onStdoutLine else {
+            guard onStdoutLine != nil || retainStdoutLine != nil else {
                 outDrain.set(handle.readDataToEndOfFile())     // no streaming → drain whole
                 drained.leave(); return
             }
@@ -1460,18 +1354,30 @@ actor CodexCLI {
             while true {
                 let chunk = handle.availableData
                 if chunk.isEmpty { break }
-                buf.append(chunk); all.append(chunk)
+                buf.append(chunk)
+                if retainStdoutLine == nil { all.append(chunk) }
                 while let nl = buf.firstIndex(of: 0x0A) {
-                    onStdoutLine(String(decoding: buf[..<nl], as: UTF8.self))
+                    let line = String(decoding: buf[..<nl], as: UTF8.self)
+                    onStdoutLine?(line)
+                    if retainStdoutLine?(line) == true { all.append(Data((line + "\n").utf8)) }
                     buf = Data(buf[buf.index(after: nl)...])
                 }
             }
-            if !buf.isEmpty { onStdoutLine(String(decoding: buf, as: UTF8.self)) }
+            if !buf.isEmpty {
+                let line = String(decoding: buf, as: UTF8.self)
+                onStdoutLine?(line)
+                if retainStdoutLine?(line) == true { all.append(buf) }
+            }
             outDrain.set(all)
             drained.leave()
         }
 
-        do { try proc.run() } catch { throw CLIError.launchFailed("\(error)") }
+        do { try proc.run() } catch {
+            try? inPipe.fileHandleForWriting.close()
+            try? outPipe.fileHandleForWriting.close()
+            try? errPipe.fileHandleForWriting.close()
+            throw CLIError.launchFailed("\(error)")
+        }
         procHolder?.set(proc)   // expose to the cancellation handler (a card's STOP)
 
         // Feed the prompt over stdin on its own queue: prompts can be hundreds of KB (whole
@@ -1487,11 +1393,12 @@ actor CodexCLI {
         let timedOut = OSAllocatedUnfairLock(initialState: false)
         let watchdog = DispatchWorkItem { [weak proc] in
             timedOut.withLock { $0 = true }
-            proc?.terminate()
+            if let procHolder { procHolder.terminate() } else { proc?.terminate() }
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
         proc.waitUntilExit()
+        procHolder?.clear()
         watchdog.cancel()
         drained.wait()
 
@@ -1512,8 +1419,24 @@ actor CodexCLI {
     private final class ProcHolder: @unchecked Sendable {
         private let lock = NSLock()
         private var proc: Process?
-        func set(_ p: Process) { lock.lock(); proc = p; lock.unlock() }
-        func terminate() { lock.lock(); let p = proc; lock.unlock(); if let p, p.isRunning { p.terminate() } }
+        private var cancelled = false
+        var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
+        private let terminationGrace: TimeInterval
+        init(terminationGrace: TimeInterval = 1) { self.terminationGrace = terminationGrace }
+        func set(_ p: Process) {
+            lock.lock(); proc = p; let shouldStop = cancelled; lock.unlock()
+            if shouldStop { terminate() }
+        }
+        func clear() { lock.lock(); proc = nil; lock.unlock() }
+        func terminate() {
+            lock.lock(); cancelled = true; let p = proc; lock.unlock()
+            guard let p, p.isRunning else { return }
+            p.terminate()
+            // A provider or MCP client must not hold STOP indefinitely by ignoring SIGTERM.
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + terminationGrace) { [weak p] in
+                if let p, p.isRunning { kill(p.processIdentifier, SIGKILL) }
+            }
+        }
     }
 
     /// Streaming sibling of `execute`: same env / PATH / watchdog, but it pumps each output LINE
@@ -1529,15 +1452,25 @@ actor CodexCLI {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
+                let lease: CodexRuntime.FileLock?
+                let selected = binary
+                let binary: String
+                do {
+                    lease = try CodexRuntime.executionLease(for: selected, cancelled: { holder.isCancelled })
+                    binary = CodexRuntime.binaryAfterLease(selected)
+                    if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
+                    if holder.isCancelled { throw CancellationError() }
+                } catch { cont.resume(throwing: error); return }
+                defer { lease?.unlock() }
                 let proc = Process()
                 proc.executableURL = URL(fileURLWithPath: binary)
-                proc.arguments = args
+                proc.arguments = CodexRuntime.arguments(args, binary: binary)
                 // Full inherited env + rich PATH (see richEnvironment): computer use needs the real
                 // $TMPDIR + GUI session vars (the cua daemon's socket lives under the per-user temp
                 // dir), and so does `codex login`'s browser launch — the bare env won't do.
                 var env = richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
                 env.merge(extraEnv) { _, new in new }
-                proc.environment = env
+                proc.environment = CodexRuntime.environment(env, binary: binary)
 
                 let outPipe = Pipe(), errPipe = Pipe()
                 proc.standardInput = FileHandle.nullDevice
@@ -1545,6 +1478,13 @@ actor CodexCLI {
                 proc.standardError = errPipe
 
                 let outSink = LineSink(), errSink = LineSink()
+                // Codex can warn when it cannot sweep an old arg0 helper directory, then
+                // continue normally. Keep stderr for diagnostics, but do not show this one
+                // startup cleanup warning in live computer-use progress.
+                let showLine: @Sendable (String) -> Void = { line in
+                    guard !line.hasPrefix("stderr: WARNING: failed to clean up stale arg0 temp dirs:") else { return }
+                    onLine(line)
+                }
                 let group = DispatchGroup()
                 for (pipe, sink, prefix) in [(outPipe, outSink, ""), (errPipe, errSink, "stderr: ")] {
                     group.enter()
@@ -1559,28 +1499,33 @@ actor CodexCLI {
                                 let line = String(decoding: buf[..<nl], as: UTF8.self)
                                 buf = Data(buf[buf.index(after: nl)...])   // fresh 0-based remainder
                                 sink.append(line + "\n")
-                                onLine(prefix + line)
+                                showLine(prefix + line)
                             }
                         }
                         if !buf.isEmpty {                          // trailing partial line (no newline)
                             let line = String(decoding: buf, as: UTF8.self)
                             sink.append(line)
-                            onLine(prefix + line)
+                            showLine(prefix + line)
                         }
                         group.leave()
                     }
                 }
 
-                do { try proc.run() } catch { cont.resume(throwing: CLIError.launchFailed("\(error)")); return }
+                do { try proc.run() } catch {
+                    try? outPipe.fileHandleForWriting.close()
+                    try? errPipe.fileHandleForWriting.close()
+                    cont.resume(throwing: CLIError.launchFailed("\(error)")); return
+                }
                 holder.set(proc)        // expose to the cancellation handler (STOP)
 
                 let timedOut = OSAllocatedUnfairLock(initialState: false)
-                let watchdog = DispatchWorkItem { [weak proc] in
-                    timedOut.withLock { $0 = true }; proc?.terminate()
+                let watchdog = DispatchWorkItem {
+                    timedOut.withLock { $0 = true }; holder.terminate()
                 }
                 DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
                 proc.waitUntilExit()
+                holder.clear()
                 watchdog.cancel()
                 group.wait()
 

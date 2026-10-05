@@ -7,7 +7,7 @@
 //  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
-//    Done       → trusts the user, selects the source, and dismisses without a probe.
+//    Done       → Gmail reads and saves the connected email address; Calendar saves selection.
 //    ✕ (top-left) → closes without saving.
 //  Already connected → "Stop reading …" clears selection, not the provider connection.
 //
@@ -27,12 +27,12 @@ struct CloudConnectSheet: View {
         var connectTitle: String { self == .gmail ? "Connect Gmail" : "Connect Calendar" }
         var bullets: [(icon: String, text: String)] {
             let claude = ModelBackend.current == .claude
-            let reader = claude ? "Your Claude" : "Your ChatGPT"
+            let reader = claude ? "your Claude" : "your ChatGPT"
             let page = claude ? "Claude's page" : "OpenAI's page"
-            return [("icloud.slash", self == .gmail ? "\(reader) reads your email, never our servers"
-                                                    : "\(reader) reads your calendar, never our servers"),
+            return [("person.crop.circle", self == .gmail ? "Read email through \(reader)"
+                                                          : "Read calendar through \(reader)"),
                     ("link", "Link your Google account on \(page)"),
-                    ("lock", "Sentient never sees your password")]
+                    ("lock", "Sign in directly with your provider")]
         }
         var connectedLine: String { self == .gmail ? "Gmail selected" : "Calendar selected" }
         var stopLine: String { self == .gmail ? "Stop reading Gmail" : "Stop reading Google Calendar" }
@@ -50,6 +50,9 @@ struct CloudConnectSheet: View {
 
     private enum Phase { case idle, connected }
     @State private var openedConnectorPage = false
+    @State private var checkingEmail = false
+    @State private var emailCheck: Task<Void, Never>?
+    @State private var emailCheckError: String?
     @State private var phase: Phase
 
     init(_ service: Service) {
@@ -84,8 +87,14 @@ struct CloudConnectSheet: View {
             }
             .padding(.top, 14)
 
-            connectButton.padding(.top, 26)
-            doneButton.padding(.top, 10)
+            if service == .gmail {
+                Text(MailAccountCollection.storageDisclosure)
+                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
+            }
+
+            connectButton.padding(.top, 26).disabled(checkingEmail)
+            doneButton.padding(.top, 10).disabled(checkingEmail)
 
             statusLine
                 .padding(.top, 14)
@@ -101,6 +110,7 @@ struct CloudConnectSheet: View {
         .background(Theme.bg)
         .overlay(alignment: .topLeading) { closeButton.padding(12) }
         .onChange(of: backendRaw) { dismiss() }
+        .onDisappear { emailCheck?.cancel() }
     }
 
     // MARK: - The two buttons (+ the ✕)
@@ -126,7 +136,7 @@ struct CloudConnectSheet: View {
     private var doneButton: some View {
         Button(action: done) {
             HStack(spacing: 7) {
-                Text("Done")
+                Text(checkingEmail ? "Checking…" : "Done")
                     .font(.system(size: 13.5, weight: .medium))
             }
             .foregroundStyle(Theme.Ink.bright)
@@ -146,11 +156,14 @@ struct CloudConnectSheet: View {
 
     private var statusLine: some View {
         Group {
-            switch phase {
-            case .connected:
+            if checkingEmail {
+                Text("Checking your connected email…").foregroundStyle(Theme.Ink.body)
+            } else if let emailCheckError {
+                Text(emailCheckError).foregroundStyle(Theme.Ink.amber)
+            } else if phase == .connected {
                 Label(service.connectedLine, systemImage: "checkmark.seal.fill")
                     .foregroundStyle(Theme.Ink.green)
-            default:
+            } else {
                 Text("Linked it on the page? Press Done to use it in Sentient.")
                     .foregroundStyle(Theme.faint)
             }
@@ -168,9 +181,28 @@ struct CloudConnectSheet: View {
             .foregroundStyle(Theme.Ink.deepMuted)
     }
 
-    // MARK: - Done: accept the user's confirmation
+    // MARK: - Done: collect the address and select the source
 
     private func done() {
+        if service == .gmail {
+            guard !checkingEmail, let engine = MailAccount.Engine(rawValue: ModelBackend.current.rawValue) else { return }
+            checkingEmail = true; emailCheckError = nil
+            emailCheck = Task {
+                defer { checkingEmail = false }
+                do {
+                    let result = try await MailAccountCollection.collect(engine: engine, provider: .gmail)
+                    try Task.checkCancellation()
+                    guard ModelBackend.current.rawValue == engine.rawValue else { return }
+                    if result.connectionAvailable { confirmDone() } else { dismiss() }
+                } catch is CancellationError { return }
+                catch { emailCheckError = (error as? MailAccountError)?.errorDescription ?? "Account details couldn't be saved. Please try again." }
+            }
+            return
+        }
+        confirmDone()
+    }
+
+    private func confirmDone() {
         if !connected { Analytics.signal("Source.connected", parameters: ["source": service.analyticsName]) }
         // Keep the production connection key as the user's declaration for task routing.
         ConnectorCensus.confirmSelection(slug: service == .gmail ? "gmail" : "google-calendar",

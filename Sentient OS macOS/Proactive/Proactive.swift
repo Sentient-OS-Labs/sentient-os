@@ -69,7 +69,8 @@ actor Proactive {
     static func recent(from notes: [CloudNote], now: Date = Date()) -> [CloudNote] {
         let cutoff = now.addingTimeInterval(-Double(lookbackDays) * 86_400)
         func itemDate(_ n: CloudNote) -> Date { n.itemDate ?? .distantPast }
-        let windowed = notes.filter { itemDate($0) >= cutoff }.sorted { itemDate($0) > itemDate($1) }
+        let windowed = notes.filter { itemDate($0) >= cutoff && ($0.kind != .appleMail || itemDate($0) <= now) }
+            .sorted { itemDate($0) > itemDate($1) }
         let df = CorpusSlicer.dateFormatter()
         var bytes = 0
         for (i, n) in windowed.enumerated() {
@@ -111,7 +112,8 @@ actor Proactive {
             let (loc, src) = VaultGenerator.locSrc(kind: n.kind, folder: n.folder, sourceID: n.sourceID)
             let when = n.itemDate.map { df.string(from: $0) } ?? "undated"
             let title = (n.title?.isEmpty == false) ? n.title! : "(untitled)"
-            return "#\(i + 1) · [\(src)] \(loc) · \(when)\n\(title) — \(n.text)"
+            let reference = n.kind == .appleMail ? " · local reference \(n.sourceID)" : ""
+            return "#\(i + 1) · [\(src)] \(loc) · \(when)\(reference)\n\(title) — \(n.text)"
         }.joined(separator: "\n\n")
     }
 
@@ -235,9 +237,10 @@ actor Proactive {
         // The user's LIVE calendar (last 7 days + next 24h, ALL events), pre-fetched as text so PART 1
         // stays tool-free/hermetic. Only present when Calendar is connected (CalendarConnect.fetch…).
         let calendarBlock: String = {
-            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return "" }
-            if calendarContextScoped { return CalendarContext.promptBlock(ctx) }
-            return """
+            let localPolicy = recent.contains { $0.kind == .appleCalendar } ? CalendarContext.localSnapshotPolicy : ""
+            guard let ctx = calendarContext?.trimmingCharacters(in: .whitespacesAndNewlines), !ctx.isEmpty else { return localPolicy }
+            if calendarContextScoped { return localPolicy + CalendarContext.promptBlock(ctx) }
+            return localPolicy + """
 
             ## THE USER'S LIVE CALENDAR (every event — last 7 days + next 24 hours)
             This is the user's actual calendar right now (not a summary). Use it to ground \

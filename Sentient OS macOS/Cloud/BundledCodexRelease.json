@@ -1,0 +1,1274 @@
+{
+  "target": "aarch64-apple-darwin",
+  "helperBuild": 1001365,
+  "cli": {
+    "version": "0.160.0",
+    "filename": "codex-package-0.160.0-aarch64-apple-darwin.tar.gz",
+    "bytes": 129976298,
+    "sha256": "007df41b607dbbc8d204b9746ce7fed2d4ce6c813f44c32ceee54175ca796525",
+    "files": [
+      {
+        "path": "bin/codex",
+        "bytes": 241555024,
+        "sha256": "112fae7a5a1223e673c8a1791d32338f37df8b527ff1159bb8adac6c4dbf1b4b",
+        "executable": true
+      },
+      {
+        "path": "bin/codex-code-mode-host",
+        "bytes": 65391216,
+        "sha256": "679eedaea70529aa1cffc9bc0a0788c186412663544fa76c09d63b57f383a65a",
+        "executable": true
+      },
+      {
+        "path": "codex-package.json",
+        "bytes": 200,
+        "sha256": "404c4c935bf9b7a57fc02b6f0d09ba6b7bbbf15cf14286fc017de2a6c01cab47",
+        "executable": false
+      },
+      {
+        "path": "codex-path/rg",
+        "bytes": 4030432,
+        "sha256": "7c7d5b09c3a57de864500c65dc2e9c4d2a5e96a3fc7b7d5318480c19887a739b",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/NOTICE.md",
+        "bytes": 2403,
+        "sha256": "40097a1799441051aa0b6645cdc819cceb19be73cdd265eb602aa2b15e0b1f48",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/bin/codex-voice-host",
+        "bytes": 9900112,
+        "sha256": "e408413b79d76e518966046ce1d7758523c606844269fe4dd56446bed80c1062",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libffi.8.dylib",
+        "bytes": 136768,
+        "sha256": "3dfe23b471423eb61bf38785c21ddb7054c5be1f87f87fbed7aa8a8c91e3bde0",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgio-2.0.0.dylib",
+        "bytes": 1866272,
+        "sha256": "b0c1b06de1deef21fde623c38a604cf413b1d607dda85644e296fb6d97067c39",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libglib-2.0.0.dylib",
+        "bytes": 1310992,
+        "sha256": "65a0785497ed134d79284c08118d8bba560f7f60e20682debe4ee12e848a5f8c",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgmodule-2.0.0.dylib",
+        "bytes": 68912,
+        "sha256": "3b4b70cdd569c088c28d6618b330d1acdc0fe456cf34267525c594f89e5dae84",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgobject-2.0.0.dylib",
+        "bytes": 403088,
+        "sha256": "ae78667a1a328528169ade0b18aa4ef547ce6b5f70db891781db8dab95ac46a1",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgstapp-1.0.0.dylib",
+        "bytes": 152608,
+        "sha256": "04d8b371136a375f1efe0af61d18a7605a8556b80599b2cfa0c91a5a235a43e4",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgstaudio-1.0.0.dylib",
+        "bytes": 530400,
+        "sha256": "3fa362d9b53ef65993108a7fdc88471086e95012f5de4cb35ab37991490cfb60",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgstbase-1.0.0.dylib",
+        "bytes": 505968,
+        "sha256": "437beaf6d2f2b1204a58d987d0698fd8c1c796a6c341f25c8a7a797b0e045540",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgstnet-1.0.0.dylib",
+        "bytes": 117008,
+        "sha256": "5173345f4b6ab9fa75ca731c8fe94ae187d6ac395eb213844312a04218924e3e",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgstpbutils-1.0.0.dylib",
+        "bytes": 309856,
+        "sha256": "e3f9bb0e56280e1572267f2cf482cd26b5341cecae4cc279e2d1dd2b6d80920c",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgstreamer-1.0.0.dylib",
+        "bytes": 1304704,
+        "sha256": "0e6826b74f874848e8a0e37fdcb7f5061abc711edfb802587771c5dc1c399f1b",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgstrtp-1.0.0.dylib",
+        "bytes": 205696,
+        "sha256": "fd50798327e0f20605c02ff133a3ca4583ebb8cf13f082205360da8b07389209",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgsttag-1.0.0.dylib",
+        "bytes": 283696,
+        "sha256": "3b40bd0003b56507d701d3c4111ee5b8c58be3a2dcaf6da9e0a30498611222bc",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libgstvideo-1.0.0.dylib",
+        "bytes": 903664,
+        "sha256": "ae8adbb687f26decf3c685265e595f1649769e49202e38b6854f1debdc06d363",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libintl.8.dylib",
+        "bytes": 50112,
+        "sha256": "d9ee5a31754b382365628fad50df33b6111ad84e133d6f141e73822611c9f727",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libopus.0.dylib",
+        "bytes": 504080,
+        "sha256": "c51f552406b80e7026659f77902488eea4ddad101af84f244cfe4912e90bccb2",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libpcre2-8.0.dylib",
+        "bytes": 456816,
+        "sha256": "ce76aa5a13b32e8d8d8ddfd723f519e025e028b53250f3e11a90df39ec473e53",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/lib/libz.1.dylib",
+        "bytes": 123312,
+        "sha256": "d80d2b42ec19b265c361d5bba2070c29c38a6ef389ffecd87822e248fc700993",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/licenses/LGPL-2.1.txt",
+        "bytes": 26431,
+        "sha256": "ad2eec519ebd4b5df86ea84dff24ae3bfa2edea846a703b58902dd221ae375db",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/licenses/Opus.txt",
+        "bytes": 1945,
+        "sha256": "01e1167d54a096d123cf6dfbbeb19587278845c6481d2d66d545669846079551",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/licenses/PCRE2.md",
+        "bytes": 4011,
+        "sha256": "197d8a73ffee0d6b09adba2f9c677b5f5aede24edf89258a68e48248d010d811",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/licenses/libffi.txt",
+        "bytes": 1132,
+        "sha256": "17b64dc60f3b6897a60f971e288b973f655c2edcdf08b25f3c3dd5549857881c",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/licenses/proxy-libintl.txt",
+        "bytes": 25292,
+        "sha256": "d245807f90032872d1438d741ed21e2490e1175dc8aa3afa5ddb6c8e529b58e5",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/licenses/sljit.txt",
+        "bytes": 1444,
+        "sha256": "5f216505c0f6ea3273caec89e766eef93cdeb7bbb0c429f9360116d7c938feeb",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/licenses/zlib.txt",
+        "bytes": 1002,
+        "sha256": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/manifest.json",
+        "bytes": 4637,
+        "sha256": "dcf75f68cd3d1e94e557f80998dd1a707283dc2a9799c9c14c5d46aa6e158909",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/voice/plugins/libgstapp.dylib",
+        "bytes": 49872,
+        "sha256": "86a4f96e8ecc4802777eec36391105226976dce1a80ce68e561989aa83314e9d",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/plugins/libgstaudioconvert.dylib",
+        "bytes": 93824,
+        "sha256": "4c85c9ea1568cf778f8f1365979cc8383376bb2a4630768de24eb66a1b254c52",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/plugins/libgstaudioresample.dylib",
+        "bytes": 91840,
+        "sha256": "757a61f900ed50c0a51ec9928c4ca0b27798ff6b0a3a235329d240faedd438c1",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/plugins/libgstcoreelements.dylib",
+        "bytes": 446608,
+        "sha256": "a2e96bac9f9a88712a94320d9017077346f212e77c4fc4b20f02f23c3ee6ff49",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/plugins/libgstopus.dylib",
+        "bytes": 131680,
+        "sha256": "42eac3b57ef0ec6de84c9aed32453b07482294738345062f4699ec9e0454c867",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/plugins/libgstrtp.dylib",
+        "bytes": 673888,
+        "sha256": "591b36944f84d8740b2813ff7bee74b15fdd364b5ac3351bd40c91a498d7f54b",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/plugins/libgstrtpmanager.dylib",
+        "bytes": 527568,
+        "sha256": "5109cff21697ce04c93ea822577aac3bcb0fb659a53ea32f332f10ca44c0496e",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/runtime.json",
+        "bytes": 14915,
+        "sha256": "2a2e60d93e82a335039dc5a08a26963ca853f2238e927c2498d76dc2466f7d74",
+        "executable": true
+      },
+      {
+        "path": "codex-resources/voice/sources.json",
+        "bytes": 4911,
+        "sha256": "e2f6b124f6277e7c3c4f5c7cc8830c66190f671ad65e972bb2cc9507dbfcb937",
+        "executable": false
+      },
+      {
+        "path": "codex-resources/zsh/bin/zsh",
+        "bytes": 754208,
+        "sha256": "d715e06edcf1661edb2e7767d65fbd1b44af505edfb217281b701f0a6ae93b15",
+        "executable": true
+      }
+    ]
+  },
+  "helper": {
+    "version": "26.929.1001365",
+    "filename": "computer-use-26.929.1001365-arm64.zip",
+    "bytes": 35881436,
+    "sha256": "553b6fa2f54074ea5f44a85347d4ee7438e7c5ee06e01a21b5405c430cab9195",
+    "files": [
+      {
+        "path": "Contents/Info.plist",
+        "bytes": 2474,
+        "sha256": "95039f1a805fa7b87966c713fe4ae762c4098b9bc07813d5036ea76253de8c46",
+        "executable": false
+      },
+      {
+        "path": "Contents/MacOS/SkyComputerUseService",
+        "bytes": 24509440,
+        "sha256": "fa5b5d685f550af82902cff1a345db558a1da3eb526cf78cd4659fa0dcde01a5",
+        "executable": true
+      },
+      {
+        "path": "Contents/PkgInfo",
+        "bytes": 8,
+        "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Assets.car",
+        "bytes": 3281976,
+        "sha256": "1355abc14dc95e88073a8fc75f686590c14bd51ea263b7a3e45508b511b6e2a7",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/BUILD.bazel",
+        "bytes": 3306,
+        "sha256": "c6a5dc12cc866633a3dca9782e4d5d5aeb4796091bed3b30c1e300648ea9c81a",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/CUAAppIcon.icns",
+        "bytes": 80252,
+        "sha256": "2c19550c56036c0bdd8e4fa791a215e12b91d84261f9f0df9cff2187d005837c",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_Appshot.bundle/Contents/Info.plist",
+        "bytes": 1250,
+        "sha256": "ecf4ee720319f71a810ab73441530e842b1ac20094a6075a191b3e375e01bba5",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_Appshot.bundle/Contents/Resources/Appshot.wav",
+        "bytes": 373904,
+        "sha256": "f44a8d748c1bc44c780a78d4e5188b3652cf088ed5aedc10c170b5e90af3f9c1",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_Appshot.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 2444,
+        "sha256": "cf54c35fa89615431d8fe0701bf2e7e7c5e9dc784173fc6b865aa731f1e10638",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Info.plist",
+        "bytes": 1258,
+        "sha256": "353fec505227884bd9b3aa9cfa03626f5b4e28d37cff3d66dea5dd010cfe4929",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/AppleMusic.md",
+        "bytes": 1260,
+        "sha256": "9bddb86ceac45973489c0c704ed163b2ef55bb2b4cb044da4810ea71f4da1a19",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Clock.md",
+        "bytes": 3610,
+        "sha256": "0b986d7fb6ef16e4cac24ce5de4adc37a0dd82981030b7ab648402c9a2e72c23",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Notion.md",
+        "bytes": 2206,
+        "sha256": "80669d19bb799ea90649c46dfcd77d404fa1960297519640b50ac57ad81969f7",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Numbers.md",
+        "bytes": 1017,
+        "sha256": "a4e07c2c50d233b22f6cabcac0a301474d5317d8c763e9287cdd5763ef34c1bc",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Slack.md",
+        "bytes": 1380,
+        "sha256": "8eb94654ac7d6bf90a75b769a36e8591c8a4f0c5af774045f9499db9b5ed434a",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Spotify.md",
+        "bytes": 828,
+        "sha256": "bcdfc5d2087e88baa55eef3fd8345a988c15bffe74701631bb5239780fd7b99f",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/iPhone Mirroring.md",
+        "bytes": 275,
+        "sha256": "a4f39b49aa6400d1af1657d53de1d7cf6b0f093563704136730d84f07e458ab0",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/Assets.car",
+        "bytes": 21864,
+        "sha256": "203edb9ae35164b53576dfff4161eb15042bfda81e1b36c4cade8f885863a80a",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_00.png",
+        "bytes": 18693,
+        "sha256": "d190e7c5d08fe56320c7141de1f3e1422790a22cb3ac002858a124c36ea96a1f",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_01.png",
+        "bytes": 18693,
+        "sha256": "4fd3d17abd60af0f2f33518052f961f65e36136914704d5d0a21851ecd7cfb20",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_02.png",
+        "bytes": 18693,
+        "sha256": "fa393a59f2d6c340d8096076861d69c72a2c0fa504551d139e56380e0ad4dadb",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_03.png",
+        "bytes": 18693,
+        "sha256": "78ca0a05093d9851686b2dfeaf0f06d3cdb83af55bf76caba308a5e78568b32c",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_04.png",
+        "bytes": 18693,
+        "sha256": "2fa66e5196fa5e86c7e53e779d2b65ab965d8706b44a8f38ab72f1171f82019a",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_05.png",
+        "bytes": 18693,
+        "sha256": "5e30aaa10338c9de9a895df5fc1d9a9e05eeb6b2af8a5382efad08f69f9bce50",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_06.png",
+        "bytes": 18693,
+        "sha256": "17a88b291607feeecde1f8e4bdc9c93bbe1ca54bcfb0f36a197d14de91e10c24",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_07.png",
+        "bytes": 18693,
+        "sha256": "3ccc54e59e5c170dc7f1657250f409b9ac2a7dc0b1c6753c80f475092155d6e8",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_08.png",
+        "bytes": 18693,
+        "sha256": "fa2fd2a82510046d3d1a8a2ff95caf6b8cae4a24bc4b04d61d54fcc29f8071e8",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_09.png",
+        "bytes": 18693,
+        "sha256": "e6921f8c1a5c52cb478213abd5e5d6687e7932603b94d92f6fdc29e50a14a881",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_10.png",
+        "bytes": 18693,
+        "sha256": "1fcf195260e99e8852ce1a219e31d37618c4e8473be9ff7f5b2e4b4e0bcf9692",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_11.png",
+        "bytes": 18693,
+        "sha256": "cc0595889124a35ff567f8fece01fe0dcb33d76fb8a12e7e8ee461188ea1fb03",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_12.png",
+        "bytes": 18693,
+        "sha256": "4b56e81c8d05d2b7096b0fff4b92fc1e8fcf38cdc18585ecf78243554fb08447",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_13.png",
+        "bytes": 18693,
+        "sha256": "ae7dcce57881fe64423cde554bdaeeccc6a31dd5037aba6f88498ae8dea0cf5e",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_14.png",
+        "bytes": 18693,
+        "sha256": "81e4b45c9cb09569a603e6add3a76c1d21c0d99b2a7b33e66feec357ec858769",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_15.png",
+        "bytes": 18693,
+        "sha256": "6fc4c0ca18851b02e7111638441d99689e26b8c0cffcb6a881af9b7dd35bfab0",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_16.png",
+        "bytes": 18693,
+        "sha256": "6345e864a99674187ccdeac6ec569d055b961ca677efecedc9fd4aeb9591c144",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_17.png",
+        "bytes": 18693,
+        "sha256": "cee584164c42b1b295d821de84f9c924d36d65f51b379fda2f4b8ed74d5ac4ef",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_18.png",
+        "bytes": 18693,
+        "sha256": "e3c390a938258cfc4aea1868a4fb8ff531bfeb893857e02ec85242fa3d0b0407",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_19.png",
+        "bytes": 18693,
+        "sha256": "e5f9d08ebeff94847cfcc7599358f55bba9e8b84b390a7a3d008f87791a97107",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_20.png",
+        "bytes": 18693,
+        "sha256": "2a2a9c75e080c3208728617a36ae2c977c9701a49db59897189caca4c3f343ed",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_21.png",
+        "bytes": 18693,
+        "sha256": "5b823bc56c7d1d275c42faf72784295e92cc7fa6afc0440b2721e28f3e4b6e24",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_22.png",
+        "bytes": 18693,
+        "sha256": "70c33404914a366ff2e35d1a5781a30b3dca2e286007d6c83627d0d707fd8d00",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_23.png",
+        "bytes": 18693,
+        "sha256": "aaa1b67609a6882181d05036e4735fb09f9fec963816019eef9c19c1b4854d2e",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_24.png",
+        "bytes": 18693,
+        "sha256": "1bfe02203733866654e0f24b6ac3aff132bd8612d57bb471f1f33a499046c7f0",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_25.png",
+        "bytes": 18693,
+        "sha256": "f5546a3dd04193fef0aa54e815c7480cfd71304ae3d027be51fe713d2abd296a",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_26.png",
+        "bytes": 18693,
+        "sha256": "6cf2aa0e8e4ec0bf534144422059dc742097e1d6d0d91f7aca2a1a7eae52fc3b",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_27.png",
+        "bytes": 18693,
+        "sha256": "3bfae726d0b9443c5883b315f72c448a981ec5e77cab2be82b6b4e7d6549327c",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_28.png",
+        "bytes": 18693,
+        "sha256": "2a8d4cc87f26d40622b16211f3c779d55d4efa3bca5af77564829c49b911e64c",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_29.png",
+        "bytes": 18693,
+        "sha256": "db860ef399fc9773f216b102ea0e43c751dcbc35076ce54f00d312d34753d12f",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_30.png",
+        "bytes": 18693,
+        "sha256": "5b9e0334abbe5660deb45894446fa109961d7ef7b1265674290c634701d6bc94",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_31.png",
+        "bytes": 18693,
+        "sha256": "62effb88fe3ad407b1bde2cb324e11144531ed10266fa0b777330d52f4637378",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_32.png",
+        "bytes": 18693,
+        "sha256": "96397ef8cda8bcbc562e0ce8408c4617997e7762e5600a82677b103e1b201874",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_33.png",
+        "bytes": 18693,
+        "sha256": "867f40ad11983ddfbf2f69190c982314907dc075c2346ee85485e19e18747997",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_34.png",
+        "bytes": 18693,
+        "sha256": "958150c456a23fbf02895b4d93d18bc046707a87f087c27aee3631a60436f248",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_35.png",
+        "bytes": 18693,
+        "sha256": "e1c51f3794bb67989be2d4831dce0dc4a1c4ac555dd74b65e9255c52ee575b88",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_36.png",
+        "bytes": 18693,
+        "sha256": "3859828b160ae8c1bdeb856a39965297b6d9aa09a9c055ac16c81255b7501b06",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_37.png",
+        "bytes": 18693,
+        "sha256": "82f186010bfb0852a5cad28b0130915ca887efdb97e2a44b9b0e8cc7337b6dfc",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_38.png",
+        "bytes": 18693,
+        "sha256": "39b00e9d044880b655909e7a29e30c6138a58ccf3e41b7e02965ab1206cbca70",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_39.png",
+        "bytes": 18693,
+        "sha256": "ef4cecc19701d13f835484f4ff40f68f1a9bd23debd1b3ee082f9a8edd6053c8",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_40.png",
+        "bytes": 18693,
+        "sha256": "c21223d5e03b57ed90829400d5827c1366e14c837e5f34d854d7c708a184738a",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_41.png",
+        "bytes": 18693,
+        "sha256": "9930a11363cfb9b506f75511319eef2b6710a5a1e5cf59d2606b453391e505c5",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_42.png",
+        "bytes": 18693,
+        "sha256": "b434655f34193a467f5f53bffaf4fa36b240dd1fb56e46ecc729b4ffec74e849",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_43.png",
+        "bytes": 18693,
+        "sha256": "4c86964886d74e40499f0e3a87dd652f4d4b9db9eb418d246dfeb343e65a4562",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_44.png",
+        "bytes": 18693,
+        "sha256": "1458c6ec216e0d6b4a266adef57a47f92d602b380ac58284c6404a5f89c47092",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/SkysightMemoryInstructions.md",
+        "bytes": 2172,
+        "sha256": "b0c176f51416e2c2e06e0f582cb42c830fdf37287dc9b0d0dbc5dc37d1f1c556",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/SkysightSummarizer.md",
+        "bytes": 20627,
+        "sha256": "2e48522c484c145b65dc3bd4f825e3703ffc5b29d3fac18016e69bda29493ee1",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_ComputerUse.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 16744,
+        "sha256": "4d63a99533252ccba2b20fb12d3a05ad13bd32c0723e71f79eb6a2573fa972f8",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_SlimCore.bundle/Contents/Info.plist",
+        "bytes": 1252,
+        "sha256": "7e1ea00414a67f7f6b37b61dc21c26a99e4b3a572351f5ca5e9a61d1bb5513af",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_SlimCore.bundle/Contents/Resources/Assets.car",
+        "bytes": 28632,
+        "sha256": "f20daabb37db9e1a92f1af8d108c55683603b2c13633b3bc9d1d88524b41ccbb",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/Package_SlimCore.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 2442,
+        "sha256": "ce2007543e80a74a2ffca76c599564a4009ed6952b0cd71304c8d145dda0693a",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Info.plist",
+        "bytes": 1276,
+        "sha256": "793cfe86af43fc0e119fc554172543d4cbf0551c67254205f50762ab7875269a",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Resources/PrivacyInfo.xcprivacy",
+        "bytes": 373,
+        "sha256": "a07418e5fe128e224cd37964bc21c503b7aa2f575e7b4927468478ad873214fe",
+        "executable": false
+      },
+      {
+        "path": "Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 2464,
+        "sha256": "b1ffd3943be9429b125873704d3262452ccbd7b6bf8cbee78fd3ef215f46ba51",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Info.plist",
+        "bytes": 1615,
+        "sha256": "9c5d6af89a53af446efea8d7377b0f9634e6515b76ab1aaedcd983085e0eb6d8",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/MacOS/CUALockScreenGuardian",
+        "bytes": 24156016,
+        "sha256": "ed36d499f1d39c65a5846ddf9eb0ab564e2eacceb68022e9674a6233f96b9247",
+        "executable": true
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/PkgInfo",
+        "bytes": 8,
+        "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Assets.car",
+        "bytes": 3011144,
+        "sha256": "0247a4c221eceb45d80c996e5b796b78221090b7d072eaaf94d329f1d67359af",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/CUAAppIcon.icns",
+        "bytes": 80252,
+        "sha256": "2c19550c56036c0bdd8e4fa791a215e12b91d84261f9f0df9cff2187d005837c",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/CUALockScreenGuardian_Parent.coderequirement",
+        "bytes": 245,
+        "sha256": "2be77c819c90048a61809348247598773dee2bce005bc246cdd99b2c0274235b",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_Appshot.bundle/Contents/Info.plist",
+        "bytes": 1250,
+        "sha256": "ecf4ee720319f71a810ab73441530e842b1ac20094a6075a191b3e375e01bba5",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_Appshot.bundle/Contents/Resources/Appshot.wav",
+        "bytes": 373904,
+        "sha256": "f44a8d748c1bc44c780a78d4e5188b3652cf088ed5aedc10c170b5e90af3f9c1",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_Appshot.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 2444,
+        "sha256": "cf54c35fa89615431d8fe0701bf2e7e7c5e9dc784173fc6b865aa731f1e10638",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Info.plist",
+        "bytes": 1258,
+        "sha256": "353fec505227884bd9b3aa9cfa03626f5b4e28d37cff3d66dea5dd010cfe4929",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/AppleMusic.md",
+        "bytes": 1260,
+        "sha256": "9bddb86ceac45973489c0c704ed163b2ef55bb2b4cb044da4810ea71f4da1a19",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Clock.md",
+        "bytes": 3610,
+        "sha256": "0b986d7fb6ef16e4cac24ce5de4adc37a0dd82981030b7ab648402c9a2e72c23",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Notion.md",
+        "bytes": 2206,
+        "sha256": "80669d19bb799ea90649c46dfcd77d404fa1960297519640b50ac57ad81969f7",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Numbers.md",
+        "bytes": 1017,
+        "sha256": "a4e07c2c50d233b22f6cabcac0a301474d5317d8c763e9287cdd5763ef34c1bc",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Slack.md",
+        "bytes": 1380,
+        "sha256": "8eb94654ac7d6bf90a75b769a36e8591c8a4f0c5af774045f9499db9b5ed434a",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/Spotify.md",
+        "bytes": 828,
+        "sha256": "bcdfc5d2087e88baa55eef3fd8345a988c15bffe74701631bb5239780fd7b99f",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/AppInstructions/iPhone Mirroring.md",
+        "bytes": 275,
+        "sha256": "a4f39b49aa6400d1af1657d53de1d7cf6b0f093563704136730d84f07e458ab0",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/Assets.car",
+        "bytes": 21864,
+        "sha256": "203edb9ae35164b53576dfff4161eb15042bfda81e1b36c4cade8f885863a80a",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_00.png",
+        "bytes": 18693,
+        "sha256": "d190e7c5d08fe56320c7141de1f3e1422790a22cb3ac002858a124c36ea96a1f",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_01.png",
+        "bytes": 18693,
+        "sha256": "4fd3d17abd60af0f2f33518052f961f65e36136914704d5d0a21851ecd7cfb20",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_02.png",
+        "bytes": 18693,
+        "sha256": "fa393a59f2d6c340d8096076861d69c72a2c0fa504551d139e56380e0ad4dadb",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_03.png",
+        "bytes": 18693,
+        "sha256": "78ca0a05093d9851686b2dfeaf0f06d3cdb83af55bf76caba308a5e78568b32c",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_04.png",
+        "bytes": 18693,
+        "sha256": "2fa66e5196fa5e86c7e53e779d2b65ab965d8706b44a8f38ab72f1171f82019a",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_05.png",
+        "bytes": 18693,
+        "sha256": "5e30aaa10338c9de9a895df5fc1d9a9e05eeb6b2af8a5382efad08f69f9bce50",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_06.png",
+        "bytes": 18693,
+        "sha256": "17a88b291607feeecde1f8e4bdc9c93bbe1ca54bcfb0f36a197d14de91e10c24",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_07.png",
+        "bytes": 18693,
+        "sha256": "3ccc54e59e5c170dc7f1657250f409b9ac2a7dc0b1c6753c80f475092155d6e8",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_08.png",
+        "bytes": 18693,
+        "sha256": "fa2fd2a82510046d3d1a8a2ff95caf6b8cae4a24bc4b04d61d54fcc29f8071e8",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_09.png",
+        "bytes": 18693,
+        "sha256": "e6921f8c1a5c52cb478213abd5e5d6687e7932603b94d92f6fdc29e50a14a881",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_10.png",
+        "bytes": 18693,
+        "sha256": "1fcf195260e99e8852ce1a219e31d37618c4e8473be9ff7f5b2e4b4e0bcf9692",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_11.png",
+        "bytes": 18693,
+        "sha256": "cc0595889124a35ff567f8fece01fe0dcb33d76fb8a12e7e8ee461188ea1fb03",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_12.png",
+        "bytes": 18693,
+        "sha256": "4b56e81c8d05d2b7096b0fff4b92fc1e8fcf38cdc18585ecf78243554fb08447",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_13.png",
+        "bytes": 18693,
+        "sha256": "ae7dcce57881fe64423cde554bdaeeccc6a31dd5037aba6f88498ae8dea0cf5e",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_14.png",
+        "bytes": 18693,
+        "sha256": "81e4b45c9cb09569a603e6add3a76c1d21c0d99b2a7b33e66feec357ec858769",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_15.png",
+        "bytes": 18693,
+        "sha256": "6fc4c0ca18851b02e7111638441d99689e26b8c0cffcb6a881af9b7dd35bfab0",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_16.png",
+        "bytes": 18693,
+        "sha256": "6345e864a99674187ccdeac6ec569d055b961ca677efecedc9fd4aeb9591c144",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_17.png",
+        "bytes": 18693,
+        "sha256": "cee584164c42b1b295d821de84f9c924d36d65f51b379fda2f4b8ed74d5ac4ef",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_18.png",
+        "bytes": 18693,
+        "sha256": "e3c390a938258cfc4aea1868a4fb8ff531bfeb893857e02ec85242fa3d0b0407",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_19.png",
+        "bytes": 18693,
+        "sha256": "e5f9d08ebeff94847cfcc7599358f55bba9e8b84b390a7a3d008f87791a97107",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_20.png",
+        "bytes": 18693,
+        "sha256": "2a2a9c75e080c3208728617a36ae2c977c9701a49db59897189caca4c3f343ed",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_21.png",
+        "bytes": 18693,
+        "sha256": "5b823bc56c7d1d275c42faf72784295e92cc7fa6afc0440b2721e28f3e4b6e24",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_22.png",
+        "bytes": 18693,
+        "sha256": "70c33404914a366ff2e35d1a5781a30b3dca2e286007d6c83627d0d707fd8d00",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_23.png",
+        "bytes": 18693,
+        "sha256": "aaa1b67609a6882181d05036e4735fb09f9fec963816019eef9c19c1b4854d2e",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_24.png",
+        "bytes": 18693,
+        "sha256": "1bfe02203733866654e0f24b6ac3aff132bd8612d57bb471f1f33a499046c7f0",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_25.png",
+        "bytes": 18693,
+        "sha256": "f5546a3dd04193fef0aa54e815c7480cfd71304ae3d027be51fe713d2abd296a",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_26.png",
+        "bytes": 18693,
+        "sha256": "6cf2aa0e8e4ec0bf534144422059dc742097e1d6d0d91f7aca2a1a7eae52fc3b",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_27.png",
+        "bytes": 18693,
+        "sha256": "3bfae726d0b9443c5883b315f72c448a981ec5e77cab2be82b6b4e7d6549327c",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_28.png",
+        "bytes": 18693,
+        "sha256": "2a8d4cc87f26d40622b16211f3c779d55d4efa3bca5af77564829c49b911e64c",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_29.png",
+        "bytes": 18693,
+        "sha256": "db860ef399fc9773f216b102ea0e43c751dcbc35076ce54f00d312d34753d12f",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_30.png",
+        "bytes": 18693,
+        "sha256": "5b9e0334abbe5660deb45894446fa109961d7ef7b1265674290c634701d6bc94",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_31.png",
+        "bytes": 18693,
+        "sha256": "62effb88fe3ad407b1bde2cb324e11144531ed10266fa0b777330d52f4637378",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_32.png",
+        "bytes": 18693,
+        "sha256": "96397ef8cda8bcbc562e0ce8408c4617997e7762e5600a82677b103e1b201874",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_33.png",
+        "bytes": 18693,
+        "sha256": "867f40ad11983ddfbf2f69190c982314907dc075c2346ee85485e19e18747997",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_34.png",
+        "bytes": 18693,
+        "sha256": "958150c456a23fbf02895b4d93d18bc046707a87f087c27aee3631a60436f248",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_35.png",
+        "bytes": 18693,
+        "sha256": "e1c51f3794bb67989be2d4831dce0dc4a1c4ac555dd74b65e9255c52ee575b88",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_36.png",
+        "bytes": 18693,
+        "sha256": "3859828b160ae8c1bdeb856a39965297b6d9aa09a9c055ac16c81255b7501b06",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_37.png",
+        "bytes": 18693,
+        "sha256": "82f186010bfb0852a5cad28b0130915ca887efdb97e2a44b9b0e8cc7337b6dfc",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_38.png",
+        "bytes": 18693,
+        "sha256": "39b00e9d044880b655909e7a29e30c6138a58ccf3e41b7e02965ab1206cbca70",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_39.png",
+        "bytes": 18693,
+        "sha256": "ef4cecc19701d13f835484f4ff40f68f1a9bd23debd1b3ee082f9a8edd6053c8",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_40.png",
+        "bytes": 18693,
+        "sha256": "c21223d5e03b57ed90829400d5827c1366e14c837e5f34d854d7c708a184738a",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_41.png",
+        "bytes": 18693,
+        "sha256": "9930a11363cfb9b506f75511319eef2b6710a5a1e5cf59d2606b453391e505c5",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_42.png",
+        "bytes": 18693,
+        "sha256": "b434655f34193a467f5f53bffaf4fa36b240dd1fb56e46ecc729b4ffec74e849",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_43.png",
+        "bytes": 18693,
+        "sha256": "4c86964886d74e40499f0e3a87dd652f4d4b9db9eb418d246dfeb343e65a4562",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/LensSequence/Lens_frame_44.png",
+        "bytes": 18693,
+        "sha256": "1458c6ec216e0d6b4a266adef57a47f92d602b380ac58284c6404a5f89c47092",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/SkysightMemoryInstructions.md",
+        "bytes": 2172,
+        "sha256": "b0c176f51416e2c2e06e0f582cb42c830fdf37287dc9b0d0dbc5dc37d1f1c556",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/Resources/SkysightSummarizer.md",
+        "bytes": 20627,
+        "sha256": "2e48522c484c145b65dc3bd4f825e3703ffc5b29d3fac18016e69bda29493ee1",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_ComputerUse.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 16744,
+        "sha256": "4d63a99533252ccba2b20fb12d3a05ad13bd32c0723e71f79eb6a2573fa972f8",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_SlimCore.bundle/Contents/Info.plist",
+        "bytes": 1252,
+        "sha256": "7e1ea00414a67f7f6b37b61dc21c26a99e4b3a572351f5ca5e9a61d1bb5513af",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_SlimCore.bundle/Contents/Resources/Assets.car",
+        "bytes": 28632,
+        "sha256": "f20daabb37db9e1a92f1af8d108c55683603b2c13633b3bc9d1d88524b41ccbb",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/Package_SlimCore.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 2442,
+        "sha256": "ce2007543e80a74a2ffca76c599564a4009ed6952b0cd71304c8d145dda0693a",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Info.plist",
+        "bytes": 1276,
+        "sha256": "793cfe86af43fc0e119fc554172543d4cbf0551c67254205f50762ab7875269a",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Resources/PrivacyInfo.xcprivacy",
+        "bytes": 373,
+        "sha256": "a07418e5fe128e224cd37964bc21c503b7aa2f575e7b4927468478ad873214fe",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 2464,
+        "sha256": "b1ffd3943be9429b125873704d3262452ccbd7b6bf8cbee78fd3ef215f46ba51",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/CUALockScreenGuardian.app/Contents/_CodeSignature/CodeResources",
+        "bytes": 26072,
+        "sha256": "54a2c01e95480365f052ffc28717b522e39681432caca7a7e29cb990d748e0a0",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Info.plist",
+        "bytes": 1667,
+        "sha256": "51e4b7b4c4e226496d05fd9c44a5a9d6125bc4a0b884292e226aafe241906bc3",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/MacOS/Codex Computer Use Installer",
+        "bytes": 90480,
+        "sha256": "a58d398138dd7da4548b1f5ca4254f0a91a5d10873aa43bd4b424c26c3653f36",
+        "executable": true
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/PkgInfo",
+        "bytes": 8,
+        "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/Assets.car",
+        "bytes": 3011144,
+        "sha256": "35ee157c7832438cda66af3f64963caaedaf03d7cb3d7790a75eeb6ea1de9021",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/CUAAppIcon.icns",
+        "bytes": 80252,
+        "sha256": "2c19550c56036c0bdd8e4fa791a215e12b91d84261f9f0df9cff2187d005837c",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/CodexComputerUseAuthorizationPlugin.bundle/Contents/Info.plist",
+        "bytes": 1488,
+        "sha256": "cac329ff291c2bc42210339acd8a73e134c4556deea8ce4d94c16466e63299fb",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/CodexComputerUseAuthorizationPlugin.bundle/Contents/MacOS/CodexComputerUseAuthorizationPlugin",
+        "bytes": 67872,
+        "sha256": "659f8103fb992f2b8b7e455f3db56605b0aefdf22c0cc722a1343612b6609241",
+        "executable": true
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/CodexComputerUseAuthorizationPlugin.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 2200,
+        "sha256": "6686de10a28a2fe11b36cbb86dcbacc827cfc4ea116b4dabf1845e5aee629e9b",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/Resources/CodexComputerUseAuthorizationPluginInstallerTool",
+        "bytes": 109776,
+        "sha256": "c076c8fafee77dfdcf144dcca864e54ca769d757f41acf304c6a70ae5743c2db",
+        "executable": true
+      },
+      {
+        "path": "Contents/SharedSupport/Codex Computer Use Installer.app/Contents/_CodeSignature/CodeResources",
+        "bytes": 4068,
+        "sha256": "1772e3f2982eeb9eadbb34f22549e7bad2329ab1f4a378259425156aa44c5e3b",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/Info.plist",
+        "bytes": 1492,
+        "sha256": "520dc5262c07303f405e1347067b2c8114fa081ce6cf299139969e1eaa62ef60",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient",
+        "bytes": 15128240,
+        "sha256": "1092710656ed437747359ffa32a87447220055f6d11f2a9c3b2f7810f1841f4c",
+        "executable": true
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/PkgInfo",
+        "bytes": 8,
+        "sha256": "82502191c9484b04d685374f9879a0066069c49b8acae7a04b01d38d07e8eca0",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/Resources/BUILD.bazel",
+        "bytes": 1479,
+        "sha256": "ec45160827f2e5382e329173f8f8ce252a4cc60d70ecb9ea52ebd42c217a1f3f",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/Resources/SkyComputerUseClient_Parent.coderequirement",
+        "bytes": 245,
+        "sha256": "2be77c819c90048a61809348247598773dee2bce005bc246cdd99b2c0274235b",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Info.plist",
+        "bytes": 1276,
+        "sha256": "793cfe86af43fc0e119fc554172543d4cbf0551c67254205f50762ab7875269a",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/Resources/PrivacyInfo.xcprivacy",
+        "bytes": 373,
+        "sha256": "a07418e5fe128e224cd37964bc21c503b7aa2f575e7b4927468478ad873214fe",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/Resources/SwiftProtobuf_SwiftProtobuf.bundle/Contents/_CodeSignature/CodeResources",
+        "bytes": 2464,
+        "sha256": "b1ffd3943be9429b125873704d3262452ccbd7b6bf8cbee78fd3ef215f46ba51",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/_CodeSignature/CodeResources",
+        "bytes": 3903,
+        "sha256": "4eb059d111a8ab23f1412d7b64aab7dd3fadf29c3dab0eeeb709af33554796e3",
+        "executable": false
+      },
+      {
+        "path": "Contents/SharedSupport/SkyComputerUseClient.app/Contents/embedded.provisionprofile",
+        "bytes": 12726,
+        "sha256": "b8c737fbd1635db26550713a9b3f6251c014da0a5ed2130fe20b6e25520ad85f",
+        "executable": false
+      },
+      {
+        "path": "Contents/_CodeSignature/CodeResources",
+        "bytes": 48547,
+        "sha256": "0214c1996c145c4816ca03579723f106680ed99cd79562ad7532409142fc1c90",
+        "executable": false
+      },
+      {
+        "path": "Contents/embedded.provisionprofile",
+        "bytes": 12609,
+        "sha256": "df32d812011ff70edb1ddb008170d39fe9ded56026f5e1cf2bfa1beaaa4071e4",
+        "executable": false
+      }
+    ]
+  }
+}

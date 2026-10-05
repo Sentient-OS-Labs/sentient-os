@@ -19,7 +19,8 @@ import Foundation
 
 struct Bucket: Sendable {
     let key: String                                  // pointer namespace
-    let items: [(key: ItemKey, item: Candidate)]     // newest-first
+    let items: [(key: ItemKey, item: Candidate)]     // newest-first for append-only sources
+    var snapshot: AppleCalendarSource.Snapshot? = nil // complete mutable calendar window
 }
 
 protocol Connector: Sendable {

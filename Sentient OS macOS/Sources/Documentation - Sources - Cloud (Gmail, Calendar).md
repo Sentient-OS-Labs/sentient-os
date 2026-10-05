@@ -1,6 +1,7 @@
-# Sources: Gmail and Google Calendar (Sources/)
+# Sources: hosted Gmail, Calendar, Slack and Outlook (Sources/)
 
-The two cloud sources. Neither can be read on-device, so Sentient both **fetches and summarizes** them
+These are the **hosted-connector paths** for Gmail and Google Calendar. Sentient both fetches and
+summarizes them
 through the user's own hosted connectors, per engine: on the ChatGPT backend, OpenAI's account-level
 `codex_apps/gmail.*` / `codex_apps/google_calendar.*` tools reached by `codex exec`; on the Claude
 backend, the **claude.ai Gmail and Google Calendar connectors** reached by `claude -p`
@@ -9,12 +10,20 @@ section). No on-device model touches them, and no Sentient server is involved. T
 subscription-account auth, so the chips lock on a custom frontier model and on free/go ChatGPT plans.
 All runs go through `FrontierRun`, so this file's prompts and parsing serve both engines unchanged.
 
+For locally analyzed email and calendar instead, choose **Apple Mail and Apple Calendar**. Those
+read data already synced to the Mac and work with any supported frontier backend, without a
+ChatGPT or Claude subscription. Gmail or Google Calendar data can be available locally through those
+Apple apps; “hosted” here describes this connector path, not an inherent property of the service.
+
 ## Files
 
 | File | Job |
 |---|---|
 | `GmailConnect.swift` | The Gmail source: connect probe, the initial read (4 weekly summaries in parallel), the iterative read (since the mark), and the disciplined weekly prompt. |
 | `CalendarConnect.swift` | The Calendar source: connect probe, the initial read (12 monthly summaries), the iterative read, and `fetchProactiveContext()` (the live calendar block both proactive stages receive). |
+| `MCPSource.swift` | Shared hosted-source orchestration, bounded retries, privacy filtering and atomic summary/checkpoint commits. |
+| `SlackSource.swift` | Slack's bounded discovery, selected-thread reads and native receipt validation. |
+| `OutlookMailSource.swift` · `OutlookCalendarSource.swift` | Outlook's source-specific windows, evidence validation and inspected-item counts. |
 | `Views/CloudConnectSheet.swift` | The one connect sheet both sources share (in `Views/`). |
 
 Writes (send an email, create an event) do NOT live here; they are `ProactiveExecutor`'s gmail and
@@ -27,11 +36,20 @@ Analysis popover, onboarding's ready screen, and Dev Tools. Flow: **Connect** op
 connector page (`GmailConnect.connectorURL` / `CalendarConnect.connectorURL` pick per backend:
 OpenAI's hosted connector page on ChatGPT, claude.ai's connector directory on Claude; the sheet's
 copy follows, and the sources group header reads "Through Your ChatGPT" / "Through Your Claude")
-where the user links Google; **Done** waits 1 s, then runs `probeConnected()`, a real headless run
-(luna tier — `gpt-5.6-luna` / `haiku`, low effort, read-only) that must reply exactly YES or NO off
-an actual connector read. YES persists `dbg.gmail.connected` + `dbg.run.gmail` (calendar twins),
-shows a green beat, and auto-dismisses; NO shows a quiet retry line. The "Stop reading …" link fully
-disconnects (both flags cleared); reconnecting is the whole flow again.
+where the user links Google. Calendar's **Done** saves the user's declaration and selects the source.
+Gmail's **Done** reads and saves the connected email address directly: Codex discovers the address from its
+connector metadata; Claude Gmail reads one sent thread's metadata directly, without a model turn.
+The connection flow discloses cloud storage inline before Done; no additional popup appears. One distinct sender from messages marked
+SENT is saved automatically. Empty, ambiguous or unavailable results are skipped without asking for
+an email address. A missing connection returns to the picker without being marked linked.
+No message bodies, subjects or snippets are requested by this address-collection step. Only the
+email address is queued in Keychain until the feedback list accepts it; connector metadata is not
+retained in that list. “Stop reading” turns off knowledge selection; it does not unlink the provider
+or remove an address from the founder-feedback list.
+
+Outlook Mail's connector popup uses the same automatic collection flow on Done, reading Codex metadata or Claude
+Microsoft 365 `get_me`. Email-only storage, access controls and retention are documented in `Cloud/Mail Accounts/Documentation - Connected Email
+Accounts.md`. Message ingestion and its existing per-run identity checks remain independent.
 
 ## How reads work
 
@@ -49,9 +67,28 @@ run start; a little overlap next run beats a boundary gap.
 - `runIterative`: events with a start time in `[mark, now)`.
 - **`fetchProactiveContext()`** is separate and deliberately uncurated: the last 7 days plus the next 24 hours, every event, as a compact chronological text block (`{connected, events_text}`). `ProactiveCycle` fetches it once and injects it into both the judge and the research prompts, so the judge can reason about time-sensitivity while staying tool-free.
 
-Models: the luna tier for every read (`gpt-5.6-luna` on codex, `haiku` on claude; medium effort, low
+Models: the luna tier for every read (`gpt-6-luna` on codex, `haiku` on claude; medium effort, low
 for the connect probe), read-only sandbox, web search off for calendar. Sending an email or creating
 an event runs on the flagship tier in the executor.
+
+## Slack and Outlook knowledge reads
+
+These sources use `MCPSource` on the selected subscription backend. Slack samples recent messages;
+Outlook Mail initially reads four weekly windows, and Outlook Calendar reads twelve monthly windows
+on the default calendar. Each connector commits its summaries and checkpoint together only after
+every window succeeds. A failed read leaves existing notes and progress available for retry.
+
+Slack requires every attempted search and selected-thread read to succeed. A quiet result also
+requires all three discovery lanes. Search result content is decoded separately from pagination
+metadata, and only a complete empty-page response establishes zero results. Words quoted inside
+messages do not change the discovery count.
+
+Privacy filtering discards the entire sensitive summary before storage or display while preserving
+only its anonymous inspected-item count. Source-specific validation still runs; Outlook Calendar
+requires that count to match the events in the native receipts, including for a quiet result.
+
+The processing card retains a useful summary when a later committed window is quiet. Starting a new
+source or run resets that card, so an earlier summary cannot imply success for a new read.
 
 ## Facts worth knowing
 

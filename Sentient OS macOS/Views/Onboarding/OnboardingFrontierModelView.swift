@@ -59,7 +59,7 @@ struct OnboardingFrontierModelView: View {
                             .display(26)
                             .foregroundStyle(Theme.Ink.bright)
 
-                        Text("Sentient's on-device model understands your life. Proactive Intelligence and Sidekick run on a frontier model of your choice.")
+                        Text(PrivacyCopy.frontierSummary)
                             .font(.system(size: 14.5))
                             .foregroundStyle(Theme.secondary)
                             .multilineTextAlignment(.center)
@@ -95,14 +95,13 @@ struct OnboardingFrontierModelView: View {
         }
         .overlay { OnboardingTelemetryConsent() }
         .overlay(alignment: .bottomTrailing) {
-            InviteRedemptionView()
+            InviteRedemptionView(startsCollapsed: true)
                 .frame(width: 320)
                 .padding(.trailing, 36).padding(.bottom, 28)
         }
         .onAppear {
-            // Detection only — NO install kicks here (decision 2026-08-21): each engine's CLI
-            // downloads lazily when the user actually picks it (a pill click or a panel's
-            // sign-in action), so a Claude user never downloads codex, and vice versa.
+            // Observe the shared Codex setup already started by AppState. Claude Code is
+            // prepared by its commitment/sign-in action; appearing here only refreshes status.
             Task { await codex.refreshInstalled() }
             Task { await codex.refreshLoginStatus() }
             Task {

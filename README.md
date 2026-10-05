@@ -10,7 +10,7 @@
 
 Every AI you use today has two problems: it knows nothing about you (nobody can paste their entire life into a chat box), and it only helps when summoned. Fixing both means reading your entire life, every day. In the cloud, that much inference is a fortune and a privacy nightmare. On your own chip, it's free, and nobody else's business.
 
-So every night, Sentient's on-device LLM reads what's new (your files, screenshots, WhatsApp, iMessage, Notes, email) and distills it into a clean markdown knowledge base: the deepest memory of you any AI has ever had. Knowledge-base generation, proactive work, and Sidekick use your own ChatGPT or Claude subscription, or a model endpoint you choose. Double Tap has a separate route, covered by Sentient by default, with your own API provider available in Settings.
+So every night, Sentient's on-device LLM reads what's new (your files, screenshots, WhatsApp, iMessage, Notes, email) and distills it into a clean markdown knowledge base: the deepest memory of you any AI has ever had. Knowledge-base generation, proactive work, and Sidekick use your own ChatGPT or Claude subscription, or a model endpoint you choose. Double Tap has a separate route, covered by Sentient by default, with your own API provider or a compatible local model available in Settings.
 
 By morning, Sentient offers your grunt work done in one click: that reply you forgot, drafted from your own rich personal context. The subscription you meant to cancel, caught the night before it renews.
 
@@ -24,11 +24,11 @@ No signup is required. Local source processing happens on your Mac; cloud featur
 
 <sub><samp>3:00 AM · LOCAL SOURCE PROCESSING</samp></sub>
 
-At 3 AM every night, Sentient quietly wakes your Mac (lid closed is fine; it falls back asleep after) and reads what's new: files and screenshots, WhatsApp, iMessage, and Apple Notes, decoded straight out of the databases already sitting on your disk. Gmail and Google Calendar ride in through your own OpenAI connectors.
+At 3 AM every night, Sentient quietly wakes your Mac (lid closed is fine; it falls back asleep after) and reads what's new from your enabled sources: files and screenshots, WhatsApp, iMessage, Apple Notes, Apple Mail, and Apple Calendar. Apple Mail and Apple Calendar are analyzed locally and work without a ChatGPT or Claude subscription. Hosted email and calendar connectors use your supported AI account.
 
-Every single item passes an on-device bouncer. Gemma 4 E4B, running locally, reads it and rules: keep, junk, or sensitive. Junk gets dropped. Sensitive gets dropped harder: no summary, no log, no tombstone, zero trace it ever existed. Only clean, PII-stripped summaries of the keepers survive.
+Every single item passes an on-device bouncer. Gemma 4 E4B, running locally, reads it and rules: keep, junk, or sensitive. Rejected items do not become knowledge summaries. Useful summaries pass through sensitive-content filters and a deterministic PII backstop before reaching your chosen frontier model. Local checkpoints and counts let interrupted processing resume; the filters are not a guarantee that every personal detail has been removed.
 
-Then the finale: your own codex's frontier model takes those thousands of PII-stripped summaries and distills them into the best possible knowledge base: an Obsidian-style folder of plain markdown, on your Mac, yours to read, edit, and delete note by note. It's not a black box; it's a folder.
+Then the finale: your chosen frontier model takes those summaries and distills them into the best possible knowledge base: an Obsidian-style folder of plain markdown, on your Mac, yours to read, edit, and delete note by note. It's not a black box; it's a folder.
 
 <div align="center"><img src=".github/readme/constellation.gif" alt="The Knowledge window's Constellation View: your life, from above. Notes as stars, wikilinks as threads." width="780" /></div>
 
@@ -52,7 +52,7 @@ You get a small handful of cards drafted in the morning, which you can read, edi
 
 <div align="center"><img src=".github/readme/sidekick.gif" alt="Sidekick: the notch drops open and does the task in your own apps" width="780" /></div>
 
-Anywhere on your Mac, click your notch (or use right ⌘: hold to speak, tap to type) and say: "finish this for me", "reply with the update from Sarah", "put these ingredients in my cart". The notch drops open glowing, transcribes you on-device, and computer use takes it from there, in your own apps and your own logged-in browser, with progress streaming live in the notch.
+Anywhere on your Mac, click your notch (or use right ⌘: hold to speak, tap to type) and say: "finish this for me", "reply with the update from Sarah", "put these ingredients in my cart". The notch drops open glowing, transcribes your request, and computer use takes it from there, in your own apps and your own logged-in browser, with progress streaming live in the notch.
 
 Because every task is grounded in your knowledge base, Sidekick knows who the people in your life are, what "the usual" means, and what you promised whom. That's the difference between an agent, and a proactive agent that knows you.
 
@@ -66,9 +66,9 @@ Somewhere along the way we realized the knowledge base is too useful to keep to 
 
 Connect it, then ask your ChatGPT: *"what do you know about me?"* Et voila.
 
-Your Mac seals the knowledge base with AES-256-GCM before anything leaves. This is zero-access encryption: the key lives only on your Mac and in your private link, never on our servers, which hold nothing but ciphertext and no key to unlock it. Hack our relay and all you'd find is scrambled bytes; unlike a normal cloud backup, where the company keeps your keys and can be compelled to decrypt, we have nothing to hand over. There is no account: turn sharing off and the cloud copy is deleted on the spot, and if your Mac simply stops syncing, the copy self-destructs after 30 days. The relay is open source too: [sentient-os-mcp](https://github.com/Sentient-OS-Labs/sentient-os-mcp).
+Your Mac seals the knowledge base with AES-256-GCM before upload. The optional mirror uses zero-access encryption for stored data: the server stores ciphertext without persisting the decryption key. Your private connector link supplies the secret, and the relay decrypts in memory when serving an authorized request. Keep that link private. Turning sharing off stops sync and requests deletion; network failures can delay that request. An unrefreshed mirror expires after 30 days. The relay is open source too: [sentient-os-mcp](https://github.com/Sentient-OS-Labs/sentient-os-mcp), and [SECURITY.md](SECURITY.md) describes the threat model.
 
-<div align="center"><img src=".github/readme/mcp.png" alt="The cloud MCP: sealed on your Mac, ciphertext on the relay, no accounts" width="680" /></div>
+<div align="center"><img src=".github/readme/mcp.png" alt="The optional cloud MCP mirror: encrypted knowledge stored on the relay" width="680" /></div>
 
 <br/>
 
@@ -92,35 +92,36 @@ Building from source is straightforward: clone, open `Sentient OS macOS.xcodepro
 
 <sub><samp>YOUR MAC · YOUR CHATGPT PLAN · OUR SERVERS</samp></sub>
 
-Your Mac processes local sources, and your chosen frontier model builds the knowledge base and powers proactive work and Sidekick. Double Tap can use Sentient's inference relay or your own API provider. The optional encrypted MCP mirror and invitation service have separate server paths.
+Your Mac processes local sources, and your chosen frontier model builds the knowledge base and powers proactive work and Sidekick. Double Tap can use Sentient's inference relay, your own API provider, or a compatible local model. The optional encrypted MCP mirror, invitation service, and feedback-contact list have separate server paths.
 
 <div align="center"><img src=".github/readme/under-the-hood.png" alt="Illustration of local source processing and the frontier-model pipeline" width="880" /></div>
 
-The illustration shows the local-source and frontier-model pipeline. Double Tap, invitations, and the optional mirror use the additional server paths described below. The local processing includes:
+The illustration shows the local-source and frontier-model pipeline. Double Tap, invitations, feedback contacts, and the optional mirror use the additional server paths described below. The local processing includes:
 
 - **The inference engine.** <samp>a custom LiteRT-LM fork, running Gemma 4 E4B</samp>
 - **Inference optimization.** <samp>kv cache reuse · flash attention · speculative decoding · self-healing gpu runs · 8 gb macs, welcome</samp>
 - **Reading your real life.** <samp>typedstream decoding · protobuf walks · wal-safe copy-reads · date-added, not mtime · never spotlight</samp>
-- **Privacy engineering.** <samp>zero-trace triage · fail-closed parsing · a pii regex backstop · aes-256-gcm before anything leaves · a 30-day dead-man lease</samp>
+- **Privacy engineering.** <samp>zero-trace triage · fail-closed parsing · a pii regex backstop · aes-256-gcm before mirror upload · a 30-day dead-man lease</samp>
 - **The 3 AM machine.** <samp>a codesign-verified root helper · a deadman timer · ac + thermal gates · crash-safe resume</samp>
 - **The cloud brain.** <samp>your own frontier CLI as the brain, native computer-use tools as the hands · frontier compute on your subscription · marginal cost ~$0</samp>
 
-And about that cloud brain. Sentient uses your own Codex CLI, Claude Code, or chosen model endpoint. ChatGPT tasks use OpenAI's signed computer-use helper; Claude and custom endpoints use the open-source [CUA driver](https://github.com/trycua/cua) (MIT). Both act in your own apps and browser, with visible progress and STOP. Dependencies download directly from their publishers and are verified before use. These CLI-based tasks use your selected provider directly. Double Tap's separate relay route is described below.
+And about that cloud brain. Sentient uses your own ChatGPT or Claude subscription, or a chosen model endpoint, with managed CLI runtimes. All active computer-use backends use OpenAI's signed native helper to act in your own apps and browser, with visible progress and STOP. Dependencies are verified before use. Double Tap's separate inference route is described below.
 
 ## The privacy flex.
 
 Local source processing and user-triggered cloud features have different data paths:
 
-1. **Local ingestion stays on your Mac.** Files and local message databases are read on-device. The summary pipeline sends PII-stripped summaries to your chosen frontier model, with a deterministic PII backstop after model triage.
-2. **Junk and sensitive items leave zero trace downstream.** The local triage pipeline drops them instead of adding them to your knowledge base.
+1. **Local source analysis stays on your Mac.** Files, local message databases, Apple Mail, and Apple Calendar are analyzed on-device. Useful summaries pass through sensitive-content filtering and a deterministic PII backstop before going to your chosen frontier model.
+2. **Rejected items do not become knowledge summaries.** Local checkpoints and counts support reliable processing. Double Tap's separate writing-style setup saves a one-time, editable sample of selected sent messages as `writingstyle.md`; those original examples travel with Double Tap requests and optional knowledge sharing.
 3. **Your Mac's knowledge base is canonical.** You can read and edit its Markdown files. Frontier tasks can receive this context, connected-service results, and screen context when needed for the task you started.
 4. **The MCP mirror is optional and off by default.** Your Mac encrypts it with AES-256-GCM before upload. Stored data is ciphertext; your private connector link carries the key used to serve requests. One click deletes the mirror, and an unrefreshed copy expires after 30 days. See [SECURITY.md](SECURITY.md) for the threat model.
-5. **Double Tap sends reply context to the selected provider.** By default, a screenshot, knowledge-base context, and your instructions pass through Sentient's relay to OpenAI. Settings → Double Tap also supports your own OpenAI or OpenRouter API credentials. Double Tap drafts into the focused field; you decide whether to send.
+5. **Double Tap sends reply context to the selected provider.** By default, a screenshot, knowledge-base context including writing examples, and your instructions pass through Sentient's relay to OpenAI. Settings → Double Tap also supports your own API provider or a compatible local model through Ollama or LM Studio. Double Tap drafts into the focused field; you decide whether to send.
 6. **Invitations use an anonymous installation identity.** Supabase stores invite codes, redemption dates, and lifetime-access grants. Sentient administrators can access these records. They contain no files, messages, or model credentials; the installation credential stays in Keychain, and Reset preserves lifetime access.
+7. **Feedback contacts contain email addresses only.** Completing a supported Gmail or Outlook connection can save the detected address to a separate founder-feedback list, as disclosed before Done. Contact rows contain no installation ID, connector metadata, timestamps, or message content. Reset and uninstall preserve this list. Privacy or removal requests can go to **feedback@sentient-os.ai**; feedback outreach will include an opt-out.
 
 Crash reports (Sentry) and usage analytics (TelemetryDeck) carry structural diagnostics rather than your content. Each has an off switch in Settings. Crash reports turn off completely; disabling analytics retains only the limited usage counts disclosed beside the toggle.
 
-Features using your own Codex CLI, Claude Code, or API provider follow that provider's privacy and retention policies. The app's Privacy Policy explains these paths alongside the optional mirror, Double Tap, and invitations.
+Features using your own Codex CLI, Claude Code, or API provider follow that provider's privacy and retention policies. Voice uses Apple's on-device speech recognition where supported; otherwise Apple's speech service may process audio. The app's Privacy Policy and [SECURITY.md](SECURITY.md) explain these paths alongside the optional mirror, Double Tap, invitations, and feedback contacts.
 
 <br/>
 
@@ -130,7 +131,7 @@ Features using your own Codex CLI, Claude Code, or API provider follow that prov
 <summary><b>How is Sentient free? What's the catch?</b></summary>
 <br/>
 
-Local processing runs on your Mac, and frontier tasks use your own subscription or chosen endpoint. Sentient covers Double Tap's default relay route; you can also choose your own API provider in Settings.
+Local processing runs on your Mac, and frontier tasks use your own subscription or chosen endpoint. Sentient covers Double Tap's default relay route; you can also choose your own API provider or a compatible local model in Settings.
 
 As for how we ever make money: enterprise, later. The same engine, with the consumer connectors swapped for work ones like Slack, Granola, Linear, and Notion, becomes a personal intelligence layer for every employee, and companies pay for a license. But nobody has built AI like this before; it's a genuinely new frontier, so we're perfecting it with consumers first. Your data is never the product.
 
@@ -157,7 +158,7 @@ If you go the ChatGPT route:
 - A free ChatGPT account comes with a small amount of codex compute, enough to build your knowledge base, but not enough to power proactive intelligence or Sidekick (and ChatGPT Go doesn't unlock them either).
 - The full engine needs ChatGPT Plus, about $20 a month, paid to OpenAI, not to us.
 
-We still recommend Plus as the nicest path: right now, Sentient connects to your Gmail and Google Calendar through OpenAI's own connectors, which require Plus.
+Hosted Gmail and calendar connectors require a supported AI account. Apple Mail and Apple Calendar are local sources and work without a ChatGPT or Claude subscription.
 
 </details>
 
@@ -165,9 +166,9 @@ We still recommend Plus as the nicest path: right now, Sentient connects to your
 <summary><b>What actually leaves my Mac?</b></summary>
 <br/>
 
-The local ingestion pipeline sends PII-stripped summaries to your chosen frontier model. Proactive tasks and Sidekick can also use your knowledge base, connected-service context, and screenshots for the task you started. Double Tap sends a screenshot, knowledge-base context, and instructions through Sentient's relay to OpenAI by default, or to your own configured API provider.
+The local ingestion pipeline sends filtered summaries to your chosen frontier model. Proactive tasks and Sidekick can also use your knowledge base, connected-service context, and screenshots for the task you started. Double Tap sends a screenshot, knowledge-base context including selected writing examples, and instructions through Sentient's relay to OpenAI by default, or to your own configured provider, including a compatible local model.
 
-The optional MCP mirror uploads an encrypted knowledge base. Invitations store codes and access grants under an anonymous installation identity. Diagnostics send the structural information described above. [SECURITY.md](SECURITY.md) explains the data paths and permission boundaries.
+The optional MCP mirror uploads an encrypted knowledge base, including writing examples and files you add to that folder. Invitations store codes and access grants under an anonymous installation identity. Supported email connection flows can save an email address to the separate feedback list. Diagnostics send the structural information described above. [SECURITY.md](SECURITY.md) explains the data paths and permission boundaries.
 
 </details>
 
@@ -185,7 +186,7 @@ This works even if your laptop's sleeping with its lid closed: Sentient wakes it
 <summary><b>Why does it need Full Disk Access?</b></summary>
 <br/>
 
-That's how it reads your real life: WhatsApp, iMessage, and Apple Notes live in databases on your Mac that only Full Disk Access can open. Everything's read locally, and the permission never sends anything anywhere. That's the whole trade Sentient makes: deep access on your machine, so nothing needs access in the cloud.
+Full Disk Access lets the local readers access WhatsApp, iMessage, Apple Notes, and Apple Mail data on your Mac. Source selection controls regular analysis, and writing-style setup has its own sample scope. Apple Calendar uses a separate macOS calendar permission. These permissions enable local reading; the inference and sharing paths above determine what context leaves your Mac.
 
 </details>
 
@@ -193,9 +194,9 @@ That's how it reads your real life: WhatsApp, iMessage, and Apple Notes live in 
 <summary><b>Can I see what it knows about me?</b></summary>
 <br/>
 
-All of it. The knowledge base is a folder of plain markdown on your Mac, and the built-in Knowledge window lets you read, edit, and delete any of it. If Sentient knows something you'd rather it didn't, delete the note and it's gone everywhere.
+All of it. The knowledge base is a folder of plain markdown on your Mac, and the built-in Knowledge window lets you read, edit, and delete any of it. If Sentient knows something you'd rather it didn't, edit or delete the note. Changes sync to the optional mirror when it is enabled and reachable; previously processed provider requests follow that provider's retention settings.
 
-Settings lets you delete the cloud mirror and reset the app. An unrefreshed mirror expires after 30 days. Reset preserves your invitation identity and lifetime-access grant.
+Settings lets you request deletion of the cloud mirror and reset the app. An unrefreshed mirror expires after 30 days. Reset preserves invitation and lifetime-access records, as well as the separate feedback-contact list. For contact removal, email **feedback@sentient-os.ai**.
 
 </details>
 
