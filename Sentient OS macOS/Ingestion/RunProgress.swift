@@ -78,14 +78,14 @@ nonisolated struct RunProgress: Sendable {
         lastFilePath = nil; lastSeconds = nil
     }
 
-    mutating func failSourceRead(name: String, message: String) {
+    mutating func failSourceRead(name: String, message: String, countFailure: Bool = true) {
         sourceRead = SourceRead(name: name, status: .failed)
         lastTitle = "\(name) needs another try"
         lastSummary = message; lastPath = name
         lastVerdict = nil; lastFilePath = nil; lastSeconds = nil; lastPrompt = nil
         sourceReadFailures[name] = message
         successfulSources.remove(name)
-        failed += 1
+        if countFailure { failed += 1 }
     }
 
     /// Preserve failures across pauses, clearing them only when that source succeeds on retry.

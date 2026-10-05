@@ -54,7 +54,7 @@ private final class TimeoutBox: @unchecked Sendable {
 /// truly-hung synchronous extractor keeps running on its background thread (sync work can't be
 /// force-killed) but never blocks the pipeline. FilesSource's size ceiling is the first-line guard
 /// against this; the timeout is the backstop for a small-but-corrupt file.
-private func withExtractionTimeout<T: Sendable>(_ seconds: Double,
+func withExtractionTimeout<T: Sendable>(_ seconds: Double,
                                                 _ work: @escaping @Sendable () throws -> T) async throws -> T {
     try await withCheckedThrowingContinuation { (cont: CheckedContinuation<T, Error>) in
         // Erase T here so TimeoutBox stays non-generic (see its note). The success value is always
@@ -73,11 +73,11 @@ struct IterativeRun {
 
     enum Mode { case initial, iterative, auto }
 
-    private static let preemptiveReloadEvery = 40
+    static let preemptiveReloadEvery = 40
     private static let failuresBeforeReload = 3
     private static let maxReloadsWithoutProgress = 4
-    private static let extractionTimeoutSeconds: Double = 30   // one file's content extraction can't hang the run
-    private static let sourceTimeCapSeconds: Double = 3600     // §5: a source gets ≤60 min wall-clock, then we move on (progress is per-item atomic, so it just resumes next run)
+    static let extractionTimeoutSeconds: Double = 30   // one file's content extraction can't hang the run
+    static let sourceTimeCapSeconds: Double = 3600     // §5: a source gets ≤60 min wall-clock, then we move on (progress is per-item atomic, so it just resumes next run)
 
     /// Runs each connector's buckets through ONE engine (sized to the biggest connector). The caller
     /// passes every selected source at once; per-connector load + kind ride along per bucket.
@@ -121,6 +121,10 @@ struct IterativeRun {
                 tags: ["error": String(describing: type(of: error))],
                 extra: ["model_present": String(ModelLocator.resolve() != nil)],
                 fingerprint: ["engine", "load_failed"])
+            if connectors.contains(where: { $0.kind == .appleCalendar }) {
+                AppleCalendarSource.recordIssue(.model)
+                p.failSourceRead(name: "Apple Calendar", message: "Apple Calendar is waiting for the on-device model. Try analysis again.")
+            }
             if connectors.contains(where: { $0.kind == .appleMail }) {
                 p.failed = 1; p.mailIncomplete = true
                 UserDefaults.standard.set("Apple Mail is waiting for the on-device model. Try analysis again.", forKey: AppleMailHealth.key)
@@ -184,7 +188,6 @@ struct IterativeRun {
                 #if DEBUG
                 Log("• \(cand.metadata["displayPath"] ?? cand.id) → \(outcome.verdict)")
                 #endif
-                if connector.kind == .appleCalendar, outcome.reason == .parseFailed { return .generateFailed }
                 return .ok(draft)
             } catch {
                 p.lastSummary = "(generate skipped: \(error))"
@@ -222,6 +225,26 @@ struct IterativeRun {
                 if result.diskFull { break runLoop }
                 continue
             }
+            if let calendar = connector as? AppleCalendarConnector {
+                let base = p
+                let combined: @Sendable (RunProgress) -> RunProgress = { update in
+                    var total = base
+                    total.total += update.total; total.done += update.done; total.survivors += update.survivors
+                    total.junk += update.junk; total.sensitive += update.sensitive; total.failed += update.failed
+                    total.parseFailures += update.parseFailures; total.extractionFailed += update.extractionFailed
+                    total.quietReads += update.quietReads; total.totalSeconds += update.totalSeconds
+                    total.diskFull = update.diskFull
+                    total.sourceReadFailures.merge(update.sourceReadFailures) { _, new in new }
+                    total.successfulSources.formUnion(update.successfulSources)
+                    for source in update.successfulSources { total.sourceReadFailures.removeValue(forKey: source) }
+                    total.updateLastItem(from: update)
+                    return total
+                }
+                let result = await runCalendar(calendar, engine: engine) { onProgress(combined($0)) }
+                p = combined(result)
+                if result.diskFull { break runLoop }
+                continue
+            }
             let buckets: [Bucket]
             do {
                 buckets = try await withExtractionTimeout(Self.extractionTimeoutSeconds) {
@@ -236,7 +259,6 @@ struct IterativeRun {
                     tags: ["source": connector.kind.rawValue, "error": String(describing: type(of: error))],
                     fingerprint: ["source", "dropped", connector.kind.rawValue])
                 p.failed += 1
-                if connector.kind == .appleCalendar { AppleCalendarSource.recordIssue(error) }
                 continue
             }
 
@@ -255,7 +277,6 @@ struct IterativeRun {
                 // first run was interrupted, RESUME it; collapsed (floor nil) → everyday catch-up.
                 let effective: Mode
                 switch mode {
-                case _ where bucket.snapshot != nil: effective = .iterative
                 case .auto:      effective = (state == nil || state?.floor != nil) ? .initial : .iterative
                 case .initial:   effective = .initial
                 case .iterative: effective = .iterative
@@ -265,9 +286,6 @@ struct IterativeRun {
                 let work: [(key: ItemKey, item: Candidate)]
                 let top: ItemKey?
                 switch effective {
-                case _ where bucket.snapshot != nil:
-                    top = nil
-                    work = bucket.items.sorted { $0.key < $1.key }
                 case .initial:
                     // Explicit INITIAL = full reset (re-summarize everything). An .auto-chosen initial
                     // (fresh first run OR resuming an interrupted one) keeps its partial progress.
@@ -300,7 +318,6 @@ struct IterativeRun {
                 onProgress(p)
 
                 var finished = true
-                var snapshotNotes: [NoteDraft] = []
                 for w in work {
                     if Task.isCancelled { finished = false; break runLoop }
                     // §5: source over its 60-min budget → stop this source (all its buckets), next source.
@@ -354,16 +371,6 @@ struct IterativeRun {
                     case .generateFailed:   p.failed += 1; draft = nil
                     }
 
-                    if bucket.snapshot != nil {
-                        // Calendar events are mutable and deletions have no change cursor. Never
-                        // advance per event, nor publish survivors from an incomplete snapshot.
-                        if case .ok = result {} else { finished = false }
-                        if let draft { snapshotNotes.append(draft) }
-                        sinceReload += 1; p.done += 1; processedThisConnector += 1
-                        onProgress(p)
-                        continue
-                    }
-
                     // ONE atomic store write per item: optional survivor note + marker advance — no gap
                     // for a crash to land in. Iterative climbs the mark; initial sinks the floor.
                     let outcome: CycleStore.CommitOutcome
@@ -385,22 +392,6 @@ struct IterativeRun {
                     }
                     if outcome == .failed { p.failed += 1; break runLoop }
                     sinceReload += 1; p.done += 1; processedThisConnector += 1
-                    onProgress(p)
-                }
-
-                if let snapshot = bucket.snapshot, finished, !Task.isCancelled {
-                    do {
-                        try await withExtractionTimeout(Self.extractionTimeoutSeconds) { try snapshot.validate() }
-                        try Task.checkCancellation()
-                        let result = await store.commitCalendarSnapshot(snapshot, notes: snapshotNotes)
-                        if result == .diskFull { p.diskFull = true; break runLoop }
-                        if result == .failed { p.failed += 1 }
-                        if result == .saved { UserDefaults.standard.removeObject(forKey: AppleCalendarSource.issueKey) }
-                    } catch {
-                        p.failed += 1
-                        AppleCalendarSource.recordIssue(error)
-                        Log("Apple Calendar snapshot not published: \(ErrorLabel(error))")
-                    }
                     onProgress(p)
                 }
 

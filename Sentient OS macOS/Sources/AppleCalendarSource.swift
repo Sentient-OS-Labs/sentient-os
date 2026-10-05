@@ -32,6 +32,9 @@ nonisolated enum AppleCalendarSource {
 
     /// Structure-only source health. Set before a run, clear only after a complete commit.
     /// A crash therefore leaves an honest retry message, never a persisted "reading" spinner.
+    enum Issue: String { case incomplete, permission, missing, limit, changed, model, storage, deadline }
+    static func recordIssue(_ issue: Issue) { UserDefaults.standard.set(issue.rawValue, forKey: issueKey) }
+
     static func recordIssue(_ error: Error? = nil) {
         let code: String
         switch error as? ReadError {
@@ -51,6 +54,9 @@ nonisolated enum AppleCalendarSource {
         case "limit": "These calendars contain more than 2,000 events in the analysis window. Choose fewer calendars to continue."
         case "changed": "Your calendar changed during analysis. Run Analyze Now to read the updated schedule."
         case "incomplete": "Calendar analysis did not finish. Run Analyze Now again, or choose fewer calendars."
+        case "model": "The on-device model could not finish Calendar analysis. No partial schedule was saved. Try analysis again."
+        case "storage": "Calendar analysis could not save its results. Check available disk space, then try again."
+        case "deadline": "Calendar analysis reached its time limit. Choose fewer calendars or try again."
         default: nil
         }
     }
@@ -117,11 +123,21 @@ nonisolated enum AppleCalendarSource {
         let end: Date
         let schedule: String
         let content: String
+        let inputRisk: String?
+        /// Ephemeral hash of complete source fields; edits past the model excerpt still invalidate it.
+        let revision: String
+
+        init(id: String, start: Date, end: Date, schedule: String, content: String,
+             inputRisk: String? = nil, revision: String = "") {
+            self.id = id; self.start = start; self.end = end; self.schedule = schedule
+            self.content = content; self.inputRisk = inputRisk; self.revision = revision
+        }
 
         var candidate: Candidate {
             Candidate(id: id, kind: .appleCalendar, itemDate: start,
                       metadata: ["folder": "Apple Calendar", "displayPath": "Apple Calendar event",
-                                 "calendarText": content, "calendarSchedule": schedule])
+                                 "calendarText": content, "calendarSchedule": schedule,
+                                 "calendarInputRisk": inputRisk ?? ""])
         }
     }
 
@@ -172,30 +188,52 @@ nonisolated enum AppleCalendarSource {
             guard !exceededLimit else { throw ReadError.tooManyEvents } // never silently truncate coverage
             var events: [String: Event] = [:]
             for event in raw {
-                guard let start = event.startDate, let end = event.endDate, start <= end,
+                guard let rawStart = event.startDate, let rawEnd = event.endDate, rawStart <= rawEnd,
+                      rawStart.timeIntervalSince1970.isFinite, rawEnd.timeIntervalSince1970.isFinite,
                       !event.calendarItemIdentifier.isEmpty else { throw ReadError.invalidEvent }
+                let zone = event.isAllDay ? TimeZone.current : (event.timeZone ?? .current)
+                let (start, end) = interval(start: rawStart, end: rawEnd, allDay: event.isAllDay, zone: zone)
                 guard start < bounds.upper, end > bounds.lower || (start == end && start >= bounds.lower) else { continue }
                 let id = occurrenceID(calendarID: event.calendar.calendarIdentifier,
                                       itemID: event.calendarItemIdentifier,
                                       occurrence: event.occurrenceDate ?? start)
-                let zone = event.isAllDay ? TimeZone.current : (event.timeZone ?? .current)
                 let schedule = schedule(start: start, end: end, allDay: event.isAllDay, zone: zone,
                                         status: event.status.rawValue, availability: event.availability.rawValue,
                                         response: event.attendees?.first(where: \.isCurrentUser)?.participantStatus.rawValue)
                 // Attendee addresses, organizer addresses, and conference URLs are deliberately
                 // omitted. Even local calendar/account names stay out of downstream metadata.
-                let fields = ["title": bounded(event.title ?? "", bytes: 512),
-                              "notes": bounded(event.notes ?? "", bytes: 3_000),
-                              "location": bounded(event.location ?? "", bytes: 512), "schedule": schedule]
-                let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
-                let content = String(decoding: try encoder.encode(fields), as: UTF8.self)
-                let value = Event(id: id, start: start, end: end, schedule: schedule, content: content)
+                let projection = try project(title: event.title ?? "", notes: event.notes ?? "",
+                                             location: event.location ?? "", schedule: schedule)
+                let value = Event(id: id, start: start, end: end, schedule: schedule, content: projection.content,
+                                  inputRisk: projection.risk, revision: projection.revision)
                 if let old = events[id], old != value { throw ReadError.invalidEvent }
                 events[id] = value
             }
             guard hasAccess else { throw ReadError.permission }
             return Snapshot(capturedAt: now, coverage: bounds, events: events.values.sorted { $0.id < $1.id })
         }
+    }
+
+    /// EventKit on macOS may return an all-day inclusive 23:59:59 end. Normalize to
+    /// local calendar-day boundaries, preserving already-exclusive midnight ends and DST.
+    static func interval(start: Date, end: Date, allDay: Bool, zone: TimeZone) -> (Date, Date) {
+        guard allDay else { return (start, end) }
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
+        let first = calendar.startOfDay(for: start), last = calendar.startOfDay(for: end)
+        let exclusive = end == last && end > first ? last : calendar.date(byAdding: .day, value: 1, to: last)!
+        return (first, exclusive)
+    }
+
+    static func project(title: String, notes: String, location: String, schedule: String)
+        throws -> (content: String, risk: String?, revision: String) {
+        let full = [title, notes, location]
+        let fields = ["title": bounded(title, bytes: 512), "notes": bounded(notes, bytes: 3_000),
+                      "location": bounded(location, bytes: 512), "schedule": schedule]
+        var data = fields
+        data["truncated"] = fields["title"] != title || fields["notes"] != notes || fields["location"] != location ? "true" : "false"
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        return (String(decoding: try encoder.encode(data), as: UTF8.self),
+                Triage.calendarInputRisk(full), digest(full))
     }
 
     /// Recurrences share an item ID. Their ORIGINAL occurrence date distinguishes instances,
@@ -207,13 +245,20 @@ nonisolated enum AppleCalendarSource {
     static func schedule(start: Date, end: Date, allDay: Bool, zone: TimeZone,
                          status: Int, availability: Int, response: Int?) -> String {
         let formatter = ISO8601DateFormatter(); formatter.timeZone = zone
+        if allDay { formatter.formatOptions = [.withFullDate] }
+        let displayedDates: String
+        if allDay {
+            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = zone
+            let finalDay = calendar.date(byAdding: .day, value: -1, to: end)!
+            displayedDates = "All-day dates: \(formatter.string(from: start)) through \(formatter.string(from: finalDay)) (inclusive). "
+        } else { displayedDates = "" }
         let state: String
         switch status { case 1: state = "confirmed"; case 2: state = "tentative"; case 3: state = "cancelled"; default: state = "unknown" }
         let busy: String
         switch availability { case 0: busy = "busy"; case 1: busy = "free"; case 2: busy = "tentative"; case 3: busy = "unavailable"; default: busy = "unknown" }
         let participation: String
-        switch response { case 1: participation = "pending"; case 2: participation = "accepted"; case 3: participation = "declined"; case 4: participation = "tentative"; default: participation = "unknown" }
-        return "Start: \(formatter.string(from: start)); end: \(formatter.string(from: end)) (exclusive); "
+        switch response { case 1: participation = "pending"; case 2: participation = "accepted"; case 3: participation = "declined"; case 4: participation = "tentative"; case 5: participation = "delegated"; case 6: participation = "completed"; case 7: participation = "in process"; default: participation = "unknown" }
+        return displayedDates + "Start: \(formatter.string(from: start)); end: \(formatter.string(from: end)) (exclusive); "
             + "time zone: \(zone.identifier); all-day: \(allDay); status: \(state); availability: \(busy); response: \(participation)."
     }
 
@@ -223,6 +268,19 @@ nonisolated enum AppleCalendarSource {
         SHA256.hash(data: try! JSONEncoder().encode(parts)).map { String(format: "%02x", $0) }.joined()
     }
     private static func bounded(_ text: String, bytes: Int) -> String {
-        String(decoding: text.utf8.prefix(bytes), as: UTF8.self)
+        // Count the encoded JSON cost, not raw UTF-8: a control scalar can expand to six bytes.
+        // Iterate scalars so the cap cannot introduce a replacement character mid-sequence.
+        var count = 0, result = ""
+        for scalar in text.unicodeScalars {
+            let cost: Int
+            switch scalar.value {
+            case 8, 9, 10, 12, 13, 34, 92: cost = 2
+            case 0..<32: cost = 6
+            default: cost = scalar.utf8.count
+            }
+            guard count + cost <= bytes else { break }
+            result.unicodeScalars.append(scalar); count += cost
+        }
+        return result
     }
 }

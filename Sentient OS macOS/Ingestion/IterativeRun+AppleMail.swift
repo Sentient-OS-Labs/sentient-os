@@ -96,7 +96,7 @@ extension IterativeRun {
                                     }
                                     if parsed != nil { break }
                                 }
-                                guard let parsed else { throw Triage.MailReplyFailure.invalidJSON }
+                                guard let parsed else { throw Triage.ReplyFailure.invalidJSON }
                                 // Metadata policy wins even if the model calls a promotion useful.
                                 // Sensitive always wins over junk; only safe previews reach the card.
                                 let outcome = forcedJunk && parsed.verdict != .sensitive
@@ -124,7 +124,7 @@ extension IterativeRun {
                                 p.failed += 1
                                 // Malformed JSON is a deferred classification, not a broken GPU.
                                 // Repeated bad outputs must not starve all remaining message bodies.
-                                if let reason = error as? Triage.MailReplyFailure {
+                                if let reason = error as? Triage.ReplyFailure {
                                     p.parseFailures += 1; modelFailures = 0
                                     failureReason = "The local model returned an incomplete answer. This email remains queued for another analysis."
                                     Log("Apple Mail analysis deferred: \(reason.rawValue)")

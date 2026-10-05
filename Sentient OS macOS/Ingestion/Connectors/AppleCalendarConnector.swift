@@ -8,7 +8,9 @@ import Foundation
 struct AppleCalendarConnector: Connector {
     let calendarIDs: Set<String>
     let kind = SourceKind.appleCalendar
-    var maxTokens: Int { 8_192 }
+    // Includes JSON escaping, the fixed prompt, retry instruction and reply budget.
+    nonisolated static let contextSize = 16_384
+    var maxTokens: Int { Self.contextSize }
 
     func buckets(since marks: [String: ItemKey]) throws -> [Bucket] {
         guard calendarIDs == AppleCalendarSource.selectedIDs else { throw AppleCalendarSource.ReadError.changed }
