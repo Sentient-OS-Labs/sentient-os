@@ -3,14 +3,16 @@
 //  Sentient OS macOS
 //
 //  The iterative system's database — connector-agnostic, with its OWN on-disk container (isolated
-//  from the old `Store`, so its models never schema-wipe the old dev DB). Two models:
+//  from the old `Store`, so its models never schema-wipe the old dev DB). Three models:
 //
 //   - BucketPointer  DURABLE. One row per BUCKET (folder root / chat / "notes"). Normally the
 //                    HIGH-WATER MARK — everything ≤ (order, tiebreak) is done, everything newer is
 //                    new. During a bucket's FIRST run it also carries a FLOOR (the oldest item done
 //                    so far, sinking one item at a time) so a crash mid-descent RESUMES below the
 //                    floor instead of restarting; the floor collapses into the mark once the descent
-//                    reaches the bottom. The ONLY state that survives a cycle.
+//                    reaches the bottom. Mail carries its own versioned Int64 frontiers.
+//   - AppleMailReceipt DURABLE. Opaque identity and content digest for accepted Mail only.
+//                    Prevents duplicate summaries and revalidates later uses. No rejected ledger.
 //   - CycleNote      EPHEMERAL. One survivor summary, wiped at cycle end (the proactive button).
 //                    Junk/sensitive store nothing. `kind` + `sourceID` carry the cloud's trust tag.
 //
@@ -44,6 +46,8 @@ final class BucketPointer {
     var updatedAt: Date
     /// Hosted-read provenance. Nil on existing/local buckets; a new origin requires backfill.
     var mcpReadOrigin: String? = nil
+    /// Versioned Int64 Mail traversal state. Nil for every pre-existing source.
+    var appleMailState: Data? = nil
 
     init(bucketKey: String, mark: ItemKey, floor: ItemKey? = nil, updatedAt: Date = Date()) {
         self.bucketKey = bucketKey
@@ -58,6 +62,30 @@ final class BucketPointer {
         guard let floorOrder else { return nil }
         return ItemKey(order: floorOrder, tiebreak: floorTiebreak ?? "")
     }
+}
+
+/// Only accepted messages have durable identity receipts. Rejected mail leaves no identity ledger.
+@Model
+final class AppleMailReceipt {
+    @Attribute(.unique) var identity: String
+    var bucketKey: String
+    var contentHash: String
+    var generation: String
+    var rowID: Int64
+    var messageKey: String? = nil
+    init(identity: String, bucketKey: String, contentHash: String, generation: String, rowID: Int64, messageKey: String? = nil) {
+        self.identity = identity; self.bucketKey = bucketKey; self.contentHash = contentHash
+        self.generation = generation; self.rowID = rowID
+        self.messageKey = messageKey
+    }
+}
+
+struct AppleMailReceiptValue: Sendable {
+    let identity: String
+    let contentHash: String
+    let generation: String
+    let rowID: Int64
+    var messageKey: String? = nil
 }
 
 /// EPHEMERAL — one survivor summary for one item, this cycle only.
@@ -141,6 +169,54 @@ struct NoteDraft: Sendable {
 
 @ModelActor
 actor CycleStore {
+    private var calendarSnapshotReady = false
+    func invalidateCalendarSnapshot() { calendarSnapshotReady = false }
+
+    func mailCheckpoint(_ bucketKey: String) throws -> AppleMailCheckpoint? {
+        guard let data = try fetchRow(bucketKey)?.appleMailState else { return nil }
+        let state = try JSONDecoder().decode(AppleMailCheckpoint.self, from: data)
+        guard state.version == 1 else { throw AppleMailError.unsupportedSchema }
+        return state
+    }
+
+    func mailReceipts(_ bucketKey: String) throws -> [String: AppleMailReceiptValue] {
+        let rows = try modelContext.fetch(FetchDescriptor<AppleMailReceipt>(predicate: #Predicate { $0.bucketKey == bucketKey }))
+        return Dictionary(uniqueKeysWithValues: rows.map { r in
+            (r.identity, AppleMailReceiptValue(identity: r.identity, contentHash: r.contentHash, generation: r.generation, rowID: r.rowID, messageKey: r.messageKey))
+        })
+    }
+
+    /// Summary, survivor receipt, rejected-summary removal and ALL progress commit together.
+    /// `remove` is used when a formerly accepted message becomes excluded or disappears.
+    func commitMail(bucketKey: String, state: AppleMailCheckpoint, note: NoteDraft? = nil,
+                    receipt: AppleMailReceiptValue? = nil, remove: Set<String> = []) -> CommitOutcome {
+        guard let data = try? JSONEncoder().encode(state) else { return .failed }
+        let replacing = remove.union(note.map { [$0.sourceID] } ?? [])
+        return commit(bucketKey: bucketKey, note: note, prepare: {
+            for id in replacing {
+                let notes = try self.modelContext.fetch(FetchDescriptor<CycleNote>(predicate: #Predicate { $0.sourceID == id && $0.bucketKey == bucketKey }))
+                for n in notes { self.modelContext.delete(n) }
+            }
+            for id in remove {
+                let receipts = try self.modelContext.fetch(FetchDescriptor<AppleMailReceipt>(predicate: #Predicate { $0.identity == id }))
+                for r in receipts { self.modelContext.delete(r) }
+            }
+            if let receipt {
+                let id = receipt.identity
+                let existing = try self.modelContext.fetch(FetchDescriptor<AppleMailReceipt>(predicate: #Predicate { $0.identity == id })).first
+                if let existing, !remove.contains(id) {
+                    existing.contentHash = receipt.contentHash; existing.generation = receipt.generation; existing.rowID = receipt.rowID
+                    existing.messageKey = receipt.messageKey
+                } else {
+                    self.modelContext.insert(AppleMailReceipt(identity: receipt.identity, bucketKey: bucketKey,
+                        contentHash: receipt.contentHash, generation: receipt.generation, rowID: receipt.rowID, messageKey: receipt.messageKey))
+                }
+            }
+        }, apply: { r in r.appleMailState = data; r.updatedAt = Date() }, make: {
+            let r = BucketPointer(bucketKey: bucketKey, mark: ItemKey(order: 0, tiebreak: ""))
+            r.appleMailState = data; return r
+        })
+    }
 
     #if DEBUG
     /// Narrow fault seam for the real transaction test; never applies to non-MCP commits.
@@ -341,6 +417,28 @@ actor CycleStore {
         })
     }
 
+    /// A complete local calendar snapshot replaces pending summaries and its coverage checkpoint
+    /// together, including an empty result. A crash never publishes half a schedule. Rejected event
+    /// IDs and raw content are absent from both the notes and the checkpoint.
+    func commitCalendarSnapshot(_ snapshot: AppleCalendarSource.Snapshot, notes: [NoteDraft]) -> CommitOutcome {
+        let key = AppleCalendarSource.bucketKey
+        let mark = ItemKey(order: snapshot.capturedAt.timeIntervalSince1970, tiebreak: snapshot.coverage.encoded)
+        let result = commit(bucketKey: key, note: nil, prepare: {
+            guard AppleCalendarSource.isEnabled, snapshot.coverage.matchesSelection else {
+                throw AppleCalendarSource.ReadError.changed
+            }
+            let previous = try self.modelContext.fetch(FetchDescriptor<CycleNote>(
+                predicate: #Predicate { $0.bucketKey == key }))
+            for note in previous { self.modelContext.delete(note) }
+            for note in notes + [snapshot.marker] { self.insertNote(bucketKey: key, note: note) }
+        }, apply: { r in
+            r.order = mark.order; r.tiebreak = mark.tiebreak
+            r.floorOrder = nil; r.floorTiebreak = nil; r.mcpReadOrigin = nil; r.updatedAt = Date()
+        }, make: { BucketPointer(bucketKey: key, mark: mark) })
+        calendarSnapshotReady = result == .saved
+        return result
+    }
+
     /// FIRST RUN (initial descent) — record an optional survivor note AND sink the floor to `floor`
     /// (top stays fixed), in one save. Creates the row with `top` on the first step. A crash leaves an
     /// honest floor → the next run resumes strictly below it.
@@ -371,7 +469,10 @@ actor CycleStore {
     func notes() -> [CycleNoteItem] {
         let rows = (try? modelContext.fetch(FetchDescriptor<CycleNote>(
             sortBy: [SortDescriptor(\.itemDateEpoch, order: .reverse)]))) ?? []
-        return rows.map(item(from:))
+        let calendarMark = pointer(AppleCalendarSource.bucketKey)
+        let calendarAllowed = calendarSnapshotReady && AppleCalendarSource.isEnabled
+            && calendarMark.flatMap { AppleCalendarSource.Coverage.decode($0.tiebreak) }?.matchesSelection == true
+        return rows.filter { $0.kind != SourceKind.appleCalendar.rawValue || calendarAllowed }.map(item(from:))
     }
 
     /// End-of-cycle wipe (fired by the proactive button) — pointers persist, notes do not.
@@ -380,9 +481,20 @@ actor CycleStore {
         try? modelContext.save()
     }
 
+    /// Clear only the corpus actually consumed. Mail notes withheld after lost access or a
+    /// temporary body failure remain pending for a later validated cycle.
+    func wipeNotes(sourceIDs: Set<String>) {
+        do {
+            let notes = try modelContext.fetch(FetchDescriptor<CycleNote>())
+            for note in notes where sourceIDs.contains(note.sourceID) { modelContext.delete(note) }
+            try modelContext.save()
+        } catch { modelContext.rollback(); report(error, op: "wipe_consumed") }
+    }
+
     /// Factory reset — delete EVERY pointer and EVERY note (the dev "Reset everything" button pairs
     /// this with wiping the vault). After this, the next run is a fresh first run for every bucket.
     func wipeEverything() {
+        try? modelContext.delete(model: AppleMailReceipt.self)
         try? modelContext.delete(model: CycleNote.self)
         try? modelContext.delete(model: BucketPointer.self)
         try? modelContext.save()
@@ -435,7 +547,7 @@ extension CycleStore {
     }
 
     private static let persistentStore: CycleStore = {
-        let schema = Schema([BucketPointer.self, CycleNote.self])
+        let schema = Schema([BucketPointer.self, CycleNote.self, AppleMailReceipt.self])
         let url = URL.sentientSupport.appending(path: "IterativeCycle.store")
         let config = ModelConfiguration(schema: schema, url: url)
         do {

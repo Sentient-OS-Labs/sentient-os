@@ -415,9 +415,10 @@ enum GranolaSource {
         if let parsed = format.date(from: value) ?? ISO8601DateFormatter().date(from: value) { return parsed }
         guard value.utf8.count <= 80, let split = value.lastIndex(of: " ") else { return nil }
         let zone = String(value[value.index(after: split)...])
-        // The observed US Pacific format and unambiguous UTC/numeric offsets only.
+        // Observed US Eastern/Pacific display forms and explicit UTC/numeric offsets.
         // Do not guess ambiguous abbreviations such as CST or IST.
-        let offsets = ["UTC": 0, "GMT": 0, "PDT": -7 * 3600, "PST": -8 * 3600]
+        let offsets = ["UTC": 0, "GMT": 0, "EDT": -4 * 3600, "EST": -5 * 3600,
+                       "PDT": -7 * 3600, "PST": -8 * 3600]
         var offset = offsets[zone]
         if offset == nil, zone.range(of: #"^[+-](?:0\d|1[0-4]):[0-5]\d$"#, options: .regularExpression) != nil {
             let parts = zone.dropFirst().split(separator: ":")

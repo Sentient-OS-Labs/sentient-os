@@ -73,6 +73,8 @@ enum SourceSelection {
         if bool("dbg.run.whatsapp", default: false) && !chatJIDs.isEmpty { n += 1 }
         if bool("dbg.run.imessage", default: false) && !imessageGUIDs.isEmpty { n += 1 }
         if bool("dbg.run.notes", default: false) { n += 1 }
+        if !AppleMailSelection.accounts.isEmpty { n += 1 }
+        if AppleCalendarSource.isEnabled { n += 1 }
         // Hosted Gmail and Calendar need a subscription backend, so they cannot count
         // toward the minimum on a custom endpoint.
         if ModelBackend.connectorsAvailable {
@@ -91,9 +93,11 @@ enum SourceSelection {
     static var hasEmailAndCalendar: Bool {
         let packs = ConnectorRegistry.kbEnabledConnectors().compactMap { ConnectorRegistry.pack(for: $0) }
         let email = (ModelBackend.connectorsAvailable && bool("dbg.run.gmail", default: false))
+            || !AppleMailSelection.accounts.isEmpty
             || packs.contains { $0.slug == OutlookMailConnector.slug }
         let calendar = (ModelBackend.connectorsAvailable && bool("dbg.run.calendar", default: false))
             || packs.contains { $0.providesCalendarContext }
+            || AppleCalendarSource.isEnabled
         return email && calendar
     }
 
@@ -110,6 +114,10 @@ enum SourceSelection {
             s.append(.imessage(chatGUIDs: imessageGUIDs))
         }
         if bool("dbg.run.notes", default: false) && fdaGranted { s.append(.notes) }
+        // Include selected Mail even when the broad FDA probe fails: its own read reports a
+        // useful error instead of silently disappearing from analysis.
+        if !AppleMailSelection.accounts.isEmpty { s.append(.appleMail(accounts: AppleMailSelection.accounts)) }
+        if AppleCalendarSource.isEnabled { s.append(.appleCalendar(calendarIDs: AppleCalendarSource.selectedIDs)) }
         return s
     }
 

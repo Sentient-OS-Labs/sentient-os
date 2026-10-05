@@ -29,6 +29,7 @@ struct KnowledgeSourcesPicker: View {
     @AppStorage("dbg.run.gmail")       private var runGmail = false
     @AppStorage("dbg.run.calendar")       private var runCalendar = false
     @AppStorage(CustomRoots.key) private var customRootsRaw = ""
+    @AppStorage(AppleCalendarSource.issueKey) private var calendarReadIssue = ""
     // Re-renders the connector catalog and availability when the engine changes,
     // and keys the census reload below.
     @AppStorage(ModelBackend.key) private var backendRaw = ""
@@ -40,6 +41,9 @@ struct KnowledgeSourcesPicker: View {
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
     @State private var showCalendarConnect = false
+    @State private var showAppleMailPicker = false
+    @AppStorage(AppleMailSelection.key) private var appleMailAccounts = ""
+    @State private var showAppleCalendarConnect = false
     @State private var flashMinimum = false
 
     private var customRoots: [URL] { CustomRoots.decode(customRootsRaw) }
@@ -110,6 +114,12 @@ struct KnowledgeSourcesPicker: View {
         }
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
+        .sheet(isPresented: $showAppleMailPicker) {
+            AppleMailPicker(initialSelection: AppleMailSelection.accounts) { accounts in
+                appleMailAccounts = accounts.sorted().joined(separator: ",")
+            }
+        }
+        .sheet(isPresented: $showAppleCalendarConnect) { AppleCalendarConnectSheet() }
         .sheet(item: $selectedConnector) { source in
             ConnectorConnectSheet(source: source, connectors: $connectors, context: context)
         }
@@ -121,7 +131,7 @@ struct KnowledgeSourcesPicker: View {
 
     private var fdaLine: some View {
         VStack(alignment: .leading, spacing: 8) {
-            StatusLine(title: "Full Disk Access is off, so WhatsApp, iMessage & Notes can't be read.",
+            StatusLine(title: "Full Disk Access is off, so Mail, WhatsApp, iMessage & Notes can't be read.",
                        health: .warn, note: "not granted", fixTitle: "Grant…") {
                 Permissions.openFullDiskAccessSettings()
             }
@@ -163,7 +173,7 @@ struct KnowledgeSourcesPicker: View {
                     HStack(spacing: 18) { conversationPills }
                     VStack(spacing: 10) { conversationPills }
                 }
-                sourceNote("Understood privately using Sentient's on-device LLM. Your chats never leave this device.",
+                sourceNote(PrivacyCopy.conversationSources,
                            symbol: "lock")
             }
         }
@@ -201,7 +211,7 @@ struct KnowledgeSourcesPicker: View {
                         calendarColumn
                     }
                 }
-                sourceNote("Connect through your own \(ModelBackend.current == .claude ? "Claude" : "ChatGPT") account, never our servers.",
+                sourceNote(PrivacyCopy.emailSources,
                            symbol: "lock")
             }
         } trailing: {
@@ -218,12 +228,22 @@ struct KnowledgeSourcesPicker: View {
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
                 connectorPill(source, featured: true)
             }
+            KnowledgeSourcePill(label: "Apple Mail", asset: "AppleMailMark",
+                                selected: !appleMailAccounts.isEmpty, featured: true) {
+                showAppleMailPicker = true
+            }
+            .accessibilityValue(appleMailAccounts.isEmpty ? "Not selected"
+                : "\(AppleMailSelection.accounts.count) \(AppleMailSelection.accounts.count == 1 ? "account" : "accounts") selected for analysis")
+            .help("Choose which Apple Mail accounts to include.")
         }
         .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
     }
 
     private var calendarColumn: some View {
         VStack(alignment: .leading, spacing: 9) {
+            KnowledgeSourcePill(label: "Apple Calendar", detail: appleCalendarDetail,
+                                asset: "AppleCalendarMark", selected: AppleCalendarSource.isEnabled,
+                                featured: true) { showAppleCalendarConnect = true }
             KnowledgeSourcePill(label: "Google Calendar", asset: "GoogleCalendarMark", selected: runCalendar,
                                 featured: true, locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
@@ -231,6 +251,13 @@ struct KnowledgeSourcesPicker: View {
             }
         }
         .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var appleCalendarDetail: String? {
+        let count = AppleCalendarSource.selectedIDs.count
+        if count > 0 && !AppleCalendarSource.hasAccess { return "Calendar access needed · Manage" }
+        if count > 0 && !calendarReadIssue.isEmpty && !PipelineActivity.shared.isRunning { return "Analysis needs attention · Manage" }
+        return count > 0 ? "\(count) calendars selected · On this Mac" : nil
     }
 
     private var otherAppsGroup: some View {

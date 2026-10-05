@@ -36,7 +36,8 @@ enum ConnectorReadPolicyTests {
                  .init(slug: "slack", displayName: "Slack", origin: .chatgpt,
                        serverURL: nil, catalogID: slackID, iconPath: nil, healthy: true, lastSeen: Date())]
             } ?? []
-            domain["mcp.connectors.chatgpt"] = try! JSONEncoder().encode(connectors)
+            let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.bundled." + $0 } ?? "mcp.connectors.chatgpt"
+            domain[codexKey] = try! JSONEncoder().encode(connectors)
             domain["mcp.connectors.claude"] = try! JSONEncoder().encode([
                 ConnectorCensus.DetectedConnector(slug: "slack", displayName: "Slack", origin: .claude,
                     serverURL: "https://mcp.slack.com/mcp", catalogID: nil, iconPath: nil, healthy: true, lastSeen: Date())])
@@ -62,8 +63,10 @@ enum ConnectorReadPolicyTests {
         }
         func policy(_ args: [String]) -> String { args.last { $0.hasPrefix("apps = ") } ?? "" }
 
-        install()
-        check(refuses(invocation(["google-drive"])), "missing catalog identity refuses the read")
+        // An absent cached entry can legitimately resolve from this Mac's installed plugin.
+        // Use an explicitly empty identity to exercise refusal without depending on that cache.
+        install("")
+        check(refuses(invocation(["google-drive"])), "empty catalog identity refuses the read")
         install("connector_bad.id")
         check(refuses(invocation(["google-drive"])), "malformed catalog identity refuses the read")
         install(driveID + "\n")
@@ -155,7 +158,7 @@ enum ConnectorReadPolicyTests {
                     }
                 }
                 fixture["claude-slack-computer"] = try ModelBackend.$runOverride.withValue(.claude) {
-                    try ClaudeCLI.agentArguments(prompt: "Synthetic fixture", modelID: "haiku", effortArg: "low", socketPath: "/tmp/fixture.sock")
+                    try CodexCLI.agentArguments(prompt: "Synthetic fixture", imagePaths: [], modelID: "claude-sonnet-5-5", effortArg: "low")
                 }
                 // Exercise the production action and computer-use deny recipes for the new
                 // reviewed mutation modes, using volatile synthetic inventories only.
@@ -180,9 +183,11 @@ enum ConnectorReadPolicyTests {
                         try ClaudeCLI.arguments(for: action, modelID: "haiku", effortArg: "low")
                     }
                     fixture["claude-" + slug + "-computer"] = try ModelBackend.$runOverride.withValue(.claude) {
-                        try ClaudeCLI.agentArguments(prompt: "Synthetic fixture", modelID: "haiku", effortArg: "low", socketPath: "/tmp/fixture.sock")
+                        try CodexCLI.agentArguments(prompt: "Synthetic fixture", imagePaths: [], modelID: "claude-sonnet-5-5", effortArg: "low")
                     }
-                    for mode in ["action", "computer"] {
+                    let computer = fixture["claude-" + slug + "-computer"]!
+                    check(computer.first == "exec" && !computer.contains("--disallowedTools"), "Claude computer tasks use Codex; hosted connector actions retain Claude policy")
+                    for mode in ["action"] {
                         let args = fixture["claude-" + slug + "-" + mode]!
                         let index = args.firstIndex(of: "--disallowedTools")!
                         let denied = Set(args[index + 1].split(separator: ",").map(String.init))

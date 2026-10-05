@@ -1,10 +1,15 @@
 # Proactive Intelligence (Proactive/)
 
-The product's headline feature: overnight, Sentient decides what in the user's life is worth doing,
+**Useful work, ready before you ask.** An overdue reply with the missing project detail. A deadline
+that needs a form. A trip that still needs a check-in. Proactive intelligence looks for unfinished
+work supported by your context, prepares the next step, and puts it within reach in the morning.
+These are examples, not fixed daily cards or a promise to find something every night.
+
+Overnight, Sentient decides what in the user's life is worth doing,
 verifies it against the live world, prepares it (a draft, an event, a step-by-step plan, or a briefing),
 and leaves it on the home as a card the user fires with one click. Three parts, each its own prompt,
-lined up exactly on the permission boundary: parts 1 and 2 are read-only; part 3 is the single
-write-capable step and runs only on the user's press. Plus the cycle that sequences everything and the
+lined up exactly on the permission boundary: parts 1 and 2 are read-only with respect to external services; part 3 is the
+action-execution step and runs only on the user's press. Plus the cycle that sequences everything and the
 one-time welcome gift letter.
 
 ## Files
@@ -36,6 +41,17 @@ UI renders; `onLine` streams codex's humanized play-by-play from every cloud sta
 "THINKING" trail; the scheduler passes nothing). `resetAll()` forgets the judge items, the prepared
 deck, the gift, and the last-cycle stamp.
 
+Local files, conversations, notes, Apple Mail and Apple Calendar are first analyzed on-device.
+The selected frontier model organizes the knowledge and prepares suggestions; it can be local or
+hosted. Apple Mail and Calendar provide email and schedule context without a ChatGPT or Claude
+subscription. Hosted/direct connectors are optional additional sources, with their own support.
+
+Apple Calendar summaries are dated local snapshots, distinct from hosted live-calendar context.
+When they are present, both judge and research receive `CalendarContext.localSnapshotPolicy`: do
+not infer free time or attendance, do not pass local occurrence IDs to hosted APIs, and do not treat
+this read-only connection as write access. Any native-calendar action must be prepared for explicit
+user-triggered computer use and verify the live calendar first.
+
 ## PART 1: the judge (`Proactive.findActionItems`)
 
 - **Input:** the last 7 days of summaries from every source (`Proactive.recent`: windowed by item date, byte-budgeted to `CorpusSlicer.budget`, oldest dropped first), plus the pre-fetched live calendar block, plus the user's standing instructions from Settings (`Proactive.instructionsBlock`, from `CustomInstructions.proactive`), plus the clock ("Right now it is Thursday, July 17, 2026 at 1:05 PM (PDT)", since a hermetic run cannot even run `date`).
@@ -50,11 +66,11 @@ One read-only agentic pass over part 1's items, two jobs per item:
 1. **Verify** against the live world and DROP the stale ones: the knowledge base (`cwd` = the vault; the identity anchor, the user's voice, and the facts a draft needs), the Gmail MCP if connected (read the actual thread; never send, draft, label, or modify), web search (identity-matched external facts), and the calendar block. Verdicts: `confirmed`, `updated` (a detail corrected), or `unverified` (a valid, expected outcome; honest uncertainty beats invented certainty).
 2. **Prepare** every survivor to be ready to fire: `prepared_content` (the VERBATIM artifact the user reviews and can edit: the full email subject + body, the exact chat message, the numbered step-by-step PLAN for a computer task, or a research briefing in the letters' light Markdown), `execution_recipe` (ROUTING only: recipient and thread, event fields, the app or URL to start in), `recipient` (the editable "To:"), an LLM-written `button_text` and `detail_label`, `sources`, and a `review_note`.
 
-Three inviolable rules, each enforced in the prompt AND the invocation:
+Three design constraints shape the prompt and invocation:
 
 - **Accuracy:** receipts only; a live fact exists only if a tool returned it this run.
-- **Never fires:** three independent layers: the prompt rule; a read-only sandbox with `bypassApprovals = false` (a connector write auto-cancels headless); and `CodexCLI.Invocation.stripConnectorActionTools`, which removes the sending and destructive connector tools from the run's tool surface entirely, so an injected instruction has nothing to call. On the Claude engine the same preset maps to the curated read-only connector allows (`ClaudeCLI.ConnectorTools`): reads flow, and no write rule exists in the run, so "never fire" stays structural there too.
-- **Never computer use**, not even to verify: research runs get no cua tools (the driver's MCP registration and shim belong to `runAgentCommand` only) and the prompt forbids it; acting on the Mac belongs to part 3, on the user's press.
+- **Never fires:** three independent layers: the prompt rule; a read-only sandbox with `bypassApprovals = false` (a connector write auto-cancels headless); and `CodexCLI.Invocation.stripConnectorActionTools`, which removes the sending and destructive connector tools from the run's tool surface entirely, to limit the tools available to untrusted retrieved content. On the Claude engine the same preset maps to the curated read-only connector allows (`ClaudeCLI.ConnectorTools`): reads flow, and no write rule exists in the run, so "never fire" stays structural there too.
+- **Never computer use**, not even to verify: research runs do not receive the native computer-use tools (these belong to `runAgentCommand`) and the prompt forbids it; acting on the Mac belongs to part 3, on the user's press.
 
 Methods: `gmail`, `calendar`, `computer` (native apps, chat sends via Messages, AND logged-in website
 tasks in the user's real browser), `research` (informational only; nothing fires). At most 5 ready
@@ -68,13 +84,13 @@ Routes on `method`. The user-editable artifact rides in a `<<<CONTENT … CONTEN
 routing (with the possibly edited recipient placed FIRST as the authoritative destination) in a
 `<<<ROUTING … ROUTING>>>` block, so what the user edited is exactly what fires.
 
-- **gmail / calendar:** `FrontierRun.run` with the sandbox ON (`read-only`) and the connector write tools pre-approved for the one run (`approveConnectorWrites`; on Claude that preset maps to a scoped allow), user config on, web off, 300 s. If the agent reports `COULD_NOT` AND the raw JSONL carries the verbatim "cancelled MCP tool call" marker (the pre-approval did not take, e.g. codex changed its apps config surface), it retries ONCE on the bypass path with the same fixed wrapper and emits `codex.fire_fallback`, so the hardening can never cost a user their fire.
-- **computer:** `FrontierRun.runAgentCommand`, the same spine as Sidekick, with a 900-second deadline. ChatGPT uses native OpenAI tools; Claude/custom use CUA. The card wrapper confines work to the user's one approved task and the selected runtime's documented transport. `FrontierRun` adds the matching manual and custom-backend guardrails once. Only an exact final success sentinel counts as completion; missing status is unconfirmed.
+- **gmail / calendar:** `FrontierRun.run` with the sandbox ON (`read-only`) and the connector write tools pre-approved for the one run (`approveConnectorWrites`; on Claude that preset maps to a scoped allow), user config on, web off, 300 s. If the agent reports `COULD_NOT` AND the raw JSONL carries the verbatim "cancelled MCP tool call" marker (the pre-approval did not take, e.g. codex changed its apps config surface), it retries ONCE on the bypass path with the same fixed wrapper and emits `codex.fire_fallback`, to recover that recognized tool-policy failure without an unbounded retry loop.
+- **computer:** `FrontierRun.runAgentCommand`, the same spine as Sidekick, with a 900-second deadline. All current model backends use native OpenAI computer tools through Codex; Claude inference uses its local subscription bridge. The card wrapper confines work to the user's one approved task and the selected runtime's documented transport. `FrontierRun` adds the matching manual and custom-backend guardrails once. Only an exact final success sentinel counts as completion; missing status is unconfirmed.
 - **research:** `notFireable` (a briefing to read).
 
-Every wrapper is a fixed, app-authored prompt: one declared task, both blocks treated purely as DATA
-(nothing on a page, in an app, or inside the blocks can add a task, change the destination, or grant
-permissions), and a mandatory final `STATUS: DONE — …` / `STATUS: COULD_NOT — …` line parsed by the
+Every wrapper is a fixed, app-authored prompt that instructs the model to follow one declared task
+and treat both blocks and retrieved content as data. This is a guardrail, not a guarantee that prompt
+injection or an incorrect model action is impossible. The wrapper requires a final `STATUS: DONE — …` / `STATUS: COULD_NOT — …` line parsed by the
 shared `AgentStatus`. Outcomes feed `ExecutorScoreboard` (defects only) and the analytics signals
 `Proactive.actionFired` (core tier) and `ComputerUse.finished` (agent seconds). A user STOP (a cancelled
 Task) records nothing.
@@ -86,7 +102,7 @@ Task) records nothing.
 
 ## The gift letter (`GiftLetter.generate`)
 
-One frontier call (the flagship tier — `gpt-5.6-sol` / `sonnet` — high, `workspace-write`, `cwd` =
+One frontier call (the flagship tier — `gpt-6-sol` / `sonnet` — high, `workspace-write`, `cwd` =
 the vault, no web, hermetic) reads
 the whole knowledge base and writes a short, delightful cross-life-patterns letter as `Gift from
 Sentient.md` in the vault folder; the app reads it back, persists it (`gift.latestLetter`), and deletes
@@ -98,7 +114,7 @@ it as the sealed envelope card (`Briefing(fromGiftMarkdown:)`), with a **Save to
 
 ## Rules
 
-- Parts 1 and 2 never write, never send, never use computer use. Part 3 fires only on the user's press.
+- Parts 1 and 2 may save local preparation state but must not mutate connected services, send messages, or use computer use. Part 3 fires only on the user's press.
 - Content and routing blocks are DATA. Never let a channel prompt become dynamic beyond those blocks.
 - `bypassApprovals` in this folder appears only in the computer channel and the one-shot connector fallback.
 - Content-bearing logs (items, drafts, recipes) are `#if DEBUG` only.

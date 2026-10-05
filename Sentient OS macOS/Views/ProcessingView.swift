@@ -6,7 +6,7 @@
 //  "Analyze Now" button and the dev "start on device" buttons. It drives the connector-agnostic
 //  IterativeRun (synchronous generate() + GPU-wedge recovery — NO streaming) over the selected
 //  connectors, optionally followed by the cloud Gmail leg, and shows a breathing sparkle, an
-//  "Analyzing ___" cycling-gradient title, a glowing progress bar, live verdict counts, and a
+//  source-aware analysis title, a glowing progress bar, live verdict counts, and a
 //  "just processed" preview (thumbnail + verdict + title + summary). The real-mode cloud tail
 //  (knowledge base → gift → proactive) is the living orb over the phase line, with codex's live
 //  play-by-play as a fading three-line mono "thought" trail (liveThought — ProactiveCycle's
@@ -27,6 +27,8 @@ enum RunSource: Hashable {
     case whatsapp(chatJIDs: Set<String>)    // the opt-in chats to analyze
     case imessage(chatGUIDs: Set<String>)   // the opt-in chats to analyze
     case notes                              // all notes (newest-1000 cap inside the source)
+    case appleMail(accounts: Set<String>)
+    case appleCalendar(calendarIDs: Set<String>)
 
     var label: String {
         switch self {
@@ -34,6 +36,8 @@ enum RunSource: Hashable {
         case .whatsapp:        return "WhatsApp"
         case .imessage:        return "iMessage"
         case .notes:           return "Apple Notes"
+        case .appleMail:       return "Apple Mail"
+        case .appleCalendar:   return "Apple Calendar"
         }
     }
 
@@ -49,6 +53,8 @@ enum RunSource: Hashable {
             case .whatsapp(let jids):  connectors.append(WhatsAppConnector(chatJIDs: jids))
             case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
             case .notes:               connectors.append(NotesConnector())
+            case .appleMail(let accounts): connectors.append(AppleMailConnector(accounts: accounts))
+            case .appleCalendar(let ids): connectors.append(AppleCalendarConnector(calendarIDs: ids))
             case .files:               break   // rolled into FilesConnector(roots:)
             }
         }
@@ -165,6 +171,9 @@ struct ProcessingView: View {
                     }
                 }
                 Spacer(minLength: 0)
+                if !progress.sourceReadFailures.isEmpty {
+                    sourceFailuresView.padding(.bottom, 20)
+                }
                 if state == .loadingModel || state == .processing {
                     footer.padding(.bottom, 30)
                 } else if state == .preparing {
@@ -218,12 +227,15 @@ struct ProcessingView: View {
             Image(systemName: "sparkles").font(.system(size: 46))
                 .foregroundStyle(.white.opacity(0.65)).symbolEffect(.breathe, options: .speed(0.7))
 
-            AnalyzingTitle()
+            Text(progress.sourceRead.map { "Analyzing \($0.name)" } ?? "Analyzing your sources")
+                .display(26).foregroundStyle(.white)
+                .multilineTextAlignment(.center)
 
             VStack(spacing: 10) {
                 GlowProgressBar(value: shownTotal > 0 ? Double(shownDone) / Double(shownTotal) : 0)
                 HStack {
-                    Text("\(shownDone) of \(shownTotal)").fontWeight(.bold).monospacedDigit()
+                    Text("\(shownDone) of \(shownTotal)\(connectors.isEmpty && !runGmail && !runCalendar ? (shownTotal == 1 ? " source" : " sources") : "")")
+                        .fontWeight(.bold).monospacedDigit()
                     Spacer()
                     Text("\(percent)%").monospacedDigit()
                 }
@@ -269,6 +281,8 @@ struct ProcessingView: View {
         HStack(spacing: 16) {
             countTag(shownSurvivors, "kept", Theme.verdictColor(.survivor))
             countTag(shownJunk, "junk", Theme.verdictColor(.junk))
+            if progress.quietReads > 0 { countTag(progress.quietReads, "quiet", Theme.secondary) }
+            if progress.failed > 0 { countTag(progress.failed, "failed", Theme.Ink.amber) }
             if let last = progress.lastSeconds {
                 Text("· \(String(format: "%.1f", last))s/file")
                     .font(.caption).foregroundStyle(.white.opacity(0.4))
@@ -286,11 +300,27 @@ struct ProcessingView: View {
     private var justProcessed: some View {
         VStack(spacing: 12) {
             Rectangle().fill(.white.opacity(0.1)).frame(height: 1).padding(.horizontal, 60)
-            Text("JUST PROCESSED").font(.caption2).tracking(1.5).foregroundStyle(.white.opacity(0.3))
+            Text(progress.sourceRead?.caption ?? "JUST PROCESSED")
+                .font(.caption2).tracking(1.5).foregroundStyle(.white.opacity(0.3))
             HStack(alignment: .top, spacing: 16) {
-                FileThumbnail(path: progress.lastFilePath, size: 66)
-                    .id(progress.done)
-                    .transition(.blurReplace)
+                if let source = progress.sourceRead {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.04))
+                        if source.status == .reading {
+                            Image(systemName: "arrow.down.doc")
+                                .font(.system(size: 25)).foregroundStyle(Theme.secondary)
+                                .symbolEffect(.pulse)
+                        } else {
+                            Image(systemName: source.status == .failed ? "exclamationmark.triangle" : "text.book.closed")
+                                .font(.system(size: 25))
+                                .foregroundStyle(source.status == .failed ? Theme.Ink.amber : Theme.secondary)
+                        }
+                    }.frame(width: 66, height: 66)
+                } else {
+                    FileThumbnail(path: progress.lastFilePath, size: 66)
+                        .id(progress.done)
+                        .transition(.blurReplace)
+                }
                 VStack(alignment: .leading, spacing: 6) {
                     let verdict = progress.lastVerdict
                     // Pills: sensitive (red) / junk (dim). Kept = none.
@@ -314,9 +344,10 @@ struct ProcessingView: View {
                         Text(body)
                             .font(.subheadline)
                             .italic(progress.lastSummary == nil)
-                            .foregroundStyle(.white.opacity(verdict == .survivor ? 0.85 : 0.32))
+                            .foregroundStyle(.white.opacity(verdict == .survivor || progress.sourceRead != nil ? 0.85 : 0.32))
                             .lineLimit(3).frame(maxWidth: 340, alignment: .leading)
-                            .blur(radius: verdict == .sensitive ? 6 : 0)   // redact sensitive content
+                            // Redact source content, but keep the app-authored explanation readable.
+                            .blur(radius: verdict == .sensitive && progress.lastSummary != nil ? 6 : 0)
                     }
                     if let path = progress.lastPath {
                         Text(path)
@@ -455,14 +486,37 @@ struct ProcessingView: View {
         }
     }
 
+    private var sourceFailuresView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("SOURCES TO RETRY").font(.caption2).tracking(1.5).foregroundStyle(Theme.Ink.amber)
+            ForEach(progress.sourceReadFailures.keys.sorted(), id: \.self) { name in
+                Text("\(name): \(progress.sourceReadFailures[name] ?? "The read did not finish.")")
+                    .font(.caption).foregroundStyle(Theme.secondary).lineLimit(2)
+            }
+            Text("Run analysis again to retry these sources.")
+                .font(.caption).foregroundStyle(Theme.secondary)
+        }
+        .frame(maxWidth: 460, alignment: .leading)
+    }
+
     private var completedView: some View {
         VStack(spacing: 22) {
-            Image(systemName: "checkmark.circle.fill").font(.system(size: 58))
-                .foregroundStyle(Theme.verdictColor(.survivor))
+            Image(systemName: progress.sourceReadFailures.isEmpty ? "checkmark.circle.fill" : "exclamationmark.circle")
+                .font(.system(size: 58))
+                .foregroundStyle(progress.sourceReadFailures.isEmpty ? Theme.verdictColor(.survivor) : Theme.Ink.amber)
             VStack(spacing: 6) {
-                Text("Analysis complete").display(28).foregroundStyle(.white)
-                Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.failed) failed")
+                Text(!progress.sourceReadFailures.isEmpty ? "Some sources need another try"
+                    : progress.mailIncomplete || progress.mailDeferred > 0 ? "Analysis saved" : "Analysis complete")
+                    .display(28).foregroundStyle(.white).multilineTextAlignment(.center)
+                Text("\(progress.survivors) kept · \(progress.junk) junk · \(progress.quietReads) quiet · \(progress.failed) failed")
                     .font(.subheadline).foregroundStyle(.white.opacity(0.55))
+                if progress.mailIncomplete || progress.mailDeferred > 0 {
+                    Text(UserDefaults.standard.string(forKey: AppleMailHealth.key) ?? "Apple Mail will resume during the next analysis.")
+                        .font(.caption).foregroundStyle(Theme.secondary).frame(maxWidth: 430)
+                }
+            }
+            if progress.sourceRead?.status == .summarized || progress.sourceRead?.status == .quiet {
+                justProcessed
             }
             Button(action: onDone) {
                 Text("Done").font(.headline).foregroundStyle(.black)
@@ -474,10 +528,10 @@ struct ProcessingView: View {
         // Auto-advance: 5s after completion the takeover dismisses itself, so a user who left
         // the analysis running returns to the home + cards (onboarding: the Constellation
         // finale), never a stale "complete" screen. The Done button stays for the impatient;
-        // dev runs (showPrompt) keep manual Done so the final counts can be inspected. The
-        // cancellation check keeps a manual Done from double-firing the finale.
+        // dev runs and connector results keep manual Done so summaries and failures can be read.
+        // The cancellation check keeps a manual Done from double-firing the finale.
         .task {
-            guard !showPrompt else { return }
+            guard !showPrompt, progress.sourceReadFailures.isEmpty, progress.sourceRead == nil else { return }
             try? await Task.sleep(for: .seconds(5))
             if !Task.isCancelled { onDone() }
         }
@@ -504,7 +558,7 @@ struct ProcessingView: View {
                             .buttonStyle(.borderedProminent).tint(.white)
                             .disabled(claude.loggingIn)
                     } else {
-                        Button("Log in to Codex") { loginStarted = true; codex.startLogin(force: true) }
+                        Button("Log in to Codex") { loginStarted = true; Task { await codex.startLogin(force: true) } }
                             .buttonStyle(.borderedProminent).tint(.white)
                             .disabled(codex.loggingIn)
                     }
@@ -607,7 +661,7 @@ struct ProcessingView: View {
             } else {
                 HStack(spacing: 7) {
                     Image(systemName: "lock.shield.fill")
-                    Text("Private by design. Your files never leave this Mac.")
+                    Text(PrivacyCopy.trustRibbon)
                 }
                 .font(.callout).foregroundStyle(.white.opacity(0.6))
             }
@@ -649,6 +703,10 @@ struct ProcessingView: View {
                 carried.parseFailures    += finished.parseFailures
                 carried.extractionFailed += finished.extractionFailed
                 carried.totalSeconds     += finished.totalSeconds
+                carried.quietReads       += finished.quietReads
+                var results = finished
+                results.mergeSourceResults(from: carried)
+                carried.sourceReadFailures = results.sourceReadFailures
             }
             await startIfNeeded()
         }
@@ -669,6 +727,8 @@ struct ProcessingView: View {
         c.parseFailures    = base.parseFailures + p.parseFailures
         c.extractionFailed = base.extractionFailed + p.extractionFailed
         c.totalSeconds     = base.totalSeconds + p.totalSeconds
+        c.quietReads       = base.quietReads + p.quietReads
+        c.mergeSourceResults(from: base)
         return c
     }
 
@@ -896,8 +956,8 @@ struct ProcessingView: View {
 
     /// The generic connector KB legs (KB-toggled connectors, via MCPSource.runAll — always
     /// iterative-with-fallback, same as the 3am run). The bar gets ONE slot per connector; each
-    /// window's label/summary rides the same card, and a per-connector failure renders exactly
-    /// like the Gmail leg's catch (runAll's `.failed` event; the run continues past it).
+    /// window's label/summary rides the same card, and source failures remain visible through
+    /// later sources and the cloud tail without being counted as junk.
     private func runMCPLeg(base: RunProgress,
                            yield: @Sendable @escaping (RunProgress) -> Void) async -> RunProgress {
         let box = ProgressBox(base)
@@ -908,8 +968,7 @@ struct ProcessingView: View {
             case let .windowStart(_, _, label, prompt):
                 var p = box.value
                 p.total = baseTotal + total
-                p.lastPrompt = prompt
-                p.lastPath = "\(name) · \(label)"
+                p.beginSourceRead(name: name, label: label, prompt: prompt)
                 box.value = p
                 yield(p)
             case let .windowDone(step, windows, label, summary, items, _):
@@ -918,23 +977,15 @@ struct ProcessingView: View {
                 // The connector's final window completes its bar slot; inner windows (the Step 3
                 // windowed adapters) just refresh the card.
                 if step == windows { p.done = baseDone + index + 1 }
-                if summary != nil { p.survivors += 1 } else { p.junk += 1 }
-                p.lastTitle   = "\(name) · \(label)"
-                p.lastSummary = summary
-                p.lastVerdict = summary == nil ? .junk : .survivor
-                p.lastFilePath = nil
-                p.lastPath    = "\(name) · \(label)" + (items > 0 ? " · \(items) items" : "")
-                p.lastSeconds = nil
+                if summary != nil { p.survivors += 1 } else { p.quietReads += 1 }
+                p.finishSourceRead(name: name, label: label, summary: summary, items: items)
                 box.value = p
                 yield(p)
             case let .failed(label, message):
                 var p = box.value
                 p.total = baseTotal + total
                 p.done = baseDone + index + 1
-                p.lastTitle = "\(label) failed"
-                p.lastSummary = message
-                p.lastVerdict = .junk
-                p.lastFilePath = nil
+                p.failSourceRead(name: label, message: message)
                 box.value = p
                 yield(p)
             }
@@ -962,60 +1013,6 @@ private nonisolated final class ProgressBox: @unchecked Sendable {
     }
 }
 
-// MARK: - Analyzing title
-
-/// "Analyzing ___" with the right-hand word cycling. Isolated in its OWN view (with its own state +
-/// timer) so the cycle runs at a steady pace, immune to the parent's per-file re-renders.
-private struct AnalyzingTitle: View {
-    private let words = ["Files", "Notes", "Messages", "WhatsApp", "Everything."]
-    @State private var index = 0
-
-    var body: some View {
-        HStack(spacing: 7) {
-            Text("Analyzing").font(.title2.weight(.semibold)).foregroundStyle(.white)
-            // Invisible widest-word anchor reserves constant width so "Analyzing" never shifts.
-            Text("Everything.")
-                .font(.title2.weight(.semibold))
-                .opacity(0)
-                .accessibilityHidden(true)
-                .overlay(alignment: .leading) {
-                    ZStack(alignment: .leading) {
-                        Text(words[index])
-                            .font(.title2.weight(words[index] == "Everything." ? .bold : .semibold))
-                            .foregroundStyle(gradient(words[index]))
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .id(index)
-                            .transition(.asymmetric(
-                                insertion: .move(edge: .bottom).combined(with: .opacity),
-                                removal: .move(edge: .top).combined(with: .opacity)
-                            ))
-                    }
-                }
-        }
-        .task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4.0))
-                if Task.isCancelled { break }
-                withAnimation(.easeInOut(duration: 0.4)) { index = (index + 1) % words.count }
-            }
-        }
-    }
-
-    private func gradient(_ word: String) -> LinearGradient {
-        let colors: [Color]
-        switch word {
-        case "Files":       colors = [Color(red: 0.55, green: 0.95, blue: 0.30), Color(red: 0.15, green: 0.80, blue: 0.50), Color(red: 0.10, green: 0.55, blue: 0.65)]
-        case "Notes":       colors = [Color(red: 1.00, green: 0.85, blue: 0.25), Color(red: 1.00, green: 0.55, blue: 0.20), Color(red: 1.00, green: 0.30, blue: 0.45)]
-        case "Messages":    colors = [Color(red: 0.30, green: 0.85, blue: 0.55), Color(red: 0.20, green: 0.60, blue: 0.98)]
-        case "WhatsApp":    colors = [Color(red: 0.42, green: 0.92, blue: 0.45), Color(red: 0.10, green: 0.70, blue: 0.45)]
-        case "Everything.": colors = [Color(red: 0.66, green: 0.42, blue: 0.85), Color(red: 0.91, green: 0.45, blue: 0.75), Color(red: 0.96, green: 0.55, blue: 0.50), Color(red: 0.95, green: 0.70, blue: 0.35)]
-        default:            colors = [.white, .white]
-        }
-        return LinearGradient(colors: colors, startPoint: .leading, endPoint: .trailing)
-    }
-}
-
 // MARK: - Previews
 
 #if DEBUG
@@ -1023,6 +1020,28 @@ private struct AnalyzingTitle: View {
 /// actual pipeline on appear, so this factory pre-sets `started` — `startIfNeeded()` no-ops and
 /// the REAL layout renders with nothing running.
 extension ProcessingView {
+    static func connectorPreview(_ status: String) -> ProcessingView {
+        var view = ProcessingView(modelPath: "", connectors: [], mode: .auto, mcpSlugs: ["fixture"], onDone: {})
+        view._started = State(initialValue: true)
+        view._state = State(initialValue: status.hasPrefix("completed") ? .completed : .processing)
+        var progress = RunProgress()
+        progress.total = 1
+        progress.beginSourceRead(name: "Granola", label: "recent 30-day note sample", prompt: "")
+        if status == "summary" || status == "completed-summary" {
+            progress.done = 1; progress.survivors = 1
+            progress.finishSourceRead(name: "Granola", label: "recent 30-day note sample",
+                summary: "The user and their team agreed to review the prototype together next week.", items: 3)
+        } else if status == "quiet" {
+            progress.done = 1; progress.quietReads = 1
+            progress.finishSourceRead(name: "Notion", label: "initial page sample", summary: nil, items: 6)
+        } else if status == "failed" || status == "completed" {
+            progress.done = 1
+            progress.failSourceRead(name: "Granola", message: "The service returned a response Sentient couldn't verify.")
+        }
+        view._progress = State(initialValue: progress)
+        return view
+    }
+
     static func preparingPreview() -> ProcessingView {
         var view = ProcessingView(modelPath: "", connectors: [], mode: .auto, fullCycle: true, onDone: {})
         view._started = State(initialValue: true)
@@ -1039,9 +1058,18 @@ extension ProcessingView {
     }
 }
 
+#Preview("Connector reading") {
+    ProcessingView.connectorPreview("reading").frame(width: 680, height: 720)
+}
+#Preview("Connector summary") {
+    ProcessingView.connectorPreview("summary").frame(width: 680, height: 720)
+}
+#Preview("Connector needs another try") {
+    ProcessingView.connectorPreview("completed").frame(width: 680, height: 720)
+}
+
 #Preview("Preparing — cloud tail") {
     ProcessingView.preparingPreview()
         .frame(width: 1160, height: 780)
 }
 #endif
-

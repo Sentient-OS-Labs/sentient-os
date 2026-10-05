@@ -12,7 +12,7 @@
 //   - ensureClassified(_:)  → the production entry: no-op off the Claude backend, cache-fresh
 //                             check against the managed CLI version AND a weekly TTL (server-
 //                             side surfaces drift on their own), else classify + persist.
-//   - sweepComputerUseAttachables() → the idle-tick sweep over chips + detected connectors,
+//   - sweepActionConnectors() → the idle-tick sweep over chips + detected connectors,
 //                             so the computer-use attach set is classified on real machines.
 //   - classify(slug:)       → one model run: the connector walled in alone, zero tool calls,
 //                             structured JSON out. Fail-closed: anything that won't parse leaves
@@ -215,15 +215,10 @@ nonisolated enum ConnectorClassifier {
 
     // MARK: The attachables sweep (task 1.6)
 
-    /// Classify everything a computer-use run could attach: the connected chip connectors
-    /// (their dedicated source paths do not classify them) plus every additional detected
-    /// claude-origin connector. Rides CodexSetup's 15-minute idle tick (first fire ~90 s after
-    /// launch), so on a real user's Mac the fail-closed exclusions in
-    /// ConnectorRegistry.computerUseAttachments are a minutes-long transient, not a resting
-    /// state. Cache hits are free — the steady state is zero model runs — and a managed-CLI
-    /// update re-classifies naturally through ensureClassified's version check. Serial on the
-    /// haiku tier; a failure stays unclassified (fail-closed) and retries on the next tick.
-    static func sweepComputerUseAttachables() async {
+    /// Classify connected hosted services for dedicated Claude connector actions and cards.
+    /// Runs on the idle tick; cache hits are free and a CLI update refreshes the classification.
+    /// Failures remain unclassified and retry on a later tick.
+    static func sweepActionConnectors() async {
         guard ModelBackend.current == .claude else { return }
         var slugs: [String] = []
         if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }

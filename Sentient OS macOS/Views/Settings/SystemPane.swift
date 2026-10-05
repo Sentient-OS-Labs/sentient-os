@@ -62,7 +62,7 @@ struct SystemPane: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Your Sentient works the night shift.")
                     .font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
-                SettingsProse("Every night at 3 AM, Sentient wakes your Mac to read what's new in your life, update your knowledge base, and prepare your morning suggestions. It only happens while your Mac is plugged in (or on battery, if you've allowed that in the home's Analysis menu), and only if Sentient is still running in your menu bar. This quiet, on-device work is what keeps your Sentient alive and helpful.")
+                SettingsProse(PrivacyCopy.overnight)
                 Text("Runs while your Mac rests.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Theme.Ink.deepMuted)
@@ -129,19 +129,19 @@ struct SystemPane: View {
     private var privacyGroup: some View {
         SettingsGroup(label: "Privacy") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Sentient never collects any of your personal data, nor any AI analysis of it. Privacy is a core principle that extends to every part of Sentient, and the whole stack will always remain open source.")
+                SettingsProse("Privacy-preserving diagnostics help us improve this open-source app for you.")
                     .padding(.bottom, 6)
-                SettingToggleLine(title: "Share anonymous crash reports",
-                                  sub: "Privacy-friendly, structure-only reports that help us fix your bugs; never your content.",
+                SettingToggleLine(title: "Share crash reports",
+                                  sub: PrivacyCopy.crashReports,
                                   isOn: $crashReportsEnabled)
                 SettingsHairline()
-                SettingToggleLine(title: "Share anonymous analytics",
-                                  sub: "Share the fuller picture: anonymous usage signals through a privacy-first, open-source analytics framework; structure only, never any of your personal information.",
+                SettingToggleLine(title: "Share extended usage analytics",
+                                  sub: PrivacyCopy.extendedAnalytics,
                                   isOn: $analyticsEnabled)
                 if !analyticsEnabled {
                     // The core-tier disclosure — keeps the switch honest (Analytics.swift, Tier.core):
                     // the five always-on, extremely anonymized usage-count pings.
-                    Text("Even with this off, Sentient still sends a handful of extremely anonymized usage-count pings: how many people use Sentient, and how often core features fire (Sidekick, proactive cards, overnight runs, home opens). Counts only, through a privacy-first, open-source tool, so a two-person team can see our work is being used. Never your content, never anything personal.")
+                    Text(PrivacyCopy.coreAnalytics)
                         .font(.system(size: 10.5))
                         .foregroundStyle(Theme.Ink.body)
                         .fixedSize(horizontal: false, vertical: true)
@@ -160,7 +160,7 @@ struct SystemPane: View {
     private var protectionGroup: some View {
         SettingsGroup(label: "How We Protect Your Data") {
             HStack(spacing: 14) {
-                Text("We never collect your personal info.")
+                Text(PrivacyCopy.headline)
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
                 SettingsPillButton(title: "Read More") { showPrivacyPolicy = true }
             }
@@ -175,7 +175,7 @@ struct SystemPane: View {
     private var dangerGroup: some View {
         SettingsGroup(label: "Danger Zone") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Reset erases everything Sentient has learned: the knowledge base, every summary, all suggestions, and the cloud copy your AIs read. Sentient takes you back through setup and starts over from scratch. Your private link stays valid; the next processing run fills it again.")
+                SettingsProse(PrivacyCopy.reset)
                 SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
                                    tint: Self.dangerRed) { confirmReset = true }
                     .disabled(resetting || activity.isRunning)
@@ -188,18 +188,18 @@ struct SystemPane: View {
         }
         .alert("Erase everything Sentient has learned?", isPresented: $confirmReset) {
             Button("Cancel", role: .cancel) {}
-            Button("Erase Everything", role: .destructive) {
+            Button("Reset Knowledge", role: .destructive) {
                 resetting = true
                 Task {
                     resetError = nil
                     let completed = await FactoryReset.run(appState: appState)
                     resetting = false
                     if completed { dismiss() }
-                    else { resetError = "The saved app connections couldn't be removed from Keychain. Unlock your Mac and retry Reset." }
+                    else { resetError = "Reset couldn’t clear saved app connections. Unlock your Mac and try again." }
                 }
             }
         } message: {
-            Text("Your knowledge base and everything Sentient understood is deleted from this Mac, and the cloud copy is removed. This can't be undone; Sentient takes you back through setup, beginning with the initial processing.")
+            Text(PrivacyCopy.resetConfirmation)
         }
     }
 
@@ -208,7 +208,7 @@ struct SystemPane: View {
     private var uninstallGroup: some View {
         SettingsGroup(label: "Uninstall") {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Uninstall removes everything Sentient created on this Mac: the on-device model, your knowledge base, the private cloud copy your AIs read, the overnight wake helper, and every setting. Your own files stay exactly where they are.")
+                SettingsProse(PrivacyCopy.uninstall)
                 SettingsPillButton(title: "Uninstall Sentient…", tint: Self.dangerRed) {
                     showUninstall = true
                 }

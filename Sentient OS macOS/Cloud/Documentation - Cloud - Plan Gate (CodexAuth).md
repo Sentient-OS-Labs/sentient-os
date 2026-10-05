@@ -1,5 +1,10 @@
 # The Plan Gate: CodexAuth & knowledge-base-only mode (Cloud/)
 
+This gate describes the selected **ChatGPT plan**, not a general requirement to buy a subscription.
+Supported Claude and custom backends use their own availability checks. Apple Mail and Apple Calendar
+provide locally analyzed email/schedule context with a custom backend; Double Tap has a separate
+provider setting. See the Frontier Model Choice guide for those options.
+
 Sentient reads the user's ChatGPT plan from their own codex login and adapts. Free and Go accounts have
 a tiny monthly codex quota (the first knowledge-base build alone eats most of it) and no ChatGPT
 connectors, so instead of a broken full experience they get an honest fork at onboarding and a scoped
@@ -41,7 +46,7 @@ respected, so focus-return re-checks can never hammer the endpoint. A non-OK sta
 ## The two flags
 
 - **`knowledgeBaseOnly`** (`plan.kbOnly`): the user's CHOICE at the crossroads to continue with just the knowledge base. This is the gate every limited-mode surface checks. The getter reads false whenever a non-ChatGPT backend is active (the free/go limitation is a ChatGPT-plan fact; Claude and custom engines gate themselves); the stored value is preserved so switching back to ChatGPT restores the free/go experience.
-- **`assertedPlus`** (`plan.assertedPlus`): the user told us they upgraded and we believed them (the crossroads' "I've upgraded to ChatGPT Plus" plus a native confirm). Needed because a just-paid upgrade can read free/go on disk for a while (the claim lags, the refresh can be throttled), and OpenAI's server is the real enforcement point anyway. Sticky; makes `isLimited()` false everywhere (chiefly so `CodexCLI.backendTuned` stops downshifting them off `gpt-5.6-sol`). Reset clears it.
+- **`assertedPlus`** (`plan.assertedPlus`): the user told us they upgraded and we believed them (the crossroads' "I've upgraded to ChatGPT Plus" plus a native confirm). Needed because a just-paid upgrade can read free/go on disk for a while (the claim lags, the refresh can be throttled), and OpenAI's server is the real enforcement point anyway. Sticky; makes `isLimited()` false everywhere (chiefly so `CodexCLI.backendTuned` stops downshifting them off `gpt-6-sol`). Reset clears it.
 
 `connectorsLocked` (free/go OR a custom backend) and `connectorLockedTip` are the one predicate and the
 one wording every Gmail/Calendar chip uses.
@@ -57,7 +62,7 @@ one wording every Gmail/Calendar chip uses.
 | Home | The command bar is hidden. The always-mounted preview note (orb + "This is a preview of Sentient." + the three feature rows + a Get ChatGPT Plus glow + a Reset Sentient… pill) replaces the empty state; the gift envelope perches above a compact version of it. Once the claim reads Plus, it becomes "You're on Plus. Time to go live." with a Reset & Rebuild glow. No health banners on the free home. |
 | Gmail / Calendar chips | Locked (dim, lock glyph, hover tip) in onboarding's ready screen, the Analysis popover, and Settings → Knowledge Sources. |
 | Settings → Health | A "ChatGPT plan" row (amber when limited) with a Re-check pill → `refreshPlan()`. |
-| `CodexCLI.backendTuned` | `gpt-5.6-sol` calls downshift to `gpt-5.6-terra` at medium on a positive free/go read. |
+| `CodexCLI.backendTuned` | `gpt-6-sol` calls downshift to `gpt-5.6-terra` at medium on a positive free/go read. |
 
 Deliberately NOT gated: Analyze Now. The on-device read is free; the knowledge-base update spends the
 user's leftover quota until codex's usage-limit error stops it gracefully (summaries kept).

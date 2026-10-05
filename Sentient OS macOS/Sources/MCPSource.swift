@@ -156,6 +156,8 @@ enum MCPSource {
             if hitUsageLimit {
                 outcomes.append(LegOutcome(slug: slug, result: "skipped"))
                 signalRead(slug: slug, outcome: "skipped", started: Date())
+                onEvent(slug, index, slugs.count, .failed(label: ConnectorRegistry.displayName(slug: slug),
+                    message: "Skipped after the model reached its usage limit. Try again later."))
                 continue
             }
             let legStart = Date()
@@ -186,11 +188,9 @@ enum MCPSource {
                     tags: ["slug": ConnectorRegistry.telemetrySlug(slug), "reason": reason],
                     extra: ["seconds": String(Int(Date().timeIntervalSince(legStart)))],
                     fingerprint: ["mcp", "read", reason])
-                if !ConnectorReadFailure.isConnectionFailure(error) {
-                    onEvent(slug, index, slugs.count,
-                            .failed(label: ConnectorRegistry.displayName(slug: slug),
-                                    message: (error as? LocalizedError)?.errorDescription ?? "The read failed."))
-                }
+                onEvent(slug, index, slugs.count,
+                        .failed(label: ConnectorRegistry.displayName(slug: slug),
+                                message: (error as? LocalizedError)?.errorDescription ?? "The read failed."))
             }
         }
         return (outcomes, hitUsageLimit)
@@ -260,7 +260,7 @@ enum MCPSource {
             if slug == "slack", slackIdentity == nil || slackIdentity?.fingerprint != identity {
                 throw MCPError.connectionChanged
             }
-            let origin = checkpointOrigin(backend: backend, fingerprint: identity, fallback: connectionOrigin)
+            let origin = checkpointOrigin(slug: slug, backend: backend, fingerprint: identity, fallback: connectionOrigin)
             let explicitInitial = mode == .initial
             let initial = mode == .initial || checkpoint == nil || checkpoint?.origin != origin
             if !initial, let checkpoint, checkpoint.mark.order > now.timeIntervalSince1970 {
@@ -337,6 +337,9 @@ enum MCPSource {
     /// Exact half-open windows. The generic first read covers 30 local calendar days;
     /// weekly/monthly adapters retain their four/twelve-window shapes and never read the future.
     static func windows(slug: String, mode: ReadMode, since: Date?, now: Date) throws -> [Window] {
+        if ConnectorRegistry.pack(forSlug: slug)?.slug == "notion", mode == .initial {
+            return [Window(lower: .distantPast, upper: now, label: "initial page sample")]
+        }
         if ConnectorRegistry.pack(forSlug: slug)?.slug == "granola" {
             guard let lower = Calendar.current.date(byAdding: .day, value: -30, to: now) else { throw MCPError.dateMath }
             return [Window(lower: lower, upper: now, label: "recent 30-day note sample")]
@@ -586,8 +589,9 @@ enum MCPSource {
                                                : MCPError.toolFailure(slug: slug)
         }
         guard reply.notable else { return .quiet(itemCount: reply.item_count) }
-        // Match local triage's zero-trace backstop: rejected text never reaches the store or UI.
-        guard !PIIScan.containsHighRiskPII(summary) else { return .quiet(itemCount: 0) }
+        // Rejected text never reaches the store or UI. Keep only the anonymous inspected count
+        // so the source can still validate coverage against native receipts before committing.
+        guard !PIIScan.containsHighRiskPII(summary) else { return .quiet(itemCount: reply.item_count) }
         let actionHeading = summary.split(separator: "\n").contains { line in
             let title = line.trimmingCharacters(in: CharacterSet(charactersIn: " #*:\t")).uppercased()
             return title == "ACTION ITEMS" || title.hasPrefix("ACTION ITEMS:")

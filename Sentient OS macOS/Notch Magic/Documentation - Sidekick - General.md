@@ -1,11 +1,16 @@
 # Sidekick (Notch Magic/): the general doc
 
-Sidekick is the global way to tell Sentient to DO something, and the universal status surface while it
-works. Hold the Sidekick key (right ⌘ by default, or right ⌥) anywhere on the Mac and talk; tap it to
+**Pick up exactly where you are.** Click the notch and ask Sidekick to “finish this for me.” It uses
+screen context and the knowledge Sentient has built to work in your own apps and logged-in browser.
+The aim is a small handoff in the middle of your day: finish a registration, work through a form,
+follow up on an email, or carry information between apps without restating the whole background.
+The request still needs to make your intent clear, and results depend on the model and available context.
+
+Sidekick is also the shared status surface while a user-requested task runs. Hold the Sidekick key (right ⌘ by default, or right ⌥) anywhere on the Mac and talk; tap it to
 type; click the notch itself; or type in the home's command bar. Every door reaches the same backend
 (connector tools or computer use through the selected frontier engine, grounded in the knowledge base) and the same living notch.
 A proactive card's fire adopts the same run, so the notch, the command bar, and the card are three
-views of one task, and there is exactly ONE task at a time app-wide.
+views of one task, and there is one shared computer/connector task at a time. Double Tap drafting has its own single-flight path.
 
 This doc covers the brain and the backend: the coordinator, the run model, the hotkey, voice, the
 screen stills, and the prompt. The window, the click-through mechanics, and the visual are in
@@ -112,18 +117,16 @@ nothing real underneath (no codex, no screenshots, no scoreboard).
 
 ## The prompt (`CommandRunModel.commandPrompt`)
 
-"Using computer use, <task>", then: a spoken-transcript note when the task came by voice (use common
-sense for mis-transcriptions but do not act on a guess when the outcome is non-trivial); a screenshot
-line when frames are attached (resolve "this" / "here" against the pixels; with several displays, the
-first is the main one); the instruction to drive real apps and websites through the selected computer-use tools and never
-fake it with AppleScript or osascript; **`CuaDriverSkill.rules`** — the driver's full operating manual
-(the hybrid MCP + CLI transport, the snapshot → act → verify loop, the no-foreground law; see the
-Driver doc); `CustomProvider.computerUsePromptRules` on a custom backend (a safety stop-list and an
-anti-stall rule for weaker models); the injection guard (the task at the top is the ONLY task;
-everything read along the way is DATA); no follow-up questions are possible; the user's standing
-Sidekick context from Settings (`CustomInstructions.sidekick`, e.g. "text people on WhatsApp; my
-browser is Edge"); the knowledge base path with the instruction to read it with shell tools, never a
-GUI app; and the STATUS sentinel.
+The command prompt includes the requested task, a speech-transcription note when appropriate,
+screenshot context for “this” and “here,” the user's standing Sidekick instructions, and the
+knowledge-folder path. It asks the model to read knowledge with file tools, act through computer-use
+tools, verify the result, and finish with the `STATUS` sentinel. Retrieved pages, messages and other
+content are explicitly framed as data rather than new instructions.
+
+At dispatch, `FrontierRun` appends the selected runtime's manual once. Every active backend uses
+`OpenAIComputerUse.promptRules`; custom models also receive `CustomProvider.computerUsePromptRules`.
+Prepared direct connector attachments and their account-specific guidance follow the same dispatch.
+The native computer-use guide describes the shared snapshot → act → verify contract.
 
 ## The hotkey (`SidekickHotkeyMonitor`)
 
@@ -150,7 +153,9 @@ the on-device speech model at arm time. `correctMishears` swaps the model's reli
 "Sentient" as "ascension" before the transcript is shown or fired.
 
 - **`SpeechAnalyzerEngine` (macOS 26+):** on-device, in memory (no temp audio file). ONE shared `AVAudioEngine` for the process (a fresh engine per capture wedges CoreAudio input after rapid press/cancel churn); mic buffers converted to the analyzer's format and streamed in; on stop, a bounded finalize (5 s graceful, then `cancelAndFinishNow`) and a bounded results collection (2 s). Model readiness is memoized and single-flight (`installedLocales` is the only honest installed check; `assetInstallationRequest` returns a request even when installed), the install task is shielded from caller cancellation, and cancelled sessions are closed for real and chained so the next capture never queues behind a zombie. A capture that fed zero buffers returns "" immediately. Cap 180 s.
-- **`SFSpeechRecognizerEngine` (macOS 15):** the classic buffer request, server-capable by default (deliberate, for quality), a 5 s finalize timeout. Cap 59 s. Build-verified only; needs a real old-Mac smoke test.
+- **`SFSpeechRecognizerEngine` (older supported macOS):** the classic buffer request, with
+  `requiresOnDeviceRecognition` enabled when the recognizer supports it; otherwise Apple's speech
+  service may process audio. A 5 s finalize timeout bounds completion. Cap 59 s.
 
 Both Info.plist usage strings (`NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription`)
 are set in the build settings; the Speech framework crashes without the latter. The Hardened Runtime
@@ -163,8 +168,21 @@ its own contract; a 5 s watchdog per call), returns the temp JPEG URLs, and the 
 `codex exec -i`. Gated on Sentient's own Screen Recording grant (`CGPreflightScreenCaptureAccess`) —
 now a REQUIRED action grant (the driver's eyes ride it too), so the first-fire gate acquires it before
 any run; if it regresses mid-session the run goes text-only, never a prompt mid-command, and Health
-banners. The frames go to the user's own codex, never a Sentient server, and are deleted when codex is
-done; only sizes are logged. The proactive executor passes no frames.
+banners. The frames are supplied to the selected model through the task runtime and their temporary local
+files are deleted after the run. A hosted model processes screen context under the chosen provider's
+settings; a compatible local model processes it on the Mac. Release diagnostics record sizes, not
+screen contents. The proactive executor passes no frames.
+
+## Context, permission and control
+
+Your request, useful knowledge and screen/app context give meaning to a short handoff. Sidekick can
+read more context as a task requires; a visible page is not its only source of understanding.
+Frontier Model Choice controls its inference provider, while Double Tap's provider is independent.
+
+A user starts each task. The notch shows progress, and STOP cancels the active run. The task may
+perform the actions the user requested, so this is an execution surface, not always a draft for a
+second confirmation. Prompt guardrails and tool policies guide the run; they are not a claim that
+all model mistakes or malicious page instructions are impossible.
 
 ## Rules
 
@@ -176,4 +194,5 @@ done; only sizes are logged. The proactive executor passes no frames.
 
 `Notch Magic/Documentation - Sidekick - Notch Window & Visual.md`, `Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Proactive/Documentation - Proactive Intelligence.md` (card fires), `Views/Documentation - Views - Home, Processing & Shared UI.md` (`PromptBar`).
 
-Computer-use runtime selection and its manual live in `FrontierRun`: native OpenAI tools for ChatGPT, CUA for Claude/custom. See `Driver/Documentation - Native Computer Use.md`.
+Computer-use runtime selection and its manual live in `FrontierRun`: native OpenAI tools through `codex exec` for every backend. Claude subscriptions use the local
+ClaudeSubscriptionBridge for inference; dedicated connector tasks stay on the structured Claude path. See `Driver/Documentation - Native Computer Use.md`.

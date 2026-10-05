@@ -5,7 +5,8 @@
 //  The ONE dispatch seam between the two frontier engines. Every caller that used to talk to
 //  CodexCLI.shared directly talks to this instead; the switch on ModelBackend picks the harness:
 //   - .chatgpt / .custom → CodexCLI (`codex exec`; custom endpoints ride codex's provider overrides)
-//   - .claude            → ClaudeCLI (`claude -p`)
+//   - .claude            → ClaudeCLI (`claude -p`) for structured work.
+//  Computer tasks always use CodexCLI, with ClaudeSubscriptionBridge when Claude is selected.
 //  Both engines speak the same types (CodexCLI.Invocation / Envelope / CLIError), so callers,
 //  their catch blocks, and the diagnostics classifiers never care which harness ran. Deliberately
 //  a dispatcher, not a protocol (decision 2026-08-21): two engines, one switch, zero ceremony.
@@ -145,7 +146,6 @@ enum FrontierRun {
         defer { if let mailRunID { OutlookToolPolicy.cleanup(runID: mailRunID) } }
         return try await OutlookToolPolicy.$computerRunID.withValue(mailRunID) {
             try await ModelBackend.$runOverride.withValue(backend) {
-                if backend == .claude { await ConnectorClassifier.refreshCLIVersion() }
                 var attachments: [DirectMCPRuntime.Attachment] = []
                 for connection in DirectMCPStore.connections().filter(\.connected) {
                     do {
@@ -164,14 +164,8 @@ enum FrontierRun {
                 let fullPrompt = computerPrompt + (services.isEmpty ? "" : "\n\nDIRECT CONNECTED ACCOUNTS (use these exact accounts):\n\(services)\nPrefer these tools when they fit the requested task. Never repeat an uncertain write without checking whether it already succeeded.")
                     + (guidance.isEmpty ? "" : "\n\n" + guidance)
                 return try await DirectMCPRuntime.execute(attachments) {
-                    switch backend {
-                    case .claude:
-                        return try await ClaudeCLI.shared.runAgentCommand(fullPrompt, imagePaths: imagePaths,
-                                                                          timeout: timeout, onLine: onLine)
-                    case .chatgpt, .custom:
-                        return try await CodexCLI.shared.runAgentCommand(fullPrompt, imagePaths: imagePaths,
-                                                                         timeout: timeout, onLine: onLine)
-                    }
+                    return try await CodexCLI.shared.runAgentCommand(fullPrompt, imagePaths: imagePaths,
+                                                                     timeout: timeout, onLine: onLine)
                 }
             }
         }

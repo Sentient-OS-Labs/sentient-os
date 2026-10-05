@@ -4,8 +4,8 @@
 //
 //  macOS 15 fallback speech-to-text via the classic Speech framework (SFSpeechRecognizer +
 //  SFSpeechAudioBufferRecognitionRequest). Used only when SpeechAnalyzer (macOS 26+) isn't available.
-//  Left server-capable by default for highest quality (Apple's API — our deliberate call, not forced
-//  on-device), and it hard-caps audio at ~1 minute, so a capture is capped at 59s upstream (CommandCoordinator.startListening).
+//  Requests on-device recognition when the recognizer supports it; otherwise uses Apple’s service.
+//  Audio is capped at 59s upstream (CommandCoordinator.startListening).
 //
 //  Key methods: start() · stopAndTranscribe() · cancel().
 //
@@ -34,6 +34,8 @@ final class SFSpeechRecognizerEngine: QuickTranscriptionEngine {
         guard let recognizer, recognizer.isAvailable else { throw VoiceError.modelUnavailable }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
+        // Keep audio on this Mac whenever Apple's recognizer supports local recognition.
+        request.requiresOnDeviceRecognition = recognizer.supportsOnDeviceRecognition
         request.shouldReportPartialResults = true   // not shown — they just keep `latest` current for the stop
         request.addsPunctuation = true
         self.request = request

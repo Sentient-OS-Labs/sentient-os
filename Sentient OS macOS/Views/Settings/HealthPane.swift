@@ -2,22 +2,10 @@
 //  HealthPane.swift
 //  Sentient OS macOS
 //
-//  Settings → Permissions & Health: the health board. Live LED rows for every grant Sentient
-//  actually asks for, in severity order — ON-DEVICE INTELLIGENCE (Full Disk Access · the overnight
-//  wake daemon · launch-at-login), SIDEKICK & PROACTIVE (mic & speech · Accessibility and Screen
-//  Recording, the cua driver's hands and eyes — Sentient's OWN grants, since the driver runs
-//  inside Sentient's TCC chain · notifications), and the ENGINE group, which follows the live
-//  frontier-model choice (decided 2026-08-22): ChatGPT backend → SET UP CODEX (CLI · account ·
-//  plan · computer use), Claude backend → SET UP CLAUDE (Claude Code CLI · Claude account ·
-//  computer use), custom backends → SET UP CODEX with the endpoint row in place of the account
-//  rows (codex is the harness for custom endpoints too — no ChatGPT login needed, but the CLI
-//  row stays).
-//  Red = a core capability is broken · yellow = optional, fixable-later, or working on it. The
-//  engine fix buttons drive the shared setup engines INLINE (install / browser login with
-//  auto-notice / the driver download — no sheet). When the whole engine stack is green it
-//  collapses to one glowing summary line (tap for details) — a browsing user shouldn't wade
-//  through five rows of "fine". Statuses re-probe on app foreground.
-//  (Reset lives in Settings → System.)
+//  Settings → Permissions & Health. Shared setup rows prepare native computer use for every
+//  backend; Claude users see both CLIs and only their Claude login. Required grants remain
+//  separate from optional voice and notifications. Fixes use the existing setup engines.
+//  Doc: Documentation - Settings.md
 //
 
 import SwiftUI
@@ -44,7 +32,6 @@ struct HealthPane: View {
     @State private var loginOn = LoginItem.isEnabled
     @State private var micSpeech: MicSpeechState = .notAsked
     @State private var screenRec = Permissions.hasScreenRecording()   // Sentient's own grant — the driver's eyes
-    @State private var accessibility = Permissions.hasAccessibility() // Sentient's own grant — the driver's hands
     @State private var notifStatus: UNAuthorizationStatus = .notDetermined
 
     // ChatGPT plan (decoded from the user's own codex login — CodexAuth)
@@ -55,19 +42,23 @@ struct HealthPane: View {
     @State private var checked = false        // first full probe done (codex login check is seconds)
     @State private var revealed = false       // drives the rise-in cascade after the first probe
 
+    #if DEBUG
+    init(expandEngine: Bool = false) { _codexExpanded = State(initialValue: expandEngine) }
+    #endif
+
     private enum DaemonState { case ready, installing, notSetUp, disabled }
     private enum MicSpeechState { case granted, notAsked, denied }
 
     /// The live engine's whole stack, healthy — what the group's collapse and the pane's
     /// all-clear whisper judge. Per engine: ChatGPT = CLI + login + a non-limited plan;
-    /// Claude = Claude Code + its login; custom = CLI + a proven endpoint (codex is the
+    /// Claude = Claude Code + its login + Codex for computer tasks; custom = CLI + a proven endpoint (codex is the
     /// harness there too). The computer-use driver rides every engine.
     private var engineAllGreen: Bool {
         guard ComputerUseSetup.current.ready, computerGate.allRequiredGranted else { return false }
         switch backend {
         case .chatgpt: return codex.installed && !codex.outdated
                            && codex.loggedIn && plan?.tier != .limited
-        case .claude:  return claude.installed && claude.loggedIn
+        case .claude:  return claude.installed && claude.loggedIn && codex.installed && !codex.outdated
         case .custom:  return codex.installed && !codex.outdated
                            && CustomProvider.current.isUsable
         }
@@ -75,7 +66,7 @@ struct HealthPane: View {
 
     private var allGreen: Bool {
         fdaGranted && daemon == .ready && loginOn && micSpeech == .granted
-            && screenRec && (backend == .chatgpt || accessibility)
+            && screenRec
             && (notifStatus == .authorized || notifStatus == .provisional)
             && engineAllGreen
     }
@@ -90,7 +81,7 @@ struct HealthPane: View {
                 VStack(alignment: .leading, spacing: 30) {
                     onDeviceGroup
                     sidekickGroup
-                    if backend == .chatgpt { NativeComputerUsePermissionRows(gate: computerGate) }
+                    NativeComputerUsePermissionRows(gate: computerGate)
                     SettingsHairline(opacity: 0.12)
                         .padding(.vertical, -7)   // the brighter, tighter group splitter (matches ProactivePane's)
                         .rise(7, revealed: revealed)
@@ -156,7 +147,7 @@ struct HealthPane: View {
                     StatusLine(title: "Full Disk Access",
                                health: fdaGranted ? .ok : .bad,
                                note: fdaGranted ? "granted" : "not granted",
-                               tip: "Lets Sentient's on-device LLM read your files & folders, and the databases WhatsApp, iMessage, and Notes keep on this Mac.\n\nEverything is read right here on your Mac; your data never leaves it.",
+                               tip: PrivacyCopy.fullDiskAccess,
                                fixTitle: "Grant…") {
                         PermissionGuide.shared.guide(.fullDiskAccess, dragging: Bundle.main.bundleURL)
                     }
@@ -210,20 +201,10 @@ struct HealthPane: View {
                     fixMicSpeech()
                 }
                 .rise(3, revealed: revealed)
-                if backend != .chatgpt {
-                StatusLine(title: "Accessibility",
-                           health: accessibility ? .ok : .bad,   // the driver's hands — computer use is off without it
-                           note: accessibility ? "granted" : "not granted",
-                           tip: "Lets Sentient read what's on a window and click and type inside it — in the background, without taking over your cursor.\n\nGranted to Sentient itself, so there's no second helper app to trust. Without it, Sentient can't act on your Mac for you.",
-                           fixTitle: "Allow…") {
-                    fixAccessibility()
-                }
-                .rise(4, revealed: revealed)
-                }
                 StatusLine(title: "Screen Recording",
                            health: screenRec ? .ok : .bad,   // the driver's eyes — computer use is off without it
                            note: screenRec ? "granted" : "not granted",
-                           tip: "Lets Sentient see the window it's working in, so it acts on the right thing — and see your screen the moment you summon Sidekick (\u{201C}finish this\u{201D}, \u{201C}reply to this\u{201D}).\n\nGranted to Sentient itself. Screenshots are read on this Mac and passed to your own Codex; they never reach a Sentient server.",
+                           tip: PrivacyCopy.screenCapture,
                            fixTitle: "Allow…") {
                     fixScreenRecording()
                 }
@@ -321,20 +302,6 @@ struct HealthPane: View {
         PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
     }
 
-    /// Accessibility has a real system prompt (unlike Screen Recording on Tahoe), so ask directly.
-    /// macOS shows it once per app identity — a user who already dismissed it gets nothing, hence
-    /// the deep-link fallback a beat later, once the probe says it didn't take. (Same manners as
-    /// the computer-use gate's fix.)
-    private func fixAccessibility() {
-        guard !accessibility else { return }
-        Permissions.requestAccessibility()
-        Task {
-            try? await Task.sleep(for: .milliseconds(600))
-            accessibility = Permissions.hasAccessibility()
-            if !accessibility { Permissions.openAccessibilitySettings() }
-        }
-    }
-
     private func refreshMicSpeech() {
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
         let speech = SFSpeechRecognizer.authorizationStatus()
@@ -424,16 +391,7 @@ struct HealthPane: View {
     private var codexSetupGroup: some View {
         SettingsGroup(label: "Set Up Codex") {
             VStack(alignment: .leading, spacing: 2) {
-                StatusLine(title: "Codex CLI",
-                           health: codex.installing ? .warn : (codex.installed && !codex.outdated ? .ok : .bad),
-                           note: codex.installing ? (codex.installed ? "updating…" : "installing…")
-                               : !codex.installed ? "not installed"
-                               : codex.outdated ? "needs an update"
-                               : (codex.version.map { "installed · \($0)" } ?? "installed"),
-                           tip: "OpenAI's official Codex command line tool. Sentient runs its cloud thinking through it, using your own ChatGPT subscription.\n\nSentient keeps it up to date on its own, quietly, at most once a day while you're away from the app. Install runs OpenAI's own installer; if codex is already there it simply updates in place, and your login and settings are untouched.",
-                           fixTitle: codex.installed ? "Update…" : "Install…",
-                           fix: codex.installing ? nil : { Task { await codex.installCodex() } })
-                failureLine(codex.installStatus)
+                codexCLIRow
                 if backend == .custom {
                     // Codex is the harness for custom endpoints too (the vision probe and every
                     // run go through `codex exec`) — the CLI row stays, and the endpoint stands
@@ -452,9 +410,9 @@ struct HealthPane: View {
                                health: codex.loggedIn ? .ok : (codex.loggingIn ? .warn : .bad),
                                note: codex.loggedIn ? "logged in"
                                    : codex.loggingIn ? "finish in your browser" : "not logged in",
-                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Sentient never sees your credentials.",
+                               tip: "Your own OpenAI login for Codex CLI.\n\n\u{201C}Log in\u{201D} asks Codex to open your browser to sign in. Your Codex login stays in Sentient’s private folder on this Mac.",
                                fixTitle: codex.loggingIn ? "Re-open…" : "Log in…",
-                               fix: codex.loggedIn ? nil : { codex.startLogin() })
+                               fix: codex.loggedIn ? nil : { Task { await codex.startLogin() } })
                     failureLine(codex.loginStatusLine)
                     if codex.loggedIn, let plan {
                         StatusLine(title: "ChatGPT plan",
@@ -490,23 +448,37 @@ struct HealthPane: View {
                            note: claude.loggedIn
                                ? (claude.plan.map { "signed in · \($0.lowercased()) plan" } ?? "signed in")
                                : claude.loggingIn ? "finish in your browser" : "not signed in",
-                           tip: "Your own Claude login for Claude Code (Pro, Max, or Team).\n\n\u{201C}Sign in\u{201D} asks Claude Code to open your browser. Sentient never sees your credentials, and the login is shared with any Claude Code you already use on this Mac.",
+                           tip: "Sign in directly through Claude Code in your browser. Its login is kept in your Mac’s Keychain and shared with your existing Claude Code setup.",
                            fixTitle: claude.loggingIn ? "Re-open…" : "Sign in…",
                            fix: claude.loggedIn ? nil : { claude.startLogin() })
                 failureLine(claude.loginStatusLine)
+                codexCLIRow
                 computerUseRow
             }
         }
     }
 
-    /// The computer-use driver row — identical on every engine (the cua driver is shared, and
-    /// CodexSetup owns its one install path for all of them).
+    @ViewBuilder private var codexCLIRow: some View {
+        StatusLine(title: backend == .claude ? "Codex CLI for computer use" : "Codex CLI",
+                   health: codex.installing ? .warn : (codex.computerUseReady && !codex.outdated ? .ok : .bad),
+                   note: codex.installing ? "preparing…" : !codex.installed ? "not installed"
+                       : codex.outdated || !codex.computerUseReady ? "needs an update"
+                       : (codex.version.map { "installed · \($0)" } ?? "installed"),
+                   tip: backend == .claude
+                       ? "Runs Sidekick's computer actions using your Claude subscription. A ChatGPT account is not required."
+                       : "Sentient’s verified copy of Codex, using your selected frontier model. New versions arrive with Sentient updates. Repair preserves your login and saved tasks.",
+                   fixTitle: codex.installed ? "Repair…" : "Install…",
+                   fix: codex.installing ? nil : { Task { await codex.installCodex() } })
+        failureLine(codex.installStatus)
+    }
+
+    /// The same signed native helper serves every model backend.
     @ViewBuilder private var computerUseRow: some View {
         StatusLine(title: "Computer use",
                    health: ComputerUseSetup.current.ready ? .ok : (ComputerUseSetup.current.isInstalling ? .warn : .bad),
                    note: ComputerUseSetup.current.isInstalling ? "setting up…"
                        : (ComputerUseSetup.current.ready ? "ready" : "not set up"),
-                   tip: backend == .chatgpt ? "Downloads OpenAI's signed computer-use helper directly from OpenAI. Uses your existing Codex CLI and login." : "Downloads the pinned CUA driver for your selected engine and verifies its checksum and signature.",
+                   tip: "Downloads and verifies OpenAI's signed computer-use helper. Your selected model powers its actions.",
                    fixTitle: "Set up…",
                    fix: ComputerUseSetup.current.isInstalling ? nil : { Task { await ComputerUseSetup.current.install() } })
         // The download deserves live narration, not just an amber dot.
@@ -552,7 +524,6 @@ struct HealthPane: View {
             || (fdaGranted && Permissions.isTCCGranted(
                     service: "kTCCServiceScreenCapture",
                     clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"))
-        accessibility = Permissions.hasAccessibility()
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         ComputerUseSetup.current.refresh()
         // Only the LIVE engine's rows are probed (the login checks shell out, seconds each).
@@ -564,6 +535,7 @@ struct HealthPane: View {
             plan = CodexAuth.currentPlan()   // pure file read (the JWT claim on disk)
             await codex.refreshLoginStatus()   // last — it shells out to `codex login status`
         case .claude:
+            await codex.refreshInstalled()
             await claude.refreshInstalled()
             await claude.refreshLoginStatus()  // shells out to `claude auth status`
         case .custom:
@@ -584,8 +556,10 @@ private extension View {
     }
 }
 
+#if DEBUG
 #Preview("Permissions & Health pane") {
-    HealthPane()
+    HealthPane(expandEngine: true)
         .background(Theme.bg)
         .frame(width: 720, height: 760)
 }
+#endif

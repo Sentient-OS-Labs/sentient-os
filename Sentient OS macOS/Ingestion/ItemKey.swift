@@ -13,7 +13,7 @@
 
 import Foundation
 
-struct ItemKey: Comparable, Codable, Sendable, Hashable {
+nonisolated struct ItemKey: Comparable, Codable, Sendable, Hashable {
     let order: Double      // date epoch, or Double(rowID)
     let tiebreak: String   // path / uuid / ""
 

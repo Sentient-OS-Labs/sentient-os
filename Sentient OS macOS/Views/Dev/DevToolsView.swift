@@ -293,7 +293,7 @@ struct DevToolsView: View {
                     .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("\(provider.model) · every call cold · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Rides Sidekick's key (\(SidekickHotkey.current.label), the Settings choice): one tap opens Sidekick, two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. On by default (Release has no way off); with this switch off, two taps just open Sidekick sooner.")
+            Text("\(provider.model) · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Rides Sidekick's key (\(SidekickHotkey.current.label), the Settings choice): one tap opens Sidekick, two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. On by default (Release has no way off); with this switch off, two taps just open Sidekick sooner.")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -569,7 +569,7 @@ struct DevToolsView: View {
     }
 
     private func cloudCreate(progress: @escaping @Sendable (String) -> Void) async -> String {
-        let notes = await CycleStore.shared.notes().map(CloudNote.init)
+        let notes = await AppleMailEvidence.validated(await CycleStore.shared.notes()).map(CloudNote.init)
         guard !notes.isEmpty else { return "✗ no summaries — run on-device first" }
         do {
             let r = try await VaultCloud.shared.create(notes: notes) { p in
@@ -588,7 +588,7 @@ struct DevToolsView: View {
     }
 
     private func cloudUpdate() async -> String {
-        let notes = await CycleStore.shared.notes().map(CloudNote.init)
+        let notes = await AppleMailEvidence.validated(await CycleStore.shared.notes()).map(CloudNote.init)
         guard !notes.isEmpty else { return "✗ no new summaries to merge" }
         do {
             let n = try await VaultCloud.shared.update(notes: notes)
@@ -602,7 +602,7 @@ struct DevToolsView: View {
     /// Proactive) + the live vault to Codex and surface the top action items. Read-only: does NOT
     /// wipe the cycle, so it's re-runnable while we tune the prompt. Full detail goes to the console.
     private func runProactive(progress: @escaping @Sendable (String) -> Void) async -> String {
-        let notes = await CycleStore.shared.notes().map(CloudNote.init)
+        let notes = await AppleMailEvidence.validated(await CycleStore.shared.notes()).map(CloudNote.init)
         guard !notes.isEmpty else { return "✗ no summaries — run an on-device pass first" }
         var calCtx: String?
         if calendarConnected {
@@ -630,7 +630,7 @@ struct DevToolsView: View {
     private func runResearch(progress: @escaping @Sendable (String) -> Void) async -> String {
         let items = Proactive.latest()
         guard !items.isEmpty else { return "✗ no action items — run “proactive system” (part 1) first" }
-        let notes = await CycleStore.shared.notes().map(CloudNote.init)   // same corpus PART 1 saw
+        let notes = await AppleMailEvidence.validated(await CycleStore.shared.notes()).map(CloudNote.init)   // same corpus PART 1 saw
         var calCtx: String?
         if calendarConnected {
             progress("Gathering your live calendar, then verifying every item…")

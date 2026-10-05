@@ -19,6 +19,8 @@
 	  ENABLE_USER_SELECTED_FILES=readonly build setting and merged in at sign time; it's an inert
 	  template leftover (see Architecture §11) and isn't repeated here.
 	-->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
 	<key>com.apple.security.automation.apple-events</key>

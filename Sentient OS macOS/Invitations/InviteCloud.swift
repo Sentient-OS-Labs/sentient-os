@@ -1,7 +1,7 @@
 // InviteCloud.swift
 // Supabase invitation RPCs and a dedicated anonymous Auth session, persisted in Keychain.
 // Only server-confirmed redemptions grant lifetime access; refresh never replaces an identity.
-// Schema: supabase/migrations/20260929120000_invitation_program.sql (repository root).
+// Schema: supabase/migrations/ (repository root).
 
 import Foundation
 import Security
@@ -53,7 +53,6 @@ actor InviteCloud {
                 case "invalid_code": return "That invite code wasn't found. Check it and try again."
                 case "own_code": return "That's your own invite code. Share it with a friend."
                 case "offer_ended": return "This invite offer has ended."
-                case "code_used": return "This code has no invites remaining."
                 case "rate_limited": return "Too many attempts. Please try again in an hour."
                 default: return "Couldn't redeem this invite. Please try again."
                 }

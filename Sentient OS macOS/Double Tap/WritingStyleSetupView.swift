@@ -43,7 +43,7 @@ struct WritingStyleSetupView: View {
                 }
             }
             if !finished {
-                Text("We built a magical feature which is now being setup")
+                Text(PrivacyCopy.writingSetup)
                     .font(.system(size: 13))
                     .foregroundStyle(Theme.secondary)
                     .multilineTextAlignment(.center)

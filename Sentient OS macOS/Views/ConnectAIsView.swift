@@ -6,7 +6,7 @@
 //  Your AIs and the home's Your AIs popover. Owns the whole story:
 //   · sharing OFF → the guide itself opens first (a 1-second crisp peek, inert), then blurs
 //     under a transparent veil carrying the consent ask: "Connect your AIs?", the trust pillars
-//     (zero-access encryption, open-source server, delete anytime), a glowing "Yes, use the cloud MCP"
+//     (encrypted storage, open-source server, sharing controls), a glowing "Yes, use the cloud MCP"
 //     (enables the mirror + first push, blur releases in place) and a "Not now" that closes the
 //     window. No MCP pill while off.
 //   · sharing ON → per-AI tabs (ChatGPT · Claude · Other AIs), plus a quiet MCP ON toggle
@@ -73,7 +73,7 @@ struct ConnectAIsView: View {
             Button("Keep Sharing", role: .cancel) {}
             Button("Stop & Delete Cloud Copy", role: .destructive) { disconnect() }
         } message: {
-            Text("The cloud copy is deleted immediately and your AIs lose access. Your knowledge base stays safe on this Mac, and turning sharing back on restores the same link.")
+            Text(PrivacyCopy.sharingOff)
         }
     }
 
@@ -108,15 +108,15 @@ struct ConnectAIsView: View {
                     .display(25)
                     .foregroundStyle(Theme.Ink.statusInk)
                     .padding(.top, 20)
-                Text("Sentient built your knowledge base right here on this Mac. Want to offer it to ChatGPT, Claude, and every AI you use?")
+                Text("Your knowledge base lives on this Mac. Want to offer it to ChatGPT, Claude, and the other AIs you choose?")
                     .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
                     .multilineTextAlignment(.center).lineSpacing(3.5)
                     .frame(maxWidth: 440)
                     .padding(.top, 20)
                 VStack(alignment: .leading, spacing: 10) {
-                    veilPillar("lock.fill", "Zero-access encryption. Your knowledge base is sealed on this Mac with a key only your Mac and your private link hold; our servers store nothing but ciphertext, with no key beside it. Hack them and there is nothing to unlock.")
-                    veilPillar("chevron.left.forwardslash.chevron.right", "The server in between is open source. Everything's verifiable.")
-                    veilPillar("key.fill", "No account. Turn it off anytime and the cloud copy is deleted on the spot.")
+                    veilPillar("lock.fill", PrivacyCopy.sharingEncryption)
+                    veilPillar("chevron.left.forwardslash.chevron.right", PrivacyCopy.sharingOpenSource)
+                    veilPillar("key.fill", PrivacyCopy.sharingControl)
                 }
                 .frame(width: 440)
                 .padding(.top, 28)

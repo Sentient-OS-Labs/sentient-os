@@ -41,7 +41,6 @@ final class AppState {
 
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController
-    private let inviteBanner = InviteBannerController()
     private var hasStartedInterface = false
 
     /// Drops the Dock icon whenever the home window is closed (the icon belongs to home;
@@ -71,10 +70,17 @@ final class AppState {
         // very real admin-password dialog. Same convention as Notify.swift's self-test silence.
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
 
+        Task { await MailAccountCloud.shared.retryPendingSync() }
+
+        CodexRuntimeMigration.start(existingUser: hasCompletedOnboarding && ModelBackend.current != .claude)
         CuaDriver.rememberExistingInstallation()
         ComputerUseUpgrade.shared.prepareForLaunch { [weak self] in
             self?.startInterfaceIfReady()
         }
+        // Every model uses Codex and the native helper for computer tasks. Begin their shared
+        // background setup before model selection; login and permission grants remain separate.
+        // Register the installation now so Settings, first use and Uninstall share its lifetime.
+        ComputerUseSetup.current.prepareForLaunch()
         scheduler.reevaluate()   // arm if the dev setting was left on; otherwise a no-op
         scheduler.maybeAutoEnable()   // 14h after initial: flip the overnight scheduler on (or arm the timer)
         // Always armed — knowledge-base-only (free/go) gating happens live at submit() inside
@@ -83,7 +89,6 @@ final class AppState {
         dockPolicy.start()           // drop the Dock icon whenever the home window closes
         update.start()               // start Sparkle + one silent launch check (gates a mandatory update)
         UpdateNotice.checkAtLaunch() // version changed since last run → macOS notif + the in-app changelog capsule
-        inviteBanner.start(appState: self)
         // Diagnostics baseline for the session (structure only, see CodexDiagnostics.swift): start
         // the network monitor now so a codex failure right after a wake never reads "unknown", and
         // leave one breadcrumb saying what codex's login looks like at launch.
@@ -103,12 +108,9 @@ final class AppState {
 
         // Keep the managed Codex CLI current (CodexSetup.updateIfDue): a 15-minute tick that only
         // acts when the user is away, the pipeline is idle, and the Sidekick/card run lock is free,
-        // at most one update a day. Post-onboarding only — onboarding runs the installer itself.
+        // at most one update a day. Initial dependency setup starts above for every user.
         // Read the codex doc's "Keeping the CLI current" before touching this.
         if hasCompletedOnboarding {
-            if !ComputerUseUpgrade.shared.isBlockingInterface {
-                ComputerUseSetup.current.updateIfNeeded()
-            }
             CodexSetup.shared.startKeepingCurrent { [weak self] in
                 self?.commandCoordinator.run.isRunning ?? true
             }
@@ -151,12 +153,8 @@ final class AppState {
             }
         }
 
-        // No engine CLI installs at launch anymore (decision 2026-08-21): each engine's CLI
-        // downloads lazily, the moment the user actually picks it on the frontier-model step —
-        // FrontierEnginePicker.selectTab and the panels' sign-in actions drive
-        // CodexSetup.ensureInstalled / ClaudeSetup.ensureInstalled. A user who chooses Claude
-        // never downloads codex, and vice versa; a user with a real setup already on disk skips
-        // the download entirely (ensureInstalled is detection-first).
+        // Claude Code remains an engine-specific install, prepared when the user selects Claude.
+        // Shared Codex/native setup above reuses compatible installations without signing in.
     }
 
     private func startInterfaceIfReady() {

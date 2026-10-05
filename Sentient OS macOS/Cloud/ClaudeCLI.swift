@@ -26,11 +26,9 @@
 //   - startLogin / loginStatus   → `claude auth login` (browser OAuth) + ClaudeAuth's status read
 //   - validate(force:)           → Availability (binary + login; no model tokens burned)
 //   - run(_:)                    → Envelope (blocking stream-json mode)
-//   - runAgentCommand(_:)        → computer use on the cua driver (MCP eyes via --mcp-config,
-//                                  CLI hands via the same shim + skill text as codex)
+//   - Computer use runs through CodexCLI and ClaudeSubscriptionBridge (official Claude login).
 //
-//  Doc: Cloud/Documentation - Cloud - CodexCLI (the codex exec spine).md (the reference engine;
-//  the Claude engine's own doc lands once the feature is tested and confirmed).
+//  Doc: Documentation - Cloud - ClaudeCLI (the claude -p engine).md
 //
 
 import Foundation
@@ -42,10 +40,10 @@ actor ClaudeCLI {
 
     // MARK: Models
 
-    /// Claude Code model IDs: Opus is pinned to 5.5; Sonnet and Haiku keep their aliases.
+    /// Claude Code model IDs: Opus and Sonnet are pinned to 5.5; Haiku keeps its alias.
     enum Model: String, Sendable {
         case opus = "claude-opus-5-5" // the heavy legs: vault build/update, proactive research
-        case sonnet    // everything else (the gpt-6-sol seat)
+        case sonnet = "claude-sonnet-5-5" // everything else (the gpt-6-sol seat)
         case haiku     // the light tier (the gpt-6-luna seat)
     }
 
@@ -95,18 +93,8 @@ actor ClaudeCLI {
                                     "search_events", "suggest_time"]
             .map { "mcp__claude_ai_Google_Calendar__\($0)" }
 
-        /// The Gmail complement: every connector tool that MUTATES (send/reply/forward/draft/
-        /// label/spam/trash territory) — a DENY list for computer-use runs, where
-        /// `--dangerously-skip-permissions` auto-approves connector tools (measured 2026-08-23;
-        /// the allow-rule gate above applies only to normal permission modes). A denied tool is
-        /// stripped from the model's context entirely, bypass mode included. Unlike the read
-        /// allows this is fail-OPEN — a write tool Anthropic adds is live until curated here —
-        /// so re-verify the surface when the managed CLI updates. The two filter tools ride
-        /// along preemptively: the connector's claude.ai directory page lists them though the
-        /// live capture didn't serve them. Consumed as the UNCLASSIFIED-gmail fallback in
-        /// ConnectorRegistry.computerUseAttachments (gmail rides read-only until the classifier
-        /// sweep runs; once classified, only the destructive verdicts stay denied and writes go
-        /// live — README decision #13) and by the connector lab's classifier ground-truth eval.
+        #if DEBUG
+        /// Ground truth for the retained connector classification fixture.
         static let gmailWriteDenies = ["apply_sensitive_message_label",
                                        "apply_sensitive_thread_label", "create_draft",
                                        "create_filter", "create_label", "delete_filter",
@@ -118,6 +106,7 @@ actor ClaudeCLI {
                                        "untrash_message", "untrash_thread", "update_draft",
                                        "update_label", "update_message_labels"]
             .map { "mcp__claude_ai_Gmail__\($0)" }
+        #endif
     }
 
     // MARK: Environment
@@ -463,8 +452,8 @@ actor ClaudeCLI {
     ///  │ ATTACH          │ wall only, ZERO allow rules — the classifier's inventory read  │
     ///  │ mcpAttachServer │ (the run calls no tools; listing your own needs no approval).  │
     ///  ├─────────────────┼────────────────────────────────────────────────────────────────┤
-    ///  │ COMPUTER USE    │ agentArguments below (the bypass spine; deny lists, not        │
-    ///  │ (runAgentCommand)│ allows, because bypass auto-approves everything).             │
+    ///  │ COMPUTER USE    │ CodexCLI + ClaudeSubscriptionBridge; separate from this       │
+    ///  │                 │ structured Claude runner and its connector policy.           │
     ///  └─────────────────┴────────────────────────────────────────────────────────────────┘
     /// Internal (not private) so the connector lab's argv command can print recipes without
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
@@ -677,158 +666,11 @@ actor ClaudeCLI {
         return json
     }
 
-    // MARK: Computer use (the agent spine)
-
-    /// The runAgentCommand twin: computer use on the cua driver, through `claude -p`. The hybrid
-    /// transport is IDENTICAL to codex's — the daemon, the socket, the CLI shim, and the
-    /// CuaDriverSkill manual are all engine-neutral; only the wiring dialect changes:
-    /// `--mcp-config` registers the eyes (walled by `--strict-mcp-config`, or with connectors
-    /// attached by the server allowlist that also admits them — see agentArguments),
-    /// `--dangerously-skip-permissions` is the bypass twin (headless has no one to answer a
-    /// prompt, and every action is a one-shot shell call), and the driver's 52 non-vision MCP
-    /// tools are denied by name (Claude Code has no per-server enabled_tools filter).
-    /// Screenshots: no `-i` flag exists — paths are appended to the prompt and the model Reads
-    /// them (Claude Code's Read tool ingests images natively).
-    /// The screenshots block both run paths append to the prompt (Claude Code has no `-i`
-    /// flag; the Read tool ingests images natively).
+    // Screenshots for structured Claude runs. Computer tasks enter CodexCLI via FrontierRun.
     static func screenshotsBlock(_ paths: [String]) -> String {
         "\n\nSCREENSHOTS — what the user sees right now (main display first). "
             + "Read each file with the Read tool BEFORE acting:\n"
             + paths.map { "- \($0)" }.joined(separator: "\n")
-    }
-
-    /// The computer-use argv (the third recipe row in `arguments(for:)`'s table) — extracted
-    /// so the connector lab can print it without spawning and the wall construction is one
-    /// readable place.
-    ///
-    /// ⚠️ The prompt sits DIRECTLY after -p (the documented `claude -p "query"` form),
-    /// never trailing the flag list: claude's tool flags are VARIADIC (--allowedTools /
-    /// --disallowedTools / --mcp-config each keep consuming space-separated values), so a
-    /// bare positional after one gets eaten as another value and the run dies with
-    /// "Input must be provided either through stdin or as a prompt argument"
-    /// [FIELD-FOUND 2026-08-21, the first live Sidekick fire]. Same trap as codex's `-i`
-    /// variadic, dodged the same way: no positional ever follows a variadic flag.
-    ///
-    /// The wall admits the cua driver + every attachable connector
-    /// (`ConnectorRegistry.computerUseAttachments` — fail-closed: a connector only attaches
-    /// when a REAL deny list exists for it), and the deny list is cua's non-vision tools +
-    /// every attached connector's DESTRUCTIVE tools. Constructive connector writes are LIVE —
-    /// the deliberate posture change (README decision #13, task 1.6): a user-fired computer-use
-    /// run could already send that email by driving a mail app, so denying the tool changed the
-    /// path, not the power; safety rides one-declared-task + live streaming + STOP.
-    /// Unclassified gmail attaches with its curated write-deny fallback (read-only, exactly the
-    /// shipped posture); every other unclassified connector waits for the classifier sweep.
-    /// Zero attachable connectors = the strict wall, byte-identical to shipped.
-    /// `--settings` applies even under `--setting-sources ""` (measured 2026-08-23).
-    static func agentArguments(prompt: String, modelID: String, effortArg: String,
-                               socketPath: String) throws -> [String] {
-        let direct = DirectMCPRuntime.current
-        var mcpWall: [String]
-        var disallowed = CuaDriver.claudeDisallowedMcpTools
-        let (attached, excluded) = ConnectorRegistry.computerUseAttachments()
-        if !direct.isEmpty {
-            let settings = try DirectMCPRuntime.claudeSettings(direct,
-                hostedURLs: attached.compactMap(\.server.claudeServerURL), driver: true, guardBypass: true)
-            mcpWall = (attached.isEmpty ? ["--strict-mcp-config"] : []) + ["--settings", settings]
-            for attachment in attached { disallowed += attachment.denies }
-            disallowed += direct.flatMap(\.denied)
-        } else if attached.isEmpty {
-            mcpWall = ["--strict-mcp-config"]
-        } else {
-            mcpWall = ["--settings",
-                       mcpServerAllowSettings(serverURLs: attached.compactMap(\.server.claudeServerURL),
-                                              serverNames: ["cua_driver"])]
-            for attachment in attached { disallowed += attachment.denies }
-        }
-        if attached.contains(where: { $0.server.slug == "slack" }), let index = mcpWall.firstIndex(of: "--settings") {
-            mcpWall[index + 1] = try SlackToolPolicy.claudeSettings(mcpWall[index + 1])
-        }
-        let mail = attached.contains { $0.server.slug == OutlookMailConnector.slug }
-        let calendar = attached.contains { $0.server.slug == OutlookCalendarConnector.slug }
-        if mail || calendar, let index = mcpWall.firstIndex(of: "--settings") {
-            mcpWall[index + 1] = try OutlookToolPolicy.claudeSettings(mcpWall[index + 1],
-                operation: .write, runID: OutlookToolPolicy.computerRunID ?? UUID(),
-                calendar: calendar ? .init(operation: .read) : nil, includesMail: mail)
-        }
-        Log("claude agent: connectors attached=\(attached.count) excluded=\(excluded)")
-        return ["-p", prompt,
-                "--output-format", "stream-json", "--verbose",
-                "--model", modelID,
-                "--effort", effortArg,
-                "--dangerously-skip-permissions",
-                "--setting-sources", "",
-                "--disable-slash-commands"]
-            + mcpWall
-            + ["--mcp-config", direct.isEmpty ? CuaDriver.claudeMcpConfig(socketPath: socketPath)
-                : try DirectMCPRuntime.claudeConfig(direct, driverJSON: CuaDriver.claudeMcpConfig(socketPath: socketPath)),
-               // Bash = the shim's one-shot action calls; Read = the screenshots. Nothing
-               // else from the built-in surface (a file the task needs written goes
-               // through the shell, same as on codex).
-               "--tools", attached.contains(where: { $0.server.slug == "slack" }) ? "Bash,Read,ToolSearch" : "Bash,Read",
-               "--disallowedTools", disallowed.joined(separator: ",")]
-    }
-
-    func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
-                         onLine: @escaping @Sendable (String) -> Void) async throws -> String {
-        let t0 = Date()
-        var beganCuaSession = false
-        let (modelID, effortArg) = Self.agentTuned()
-        do {
-            if prompt.utf8.count > CodexCLI.promptByteCap {
-                throw CodexCLI.CLIError.inputTooLarge(chars: prompt.utf8.count)
-            }
-            guard let bin = Self.locateBinary() else { throw CodexCLI.CLIError.notAvailable(.notInstalled) }
-            // Same fire-time self-heals as codex: driver on disk, then the daemon + live socket.
-            if !CuaDriver.isInstalled { await ComputerUseSetup.instance(for: .cua).ensureInstalled() }
-            guard CuaDriver.isInstalled else {
-                throw CodexCLI.CLIError.notAvailable(.notWorking("the cua driver is not installed"))
-            }
-            guard let socket = await CuaDriverHost.shared.ensureRunning() else {
-                throw CodexCLI.CLIError.notAvailable(.notWorking("cua-driver daemon did not start"))
-            }
-            try Task.checkCancellation()
-            guard await CuaDriverHost.shared.beginAgentSession() else {
-                throw CodexCLI.CLIError.notAvailable(.notWorking("cua-driver session did not start"))
-            }
-            beganCuaSession = true
-
-            var fullPrompt = prompt
-            if !imagePaths.isEmpty { fullPrompt += Self.screenshotsBlock(imagePaths) }
-
-            let args = try Self.agentArguments(prompt: fullPrompt, modelID: modelID,
-                                           effortArg: effortArg, socketPath: socket)
-
-            var env = Self.baseEnv
-            // Screenshot-bearing MCP results are big (the default 25k-token cap would truncate a
-            // full-display look), and the eyes' first window walk can be slow.
-            env["MAX_MCP_OUTPUT_TOKENS"] = "50000"
-            env["MCP_TIMEOUT"] = "30000"          // server connect budget (codex: startup_timeout_sec=30)
-            env["MCP_TOOL_TIMEOUT"] = "120000"    // per-call budget (codex: tool_timeout_sec=120)
-
-            Log("claude exec: start feature=computer cua=\(CuaDriver.version) model=\(modelID) effort=\(effortArg) resume=false mode=bypass prompt_kb=\(fullPrompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
-            let out = try await CodexCLI.executeStreaming(binary: bin, args: args, timeout: timeout,
-                                                          extraEnv: env) { raw in
-                // stderr rides through as-is (already prefixed by the plumbing); stdout is
-                // stream-json and gets reduced to the human play-by-play.
-                if raw.hasPrefix("stderr: ") { onLine(raw) }
-                else { for s in Self.humanLines(fromStreamJSON: raw) { onLine(s) } }
-            }
-            let env2 = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(t0) * 1000))
-            Log("claude exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
-            await CuaDriverHost.shared.endAgentSession()
-            beganCuaSession = false
-            return env2.result
-        } catch {
-            if beganCuaSession { await CuaDriverHost.shared.endAgentSession() }
-            if !Task.isCancelled {
-                let ms = Int(Date().timeIntervalSince(t0) * 1000)
-                Log("claude exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
-                emitClaudeFailure(event: "claude.agent_command", error, feature: "computer",
-                                  modelID: modelID, effort: effortArg, resumed: false,
-                                  durationMS: ms, timeoutS: Int(timeout))
-            }
-            throw error
-        }
     }
 
     // MARK: Stream-json parsing
@@ -855,7 +697,7 @@ actor ClaudeCLI {
     /// Reduce the stream-json output to the shared Envelope. The stream's last line is a
     /// `result` object; `system/init` (the first line) carries the session id — so even a
     /// mid-run usage limit keeps its resume handle, the same guarantee codex gives.
-    private static func parseEnvelope(_ out: CodexCLI.ExecResult, durationMS: Int) throws -> CodexCLI.Envelope {
+    static func parseEnvelope(_ out: CodexCLI.ExecResult, durationMS: Int) throws -> CodexCLI.Envelope {
         var sessionID: String?
         var resultObj: [String: Any]?
 
@@ -925,7 +767,7 @@ actor ClaudeCLI {
     /// An assistant message can carry several content blocks (text + tool calls), so this
     /// returns all of them. Thinking blocks are skipped (full extended thinking is far too
     /// verbose for a notch line); tool results and partial deltas are noise.
-    private static func humanLines(fromStreamJSON line: String) -> [String] {
+    static func humanLines(fromStreamJSON line: String) -> [String] {
         guard let data = line.data(using: .utf8),
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               obj["type"] as? String == "assistant",

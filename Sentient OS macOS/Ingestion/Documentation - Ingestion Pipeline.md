@@ -1,11 +1,10 @@
 # Ingestion Pipeline (Ingestion/)
 
 The one on-device reading pipeline: **Connector → IterativeRun → CycleStore**. Every local source
-(Files, Apple Notes, WhatsApp, iMessage) is a connector on this core, one screen (`ProcessingView`)
-drives it for both the home's Analyze Now and the dev buttons, and the 3 AM scheduler runs the exact
-same code. It is crash-safe by construction: every processed item commits its survivor note and its
-progress marker in ONE store write, so an interrupted run resumes exactly where it stopped, never
-duplicating and never skipping.
+(Files, Apple Notes, WhatsApp, iMessage, Apple Mail, Apple Calendar) is a connector on this core. One screen
+(`ProcessingView`) drives both Analyze Now and the dev buttons; the scheduler uses the same code.
+Timeline sources commit each survivor and progress marker together. Apple Mail has a dedicated checkpoint path; Apple Calendar commits
+an entire validated snapshot with its coverage checkpoint because events can change or disappear.
 
 ## Files
 
@@ -15,8 +14,8 @@ duplicating and never skipping.
 | `ItemKey.swift` | A work item's position in its connector's timeline: `(order, tiebreak)`. Files use (date added, path), Notes (creation date, uuid), chats (row id, ""). |
 | `CycleStore.swift` | The pipeline's own SwiftData store: durable per-bucket pointers + ephemeral survivor summaries, with the atomic per-item commit. |
 | `IterativeRun.swift` | The orchestrator: drives any connectors through one `Engine`, per bucket, in `.initial` / `.iterative` / `.auto` mode. Owns the GPU-wedge recovery, per-item extraction timeout, per-source time budget, and progress reporting. |
-| `Connectors/FilesConnector.swift` · `NotesConnector.swift` · `ChatConnectors.swift` | Thin adapters over the `Sources/` readers: one bucket per folder root, one bucket for Notes, one bucket per chat. |
-| `LifetimeStats.swift` | The lifetime counters ("I've read 12,438 things"). Numbers only; the only memory that a junk or sensitive item was ever looked at. |
+| `Connectors/FilesConnector.swift` · `NotesConnector.swift` · `ChatConnectors.swift` · `AppleMailConnector.swift` · `AppleCalendarConnector.swift` | Thin adapters over the `Sources/` readers: one bucket per folder root, Notes, chat, or selected Calendar snapshot. |
+| `LifetimeStats.swift` | The lifetime counters ("I've read 12,438 things"). Verdict counts without source contents; source-specific progress checkpoints are separate. |
 | `PipelineActivity.swift` | A tiny "is a run active?" counter (`IterativeRun` and `ProactiveCycle` bump it). Settings disables Reset and Uninstall while it is non-zero; the updater also refuses to relaunch during a run. |
 | `FactoryReset.swift` | The one full wipe shared by Settings → System → Reset and Dev Tools → Reset everything: cycle store, knowledge base folder, proactive traces, counters, cloud copy (best-effort), and the rewind to the start of onboarding. |
 
@@ -24,8 +23,8 @@ duplicating and never skipping.
 
 Its own on-disk container: `~/Library/Application Support/SentientOS/IterativeCycle.store`. Two models:
 
-- **`BucketPointer` (durable, one per bucket).** Normally the **high-water mark**: everything at or below `(order, tiebreak)` is done, everything newer is new. During a bucket's FIRST run it also carries a **floor**: the mark holds the top (the newest item this first run covers), and the floor is the oldest item done so far, sinking one item at a time. A non-nil floor is the single tell that a first run is mid-descent. When the descent reaches the bottom, the floor collapses and the mark becomes a normal high-water mark. This is the only state that survives a cycle.
-- **`CycleNote` (ephemeral, one per survivor).** The summary text, title, source kind, source id, folder tag, item date, and a `reminderFlagged` hint. Wiped at the end of every successful full cycle (`ProactiveCycle` step 4). Junk and sensitive items store nothing.
+- **`BucketPointer` (durable, one per bucket).** Normally the **high-water mark**: everything at or below `(order, tiebreak)` is done, everything newer is new. During a bucket's FIRST run it also carries a **floor**: the mark holds the top (the newest item this first run covers), and the floor is the oldest item done so far, sinking one item at a time. A non-nil floor is the single tell that a first run is mid-descent. When the descent reaches the bottom, the floor collapses and the mark becomes a normal high-water mark. Progress state survives a cycle; Apple Mail additionally retains its dedicated checkpoint and survivor identities.
+- **`CycleNote` (ephemeral, one per survivor).** The summary text, title, source kind, source id, folder tag, item date, and a `reminderFlagged` hint. Wiped at the end of every successful full cycle (`ProactiveCycle` step 4). Junk and sensitive items do not produce retained knowledge summaries. Progress checkpoints are separate.
 
 Bucket keys are the pointer namespace: `file:<root.id>` per folder root, `notes`, `whatsapp:<jid>`,
 `imessage:<guid>`, and the cloud legs' `gmail` / `calendar`.
@@ -56,6 +55,48 @@ only part of a bucket key that may be logged (the full key can carry a phone-num
 
 `RunProgress` is the snapshot the UI reads: totals, verdict counts, and the last item's title / summary /
 verdict / prompt, all describing the same item so a UI never shows a mismatched pair.
+Hosted reads carry separate reading, summarized, quiet and failed states. A quiet committed window
+preserves the same source's useful summary card; starting the next source or run clears it. Quiet
+reads are not junk, and failures remain available across pauses until that source succeeds on retry.
+
+## Apple Mail checkpoints
+
+Apple Mail uses `AppleMailConnector` and `AppleMailCheckpoint` rather than generic date-based
+pointers. Mail row IDs are meaningful only within one Envelope Index generation. Discovery of new
+rows, unfinished historical backfill, unavailable-body retries and periodic reconciliation have
+separate frontiers, so arriving mail cannot erase unfinished history. A bounded pass handles up to
+600 messages. Index rebuilds reset traversal while retained survivor identities support deduplication.
+
+Body text goes through the on-device model's dedicated classification-first Mail prompt. Invalid
+output is retryable, not a permissive summary. Checkpoint progress and retained summaries are saved
+through `CycleStore`'s Mail-specific commit path. Pending row IDs and hashed survivor identities are
+local processing state, not raw-message storage or product analytics. Missing bodies remain eligible
+for retry after Apple Mail downloads them.
+
+## Mutable calendar snapshots
+
+`AppleCalendarConnector` produces one `apple-calendar` bucket with a bounded native snapshot.
+All run modes reread that entire window. Event start times and modification dates are not safe
+high-water marks: a reschedule can move backward, recurring instances share an item, and deletions
+have no later item to advance through. The normal timeline floor/descent logic does not apply.
+
+The run invalidates earlier calendar readiness before loading the model, accumulates survivor drafts
+only in memory, and validates the fixed window against a fresh EventKit read. Every item must finish
+successfully. Cancellation, extraction or model failure, malformed output, time cap, permission loss,
+and changed selection/content prevent publication. A later run starts a fresh snapshot.
+
+`CycleStore.commitCalendarSnapshot` atomically replaces the bucket's pending notes, adds an
+app-authored coverage note, and updates its pointer through the existing rollback/retry helper.
+An empty snapshot is a successful replacement, not a skipped bucket. The mark's `order` is capture
+time; `tiebreak` holds versioned coverage bounds and a digest of selected calendar IDs. The floor is
+nil. No event IDs, event hashes, or rejected-item tombstones persist in this checkpoint.
+
+`notes()` exposes calendar summaries only after a successful commit in the current process, with
+permission and matching selected scope. A restart or failed refresh hides old pending calendar
+notes until another complete read. Other sources retain their existing retry behavior. The coverage
+note tells downstream consumers to reconcile the full window across all corpus parts; omitted
+summaries cannot establish deletion, attendance, or free time. Native calendar data is a dated
+snapshot, never a live availability check.
 
 ## Modes at the entry points
 
@@ -66,8 +107,8 @@ verdict / prompt, all describing the same item so a UI never shows a mismatched 
 ## The cycle
 
 On-device read (this folder) → the shared tail `ProactiveCycle` (knowledge base → mirror → gift →
-proactive → wipe the summaries). Summaries are disposable on purpose: "tell the cloud" always sends
-whatever exists, with no "which are new?" bookkeeping. Only the per-bucket marks persist. A failed tail
+proactive → wipe the summaries). Summaries are disposable on purpose: the chosen frontier model receives
+the pending corpus, with no "which are new?" bookkeeping. Per-source progress and retained Mail survivor identities persist. A failed tail
 keeps the summaries so the next cycle retries.
 
 ## FactoryReset
@@ -81,7 +122,10 @@ scheduler's first-cycle / auto-enable / production-enabled state, and stops the 
 
 Deliberately kept: the mirror password and opt-in (the share URL pasted into the user's AIs must
 survive; the next push recreates the copy), the source selections, the frontier-model choice, and the
-installed wake helper. Uninstall (`System/Uninstall.swift`) is the strict superset that removes those too.
+installed wake helper. Feedback-list addresses and invitation/lifetime-access records are also
+retained; reset does not delete those cloud records. The local contact queue remains available for
+retry. Uninstall (`System/Uninstall.swift`) also removes local setup and contact credentials, but still
+preserves the feedback list and invitation/lifetime-access records.
 
 ## Rules
 

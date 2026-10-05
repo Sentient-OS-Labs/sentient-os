@@ -2,8 +2,8 @@
 //  CuaDriverSetup.swift
 //  Sentient OS macOS  ·  Driver/
 //
-//  Puts the pinned cua-driver binary on the user's Mac — the CUA branch of computer-use setup (ComputerUseSetup owns
-//  the flow; onboarding arms it in the background two minutes into the first analysis).
+//  Legacy pinned cua-driver installer, retained for compatibility tooling. Active app startup
+//  and computer tasks prepare OpenAI's native helper through ComputerUseSetup.
 //
 //  The chain, in order, each step able to say no:
 //    1. Download the pinned release tarball straight from Cua's GitHub release (~40 MB).

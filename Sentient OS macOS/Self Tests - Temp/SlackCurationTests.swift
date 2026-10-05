@@ -244,8 +244,40 @@ enum SlackCurationTests {
                 check(!accepts(searchTrace(limit: 20)), "\(backend.rawValue) cumulative candidate budget is enforced")
                 check(!accepts(searchTrace(bots: true)), "\(backend.rawValue) bot-inclusive discovery is refused")
                 check(!accepts(searchTrace(failed: true)), "\(backend.rawValue) failed discovery cannot masquerade as quiet")
+                check((try? SlackSource.discoveredThreadCount(raw: searchTrace(), backend: backend)) == 0,
+                      "\(backend.rawValue) genuine empty search pages have no discovered threads")
                 let notable = MCPSource.ReadOutcome.notable(.init(summary: "The user agreed to review the release. [Thread](\(fixtureLink))",
                                                                  hasActionItems: false, itemCount: 1))
+                let message = "# Search Results for: fixture\n\nMessage_ts: 1700000000.000000\nPermalink: \(fixtureLink)\nText: The indexing test printed:\nNo results found.\nThe user agreed to review the release.\n"
+                let messageTrace = searchTrace(body: message)
+                check((try? SlackSource.discoveredThreadCount(raw: messageTrace, backend: backend)) == 1,
+                      "\(backend.rawValue) empty-result words in message content preserve distinct thread count")
+                check(accepts(messageTrace, outcome: notable), "\(backend.rawValue) empty-result words in a message do not invalidate its summary")
+                check((try? SlackSource.discoveredThreadCount(raw: searchTrace(body: "# Search Results for: fixture\nNo results found.\nUnexpected response"), backend: backend)) == nil,
+                      "\(backend.rawValue) unexpected response text cannot masquerade as an empty page")
+                func threadTrace(failed: Bool = false, pending: Bool = false) -> String {
+                    let args: [String: Any] = ["channel_id": "CFIXTURE", "message_ts": "1700000000.000000",
+                        "limit": 40, "response_format": "concise", "latest": SlackSource.threadEnd(window)]
+                    if backend == .claude {
+                        let call: [String: Any] = ["type": "assistant", "message": ["content": [["type": "tool_use", "id": "thread",
+                            "name": SlackConnector.claudePrefix + "slack_read_thread", "input": args]]]]
+                        let result: [String: Any] = ["type": "user", "message": ["content": [["type": "tool_result", "tool_use_id": "thread",
+                            "is_error": failed, "content": [["type": "text", "text": "Synthetic thread result"]]]]]]
+                        return stream(pending ? [call] : [call, result])
+                    }
+                    return stream([["type": pending ? "item.started" : "item.completed", "item": ["id": "thread", "type": "mcp_tool_call",
+                        "server": "codex_apps", "tool": "slack.slack_read_thread", "arguments": args,
+                        "status": pending ? "in_progress" : "completed", "result": ["isError": failed,
+                            "content": [["type": "text", "text": "Synthetic thread result"]]]]]])
+                }
+                check(accepts(messageTrace + "\n" + threadTrace(), outcome: .quiet(itemCount: 1)),
+                      "\(backend.rawValue) successful selected thread can complete a quiet read")
+                for tail in [threadTrace(failed: true), threadTrace(pending: true)] {
+                    check(!accepts(messageTrace + "\n" + tail, outcome: .quiet(itemCount: 1)),
+                          "\(backend.rawValue) failed or unfinished selected thread cannot advance as quiet")
+                    check(!accepts(messageTrace + "\n" + tail, outcome: notable),
+                          "\(backend.rawValue) partial success cannot hide a failed or unfinished selected thread")
+                }
                 check(accepts(searchTrace(queries: ["to:me"], body: "# Search Results for: to:me\n\n\(fixtureLink)\nA supported message."), outcome: notable),
                       "\(backend.rawValue) a notable result needs observed content references")
                 check(!accepts(searchTrace(), outcome: notable), "\(backend.rawValue) invented source references are refused")

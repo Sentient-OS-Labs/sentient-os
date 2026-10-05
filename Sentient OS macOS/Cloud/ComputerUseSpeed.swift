@@ -66,7 +66,7 @@ enum ComputerUseSpeed: String, CaseIterable, Sendable {
         case .claude:
             let (model, effort) = claudeModelAndEffort
             let name = (model == .opus && ClaudeAuth.isPro) ? ClaudeCLI.Model.sonnet : model
-            let display = name == .opus ? "Opus 5.5" : "Sonnet"
+            let display = name == .opus ? "Opus 5.5" : "Sonnet 5.5"
             let level = switch effort {
             case .low: "low"
             case .medium: "med"

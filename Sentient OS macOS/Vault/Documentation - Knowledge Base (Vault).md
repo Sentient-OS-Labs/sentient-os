@@ -1,10 +1,31 @@
 # The Knowledge Base (Vault/)
 
-How the survivor summaries become an Obsidian-style markdown knowledge base at
-`~/Sentient OS - Knowledge Base/`, and how it stays current. The user-facing name is **Knowledge**;
-"vault" survives only in code. The frontier model (through `CodexCLI`) WRITES the markdown itself with
+Sentient connects the useful details scattered across your apps into knowledge you can actually
+read, correct and keep. People, projects, commitments and preferences become ordinary Markdown
+notes with links between them. That shared context helps Sidekick understand a short handoff, gives
+Double Tap facts for a reply, and lets proactive intelligence connect unfinished work.
+
+The main knowledge folder is `~/Sentient OS - Knowledge Base/`. The user-facing name is **Knowledge**;
+"vault" survives only in code. The chosen frontier model (through `FrontierRun`) writes the markdown itself with
 its file tools inside a staging directory, and the live folder is only ever replaced by an atomic swap
 on success. Never mutated mid-run.
+
+Local sources are summarized by Sentient's on-device model first. Your chosen AI consolidates those
+summaries and updates the notes; if that AI is hosted, it processes the context used for this work.
+Local storage does not mean every stage uses local inference. Hosted/direct connectors have their
+own data paths. Optional MCP sharing uploads an encrypted copy only when enabled.
+
+## Your voice and your edits
+
+`writingstyle.md` is a separate **one-time snapshot** of selected sent-message examples, not a
+continuously collected message history. Knowledge builds and updates preserve it, including your
+edits. Double Tap includes it in drafting requests, and whole-folder MCP sharing includes it too.
+Open it with **Settings → Double Tap → Show writing examples in Finder**; the Knowledge window hides
+this support file from ordinary navigation. See the Double Tap guide for collection scope.
+
+Read and edit regular notes in the Knowledge window or your preferred Markdown editor. The
+Constellation View makes relationships visible; the Reader View lets you inspect the actual text.
+No proprietary storage format or separate Sentient account is needed to keep these files.
 
 ## Files
 
@@ -13,14 +34,15 @@ on success. Never mutated mid-run.
 | `VaultGenerator.swift` | The first build: the locked prompt core, the agentic run over a staging dir, the shared staging + atomic-swap helpers, resume tokens, the source-trust tags (`locSrc`). |
 | `VaultCloud.swift` | The two cycle calls: `create` (first build, via `VaultGenerator`) and `update` (a surgical merge over a staged COPY of the live vault). Persists resume tokens. Owns `pushIfDirty()` and the update prompt. |
 | `CorpusSlicer.swift` | Splits a summary corpus into byte-budgeted parts so no single prompt can exceed codex's ~1 MiB per-turn input cap. Deterministic on purpose. |
+| `WritingStyle.swift` | One-time writing samples, setup, and preservation across knowledge updates. |
 | `VaultActivity.swift` | The vault-change / mirror-sync seam: `vaultDirty` (persisted), `editorBusy`, and the Knowledge editor's 30 s debounced push with its status line. |
 
 ## Build (`VaultGenerator.generate`)
 
-- Runs `codex exec` with `gpt-5.6-sol` at high effort (xhigh was retired; it thinks far too long), a `workspace-write` sandbox, and `cwd` = a fresh, empty staging directory (`.sentientos-vault-staging-<uuid>`, a SIBLING of the vault so the swap stays on one volume). Orphaned staging dirs from earlier runs are swept first.
+- Runs through `FrontierRun` with the configured backend and knowledge-build model policy, a `workspace-write` sandbox, and `cwd` = a fresh, empty staging directory (`.sentientos-vault-staging-<uuid>`, a SIBLING of the vault so the swap stays on one volume). Orphaned staging dirs from earlier runs are swept first.
 - The prompt = `vaultPromptCore` + `agenticOutputInstructions` + the corpus. The core is the product of a multi-cycle eval on real data: source-trust tiers (the user's own Obsidian / authored notes are the truth; screenshots and saved files are often about other people), the truth-and-attribution rule (a confident false claim is worse than an omission; when unsure, leave it out), ruthless synthesis and de-duplication, a root `README.md` portrait written for an AI reader FIRST, and hard shape caps: at most ~10 root folders, notes at depth ≥ 2, ~2 to 5 substantial notes per subfolder, **80 to 120 notes** total, `[[wikilinks]]` only to notes that exist, no frontmatter, no em dashes.
 - Progress: a 2 s poll of the staging dir's `.md` count, plus an optional `onLine` that forwards codex's humanized play-by-play (the takeover's "THINKING" trail).
-- Success = at least one note written → `swapStagingIntoVault` (`FileManager.replaceItemAt`, a true atomic replace; a plain move on the very first build). On any throw the existing vault is left intact and staging survives for a retry.
+- Success = at least one note written → `swapStagingIntoVault` (`FileManager.replaceItemAt`, an atomic replace; a plain move on the very first build). On any throw the existing vault is left intact and staging survives for a retry.
 
 ## Update (`VaultCloud.update`)
 
@@ -69,6 +91,13 @@ tag is what the prompt keys its trust on: `Obsidian — USER'S OWN NOTE`, `<fold
 (`.md` / `.txt`), `WhatsApp · <chat>`, `Gmail — the user's email correspondence`, `Calendar — the
 user's schedule / events`, or the plain folder for screenshots, photos, and PDFs. Proactive's prompts
 render the same lines.
+
+Apple Calendar has its own local-schedule source tag. Its app-authored coverage note carries the
+capture time and fixed window. Build/update prompts reconcile earlier schedule claims against the
+current summaries across all parts of the cycle, preserve uncertainty, and treat older claims as
+historical. A missing summary does not prove an event was deleted or that time is free. Native and
+hosted sources can describe the same meeting, so consumers must deduplicate them and verify live
+state before proposing calendar changes.
 
 ## Rules
 
