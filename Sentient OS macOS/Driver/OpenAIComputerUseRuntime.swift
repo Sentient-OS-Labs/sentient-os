@@ -120,6 +120,7 @@ final class OpenAIComputerUseRuntime {
                 self.checked = nil
                 self.isReady = false
                 if !Task.isCancelled, !(error is CancellationError) {
+                    if !Diagnostics.isExpected(error) { Diagnostics.report(.readinessFailed, phase: .probe, error: error) }
                     let reason = (error as? OpenAIComputerUse.RuntimeError).map { String(describing: $0) } ?? "unexpected"
                     Log("Native computer use: service check failed (\(reason))")
                 }

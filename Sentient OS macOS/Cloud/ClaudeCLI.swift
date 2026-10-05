@@ -848,12 +848,22 @@ actor ClaudeCLI {
         default: (caseName, level) = (String(describing: type(of: error)), .error)
         }
         let reason = CodexFailureReason.classify(error)
+        if phase == "ping", CodexTrigger.current == .probe, [.notInstalled, .notLoggedIn, .planDenied].contains(reason) { return }
         let net = NetworkSnapshot.shared.current
         extra["effort"] = effort
         extra["resumed"] = String(resumed)
         extra["duration_ms"] = String(durationMS)
         extra["timeout_s"] = String(timeoutS ?? -1)
-        if feature == "computer" { extra["cua_driver"] = CuaDriver.version }
+        if feature == "computer" {
+            let runtime = ComputerUseBackend.selected(for: ModelBackend.current)
+            extra["computer_runtime"] = runtime.rawValue
+            if runtime == .cua { extra["cua_driver"] = CuaDriver.version }
+            else {
+                extra["helper_version"] = CodexRuntime.release.helper.version
+                extra["helper_build"] = String(CodexRuntime.release.helperBuild)
+            }
+        }
+        Diagnostics.current?.markReported(error)
         CrashReporting.captureEvent(event, level: level, tags: [
             "feature": feature,
             "error": caseName,

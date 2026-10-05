@@ -80,7 +80,9 @@ actor ProactiveExecutor {
     func fire(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         // trigger=card: every codex call under a card fire reports it (task-local, inherited).
         await ModelBackend.$runOverride.withValue(ModelBackend.current) {
-            await CodexTrigger.$current.withValue(.card) { await fireBody(action, progress: progress) }
+            await CodexTrigger.$current.withValue(.card) {
+                await Diagnostics.withOperation("proactive_action") { await fireBody(action, progress: progress) }
+            }
         }
     }
 
@@ -135,7 +137,7 @@ actor ProactiveExecutor {
         if !stopped {
             ExecutorScoreboard.record(method: channel, source: "proactive_card",
                 outcome: r.board, durationS: Date().timeIntervalSince(t0),
-                statusPresent: r.statusPresent, errorClass: r.errorClass)
+                statusPresent: r.statusPresent, errorClass: r.errorClass, error: r.error)
         }
         // The single most important number: a user fired a real action — which channel, did it land.
         // Core tier — the proactive-click count is always-on telemetry (disclosed in Settings).
@@ -191,6 +193,7 @@ actor ProactiveExecutor {
         let board: ExecutorScoreboard.Outcome
         let statusPresent: Bool
         let errorClass: String?
+        var error: Error? = nil
         static func notFireable(_ m: String) -> FireResult {
             FireResult(outcome: .notFireable(m), board: .notFireable, statusPresent: true, errorClass: nil)
         }
@@ -298,7 +301,7 @@ actor ProactiveExecutor {
         } catch {
             Log("ProactiveExecutor/\(channel): ✗ \(ErrorLabel(error))")
             return FireResult(outcome: .failed(describe(error)), board: .failed, statusPresent: true,
-                              errorClass: String(describing: type(of: error)))
+                              errorClass: String(describing: type(of: error)), error: error)
         }
     }
 
@@ -325,7 +328,7 @@ actor ProactiveExecutor {
         } catch {
             Log("ProactiveExecutor/computer: ✗ \(ErrorLabel(error))")
             return FireResult(outcome: .failed(describe(error)), board: .failed, statusPresent: true,
-                              errorClass: String(describing: type(of: error)))
+                              errorClass: String(describing: type(of: error)), error: error)
         }
     }
 

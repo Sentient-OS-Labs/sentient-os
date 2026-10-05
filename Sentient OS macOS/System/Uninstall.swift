@@ -100,6 +100,7 @@ enum Uninstall {
         progress(.cloud)
         do { try await MailAccountCloud.shared.forgetLocalState() }
         catch {
+            Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "contact_credentials", error: error)
             lastFailure = "Uninstall paused because local contact credentials couldn't be removed. Unlock your Mac and retry."
             appState?.isUninstalling = false
             return false
@@ -115,6 +116,7 @@ enum Uninstall {
         }
         do { try await DirectMCPConnections.shared.removeAll() }
         catch {
+            Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "connector_credentials", error: error)
             Log("Uninstall: direct-connection Keychain cleanup needs retry")
             lastFailure = "Uninstall paused because saved app connections couldn't be removed from Keychain. Unlock your Mac and retry to finish removing Sentient."
             appState?.isUninstalling = false
@@ -129,7 +131,7 @@ enum Uninstall {
 
         progress(.knowledge)
         await CycleStore.shared.wipeEverything()     // close out SwiftData cleanly before its files go
-        try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
+        Diagnostics.removeForCleanup(VaultGenerator.vaultRoot, phase: .uninstall, reason: "vault")
         VaultGenerator.sweepOrphanStaging(keeping: nil)
         await beat()
 
@@ -148,6 +150,7 @@ enum Uninstall {
                 try FileManager.default.removeItem(at: URL.sentientSupport)
             }
         } catch {
+            Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "runtime", error: error)
             lastFailure = "Uninstall paused because Sentient's runtime is still in use or couldn't be removed. Finish active tasks and retry."
             appState?.isUninstalling = false
             return false
@@ -159,14 +162,14 @@ enum Uninstall {
         let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library")
         for sub in ["Caches/\(bundleID)", "HTTPStorages/\(bundleID)", "WebKit/\(bundleID)",
                     "Saved Application State/\(bundleID).savedState", "Logs/SentientOS"] {
-            try? FileManager.default.removeItem(at: library.appendingPathComponent(sub, isDirectory: true))
+            Diagnostics.removeForCleanup(library.appendingPathComponent(sub, isDirectory: true), phase: .uninstall, reason: "app_cache")
         }
         // Every setting, flag, and latch at once — LAST, so a live observer can't re-persist a key.
         d.removePersistentDomain(forName: bundleID)
         d.synchronize()
         await beat()
 
-        Log("Uninstall: removed wake helper + cloud copy + keychain identity + knowledge base + model + cua driver + store + caches + TCC grant + defaults · left the .app, ~/.codex, and gift keepsakes untouched")
+        Log("Uninstall: cleanup attempts finished; individual failures are reported")
         return true
     }
 

@@ -207,6 +207,10 @@ nonisolated enum ConnectorClassifier {
             } catch {
                 if Task.isCancelled || error is CancellationError { return false }
                 Log("classifier: \(ConnectorRegistry.telemetrySlug(slug)) attempt \(attempt) \(ErrorLabel(error))")
+                if attempt == 2, !Diagnostics.isExpected(error) {
+                    Diagnostics.report(.connectorFailed, phase: .validate, reason: "classification_failed", error: error,
+                                       source: ConnectorRegistry.telemetrySlug(slug), counts: [.attempted: attempt])
+                }
                 if attempt == 1 { try? await Task.sleep(for: .seconds(2)) }
             }
         }
@@ -219,7 +223,7 @@ nonisolated enum ConnectorClassifier {
     /// Runs on the idle tick; cache hits are free and a CLI update refreshes the classification.
     /// Failures remain unclassified and retry on a later tick.
     static func sweepActionConnectors() async {
-        guard ModelBackend.current == .claude else { return }
+        guard ModelBackend.current == .claude, ClaudeAuth.cachedLoggedIn else { return }
         var slugs: [String] = []
         if UserDefaults.standard.bool(forKey: "dbg.gmail.connected") { slugs.append("gmail") }
         if UserDefaults.standard.bool(forKey: "dbg.calendar.connected") { slugs.append("google-calendar") }

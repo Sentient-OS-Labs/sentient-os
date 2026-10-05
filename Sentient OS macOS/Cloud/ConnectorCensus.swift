@@ -278,13 +278,21 @@ nonisolated enum ConnectorCensus {
         // exporting CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 can't reach the child — but the
         // empty-string pin in baseEnv is what guarantees it, and that flag suppresses the
         // claude.ai connector fetch entirely (every probe would read an honest-but-wrong empty).
-        guard let out = try? await CodexCLI.executeAsync(binary: binary, args: ["mcp", "list"],
-                                                         stdinText: nil, cwd: nil, timeout: 60,
-                                                         extraEnv: ClaudeCLI.baseEnv) else {
+        do {
+            let out = try await CodexCLI.executeAsync(binary: binary, args: ["mcp", "list"],
+                stdinText: nil, cwd: nil, timeout: 60, extraEnv: ClaudeCLI.baseEnv)
+            guard out.status == 0 else {
+                if ClaudeAuth.cachedLoggedIn {
+                    Diagnostics.report(.inventoryDegraded, phase: .inventory, reason: "list_exit", counts: [.exitCode: Int(out.status)])
+                }
+                return []
+            }
+            return parseClaudeList(out.stdout)
+        } catch {
+            if ClaudeAuth.cachedLoggedIn { Diagnostics.report(.inventoryDegraded, phase: .inventory, reason: "list_failed", error: error) }
             Log("ConnectorCensus.claude: mcp list failed to run")
             return []
         }
-        return parseClaudeList(out.stdout)
     }
 
     /// The ONE place `claude mcp list`'s output format is understood — pure, so the lab can
@@ -337,6 +345,7 @@ nonisolated enum ConnectorCensus {
         if excluded > 0 {
             // A claude.ai line was dropped: the output format may have drifted.
             // Report the shape, never the content.
+            Diagnostics.report(.inventoryDegraded, phase: .parse, reason: "inventory_shape", counts: [.attempted: candidates, .rejected: excluded])
             Log("ConnectorCensus.claude: parsed \(connectors.count) of \(candidates) claude.ai lines")
         }
         return logicalServices(connectors)

@@ -155,6 +155,7 @@ final class ComputerUseSetup {
                 do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL, configuration: nativeConfiguration) }
                 catch {
                     if !Task.isCancelled {
+                        recordFailure(error)
                         failure = error
                         verificationFailed = (error as? OpenAIComputerUse.RuntimeError) != .cliUnavailable
                         ready = false
@@ -201,8 +202,17 @@ final class ComputerUseSetup {
     }
 
     private func recordFailure(_ error: Error) {
+        guard !Diagnostics.isExpected(error) else { return }
+        let phase: String
+        switch progress {
+        case .downloading: phase = "download"
+        case .verifying, .checkingSignature, .checkingVersion: phase = "verify"
+        case .unpacking: phase = "unpack"
+        case .installing: phase = "install"
+        default: phase = "setup"
+        }
         CrashReporting.captureEvent("computer_use.setup_failed", level: .warning,
-            tags: ["runtime": backend.rawValue, "error": String(describing: type(of: error))],
-            fingerprint: ["computer_use", "setup_failed", backend.rawValue])
+            tags: Diagnostics.errorFields(error).merging(["runtime": backend.rawValue, "phase": phase, "dependency_version": backend == .cua ? CuaDriver.version : CodexRuntime.release.helper.version]) { _, new in new },
+            fingerprint: ["computer_use", "setup_failed", backend.rawValue, Diagnostics.errorFields(error)["error_case"] ?? Diagnostics.errorFields(error)["error_code"] ?? "unknown"])
     }
 }

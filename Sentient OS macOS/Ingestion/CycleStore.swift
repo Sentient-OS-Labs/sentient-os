@@ -175,7 +175,7 @@ actor CycleStore {
     func mailCheckpoint(_ bucketKey: String) throws -> AppleMailCheckpoint? {
         guard let data = try fetchRow(bucketKey)?.appleMailState else { return nil }
         let state = try JSONDecoder().decode(AppleMailCheckpoint.self, from: data)
-        guard state.version == 1 else { throw AppleMailError.unsupportedSchema }
+        guard (1...2).contains(state.version) else { throw AppleMailError.unsupportedSchema }
         return state
     }
 
@@ -247,7 +247,12 @@ actor CycleStore {
     /// (floor set) is OMITTED so its connector returns its FULL set — the descent needs items BELOW
     /// its top, which a `> mark` hint would hide. IterativeRun still filters/advances authoritatively.
     func connectorMarks() -> [String: ItemKey] {
-        let rows = (try? modelContext.fetch(FetchDescriptor<BucketPointer>())) ?? []
+        let rows: [BucketPointer]
+        do { rows = try modelContext.fetch(FetchDescriptor<BucketPointer>()) }
+        catch {
+            Diagnostics.report(.storeReadFailed, phase: .read, reason: "connector_marks", error: error)
+            return [:]
+        }
         return Dictionary(rows.filter { $0.floor == nil }.map { ($0.bucketKey, $0.mark) },
                           uniquingKeysWith: { a, _ in a })
     }
@@ -266,8 +271,10 @@ actor CycleStore {
     /// Initial reset for one bucket: drop its pointer AND its ephemeral notes (fresh top→bottom).
     func clearBucket(_ bucketKey: String) {
         if let r = row(bucketKey) { modelContext.delete(r) }
-        try? modelContext.delete(model: CycleNote.self, where: #Predicate { $0.bucketKey == bucketKey })
-        try? modelContext.save()
+        do {
+            try modelContext.delete(model: CycleNote.self, where: #Predicate { $0.bucketKey == bucketKey })
+            try modelContext.save()
+        } catch { modelContext.rollback(); report(error, op: "clear_bucket") }
     }
 
     /// Throwing fetch — lets write paths tell "no row exists" apart from "the fetch failed" (B9). A
@@ -306,15 +313,12 @@ actor CycleStore {
     /// Store failure kinds (domain + code) already reported to Sentry this process. A full disk or a
     /// wedged store fails EVERY item the same way; one event per kind is the signal, hundreds are noise
     /// (and each `capture(error)` used to snapshot every thread on the caller). Structure only.
-    private var reportedFailures: Set<String> = []
 
     private func report(_ error: Error, op: String) {
         let ns = error as NSError
-        let key = "\(ns.domain):\(ns.code)"
-        guard reportedFailures.insert(key).inserted else { return }
         CrashReporting.captureEvent("store.commit_failed", level: .error,
-            tags: ["op": op, "domain": ns.domain, "code": String(ns.code)],
-            fingerprint: ["store", "commit_failed", ns.domain, String(ns.code)])
+            tags: Diagnostics.errorFields(error).merging(["op": op]) { _, new in new },
+            fingerprint: ["store", "commit_failed", op, Diagnostics.errorFields(error)["error_domain"] ?? "application", String(ns.code)])
     }
 
     /// The collision-safe update-or-insert for a bucket's pointer, committing an optional survivor
@@ -363,7 +367,8 @@ actor CycleStore {
         insertNote(bucketKey: bucketKey,
                    note: NoteDraft(kind: kind, sourceID: sourceID, folder: folder, itemDate: itemDate,
                                    text: text, title: title, reminderFlagged: reminderFlagged))
-        try? modelContext.save()
+        do { try modelContext.save() }
+        catch { modelContext.rollback(); report(error, op: "record_note") }
     }
 
     private func insertNote(bucketKey: String, note: NoteDraft) {
@@ -421,6 +426,10 @@ actor CycleStore {
     /// together, including an empty result. A crash never publishes half a schedule. Rejected event
     /// IDs and raw content are absent from both the notes and the checkpoint.
     func commitCalendarSnapshot(_ snapshot: AppleCalendarSource.Snapshot, notes: [NoteDraft]) -> CommitOutcome {
+        // Cancellation may arrive while the caller is waiting to enter this actor. Keep
+        // earlier notes hidden and leave the persisted snapshot untouched in that case.
+        calendarSnapshotReady = false
+        guard !Task.isCancelled else { return .failed }
         let key = AppleCalendarSource.bucketKey
         let mark = ItemKey(order: snapshot.capturedAt.timeIntervalSince1970, tiebreak: snapshot.coverage.encoded)
         let result = commit(bucketKey: key, note: nil, prepare: {
@@ -467,8 +476,12 @@ actor CycleStore {
 
     /// Every current-cycle note, newest first (VIEW SUMMARIES + the cloud corpus).
     func notes() -> [CycleNoteItem] {
-        let rows = (try? modelContext.fetch(FetchDescriptor<CycleNote>(
-            sortBy: [SortDescriptor(\.itemDateEpoch, order: .reverse)]))) ?? []
+        let rows: [CycleNote]
+        do { rows = try modelContext.fetch(FetchDescriptor<CycleNote>(sortBy: [SortDescriptor(\.itemDateEpoch, order: .reverse)])) }
+        catch {
+            Diagnostics.report(.storeReadFailed, phase: .read, reason: "cycle_notes", error: error)
+            return []
+        }
         let calendarMark = pointer(AppleCalendarSource.bucketKey)
         let calendarAllowed = calendarSnapshotReady && AppleCalendarSource.isEnabled
             && calendarMark.flatMap { AppleCalendarSource.Coverage.decode($0.tiebreak) }?.matchesSelection == true
@@ -477,8 +490,13 @@ actor CycleStore {
 
     /// End-of-cycle wipe (fired by the proactive button) — pointers persist, notes do not.
     func wipeAllNotes() {
-        try? modelContext.delete(model: CycleNote.self)
-        try? modelContext.save()
+        do {
+            try modelContext.delete(model: CycleNote.self)
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            Diagnostics.report(.cleanupFailed, phase: .reset, reason: "wipeAllNotes", error: error)
+        }
     }
 
     /// Clear only the corpus actually consumed. Mail notes withheld after lost access or a
@@ -494,10 +512,15 @@ actor CycleStore {
     /// Factory reset — delete EVERY pointer and EVERY note (the dev "Reset everything" button pairs
     /// this with wiping the vault). After this, the next run is a fresh first run for every bucket.
     func wipeEverything() {
-        try? modelContext.delete(model: AppleMailReceipt.self)
-        try? modelContext.delete(model: CycleNote.self)
-        try? modelContext.delete(model: BucketPointer.self)
-        try? modelContext.save()
+        do {
+            try modelContext.delete(model: AppleMailReceipt.self)
+            try modelContext.delete(model: CycleNote.self)
+            try modelContext.delete(model: BucketPointer.self)
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            Diagnostics.report(.cleanupFailed, phase: .reset, reason: "wipeEverything", error: error)
+        }
     }
 
     /// Bulk-insert notes from an export file (dev cross-pollination — share a rich summary set with a

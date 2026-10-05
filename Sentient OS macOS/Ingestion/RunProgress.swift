@@ -15,6 +15,7 @@ nonisolated struct RunProgress: Sendable {
     var parseFailures = 0          // §7.13: junk that was actually a garbled/unparseable model reply
     var extractionFailed = 0       // §7.8/B10: item whose CONTENT extraction failed (corrupt file), not the engine
     var lastPath: String?
+    var lastItemDate: Date?        // source date for the current item's preview footer
     var lastFilePath: String?      // absolute path (for the thumbnail)
     var lastPrompt: String?        // the EXACT prompt fed to the model for this item (dev prompt pane)
     var lastTitle: String?
@@ -53,6 +54,7 @@ nonisolated struct RunProgress: Sendable {
     mutating func updateLastItem(from progress: RunProgress) {
         guard progress.lastPath != nil else { return }
         lastPath = progress.lastPath; lastFilePath = progress.lastFilePath; lastPrompt = progress.lastPrompt
+        lastItemDate = progress.lastItemDate
         lastTitle = progress.lastTitle; lastSummary = progress.lastSummary; lastVerdict = progress.lastVerdict
         lastSeconds = progress.lastSeconds; sourceRead = progress.sourceRead
     }
@@ -61,6 +63,7 @@ nonisolated struct RunProgress: Sendable {
         lastTitle = "Reading \(name)"
         lastSummary = "Finding and summarizing useful context."
         lastPath = label; lastPrompt = prompt
+        lastItemDate = nil
         lastVerdict = nil; lastFilePath = nil; lastSeconds = nil
     }
 
@@ -76,6 +79,7 @@ nonisolated struct RunProgress: Sendable {
         lastPath = label + (items > 0 ? " · \(items) item\(items == 1 ? "" : "s") checked" : "")
         lastVerdict = summary == nil ? nil : .survivor
         lastFilePath = nil; lastSeconds = nil
+        lastItemDate = nil
     }
 
     mutating func failSourceRead(name: String, message: String, countFailure: Bool = true) {
@@ -83,6 +87,7 @@ nonisolated struct RunProgress: Sendable {
         lastTitle = "\(name) needs another try"
         lastSummary = message; lastPath = name
         lastVerdict = nil; lastFilePath = nil; lastSeconds = nil; lastPrompt = nil
+        lastItemDate = nil
         sourceReadFailures[name] = message
         successfulSources.remove(name)
         if countFailure { failed += 1 }

@@ -139,6 +139,9 @@ final class ComputerUseGate {
         nativePermissionError = error.localizedDescription
         let failure = error as? OpenAIComputerUse.RuntimeError
         nativeRestartRequired = failure == .restartRequired || failure == .backendUnavailable
+        if !Diagnostics.isExpected(error) {
+            Diagnostics.report(.readinessFailed, phase: .probe, error: error)
+        }
     }
 
     // MARK: The gate

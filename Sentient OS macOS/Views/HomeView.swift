@@ -1148,7 +1148,7 @@ private struct LetterView: View {
             withAnimation(.easeInOut(duration: 0.2)) { giftSaved = true }
             NSWorkspace.shared.activateFileViewerSelecting([url])   // sharing = one drag from here
         } catch {
-            Log("GiftShareImage: save failed — \(error)")
+            Log("GiftShareImage: save failed — \(ErrorLabel(error))")
         }
     }
 

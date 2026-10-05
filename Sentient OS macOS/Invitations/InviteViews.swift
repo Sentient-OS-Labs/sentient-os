@@ -33,13 +33,15 @@ struct InviteRedemptionView: View {
                         codeFocused = true
                     }
                 } label: {
-                    HStack(spacing: 6) {
-                        Text("Have an invite code?").font(.system(size: 12))
-                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium))
+                    HStack(spacing: 8) {
+                        Text("Have an invite code?").font(.system(size: 14, weight: .medium))
+                        Image(systemName: "chevron.down").font(.system(size: 10, weight: .medium))
                     }
-                    .foregroundStyle(Theme.secondary)
-                    .padding(.vertical, 6)
-                    .contentShape(Rectangle())
+                    .foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(.white.opacity(0.07), in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.2)))
+                    .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Show the invite code field")
@@ -99,21 +101,21 @@ struct InviteSettingsSection: View {
             VStack(alignment: .leading, spacing: 12) {
                 if let snapshot = program.snapshot, snapshot.canShare, let code = snapshot.code {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(InviteProgram.offerTitle)
+                        Text("5 invitations, reserved for you")
                             .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
-                        Text(InviteProgram.offerMessage)
+                        Text("Share Sentient OS free\u{00A0}for\u{00A0}life with just 5\u{00A0}people you choose.")
                             .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
                     }
                     InviteCopyButton(code: code)
                     if snapshot.redemptionCount > 0 {
-                        Text(snapshot.redemptionCount == 1 ? "1 friend joined." : "\(snapshot.redemptionCount) friends joined.")
+                        Text(snapshot.redemptionCount == 1 ? "1 invitation accepted." : "\(snapshot.redemptionCount) invitations accepted.")
                             .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
                     }
                 } else if let snapshot = program.snapshot, !snapshot.canShare {
-                    Text("The invite offer has ended.")
+                    Text("This invitation offer has closed.")
                         .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
                 } else {
-                    SettingsPillButton(title: program.isBusy ? "Checking invites..." : "Get invite code") {
+                    SettingsPillButton(title: program.isBusy ? "Preparing your invitations…" : "View your invitations") {
                         Task { await program.refresh() }
                     }
                     .disabled(program.isBusy)

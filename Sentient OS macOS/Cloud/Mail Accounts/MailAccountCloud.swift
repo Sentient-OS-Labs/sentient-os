@@ -64,7 +64,16 @@ actor MailAccountCloud {
         self.session = session; self.storageKey = storageKey
     }
 
-    func hasPendingSync() throws -> Bool { try !load().pendingEmails.isEmpty }
+    func hasPendingSync() throws -> Bool {
+        do { return try !load().pendingEmails.isEmpty }
+        catch {
+            if let counts = Diagnostics.backgroundFailure(.mailAccount) {
+                Diagnostics.report(.serviceFailed, phase: .read, reason: "pending_contact_state", error: error,
+                                   source: "mail_account", counts: counts, cooldown: 86_400)
+            }
+            throw error
+        }
+    }
 
     /// Add addresses without retaining their connector, source, or installation identity in the list.
     func save(_ emails: [String]) async throws -> Bool {
@@ -107,7 +116,14 @@ actor MailAccountCloud {
             // Clear the shared task before waking callers, so a new save cannot join an
             // already-completed drain and leave its address stranded until the next launch.
             defer { syncTask = nil }
-            try await drain()
+            do { try await drain(); Diagnostics.backgroundRecovered(.mailAccount) }
+            catch {
+                if !Diagnostics.isCancellation(error), let counts = Diagnostics.backgroundFailure(.mailAccount) {
+                    Diagnostics.report(.serviceFailed, phase: .publish, reason: "pending_contact_sync", error: error,
+                                       source: "mail_account", counts: counts, flags: [.retriable: true], cooldown: 86_400)
+                }
+                throw error
+            }
         }
         syncTask = task
         try await task.value

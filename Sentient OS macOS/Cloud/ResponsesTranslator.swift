@@ -70,7 +70,7 @@ final class ResponsesTranslator: @unchecked Sendable {
         let ready = DispatchSemaphore(value: 0)
         l.stateUpdateHandler = { state in
             if case .ready = state { ready.signal() }
-            if case .failed(let err) = state { Log("ResponsesTranslator: listener failed: \(err)"); ready.signal() }
+            if case .failed(let err) = state { Log("ResponsesTranslator: listener failed: \(ErrorLabel(err))"); ready.signal() }
         }
         l.start(queue: DispatchQueue(label: "sentient.translator.listener"))
         _ = ready.wait(timeout: .now() + 3)
@@ -92,7 +92,7 @@ final class ResponsesTranslator: @unchecked Sendable {
         Task.detached { [weak self] in
             guard let self else { return }
             do { try await self.handle(conn) }
-            catch { Log("ResponsesTranslator: connection error: \(error)") }
+            catch { Log("ResponsesTranslator: connection error: \(ErrorLabel(error))") }
             conn.cancel()
         }
     }

@@ -9,7 +9,7 @@ import Observation
 final class InviteProgram {
     static let shared = InviteProgram()
     static let offerTitle = "Exclusive offer"
-    static let offerMessage = "Invite your friends to enjoy Sentient OS free\u{00A0}for\u{00A0}life."
+    static let offerMessage = "You have just 5\u{00A0}invites to share. Give 5\u{00A0}friends Sentient OS free\u{00A0}for\u{00A0}life."
 
     enum Use { case doubleTap, sidekick, proactive }
     private(set) var snapshot: InviteSnapshot?
@@ -77,8 +77,16 @@ final class InviteProgram {
             // can be retried; the server returns the same permanent grant.
             try InviteCredential.write("snapshot", data: JSONEncoder().encode(result))
             snapshot = result
+            Diagnostics.backgroundRecovered(.invite)
             return true
         } catch is CancellationError { return false }
-        catch { if reportErrors { errorMessage = error.localizedDescription }; return false }
+        catch {
+            if case InviteCloud.Failure.rejected = error {} else {
+                if let counts = Diagnostics.backgroundFailure(.invite) {
+                    Diagnostics.report(.serviceFailed, phase: .refresh, reason: "invite_refresh", error: error, source: "invite", counts: counts)
+                }
+            }
+            if reportErrors { errorMessage = error.localizedDescription }; return false
+        }
     }
 }

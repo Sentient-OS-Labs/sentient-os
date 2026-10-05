@@ -147,6 +147,7 @@ enum GoogleSourceRead {
         for attempt in 1...2 {
             try Task.checkCancellation()
             let result = try await FrontierRun.run(request)
+            var diagnosticPhase: Diagnostics.Phase = .parse
             do {
                 try ConnectorReadFailure.validate(result, slug: slug)
                 if let data = result.jsonResult.data(using: .utf8),
@@ -155,10 +156,15 @@ enum GoogleSourceRead {
                     throw MCPSource.MCPError.toolFailure(slug: slug)
                 }
                 let summary = try parse(result.result, countKey: countKey, cap: cap)
+                diagnosticPhase = .validate
                 try validateDiscovery(result, slug: slug, calendarWindow: calendarWindow)
                 return summary
             } catch Failure.invalidResponse {
-                if attempt == 2 { throw Failure.invalidResponse }
+                if attempt == 2 {
+                    Diagnostics.report(.modelOutputInvalid, phase: diagnosticPhase, reason: "google_response", source: slug,
+                                       counts: [.bytes: result.result.utf8.count, .retries: attempt - 1], flags: [.previousStateRetained: true])
+                    throw Failure.invalidResponse
+                }
                 Log("Google source read: incomplete result; retrying once")
                 request.prompt += "\nThe previous attempt had invalid output or no successful discovery receipt. Wait for the connector if necessary, then perform the actual bounded search. Return all required fields with their exact types. Never invent an empty result when tools are unavailable."
             }

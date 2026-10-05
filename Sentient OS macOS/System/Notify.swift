@@ -96,7 +96,7 @@ enum Notify {
         do {
             try await center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
         } catch {
-            Log("Notify: add failed — \(error)")
+            Log("Notify: add failed — \(ErrorLabel(error))")
             CrashReporting.captureEvent("notify.add_failed", level: .warning,
                 tags: ["error": String(describing: type(of: error))],
                 fingerprint: ["notify", "add_failed"])

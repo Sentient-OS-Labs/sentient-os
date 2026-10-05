@@ -11,6 +11,9 @@
 import Foundation
 
 @objc protocol WakeHelperProtocol {
+    /// Diagnostics use the signed GUI client's choice and anonymous UUID, never root's defaults.
+    func configureDiagnostics(enabled: Bool, anonymousID: String, withReply reply: @escaping () -> Void)
+
     /// Keep the Mac awake (root `pmset disablesleep 1`) and start a deadman timer. If the app
     /// stops calling `heartbeat()` within `timeoutSeconds`, the helper resets disablesleep itself.
     func beginAwake(timeoutSeconds: Int, withReply reply: @escaping (Bool) -> Void)

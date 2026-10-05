@@ -291,6 +291,20 @@ actor VaultCloud {
                 throw CloudError.vaultChanged
             }
             CorpusSlicer.deleteCorpus(in: staging)              // the snapshot must never enter the vault
+            if let previous = VaultGenerator.diagnosticShape(vault), let staged = VaultGenerator.diagnosticShape(staging) {
+                let counts: [Diagnostics.Count: Int] = [.filesBefore: previous.files, .filesAfter: staged.files,
+                    .bytesBefore: previous.bytes, .bytesAfter: staged.bytes, .items: notes.count]
+                if staged.files == 0 || (previous.files >= 10 && staged.files * 5 < previous.files)
+                    || (previous.bytes >= 10_000 && staged.bytes * 5 < previous.bytes) {
+                    Diagnostics.report(.vaultOutputInvalid, phase: .validate, reason: "staged_vault_shrink", counts: counts)
+                }
+                if !staged.indexPresent {
+                    Diagnostics.report(.vaultOutputInvalid, phase: .validate, reason: "missing_index", counts: counts)
+                }
+                CrashReporting.diagnosticBreadcrumb("vault.output_checked", data: ["files_before": String(previous.files),
+                    "files_after": String(staged.files), "bytes_before": String(previous.bytes), "bytes_after": String(staged.bytes),
+                    "changed": String(VaultGenerator.vaultFingerprint(staging) != baseline)])
+            }
             try VaultGenerator.swapStagingIntoVault(staging)    // atomic; live vault untouched until here
             setUpdateResume(nil)
             lastConsumedSourceIDs = Set(inputIDs)

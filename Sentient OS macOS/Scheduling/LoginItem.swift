@@ -35,7 +35,7 @@ enum LoginItem {
     static func enable() -> Bool {
         guard service.status != .enabled else { return true }
         do { try service.register(); Log("LoginItem: registered (status=\(service.status.rawValue))"); return true }
-        catch { Log("LoginItem: register failed — \(error)"); return false }
+        catch { Log("LoginItem: register failed — \(ErrorLabel(error))"); return false }
     }
 
     /// The UI "Turn On" action: register, and when macOS answers .requiresApproval (the user
@@ -49,6 +49,6 @@ enum LoginItem {
     /// Unregister the login item. Best-effort.
     static func disable() async {
         do { try await service.unregister(); Log("LoginItem: unregistered") }
-        catch { Log("LoginItem: unregister failed — \(error)") }
+        catch { Log("LoginItem: unregister failed — \(ErrorLabel(error))") }
     }
 }

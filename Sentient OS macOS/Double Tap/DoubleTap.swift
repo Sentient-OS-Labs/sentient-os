@@ -55,6 +55,8 @@ final class DoubleTap {
     enum Result { case pasted, notAMessage, stopped, failed(String) }
 
     private var task: Task<Void, Never>?
+    private var activeRunID: UUID?
+    private var phase: Diagnostics.Phase = .capture
     private let swirl = CaretSwirl()
 
     /// True from the second tap until the paste (or the fade). CommandCoordinator swallows every
@@ -67,9 +69,14 @@ final class DoubleTap {
     /// second one just started, and the paste would arrive twice.
     func start(completion: @escaping @MainActor (Result) -> Void) {
         guard task == nil else { Log("⌘⌘ double tap ignored — a reply is already being drafted"); return }
+        let runID = UUID()
+        let operation = Diagnostics.Operation("doubletap", doubleTapProvider: DoubleTapProvider.current)
+        activeRunID = runID
+        phase = .capture
         let work = Task { [weak self] in
             guard let self else { return }
-            let result = await self.perform()
+            let result = await Diagnostics.$current.withValue(operation) { await self.perform() }
+            self.activeRunID = nil
             self.task = nil
             if case .pasted = result { InviteProgram.shared.record(.doubleTap) }
             if case .pasted = result {} else { self.swirl.dissolve() }   // the light fades when nothing lands
@@ -78,7 +85,12 @@ final class DoubleTap {
         task = work
         Task {
             try? await Task.sleep(for: .seconds(Self.deadline))
-            if !work.isCancelled { work.cancel() }
+            guard activeRunID == runID, !work.isCancelled else { return }
+            Diagnostics.$current.withValue(operation) {
+                Diagnostics.report(.doubleTapFailed, phase: operation.phase ?? phase, reason: "deadline",
+                                   source: "doubletap", counts: [.deadlineMS: Int(Self.deadline * 1000)])
+            }
+            work.cancel()
         }
     }
 
@@ -97,12 +109,16 @@ final class DoubleTap {
             return .failed("no screenshot (Screen Recording?)")
         }
         defer { ScreenCapture.discard([shot]) }
+        phase = .encode
+        Diagnostics.step(.encode)
         guard let jpeg = ScreenCapture.downscaledJPEG(shot, maxLongEdge: Self.screenshotLongEdge) else {
+            Diagnostics.report(.doubleTapFailed, phase: .encode, reason: "jpeg_failed", source: "doubletap")
             return .failed("screenshot encode failed")
         }
         let captureMs = Int(Date().timeIntervalSince(started) * 1000)
         if Task.isCancelled { return .stopped }
         do {
+            phase = .request
             let outcome = try await DoubleTapInference.draft(screenshot: jpeg, vault: VaultGenerator.vaultRoot)
             let t = outcome.timing
             lastReport = "\(outcome.model) · capture \(captureMs) ms"
@@ -119,17 +135,28 @@ final class DoubleTap {
                 // The ring dives into the caret; the paste fires on its bloom so the text arrives with the light.
                 swirl.land()
                 try? await Task.sleep(for: CaretSwirl.landingDelay)
-                ReplyPaste.insert(reply)
+                if Task.isCancelled { return .stopped }
+                phase = .paste
+                Diagnostics.step(.paste)
+                guard ReplyPaste.insert(reply) else { return .failed("could not paste reply") }
                 return .pasted
             }
         } catch DoubleTapInference.Failure.cancelled {
             return .stopped
         } catch let failure as DoubleTapInference.Failure {
+            switch failure {
+            case .cancelled, .noKey, .invalidModel, .invalidEndpoint, .instructionsTooLarge, .noVault, .noWritingStyle, .writingStyleTooLarge, .relay: break
+            case .http(let status, _) where [401, 402, 403, 429].contains(status): break
+            case .api(let reason) where reason == "provider refusal": break
+            default: Diagnostics.report(.doubleTapFailed, phase: .stream, error: failure, source: "doubletap", terminal: true)
+            }
             lastReport = "✗ \(failure.label)"
             return .failed(failure.label)
         } catch {
+            Diagnostics.report(.doubleTapFailed, phase: phase, error: error, source: "doubletap", terminal: true)
             return .failed(ErrorLabel(error))
         }
+
     }
 }
 
@@ -138,24 +165,36 @@ final class DoubleTap {
 /// and Slack a typed Return SENDS, while a pasted newline is just a line break. Posting the key
 /// event rides Sentient's own Accessibility grant.
 private enum ReplyPaste {
-    @MainActor static func insert(_ text: String) {
+    @MainActor static func insert(_ text: String) -> Bool {
         let pasteboard = NSPasteboard.general
         let previous = pasteboard.string(forType: .string)
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        guard pasteboard.setString(text, forType: .string) else {
+            Diagnostics.report(.doubleTapFailed, phase: .paste, reason: "clipboard_write", source: "doubletap")
+            if let previous { pasteboard.setString(previous, forType: .string) }
+            return false
+        }
         let source = CGEventSource(stateID: .combinedSessionState)
         let vKey: CGKeyCode = 9   // kVK_ANSI_V
-        for down in [true, false] {
-            guard let event = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: down) else { continue }
+        let events = [true, false].compactMap { CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: $0) }
+        guard events.count == 2 else {
+            Diagnostics.report(.doubleTapFailed, phase: .paste, reason: "key_event_create", source: "doubletap")
+            pasteboard.clearContents()
+            if let previous { pasteboard.setString(previous, forType: .string) }
+            return false
+        }
+        for event in events {
             event.flags = .maskCommand
             event.post(tap: .cghidEventTap)
         }
-        Log("⌘⌘ reply pasted (\(text.count) chars)")
+        CrashReporting.diagnosticBreadcrumb("doubletap.paste_dispatched", data: ["delivery_verified": "false"])
+        Log("⌘⌘ reply paste dispatched (\(text.count) chars)")
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             guard let previous else { return }
             pasteboard.clearContents()
             pasteboard.setString(previous, forType: .string)
         }
+        return true
     }
 }

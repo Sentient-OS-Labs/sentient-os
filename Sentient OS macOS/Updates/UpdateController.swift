@@ -70,7 +70,8 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
                 updater.checkForUpdatesInBackground()
             }
         } catch {
-            Log("Sparkle: updater failed to start — \(error.localizedDescription)")
+            Diagnostics.report(.updateFailed, phase: .start, error: error)
+            Log("Sparkle: updater failed to start — \(ErrorLabel(error))")
         }
     }
 
@@ -105,7 +106,12 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
                  didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
                  error: Error?) {
         if let error {
-            Log("Sparkle: update cycle finished with error — \((error as NSError).localizedDescription)")
+            let ns = error as NSError
+            // Sparkle documents these as ordinary cycle completion, not failed updates.
+            if ns.domain != SUSparkleErrorDomain || ![Int(SUError.noUpdateError.rawValue), Int(SUError.installationCanceledError.rawValue)].contains(ns.code) {
+                Diagnostics.report(.updateFailed, phase: .complete, error: error)
+            }
+            Log("Sparkle: update cycle finished with error — \(ErrorLabel(error))")
         }
     }
 

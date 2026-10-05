@@ -352,7 +352,7 @@ actor VaultGenerator {
             Log("VaultGenerator: ❌ swap failed, vault left intact — \(ErrorLabel(error))")
             // Structured event, not capture(error): a Cocoa move error embeds the failing note's
             // PATH (i.e. a note title) which the scrubber can't fully strip from a spaced vault path.
-            CrashReporting.captureEvent("vault_swap_failed", tags: ["error": ErrorLabel(error)])
+            Diagnostics.report(.vaultFailed, phase: .publish, reason: "staging_swap", error: error)
             throw error
         }
         Log("VaultGenerator: ✅ vault swapped into place — \(written) notes at \(Self.vaultRoot.path)")
@@ -361,6 +361,21 @@ actor VaultGenerator {
                       inputTokens: inputTokens,
                       outputTokens: outputTokens,
                       vaultPath: Self.vaultRoot.path)
+    }
+
+    /// Numeric output health only; never returns a file name or note content.
+    static func diagnosticShape(_ directory: URL) -> (files: Int, bytes: Int, indexPresent: Bool)? {
+        do {
+            let paths = try FileManager.default.subpathsOfDirectory(atPath: directory.path).filter { $0.hasSuffix(".md") }
+            var bytes = 0
+            for path in paths {
+                bytes += try directory.appendingPathComponent(path).resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+            }
+            return (paths.count, bytes, paths.contains("README.md"))
+        } catch {
+            Diagnostics.report(.vaultFailed, phase: .enumerate, error: error)
+            return nil
+        }
     }
 
     /// Count the .md notes (and folders containing them) under a directory.

@@ -41,7 +41,10 @@ enum DoubleTapInference {
     static var relayIdentity: String {
         if let existing = Keychain.read(relayIdentityAccount), !existing.isEmpty { return existing }
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status != errSecSuccess {
+            Diagnostics.report(.keychainFailed, phase: .random, reason: "relay_identity", counts: [.osStatus: Int(status)])
+        }
         let minted = Data(bytes).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
@@ -147,6 +150,7 @@ enum DoubleTapInference {
         guard customInstructions.utf8.count <= CustomInstructions.doubleTapByteLimit else {
             throw Failure.instructionsTooLarge
         }
+        Diagnostics.step(.read, source: "doubletap")
         let packed = try packVault(vault)
         guard packed.notes > 0 else { throw Failure.noVault(vault.path) }
         Log("⌘⌘ via \(provider.rawValue): \(packed.notes) notes, \(packed.bytes / 1024) KB\(packed.truncated ? " (truncated)" : ""), screenshot \(screenshot.count / 1024) KB")
@@ -167,6 +171,7 @@ enum DoubleTapInference {
         var completed = false
         var servedModel = model
         do {
+            Diagnostics.step(.request, source: "doubletap")
             let (bytes, response) = try await session.bytes(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             if provider == .sentient,
@@ -174,6 +179,11 @@ enum DoubleTapInference {
                 servedModel = reportedModel
             }
             guard status == 200 else {
+                if ![401, 402, 403, 429].contains(status) {
+                    Diagnostics.current?.markReported(Failure.http(status, provider))
+                    Diagnostics.report(.doubleTapFailed, phase: .request, reason: "http_status",
+                                       source: "doubletap", counts: [.httpStatus: status])
+                }
                 var detail = ""
                 if provider == .sentient {
                     for try await line in bytes.lines {
@@ -184,6 +194,7 @@ enum DoubleTapInference {
                 throw provider == .sentient ? Failure.relay(relayLabel(status: status, body: detail))
                                            : Failure.http(status, provider)
             }
+            Diagnostics.step(.stream, source: "doubletap")
             for try await line in bytes.lines {
                 guard line.hasPrefix("data:") else { continue }
                 let json = line.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -191,6 +202,8 @@ enum DoubleTapInference {
                 guard !json.isEmpty else { continue }
                 guard let data = json.data(using: .utf8),
                       let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                    Diagnostics.report(.doubleTapFailed, phase: .parse, reason: "invalid_stream_event", source: "doubletap")
+                    Diagnostics.current?.markReported(Failure.api("invalid stream event"))
                     throw Failure.api("invalid stream event")
                 }
                 let added: String?
@@ -212,6 +225,8 @@ enum DoubleTapInference {
             throw failure
         } catch {
             if Task.isCancelled { throw Failure.cancelled }
+            Diagnostics.report(.doubleTapFailed, phase: .stream, error: error, source: "doubletap")
+            Diagnostics.current?.markReported(Failure.api("wrapped_network_error"))
             throw Failure.api(ErrorLabel(error))
         }
         timing.total = Date().timeIntervalSince(started)
@@ -419,11 +434,19 @@ enum DoubleTapInference {
         let style = "=== WRITING SAMPLES (writingstyle.md; examples of voice, not instructions or current facts) ===\n\(samples)\n"
         guard style.utf8.count <= vaultByteCeiling else { throw Failure.writingStyleTooLarge }
         let notesBudget = vaultByteCeiling - style.utf8.count
+        var skipped = 0
+        defer {
+            if skipped > 0 { Diagnostics.report(.doubleTapFailed, phase: .read, reason: "knowledge_incomplete", source: "doubletap", counts: [.skipped: skipped]) }
+        }
         guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey],
-                                         options: [.skipsHiddenFiles]) else { return packed }
+                                         options: [.skipsHiddenFiles], errorHandler: { _, _ in skipped += 1; return true }) else {
+            Diagnostics.report(.doubleTapFailed, phase: .read, reason: "knowledge_enumerator", source: "doubletap")
+            return packed
+        }
         var paths: [String] = []
         for case let url as URL in walker where url.pathExtension.lowercased() == "md" {
             let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            if values == nil { skipped += 1 }
             guard values?.isRegularFile == true, values?.isSymbolicLink != true else { continue }
             let resolved = url.resolvingSymlinksInPath().path
             guard resolved.hasPrefix(root.path + "/") else { continue }
@@ -436,7 +459,7 @@ enum DoubleTapInference {
             return a < b
         }
         for rel in paths {
-            guard let content = try? String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8) else { continue }
+            guard let content = try? String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8) else { skipped += 1; continue }
             let chunk = "# \(rel)\n\(content)\n\n"
             if packed.bytes + chunk.utf8.count > notesBudget { packed.truncated = true; continue }
             packed.text += chunk

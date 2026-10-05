@@ -229,7 +229,12 @@ struct KnowledgeView: View {
     /// reconstruction). Refreshes whether the cloud mirror is on, so Save knows if it should sync.
     private func beginEdit() {
         guard let url = selection else { return }
-        let raw = (try? String(contentsOf: url, encoding: .utf8)) ?? (note?.markdown ?? "")
+        let raw: String
+        do { raw = try String(contentsOf: url, encoding: .utf8) }
+        catch {
+            Diagnostics.report(.knowledgeFailed, phase: .read, reason: "editor_source", error: error)
+            raw = note?.markdown ?? ""
+        }
         editText = raw; savedText = raw
         editing = true
         VaultActivity.shared.editorBusy = true
@@ -252,6 +257,7 @@ struct KnowledgeView: View {
         do {
             try editText.write(to: url, atomically: true, encoding: .utf8)
         } catch {
+            Diagnostics.report(.knowledgeFailed, phase: .write, reason: "save_note", error: error)
             Log("Knowledge editor: save failed — \(ErrorLabel(error))")
             return   // stay in edit mode so the user's text isn't lost
         }
@@ -294,6 +300,7 @@ struct KnowledgeView: View {
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         } catch {
+            Diagnostics.report(.knowledgeFailed, phase: .remove, reason: "trash_item", error: error)
             Log("Knowledge: delete failed — \(ErrorLabel(error))")
             return
         }
@@ -357,6 +364,7 @@ struct KnowledgeView: View {
         do {
             try "# \(title)\n\n".write(to: url, atomically: true, encoding: .utf8)
         } catch {
+            Diagnostics.report(.knowledgeFailed, phase: .create, reason: "create_note", error: error)
             Log("Knowledge: create note failed — \(ErrorLabel(error))")
             return
         }
@@ -372,6 +380,7 @@ struct KnowledgeView: View {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         } catch {
+            Diagnostics.report(.knowledgeFailed, phase: .create, reason: "create_folder", error: error)
             Log("Knowledge: create folder failed — \(ErrorLabel(error))")
             return
         }

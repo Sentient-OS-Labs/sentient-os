@@ -42,6 +42,7 @@ enum ScreenCapture {
             if ok, FileManager.default.fileExists(atPath: url.path) {
                 shots.append(url)
             } else {
+                if ok { Diagnostics.report(.inputFailed, phase: .capture, reason: "missing_output", source: "screen_capture") }
                 try? FileManager.default.removeItem(at: url)
             }
         }
@@ -68,6 +69,7 @@ enum ScreenCapture {
             .appendingPathComponent("sentient-shot-\(UUID().uuidString).jpg")
         let ok = await runCapture(["-x", "-t", "jpg", "-D", "\(display)", url.path])
         guard ok, FileManager.default.fileExists(atPath: url.path) else {
+            if ok { Diagnostics.report(.inputFailed, phase: .capture, reason: "missing_output", source: "screen_capture") }
             try? FileManager.default.removeItem(at: url)
             Log("📸 screenshot capture failed (display \(display))")
             return nil
@@ -102,7 +104,8 @@ enum ScreenCapture {
     /// wedged capture (house rule: no un-watchdogged Process) — the run start awaits this, so a hang
     /// here would freeze the command where STOP can't reach; on timeout the command just runs text-only.
     private static func runCapture(_ args: [String]) async -> Bool {
-        await withCheckedContinuation { cont in
+        let operation = Diagnostics.current
+        return await withCheckedContinuation { cont in
             DispatchQueue.global(qos: .userInitiated).async {
                 let p = Process()
                 p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
@@ -115,9 +118,16 @@ enum ScreenCapture {
                     DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5, execute: watchdog)
                     p.waitUntilExit()
                     watchdog.cancel()
+                    if p.terminationStatus != 0 { Diagnostics.$current.withValue(operation) {
+                        Diagnostics.report(.inputFailed, phase: .capture, reason: "screencapture_exit", source: "screen_capture",
+                                           counts: [.exitCode: Int(p.terminationStatus)], flags: [.permissionGranted: true])
+                    } }
                     cont.resume(returning: p.terminationStatus == 0)
                 } catch {
-                    Log("📸 screencapture launch failed — \(error.localizedDescription)")
+                    Diagnostics.$current.withValue(operation) {
+                        Diagnostics.report(.inputFailed, phase: .capture, reason: "screencapture_launch", error: error, source: "screen_capture")
+                    }
+                    Log("📸 screencapture launch failed — \(ErrorLabel(error))")
                     cont.resume(returning: false)
                 }
             }

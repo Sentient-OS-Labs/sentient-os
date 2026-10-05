@@ -227,14 +227,26 @@ struct FilesSource: Sendable {
         let rootDepth = root.pathComponents.count
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey,
                                          .fileSizeKey, .creationDateKey, .addedToDirectoryDateKey]
+        var enumerationFailures = 0
         guard let enumerator = FileManager.default.enumerator(
             at: root, includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles, .skipsPackageDescendants]
-        ) else { return [] }
+            options: [.skipsHiddenFiles, .skipsPackageDescendants],
+            errorHandler: { _, _ in enumerationFailures += 1; return true }
+        ) else {
+            Diagnostics.report(.sourceReadFailed, phase: .enumerate, reason: "enumerator_unavailable", source: "files")
+            return []
+        }
 
+        var resourceFailures = 0
+        defer {
+            if resourceFailures + enumerationFailures > 0 {
+                Diagnostics.report(.sourceReadDegraded, phase: .enumerate, reason: "resource_read", source: "files", counts: [.skipped: resourceFailures + enumerationFailures])
+            }
+        }
         var rows: [(candidate: Candidate, sortKey: Double)] = []
         for case let url as URL in enumerator {
             let vals = try? url.resourceValues(forKeys: keys)
+            if vals == nil { resourceFailures += 1 }
             // Never follow symlinks — they can form loops that never finish the walk.
             if vals?.isSymbolicLink == true { enumerator.skipDescendants(); continue }
             if vals?.isDirectory == true {

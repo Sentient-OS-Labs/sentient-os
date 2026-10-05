@@ -432,6 +432,7 @@ final class CommandCoordinator {
             try? await Task.sleep(for: .seconds(15))
             guard let self, self.phaseToken == token, self.phase == .transcribing else { return }
             let downloading = VoiceCapture.isModelDownloading
+            if !downloading { Diagnostics.report(.inputFailed, phase: .finalize, reason: "transcription_deadline", source: "voice", counts: [.deadlineMS: 15_000]) }
             Log("✗ transcription timed out — cancelling the capture (\(downloading ? "model still downloading" : "capture stalled"))")
             self.listening = false
             self.voiceStartTask?.cancel(); self.voiceStartTask = nil
@@ -462,7 +463,8 @@ final class CommandCoordinator {
             } catch {
                 guard self.phaseToken == token else { return }   // the watchdog already spoke
                 self.listening = false
-                Log("✗ transcription failed — \(error.localizedDescription)")
+                Diagnostics.report(.inputFailed, phase: .finalize, error: error, source: "voice")
+                Log("✗ transcription failed — \(ErrorLabel(error))")
                 self.flash("didn’t catch that")
             }
         }
@@ -477,7 +479,8 @@ final class CommandCoordinator {
             flash("turn on the microphone to talk to Sentient")
             return
         }
-        Log("voice start failed — \(error.localizedDescription)")
+        Diagnostics.report(.inputFailed, phase: .start, error: error, source: "voice")
+        Log("voice start failed — \(ErrorLabel(error))")
         // Only speak up if we're still in the voice moment — a late failure must never clobber a
         // newer phase (the watchdog's notice, an open type field, a running task).
         switch phase {

@@ -74,11 +74,18 @@ nonisolated enum CodexRuntimeMigration {
                 await CodexSetup.shared.refreshInstalled()
                 await CodexSetup.shared.refreshLoginStatus()
                 ComputerUseSetup.current.refresh()
+                Diagnostics.backgroundRecovered(.migration)
                 Log("Codex migration: local cutover complete")
                 return true
             } catch {
                 // Paths, account details and token contents never enter migration diagnostics.
-                if !Task.isCancelled { Log("Codex migration: deferred; original installation remains available") }
+                if !Task.isCancelled {
+                    if !Diagnostics.isExpected(error), let counts = Diagnostics.backgroundFailure(.migration) {
+                        Diagnostics.report(.migrationFailed, phase: .migrate, error: error, counts: counts,
+                                           flags: [.fallbackAvailable: true, .retriable: true], cooldown: 86_400)
+                    }
+                    Log("Codex migration: deferred; original installation remains available")
+                }
                 return false
             }
         }

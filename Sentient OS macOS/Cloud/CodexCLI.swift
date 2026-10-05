@@ -861,6 +861,7 @@ actor CodexCLI {
         }
         let reason = CodexFailureReason.classify(error)
         let trigger = CodexTrigger.current
+        if phase == "ping", trigger == .probe, [.notInstalled, .notLoggedIn, .planDenied].contains(reason) { return }
         let net = NetworkSnapshot.shared.current
         let auth = CodexAuthSnapshot.read()
         let custom = ModelBackend.current == .custom
@@ -875,16 +876,23 @@ actor CodexCLI {
         extra["first_cloud_call_this_launch"] = String(!sessionHadSuccess)   // not "*_session": a scrubber word
         extra["hours_since_launch"] = String(Int(Date().timeIntervalSince(Self.launchedAt) / 3600))
         extra["secs_since_wake"] = diagnosticsRunStart.map { String(Int(Date().timeIntervalSince($0))) } ?? "-1"
-        // Computer-use failures carry the pinned driver version (a constant, never free text), so
-        // a field regression after a driver bump is attributable to the bump.
-        if feature == "computer" { extra["cua_driver"] = CuaDriver.version }
-        extra.merge(auth.extras) { cur, _ in cur }
+        // Attribute a dependency regression to the runtime this run actually selected.
+        if feature == "computer" {
+            let runtime = ComputerUseBackend.selected(for: ModelBackend.current)
+            extra["computer_runtime"] = runtime.rawValue
+            if runtime == .cua { extra["cua_driver"] = CuaDriver.version }
+            else {
+                extra["helper_version"] = CodexRuntime.release.helper.version
+                extra["helper_build"] = String(CodexRuntime.release.helperBuild)
+            }
+        }
+        if ModelBackend.current != .claude { extra.merge(auth.extras) { cur, _ in cur } }
 
         var tags: [String: String] = [
             "feature": feature,
             "error": caseName,
-            "model": custom ? "custom" : modelID,
-            "backend": custom ? "custom" : "chatgpt",
+            "model": ModelBackend.current == .claude ? "claude_subscription" : (custom ? "custom" : modelID),
+            "backend": ModelBackend.current.rawValue,
             "phase": phase,
             "availability": availability,
             "reason": reason.rawValue,
@@ -893,9 +901,13 @@ actor CodexCLI {
             "interface": net.interface,
             "codex_version": cachedVersion ?? "unknown",
         ]
-        tags.merge(auth.tags) { cur, _ in cur }
+        if ModelBackend.current == .claude {
+            tags["login_mode"] = "claude_subscription"
+            tags["plan"] = ClaudeAuth.cachedPlan ?? "unknown"
+        } else { tags.merge(auth.tags) { cur, _ in cur } }
+        Diagnostics.current?.markReported(error)
         CrashReporting.captureEvent(event, level: level, tags: tags, extra: extra,
-            fingerprint: ["codex", feature, caseName, reason.rawValue, trigger.rawValue])
+            fingerprint: ["codex", ModelBackend.current.rawValue, feature, caseName, reason.rawValue, trigger.rawValue])
     }
 
     /// Fast mode applies to every Exec path, including probes and resumed sessions.
@@ -1250,6 +1262,8 @@ actor CodexCLI {
         env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
         // Same unconditional endpoint-key injection as the sanitized env (see execute()).
         env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
+        env[ChildProcessDiagnostics.environmentKey] = ChildProcessDiagnostics.directory?.path
+        if ChildProcessDiagnostics.directory != nil { env["TMPDIR"] = FileManager.default.temporaryDirectory.path }
         return env
     }
 
@@ -1275,14 +1289,15 @@ actor CodexCLI {
                              onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
         let holder = ProcHolder(terminationGrace: terminationGrace)
+        let childDirectory = ChildProcessDiagnostics.directory
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
+                    do { cont.resume(returning: try ChildProcessDiagnostics.$directory.withValue(childDirectory) { try execute(binary: binary, args: args, stdinText: stdinText,
                                                             cwd: cwd, timeout: timeout, extraEnv: extraEnv,
                                                             includeCustomProviderKey: includeCustomProviderKey,
                                                             retainStdoutLine: retainStdoutLine,
-                                                            onStdoutLine: onStdoutLine, procHolder: holder)) }
+                                                            onStdoutLine: onStdoutLine, procHolder: holder) }) }
                     catch { cont.resume(throwing: error) }
                 }
             }
@@ -1322,6 +1337,8 @@ actor CodexCLI {
         // here also blocks the ChatGPT-token fallthrough on keyless local servers.)
         if includeCustomProviderKey { env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue }
         env.merge(extraEnv) { _, new in new }
+        env[ChildProcessDiagnostics.environmentKey] = ChildProcessDiagnostics.directory?.path
+        if ChildProcessDiagnostics.directory != nil { env["TMPDIR"] = FileManager.default.temporaryDirectory.path }
         proc.environment = CodexRuntime.environment(env, binary: binary)
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 

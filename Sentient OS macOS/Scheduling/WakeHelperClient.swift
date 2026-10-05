@@ -16,9 +16,9 @@ private final class Once: @unchecked Sendable {
     private var done = false
     private let body: (Bool) -> Void
     init(_ body: @escaping (Bool) -> Void) { self.body = body }
-    func fire(_ value: Bool) {
+    func fire(_ value: Bool, diagnostic: () -> Void = {}) {
         lock.lock(); let go = !done; done = true; lock.unlock()
-        if go { body(value) }
+        if go { diagnostic(); body(value) }
     }
 }
 
@@ -31,7 +31,7 @@ final class WakeHelperClient {
     @discardableResult
     func register() -> SMAppService.Status {
         let service = SMAppService.daemon(plistName: WakeHelperConfig.daemonPlistName)
-        do { try service.register() } catch { Log("WakeHelper register error: \(error)") }
+        do { try service.register() } catch { Log("WakeHelper register error: \(ErrorLabel(error))") }
         Log("WakeHelper status after register: \(service.status.rawValue)")
         return service.status
     }
@@ -82,12 +82,12 @@ final class WakeHelperClient {
 
     // MARK: - The four ops
 
-    func beginAwake(timeout: Int = 7200) async -> Bool { await call { $0.beginAwake(timeoutSeconds: timeout, withReply: $1) } }
-    func heartbeat() async -> Bool { await call { $0.heartbeat(withReply: $1) } }
-    func endAwake() async -> Bool { await call { $0.endAwake(withReply: $1) } }
-    func armWake(at date: Date) async -> Bool { await call { $0.armWake(atEpoch: date.timeIntervalSince1970, withReply: $1) } }
-    func cancelWake() async -> Bool { await call { $0.cancelWake(withReply: $1) } }
-    func cancelAllWakes() async -> Bool { await call { $0.cancelAllWakes(withReply: $1) } }
+    func beginAwake(timeout: Int = 7200) async -> Bool { await call(phase: .begin) { $0.beginAwake(timeoutSeconds: timeout, withReply: $1) } }
+    func heartbeat() async -> Bool { await call(phase: .heartbeat) { $0.heartbeat(withReply: $1) } }
+    func endAwake() async -> Bool { await call(phase: .restore) { $0.endAwake(withReply: $1) } }
+    func armWake(at date: Date) async -> Bool { await call(phase: .arm) { $0.armWake(atEpoch: date.timeIntervalSince1970, withReply: $1) } }
+    func cancelWake() async -> Bool { await call(phase: .cancel) { $0.cancelWake(withReply: $1) } }
+    func cancelAllWakes() async -> Bool { await call(phase: .cancel) { $0.cancelAllWakes(withReply: $1) } }
 
     // MARK: - XPC plumbing
 
@@ -98,24 +98,48 @@ final class WakeHelperClient {
         c.invalidationHandler = { [weak self] in Task { @MainActor in self?.connection = nil } }
         c.resume()
         connection = c
+        syncDiagnosticsConsent()
         return c
+    }
+
+    /// Does not start a helper or request installation when the diagnostics switch changes.
+    func syncDiagnosticsConsent() {
+        guard let connection else { return }
+        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in } as? WakeHelperProtocol
+        proxy?.configureDiagnostics(enabled: CrashReporting.diagnosticsEnabled,
+                                    anonymousID: CrashReporting.installID, withReply: {})
     }
 
     /// Every call is guarded three ways so it can NEVER hang at 3am: the reply block, the XPC
     /// error handler (fires if the helper is unreachable), and a 30s timeout — all resume-once.
     /// `quiet` softens the error line for probes, where a miss is an expected state, not a fault.
-    private func call(quiet: Bool = false,
+    private func call(quiet: Bool = false, phase: Diagnostics.Phase = .probe,
                       _ body: @escaping (WakeHelperProtocol, @escaping (Bool) -> Void) -> Void) async -> Bool {
         let connection = conn()
+        let operation = Diagnostics.current
         return await withCheckedContinuation { cont in
             let once = Once { cont.resume(returning: $0) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 30) { once.fire(false) }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 30) {
+                once.fire(false) {
+                    if !quiet { Diagnostics.$current.withValue(operation) {
+                        Diagnostics.report(.wakeFailed, phase: phase, reason: "xpc_timeout", counts: [.deadlineMS: 30_000])
+                    } }
+                }
+            }
             guard let proxy = connection.remoteObjectProxyWithErrorHandler({ err in
                 if quiet { Log("WakeHelper probe: no daemon answering") }
-                else { Log("WakeHelper XPC error: \(err)") }
-                once.fire(false)
+                else { Log("WakeHelper XPC error: \(ErrorLabel(err))") }
+                once.fire(false) {
+                    if !quiet { Diagnostics.$current.withValue(operation) {
+                        Diagnostics.report(.wakeFailed, phase: phase, reason: "xpc_error", error: err)
+                    } }
+                }
             }) as? WakeHelperProtocol else { once.fire(false); return }
-            body(proxy) { ok in once.fire(ok) }
+            body(proxy) { ok in once.fire(ok) {
+                if !ok && !quiet { Diagnostics.$current.withValue(operation) {
+                    Diagnostics.report(.wakeFailed, phase: phase, reason: "helper_rejected")
+                } }
+            } }
         }
     }
 }

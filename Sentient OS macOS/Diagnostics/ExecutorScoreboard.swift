@@ -22,18 +22,29 @@ enum ExecutorScoreboard {
     enum Outcome: String, Sendable { case fired, notFireable, failed, refused }
 
     static func record(method: String, source: String, outcome: Outcome,
-                       durationS: Double, statusPresent: Bool = true, errorClass: String? = nil) {
+                       durationS: Double, statusPresent: Bool = true, errorClass: String? = nil, error: Error? = nil) {
         // A verified success is not a defect — TelemetryDeck counts it; Sentry stays quiet. A
         // "fired" WITHOUT the STATUS sentinel still reports: that's the false-success RISK the
         // sentinel exists to measure.
         guard outcome != .fired || !statusPresent else { return }
+        // A model may reasonably decline a request, and missing prerequisites are normal UI state.
+        if statusPresent && (outcome == .refused || outcome == .notFireable) { return }
+        if let error, Diagnostics.isExpected(error) { return }
+        if let error, Diagnostics.current?.wasReported(error) == true {
+            CrashReporting.diagnosticBreadcrumb("executor.failed_after_reported_cause", data: ["outcome": outcome.rawValue, "status_present": String(statusPresent)])
+            return
+        }
         var extra: [String: String] = [
             "duration_s": String(format: "%.1f", durationS),
             "status_present": String(statusPresent),
         ]
         if let errorClass { extra["error_class"] = errorClass }
+        if let error { extra.merge(Diagnostics.errorFields(error)) { _, new in new } }
         CrashReporting.captureEvent("executor.fire", level: .warning,
-            tags: ["method": method, "source": source, "outcome": outcome.rawValue],
+            tags: ["method": method, "source": source, "outcome": outcome.rawValue,
+                   "backend": Diagnostics.current?.backend ?? ModelBackend.current.rawValue,
+                   "runtime": method == "computer" ? ComputerUseBackend.selected(for: ModelBackend.current).rawValue : "connector",
+                   "phase": "complete", "evidence": statusPresent ? "status_claim" : "missing_status"],
             extra: extra, fingerprint: ["executor", "fire", method, outcome.rawValue])
     }
 }

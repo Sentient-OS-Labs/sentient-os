@@ -91,101 +91,103 @@ final class CommandRunModel {
         let cardContext = SidekickCardContext.promptBlock(for: proactiveCards?() ?? [])
         SidekickHistory.record(task0)
         let started = Date()
-        ModelBackend.$runOverride.withValue(ModelBackend.current) {
-            task = Task { [weak self] in
-                // Snap every display NOW so computer use sees exactly what the user is looking at, on
-                // whichever screen. OPTIONAL + grant-gated: empty if the Screen Recording grant is
-                // missing → the run goes text-only (the grant is asked once, behind an info panel that
-                // states exactly what is captured and why). The frames go to the user's OWN codex /
-                // OpenAI (the same trust boundary as their ChatGPT) — NEVER a Sentient server — and the
-                // local temp files are deleted the moment codex is done (the defer below).
-                let shots = await ScreenCapture.grab()
-                defer { ScreenCapture.discard(shots) }
-                let kb = await Self.knowledgeContext()
-                do {
-                    try Task.checkCancellation()
-                    // The router: a command whose ENTIRE task fits one connector's tools takes the
-                    // screen-free spine; everything else — and any router doubt, error, or timeout —
-                    // is computer use. Skipped (no run, no latency) with zero detected connectors.
-                    // Runs INSIDE the one owned Task, so STOP and `isRunning` behave identically on
-                    // every leg; card fires never pass through here (beginExternalRun skips start()).
-                    let routerRan = CommandRouter.isActive   // skipped → no telemetry row either
-                    let routerStart = Date()
-                    if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation) = await CommandRouter.route(task0, cardContext: cardContext) {
-                        let routerMs = Int(Date().timeIntervalSince(routerStart) * 1000)
-                        try Task.checkCancellation()   // a STOP during routing must never keep going
-                        if try await self?.connectorLeg(task0, slug: slug, name: name, operation: operation, mailOperation: mailOperation, calendarOperation: calendarOperation,
-                                                        screenshots: shots, kbContext: kb, cardContext: cardContext,
-                                                        started: started) != false {
+        Diagnostics.$current.withValue(Diagnostics.Operation("command")) {
+            ModelBackend.$runOverride.withValue(ModelBackend.current) {
+                task = Task { [weak self] in
+                    // Snap every display NOW so computer use sees exactly what the user is looking at, on
+                    // whichever screen. OPTIONAL + grant-gated: empty if the Screen Recording grant is
+                    // missing → the run goes text-only (the grant is asked once, behind an info panel that
+                    // states exactly what is captured and why). The frames go to the user's OWN codex /
+                    // OpenAI (the same trust boundary as their ChatGPT) — NEVER a Sentient server — and the
+                    // local temp files are deleted the moment codex is done (the defer below).
+                    let shots = await ScreenCapture.grab()
+                    defer { ScreenCapture.discard(shots) }
+                    let kb = await Self.knowledgeContext()
+                    do {
+                        try Task.checkCancellation()
+                        // The router: a command whose ENTIRE task fits one connector's tools takes the
+                        // screen-free spine; everything else — and any router doubt, error, or timeout —
+                        // is computer use. Skipped (no run, no latency) with zero detected connectors.
+                        // Runs INSIDE the one owned Task, so STOP and `isRunning` behave identically on
+                        // every leg; card fires never pass through here (beginExternalRun skips start()).
+                        let routerRan = CommandRouter.isActive   // skipped → no telemetry row either
+                        let routerStart = Date()
+                        if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation) = await CommandRouter.route(task0, cardContext: cardContext) {
+                            let routerMs = Int(Date().timeIntervalSince(routerStart) * 1000)
+                            try Task.checkCancellation()   // a STOP during routing must never keep going
+                            if try await self?.connectorLeg(task0, slug: slug, name: name, operation: operation, mailOperation: mailOperation, calendarOperation: calendarOperation,
+                                                            screenshots: shots, kbContext: kb, cardContext: cardContext,
+                                                            started: started) != false {
+                                CommandRouter.recordOutcome(route: "connector", slug: slug,
+                                                            ms: routerMs, fellBack: false)
+                                return
+                            }
+                            try Task.checkCancellation()   // a STOP mid-leg must never fall through
                             CommandRouter.recordOutcome(route: "connector", slug: slug,
-                                                        ms: routerMs, fellBack: false)
-                            return
+                                                        ms: routerMs, fellBack: true)
+                        } else if routerRan {
+                            CommandRouter.recordOutcome(route: "computer", slug: nil,
+                                                        ms: Int(Date().timeIntervalSince(routerStart) * 1000),
+                                                        fellBack: false)
                         }
-                        try Task.checkCancellation()   // a STOP mid-leg must never fall through
-                        CommandRouter.recordOutcome(route: "connector", slug: slug,
-                                                    ms: routerMs, fellBack: true)
-                    } else if routerRan {
-                        CommandRouter.recordOutcome(route: "computer", slug: nil,
-                                                    ms: Int(Date().timeIntervalSince(routerStart) * 1000),
-                                                    fellBack: false)
-                    }
-                    // A canceled router also returns .computer. STOP must end the request
-                    // before that fallback can start a new computer-use invocation.
-                    try Task.checkCancellation()
-                    let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
-                                                    spoken: source == "voice", kbContext: kb, history: history,
-                                                    cardContext: cardContext)
-                        + (self?.connectorRecoveryContext ?? "")
-                    Log("CMD: launching agent command (\(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
-                    #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
-                                // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
-                    Log("CMD: prompt ↓\n\(prompt)")
-                    #endif
-                    Log("──────────────── live codex output ↓ ────────────────")
-                    // trigger=sidekick: every codex call under this press reports it (task-local).
-                    let out = try await CodexTrigger.$current.withValue(.sidekick) {
-                        try await FrontierRun.runAgentCommand(prompt, imagePaths: shots.map(\.path)) { line in
-                            Task { @MainActor in
-                                #if DEBUG
-                                Log("CMD │ \(line)")
-                                #endif
-                                self?.push(line)
+                        // A canceled router also returns .computer. STOP must end the request
+                        // before that fallback can start a new computer-use invocation.
+                        try Task.checkCancellation()
+                        let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
+                                                        spoken: source == "voice", kbContext: kb, history: history,
+                                                        cardContext: cardContext)
+                            + (self?.connectorRecoveryContext ?? "")
+                        Log("CMD: launching agent command (\(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
+                        #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
+                                    // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
+                        Log("CMD: prompt ↓\n\(prompt)")
+                        #endif
+                        Log("──────────────── live codex output ↓ ────────────────")
+                        // trigger=sidekick: every codex call under this press reports it (task-local).
+                        let out = try await CodexTrigger.$current.withValue(.sidekick) {
+                            try await FrontierRun.runAgentCommand(prompt, imagePaths: shots.map(\.path)) { line in
+                                Task { @MainActor in
+                                    #if DEBUG
+                                    Log("CMD │ \(line)")
+                                    #endif
+                                    self?.push(line)
+                                }
                             }
                         }
-                    }
-                    let secs = Int(Date().timeIntervalSince(started))
-                    #if DEBUG
-                    Log("CMD: final → \(out.suffix(1200))")
-                    #endif
-                    // Honesty gate: codex exiting 0 is NOT success — the run's own STATUS sentinel is.
-                    // A clean give-up surfaces its reason. Missing or malformed confirmation
-                    // remains unconfirmed rather than becoming a successful action.
-                    switch AgentStatus.parse(out) {
-                    case .couldNot(let reason):
-                        Log("──────── 🤖 ⚠️ COULD NOT after \(secs)s (\(reason.count)-char reason) ────────")
+                        let secs = Int(Date().timeIntervalSince(started))
                         #if DEBUG
-                        Log("CMD: reason → \(reason)")
+                        Log("CMD: final → \(out.suffix(1200))")
                         #endif
-                        self?.complete(.failed,
-                                       line: reason.isEmpty ? "✗ couldn't do it" : "✗ \(String(reason.prefix(160)))",
-                                       board: .refused)
-                    case .done:
-                        Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
-                        self?.complete(.success, line: "✓ done")
-                    case .none:
-                        Log("CMD: computer task completion was not confirmed")
-                        self?.complete(.failed, line: AgentStatus.unconfirmedComputerMessage,
-                                       board: .refused, statusPresent: false)
-                    }
-                } catch {
-                    let secs = Int(Date().timeIntervalSince(started))
-                    if Task.isCancelled {
-                        Log("──────── 🤖 ■ STOPPED after \(secs)s ────────")
-                        self?.complete(.stopped, line: "■ stopped")
-                    } else {
-                        Log("──────── 🤖 ✗ FAILED after \(secs)s ────────")
-                        Log("CMD: \(ErrorLabel(error))")
-                        self?.complete(.failed, line: "✗ \(Self.short(error))")
+                        // Honesty gate: codex exiting 0 is NOT success — the run's own STATUS sentinel is.
+                        // A clean give-up surfaces its reason. Missing or malformed confirmation
+                        // remains unconfirmed rather than becoming a successful action.
+                        switch AgentStatus.parse(out) {
+                        case .couldNot(let reason):
+                            Log("──────── 🤖 ⚠️ COULD NOT after \(secs)s (\(reason.count)-char reason) ────────")
+                            #if DEBUG
+                            Log("CMD: reason → \(reason)")
+                            #endif
+                            self?.complete(.failed,
+                                           line: reason.isEmpty ? "✗ couldn't do it" : "✗ \(String(reason.prefix(160)))",
+                                           board: .refused)
+                        case .done:
+                            Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
+                            self?.complete(.success, line: "✓ done")
+                        case .none:
+                            Log("CMD: computer task completion was not confirmed")
+                            self?.complete(.failed, line: AgentStatus.unconfirmedComputerMessage,
+                                           board: .refused, statusPresent: false)
+                        }
+                    } catch {
+                        let secs = Int(Date().timeIntervalSince(started))
+                        if Task.isCancelled {
+                            Log("──────── 🤖 ■ STOPPED after \(secs)s ────────")
+                            self?.complete(.stopped, line: "■ stopped")
+                        } else {
+                            Log("──────── 🤖 ✗ FAILED after \(secs)s ────────")
+                            Log("CMD: \(ErrorLabel(error))")
+                            self?.complete(.failed, line: "✗ \(Self.short(error))", error: error)
+                        }
                     }
                 }
             }
@@ -522,7 +524,7 @@ final class CommandRunModel {
     /// `board` overrides the outcome-derived scoreboard verdict (the sentinel's `.refused`);
     /// `statusPresent: false` = codex claimed done but never emitted the STATUS sentinel.
     private func complete(_ outcome: Outcome, line: String,
-                          board: ExecutorScoreboard.Outcome? = nil, statusPresent: Bool = true) {
+                          board: ExecutorScoreboard.Outcome? = nil, statusPresent: Bool = true, error: Error? = nil) {
         // §7.19: feed the executor scoreboard (this IS the command-bar / voice computer-use path).
         // Skip .stopped — that's a user cancel, not a health outcome. `fired` is now
         // sentinel-verified when statusPresent; without the sentinel it stays a flagged claim.
@@ -531,7 +533,7 @@ final class CommandRunModel {
             ExecutorScoreboard.record(method: executedMethod, source: source, outcome: resolved,
                                       durationS: Date().timeIntervalSince(runStarted),
                                       statusPresent: statusPresent,
-                                      errorClass: resolved == .refused ? "refused" : nil)
+                                      errorClass: resolved == .refused ? "refused" : nil, error: error)
         }
         // Extended tier: how long the agent worked this run — EVERY outcome (a stopped run still had
         // the notch lit that long). floatValue sums server-side into total agent-seconds, the
