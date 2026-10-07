@@ -760,7 +760,7 @@ actor CodexCLI {
             if backend == .claude {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
                 // Claude supplies readable progress; Codex's structured events still carry
-                // the actual native tool results used to detect browser interruptions.
+                // tool activity needed by Sidekick recovery.
                 onLine("codex")
                 let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName })
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
@@ -799,7 +799,6 @@ actor CodexCLI {
             await bridge?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             if Task.isCancelled { throw CancellationError() }
-            if error is ComputerUseStream.Interruption { throw error }
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
             Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
             emitCodexFailure(event: "codex.agent_command", error, feature: "computer",

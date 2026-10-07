@@ -175,7 +175,6 @@ nonisolated enum Diagnostics {
     /// Expected user/configuration states remain breadcrumbs or UI messages, not wrapper defects.
     static func isExpected(_ error: Error) -> Bool {
         if isCancellation(error) { return true }
-        if error is ComputerUseStream.Interruption { return true }
         if case VaultCloud.CloudError.vaultChanged = error { return true }
         switch error {
         case CodexRuntime.Failure.busy, OpenAIComputerUse.RuntimeError.helperRunning,

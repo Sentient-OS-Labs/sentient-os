@@ -200,8 +200,6 @@ final class CommandRunModel {
                         if Task.isCancelled || error is CancellationError {
                             Log("──────── 🤖 ■ STOPPED after \(secs)s ────────")
                             self?.complete(.stopped, line: "■ stopped")
-                        } else if let interruption = error as? ComputerUseStream.Interruption {
-                            self?.complete(.failed, line: interruption.localizedDescription, error: interruption)
                         } else {
                             Log("──────── 🤖 ✗ FAILED after \(secs)s ────────")
                             Log("CMD: \(ErrorLabel(error))")
@@ -594,9 +592,8 @@ final class CommandRunModel {
         // §7.19: feed the executor scoreboard (this IS the command-bar / voice computer-use path).
         // Skip .stopped — that's a user cancel, not a health outcome. `fired` is now
         // sentinel-verified when statusPresent; without the sentinel it stays a flagged claim.
-        // Offline and browser-interaction interruptions are expected environment state.
-        let resolved = isOffline || error is ComputerUseStream.Interruption ? nil
-            : (board ?? (outcome == .success ? .fired : (outcome == .failed ? .failed : nil)))
+        // An offline interruption is expected environment state, not an executor defect.
+        let resolved = isOffline ? nil : (board ?? (outcome == .success ? .fired : (outcome == .failed ? .failed : nil)))
         if let resolved {
             ExecutorScoreboard.record(method: executedMethod, source: source, outcome: resolved,
                                       durationS: Date().timeIntervalSince(runStarted),
