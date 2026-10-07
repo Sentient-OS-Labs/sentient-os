@@ -171,6 +171,9 @@ actor SidekickToolServer {
                 call = existing
             } else {
                 guard activeCall == nil, !interaction.hasActiveTools, !interaction.isWaiting, calls.count < 64 else {
+                    if name == SidekickPersonalization.toolName {
+                        return try reply(await Self.rejectedPersonalization(SidekickPersonalization.Failure.unavailable))
+                    }
                     return try reply(Self.invalidArguments)
                 }
                 let action: @Sendable () async throws -> Data
@@ -190,8 +193,10 @@ actor SidekickToolServer {
                         return try Self.json(payload)
                     }
                 } else if name == SidekickPersonalization.toolName, interaction.personalization != nil {
-                    guard let review = try? SidekickPersonalization.decode(arguments) else {
-                        return try reply(Self.invalidPersonalization)
+                    let review: SidekickPersonalization.Review
+                    do { review = try SidekickPersonalization.decode(arguments) }
+                    catch {
+                        return try reply(await Self.rejectedPersonalization(error))
                     }
                     action = { [interaction] in
                         let message = try await interaction.updateInstructions(review)
@@ -208,7 +213,9 @@ actor SidekickToolServer {
                 return try reply(["content": [["type": "text", "text": String(decoding: result, as: UTF8.self)]]])
             } catch {
                 if activeCall == key { activeCall = nil }
-                if name == SidekickPersonalization.toolName { return try reply(Self.invalidPersonalization) }
+                if name == SidekickPersonalization.toolName {
+                    return try reply(await Self.rejectedPersonalization(error))
+                }
                 throw error
             }
         default: return try Self.json(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Method unavailable"]])
@@ -218,8 +225,21 @@ actor SidekickToolServer {
     private static var invalidArguments: [String: Any] {
         ["isError": true, "content": [["type": "text", "text": "Ask one nonempty question with exactly two distinct, concise answers. Only one question may be pending, and all other tool calls must finish first. Do not reuse an earlier request ID with changed arguments."]]]
     }
-    private static var invalidPersonalization: [String: Any] {
-        ["isError": true, "content": [["type": "text", "text": "Instructions were not saved. Use the supplied revision, editable IDs/scopes and real user evidence; keep changes small and preserve manual instructions. If settings changed, the task stopped, or the proposal is uncertain, skip personalization and finish the original task honestly."]]]
+    @MainActor private static func rejectedPersonalization(_ error: Error) -> [String: Any] {
+        let code = SidekickPersonalization.rejectionCode(error)
+        Log("Sidekick personalization: tool rejected reason=\(code)")
+        let hint: String
+        switch code {
+        case "invalid_review":
+            hint = "Use the exact tool schema. With changes, skip_reason must be null. With changes=[], supply skip_reason with a supported code and nonempty detail."
+        case "invalid_evidence":
+            hint = "Use the supplied revision and quote real user evidence exactly. Starting screens support observed choices only; a user-requested app needs no screenshot evidence."
+        case "invalid_change", "size_limit":
+            hint = "Use the supplied editable IDs and scopes. Keep changes small, single-line and within the tool limits. Preserve manual instructions."
+        default:
+            hint = "Settings changed, a preference was removed, or the task is unavailable. Finish the original task honestly without claiming a save."
+        }
+        return ["isError": true, "content": [["type": "text", "text": "Instructions were not saved (\(code)). \(hint)"]]]
     }
     private static var tool: [String: Any] {
         ["name": "ask_user", "description": "Ask only when a specific missing fact, consequential ambiguity, or user-only action blocks the task after relevant context and reasonable safe checks. Handle routine obstacles yourself; do not repeat answered questions or use this for generic failure/retry prompts. Ask one concrete question with two useful choices. Returns only the user’s actual answer. Call alone after other tools finish; never act while waiting.",

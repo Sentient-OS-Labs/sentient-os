@@ -68,7 +68,9 @@ nonisolated final class SidekickInteraction: Sendable {
             state.updatingInstructions = true; return true
         }) else { throw SidekickPersonalization.Failure.unavailable }
         defer { wait.withLock { $0.updatingInstructions = false } }
-        return try await personalization.stage(review)
+        let message = try await personalization.stage(review)
+        try await personalization.presentStagedUpdate()
+        return message
     }
 
     /// Observe structured executor events only. Refuse a question while a computer call is
