@@ -766,6 +766,10 @@ private struct NotchPreviewStage<Content: View>: View {
     NotchPreviewStage { NotchContent(phase: .finishing(.failed), readBack: nil,
                                      statusLine: CommandRunModel.offlineMessage, metrics: .preview) }
 }
+#Preview("finishing · browser interrupted") {
+    NotchPreviewStage { NotchContent(phase: .finishing(.failed), readBack: nil,
+                                     statusLine: ComputerUseStream.Interruption.browserChanged.localizedDescription, metrics: .preview) }
+}
 #Preview("finishing") {
     NotchPreviewStage { NotchContent(phase: .finishing(.success), readBack: nil, statusLine: "✓ done", metrics: .preview) }
 }

@@ -153,16 +153,11 @@ final class CommandCoordinator {
             return
         }
 
-        // First-use permission gate: while any of the four action grants is missing, the one-time
-        // setup window takes over and holds this command — Continue fires it, close drops it.
-        if ComputerUseGate.shared.intercept({ [weak self] in self?.launch(trimmed, mode: mode, source: source) }) {
-            setPhase(.hidden)   // the gate window owns the moment; the notch steps aside
-            return
-        }
         launch(trimmed, mode: mode, source: source)
     }
 
-    /// The actual fire — everything after the gate. Only submit() and the gate's Continue call this.
+    /// Own the run immediately. Permission/setup waiting happens inside its cancellable task,
+    /// so the notch stays visible and every other entry point sees the same one-task lock.
     private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource) {
         guard !run.isRunning else { Log("launch ignored — a task is already running"); return }
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
@@ -319,16 +314,8 @@ final class CommandCoordinator {
             Log("hotkey blocked — knowledge-base-only plan (Sidekick needs Plus)")
             return
         }
-        // A quiet native preflight or visible setup holds this tap. Once it is ready, open the
-        // field without replaying the hotkey (which could otherwise count as another double tap).
-        let permissionToken = phaseToken
-        if ComputerUseGate.shared.interceptBeforeStart({ [weak self] in
-            self?.resumeTypingAfterPermissions(token: permissionToken, anchor: .mainDisplay)
-        }) {
-            Log("hotkey press held for computer-use readiness")
-            return
-        }
         setPhase(.opening)                                // you're pulling it open — reveal the instant you press
+        ComputerUseGate.shared.refresh()                 // prepare locally while the user types
         // The field waits out the double-tap window: a second press in time means a reply draft,
         // not a task (and the notch must still be non-key then — see the MARK above). The notch is
         // already open and glowing, so the wait reads as the unfold, not as lag.
@@ -525,8 +512,8 @@ final class CommandCoordinator {
 
     /// A click on the idle, hover-swollen notch — the pointer's twin of a hotkey TAP: open the
     /// type field. Mirrors hotkeyPressed's doors without the double-tap wait (a click can only mean
-    /// the field): the knowledge-base-only aside, then the first-use permission gate, then the
-    /// field. The window controller makes the panel key on .typing, same as the hotkey path.
+    /// the field): the knowledge-base-only aside, then the field. Permissions are checked when
+    /// submitting. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
         guard doubleTapDemoKeyChanged == nil else { return }
         guard phase == .hidden, !run.isRunning else { return }
@@ -539,26 +526,9 @@ final class CommandCoordinator {
             Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
             return
         }
-        let permissionToken = phaseToken
-        if ComputerUseGate.shared.interceptBeforeStart({ [weak self] in
-            self?.resumeTypingAfterPermissions(token: permissionToken, anchor: .builtInNotch)
-        }) {
-            Log("notch click held for computer-use readiness")
-            return
-        }
         setPhase(.typing)
+        ComputerUseGate.shared.refresh()   // background preparation never holds the input field
         Log("notch clicked → typing")
-    }
-
-    /// Permission checks can finish after another interaction, task or onboarding transition.
-    /// Resume only the still-current typing intent, on the display where it was requested.
-    private func resumeTypingAfterPermissions(token: Int, anchor: NotchAnchor) {
-        guard phaseToken == token, !run.isRunning, !DoubleTap.shared.isDrafting,
-              doubleTapDemoKeyChanged == nil, !onboardingDemoArmed,
-              !interceptForOnboarding(), !CodexAuth.knowledgeBaseOnly else { return }
-        notchAnchor = anchor
-        setPhase(.typing)
-        Log("notch → typing after computer-use readiness")
     }
 
     // MARK: The native Double Tap lesson
@@ -668,6 +638,10 @@ final class CommandCoordinator {
             voice.cancel()
             setPhase(.hidden)
             Log("notch voice capture cancelled")
+            return true
+        case .running where run.isPreparing:
+            stop()
+            Log("Sidekick preparation cancelled (Esc)")
             return true
         // Only while the transcript is actually shown (readBack up AND not yet replaced by "Remembering") —
         // not once computer use is working, so Esc stays free for the user's own apps then.

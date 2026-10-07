@@ -211,8 +211,8 @@ struct NativeComputerUsePermissionRows: View {
                         SettingsPillButton(title: "Try again") { gate.requestAutomation() }
                             .disabled(gate.checkingAutomation)
                     }
-                } else if gate.setup.ready, gate.checkingAutomation, !gate.nativeRuntimeReady {
-                    SettingsProse("Checking computer use…")
+                } else if gate.setup.ready, gate.checkingAutomation, gate.automation != .granted {
+                    SettingsProse("Checking permissions…")
                 }
             }
         }

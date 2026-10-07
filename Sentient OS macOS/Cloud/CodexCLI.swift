@@ -692,7 +692,7 @@ actor CodexCLI {
                                effortArg: String,
                                providerOverrides: [String] = [],
                                nativeConfiguration: OpenAIComputerUse.Configuration? = nil) throws -> [String] {
-        var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--dangerously-bypass-approvals-and-sandbox",
+        var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--json", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
@@ -759,9 +759,8 @@ actor CodexCLI {
             var environment = nativeConfiguration.clientEnvironment
             if backend == .claude {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-                // Claude supplies the readable progress for this run. Keep one producer:
-                // Codex's prompt echo otherwise leaves the notch in its hidden `user` section
-                // while Claude is narrating and the native tools are already working.
+                // Claude supplies readable progress; Codex's structured events still carry
+                // the actual native tool results used to detect browser interruptions.
                 onLine("codex")
                 let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName })
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
@@ -779,10 +778,8 @@ actor CodexCLI {
             let ownedBridge = bridge
             let out = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
-                return try await Self.executeStreaming(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
-                    extraEnv: environment) { line in
-                        if backend != .claude { onLine(line) }
-                    }
+                return try await ComputerUseStream.run(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
+                    extraEnv: environment, narrate: backend != .claude, onLine: onLine)
             } onCancel: {
                 // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
                 Task { await ownedBridge?.stop() }
@@ -794,13 +791,15 @@ actor CodexCLI {
             nativeTask = nil
             Self.noteStaleSignatureIfPresent(out.stderr)
             if let error = Self.agentFailure(out) { throw error }
+            let result = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(t0) * 1000)).result
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
-            return out.stdout.isEmpty ? out.stderr : out.stdout
+            return result
         } catch {
             await bridge?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             if Task.isCancelled { throw CancellationError() }
+            if error is ComputerUseStream.Interruption { throw error }
             let ms = Int(Date().timeIntervalSince(t0) * 1000)
             Log("codex exec: \(CodexFailureReason.classify(error).rawValue) feature=computer in \(ms)ms")
             emitCodexFailure(event: "codex.agent_command", error, feature: "computer",
@@ -1100,8 +1099,8 @@ actor CodexCLI {
                                             "rate_limit_exceeded", "limit reached", "limit resets", "quota", "too many requests",
                                             "out of extra usage", "plan limit"]
 
-    /// Human-readable computer runs report terminal failures as ERROR lines. Check those
-    /// separately from the echoed prompt and tool output, which can discuss limits themselves.
+    /// Read structured terminal failures, with ERROR lines retained for legacy callers.
+    /// Prompt echoes and ordinary tool output must not become usage-limit errors.
     static func agentFailure(_ out: ExecResult) -> CLIError? {
         guard out.status != 0 else { return nil }
         func lastErrorLine(in text: String) -> String? {
@@ -1479,10 +1478,11 @@ actor CodexCLI {
     /// codex's play-by-play live — while accumulating the full text. No stdin (the prompt rides in
     /// argv). Byte-level line splitting so multibyte UTF-8 across a read boundary never garbles.
     /// Honors Task cancellation: cancelling the awaiting Task terminates codex (the STOP button).
+    /// A throwing line consumer also terminates the child and preserves its typed failure.
     /// Internal (not private): ClaudeCLI's agent runs ride the same streaming plumbing.
     static func executeStreaming(binary: String, args: [String], timeout: TimeInterval,
                                  extraEnv: [String: String] = [:],
-                                 onLine: @escaping @Sendable (String) -> Void) async throws -> ExecResult {
+                                 onLine: @escaping @Sendable (String) throws -> Void) async throws -> ExecResult {
         let holder = ProcHolder()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
@@ -1513,12 +1513,20 @@ actor CodexCLI {
                 proc.standardError = errPipe
 
                 let outSink = LineSink(), errSink = LineSink()
+                let streamFailure = OSAllocatedUnfairLock<Error?>(initialState: nil)
                 // Codex can warn when it cannot sweep an old arg0 helper directory, then
                 // continue normally. Keep stderr for diagnostics, but do not show this one
                 // startup cleanup warning in live computer-use progress.
                 let showLine: @Sendable (String) -> Void = { line in
                     guard !line.hasPrefix("stderr: WARNING: failed to clean up stale arg0 temp dirs:") else { return }
-                    onLine(line)
+                    // One callback at a time, including stderr. Once an event interrupts the
+                    // run, suppress later progress and terminate through the same STOP path.
+                    let shouldStop = streamFailure.withLock { failure in
+                        guard failure == nil else { return false }
+                        do { try onLine(line); return false }
+                        catch { failure = error; return true }
+                    }
+                    if shouldStop { holder.terminate() }
                 }
                 let group = DispatchGroup()
                 for (pipe, sink, prefix) in [(outPipe, outSink, ""), (errPipe, errSink, "stderr: ")] {
@@ -1564,6 +1572,7 @@ actor CodexCLI {
                 watchdog.cancel()
                 group.wait()
 
+                if let failure = streamFailure.withLock({ $0 }) { cont.resume(throwing: failure); return }
                 if timedOut.withLock({ $0 }) { cont.resume(throwing: CLIError.timedOut(after: timeout)); return }
                 cont.resume(returning: ExecResult(status: proc.terminationStatus,
                                                   stdout: outSink.text, stderr: errSink.text))

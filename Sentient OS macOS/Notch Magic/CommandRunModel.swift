@@ -30,6 +30,7 @@ final class CommandRunModel {
     static let offlineMessage = "You're currently not connected to internet. Try again later"
 
     var isRunning = false
+    private(set) var isPreparing = false
     /// Keep the offline reason visible while the cancelled backend unwinds.
     var statusLine: String {
         get { isOffline ? Self.offlineMessage : progressLine }
@@ -92,10 +93,8 @@ final class CommandRunModel {
         section = ""
         remembering = nil
         rememberClear?.cancel()
-        // While the router decides (1-3s, and only when connectors exist) the honest opener is
-        // the established thinking beat; the chosen route sets the real opening line.
-        statusLine = CommandRouter.isActive ? "Thinking through your task"
-                                            : "Starting \(mode.promptPhrase)…"
+        isPreparing = true
+        statusLine = "Preparing Sidekick…"
         watchConnectivity()
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
         // History: read the block BEFORE recording this run — a task must never see itself.
@@ -110,16 +109,17 @@ final class CommandRunModel {
                         self?.complete(.stopped, line: "■ stopped")
                         return
                     }
-                    // Snap every display NOW so computer use sees exactly what the user is looking at, on
-                    // whichever screen. OPTIONAL + grant-gated: empty if the Screen Recording grant is
-                    // missing → the run goes text-only (the grant is asked once, behind an info panel that
-                    // states exactly what is captured and why). The frames go to the user's OWN codex /
-                    // OpenAI (the same trust boundary as their ChatGPT) — NEVER a Sentient server — and the
-                    // local temp files are deleted the moment codex is done (the defer below).
-                    let shots = await ScreenCapture.grab()
-                    defer { ScreenCapture.discard(shots) }
-                    let kb = await Self.knowledgeContext()
                     do {
+                        try await ComputerUseGate.shared.waitUntilReady()
+                        try Task.checkCancellation()
+                        self?.isPreparing = false
+                        self?.statusLine = CommandRouter.isActive ? "Thinking through your task"
+                                                                 : "Starting \(mode.promptPhrase)…"
+                        // Capture after required permissions settle. Frames go to the user's
+                        // own model provider and are deleted when this request ends.
+                        let shots = await ScreenCapture.grab()
+                        defer { ScreenCapture.discard(shots) }
+                        let kb = await Self.knowledgeContext()
                         try Task.checkCancellation()
                         // The router: a command whose ENTIRE task fits one connector's tools takes the
                         // screen-free spine; everything else — and any router doubt, error, or timeout —
@@ -196,9 +196,11 @@ final class CommandRunModel {
                         }
                     } catch {
                         let secs = Int(Date().timeIntervalSince(started))
-                        if Task.isCancelled {
+                        if Task.isCancelled || error is CancellationError {
                             Log("──────── 🤖 ■ STOPPED after \(secs)s ────────")
                             self?.complete(.stopped, line: "■ stopped")
+                        } else if let interruption = error as? ComputerUseStream.Interruption {
+                            self?.complete(.failed, line: interruption.localizedDescription, error: interruption)
                         } else {
                             Log("──────── 🤖 ✗ FAILED after \(secs)s ────────")
                             Log("CMD: \(ErrorLabel(error))")
@@ -429,6 +431,7 @@ final class CommandRunModel {
         isOffline = false
         statusLine = line
         isRunning = false
+        isPreparing = false
         isExternal = false
         externalStop = nil
         task = nil
@@ -589,8 +592,9 @@ final class CommandRunModel {
         // §7.19: feed the executor scoreboard (this IS the command-bar / voice computer-use path).
         // Skip .stopped — that's a user cancel, not a health outcome. `fired` is now
         // sentinel-verified when statusPresent; without the sentinel it stays a flagged claim.
-        // An offline interruption is expected environment state, not an executor defect.
-        let resolved = isOffline ? nil : (board ?? (outcome == .success ? .fired : (outcome == .failed ? .failed : nil)))
+        // Offline and browser-interaction interruptions are expected environment state.
+        let resolved = isOffline || error is ComputerUseStream.Interruption ? nil
+            : (board ?? (outcome == .success ? .fired : (outcome == .failed ? .failed : nil)))
         if let resolved {
             ExecutorScoreboard.record(method: executedMethod, source: source, outcome: resolved,
                                       durationS: Date().timeIntervalSince(runStarted),

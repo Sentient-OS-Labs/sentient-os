@@ -133,14 +133,13 @@ nonisolated enum OpenAIComputerUse {
         }
     }
 
+    /// Local integrity and signature checks only. The required MCP connection authenticates at
+    /// task execution; setup and repair can explicitly run OpenAIComputerUseProbe as a diagnostic.
     @discardableResult
-    @concurrent static func validate(at app: URL, configuration supplied: Configuration? = nil) async throws -> Installation {
+    @concurrent static func validate(at app: URL) async throws -> Installation {
         if !(CodexRuntimeMigration.isPending && app.resolvingSymlinksInPath() == CodexRuntimeMigration.legacyHelper.resolvingSymlinksInPath()) {
             try CodexRuntime.verify(CodexRuntime.release.helper, at: app)
         }
-        let configuration: Configuration
-        if let selected = supplied { configuration = selected }
-        else { configuration = try await .resolveForSetup() }
         guard let installation = installation(at: app) else { throw RuntimeError.incomplete }
         if let data = try? Data(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
            let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
@@ -156,19 +155,6 @@ nonisolated enum OpenAIComputerUse {
                 stdinText: nil, cwd: nil, timeout: 30)
             guard result.status == 0 else { throw RuntimeError.invalidSignature }
         }
-        // An MCP initialize handshake is read-only and does not inspect any app or require a
-        // model call. It catches a signed but incompatible/missing client at setup time.
-        let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sentient-setup","version":"1"}}}"# + "\n"
-        let probe = try await CodexCLI.executeAsync(binary: app.appendingPathComponent(clientRelativePath).path,
-            args: ["mcp"], stdinText: initialize, cwd: nil, timeout: 15,
-            extraEnv: configuration.clientEnvironment)
-        let initialized = probe.stdout.split(separator: "\n").contains { line in
-            guard let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  message["id"] as? Int == 1, let result = message["result"] as? [String: Any],
-                  let capabilities = result["capabilities"] as? [String: Any] else { return false }
-            return capabilities["tools"] != nil
-        }
-        guard probe.status == 0, initialized else { throw RuntimeError.incomplete }
         try Task.checkCancellation()
         return installation
     }
