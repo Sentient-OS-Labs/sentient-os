@@ -1,4 +1,4 @@
-// Owns one recovery question, its editable answer, and the visible/return-window timers.
+// Owns a clarification or final error, its editable guidance, and the visible/return-window timers.
 // Answers and cancellation consume a presentation once; stale UI events cannot affect a new one.
 // Doc: Documentation - Sidekick - General.md
 
@@ -22,8 +22,28 @@ nonisolated struct SidekickQuestion: Sendable, Equatable {
     }
 
     enum ValidationError: Error { case invalidQuestion }
-    static func failure(_ message: String) -> Self {
-        try! Self(error: message, question: "How would you like to continue?", answers: ["Try again", "Stop this task"])
+}
+
+/// Model questions always have two answers. A final error offers only editable retry guidance.
+nonisolated enum SidekickRecoveryContent: Sendable, Equatable {
+    case clarification(SidekickQuestion)
+    case failure(id: UUID, error: String)
+
+    var id: UUID {
+        switch self {
+        case .clarification(let question): question.id
+        case .failure(let id, _): id
+        }
+    }
+    var error: String? {
+        switch self {
+        case .clarification(let question): question.error
+        case .failure(_, let error): error
+        }
+    }
+    var question: SidekickQuestion? {
+        if case .clarification(let question) = self { return question }
+        return nil
     }
 }
 
@@ -68,10 +88,9 @@ nonisolated struct SidekickRecoveryTiming {
 
 @MainActor @Observable
 final class SidekickRecovery {
-    private(set) var question: SidekickQuestion?
+    private(set) var content: SidekickRecoveryContent?
     var draft = "Try again"
     private(set) var isVisible = false
-    private(set) var isFallback = false
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored private var resolve: ((SidekickAnswer?) -> Void)?
     @ObservationIgnored private var timing: SidekickRecoveryTiming?
@@ -82,13 +101,14 @@ final class SidekickRecovery {
     @ObservationIgnored private var taskAborted = false
     @ObservationIgnored private var interruptedDraft: String?
 
-    var isPending: Bool { question != nil }
+    var isPending: Bool { content != nil }
 
-    func present(_ question: SidekickQuestion, fallback: Bool = false,
+    func present(_ content: SidekickRecoveryContent,
                  resolve: @escaping (SidekickAnswer?) -> Void) {
-        if let old = self.question { interrupt(id: old.id) }
-        self.question = question; draft = fallback ? (interruptedDraft ?? "Try again") : "Try again"
-        interruptedDraft = nil; isVisible = true; isFallback = fallback
+        if let old = self.content { interrupt(id: old.id) }
+        self.content = content
+        draft = content.question == nil ? (interruptedDraft ?? "Try again") : "Try again"
+        interruptedDraft = nil; isVisible = true
         hovering = false; focused = false; timing = .init(now: Self.now)
         self.resolve = resolve
         onChange?(); schedule()
@@ -98,7 +118,7 @@ final class SidekickRecovery {
         try Task.checkCancellation()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                present(question) { answer in
+                present(.clarification(question)) { answer in
                     if let answer { continuation.resume(returning: answer) }
                     else {
                         if !self.taskAborted { onCancel() }
@@ -113,10 +133,10 @@ final class SidekickRecovery {
 
     func answer(id: UUID, choice: Int? = nil, text: String? = nil) {
         expireIfNeeded()
-        guard let question, question.id == id, isVisible else { return }
+        guard let content, content.id == id, isVisible else { return }
         let value: String
         if let choice {
-            guard question.answers.indices.contains(choice) else { return }
+            guard let question = content.question, question.answers.indices.contains(choice) else { return }
             value = question.answers[choice]
         } else { value = text ?? draft }
         guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -124,18 +144,18 @@ final class SidekickRecovery {
     }
 
     func cancel(id: UUID? = nil) {
-        if question == nil, id == nil { interruptedDraft = nil }
-        guard let question, id == nil || question.id == id else { return }
+        if content == nil, id == nil { interruptedDraft = nil }
+        guard let content, id == nil || content.id == id else { return }
         interruptedDraft = nil; consume(nil)
     }
     private func interrupt(id: UUID) {
-        guard question?.id == id else { return }
+        guard content?.id == id else { return }
         interruptedDraft = draft; taskAborted = true; consume(nil); taskAborted = false
     }
 
     private func consume(_ answer: SidekickAnswer?) {
         let callback = resolve
-        resolve = nil; question = nil; timing = nil; draft = "Try again"
+        resolve = nil; content = nil; timing = nil; draft = "Try again"
         isVisible = false; hovering = false; focused = false; timer?.cancel(); timer = nil
         timerGeneration &+= 1
         onChange?()
@@ -143,13 +163,13 @@ final class SidekickRecovery {
     }
 
     func dismiss() {
-        guard question != nil else { return }
+        guard content != nil else { return }
         timing?.dismiss(now: Self.now); hovering = false; focused = false
         isVisible = false; onChange?(); schedule()
     }
 
     @discardableResult func reopen() -> Bool {
-        guard question != nil else { return false }
+        guard content != nil else { return false }
         if timing?.reopen(now: Self.now) == true {
             isVisible = true; onChange?(); schedule(); return true
         }

@@ -247,9 +247,9 @@ final class CommandRunModel {
         let generation = runID
         let retry = retryAction
         let detail = lastAttemptDetail.isEmpty ? line : line + "\n" + lastAttemptDetail
-        recovery.present(.failure(line), fallback: true) { [weak self] answer in
+        recovery.present(.failure(id: UUID(), error: line)) { [weak self] answer in
             guard let self, self.runID == generation else { return }
-            guard let answer, answer.selectedAnswer != 1 else { self.stop(); return }
+            guard let answer else { self.stop(); return }
             guard let retry else { self.recoveryCancelled = true; return }
             let context = SidekickInteraction.retryInstructions(error: detail, guidance: answer.text)
             let resume = { [weak self] in
@@ -817,7 +817,7 @@ final class CommandRunModel {
 
         \(servicesLine)\(Self.injectionGuard)
 
-        When blocked or needing a meaningful decision, use the Sidekick recovery tool if available. Ask through that tool instead of ending the task with a question in prose. If the tool is unavailable, report the complete blocker honestly.
+        Follow the shared SIDEKICK RECOVERY policy: resolve routine obstacles yourself and ask through the recovery tool only for a remaining blocker that needs the user. If a necessary question cannot be asked through the tool, report the complete blocker honestly and stop.
         \(contextLine)
         \(cardContext.isEmpty ? "" : "\n\(cardContext)\n")
         \(Self.knowledgeBlock(kbContext))

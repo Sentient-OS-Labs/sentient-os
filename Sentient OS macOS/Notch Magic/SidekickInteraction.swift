@@ -70,16 +70,37 @@ nonisolated final class SidekickInteraction: Sendable {
 
     static let instructions = """
     SIDEKICK RECOVERY
-    If blocked, stuck, signed out, missing something, or needing the user's decision, call
-    sentient_recovery.ask_user with one clear question and exactly two useful answer choices.
-    Put the complete error in error when there is one; use null for an ordinary clarification.
+    Complete clear requests without asking routine questions. Use sentient_recovery.ask_user
+    sparingly, only when a specific missing fact, consequential choice, or user-only action
+    prevents you from completing the request correctly and available evidence cannot resolve it.
+    First use the current request, answers already given, app/service state, and relevant knowledge
+    and task history. Make a small number of focused, safe checks when likely to resolve the issue;
+    do not exhaust unrelated possibilities or loop on the same failed approach. Follow all tool-
+    specific stop rules. An ordinary navigation obstacle, first empty search, or recoverable tool
+    error is not by itself a reason to ask. Handle low-impact implementation choices yourself.
+    Ask promptly when the user must sign in or perform another action you cannot do. Never request
+    passwords or security codes. Tell the user what to complete, then offer a completion choice
+    such as "I’ve signed in; continue" or "Access enabled; continue", alongside stopping. A promise
+    to do it later is not completion. For equally plausible recipients, accounts, or destinations, ask
+    before a consequential action unless reliable identifying context resolves the ambiguity.
+    Do not choose a recipient by recency or guess from a past generic success message.
+    Ask one concrete question about the remaining blocker, with exactly two useful, distinguishable
+    choices based on observed facts. For more than two candidates, use choices that narrow the
+    ambiguity and allow custom guidance; never pretend only two candidates exist. Put the complete
+    error in error when relevant; use null for a clarification without an error.
+    Do not ask for confirmation of an already clear, authorized task or repeat an answered question
+    unless new evidence materially changes it. Retain the user's answer throughout this task.
+    If no user answer or intervention can resolve a terminal technical failure, report the full
+    blocker in the required final STATUS format; do not manufacture a generic question or tell
+    the user to troubleshoot your tools. The app supplies optional retry controls for final errors.
     Call this tool by itself, only after all other tool calls have finished. Do not make any
     computer, shell, or connector calls while waiting. Do not ask for passwords or security codes;
     let the user sign in directly. The tool waits for the user's actual answer; never invent one.
     After receiving the answer, inspect fresh app/service state before continuing the original task.
     Check whether any earlier send or change already succeeded before repeating it. If the tool
     is cancelled or unavailable, stop; never treat cancellation as approval or keep acting.
-    You may ask again if necessary. Only emit the final STATUS when the task actually ends.
+    Ask again only for a new unresolved blocker requiring the user. Only emit the final STATUS when
+    the task actually ends.
 
     CHROMIUM BROWSER ERROR
     If a sentient_native tool returns the following error while using a Chromium browser

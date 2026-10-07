@@ -196,7 +196,7 @@ actor SidekickQuestionServer {
         ["isError": true, "content": [["type": "text", "text": "Ask one nonempty question with exactly two distinct, concise answers. Only one question may be pending, and all other tool calls must finish first. Do not reuse an earlier request ID with changed arguments."]]]
     }
     private static var tool: [String: Any] {
-        ["name": "ask_user", "description": "Pause Sidekick and ask the user for help in the notch. Returns only their actual answer. Call alone after other tools finish; never act while waiting.",
+        ["name": "ask_user", "description": "Ask only when a specific missing fact, consequential ambiguity, or user-only action blocks the task after relevant context and reasonable safe checks. Handle routine obstacles yourself; do not repeat answered questions or use this for generic failure/retry prompts. Ask one concrete question with two useful choices. Returns only the user’s actual answer. Call alone after other tools finish; never act while waiting.",
          "inputSchema": ["type": "object", "properties": [
             "error": ["type": ["string", "null"], "description": "The complete error to display, or null for a clarification."],
             "question": ["type": "string", "minLength": 1, "maxLength": 500],

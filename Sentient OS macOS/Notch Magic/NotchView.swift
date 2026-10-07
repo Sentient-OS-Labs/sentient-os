@@ -68,7 +68,7 @@ struct NotchMetrics: Equatable {
     /// Size for a phase. When a voice read-back is showing, the running notch grows DOWN to fit the whole
     /// heard instruction (capped at `maxReadBackLines`); once it dissolves to the codex line it shrinks back.
     func size(for phase: NotchPhase, readBack: String? = nil, remembering: String? = nil,
-              recoveryQuestion: SidekickQuestion? = nil) -> CGSize {
+              recoveryContent: SidekickRecoveryContent? = nil) -> CGSize {
         switch phase {
         case .hidden:
             // Retract target: collapse to the EXACT hardware notch (radius matched in `radii`) so the black
@@ -90,8 +90,8 @@ struct NotchMetrics: Equatable {
             else { caption = captionHeight }
             return CGSize(width: runningWidth, height: runningHeight(caption: caption))
         case .recovery:
-            if let recoveryQuestion { return SidekickRecoveryLayout(question: recoveryQuestion, metrics: self).size }
-            // Without a question, return the maximum so the panel reserves a fixed canvas.
+            if let recoveryContent { return SidekickRecoveryLayout(content: recoveryContent, metrics: self).size }
+            // Without content, return the maximum so the panel reserves a fixed canvas.
             return CGSize(width: min(520, availableSize.width - 40), height: min(240, availableSize.height - 80))
         case .notice:
             return CGSize(width: max(baseWidth + 120, 320), height: baseHeight + captionHeight + bottomPad)
@@ -221,7 +221,7 @@ struct NotchContent: View {
         let hoverIdle = hovering && phase == .hidden     // the swollen click affordance — idle only
         let size = hoverIdle ? metrics.hoverSize
                              : metrics.size(for: phase, readBack: readBack, remembering: remembering,
-                                            recoveryQuestion: recovery?.question)
+                                            recoveryContent: recovery?.content)
         let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: phase)
         let visible = phase != .hidden
         // The notch sits FLUSH at the screen's top edge — its concave top corners visible on the bezel
@@ -266,7 +266,7 @@ struct NotchContent: View {
         .animation(morph, value: phase)
         .animation(morph, value: readBack)               // grow/shrink the notch as the read-back appears/clears
         .animation(morph, value: remembering)            // shrink back to one line when "Remembering" takes over
-        .animation(morph, value: recovery?.question?.id) // successive questions can need different heights
+        .animation(morph, value: recovery?.content?.id) // successive presentations can need different heights
         .animation(hoverMorph, value: hovering)          // the hover swell/settle — snappier than the phase morph
         .onChange(of: phase) { _, newPhase in
             if newPhase == .typing {
@@ -326,10 +326,10 @@ struct NotchContent: View {
             }
             .frame(height: metrics.topRowHeight)
 
-            if phase == .recovery, let recovery, let question = recovery.question {
-                SidekickRecoveryView(recovery: recovery, question: question,
-                                     layout: SidekickRecoveryLayout(question: question, metrics: metrics))
-                    .id(question.id)
+            if phase == .recovery, let recovery, let content = recovery.content {
+                SidekickRecoveryView(recovery: recovery, content: content,
+                                     layout: SidekickRecoveryLayout(content: content, metrics: metrics))
+                    .id(content.id)
                     .transition(.opacity)
             } else if phase == .typing {
                 typingField
