@@ -23,6 +23,8 @@ enum FactoryReset {
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil) async -> Bool {
+        // Invalidate in-flight learning before any suspension; explicit settings survive.
+        SidekickInstructionStore.resetLearning()
         await HostedConnectorSetup.beginTeardown()
         defer { HostedConnectorSetup.endTeardown() }
         // Retain contact records and their local identity, like invitation access. Reset clears

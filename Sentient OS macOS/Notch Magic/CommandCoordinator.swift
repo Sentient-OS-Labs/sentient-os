@@ -215,7 +215,7 @@ final class CommandCoordinator {
             deferredSubmission = nil
             setPhase(.hidden)
         }
-        if phase == .running, readBack != nil, run.remembering == nil { setPhase(.hidden) }
+        if phase == .running, readBack != nil, run.remembering == nil && !run.isPersonalizing { setPhase(.hidden) }
         run.stop()
     }
 
@@ -689,7 +689,7 @@ final class CommandCoordinator {
             return true
         // Only while the transcript is actually shown (readBack up AND not yet replaced by "Remembering") —
         // not once computer use is working, so Esc stays free for the user's own apps then.
-        case .running where readBack != nil && run.remembering == nil:
+        case .running where readBack != nil && run.remembering == nil && !run.isPersonalizing:
             stop()                       // transcript shown → stop() dismisses instantly (no flourish), run cancelled
             Log("notch transcript cancelled (Esc) — immediate dismiss")
             return true

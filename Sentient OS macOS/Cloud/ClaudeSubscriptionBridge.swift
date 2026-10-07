@@ -19,7 +19,7 @@ actor ClaudeSubscriptionBridge {
     private let model: String
     private let effort: String
     private let interaction: SidekickInteraction?
-    private var transportTimeout: TimeInterval { timeout + (interaction == nil ? 0 : SidekickQuestionServer.maximumWait) }
+    private var transportTimeout: TimeInterval { timeout + (interaction == nil ? 0 : SidekickToolServer.maximumWait) }
     private let timeout: TimeInterval
     private let namespaces: Set<String>
     private let onProgress: @Sendable (String) -> Void

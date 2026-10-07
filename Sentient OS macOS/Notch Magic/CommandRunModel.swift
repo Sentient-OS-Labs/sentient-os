@@ -41,6 +41,8 @@ final class CommandRunModel {
     /// While codex is reading the knowledge base, the note it's on (relative path; "" = whole vault).
     /// Drives the gradient, blooming "Remembering …" in the notch. nil = not reading the KB.
     private(set) var remembering: String?
+    /// Real instruction proposals, never a keyword inferred from agent narration.
+    private(set) var isPersonalizing = false
     private(set) var mode: AgentMode = .computer // the in-flight run's channel (the notch shows only for .computer)
 
     /// Starts the finishing presentation, including immediately on an offline interruption.
@@ -83,12 +85,14 @@ final class CommandRunModel {
     private var executedMethod = "computer"      // which spine finished the run ("computer" / "mcp") —
                                                  // the scoreboard + analytics method tag
     private var connectorRecoveryContext = ""
+    private var personalizationTaskID = UUID()
+    private var retryGuidance: String?
 
     func start(_ text: String, mode: AgentMode, source: String = "command", retryContext: String = "") {
         guard !isRunning else { return }
         let task0 = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !task0.isEmpty else { return }
-        prepareRecovery(context: retryContext) { [weak self] guidance in
+        prepareRecovery(context: retryContext, userRequest: task0) { [weak self] guidance in
             self?.start(task0, mode: mode, source: source, retryContext: retryContext + guidance)
         }
         let generation = runID
@@ -132,6 +136,7 @@ final class CommandRunModel {
                         // own model provider and are deleted when this request ends.
                         let shots = await ScreenCapture.grab()
                         defer { ScreenCapture.discard(shots) }
+                        self?.interaction?.personalization?.recordScreenshots(count: shots.count)
                         let kb = await Self.knowledgeContext()
                         try Task.checkCancellation()
                         // The router: a command whose ENTIRE task fits one connector's tools takes the
@@ -141,7 +146,8 @@ final class CommandRunModel {
                         // every leg; card fires never pass through here (beginExternalRun skips start()).
                         let routerRan = CommandRouter.isActive   // skipped → no telemetry row either
                         let routerStart = Date()
-                        if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation) = await CommandRouter.route(task0, cardContext: cardContext) {
+                        if case .connector(let slug, let name, let operation, let mailOperation, let calendarOperation) = await CommandRouter.route(task0, cardContext: cardContext,
+                            standingInstructions: self?.interaction?.instructionsSnapshot?.promptBlock ?? "") {
                             let routerMs = Int(Date().timeIntervalSince(routerStart) * 1000)
                             try Task.checkCancellation()   // a STOP during routing must never keep going
                             if try await self?.connectorLeg(task0, slug: slug, name: name, operation: operation, mailOperation: mailOperation, calendarOperation: calendarOperation,
@@ -225,12 +231,24 @@ final class CommandRunModel {
         }
     }
 
-    private func prepareRecovery(context: String, retry: ((String) -> Void)?) {
+    private func prepareRecovery(context: String, userRequest: String? = nil, retry: ((String) -> Void)?) {
+        interaction?.personalization?.finish(success: false)
         recovery.cancel()
         runID = UUID(); recoveryCancelled = false; queuedRetry = nil
+        isPersonalizing = false
+        if context.isEmpty { personalizationTaskID = UUID(); retryGuidance = nil }
         retryAction = retry; lastAttemptDetail = ""
         let generation = runID
-        interaction = SidekickInteraction(retryContext: context, historyContext: SidekickHistory.promptBlock()) { [weak self] question in
+        let snapshot = CustomInstructions.sidekickSnapshot()
+        let personalization = SidekickPersonalization(snapshot: snapshot, taskID: personalizationTaskID,
+            request: userRequest, retryGuidance: retryGuidance) { [weak self] active in
+                guard let self, self.runID == generation else { return }
+                self.isPersonalizing = active && self.isRunning && !self.recoveryCancelled && !self.isOffline
+                if self.isPersonalizing { self.clearRemembering() }
+            }
+        retryGuidance = nil
+        interaction = SidekickInteraction(retryContext: context, historyContext: SidekickHistory.promptBlock(),
+            instructionsSnapshot: snapshot, personalization: personalization) { [weak self] question in
             guard let self, self.runID == generation, self.isRunning, !self.isOffline, !self.recoveryCancelled else { throw CancellationError() }
             self.clearRemembering()
             if let error = question.error { SidekickHistory.recordError(error, for: self.historyID) }
@@ -254,6 +272,7 @@ final class CommandRunModel {
             let context = SidekickInteraction.retryInstructions(error: detail, guidance: answer.text)
             let resume = { [weak self] in
                 guard let self, self.runID == generation else { return }
+                self.retryGuidance = answer.text
                 retry(context); self.onRecoveryResumed?()
             }
             if self.isRunning { self.queuedRetry = resume }
@@ -344,6 +363,7 @@ final class CommandRunModel {
         }
         // The narrated fallback: one honest notch line, then the SAME run continues on screen
         // (the caller). Seeded into `recent` so the computer leg's first lines join below it.
+        interaction?.personalization?.discardProposal()
         executedMethod = "computer"
         let note = "\(name)'s tools couldn't finish this. Doing it on screen instead."
         recent = [note]
@@ -371,6 +391,7 @@ final class CommandRunModel {
     func stop() {
         guard !recoveryCancelled else { return }
         recoveryCancelled = true; queuedRetry = nil
+        interaction?.personalization?.finish(success: false)
         recovery.cancel()
         guard isRunning else { return }
         stopWatchingConnectivity()
@@ -484,6 +505,10 @@ final class CommandRunModel {
         let line = alreadyFinishing || (!isDemo && outcome == .failed && NetworkSnapshot.shared.current.status == "unsatisfied")
             ? Self.offlineMessage : line
         stopWatchingConnectivity()
+        if !isDemo {
+            interaction?.personalization?.finish(success: outcome == .success && !recoveryCancelled)
+        }
+        isPersonalizing = false
         if !isDemo { SidekickHistory.close(historyID, outcome: outcome, line: line) }
         historyID = nil
         clearRemembering()
@@ -527,6 +552,7 @@ final class CommandRunModel {
         guard !Task.isCancelled, isRunning, !isDemo, !isOffline,
               NetworkSnapshot.shared.current.status == "unsatisfied" else { return false }
         isOffline = true
+        interaction?.personalization?.finish(success: false)
         clearRemembering()
         stopWatchingConnectivity()
         presentFailure(Self.offlineMessage)
@@ -540,7 +566,7 @@ final class CommandRunModel {
     }
 
     private func push(_ line: String) {
-        guard isRunning, !isOffline else { return }
+        guard isRunning, !isOffline, !isPersonalizing else { return }
 
         // Strip codex's stderr channel tag — BEFORE trimming, so a bare "stderr:" (empty line) vanishes
         // instead of flashing in the bar.
@@ -799,7 +825,8 @@ final class CommandRunModel {
         let servicesLine = services.isEmpty ? "" : "\(services)\n\n"
         // The user's standing Sidekick context (Settings → Proactive & Sidekick) — preferred apps,
         // browser, norms. Empty string when they've set none, so the prompt is unchanged by default.
-        let context = CustomInstructions.sidekick
+        // Live runs receive one frozen snapshot through SidekickInteraction on every route.
+        let context = SidekickInteraction.current == nil ? CustomInstructions.sidekick : ""
         let contextLine = context.isEmpty ? ""
             : "\nStanding preferences I've set for you (apply them wherever they're relevant to this task): \(context)\n"
         // Only ChatGPT carries its hosted Gmail tools into the Codex computer task.

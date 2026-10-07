@@ -10,11 +10,14 @@ nonisolated final class SidekickInteraction: Sendable {
     let id = UUID()
     let retryContext: String
     let historyContext: String
+    let instructionsSnapshot: SidekickInstructionStore.Snapshot?
+    let personalization: SidekickPersonalization?
     let request: @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer
     private struct Wait: Sendable {
         var began: TimeInterval?
         var total: TimeInterval = 0
         var activeTools: Set<String> = []
+        var updatingInstructions = false
     }
     enum Failure: LocalizedError {
         case toolWhileWaiting
@@ -22,12 +25,18 @@ nonisolated final class SidekickInteraction: Sendable {
     }
     private let wait = OSAllocatedUnfairLock(initialState: Wait())
 
-    init(retryContext: String = "", historyContext: String = "", request: @escaping @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer) {
+    init(retryContext: String = "", historyContext: String = "",
+         instructionsSnapshot: SidekickInstructionStore.Snapshot? = nil,
+         personalization: SidekickPersonalization? = nil,
+         request: @escaping @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer) {
         self.retryContext = retryContext; self.historyContext = historyContext; self.request = request
+        self.instructionsSnapshot = instructionsSnapshot; self.personalization = personalization
     }
     /// A snapshot taken before this request was recorded, shared by computer and connector legs.
     var promptInstructions: String {
         Self.instructions + (historyContext.isEmpty ? "" : "\n\n" + historyContext) + retryContext
+            + "\n\n" + (instructionsSnapshot?.promptBlock ?? "")
+            + "\n\n" + (personalization?.promptInstructions ?? "")
     }
 
     var hasActiveTools: Bool { wait.withLock { !$0.activeTools.isEmpty } }
@@ -37,7 +46,7 @@ nonisolated final class SidekickInteraction: Sendable {
     }
     func ask(_ question: SidekickQuestion) async throws -> SidekickAnswer {
         guard wait.withLock({ state in
-            guard state.began == nil, state.activeTools.isEmpty else { return false }
+            guard state.began == nil, state.activeTools.isEmpty, !state.updatingInstructions else { return false }
             state.began = ProcessInfo.processInfo.systemUptime; return true
         }) else { throw SidekickQuestion.ValidationError.invalidQuestion }
         defer {
@@ -46,7 +55,20 @@ nonisolated final class SidekickInteraction: Sendable {
                 state.began = nil
             }
         }
-        return try await request(question)
+        personalization?.discardProposal()
+        let answer = try await request(question)
+        personalization?.recordAnswer(question.id, text: answer.text)
+        return answer
+    }
+
+    func updateInstructions(_ review: SidekickPersonalization.Review) async throws -> String {
+        guard let personalization else { throw SidekickPersonalization.Failure.unavailable }
+        guard wait.withLock({ state in
+            guard state.began == nil, state.activeTools.isEmpty, !state.updatingInstructions else { return false }
+            state.updatingInstructions = true; return true
+        }) else { throw SidekickPersonalization.Failure.unavailable }
+        defer { wait.withLock { $0.updatingInstructions = false } }
+        return try await personalization.stage(review)
     }
 
     /// Observe structured executor events only. Refuse a question while a computer call is
@@ -54,18 +76,34 @@ nonisolated final class SidekickInteraction: Sendable {
     func observeToolEvent(_ line: String) throws {
         guard let data = line.data(using: .utf8),
               let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let kind = event["type"] as? String,
-              let item = event["item"] as? [String: Any], let id = item["id"] as? String,
-              let type = item["type"] as? String,
-              ["mcp_tool_call", "command_execution", "web_search"].contains(type),
-              item["server"] as? String != SidekickQuestionServer.name else { return }
-        try wait.withLock { state in
-            if kind == "item.completed" { state.activeTools.remove(id) }
-            else if kind == "item.started" {
-                guard state.began == nil else { throw Failure.toolWhileWaiting }
-                state.activeTools.insert(id)
+              let kind = event["type"] as? String else { return }
+        var changes: [(id: String, started: Bool)] = []
+        if let item = event["item"] as? [String: Any], let id = item["id"] as? String,
+           let type = item["type"] as? String, ["mcp_tool_call", "command_execution", "web_search"].contains(type),
+           item["server"] as? String != SidekickToolServer.name {
+            if kind == "item.started" { changes.append((id, true)) }
+            if kind == "item.completed" { changes.append((id, false)) }
+        } else if let message = event["message"] as? [String: Any],
+                  let blocks = message["content"] as? [[String: Any]] {
+            // Claude's connector spine uses stream-json instead of Codex item events.
+            for block in blocks {
+                if kind == "assistant", block["type"] as? String == "tool_use",
+                   let id = block["id"] as? String, let name = block["name"] as? String,
+                   !name.hasPrefix("mcp__\(SidekickToolServer.name)__") { changes.append((id, true)) }
+                if kind == "user", block["type"] as? String == "tool_result",
+                   let id = block["tool_use_id"] as? String { changes.append((id, false)) }
             }
         }
+        let updates = changes
+        try wait.withLock { state in
+            for change in updates {
+                if change.started {
+                    guard state.began == nil, !state.updatingInstructions else { throw Failure.toolWhileWaiting }
+                    state.activeTools.insert(change.id)
+                } else { state.activeTools.remove(change.id) }
+            }
+        }
+        if updates.contains(where: \.started) { personalization?.discardProposal() }
     }
 
     static let instructions = """

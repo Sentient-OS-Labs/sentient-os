@@ -755,7 +755,7 @@ actor CodexCLI {
             let nativeConfiguration = try OpenAIComputerUse.Configuration.resolve()
             nativeTask = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: nativeConfiguration)
             try Task.checkCancellation()
-            var overrides = SidekickQuestionServer.connection?.codexOverrides ?? []
+            var overrides = SidekickToolServer.connection?.codexOverrides ?? []
             var environment = nativeConfiguration.clientEnvironment
             if backend == .claude {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
@@ -763,7 +763,7 @@ actor CodexCLI {
                 // tool activity needed by Sidekick recovery.
                 onLine("codex")
                 let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName }
-                    + (SidekickQuestionServer.connection == nil ? [] : ["mcp__sentient_recovery"]))
+                    + (SidekickToolServer.connection == nil ? [] : ["mcp__sentient_recovery"]))
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
                     timeout: timeout, namespaces: namespaces, onProgress: onLine)
                 bridge = relay
@@ -1371,6 +1371,14 @@ actor CodexCLI {
         // whole; stdout LINE-streams to `onStdoutLine` (when present) so callers see codex's --json
         // play-by-play live, while still accumulating the full buffer for parseEnvelope.
         let outDrain = PipeDrain(), errDrain = PipeDrain()
+        let interactionViolated = OSAllocatedUnfairLock(initialState: false)
+        let observeInteraction: @Sendable (String) -> Void = { line in
+            do { try interaction?.observeToolEvent(line) }
+            catch {
+                interactionViolated.withLock { $0 = true }
+                procHolder?.terminate()
+            }
+        }
         let drained = DispatchGroup()
         drained.enter()
         DispatchQueue.global(qos: .utility).async {
@@ -1380,7 +1388,7 @@ actor CodexCLI {
         drained.enter()
         DispatchQueue.global(qos: .utility).async {
             let handle = outPipe.fileHandleForReading
-            guard onStdoutLine != nil || retainStdoutLine != nil else {
+            guard onStdoutLine != nil || retainStdoutLine != nil || interaction != nil else {
                 outDrain.set(handle.readDataToEndOfFile())     // no streaming → drain whole
                 drained.leave(); return
             }
@@ -1392,6 +1400,7 @@ actor CodexCLI {
                 if retainStdoutLine == nil { all.append(chunk) }
                 while let nl = buf.firstIndex(of: 0x0A) {
                     let line = String(decoding: buf[..<nl], as: UTF8.self)
+                    observeInteraction(line)
                     onStdoutLine?(line)
                     if retainStdoutLine?(line) == true { all.append(Data((line + "\n").utf8)) }
                     buf = Data(buf[buf.index(after: nl)...])
@@ -1399,6 +1408,7 @@ actor CodexCLI {
             }
             if !buf.isEmpty {
                 let line = String(decoding: buf, as: UTF8.self)
+                observeInteraction(line)
                 onStdoutLine?(line)
                 if retainStdoutLine?(line) == true { all.append(buf) }
             }
@@ -1435,6 +1445,7 @@ actor CodexCLI {
         watchdog.cancel()
         drained.wait()
 
+        if interactionViolated.withLock({ $0 }) { throw SidekickInteraction.Failure.toolWhileWaiting }
         if timedOut.withLock({ $0 }) { throw CLIError.timedOut(after: timeout) }
         return ExecResult(status: proc.terminationStatus, stdout: outDrain.text, stderr: errDrain.text)
     }
