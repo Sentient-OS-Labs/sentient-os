@@ -1,4 +1,4 @@
-// The expanded notch's error, two immediate answers, and separate editable steering field.
+// The expanded notch shows an error or a clarification with two answers, plus editable guidance.
 // Draft and timing live in SidekickRecovery, so dismissing or moving displays cannot erase them.
 // Doc: Documentation - Sidekick - Notch Window & Visual.md
 import SwiftUI
@@ -29,34 +29,34 @@ struct SidekickRecoveryLayout {
     let errorHeight: CGFloat
     let answerWidth: CGFloat
 
-    init(question: SidekickQuestion, metrics: NotchMetrics) {
+    init(content: SidekickRecoveryContent, metrics: NotchMetrics) {
         let maximum = metrics.size(for: .recovery)
         let textWidth = maximum.width - 2 * (metrics.hPad + Self.scrollHPad)
         let buttonWidth = (textWidth - Self.answerSpacing) / 2
         answerWidth = buttonWidth
-        let questionHeight = Self.height(question.question, font: Self.questionFont, width: textWidth)
-        let answersHeight = question.answers.map {
+        let questionHeight = content.question.map { Self.height($0.question, font: Self.questionFont, width: textWidth) } ?? 0
+        let answersHeight = (content.question?.answers ?? []).map {
             max(18, Self.height($0, font: Self.answerFont, width: buttonWidth - 2 * Self.answerPadding))
                 + 2 * Self.answerPadding
         }.max() ?? 0
         let chromeHeight = metrics.topRowHeight + metrics.topPad + metrics.bottomPad
             + Self.topPad + Self.bottomPad + Self.fieldSpacing + Self.fieldHeight
         let availableScrollHeight = max(0, maximum.height - chromeHeight)
-        let questionAndAnswersHeight = questionHeight + Self.sectionSpacing
-            + answersHeight + 2 * Self.scrollVPad
-        let errorChrome = Self.labelHeight + 6 + Self.sectionSpacing
+        let questionAndAnswersHeight = questionHeight + answersHeight + 2 * Self.scrollVPad
+            + (content.question == nil ? 0 : Self.sectionSpacing)
+        let errorChrome = Self.labelHeight + 6 + (content.question == nil ? 0 : Self.sectionSpacing)
         // Give the question and answers room first. A long error can scroll in the remaining
         // space; long questions/answers still scroll as a group above the fixed input.
-        errorHeight = question.error.map {
+        errorHeight = content.error.map {
             let lineHeight = Self.errorLineHeight
-            let available = min(64, max(lineHeight + 2 * Self.errorVPad,
+            let available = min(content.question == nil ? availableScrollHeight : 64, max(lineHeight + 2 * Self.errorVPad,
                                        availableScrollHeight - questionAndAnswersHeight - errorChrome))
             let lines = max(1, floor((available - 2 * Self.errorVPad) / lineHeight))
             // Whole lines and an inset keep the first/last lines clear of the scroll edges.
             return min(Self.height($0, font: Self.errorFont, width: textWidth), lines * lineHeight)
                 + 2 * Self.errorVPad
         } ?? 0
-        let contentHeight = questionAndAnswersHeight + (question.error == nil ? 0 : errorChrome + errorHeight)
+        let contentHeight = questionAndAnswersHeight + (content.error == nil ? 0 : errorChrome + errorHeight)
         scrollHeight = min(contentHeight, availableScrollHeight)
         size = CGSize(width: maximum.width, height: chromeHeight + scrollHeight)
     }
@@ -72,7 +72,7 @@ struct SidekickRecoveryLayout {
 
 struct SidekickRecoveryView: View {
     @Bindable var recovery: SidekickRecovery
-    let question: SidekickQuestion
+    let content: SidekickRecoveryContent
     let layout: SidekickRecoveryLayout
     @FocusState private var fieldFocused: Bool
 
@@ -80,9 +80,9 @@ struct SidekickRecoveryView: View {
         VStack(alignment: .leading, spacing: SidekickRecoveryLayout.fieldSpacing) {
             ScrollView {
                 VStack(alignment: .leading, spacing: SidekickRecoveryLayout.sectionSpacing) {
-                    if let error = question.error {
+                    if let error = content.error {
                         VStack(alignment: .leading, spacing: 6) {
-                            Label("Sidekick needs your help", systemImage: "exclamationmark.circle")
+                            Label(content.question == nil ? "Sidekick couldn’t finish" : "Sidekick needs your help", systemImage: "exclamationmark.circle")
                                 .font(Font(SidekickRecoveryLayout.labelFont))
                                 .frame(height: SidekickRecoveryLayout.labelHeight, alignment: .leading)
                                 .foregroundStyle(Color(red: 1, green: 0.65, blue: 0.58))
@@ -100,24 +100,26 @@ struct SidekickRecoveryView: View {
                             .accessibilityLabel("Complete error")
                         }
                     }
-                    Text(question.question)
-                        .font(Font(SidekickRecoveryLayout.questionFont))
-                        .foregroundStyle(.white)
-                        .fixedSize(horizontal: false, vertical: true)
-                    HStack(alignment: .top, spacing: SidekickRecoveryLayout.answerSpacing) {
-                        ForEach(question.answers.indices, id: \.self) { index in
-                            Button { recovery.answer(id: question.id, choice: index) } label: {
-                                Text(question.answers[index])
-                                    .font(Font(SidekickRecoveryLayout.answerFont))
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
-                                    .padding(SidekickRecoveryLayout.answerPadding)
-                                    .frame(width: layout.answerWidth, alignment: .leading)
-                                    .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
-                                    .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.16)))
-                            }
-                            .buttonStyle(.plain)
+                    if let question = content.question {
+                        Text(question.question)
+                            .font(Font(SidekickRecoveryLayout.questionFont))
                             .foregroundStyle(.white)
+                            .fixedSize(horizontal: false, vertical: true)
+                        HStack(alignment: .top, spacing: SidekickRecoveryLayout.answerSpacing) {
+                            ForEach(question.answers.indices, id: \.self) { index in
+                                Button { recovery.answer(id: question.id, choice: index) } label: {
+                                    Text(question.answers[index])
+                                        .font(Font(SidekickRecoveryLayout.answerFont))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
+                                        .padding(SidekickRecoveryLayout.answerPadding)
+                                        .frame(width: layout.answerWidth, alignment: .leading)
+                                        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+                                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.16)))
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.white)
+                            }
                         }
                     }
                 }
@@ -166,5 +168,5 @@ struct SidekickRecoveryView: View {
         }
         .allowsHitTesting(false)
     }
-    private func send() { recovery.answer(id: question.id) }
+    private func send() { recovery.answer(id: content.id) }
 }

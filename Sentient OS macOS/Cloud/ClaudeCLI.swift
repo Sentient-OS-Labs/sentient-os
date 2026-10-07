@@ -414,8 +414,8 @@ actor ClaudeCLI {
         }
         #endif
         var environment = Self.environment(for: invocation)
-        if SidekickQuestionServer.connection != nil {
-            environment["MCP_TOOL_TIMEOUT"] = String(Int(SidekickQuestionServer.maximumWait * 1_000))
+        if SidekickToolServer.connection != nil {
+            environment["MCP_TOOL_TIMEOUT"] = String(Int(SidekickToolServer.maximumWait * 1_000))
         }
         let out = try await CodexCLI.executeAsync(binary: bin,
                                                   args: args,
@@ -556,7 +556,12 @@ actor ClaudeCLI {
         }
         recipeAllows += direct.flatMap(\.allAllowed)
         recipeDenies += direct.flatMap(\.denied)
-        if SidekickQuestionServer.connection != nil { recipeAllows.append("mcp__sentient_recovery__ask_user") }
+        if SidekickToolServer.connection != nil {
+            recipeAllows.append("mcp__sentient_recovery__ask_user")
+            if SidekickInteraction.current?.personalization != nil {
+                recipeAllows.append("mcp__sentient_recovery__" + SidekickPersonalization.toolName)
+            }
+        }
 
         var args = ["-p",
                     "--output-format", "stream-json", "--verbose",
@@ -644,7 +649,7 @@ actor ClaudeCLI {
         if !allowed.isEmpty { args += ["--allowedTools", allowed.joined(separator: ",")] }
         if !disallowed.isEmpty { args += ["--disallowedTools", disallowed.joined(separator: ",")] }
         if let schema = inv.outputSchema { args += ["--json-schema", schema] }
-        return try SidekickQuestionServer.addToClaudeArguments(args)
+        return try SidekickToolServer.addToClaudeArguments(args)
     }
 
     /// `{"allowedMcpServers":[{"serverName":"cua_driver"},{"serverUrl":"https://host/*"},…]}` —

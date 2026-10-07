@@ -68,7 +68,7 @@ struct NotchMetrics: Equatable {
     /// Size for a phase. When a voice read-back is showing, the running notch grows DOWN to fit the whole
     /// heard instruction (capped at `maxReadBackLines`); once it dissolves to the codex line it shrinks back.
     func size(for phase: NotchPhase, readBack: String? = nil, remembering: String? = nil,
-              recoveryQuestion: SidekickQuestion? = nil) -> CGSize {
+              personalizing: Bool = false, recoveryContent: SidekickRecoveryContent? = nil) -> CGSize {
         switch phase {
         case .hidden:
             // Retract target: collapse to the EXACT hardware notch (radius matched in `radii`) so the black
@@ -85,13 +85,13 @@ struct NotchMetrics: Equatable {
         case .running, .finishing:
             let caption: CGFloat
             if case .finishing(.failed) = phase { caption = captionHeight * 2 }        // room for the 2-line ✗ reason
-            else if remembering != nil { caption = captionHeight }                     // single "Remembering …" line
+            else if remembering != nil || personalizing { caption = captionHeight } // one context-status line
             else if readBack?.isEmpty == false { caption = readBackCaptionHeight(readBack!) }
             else { caption = captionHeight }
             return CGSize(width: runningWidth, height: runningHeight(caption: caption))
         case .recovery:
-            if let recoveryQuestion { return SidekickRecoveryLayout(question: recoveryQuestion, metrics: self).size }
-            // Without a question, return the maximum so the panel reserves a fixed canvas.
+            if let recoveryContent { return SidekickRecoveryLayout(content: recoveryContent, metrics: self).size }
+            // Without content, return the maximum so the panel reserves a fixed canvas.
             return CGSize(width: min(520, availableSize.width - 40), height: min(240, availableSize.height - 80))
         case .notice:
             return CGSize(width: max(baseWidth + 120, 320), height: baseHeight + captionHeight + bottomPad)
@@ -173,6 +173,7 @@ struct NotchView: View {
                      readBack: coordinator.readBack,
                      statusLine: coordinator.run.statusLine,
                      remembering: coordinator.run.remembering,
+                     personalizing: coordinator.run.isPersonalizing,
                      hovering: coordinator.notchHovering,
                      demoText: coordinator.demoDraft,
                      showStop: !coordinator.run.isDemo,
@@ -194,6 +195,7 @@ struct NotchContent: View {
     let readBack: String?
     let statusLine: String
     var remembering: String? = nil
+    var personalizing = false
     /// The cursor is over the IDLE notch (the click-to-type affordance): the shell swells with a
     /// drop shadow — no glow, no content — and a click opens the type field. Honored only while
     /// `.hidden`; any real phase owns the shape.
@@ -220,8 +222,8 @@ struct NotchContent: View {
     var body: some View {
         let hoverIdle = hovering && phase == .hidden     // the swollen click affordance — idle only
         let size = hoverIdle ? metrics.hoverSize
-                             : metrics.size(for: phase, readBack: readBack, remembering: remembering,
-                                            recoveryQuestion: recovery?.question)
+                             : metrics.size(for: phase, readBack: readBack, remembering: remembering, personalizing: personalizing,
+                                            recoveryContent: recovery?.content)
         let radii = hoverIdle ? metrics.hoverRadii : metrics.radii(for: phase)
         let visible = phase != .hidden
         // The notch sits FLUSH at the screen's top edge — its concave top corners visible on the bezel
@@ -265,8 +267,9 @@ struct NotchContent: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(morph, value: phase)
         .animation(morph, value: readBack)               // grow/shrink the notch as the read-back appears/clears
+        .animation(morph, value: personalizing)
         .animation(morph, value: remembering)            // shrink back to one line when "Remembering" takes over
-        .animation(morph, value: recovery?.question?.id) // successive questions can need different heights
+        .animation(morph, value: recovery?.content?.id) // successive presentations can need different heights
         .animation(hoverMorph, value: hovering)          // the hover swell/settle — snappier than the phase morph
         .onChange(of: phase) { _, newPhase in
             if newPhase == .typing {
@@ -326,10 +329,10 @@ struct NotchContent: View {
             }
             .frame(height: metrics.topRowHeight)
 
-            if phase == .recovery, let recovery, let question = recovery.question {
-                SidekickRecoveryView(recovery: recovery, question: question,
-                                     layout: SidekickRecoveryLayout(question: question, metrics: metrics))
-                    .id(question.id)
+            if phase == .recovery, let recovery, let content = recovery.content {
+                SidekickRecoveryView(recovery: recovery, content: content,
+                                     layout: SidekickRecoveryLayout(content: content, metrics: metrics))
+                    .id(content.id)
                     .transition(.opacity)
             } else if phase == .typing {
                 typingField
@@ -465,7 +468,13 @@ struct NotchContent: View {
         switch phase {
         case .running:
             Group {
-                if let remembering {
+                if personalizing {
+                    Text("Personalizing Sidekick…")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Self.rememberingGradient)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityLabel("Personalizing Sidekick")
+                } else if let remembering {
                     rememberingCaption(remembering)                 // gradient, blooming "Remembering" + the note
                 } else if let readBack {
                     Text(NotchMetrics.quoted(readBack))              // the heard instruction, in quotes — wraps in full
@@ -507,9 +516,10 @@ struct NotchContent: View {
         }
     }
 
-    /// 3-way identity for the running caption, so switching remembering ⇄ read-back ⇄ status blur-dissolves
+    /// Distinct identities let personalization, remembering, read-back and progress blur-dissolve.
     /// (note / status changes WITHIN a state morph in place instead).
     private var runningCaptionKey: Int {
+        if personalizing { return 3 }
         if remembering != nil { return 2 }
         if readBack != nil { return 1 }
         return 0

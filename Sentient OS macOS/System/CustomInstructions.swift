@@ -25,6 +25,9 @@ enum CustomInstructions {
     static var proactive: String { value(proactiveKey) }
     /// The Sidekick context, trimmed ("" when the user has set none).
     static var sidekick: String { value(sidekickKey) }
+    /// Both the existing settings field and automatic learning write the same production key.
+    @MainActor static func saveSidekick(_ text: String) { SidekickInstructionStore.saveUserEdit(text) }
+    @MainActor static func sidekickSnapshot() -> SidekickInstructionStore.Snapshot { SidekickInstructionStore.snapshot() }
     static var doubleTap: String { value(doubleTapKey) }
 
     private static func value(_ key: String) -> String {

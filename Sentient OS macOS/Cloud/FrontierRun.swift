@@ -98,9 +98,9 @@ enum FrontierRun {
                     return try await DirectMCPRuntime.execute(direct) {
                         Diagnostics.step(.request)
                         let result: CodexCLI.Envelope
-                        result = try await SidekickQuestionServer.withConnection(enabled: prepared.mcpActionServer != nil) {
+                        result = try await SidekickToolServer.withConnection(enabled: prepared.mcpActionServer != nil) {
                             var interactive = prepared
-                            if let connection = SidekickQuestionServer.connection {
+                            if let connection = SidekickToolServer.connection {
                                 interactive.prompt += "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions)
                                 interactive.configOverrides += connection.codexOverrides
                             }
@@ -188,8 +188,8 @@ enum FrontierRun {
                     let fullPrompt = computerPrompt + (services.isEmpty ? "" : "\n\nDIRECT CONNECTED ACCOUNTS (use these exact accounts):\n\(services)\nPrefer these tools when they fit the requested task. Never repeat an uncertain write without checking whether it already succeeded.")
                         + (guidance.isEmpty ? "" : "\n\n" + guidance)
                     return try await DirectMCPRuntime.execute(attachments) {
-                        return try await SidekickQuestionServer.withConnection {
-                            let interactive = fullPrompt + (SidekickQuestionServer.connection == nil ? "" :
+                        return try await SidekickToolServer.withConnection {
+                            let interactive = fullPrompt + (SidekickToolServer.connection == nil ? "" :
                                 "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions))
                             return try await CodexCLI.shared.runAgentCommand(interactive, imagePaths: imagePaths,
                                                                              timeout: timeout, onLine: onLine)

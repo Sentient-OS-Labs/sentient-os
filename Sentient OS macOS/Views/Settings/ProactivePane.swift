@@ -46,8 +46,9 @@ struct ProactivePane: View {
                         }
                         SettingsHairline(opacity: 0.10)
                         VStack(alignment: .leading, spacing: 12) {
-                            instructionLabel("Custom instructions", detail: "Your preferred apps, habits, and anything Sidekick should remember.")
-                            SettingsTextBox(placeholder: "Use WhatsApp for messages and Safari for browsing.", text: $sidekickContext)
+                            instructionLabel("Custom instructions", detail: "Sidekick learns your preferences as you work. Edit its instructions anytime.")
+                            SettingsTextBox(placeholder: "Use WhatsApp for messages and Safari for browsing.", text: Binding(
+                                get: { sidekickContext }, set: { CustomInstructions.saveSidekick($0) }))
                                 .frame(height: 104)
                                 .accessibilityLabel("Sidekick custom instructions")
                         }

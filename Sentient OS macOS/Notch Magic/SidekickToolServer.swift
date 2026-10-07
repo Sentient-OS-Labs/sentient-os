@@ -1,11 +1,11 @@
-// A per-invocation, authenticated loopback MCP tool that waits for a real notch answer.
-// The app owns listener, calls and cancellation; repeated RPC IDs reuse the same question/result.
+// Per-invocation authenticated MCP tools for real notch answers and automatic instruction updates.
+// The app owns listener, calls and cancellation; repeated RPC IDs reuse the same result.
 // Doc: Documentation - Sidekick - General.md
 
 import Foundation
 import Network
 
-actor SidekickQuestionServer {
+actor SidekickToolServer {
     nonisolated static let name = "sentient_recovery"
     nonisolated static let maximumWait: TimeInterval = 86_400
     @TaskLocal static var connection: Connection?
@@ -14,11 +14,11 @@ actor SidekickQuestionServer {
         let url: String
         let token: String
         var codexOverrides: [String] {
-            let key = "mcp_servers.\(SidekickQuestionServer.name)"
+            let key = "mcp_servers.\(SidekickToolServer.name)"
             return ["\(key).url=\(DirectMCPRuntime.quoted(url))",
                 "\(key).http_headers={Authorization=\(DirectMCPRuntime.quoted("Bearer " + token))}",
                 "\(key).default_tools_approval_mode=\"approve\"", "\(key).required=true",
-                "\(key).tool_timeout_sec=\(Int(SidekickQuestionServer.maximumWait))"]
+                "\(key).tool_timeout_sec=\(Int(SidekickToolServer.maximumWait))"]
         }
         var claudeServer: [String: Any] {
             ["type": "http", "url": url, "headers": ["Authorization": "Bearer " + token]]
@@ -34,7 +34,7 @@ actor SidekickQuestionServer {
     private var closed = false
     private struct Call {
         let fingerprint: Data
-        let task: Task<SidekickAnswer, Error>
+        let task: Task<Data, Error>
     }
     private var calls: [String: Call] = [:]
     private var activeCall: String?
@@ -67,7 +67,7 @@ actor SidekickQuestionServer {
         guard enabled, let interaction = SidekickInteraction.current else {
             return try await $connection.withValue(nil) { try await body() }
         }
-        let server = SidekickQuestionServer(interaction: interaction)
+        let server = SidekickToolServer(interaction: interaction)
         do {
             let configuration = try await server.start()
             let result = try await withTaskCancellationHandler {
@@ -154,38 +154,68 @@ actor SidekickQuestionServer {
         case "initialize":
             let params = rpc["params"] as? [String: Any]
             return try reply(["protocolVersion": params?["protocolVersion"] as? String ?? "2024-11-05",
-                "capabilities": ["tools": [:]], "serverInfo": ["name": "Sidekick recovery", "version": "1"]])
+                "capabilities": ["tools": [:]], "serverInfo": ["name": "Sidekick tools", "version": "2"]])
         case "ping": return try reply([:])
-        case "tools/list": return try reply(["tools": [Self.tool]])
+        case "tools/list":
+            return try reply(["tools": [Self.tool] + (interaction.personalization == nil ? [] : [SidekickPersonalization.tool])])
         case "tools/call":
-            guard let params = rpc["params"] as? [String: Any], params["name"] as? String == "ask_user",
-                  let arguments = params["arguments"] as? [String: Any],
-                  let question = arguments["question"] as? String, let answers = arguments["answers"] as? [String],
-                  Set(arguments.keys) == ["error", "question", "answers"],
-                  arguments["error"] is NSNull || arguments["error"] is String else {
+            guard let params = rpc["params"] as? [String: Any], let name = params["name"] as? String,
+                  let arguments = params["arguments"] as? [String: Any] else {
                 return try reply(Self.invalidArguments)
             }
             let key = String(decoding: try Self.json(id), as: UTF8.self)
-            let fingerprint = try Self.json(arguments)
+            let fingerprint = try Self.json(["name": name, "arguments": arguments])
             let call: Call
             if let existing = calls[key] {
                 guard existing.fingerprint == fingerprint else { return try reply(Self.invalidArguments) }
                 call = existing
             } else {
-                guard activeCall == nil, !interaction.hasActiveTools, calls.count < 64,
-                      let value = try? SidekickQuestion(error: arguments["error"] as? String, question: question, answers: answers) else {
+                guard activeCall == nil, !interaction.hasActiveTools, !interaction.isWaiting, calls.count < 64 else {
+                    if name == SidekickPersonalization.toolName {
+                        return try reply(await Self.rejectedPersonalization(SidekickPersonalization.Failure.unavailable))
+                    }
                     return try reply(Self.invalidArguments)
                 }
+                let action: @Sendable () async throws -> Data
+                if name == "ask_user" {
+                    guard let question = arguments["question"] as? String, let answers = arguments["answers"] as? [String],
+                          Set(arguments.keys) == ["error", "question", "answers"],
+                          arguments["error"] is NSNull || arguments["error"] is String,
+                          let value = try? SidekickQuestion(error: arguments["error"] as? String, question: question, answers: answers) else {
+                        return try reply(Self.invalidArguments)
+                    }
+                    action = { [interaction] in
+                        let answer = try await interaction.ask(value)
+                        var payload: [String: Any] = ["text": answer.text, "selectedAnswer": answer.selectedAnswer.map { $0 as Any } ?? NSNull()]
+                        if interaction.personalization != nil {
+                            payload["personalization_evidence_id"] = SidekickPersonalization.answerSource(value.id)
+                        }
+                        return try Self.json(payload)
+                    }
+                } else if name == SidekickPersonalization.toolName, interaction.personalization != nil {
+                    let review: SidekickPersonalization.Review
+                    do { review = try SidekickPersonalization.decode(arguments) }
+                    catch {
+                        return try reply(await Self.rejectedPersonalization(error))
+                    }
+                    action = { [interaction] in
+                        let message = try await interaction.updateInstructions(review)
+                        return try Self.json(["message": message])
+                    }
+                } else { return try reply(Self.invalidArguments) }
                 activeCall = key
-                call = Call(fingerprint: fingerprint, task: Task { [interaction] in try await interaction.ask(value) })
+                call = Call(fingerprint: fingerprint, task: Task { try await action() })
                 calls[key] = call
             }
             do {
-                let answer = try await call.task.value
+                let result = try await call.task.value
                 if activeCall == key { activeCall = nil }
-                return try reply(["content": [["type": "text", "text": String(decoding: try JSONEncoder().encode(answer), as: UTF8.self)]]])
+                return try reply(["content": [["type": "text", "text": String(decoding: result, as: UTF8.self)]]])
             } catch {
                 if activeCall == key { activeCall = nil }
+                if name == SidekickPersonalization.toolName {
+                    return try reply(await Self.rejectedPersonalization(error))
+                }
                 throw error
             }
         default: return try Self.json(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Method unavailable"]])
@@ -195,8 +225,24 @@ actor SidekickQuestionServer {
     private static var invalidArguments: [String: Any] {
         ["isError": true, "content": [["type": "text", "text": "Ask one nonempty question with exactly two distinct, concise answers. Only one question may be pending, and all other tool calls must finish first. Do not reuse an earlier request ID with changed arguments."]]]
     }
+    @MainActor private static func rejectedPersonalization(_ error: Error) -> [String: Any] {
+        let code = SidekickPersonalization.rejectionCode(error)
+        Log("Sidekick personalization: tool rejected reason=\(code)")
+        let hint: String
+        switch code {
+        case "invalid_review":
+            hint = "Use the exact tool schema. With changes, skip_reason must be null. With changes=[], supply skip_reason with a supported code and nonempty detail."
+        case "invalid_evidence":
+            hint = "Use the supplied revision and quote real user evidence exactly. Starting screens support observed choices only; a user-requested app needs no screenshot evidence."
+        case "invalid_change", "size_limit":
+            hint = "Use the supplied editable IDs and scopes. Keep changes small, single-line and within the tool limits. Preserve manual instructions."
+        default:
+            hint = "Settings changed, a preference was removed, or the task is unavailable. Finish the original task honestly without claiming a save."
+        }
+        return ["isError": true, "content": [["type": "text", "text": "Instructions were not saved (\(code)). \(hint)"]]]
+    }
     private static var tool: [String: Any] {
-        ["name": "ask_user", "description": "Pause Sidekick and ask the user for help in the notch. Returns only their actual answer. Call alone after other tools finish; never act while waiting.",
+        ["name": "ask_user", "description": "Ask only when a specific missing fact, consequential ambiguity, or user-only action blocks the task after relevant context and reasonable safe checks. Handle routine obstacles yourself; do not repeat answered questions or use this for generic failure/retry prompts. Ask one concrete question with two useful choices. Returns only the user’s actual answer. Call alone after other tools finish; never act while waiting.",
          "inputSchema": ["type": "object", "properties": [
             "error": ["type": ["string", "null"], "description": "The complete error to display, or null for a clarification."],
             "question": ["type": "string", "minLength": 1, "maxLength": 500],
