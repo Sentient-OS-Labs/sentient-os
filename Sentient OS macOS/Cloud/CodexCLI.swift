@@ -304,7 +304,6 @@ actor CodexCLI {
     /// The only CLI Sentient adopts. Global, Homebrew and desktop installations stay independent.
     static var managedBinaryPath: String { CodexRuntime.executable.path }
     static func locateBinary() -> String? {
-        if CodexRuntimeMigration.isPending, let legacy = CodexRuntimeMigration.legacyBinary { return legacy }
         return CodexRuntime.cliPresent ? managedBinaryPath : nil
     }
 
@@ -345,6 +344,7 @@ actor CodexCLI {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: bin)
         proc.terminationHandler = { _ in lease?.unlock() }
+        proc.currentDirectoryURL = CodexRuntime.home
         proc.arguments = CodexRuntime.arguments(["login"], binary: bin)
         proc.environment = CodexRuntime.environment(richEnvironment(binDir: (bin as NSString).deletingLastPathComponent), binary: bin)
         proc.standardInput = FileHandle.nullDevice
@@ -487,7 +487,7 @@ actor CodexCLI {
     }
 
     private static func backendFingerprint() -> String {
-        let runtime = "\(locateBinary() ?? "")|\(CodexRuntime.activeHome.path)|\(CodexRuntime.accountIdentity ?? "")"
+        let runtime = "\(locateBinary() ?? "")|\(CodexRuntime.home.path)|\(CodexRuntime.accountIdentity ?? "")"
         guard ModelBackend.current == .custom else { return "chatgpt|\(runtime)" }
         let p = CustomProvider.current
         return "custom|\(p.baseURL)|\(p.modelName)|\(runtime)"
@@ -1334,7 +1334,6 @@ actor CodexCLI {
                                 procHolder: ProcHolder? = nil, interaction: SidekickInteraction? = nil) throws -> ExecResult {
         let lease = try CodexRuntime.executionLease(for: binary, cancelled: { procHolder?.isCancelled == true })
         defer { lease?.unlock() }
-        let binary = CodexRuntime.binaryAfterLease(binary)
         if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
         if procHolder?.isCancelled == true { throw CancellationError() }
         let proc = Process()
@@ -1489,11 +1488,8 @@ actor CodexCLI {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let lease: CodexRuntime.FileLock?
-                let selected = binary
-                let binary: String
                 do {
-                    lease = try CodexRuntime.executionLease(for: selected, cancelled: { holder.isCancelled })
-                    binary = CodexRuntime.binaryAfterLease(selected)
+                    lease = try CodexRuntime.executionLease(for: binary, cancelled: { holder.isCancelled })
                     if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
                     if holder.isCancelled { throw CancellationError() }
                 } catch { cont.resume(throwing: error); return }

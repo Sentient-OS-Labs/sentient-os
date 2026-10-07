@@ -169,12 +169,12 @@ nonisolated struct CodexAuthSnapshot: Sendable {
 
     /// Read the file once. Cheap (a small JSON), synchronous, safe from any executor.
     static func read() -> CodexAuthSnapshot {
-        let url = CodexRuntime.activeAuth
+        let url = CodexRuntime.auth
         guard FileManager.default.fileExists(atPath: url.path) else {
             return CodexAuthSnapshot(mode: .none, plan: "unknown", accessExpired: nil,
                                      hasRefreshToken: false, minutesSinceRefresh: nil)
         }
-        guard let data = try? Data(contentsOf: url),
+        guard let data = try? CodexRuntime.readAuthData(),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return CodexAuthSnapshot(mode: .unreadable, plan: "unknown", accessExpired: nil,
                                      hasRefreshToken: false, minutesSinceRefresh: nil)

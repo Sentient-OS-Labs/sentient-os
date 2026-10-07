@@ -172,11 +172,16 @@ enum GoogleSourceRead {
         throw Failure.invalidResponse
     }
 
-    static func commit(bucket: String, notes: [NoteDraft], through date: Date, replace: Bool = false) async throws {
+    /// Keep the connection generation captured before reading. Opening provider settings may
+    /// invalidate it during a read or while the store actor is busy; neither may consume the
+    /// new generation's backfill by stamping an older read with the latest origin.
+    static func commit(bucket: String, notes: [NoteDraft], through date: Date,
+                       origin expectedOrigin: String, replace: Bool = false) async throws {
         try Task.checkCancellation()
+        guard origin(bucket: bucket) == expectedOrigin else { throw MCPSource.MCPError.connectionChanged }
         let result = await CycleStore.shared.commitMCPRead(bucketKey: bucket, notes: notes,
             through: ItemKey(order: date.timeIntervalSince1970, tiebreak: ""),
-            origin: origin(bucket: bucket), replaceNotes: replace)
+            origin: expectedOrigin, replaceNotes: replace)
         if result == .diskFull { throw CocoaError(.fileWriteOutOfSpace) }
         guard result == .saved else { throw Failure.storage }
     }

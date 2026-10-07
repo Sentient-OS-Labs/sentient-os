@@ -15,6 +15,8 @@ import SwiftUI
 
 struct FrontierModelPane: View {
 
+    @State private var tab: FrontierEngineTab = .chatgpt
+
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
 
     private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
@@ -23,7 +25,7 @@ struct FrontierModelPane: View {
         SettingsPane(title: "Frontier Model Choice",
                      whisper: "Choose the AI behind your knowledge, suggestions, and Sidekick.") {
             VStack(alignment: .leading, spacing: 26) {
-                FrontierEnginePicker {
+                FrontierEnginePicker(tab: $tab) {
                     chatgptPanel
                 }
                 SettingsDetails(title: "How your models work together") {

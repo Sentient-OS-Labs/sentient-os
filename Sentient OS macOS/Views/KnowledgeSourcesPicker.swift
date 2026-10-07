@@ -222,19 +222,24 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private var emailColumn: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        let mailSupported = AppleMailSource.isSupported
+        return VStack(alignment: .leading, spacing: 9) {
             KnowledgeSourcePill(label: "Gmail", asset: "GmailMark", selected: runGmail,
                                 featured: true, locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
                 connectorPill(source, featured: true)
             }
-            KnowledgeSourcePill(label: "Apple Mail", asset: "AppleMailMark",
-                                selected: !appleMailAccounts.isEmpty, featured: true) {
+            KnowledgeSourcePill(label: "Apple Mail", detail: mailSupported ? nil : "Requires macOS 26",
+                                asset: "AppleMailMark", selected: !appleMailAccounts.isEmpty,
+                                featured: true, locked: !mailSupported) {
                 showAppleMailPicker = true
             }
-            .accessibilityValue(appleMailAccounts.isEmpty ? "Not selected"
+            .saturation(mailSupported ? 1 : 0)
+            .accessibilityValue(!mailSupported ? "Requires macOS 26 or later"
+                : appleMailAccounts.isEmpty ? "Not selected"
                 : "\(AppleMailSelection.accounts.count) \(AppleMailSelection.accounts.count == 1 ? "account" : "accounts") selected for analysis")
-            .help("Choose which Apple Mail accounts to include.")
+            .help(mailSupported ? "Choose which Apple Mail accounts to include."
+                : "Apple Mail requires macOS 26 or later.")
         }
         .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
     }

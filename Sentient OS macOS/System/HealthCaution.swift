@@ -142,7 +142,7 @@ enum HealthCaution {
         let engineIsClaude = ModelBackend.current == .claude
         let engineBinaryPresent = engineIsClaude ? ClaudeCLI.locateBinary() != nil
                                                  : CodexCLI.locateBinary() != nil
-        if !CodexRuntimeMigration.isPending, !dismissed.contains("codex") {
+        if !dismissed.contains("codex") {
             if engineIsClaude {
                 if !engineBinaryPresent { return .claudeMissing }
                 if await !claudeLoggedIn(force: forceCodexRecheck) { return .claudeSignedOut }
@@ -160,7 +160,7 @@ enum HealthCaution {
         // so its hands and eyes are Sentient's own grants: probed directly, no FDA needed
         // (AXIsProcessTrusted answers live; the Screen Recording preflight is this process's view,
         // so the FDA-backed TCC read rides along as the live truth when it's available).
-        if !CodexRuntimeMigration.isPending, engineBinaryPresent, !dismissed.contains("computerUse") {
+        if engineBinaryPresent, !dismissed.contains("computerUse") {
             if !ComputerUseBackend.current.isInstalled || !ComputerUseSetup.current.ready {
                 // The update-migration window (ComputerUseUpgrade) presents on this exact state at
                 // home open, with the download as ITS one glowing fix — while it's up, a red

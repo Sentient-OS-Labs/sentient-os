@@ -45,44 +45,35 @@ nonisolated enum CodexRuntimeInstall {
         let candidate = component == .cli ? staging.appendingPathComponent("payload")
             : staging.appendingPathComponent("payload/Codex Computer Use.app")
         let unpack = staging.appendingPathComponent("payload")
-        let local = (component == .cli
-            ? CodexRuntimeMigration.legacyHome.appendingPathComponent("packages/standalone/current")
-            : CodexRuntimeMigration.legacyHelper).resolvingSymlinksInPath()
-        if !force, CodexRuntimeMigration.isPending, (try? CodexRuntime.verify(artifact, at: local)) != nil {
-            onLine("Preparing verified local software…")
-            if component == .helper { try CodexRuntime.directory(unpack) }
-            try fm.copyItem(at: local, to: candidate)
-        } else {
-            if (try? CodexRuntime.sha256(archive)) != artifact.sha256 {
-                try? fm.removeItem(at: archive)
-                onLine("Downloading \(component == .cli ? "Codex" : "computer use")…")
-                if artifact.url.isFileURL {
-                    try fm.copyItem(at: artifact.url, to: archive)
-                } else {
-                    try await DependencyDownload.run(artifact.url, to: archive, timeout: 1_800, resumeDataURL: resume) { fraction in
-                        if let fraction { onLine("Downloading \(component == .cli ? "Codex" : "computer use")… \(Int(fraction * 100))%") }
-                    }
+        if (try? CodexRuntime.sha256(archive)) != artifact.sha256 {
+            try? fm.removeItem(at: archive)
+            onLine("Downloading \(component == .cli ? "Codex" : "computer use")…")
+            if artifact.url.isFileURL {
+                try fm.copyItem(at: artifact.url, to: archive)
+            } else {
+                try await DependencyDownload.run(artifact.url, to: archive, timeout: 1_800, resumeDataURL: resume) { fraction in
+                    if let fraction { onLine("Downloading \(component == .cli ? "Codex" : "computer use")… \(Int(fraction * 100))%") }
                 }
             }
-            try Task.checkCancellation()
-            onLine("Verifying download…")
-            guard (try fm.attributesOfItem(atPath: archive.path)[.size] as? NSNumber)?.int64Value == artifact.bytes,
-                  try CodexRuntime.sha256(archive) == artifact.sha256 else {
-                try? fm.removeItem(at: archive); try? fm.removeItem(at: resume)
-                throw CodexRuntime.Failure.invalidPackage
-            }
-            try CodexRuntime.directory(unpack)
-            onLine("Preparing \(component == .cli ? "Codex" : "computer use")…")
-            // These approved archives contain only regular files and directories. Check both names
-            // and types before extraction; never allow absolute paths, links or special devices.
-            let listing = try await command("/usr/bin/tar", ["-tf", archive.path])
-            guard safeEntries(listing.stdout) else { throw CodexRuntime.Failure.invalidPackage }
-            let types = try await command("/usr/bin/tar", ["-tvf", archive.path])
-            guard types.stdout.split(separator: "\n").allSatisfy({ $0.first == "-" || $0.first == "d" }) else {
-                throw CodexRuntime.Failure.invalidPackage
-            }
-            _ = try await command("/usr/bin/tar", ["-xf", archive.path, "-C", unpack.path, "--no-same-owner"])
         }
+        try Task.checkCancellation()
+        onLine("Verifying download…")
+        guard (try fm.attributesOfItem(atPath: archive.path)[.size] as? NSNumber)?.int64Value == artifact.bytes,
+              try CodexRuntime.sha256(archive) == artifact.sha256 else {
+            try? fm.removeItem(at: archive); try? fm.removeItem(at: resume)
+            throw CodexRuntime.Failure.invalidPackage
+        }
+        try CodexRuntime.directory(unpack)
+        onLine("Preparing \(component == .cli ? "Codex" : "computer use")…")
+        // These approved archives contain only regular files and directories. Check both names
+        // and types before extraction; never allow absolute paths, links or special devices.
+        let listing = try await command("/usr/bin/tar", ["-tf", archive.path])
+        guard safeEntries(listing.stdout) else { throw CodexRuntime.Failure.invalidPackage }
+        let types = try await command("/usr/bin/tar", ["-tvf", archive.path])
+        guard types.stdout.split(separator: "\n").allSatisfy({ $0.first == "-" || $0.first == "d" }) else {
+            throw CodexRuntime.Failure.invalidPackage
+        }
+        _ = try await command("/usr/bin/tar", ["-xf", archive.path, "-C", unpack.path, "--no-same-owner"])
         try CodexRuntime.verify(artifact, at: candidate)
         try await validate(component, at: candidate)
         try Task.checkCancellation()
@@ -94,8 +85,8 @@ nonisolated enum CodexRuntimeInstall {
         if component == .helper {
             let running = await MainActor.run {
                 NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID).contains {
-                    $0.bundleURL?.resolvingSymlinksInPath() == destination.resolvingSymlinksInPath()
-                        || $0.bundleURL?.resolvingSymlinksInPath() == candidate.resolvingSymlinksInPath()
+                    $0.bundleURL?.standardizedFileURL == destination.standardizedFileURL
+                        || $0.bundleURL?.standardizedFileURL == candidate.standardizedFileURL
                 }
             }
             guard !running else { throw OpenAIComputerUse.RuntimeError.helperRunning }

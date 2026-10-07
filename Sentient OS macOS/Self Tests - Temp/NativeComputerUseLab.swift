@@ -12,8 +12,7 @@ nonisolated enum NativeComputerUseLab {
     private static var root: URL { URL(fileURLWithPath: env["LAB_ROOT"]!) }
     private static var output: URL { root.appendingPathComponent("evidence/\(env["LAB_NAME"] ?? "preflight").json") }
     private static var helper: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
-            ".codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient")
+        CodexRuntime.helper.appendingPathComponent(OpenAIComputerUse.clientRelativePath)
     }
 
     @MainActor static func run() async {
@@ -140,16 +139,22 @@ nonisolated enum NativeComputerUseLab {
     }
 
     private static func native(prompt: String, cancelAfter: Double?) async -> [String: Any] {
-        guard let cli = env["LAB_CLI_BINARY"] ?? CodexCLI.locateBinary() else { return ["error": "Codex CLI unavailable"] }
+        guard let cli = CodexCLI.locateBinary(),
+              let configuration = try? OpenAIComputerUse.Configuration(cliPath: cli) else {
+            return ["error": "Private Codex runtime unavailable"]
+        }
         let model = env["LAB_MODEL"] ?? "gpt-5.6-sol"
         var args = ["exec", "--ephemeral", "--skip-git-repo-check", "--ignore-user-config",
             "--dangerously-bypass-approvals-and-sandbox", "-m", model,
             "-c", "model_reasoning_effort=\"low\"", "-c", "features.apps=false", "-c", "features.plugins=false",
-            "-c", "mcp_servers.native_cua.command=\(quoted(env["LAB_NATIVE_HELPER"] ?? helper.path))",
+            "-c", "mcp_servers.native_cua.command=\(quoted(configuration.clientURL.path))",
             "-c", "mcp_servers.native_cua.args=[\"mcp\"]",
             "-c", "mcp_servers.native_cua.required=true",
             "-c", "mcp_servers.native_cua.startup_timeout_sec=30",
             "-c", "mcp_servers.native_cua.tool_timeout_sec=45"]
+        for (key, value) in configuration.clientEnvironment.sorted(by: { $0.key < $1.key }) {
+            args += ["-c", "mcp_servers.native_cua.env.\(key)=\(quoted(value))"]
+        }
         args.append(prompt)
         let began = Date()
         let task = Task {

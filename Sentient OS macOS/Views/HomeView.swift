@@ -67,6 +67,9 @@ struct HomeView: View {
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
     @State private var showCalendarConnect = false
+    @State private var codex = CodexSetup.shared
+    @State private var showCodexSignIn = false
+    @State private var dismissedCodexSignInReminder = false
     /// The morning-after caution (last night's scheduled run hit a known snag) — nil = no banner.
     @State private var caution: OvernightCaution.Record?
     /// Kept separately from whole-cycle failures: successfully processing the other sources
@@ -137,6 +140,7 @@ struct HomeView: View {
             } else {
                 showAnalysis = false
                 showShareKnowledge = false
+                showCodexSignIn = false
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -147,6 +151,16 @@ struct HomeView: View {
             // night's caution) — re-probe so the banner melts away the moment they return.
             withAnimation(.easeInOut(duration: 0.25)) { caution = OvernightCaution.latest() }
             probeHealth()
+            Task { await refreshCodexSignIn() }
+        }
+        .task(id: canCheckCodexSignIn) { await refreshCodexSignIn() }
+        .onChange(of: canOfferCodexSignIn) { _, _ in offerCodexSignInIfNeeded() }
+        .onChange(of: codex.loggedIn) { _, signedIn in
+            if signedIn {
+                showCodexSignIn = false
+                dismissedCodexSignInReminder = false
+                probeHealth(forceCodexRecheck: true)
+            }
         }
         .onChange(of: deck) { _, v in
             // The teardown's defaults wipe re-publishes the deck key — never re-deal mid-uninstall.
@@ -156,10 +170,16 @@ struct HomeView: View {
         .onChange(of: computerSetup.ready) { _, _ in probeHealth() }
         .onChange(of: computerSetup.isInstalling) { _, _ in probeHealth() }
         .onChange(of: ComputerUseGate.shared.automation) { _, _ in probeHealth() }
-        .onChange(of: backendRaw) { _, _ in probeHealth() }
+        .onChange(of: backendRaw) { _, _ in
+            if backendRaw != ModelBackend.chatgpt.rawValue { showCodexSignIn = false }
+            probeHealth()
+        }
         .onChange(of: appState.isUninstalling) { _, tearing in
             // Uninstall began → take every card off the table; a cancel deals them back in.
-            if tearing { withAnimation(.easeInOut(duration: 0.3)) { model.clear() } }
+            if tearing {
+                showCodexSignIn = false
+                withAnimation(.easeInOut(duration: 0.3)) { model.clear() }
+            }
             else { model.beginVisit(deck: deck) }
         }
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
@@ -178,6 +198,9 @@ struct HomeView: View {
         // Gmail / Calendar connect sheets — the SAME sheets Dev Tools opens (connect / select / remove).
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
+        .sheet(isPresented: $showCodexSignIn, onDismiss: {
+            Task { await refreshCodexSignIn() }
+        }) { ChatGPTSignInSheet() }
     }
 
     // MARK: Chrome — the top-bar nav + the editorial greeting
@@ -234,7 +257,17 @@ struct HomeView: View {
 
     private var cautionBanner: some View {
         Group {
-            if let issue = liveIssue {
+            if needsCodexSignIn && !dismissedCodexSignInReminder {
+                CautionCapsule(message: "Sign in to ChatGPT to keep Sentient working for you.",
+                               accent: Theme.Ink.amber, actionTitle: "Sign in",
+                               onAction: presentCodexSignIn,
+                               onDismiss: {
+                                   dismissedCodexSignInReminder = true
+                                   HealthCaution.dismiss(.codexSignedOut)
+                                   if case .codexSignedOut? = liveIssue { liveIssue = nil }
+                               })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if let issue = liveIssue {
                 CautionCapsule(message: issue.message, accent: Theme.Ink.red,
                                actionTitle: "Open Settings", onAction: openHealthSettings,
                                onDismiss: {
@@ -321,12 +354,49 @@ struct HomeView: View {
     /// cached codex login check (forced fresh while a codex banner is up, so a fix clears on the
     /// very next foreground). Quiet on pitch decks (demo cards must never share the stage with a
     /// red capsule) and on the free home (HealthCaution guards kbOnly too — defense in depth).
-    private func probeHealth() {
+    private func probeHealth(forceCodexRecheck: Bool = false) {
         guard deck == .real, !kbOnly else { return }
         Task {
-            let issue = await HealthCaution.probe(forceCodexRecheck: liveIssue?.kindKey == "codex")
+            let issue = await HealthCaution.probe(forceCodexRecheck: forceCodexRecheck || liveIssue?.kindKey == "codex")
             withAnimation(.easeInOut(duration: 0.25)) { liveIssue = issue }
         }
+    }
+
+    // A private login starts unknown. Wait for Codex installation before checking it,
+    // then offer sign-in once per app session; closing and reopening Home never re-prompts.
+    private var canCheckCodexSignIn: Bool {
+        appState.hasCompletedOnboarding && !appState.isUninstalling && isPresented && deck == .real
+            && backendRaw == ModelBackend.chatgpt.rawValue
+            && codex.installed && !codex.preparing && !codex.installing
+            && ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil
+    }
+
+    private var needsCodexSignIn: Bool {
+        canCheckCodexSignIn && codex.loginStatusChecked && !codex.loggedIn
+    }
+
+    private var canOfferCodexSignIn: Bool {
+        needsCodexSignIn && !appState.hasOfferedCodexSignIn
+            && !letterShown && !showAnalysis && !showShareKnowledge
+            && !showWhatsAppPicker && !showIMessagePicker && !showGmailConnect && !showCalendarConnect
+    }
+
+    private func refreshCodexSignIn() async {
+        guard canCheckCodexSignIn else { return }
+        await codex.refreshLoginStatus()
+        guard !Task.isCancelled, canCheckCodexSignIn else { return }
+        offerCodexSignInIfNeeded()
+    }
+
+    private func offerCodexSignInIfNeeded() {
+        guard canOfferCodexSignIn, NSApplication.shared.isActive else { return }
+        presentCodexSignIn()
+    }
+
+    private func presentCodexSignIn() {
+        guard needsCodexSignIn else { return }
+        appState.hasOfferedCodexSignIn = true
+        showCodexSignIn = true
     }
 
     private var greeting: String {

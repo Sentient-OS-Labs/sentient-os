@@ -87,11 +87,14 @@ enum GmailConnect {
     @discardableResult
     static func runInitial(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
-            try await readInitial(onProgress: onProgress, replaceNotes: true)
+            try Task.checkCancellation()
+            await HostedConnectorSetup.processingStarted(slug: "gmail")
+            return try await readInitial(onProgress: onProgress, replaceNotes: true)
         }
     }
 
     private static func readInitial(onProgress: @Sendable @escaping (Progress) -> Void, replaceNotes: Bool) async throws -> Int {
+        let origin = GoogleSourceRead.origin(bucket: bucketKey)
         let runStart = Date()
         let cal = Calendar.current
         let today = cal.startOfDay(for: runStart)
@@ -142,7 +145,7 @@ enum GmailConnect {
 
         // High-water mark = run start. Iterative reads everything after it (a few hours of overlap
         // is harmless — the cloud updater synthesizes — and beats a boundary gap).
-        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, replace: replaceNotes)
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, origin: origin, replace: replaceNotes)
         Log("GmailConnect.runInitial: ✅ \(recorded)/\(initialWeeks) weekly summaries recorded (parallel); pointer → \(runStart)")
         return recorded
     }
@@ -154,13 +157,16 @@ enum GmailConnect {
     @discardableResult
     static func runIterative(onProgress: @Sendable @escaping (Progress) -> Void = { _ in }) async throws -> Int {
         try await ModelBackend.$runOverride.withValue(ModelBackend.current) {
-            try await readIterative(onProgress: onProgress)
+            try Task.checkCancellation()
+            await HostedConnectorSetup.processingStarted(slug: "gmail")
+            return try await readIterative(onProgress: onProgress)
         }
     }
 
     private static func readIterative(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
+        let origin = GoogleSourceRead.origin(bucket: bucketKey)
         guard let checkpoint = try await CycleStore.shared.mcpCheckpoint(bucketKey),
-              checkpoint.origin == GoogleSourceRead.origin(bucket: bucketKey) else {
+              checkpoint.origin == origin else {
             return try await readInitial(onProgress: onProgress, replaceNotes: false)
         }
         let mark = checkpoint.mark
@@ -183,7 +189,7 @@ enum GmailConnect {
             onProgress(.windowDone(total: 1, label: sinceLabel,
                                    summary: nil, threads: 0, completed: 1, keptSoFar: 0))
         }
-        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart)
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, origin: origin)
         Log("GmailConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
         return recorded
     }

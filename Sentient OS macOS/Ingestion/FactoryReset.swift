@@ -23,6 +23,8 @@ enum FactoryReset {
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil) async -> Bool {
+        await HostedConnectorSetup.beginTeardown()
+        defer { HostedConnectorSetup.endTeardown() }
         // Retain contact records and their local identity, like invitation access. Reset clears
         // learned knowledge and app connections, not the founders' feedback contact list.
         do { try await DirectMCPConnections.shared.removeAll() }

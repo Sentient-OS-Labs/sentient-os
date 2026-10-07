@@ -18,6 +18,9 @@ nonisolated enum MCPCallEvidence {
         let arguments: Data?
         let output: Data?
         let status: Status
+        /// Native transport failures can live outside the MCP result (Codex's item.error).
+        /// Keep that diagnostic separate from provider content and successful read evidence.
+        var failure: Data? = nil
     }
 
     static func receipts(raw: String, backend: ModelBackend) -> [Receipt] {
@@ -102,13 +105,14 @@ nonisolated enum MCPCallEvidence {
             let server = item["server"] as? String
             let input = arguments(item["arguments"])
             let output = json(item["result"])
+            let failure = item["error"].flatMap { $0 is NSNull ? nil : json(["error": $0]) }
             if let old = calls[id] {
                 if old.tool != name || old.server != server
                     || (old.arguments != nil && input != nil && old.arguments != input) {
                     invalid.insert(id)
                 }
                 if old.status != .pending {
-                    if type == "item.completed", old.output != output { invalid.insert(id) }
+                    if type == "item.completed", old.output != output || old.failure != failure { invalid.insert(id) }
                     continue
                 }
             } else { order.append(id) }
@@ -119,7 +123,8 @@ nonisolated enum MCPCallEvidence {
                 && (item["error"] == nil || item["error"] is NSNull) && hasResult
                 && result?["isError"] as? Bool != true && result?["is_error"] as? Bool != true
             calls[id] = Receipt(id: id, server: server, tool: name, arguments: input ?? calls[id]?.arguments,
-                output: output, status: type == "item.completed" ? (success ? .succeeded : .failed) : .pending)
+                output: output, status: type == "item.completed" ? (success ? .succeeded : .failed) : .pending,
+                failure: failure)
         }
         return order.compactMap { id in
             guard let call = calls[id] else { return nil }

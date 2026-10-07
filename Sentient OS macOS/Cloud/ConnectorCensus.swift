@@ -228,9 +228,8 @@ nonisolated enum ConnectorCensus {
         switch origin {
         case .claude:  return "mcp.connectors.claude"
         case .chatgpt:
-            if CodexRuntimeMigration.isPending { return "mcp.connectors.chatgpt" }
             guard let account = CodexRuntime.accountIdentity else { return nil }
-            return "mcp.connectors.chatgpt.bundled.\(account)"
+            return "mcp.connectors.chatgpt.\(CodexRuntime.sessionScope).\(account)"
         case .direct:  return nil   // DirectMCPStore owns this tier; it is not a CLI census.
         }
     }
