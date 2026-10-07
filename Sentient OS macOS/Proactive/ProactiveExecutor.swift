@@ -261,7 +261,7 @@ actor ProactiveExecutor {
                                calendarCreationHash: String? = nil,
                                calendarIntentHash: String? = nil,
                                progress: @escaping @Sendable (String) -> Void) async -> FireResult {
-        var inv = CodexCLI.Invocation(prompt: await SidekickHistory.appendingErrors(to: prompt))
+        var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = feature
         inv.effort = .high                   // gpt-6-sol → high
         inv.sandbox = .readOnly              // Seatbelt ON — a connector action needs no shell/file writes
@@ -313,7 +313,7 @@ actor ProactiveExecutor {
         progress("Working on your Mac…")
         Log("ProactiveExecutor/computer: firing one computer-use task via codex (runAgentCommand)…")
         do {
-            let prompt = await SidekickHistory.appendingErrors(to: Self.computerWrapper(routing: routing, content: content))
+            let prompt = Self.computerWrapper(routing: routing, content: content)
             let out = try await FrontierRun.runAgentCommand(prompt,
                                                                 timeout: 900) { line in progress(line) }
             let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }

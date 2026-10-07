@@ -9,6 +9,7 @@ nonisolated final class SidekickInteraction: Sendable {
     @TaskLocal static var current: SidekickInteraction?
     let id = UUID()
     let retryContext: String
+    let historyContext: String
     let request: @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer
     private struct Wait: Sendable {
         var began: TimeInterval?
@@ -21,9 +22,14 @@ nonisolated final class SidekickInteraction: Sendable {
     }
     private let wait = OSAllocatedUnfairLock(initialState: Wait())
 
-    init(retryContext: String = "", request: @escaping @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer) {
-        self.retryContext = retryContext; self.request = request
+    init(retryContext: String = "", historyContext: String = "", request: @escaping @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer) {
+        self.retryContext = retryContext; self.historyContext = historyContext; self.request = request
     }
+    /// A snapshot taken before this request was recorded, shared by computer and connector legs.
+    var promptInstructions: String {
+        Self.instructions + (historyContext.isEmpty ? "" : "\n\n" + historyContext) + retryContext
+    }
+
     var hasActiveTools: Bool { wait.withLock { !$0.activeTools.isEmpty } }
     var isWaiting: Bool { wait.withLock { $0.began != nil } }
     var waitingSeconds: TimeInterval {

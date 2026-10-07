@@ -52,6 +52,7 @@ final class CommandRunModel {
     private(set) var runID = UUID()
     @ObservationIgnored private var retryAction: ((String) -> Void)?
     @ObservationIgnored private var queuedRetry: (() -> Void)?
+    private var historyID: UUID?
     private var recoveryCancelled = false
     private var lastAttemptDetail = ""
 
@@ -109,10 +110,9 @@ final class CommandRunModel {
         statusLine = "Preparing Sidekick…"
         watchConnectivity()
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
-        // History: read the block BEFORE recording this run — a task must never see itself.
-        let history = SidekickHistory.promptBlock()
+        // prepareRecovery captured the previous requests before this run enters history.
         let cardContext = SidekickCardContext.promptBlock(for: proactiveCards?() ?? [])
-        SidekickHistory.record(task0)
+        historyID = SidekickHistory.record(task0)
         let started = Date()
         Diagnostics.$current.withValue(Diagnostics.Operation("command")) {
             ModelBackend.$runOverride.withValue(ModelBackend.current) {
@@ -162,11 +162,10 @@ final class CommandRunModel {
                         // A canceled router also returns .computer. STOP must end the request
                         // before that fallback can start a new computer-use invocation.
                         try Task.checkCancellation()
-                        let basePrompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
-                                                        spoken: source == "voice", kbContext: kb, history: history,
+                        let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
+                                                        spoken: source == "voice", kbContext: kb,
                                                         cardContext: cardContext)
                             + (self?.connectorRecoveryContext ?? "")
-                        let prompt = SidekickHistory.appendingErrors(to: basePrompt)
                         Log("CMD: launching agent command (\(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
                         #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
                                     // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
@@ -231,10 +230,10 @@ final class CommandRunModel {
         runID = UUID(); recoveryCancelled = false; queuedRetry = nil
         retryAction = retry; lastAttemptDetail = ""
         let generation = runID
-        interaction = SidekickInteraction(retryContext: context) { [weak self] question in
+        interaction = SidekickInteraction(retryContext: context, historyContext: SidekickHistory.promptBlock()) { [weak self] question in
             guard let self, self.runID == generation, self.isRunning, !self.isOffline, !self.recoveryCancelled else { throw CancellationError() }
             self.clearRemembering()
-            if let error = question.error { SidekickHistory.recordError(error) }
+            if let error = question.error { SidekickHistory.recordError(error, for: self.historyID) }
             let answer = try await self.recovery.ask(question) { [weak self] in self?.stop() }
             guard self.runID == generation, self.isRunning, !self.recoveryCancelled else { throw CancellationError() }
             self.onRecoveryResumed?()
@@ -244,7 +243,7 @@ final class CommandRunModel {
 
     private func presentFailure(_ line: String) {
         guard !isDemo, !recoveryCancelled else { return }
-        SidekickHistory.recordError(line)
+        SidekickHistory.recordError(line, for: historyID)
         let generation = runID
         let retry = retryAction
         let detail = lastAttemptDetail.isEmpty ? line : line + "\n" + lastAttemptDetail
@@ -277,9 +276,8 @@ final class CommandRunModel {
         let generation = runID
         executedMethod = "mcp"
         statusLine = "Using \(name)'s tools…"
-        let basePrompt = Self.connectorPrompt(task: task0, name: name,
+        let prompt = Self.connectorPrompt(task: task0, name: name,
                                               screenshots: screenshots.count, kbContext: kbContext, cardContext: cardContext)
-        let prompt = SidekickHistory.appendingErrors(to: basePrompt)
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "sidekick-mcp"
         inv.effort = .medium
@@ -408,7 +406,7 @@ final class CommandRunModel {
         rememberClear?.cancel()
         statusLine = caption
         watchConnectivity()
-        SidekickHistory.record(caption, card: true)
+        historyID = SidekickHistory.record(caption, card: true)
     }
 
     /// One raw codex line from the adopted run, through the same cleaning a native run gets
@@ -486,7 +484,8 @@ final class CommandRunModel {
         let line = alreadyFinishing || (!isDemo && outcome == .failed && NetworkSnapshot.shared.current.status == "unsatisfied")
             ? Self.offlineMessage : line
         stopWatchingConnectivity()
-        if !isDemo { SidekickHistory.close(outcome, line: line, recordDisplayedError: false) }
+        if !isDemo { SidekickHistory.close(historyID, outcome: outcome, line: line) }
+        historyID = nil
         clearRemembering()
         isOffline = false
         statusLine = line
@@ -786,11 +785,10 @@ final class CommandRunModel {
     /// When `spoken` (the notch's mic), the agent is told the task is a speech-to-text transcript,
     /// so it reads through mis-transcriptions instead of taking them literally — but doesn't gamble on an
     /// uncertain reading when the outcome would be non-trivial.
-    /// `history` (from `SidekickHistory.promptBlock()`) inlines the recent requests + outcomes so
-    /// "finish this" / "try again" can resolve against the last run; "" leaves the prompt unchanged.
+    /// FrontierRun adds the per-run history snapshot through SidekickInteraction for every execution route.
     nonisolated static func commandPrompt(task: String, mode: AgentMode, screenshots: Int,
                                           spoken: Bool = false, kbContext: String = "",
-                                          history: String = "", cardContext: String = "") -> String {
+                                          cardContext: String = "") -> String {
         let voiceLine = spoken
             ? "\nThe task above was spoken by me and transcribed with speech-to-text. Use common sense for anything that may have been mis-transcribed; but if picking the wrong reading could have a non-trivial outcome, don't act on a guess.\n"
             : ""
@@ -820,7 +818,7 @@ final class CommandRunModel {
         \(servicesLine)\(Self.injectionGuard)
 
         When blocked or needing a meaningful decision, use the Sidekick recovery tool if available. Ask through that tool instead of ending the task with a question in prose. If the tool is unavailable, report the complete blocker honestly.
-        \(contextLine)\(history.isEmpty ? "" : "\n\(history)\n")
+        \(contextLine)
         \(cardContext.isEmpty ? "" : "\n\(cardContext)\n")
         \(Self.knowledgeBlock(kbContext))
         \(gmailLine)

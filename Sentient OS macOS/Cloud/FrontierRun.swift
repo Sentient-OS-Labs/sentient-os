@@ -101,7 +101,7 @@ enum FrontierRun {
                         result = try await SidekickQuestionServer.withConnection(enabled: prepared.mcpActionServer != nil) {
                             var interactive = prepared
                             if let connection = SidekickQuestionServer.connection {
-                                interactive.prompt += "\n\n" + SidekickInteraction.instructions + (SidekickInteraction.current?.retryContext ?? "")
+                                interactive.prompt += "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions)
                                 interactive.configOverrides += connection.codexOverrides
                             }
                             switch backend {
@@ -190,7 +190,7 @@ enum FrontierRun {
                     return try await DirectMCPRuntime.execute(attachments) {
                         return try await SidekickQuestionServer.withConnection {
                             let interactive = fullPrompt + (SidekickQuestionServer.connection == nil ? "" :
-                                "\n\n" + SidekickInteraction.instructions + (SidekickInteraction.current?.retryContext ?? ""))
+                                "\n\n" + (SidekickInteraction.current?.promptInstructions ?? SidekickInteraction.instructions))
                             return try await CodexCLI.shared.runAgentCommand(interactive, imagePaths: imagePaths,
                                                                              timeout: timeout, onLine: onLine)
                         }
