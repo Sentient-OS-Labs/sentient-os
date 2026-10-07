@@ -248,8 +248,9 @@ nonisolated struct CodexAuthSnapshot: Sendable {
 /// after a wake isn't "unknown"). Values are the two tag strings codex.failure reports.
 nonisolated final class NetworkSnapshot: @unchecked Sendable {   // the monitor is only touched under `started`; readings ride the lock
     static let shared = NetworkSnapshot()
+    static let didChange = Notification.Name("sentient.networkPathChanged")
 
-    struct Reading: Sendable {
+    struct Reading: Sendable, Equatable {
         let status: String      // satisfied · unsatisfied · requires_connection · unknown
         let interface: String   // wifi · wired · cellular · other · none
     }
@@ -265,7 +266,12 @@ nonisolated final class NetworkSnapshot: @unchecked Sendable {   // the monitor 
         let first = started.withLock { s -> Bool in if s { return false }; s = true; return true }
         guard first else { return }
         monitor.pathUpdateHandler = { [latest] path in
-            latest.withLock { $0 = Self.reading(path) }
+            let reading = Self.reading(path)
+            let changed = latest.withLock { previous in
+                defer { previous = reading }
+                return previous != reading
+            }
+            if changed { NotificationCenter.default.post(name: Self.didChange, object: nil) }
         }
         monitor.start(queue: .global(qos: .utility))
     }

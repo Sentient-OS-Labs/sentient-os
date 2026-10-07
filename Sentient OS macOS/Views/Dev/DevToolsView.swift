@@ -276,7 +276,7 @@ struct DevToolsView: View {
             HStack {
                 Text(provider.label).font(.caption).foregroundStyle(Theme.secondary)
                 Spacer()
-                Button("Configure in Settings…") { SettingsView.open(.doubleTap, using: openWindow) }
+                Button("Configure in Settings…") { dismiss(); HomeWindowOpening.open(.settings, settingsPane: .doubleTap) }
                     .controlSize(.small)
             }
             if provider == .sentient {

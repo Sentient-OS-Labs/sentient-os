@@ -14,10 +14,21 @@ enum HomeWindowOpening {
     /// The menu-bar label registers even when a silent update launches without any regular scene.
     static func registerOpener(_ action: @escaping @MainActor () -> Void) {
         createHome = action
-        if pendingRequest { open() }
+        if pendingRequest { presentCurrentPage() }
     }
 
     static func open() {
+        MainNavigation.shared.show(.home)
+        presentCurrentPage()
+    }
+
+    static func open(_ page: MainNavigation.Page, settingsPane: SettingsView.Pane? = nil) {
+        MainNavigation.shared.show(page, settingsPane: settingsPane)
+        presentCurrentPage()
+    }
+
+    /// Bring forward the one main window without replacing a pending deep link or editor prompt.
+    static func presentCurrentPage() {
         #if DEBUG
         Log("Home open: setup pending=\(ComputerUseUpgrade.shared.isBlockingInterface)")
         #endif

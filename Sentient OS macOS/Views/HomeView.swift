@@ -10,7 +10,7 @@
 //
 //  The chrome is deliberately quiet: a wordmark, and four doors at the top-right —
 //  Analysis ▾ and Give AIs Knowledge ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
-//  Settings (their own windows). Status lives inside Analysis, never cluttering the home.
+//  Settings (pages in this window). Status lives inside Analysis, never cluttering the home.
 //
 //  WHEN THERE ARE NO CARDS, the living Orb blooms into the vacated center with "I'm here to
 //  help." — the orb appears ONLY here (its one home), turning the empty state into a launchpad
@@ -31,6 +31,8 @@ import SwiftUI
 import AppKit
 
 struct HomeView: View {
+    var isPresented = true
+
     // Live context from RootView (the analyze/source switchboard).
     var thingsUnderstood: Int = 0
     var sources: HomeSources = .init()
@@ -127,6 +129,16 @@ struct HomeView: View {
             probeHealth()
         }
         .onDisappear { appState.commandCoordinator.run.proactiveCards = nil }
+        .onChange(of: isPresented) { _, visible in
+            if visible {
+                planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
+                caution = OvernightCaution.latest()
+                probeHealth()
+            } else {
+                showAnalysis = false
+                showShareKnowledge = false
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil {
                 Task { await MailAccountCloud.shared.retryPendingSync() }
@@ -186,10 +198,12 @@ struct HomeView: View {
             Spacer()
             NavItem(title: "Analysis", dot: Theme.Ink.green) { showAnalysis = true }
                 .popover(isPresented: $showAnalysis) { analysisPopover }
-            NavItem(title: "Knowledge") { openWindow(id: KnowledgeView.windowID) }
+            NavItem(title: "Knowledge") { HomeWindowOpening.open(.knowledge) }
             NavItem(title: "Give AIs Knowledge") { showShareKnowledge = true }
                 .popover(isPresented: $showShareKnowledge) { shareKnowledgePopover }
-            NavItem(icon: "gearshape") { openWindow(id: SettingsView.windowID) }
+            NavItem(icon: "gearshape") { HomeWindowOpening.open(.settings) }
+                .accessibilityLabel("Settings")
+                .help("Settings (⌘,)")
         }
         .padding(.horizontal, 30).padding(.top, 18)
     }
@@ -258,7 +272,7 @@ struct HomeView: View {
                     UpdateNoticeCapsule()
                     // The offer waits until update notices are dismissed and the home is
                     // active. Keeping it here also postpones it behind every caution above.
-                    if deck == .real && !letterShown && !showAnalysis && !showShareKnowledge {
+                    if isPresented && deck == .real && !letterShown && !showAnalysis && !showShareKnowledge {
                         InviteBanner()
                     }
                 }
@@ -296,12 +310,11 @@ struct HomeView: View {
     /// Land directly on Permissions & Health — every banner's fix lives there; never strand the
     /// user on the default pane.
     private func openHealthSettings() {
-        SettingsView.requestedPane = .health
-        openWindow(id: SettingsView.windowID)
+        HomeWindowOpening.open(.settings, settingsPane: .health)
     }
 
     private func openSourceSettings() {
-        SettingsView.open(.sources, using: openWindow)
+        HomeWindowOpening.open(.settings, settingsPane: .sources)
     }
 
     /// Run HealthCaution's ladder off the main thread of thought: cheap sync probes, plus a
@@ -506,8 +519,7 @@ struct HomeView: View {
     }
 
     private func openSystemPane() {
-        SettingsView.requestedPane = .system
-        openWindow(id: SettingsView.windowID)
+        HomeWindowOpening.open(.settings, settingsPane: .system)
     }
 
     private func previewRow(_ icon: String, _ text: String) -> some View {
@@ -550,7 +562,7 @@ struct HomeView: View {
     private var bottomDock: some View {
         VStack(spacing: 16) {
             if !kbOnly {   // knowledge-base-only mode: computer use has no quota — no command bar
-                PromptBar(onSend: { text, mode in appState.commandCoordinator.submit(text, mode: mode, source: .promptBar) },
+                PromptBar(isPresented: isPresented, onSend: { text, mode in appState.commandCoordinator.submit(text, mode: mode, source: .promptBar) },
                           onStop: { appState.commandCoordinator.stop() },
                           isRunning: appState.commandCoordinator.run.isRunning,
                           statusLine: appState.commandCoordinator.run.statusLine)

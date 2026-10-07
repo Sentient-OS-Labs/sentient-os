@@ -7,6 +7,7 @@ import SwiftUI
 import AppKit
 
 struct InviteRedemptionView: View {
+    @Environment(\.settingsFormStyle) private var formStyle
     var startsCollapsed = false
     @State private var program = InviteProgram.shared
     @State private var code = ""
@@ -21,10 +22,10 @@ struct InviteRedemptionView: View {
         VStack(alignment: .leading, spacing: 8) {
             if program.snapshot?.hasLifetimeAccess == true {
                 Label("Lifetime access unlocked!", systemImage: "checkmark.seal.fill")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: formStyle ? 15 : 13, weight: .medium))
                     .foregroundStyle(Theme.Ink.green)
                 Text("Your Sentient OS access is saved.")
-                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                    .font(.system(size: formStyle ? 13 : 11)).foregroundStyle(Theme.Ink.body)
             } else if isCollapsed {
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -47,11 +48,11 @@ struct InviteRedemptionView: View {
                 .accessibilityHint("Show the invite code field")
             } else {
                 Text("Have an invite code?")
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                    .font(.system(size: formStyle ? 15 : 13, weight: .medium)).foregroundStyle(.white)
                 HStack(spacing: 8) {
                     TextField("Enter invite code", text: $code)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.system(size: formStyle ? 14 : 12, design: .monospaced))
                         .foregroundStyle(.white)
                         .focused($codeFocused)
                         .onSubmit(redeem)
@@ -63,7 +64,7 @@ struct InviteRedemptionView: View {
                     Button(action: redeem) {
                         Group {
                             if program.isBusy { ProgressView().controlSize(.small) }
-                            else { Image(systemName: "arrow.right").font(.system(size: 13, weight: .medium)) }
+                            else { Image(systemName: "arrow.right").font(.system(size: formStyle ? 15 : 13, weight: .medium)) }
                         }
                         .frame(width: 28, height: 28)
                     }
@@ -78,7 +79,7 @@ struct InviteRedemptionView: View {
                 .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.white.opacity(0.15)))
                 .disabled(program.isRedeeming)
                 if let error = program.errorMessage {
-                    Text(error).font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
+                    Text(error).font(.system(size: formStyle ? 13 : 11)).foregroundStyle(Theme.Ink.amber)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
@@ -94,6 +95,7 @@ struct InviteRedemptionView: View {
 }
 
 struct InviteSettingsSection: View {
+    @Environment(\.settingsFormStyle) private var formStyle
     @State private var program = InviteProgram.shared
 
     var body: some View {
@@ -102,25 +104,25 @@ struct InviteSettingsSection: View {
                 if let snapshot = program.snapshot, snapshot.canShare, let code = snapshot.code {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("5 invitations, reserved for you")
-                            .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                            .font(.system(size: formStyle ? 15 : 13, weight: .medium)).foregroundStyle(.white)
                         Text("Share Sentient OS free\u{00A0}for\u{00A0}life with just 5\u{00A0}people you choose.")
-                            .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                            .font(.system(size: formStyle ? 14 : 12)).foregroundStyle(Theme.Ink.body)
                     }
                     InviteCopyButton(code: code)
                     if snapshot.redemptionCount > 0 {
                         Text(snapshot.redemptionCount == 1 ? "1 invitation accepted." : "\(snapshot.redemptionCount) invitations accepted.")
-                            .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                            .font(.system(size: formStyle ? 13 : 11)).foregroundStyle(Theme.Ink.body)
                     }
                 } else if let snapshot = program.snapshot, !snapshot.canShare {
                     Text("This invitation offer has closed.")
-                        .font(.system(size: 13)).foregroundStyle(Theme.Ink.body)
+                        .font(.system(size: formStyle ? 15 : 13)).foregroundStyle(Theme.Ink.body)
                 } else {
                     SettingsPillButton(title: program.isBusy ? "Preparing your invitations…" : "View your invitations") {
                         Task { await program.refresh() }
                     }
                     .disabled(program.isBusy)
                 }
-                InviteRedemptionView().frame(maxWidth: 340)
+                InviteRedemptionView(startsCollapsed: true).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .task {
@@ -137,6 +139,7 @@ struct InviteSettingsSection: View {
 }
 
 struct InviteCopyButton: View {
+    @Environment(\.settingsFormStyle) private var formStyle
     let code: String
     var showsCode = true
     @State private var program = InviteProgram.shared
@@ -163,9 +166,9 @@ struct InviteCopyButton: View {
         } label: {
             HStack(spacing: 10) {
                 Text(showsCode ? InviteSnapshot.displayCode(code) : actionTitle)
-                    .font(.system(size: 12, weight: .medium, design: showsCode ? .monospaced : .default))
+                    .font(.system(size: formStyle ? 14 : 12, weight: .medium, design: showsCode ? .monospaced : .default))
                 Image(systemName: copied ? "checkmark" : (copyFailed ? "arrow.clockwise" : "doc.on.doc"))
-                    .font(.system(size: 12)).frame(width: 16, height: 18)
+                    .font(.system(size: formStyle ? 14 : 12)).frame(width: 16, height: 18)
             }
             .foregroundStyle(copied ? Theme.Ink.green : .white)
             .padding(.horizontal, 12).frame(height: 36)

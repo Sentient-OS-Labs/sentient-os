@@ -762,6 +762,10 @@ private struct NotchPreviewStage<Content: View>: View {
 #Preview("running · streaming") {
     NotchPreviewStage { NotchContent(phase: .running, readBack: nil, statusLine: "→ filling out the application…", metrics: .preview) }
 }
+#Preview("finishing · offline") {
+    NotchPreviewStage { NotchContent(phase: .finishing(.failed), readBack: nil,
+                                     statusLine: CommandRunModel.offlineMessage, metrics: .preview) }
+}
 #Preview("finishing") {
     NotchPreviewStage { NotchContent(phase: .finishing(.success), readBack: nil, statusLine: "✓ done", metrics: .preview) }
 }

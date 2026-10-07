@@ -556,7 +556,10 @@ struct ProcessingView: View {
             Text(Self.failBody(kind: kind, message: message)).font(.caption).foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             HStack(spacing: 12) {
-                Button("Back", action: onExitEarly ?? onDone).buttonStyle(.bordered).tint(.white)
+                Button(action: onExitEarly ?? onDone) {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(BackButtonStyle())
                 if kind == .loggedOut {
                     Button("Retry") { Task { started = false; await startIfNeeded() } }
                         .buttonStyle(.bordered).tint(.white)

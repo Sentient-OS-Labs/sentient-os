@@ -27,6 +27,7 @@ nonisolated enum AgentMode: String, CaseIterable {
 }
 
 struct PromptBar: View {
+    var isPresented = true
     /// Fired when the user sends — routes (text, mode) → the command run (CommandRunModel.start).
     var onSend: (String, AgentMode) -> Void = { _, _ in }
     /// Fired when the user taps STOP during a live run.
@@ -63,9 +64,11 @@ struct PromptBar: View {
         // "Analysis"). defaultFocus declares it; the delayed onAppear claim backs it up —
         // AppKit assigns the window's initial key view a beat after SwiftUI's appear, so an
         // immediate `focused = true` can get stomped.
-        .defaultFocus($focused, true)
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focused = true }
+        .defaultFocus($focused, isPresented)
+        .task(id: isPresented) {
+            guard isPresented else { focused = false; return }
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            focused = true
         }
     }
 

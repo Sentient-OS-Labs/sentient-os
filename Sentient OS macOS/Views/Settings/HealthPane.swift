@@ -74,17 +74,14 @@ struct HealthPane: View {
     var body: some View {
         SettingsPane(title: "Permissions & Health",
                      whisper: allGreen ? "All clear. Your Sentient is healthy."
-                                       : "Everything green means everything works.") {
+                                       : "Manage access and check that everything is ready.") {
             if !checked {
                 checkingLine
             } else {
-                VStack(alignment: .leading, spacing: 30) {
+                VStack(alignment: .leading, spacing: 24) {
                     onDeviceGroup
                     sidekickGroup
                     NativeComputerUsePermissionRows(gate: computerGate)
-                    SettingsHairline(opacity: 0.12)
-                        .padding(.vertical, -7)   // the brighter, tighter group splitter (matches ProactivePane's)
-                        .rise(7, revealed: revealed)
                     Group {
                         if engineAllGreen && !codexExpanded {
                             SettingsGroup(label: engineSummaryLabel) { engineSummaryLine }
@@ -100,6 +97,7 @@ struct HealthPane: View {
                 .task { revealed = true }
             }
         }
+        .environment(\.settingsCompactLayout, true)
         .task { await refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refresh() }   // the user may just have fixed something in System Settings
@@ -134,14 +132,14 @@ struct HealthPane: View {
         HStack(spacing: 10) {
             ProgressView().controlSize(.small)
             Text("Checking your Sentient…")
-                .font(.system(size: 12.5))
+                .font(.system(size: 15))
                 .foregroundStyle(Theme.Ink.body)
         }
         .padding(.top, 10)
     }
 
     private var onDeviceGroup: some View {
-        SettingsGroup(label: "On-device Intelligence") {
+        SettingsGroup(label: "On-device intelligence") {
             VStack(alignment: .leading, spacing: 2) {
                 VStack(alignment: .leading, spacing: 2) {
                     StatusLine(title: "Full Disk Access",
@@ -156,7 +154,7 @@ struct HealthPane: View {
                             SettingsProse("WhatsApp, iMessage & Notes stay unreadable without it. After granting:")
                             Button { Permissions.relaunch() } label: {
                                 Text("Relaunch Sentient")
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.system(size: 13, weight: .medium))
                                     .foregroundStyle(Theme.Ink.bright)
                                     .underline(true, color: Theme.Ink.deepMuted)
                             }
@@ -166,6 +164,7 @@ struct HealthPane: View {
                     }
                 }
                 .rise(0, revealed: revealed)
+                SettingsHairline(opacity: 0.10)
                 StatusLine(title: "Overnight wake",
                            health: daemon == .ready ? .ok : .bad,
                            note: daemonNote,
@@ -174,6 +173,7 @@ struct HealthPane: View {
                     fixDaemon()
                 }
                 .rise(1, revealed: revealed)
+                SettingsHairline(opacity: 0.10)
                 StatusLine(title: "Launch at login",
                            health: loginOn ? .ok : .warn,
                            note: loginOn ? "on" : (LoginItem.needsApproval ? "approve in system settings" : "off"),
@@ -191,7 +191,7 @@ struct HealthPane: View {
     }
 
     private var sidekickGroup: some View {
-        SettingsGroup(label: "Sidekick & Proactive") {
+        SettingsGroup(label: "Sidekick & Double Tap") {
             VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Microphone & Speech",
                            health: micSpeech == .granted ? .ok : .warn,   // optional — Sidekick's voice; tap-to-type works without it
@@ -201,6 +201,7 @@ struct HealthPane: View {
                     fixMicSpeech()
                 }
                 .rise(3, revealed: revealed)
+                SettingsHairline(opacity: 0.10)
                 StatusLine(title: "Screen Recording",
                            health: screenRec ? .ok : .bad,   // the driver's eyes — computer use is off without it
                            note: screenRec ? "granted" : "not granted",
@@ -209,6 +210,7 @@ struct HealthPane: View {
                     fixScreenRecording()
                 }
                 .rise(5, revealed: revealed)
+                SettingsHairline(opacity: 0.10)
                 StatusLine(title: "Notifications",
                            health: notifHealth,
                            note: notifNote,
@@ -367,9 +369,9 @@ struct HealthPane: View {
             HStack(spacing: 11) {
                 HealthDot(color: Theme.Ink.green)
                 Text(engineSummaryText)
-                    .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
+                    .font(.system(size: 14)).foregroundStyle(Theme.Ink.statusInk)
                 Spacer(minLength: 12)
-                MonoCaps("Details", size: 8.5, tracking: 1.6, color: Theme.Ink.label)
+                Text("Details").font(.system(size: 13)).foregroundStyle(SettingsStyle.secondary)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(Theme.Ink.label)
@@ -389,7 +391,7 @@ struct HealthPane: View {
     // noticed automatically (the same 2s poll onboarding uses) — no "I'm done" button.
 
     private var codexSetupGroup: some View {
-        SettingsGroup(label: "Set Up Codex") {
+        SettingsGroup(label: "Model connection") {
             VStack(alignment: .leading, spacing: 2) {
                 codexCLIRow
                 if backend == .custom {
@@ -402,8 +404,7 @@ struct HealthPane: View {
                                    ? CustomProvider.current.modelName : "not set up",
                                tip: "Sentient's cloud thinking runs through your own model endpoint instead of a ChatGPT login.\n\nPick and test it in Frontier Model Choice.",
                                fixTitle: "Configure…") {
-                        NotificationCenter.default.post(name: SettingsView.switchPane,
-                                                        object: SettingsView.Pane.frontierModel)
+                        MainNavigation.shared.show(.settings, settingsPane: .frontierModel)
                     }
                 } else {
                     StatusLine(title: "ChatGPT account",
@@ -432,7 +433,7 @@ struct HealthPane: View {
     // MARK: - SET UP CLAUDE (the Claude backend's twin — Claude Code CLI · account · computer use)
 
     private var claudeSetupGroup: some View {
-        SettingsGroup(label: "Set Up Claude") {
+        SettingsGroup(label: "Model connection") {
             VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Claude Code CLI",
                            health: claude.installing ? .warn : (claude.installed ? .ok : .bad),

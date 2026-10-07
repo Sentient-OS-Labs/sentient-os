@@ -7,9 +7,8 @@
 //     One action: Update. (Plus Quit, so a modal never traps the user.) No "skip" / "remind me".
 //   • info — a small dismissible card for a user-initiated check: "Checking…", "You're up to date",
 //     or "Couldn't check". Never shown for a silent background check.
-//  Rendered as an overlay by BOTH the home (RootView) and the Settings window, each passing its
-//  `host`: the info card draws only in the window the check came from (so Settings' Check Now
-//  shows over Settings, not buried under it), while the gate takes over every hosting window.
+//  RootView hosts one overlay above Home, Settings, and Knowledge. Both manual-check origins
+//  share this window, so an info card remains visible even if the user changes pages.
 //  Draws nothing when surface == .none.
 //
 //  Design bar: true-black, bold display titles, mono-caps whispers, the spinning AI-spectrum
@@ -20,9 +19,6 @@ import SwiftUI
 import AppKit
 
 struct UpdateGateView: View {
-    /// The window this instance overlays — the info card renders only in the check's origin window.
-    let host: UpdateModel.CheckOrigin
-
     @Environment(AppState.self) private var appState
     private var model: UpdateModel { appState.update.model }
 
@@ -34,11 +30,7 @@ struct UpdateGateView: View {
             case .gate:
                 gate.transition(.opacity)
             case .info:
-                if model.checkOrigin == host {
-                    infoCard.transition(.opacity)
-                } else {
-                    Color.clear.allowsHitTesting(false)
-                }
+                infoCard.transition(.opacity)
             }
         }
         .animation(.easeInOut(duration: 0.3), value: model.surface)
@@ -97,7 +89,9 @@ struct UpdateGateView: View {
             VStack(spacing: 16) {
                 MonoCaps("Required to keep going · v\(version)", size: 9, tracking: 2, color: Theme.Ink.deepMuted)
                 GlowButton(title: "Update Now", systemImage: "arrow.down.circle.fill") {
-                    model.installNow()
+                    MainNavigation.shared.confirmLeavingKnowledge { approved in
+                        if approved { model.installNow() }
+                    }
                 }
                 .frame(maxWidth: 320)
                 quitButton
@@ -132,7 +126,7 @@ struct UpdateGateView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 GlowButton(title: "Try Again", systemImage: "arrow.clockwise") {
                     model.dismissInfo()                 // acknowledge the error, reset
-                    appState.update.checkForUpdatesNow(from: host)
+                    appState.update.checkForUpdatesNow(from: model.checkOrigin)
                 }
                 .frame(maxWidth: 320)
                 quitButton

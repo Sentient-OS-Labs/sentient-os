@@ -13,7 +13,7 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppState.self) private var appState
-    @Environment(\.openWindow) private var openWindow
+    @State private var navigation = MainNavigation.shared
     @State private var isProcessing = false
     @State private var showDevTools = false
     @State private var startedWritingStyleSetup = false
@@ -60,9 +60,8 @@ struct RootView: View {
             Theme.bg.ignoresSafeArea()
             if !appState.hasCompletedOnboarding {
                 // First launch → onboarding, whose finished first analysis calls this closure.
-                // The finale (every plan): onboarding dissolves into the home, then the Knowledge
-                // window (the Constellation) assembles on top — the user's first sight of their
-                // knowledge base, before the cards (or the free-plan preview message) behind it.
+                // The finale opens the Knowledge page in this same window. Home remains ready
+                // underneath, and an explicit notification destination takes precedence.
                 OnboardingView {
                     modelPath = ModelLocator.resolve()   // the onboarding download may have just landed it
                     withAnimation(.easeInOut(duration: 0.3)) { appState.hasCompletedOnboarding = true }
@@ -70,10 +69,7 @@ struct RootView: View {
                     // (The app lives in the menu bar and rarely relaunches, so waiting for the
                     // next launch tick could delay auto-enable by days.)
                     appState.scheduler.maybeAutoEnable()
-                    Task {
-                        try? await Task.sleep(for: .seconds(0.6))   // let the home settle first
-                        openWindow(id: KnowledgeView.windowID)
-                    }
+                    navigation.finishOnboarding()
                 }
                 .transition(.opacity)
                 // The just-updated notice, overlaid on ONBOARDING only (the home renders it in
@@ -83,26 +79,22 @@ struct RootView: View {
                     UpdateNoticeCapsule()
                         .padding(.trailing, 24).padding(.top, 24)
                 }
-            } else if isProcessing, let modelPath {
-                // Same engine + UI as the dev "start on device" buttons; .auto = backfill new
-                // buckets, catch up the rest. (Gmail is a dev-tools leg; the home button is on-device.)
-                ProcessingView(modelPath: modelPath,
-                               connectors: RunSource.connectors(from: selectedSources),
-                               mode: .auto,
-                               runGmail: ModelBackend.connectorsAvailable && runGmail,
-                               runCalendar: ModelBackend.connectorsAvailable && runCalendar,
-                               mcpSlugs: MCPSource.kbSlugs(),
-                               fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
-                    withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
-                    appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 14h clock
-                }
-                .transition(.opacity)
             } else {
-                home.transition(.opacity)
+                workspace
+                    .opacity(navigation.page == .home ? 1 : 0)
+                    .allowsHitTesting(navigation.page == .home)
+                    .disabled(navigation.page != .home)
+                    .accessibilityHidden(navigation.page != .home)
+                if navigation.page == .settings {
+                    SettingsView()
+                }
+                if navigation.hasOpenedKnowledge {
+                    KnowledgeView(isPresented: navigation.page == .knowledge)
+                }
             }
         }
-        .frame(minWidth: resizableAnalysisDemo && isProcessing ? nil : 1040,
-               minHeight: resizableAnalysisDemo && isProcessing ? nil : 800)
+        .frame(minWidth: resizableAnalysisDemo && isProcessing && navigation.page == .home ? nil : 1040,
+               minHeight: resizableAnalysisDemo && isProcessing && navigation.page == .home ? nil : 800)
         // Core tier: the home window came up (fires once per window instantiation — launch opens it
         // automatically; anything later is a deliberate menu-bar/Dock reopen, hence the trigger
         // param). Sidekick-only users who never look at home are exactly who this measures.
@@ -113,8 +105,8 @@ struct RootView: View {
             Analytics.signal("Home.opened",
                              parameters: ["trigger": sinceBoot < 5 ? "launch" : "reopen"], tier: .core)
         }
-        // The bottom-left whispers — screen-agnostic on purpose, both keyed to live shared engine
-        // state so they ride the bottom of WHATEVER screen is up:
+        // Background setup/download whispers share Home and onboarding's bottom-left slot.
+        // Secondary pages use their own status rows and keep this area clear:
         // · the model-download card (ModelDownloadWhisper) — the on-device model landing in the
         //   background while the user is elsewhere (it hides itself when onboarding's full-screen
         //   downloading view shows the same bar big);
@@ -123,8 +115,8 @@ struct RootView: View {
         //   in rare cases), so as long as it's actually running, this quiet line shows.
         .overlay(alignment: .bottomLeading) {
             VStack(alignment: .leading, spacing: 10) {
-                ModelDownloadWhisper(download: download)
-                if computerSetup.isInstalling {
+                if navigation.page == .home { ModelDownloadWhisper(download: download) }
+                if computerSetup.isInstalling && navigation.page == .home {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.small).scaleEffect(0.6)
                         Text("Setting up computer use in the background.")
@@ -141,7 +133,18 @@ struct RootView: View {
         .animation(.easeInOut(duration: 0.35), value: download.fullScreenVisible)
         // The mandatory update gate floats above everything (home, processing, dev sheet) — when a
         // required update is found it takes over; otherwise it draws nothing. (Updates/)
-        .overlay { UpdateGateView(host: .home) }
+        .overlay { UpdateGateView() }
+        .background(MainWindowCloseGuard())
+        .onChange(of: navigation.page) { _, page in
+            if page != .home { showDevTools = false }
+        }
+        .onChange(of: appState.hasCompletedOnboarding) { _, completed in
+            if !completed {
+                isProcessing = false
+                showDevTools = false
+                startedWritingStyleSetup = false
+            }
+        }
         .sheet(isPresented: $showDevTools) {
             DevToolsView()
         }
@@ -163,6 +166,30 @@ struct RootView: View {
         }
     }
 
+    /// Keep Home's card/run model and command draft alive across page changes. Processing
+    /// retains its original lifetime and completion callback even when another page is requested.
+    private var workspace: some View {
+        Group {
+            if isProcessing, let modelPath {
+                // Same engine + UI as the dev "start on device" buttons; .auto = backfill new
+                // buckets, catch up the rest. (Gmail is a dev-tools leg; the home button is on-device.)
+                ProcessingView(modelPath: modelPath,
+                               connectors: RunSource.connectors(from: selectedSources),
+                               mode: .auto,
+                               runGmail: ModelBackend.connectorsAvailable && runGmail,
+                               runCalendar: ModelBackend.connectorsAvailable && runCalendar,
+                               mcpSlugs: MCPSource.kbSlugs(),
+                               fullCycle: deck == .real) {   // real mode → read + knowledge base + proactive + wipe
+                    withAnimation(.easeInOut(duration: 0.3)) { isProcessing = false }
+                    appState.scheduler.maybeAutoEnable()   // a full cycle may have just stamped "initial done" → arm the 14h clock
+                }
+                .transition(.opacity)
+            } else {
+                home.transition(.opacity)
+            }
+        }
+    }
+
     private var canStartWritingStyleSetup: Bool {
         #if DEBUG
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return false }
@@ -176,6 +203,7 @@ struct RootView: View {
     private var home: some View {
         let sources = selectedSources
         return HomeView(
+            isPresented: navigation.page == .home,
             thingsUnderstood: LifetimeStats.analyzed,
             sources: .init(
                 files: sources.contains { if case .files = $0 { return true } else { return false } },

@@ -27,15 +27,23 @@ final class CommandRunModel {
     /// How a run ended — drives the notch's finishing glyph (and nothing else).
     enum Outcome: Equatable { case success, stopped, failed }
 
+    static let offlineMessage = "You're currently not connected to internet. Try again later"
+
     var isRunning = false
-    var statusLine = ""                          // the latest 1–2 codex lines, shown in the bar while running
+    /// Keep the offline reason visible while the cancelled backend unwinds.
+    var statusLine: String {
+        get { isOffline ? Self.offlineMessage : progressLine }
+        set { progressLine = newValue }
+    }
+    private var progressLine = ""
+    private(set) var isOffline = false
     /// While codex is reading the knowledge base, the note it's on (relative path; "" = whole vault).
     /// Drives the gradient, blooming "Remembering …" in the notch. nil = not reading the KB.
     private(set) var remembering: String?
     private(set) var mode: AgentMode = .computer // the in-flight run's channel (the notch shows only for .computer)
 
-    /// Set by the coordinator to learn when a run ends (running → finishing). Optional — the prompt bar
-    /// alone doesn't need it.
+    /// Starts the finishing presentation, including immediately on an offline interruption.
+    /// The one-task lock remains held until backend cleanup completes.
     var onFinished: ((Outcome) -> Void)?
 
     /// Supplied by the mounted home through a weak model capture. Read once at launch so
@@ -57,6 +65,8 @@ final class CommandRunModel {
     private var recent: [String] = []
     private var section = ""                      // codex's current output section (user/codex/exec/…) — for filtering the bar
     private var task: Task<Void, Never>?
+    private var connectivityTask: Task<Void, Never>?
+    private var statusClearTask: Task<Void, Never>?
     private var rememberClear: Task<Void, Never>?   // keeps "Remembering" up ≥1.5s so its bloom completes
     private var source = "command"                // who triggered this run (promptBar / voice) — scoreboard tag
     private var runStarted = Date()              // for the scoreboard duration
@@ -72,6 +82,7 @@ final class CommandRunModel {
         self.source = source
         self.runStarted = Date()
         isDemo = false
+        isOffline = false
         isExternal = false
         externalStop = nil
         isRunning = true
@@ -85,6 +96,7 @@ final class CommandRunModel {
         // the established thinking beat; the chosen route sets the real opening line.
         statusLine = CommandRouter.isActive ? "Thinking through your task"
                                             : "Starting \(mode.promptPhrase)…"
+        watchConnectivity()
         Log("──────── 🤖 \(mode.label.uppercased()) · command ────────")
         // History: read the block BEFORE recording this run — a task must never see itself.
         let history = SidekickHistory.promptBlock()
@@ -94,6 +106,10 @@ final class CommandRunModel {
         Diagnostics.$current.withValue(Diagnostics.Operation("command")) {
             ModelBackend.$runOverride.withValue(ModelBackend.current) {
                 task = Task { [weak self] in
+                    guard !Task.isCancelled else {
+                        self?.complete(.stopped, line: "■ stopped")
+                        return
+                    }
                     // Snap every display NOW so computer use sees exactly what the user is looking at, on
                     // whichever screen. OPTIONAL + grant-gated: empty if the Screen Recording grant is
                     // missing → the run goes text-only (the grant is asked once, behind an info panel that
@@ -300,7 +316,8 @@ final class CommandRunModel {
     }
 
     func stop() {
-        guard isRunning else { return }
+        guard isRunning, !isOffline else { return }
+        stopWatchingConnectivity()
         clearRemembering()
         statusLine = "Stopping…"
         // An adopted run's Task lives in ForYouModel — ask IT to cancel (which kills codex the
@@ -321,6 +338,7 @@ final class CommandRunModel {
         source = "proactive_card"        // log/analytics honesty only — external ends never reach complete()
         runStarted = Date()
         isDemo = false
+        isOffline = false
         isExternal = true
         externalStop = onStopRequest
         isRunning = true
@@ -329,6 +347,7 @@ final class CommandRunModel {
         remembering = nil
         rememberClear?.cancel()
         statusLine = caption
+        watchConnectivity()
         SidekickHistory.record(caption, card: true)
     }
 
@@ -358,6 +377,8 @@ final class CommandRunModel {
         guard !isRunning else { return }
         mode = .computer
         isDemo = true
+        isOffline = false
+        statusClearTask?.cancel()
         isRunning = true
         recent = []; section = ""
         remembering = nil; rememberClear?.cancel()
@@ -398,24 +419,64 @@ final class CommandRunModel {
     /// scoreboard + analytics), the demo's theater exit, and completeExternal. Sets the final
     /// status line, releases the run, tells the coordinator, and lets the line linger.
     private func finish(_ outcome: Outcome, line: String) {
+        let alreadyFinishing = isOffline
+        let outcome: Outcome = alreadyFinishing ? .failed : outcome
+        let line = alreadyFinishing || (!isDemo && outcome == .failed && NetworkSnapshot.shared.current.status == "unsatisfied")
+            ? Self.offlineMessage : line
+        stopWatchingConnectivity()
         if !isDemo { SidekickHistory.close(outcome, line: line) }   // theater never touches history
         clearRemembering()
+        isOffline = false
         statusLine = line
         isRunning = false
         isExternal = false
         externalStop = nil
         task = nil
-        onFinished?(outcome)
-        Task { [weak self] in            // let the final status linger a moment, then clear the bar
+        // Offline detection already started the five-second flourish. Cleanup must not restart it.
+        if !alreadyFinishing { onFinished?(outcome) }
+        statusClearTask?.cancel()
+        statusClearTask = Task { [weak self] in
             // Failures hold longest — the ✗ line carries the give-up REASON and must be readable.
             let linger: Double = outcome == .success ? 2.5 : (outcome == .failed ? 6.0 : 4.5)
             try? await Task.sleep(for: .seconds(linger))
-            if let self, !self.isRunning { self.statusLine = "" }
+            if let self, !Task.isCancelled, !self.isRunning { self.statusLine = "" }
         }
     }
 
+    /// Reuse the app's network monitor. Unknown and on-demand paths are not proof of being offline.
+    private func watchConnectivity() {
+        stopWatchingConnectivity()
+        statusClearTask?.cancel()
+        let updates = NotificationCenter.default.notifications(named: NetworkSnapshot.didChange)
+        connectivityTask = Task { [weak self] in
+            // Defer the first check until the caller has installed the task/cancel callback
+            // and the coordinator has entered .running, even when starting already offline.
+            if self?.interruptIfOffline() == true { return }
+            for await _ in updates {
+                guard !Task.isCancelled, let self, self.isRunning else { return }
+                if self.interruptIfOffline() { return }
+            }
+        }
+    }
+
+    private func interruptIfOffline() -> Bool {
+        guard !Task.isCancelled, isRunning, !isDemo, !isOffline,
+              NetworkSnapshot.shared.current.status == "unsatisfied" else { return false }
+        isOffline = true
+        clearRemembering()
+        stopWatchingConnectivity()
+        onFinished?(.failed)
+        if let externalStop { externalStop() } else { task?.cancel() }
+        return true
+    }
+
+    private func stopWatchingConnectivity() {
+        connectivityTask?.cancel()
+        connectivityTask = nil
+    }
+
     private func push(_ line: String) {
-        guard isRunning else { return }
+        guard isRunning, !isOffline else { return }
 
         // Strip codex's stderr channel tag — BEFORE trimming, so a bare "stderr:" (empty line) vanishes
         // instead of flashing in the bar.
@@ -528,7 +589,8 @@ final class CommandRunModel {
         // §7.19: feed the executor scoreboard (this IS the command-bar / voice computer-use path).
         // Skip .stopped — that's a user cancel, not a health outcome. `fired` is now
         // sentinel-verified when statusPresent; without the sentinel it stays a flagged claim.
-        let resolved = board ?? (outcome == .success ? .fired : (outcome == .failed ? .failed : nil))
+        // An offline interruption is expected environment state, not an executor defect.
+        let resolved = isOffline ? nil : (board ?? (outcome == .success ? .fired : (outcome == .failed ? .failed : nil)))
         if let resolved {
             ExecutorScoreboard.record(method: executedMethod, source: source, outcome: resolved,
                                       durationS: Date().timeIntervalSince(runStarted),
@@ -538,7 +600,7 @@ final class CommandRunModel {
         // Extended tier: how long the agent worked this run — EVERY outcome (a stopped run still had
         // the notch lit that long). floatValue sums server-side into total agent-seconds, the
         // "Sidekick saved users N hours" headline.
-        let outcomeTag = outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed")
+        let outcomeTag = isOffline ? "failed" : (outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed"))
         Analytics.signal("ComputerUse.finished",
                          parameters: ["source": source, "method": executedMethod, "outcome": outcomeTag],
                          floatValue: Date().timeIntervalSince(runStarted))

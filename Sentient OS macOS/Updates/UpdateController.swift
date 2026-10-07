@@ -159,9 +159,9 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
         install()   // Sparkle terminates, installs, and relaunches us — zero UI.
     }
 
-    /// Two invariants: never relaunch out from under an in-flight processing run, and never yank the
-    /// app away from a user who's actively using it (UserPresence: not frontmost, or idle 5+ min).
+    /// Never relaunch during processing or an open Knowledge edit, even if the user has been
+    /// away for a while. Otherwise wait until Sentient is not frontmost or idle for 5+ minutes.
     private var isSafeToRelaunch: Bool {
-        !PipelineActivity.shared.isRunning && UserPresence.isAwayFromApp
+        !PipelineActivity.shared.isRunning && !VaultActivity.shared.editorBusy && UserPresence.isAwayFromApp
     }
 }

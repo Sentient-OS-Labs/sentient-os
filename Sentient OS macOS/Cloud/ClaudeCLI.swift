@@ -678,8 +678,9 @@ actor ClaudeCLI {
     /// Claude's usage-limit wording (the subscription windows) plus the generic family — checked
     /// against a failed run's error text, exactly like codex's marker scan, but here the
     /// structured `rate_limit_event` (persisted below) usually already told us the reset time.
-    private static let usageLimitMarkers = ["hit your session limit", "hit your weekly limit",
+    private static let usageLimitMarkers = ["hit your limit", "hit your session limit", "hit your weekly limit",
                                             "hit your opus limit", "usage limit", "rate limit",
+                                            "rate_limit_error", "rate_limit_exceeded",
                                             "limit resets", "too many requests",
                                             "out of credits", "credit balance"]
 
@@ -700,6 +701,7 @@ actor ClaudeCLI {
     static func parseEnvelope(_ out: CodexCLI.ExecResult, durationMS: Int) throws -> CodexCLI.Envelope {
         var sessionID: String?
         var resultObj: [String: Any]?
+        var rateLimitRejected = false
 
         for line in out.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
@@ -709,7 +711,10 @@ actor ClaudeCLI {
             case "system":
                 if sessionID == nil { sessionID = obj["session_id"] as? String }
             case "rate_limit_event":
-                if let info = obj["rate_limit_info"] as? [String: Any] { noteRateLimit(info) }
+                if let info = obj["rate_limit_info"] as? [String: Any] {
+                    noteRateLimit(info)
+                    rateLimitRejected = info["status"] as? String == "rejected"
+                }
             case "result":
                 resultObj = obj
             default:
@@ -731,10 +736,12 @@ actor ClaudeCLI {
         }
 
         if out.status != 0 || isError || text.isEmpty {
-            let detail = !text.isEmpty ? text
+            let resultDetail = ([text] + (resultObj?["errors"] as? [String] ?? []))
+                .filter { !$0.isEmpty }.joined(separator: " · ")
+            let detail = !resultDetail.isEmpty ? resultDetail
                 : (out.stderr.isEmpty ? String(out.stdout.suffix(600)) : out.stderr)
             let lowered = detail.lowercased()
-            if usageLimitMarkers.contains(where: { lowered.contains($0) }) {
+            if rateLimitRejected || usageLimitMarkers.contains(where: { lowered.contains($0) }) {
                 throw CodexCLI.CLIError.usageLimit(message: String(detail.prefix(600)),
                                                    sessionID: sessionID)
             }

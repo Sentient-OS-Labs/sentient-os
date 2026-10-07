@@ -199,7 +199,7 @@ struct KnowledgeSourcesPicker: View {
     // MARK: - Hosted and direct connectors
 
     private var emailAndCalendarGroup: some View {
-        SettingsGroup(label: "Email & Calendar") {
+        SettingsGroup(label: "Email & calendar") {
             VStack(alignment: .leading, spacing: 12) {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 18) {

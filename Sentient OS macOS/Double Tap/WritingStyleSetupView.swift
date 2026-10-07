@@ -12,7 +12,6 @@ import SwiftUI
 struct WritingStyleSetupView: View {
     var runsSetup = true
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.openWindow) private var openWindow
     @State private var attempt = 0
     @State private var status = "Gathering examples of how you write…"
     @State private var failure: String?
@@ -37,7 +36,7 @@ struct WritingStyleSetupView: View {
                 HStack(spacing: 18) {
                     Button("Open Settings") {
                         dismiss()
-                        openWindow(id: SettingsView.windowID)
+                        HomeWindowOpening.open(.settings, settingsPane: .doubleTap)
                     }.buttonStyle(.plain).foregroundStyle(Theme.secondary)
                     primaryButton("Try again") { attempt += 1 }.keyboardShortcut(.defaultAction)
                 }

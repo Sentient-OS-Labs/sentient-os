@@ -54,6 +54,7 @@ final class AppState {
     static let onboardingKey = "hasCompletedOnboarding"   // FactoryReset clears it (the rewind)
     var hasCompletedOnboarding: Bool {
         didSet {
+            if !hasCompletedOnboarding { MainNavigation.shared.reset() }
             UserDefaults.standard.set(hasCompletedOnboarding, forKey: Self.onboardingKey)
             if hasCompletedOnboarding, !oldValue { Analytics.signal("Onboarding.completed") }
         }
@@ -99,13 +100,6 @@ final class AppState {
             // lifeline EOF would otherwise hold its screen-capture stream (and CPU) forever.
             await CuaDriverHost.sweepOrphans()
         }
-        // A silent auto-update relaunch opens no window, so DockPolicy's open/close notifications
-        // never fire — evaluate once (next runloop tick, after launch settles) so the Dock icon
-        // drops to match the windowless launch instead of lingering with nothing behind it.
-        if UpdateNotice.suppressHomeThisLaunch {
-            Task { dockPolicy.reevaluate() }
-        }
-
         // Keep the managed Codex CLI current (CodexSetup.updateIfDue): a 15-minute tick that only
         // acts when the user is away, the pipeline is idle, and the Sidekick/card run lock is free,
         // at most one update a day. Initial dependency setup starts above for every user.

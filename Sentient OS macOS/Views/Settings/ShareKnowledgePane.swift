@@ -20,18 +20,23 @@ struct ShareKnowledgePane: View {
     @State private var loaded = false
 
     var body: some View {
-        SettingsPane(title: "ChatGPT & Claude",
-                     whisper: "Your knowledge base, offered to every AI you already use.") {
-            VStack(alignment: .leading, spacing: 30) {
-                intro
+        SettingsPane(title: "Give AIs Knowledge",
+                     whisper: "Let ChatGPT, Claude, and other AIs get to know you.") {
+            VStack(alignment: .leading, spacing: 32) {
                 cloudSyncGroup
-                    .padding(.top, 10)    // same breath as before Activity — the blurb block stands alone
-                if enabled && loaded {
-                    activityGroup
-                        .padding(.top, 10)    // extra breath after the hero
-                } else if loaded {
-                    localOnlyProse
+                SettingsGroup(label: "Your knowledge, your control") {
+                    VStack(alignment: .leading, spacing: 18) {
+                        SettingsProse("Sharing is optional. Your original knowledge stays in a folder on this Mac.")
+                        SettingsDetails(title: "How sharing and privacy work") {
+                            SettingsProse(PrivacyCopy.sharingContents)
+                            SettingsProse(PrivacyCopy.sharingEncryption)
+                            SettingsProse(PrivacyCopy.sharingControl)
+                            SettingsProse(PrivacyCopy.sharingOpenSource)
+                        }
+                    }
                 }
+                if enabled && loaded { activityGroup }
+                else if loaded { localOnlyProse }
             }
         }
         .task { await refresh() }
@@ -42,50 +47,26 @@ struct ShareKnowledgePane: View {
         }
     }
 
-    // MARK: - The story (value first, then four scannable privacy pillars — never a wall of text)
-
-    private var intro: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Your ChatGPT and Claude, phone apps included, can read your Sentient knowledge base, making them dramatically more helpful.")
-                .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.statusInk)
-                .lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 9) {
-                pillar("lock.shield", PrivacyCopy.sharingContents)
-                pillar("lock.fill", PrivacyCopy.sharingEncryption)
-                pillar("key.fill", PrivacyCopy.sharingControl)
-                pillar("chevron.left.forwardslash.chevron.right", PrivacyCopy.sharingOpenSource)
-            }
-        }
-    }
-
-    private func pillar(_ icon: String, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 9) {
-            Image(systemName: icon)
-                .font(.system(size: 10))
-                .foregroundStyle(Theme.Ink.green.opacity(0.8))
-                .frame(width: 15)
-            Text(text)
-                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.body)
-                .lineSpacing(2.5)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    // MARK: - Cloud Sync (no toggle — ConnectAIsView owns sharing on/off; the hero is the door)
+    // MARK: - Sharing setup owns both enabling and disabling the mirror
 
     private var cloudSyncGroup: some View {
-        SettingsGroup(label: "Cloud Sync") {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Offer your knowledge base to your AIs")
-                        .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
-                    Text("ChatGPT and Claude read your shared knowledge over MCP using the private link you give them.")
-                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
-                        .fixedSize(horizontal: false, vertical: true)
+        SettingsGroup(label: "AI connections", inset: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsRow(title: "Share your knowledge",
+                            subtitle: "Connect your AIs with a private link. Works on your phone, too.") {
+                    SettingsPillButton(title: enabled ? "Configure" : "Set up sharing") {
+                        openWindow(id: ConnectAIsView.windowID)
+                    }
                 }
-                ConnectCTA(title: enabled ? "Configure" : "Set up in 2 minutes") {
-                    openWindow(id: ConnectAIsView.windowID)
+                if loaded {
+                    SettingsHairline(opacity: 0.10)
+                    HStack(spacing: 9) {
+                        Circle().fill(enabled ? Theme.Ink.green : SettingsStyle.secondary)
+                            .frame(width: 6, height: 6)
+                        Text(enabled ? "Sharing is on" : "Sharing is off")
+                            .font(.system(size: 14)).foregroundStyle(SettingsStyle.secondary)
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 16)
                 }
             }
         }
@@ -97,11 +78,11 @@ struct ShareKnowledgePane: View {
         SettingsGroup(label: "Activity") {
             VStack(alignment: .leading, spacing: 7) {
                 Text(activityLine)
-                    .font(.system(size: 13))
+                    .font(.system(size: 14))
                     .foregroundStyle(Theme.Ink.body)
                 if let last = stats?.lastAccess {
-                    MonoCaps("Last read · \(last.formatted(.relative(presentation: .named)))",
-                             size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+                    Text("Last read \(last.formatted(.relative(presentation: .named)))")
+                        .font(.system(size: 13)).foregroundStyle(SettingsStyle.secondary)
                 }
             }
         }
@@ -127,33 +108,6 @@ struct ShareKnowledgePane: View {
         enabled = await MirrorClient.shared.isEnabled
         loaded = true
         if enabled { stats = try? await MirrorClient.shared.stats() }
-    }
-}
-
-/// The pane's compact glow CTA: a dark capsule with the AI-gradient as a thin ring + a soft
-/// halo behind it. Jewelry at settings scale — deliberately NOT the home's big white GlowButton.
-private struct ConnectCTA: View {
-    let title: String
-    let action: () -> Void
-
-    private var gradient: AngularGradient {
-        AngularGradient(colors: GlowHalo.stops, center: .center)
-    }
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles").font(.system(size: 12, weight: .semibold))
-                Text(title).font(.system(size: 13, weight: .semibold))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 22).padding(.vertical, 10)
-            .background(Capsule().fill(Theme.Ink.cardBG))
-            .overlay(Capsule().strokeBorder(gradient, lineWidth: 1.2))
-            .background(Capsule().fill(gradient).blur(radius: 9).opacity(0.38))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(PressScaleStyle())
     }
 }
 

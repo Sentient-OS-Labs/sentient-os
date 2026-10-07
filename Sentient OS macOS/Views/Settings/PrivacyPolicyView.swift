@@ -6,6 +6,7 @@
 import SwiftUI
 
 struct PrivacyPolicyView: View {
+    @Environment(\.settingsFormStyle) private var formStyle
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -20,14 +21,14 @@ struct PrivacyPolicyView: View {
                     prose(PrivacyCopy.intro).padding(.top, 12)
                     ForEach(PrivacyCopy.sections) { section in
                         Text(section.title)
-                            .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
+                            .font(.system(size: formStyle ? 17 : 13, weight: .medium)).foregroundStyle(.white)
                             .padding(.top, 22)
                         ForEach(section.paragraphs, id: \.self) { paragraph in
                             prose(paragraph).padding(.top, 9)
                         }
                     }
                     Link("OpenAI API data controls", destination: URL(string: "https://developers.openai.com/api/docs/guides/your-data")!)
-                        .font(.system(size: 12.5)).padding(.top, 16)
+                        .font(.system(size: formStyle ? 14 : 12.5)).padding(.top, 16)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -38,14 +39,14 @@ struct PrivacyPolicyView: View {
                 .padding(.top, 22)
         }
         .padding(.horizontal, 34).padding(.top, 30).padding(.bottom, 24)
-        .frame(width: 600, height: 650)
+        .frame(width: formStyle ? 660 : 600, height: 650)
         .background(Theme.bg)
         .preferredColorScheme(.dark)
     }
 
     private func prose(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.body)
+            .font(.system(size: formStyle ? 14 : 12.5)).foregroundStyle(Theme.Ink.body)
             .lineSpacing(3.5)
             .fixedSize(horizontal: false, vertical: true)
     }

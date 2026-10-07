@@ -287,7 +287,9 @@ actor CodexCLI {
             case .timedOut(let t):                return "\(claude ? "claude -p" : "codex exec") timed out after \(Int(t))s"
             case .exitFailure(let code, let m):   return "\(binary) exited \(code): \(m.prefix(300))"
             case .badEnvelope(let m):             return "Unparseable \(binary) output: \(m.prefix(300))"
-            case .usageLimit(let m, _):           return "\(engine) usage limit: \(m.prefix(200))"
+            case .usageLimit(let m, _):
+                if ModelBackend.current == .custom { return "Model usage limit: \(m.prefix(200))" }
+                return "You're out of your \(claude ? "Claude" : "Codex") subscription 5 hour usage, try again later."
             case .inputTooLarge(let c):           return claude
                 ? "Prompt too large for Claude Code: \(c) chars"
                 : "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
@@ -791,11 +793,7 @@ actor CodexCLI {
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             nativeTask = nil
             Self.noteStaleSignatureIfPresent(out.stderr)
-            guard out.status == 0 else {
-                let detail = Self.failureDetail(out)
-                if let stale = Self.staleClientError(in: out.stderr, detail) { throw stale }
-                throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
-            }
+            if let error = Self.agentFailure(out) { throw error }
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             return out.stdout.isEmpty ? out.stderr : out.stdout
@@ -1098,9 +1096,29 @@ actor CodexCLI {
 
     // MARK: JSONL parsing
 
-    private static let usageLimitMarkers = ["usage limit", "rate limit", "limit reached",
-                                            "limit resets", "quota", "too many requests",
+    private static let usageLimitMarkers = ["usage limit", "usage_limit_reached", "rate limit",
+                                            "rate_limit_exceeded", "limit reached", "limit resets", "quota", "too many requests",
                                             "out of extra usage", "plan limit"]
+
+    /// Human-readable computer runs report terminal failures as ERROR lines. Check those
+    /// separately from the echoed prompt and tool output, which can discuss limits themselves.
+    static func agentFailure(_ out: ExecResult) -> CLIError? {
+        guard out.status != 0 else { return nil }
+        func lastErrorLine(in text: String) -> String? {
+            text.split(separator: "\n").reversed()
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { $0.hasPrefix("ERROR:") }
+        }
+        let terminalError = streamErrors(in: out.stdout).last
+            ?? lastErrorLine(in: out.stderr) ?? lastErrorLine(in: out.stdout)
+        let detail = terminalError ?? failureDetail(out)
+        if let terminalError,
+           usageLimitMarkers.contains(where: { terminalError.lowercased().contains($0) }) {
+            return .usageLimit(message: String(detail.prefix(600)), sessionID: nil)
+        }
+        if let stale = staleClientError(in: out.stderr, detail) { return stale }
+        return .exitFailure(code: out.status, message: String(detail.prefix(600)))
+    }
 
     /// The stale-client signature: an older CLI failing to deserialize a `~/.codex` cache a newer
     /// codex wrote (field-found on 1.3: `codex_models_manager: failed to renew cache TTL: missing
