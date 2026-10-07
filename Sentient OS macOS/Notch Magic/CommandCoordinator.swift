@@ -31,6 +31,7 @@ enum NotchPhase: Equatable {
     case listening                          // the mic is open — the field row shows "Listening…" + the stop button
     case transcribing                       // stopped → finalizing speech
     case running                            // codex is acting — orb + status line + STOP
+    case recovery                           // one pending question or an app-owned retry
     case finishing(CommandRunModel.Outcome) // a brief success / stopped / failed flourish
     case notice(String)                     // a short serif aside: "didn't catch that", mic-off, …
 }
@@ -100,6 +101,28 @@ final class CommandCoordinator {
     private var phaseToken = 0              // guards delayed phase transitions against newer ones
     private var readBackToken = 0
     private var lastPressAt: Date?          // the previous hotkey press — two inside DoubleTap.window are a double tap
+    private var returningFromRecovery = false
+    private var deferredSubmission: (String, AgentMode, TriggerSource)?
+
+    init() {
+        run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
+        run.onRecoveryResumed = { [weak self] in self?.setPhase(.running) }
+        run.recovery.onChange = { [weak self] in
+            guard let self else { return }
+            if self.run.recovery.isPending {
+                self.clearReadBack()
+                self.setPhase(self.run.recovery.isVisible ? .recovery : .hidden)
+            } else if self.phase == .recovery { self.setPhase(.hidden) }
+        }
+    }
+
+    func backFromRecovery() {
+        guard run.recovery.isPending else { return }
+        run.stop()
+        returningFromRecovery = run.isRunning
+        deferredSubmission = nil
+        clearReadBack(); setPhase(.typing)
+    }
 
     // MARK: Lifecycle
 
@@ -134,7 +157,15 @@ final class CommandCoordinator {
     func submit(_ text: String, mode: AgentMode, source: TriggerSource) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard !run.isRunning else { Log("submit ignored — a task is already running"); return }
+        guard !run.isRunning else {
+            if returningFromRecovery {
+                deferredSubmission = (trimmed, mode, source)
+                setPhase(.running)
+            } else { Log("submit ignored — a task is already running"); return }
+            return
+        }
+        returningFromRecovery = false
+        run.recovery.cancel()
 
         // The home command bar starts a fresh main-display interaction. Voice and notchTyped submits
         // arrive MID-session (the anchor was set at their press/click) and must not move a
@@ -180,6 +211,10 @@ final class CommandCoordinator {
     /// (an adopted card fire included — run.stop() routes to the card's own cancel). Reached from the
     /// notch's and the bar's STOP buttons and from Esc at the transcript beat; never from the hotkey.
     func stop() {
+        if returningFromRecovery {
+            deferredSubmission = nil
+            setPhase(.hidden)
+        }
         if phase == .running, readBack != nil, run.remembering == nil { setPhase(.hidden) }
         run.stop()
     }
@@ -193,11 +228,12 @@ final class CommandCoordinator {
     /// for minutes re-answers the lock here. Completion needs no coordinator API: the card's
     /// completeExternal rides onFinished → runFinished → the normal finishing flourish.
     @discardableResult
-    func beginExternalRun(caption: String, onStopRequest: @escaping @MainActor () -> Void) -> Bool {
+    func beginExternalRun(caption: String, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
+                          onStopRequest: @escaping @MainActor () -> Void) -> Bool {
         guard !run.isRunning else { return false }
         clearReadBack()
         notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
-        run.adoptExternal(caption: caption, onStopRequest: onStopRequest)
+        run.adoptExternal(caption: caption, retryContext: retryContext, onRetry: onRetry, onStopRequest: onStopRequest)
         setPhase(.running)
         Log("▶︎ external run adopted (\(caption))")
         return true
@@ -258,6 +294,11 @@ final class CommandCoordinator {
     }
 
     private func hotkeyPressed() {
+        if run.recovery.isPending {
+            if run.recovery.isVisible { run.recovery.dismiss() }
+            else { run.recovery.reopen() }
+            return
+        }
         if let keyChanged = doubleTapDemoKeyChanged {
             if NSApp.isActive, doubleTapDemoWindow?.isKeyWindow == true { keyChanged(true) }
             return
@@ -298,7 +339,7 @@ final class CommandCoordinator {
         case .listening, .transcribing:
             cancelCurrent()               // the press also bails a capture or a stuck finalize (there is no global Esc)
             return
-        case .hidden, .running, .finishing, .notice:
+        case .hidden, .running, .finishing, .notice, .recovery:
             break                         // a fresh press (.running only reaches here for the demo, which the guards below ignore)
         }
         guard !run.isRunning else { Log("hotkey ignored — busy"); return }
@@ -497,6 +538,7 @@ final class CommandCoordinator {
     /// Esc · click-away · empty-⏎ — close the type field with no action.
     func dismissTyping() {
         guard phase == .typing else { return }
+        deferredSubmission = nil
         setPhase(.hidden)
         Log("notch typing dismissed")
     }
@@ -516,6 +558,7 @@ final class CommandCoordinator {
     /// submitting. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
         guard doubleTapDemoKeyChanged == nil else { return }
+        if run.recovery.isPending { run.recovery.reopen(); return }
         guard phase == .hidden, !run.isRunning else { return }
         notchAnchor = .builtInNotch       // the whole session lives on the bezel that was clicked
         if onboardingDemoArmed { beginNotchDemo(door: "notch click"); return }
@@ -624,6 +667,7 @@ final class CommandCoordinator {
     /// via a hotkey press for the listening and transcribing beats (hotkeyPressed).
     @discardableResult
     func cancelCurrent() -> Bool {
+        if phase == .recovery { run.recovery.dismiss(); return true }
         switch phase {
         case .opening:
             setPhase(.hidden)
@@ -657,9 +701,16 @@ final class CommandCoordinator {
     // MARK: Run completion → the notch's finishing flourish
 
     private func runFinished(_ outcome: CommandRunModel.Outcome) {
+        if returningFromRecovery {
+            returningFromRecovery = false
+            if let (text, mode, source) = deferredSubmission {
+                deferredSubmission = nil; submit(text, mode: mode, source: source)
+            }
+            return
+        }
         clearReadBack()
         // Only flourish if the notch is actually up (a stop/dismiss may have already hidden it).
-        guard phase == .running else { setPhase(.hidden); return }
+        guard phase == .running else { return }
         setPhase(.finishing(outcome))
         // ✓/stopped are a quick flourish; a failure holds longer — its caption carries the ✗ REASON
         // (the sentinel's give-up explanation or the error), and that has to be readable.

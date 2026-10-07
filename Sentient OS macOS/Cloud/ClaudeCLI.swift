@@ -413,12 +413,16 @@ actor ClaudeCLI {
             args += ["--debug-file", directory.appending(path: "claude-\(UUID().uuidString).log").path]
         }
         #endif
+        var environment = Self.environment(for: invocation)
+        if SidekickQuestionServer.connection != nil {
+            environment["MCP_TOOL_TIMEOUT"] = String(Int(SidekickQuestionServer.maximumWait * 1_000))
+        }
         let out = try await CodexCLI.executeAsync(binary: bin,
                                                   args: args,
                                                   stdinText: invocation.prompt,
                                                   cwd: invocation.cwd,
                                                   timeout: invocation.timeout,
-                                                  extraEnv: Self.environment(for: invocation),
+                                                  extraEnv: environment,
                                                   onStdoutLine: stdoutLine)
         let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
         Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
@@ -552,6 +556,7 @@ actor ClaudeCLI {
         }
         recipeAllows += direct.flatMap(\.allAllowed)
         recipeDenies += direct.flatMap(\.denied)
+        if SidekickQuestionServer.connection != nil { recipeAllows.append("mcp__sentient_recovery__ask_user") }
 
         var args = ["-p",
                     "--output-format", "stream-json", "--verbose",
@@ -639,7 +644,7 @@ actor ClaudeCLI {
         if !allowed.isEmpty { args += ["--allowedTools", allowed.joined(separator: ",")] }
         if !disallowed.isEmpty { args += ["--disallowedTools", disallowed.joined(separator: ",")] }
         if let schema = inv.outputSchema { args += ["--json-schema", schema] }
-        return args
+        return try SidekickQuestionServer.addToClaudeArguments(args)
     }
 
     /// `{"allowedMcpServers":[{"serverName":"cua_driver"},{"serverUrl":"https://host/*"},…]}` —

@@ -794,7 +794,7 @@ final class ForYouModel {
     /// once, here, when `fire` unwinds (it always returns, even cancelled). `beginExternalRun`'s
     /// refusal doubles as the re-check for a fire the permission gate held while another task
     /// started.
-    private func runReal(_ id: String, _ action: PreparedAction) {
+    private func runReal(_ id: String, _ action: PreparedAction, retryContext: String = "") {
         let v = visit
         let external = ProactiveExecutor.isFireable(action)
         if external {
@@ -807,28 +807,37 @@ final class ForYouModel {
             guard let coordinator,
                   coordinator.beginExternalRun(
                       caption: entry(id)?.b.title ?? fallback,
+                      retryContext: retryContext,
+                      onRetry: { guidance in self.runReal(id, action, retryContext: retryContext + guidance) },
                       onStopRequest: { [weak self] in self?.stopRun(id) })
             else { Log("card fire blocked at launch — a task already owns the run"); return }
         }
         update(id) { $0.phase = .working(0); $0.liveLines = [] }
         InviteProgram.shared.record(.proactive)
+        let adoptedRun = external ? coordinator?.run : nil
+        let generation = adoptedRun?.runID
+        let interaction = adoptedRun?.interaction
         let task = Task {
             let progress: @Sendable (String) -> Void = { line in
                 Task { @MainActor in
-                    guard self.visit == v else { return }
+                    guard self.visit == v, !external || adoptedRun?.runID == generation else { return }
                     self.appendLine(id, line)                                  // the card (raw)
-                    if external { self.coordinator?.run.externalPush(line) }   // the notch (cleaned)
+                    if external { self.coordinator?.run.externalPush(line, runID: generation) }
                 }
             }
-            let outcome = await ProactiveExecutor.shared.fire(action, progress: progress)
+            let outcome = await SidekickInteraction.$current.withValue(interaction) {
+                await ProactiveExecutor.shared.fire(action, progress: progress)
+            }
             let adopted = external ? self.coordinator?.run : nil
+            if external, adopted?.runID != generation { return }
+            self.runTasks[id] = nil
             guard self.visit == v, !Task.isCancelled else {
-                adopted?.completeExternal(.stopped, line: "■ stopped")   // any stop/re-deal lands here
+                adopted?.completeExternal(.stopped, line: "■ stopped", runID: generation)
                 return
             }
             switch outcome {
             case .fired:
-                adopted?.completeExternal(.success, line: "✓ done")
+                adopted?.completeExternal(.success, line: "✓ done", runID: generation)
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { self.update(id) { $0.phase = .done } }
                 self.removeFromLatest(id)
                 try? await Task.sleep(for: .seconds(2.6))
@@ -836,13 +845,12 @@ final class ForYouModel {
                 self.dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
                                                 height: -CGFloat.random(in: 350...560)))
             case .notFireable(let m), .failed(let m):
-                adopted?.completeExternal(.failed, line: "✗ \(String(m.prefix(160)))")
+                adopted?.completeExternal(.failed, line: "✗ \(m)", runID: generation)
                 self.appendLine(id, "✗ \(m)")
                 try? await Task.sleep(for: .seconds(1.4))
-                guard self.visit == v else { return }
+                guard self.visit == v, !external || adopted?.runID == generation else { return }
                 withAnimation { self.update(id) { $0.phase = .offer } }   // back to offer — edit + retry
             }
-            self.runTasks[id] = nil
         }
         runTasks[id] = task
     }

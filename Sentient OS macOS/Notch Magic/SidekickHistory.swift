@@ -48,7 +48,7 @@ enum SidekickHistory {
     /// Close the pending entry with how the run ended. `line` is the run's final status line —
     /// for failures it carries "✗ <reason>", and the reason is kept: "it stopped because it
     /// needed my card details" is exactly the context the next "finish this" needs.
-    static func close(_ outcome: CommandRunModel.Outcome, line: String) {
+    static func close(_ outcome: CommandRunModel.Outcome, line: String, recordDisplayedError: Bool = true) {
         var entries = load()
         guard let last = entries.indices.last, entries[last].outcome == nil else { return }
         entries[last].outcome = switch outcome {
@@ -60,11 +60,16 @@ enum SidekickHistory {
         save(entries)
         // Keep the exact final notch text, independently of the recent-request buffer.
         // The pending-entry guard above also prevents a duplicate close from adding it twice.
-        if outcome == .failed, !line.isEmpty {
-            var errors = UserDefaults.standard.stringArray(forKey: errorsKey) ?? []
-            errors.append(line)
-            UserDefaults.standard.set(Array(errors.suffix(errorCapacity)), forKey: errorsKey)
-        }
+        if outcome == .failed, recordDisplayedError { recordError(line) }
+    }
+
+    /// Called once when an actual error is presented, including a recoverable tool error.
+    /// Reopening and answering a presentation do not call this again.
+    static func recordError(_ line: String) {
+        guard !line.isEmpty else { return }
+        var errors = UserDefaults.standard.stringArray(forKey: errorsKey) ?? []
+        errors.append(line)
+        UserDefaults.standard.set(Array(errors.suffix(errorCapacity)), forKey: errorsKey)
     }
 
     /// Append the same historical-error instructions to every Sidekick execution route.

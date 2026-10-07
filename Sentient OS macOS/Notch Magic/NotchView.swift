@@ -19,6 +19,7 @@ import AppKit
 // MARK: - Sizing (per phase), derived from the display's real notch (or a default)
 
 struct NotchMetrics: Equatable {
+    var availableSize = CGSize(width: 1440, height: 900)
     var hardwareNotch: CGSize?              // nil = this display has no physical notch
 
     var hasPhysicalNotch: Bool { hardwareNotch != nil }
@@ -87,6 +88,8 @@ struct NotchMetrics: Equatable {
             else if readBack?.isEmpty == false { caption = readBackCaptionHeight(readBack!) }
             else { caption = captionHeight }
             return CGSize(width: runningWidth, height: runningHeight(caption: caption))
+        case .recovery:
+            return CGSize(width: min(520, availableSize.width - 40), height: min(240, availableSize.height - 80))
         case .notice:
             return CGSize(width: max(baseWidth + 120, 320), height: baseHeight + captionHeight + bottomPad)
         }
@@ -171,6 +174,8 @@ struct NotchView: View {
                      demoText: coordinator.demoDraft,
                      showStop: !coordinator.run.isDemo,
                      metrics: metrics,
+                     recovery: coordinator.run.recovery,
+                     onBack: { coordinator.backFromRecovery() },
                      onStop: { coordinator.stop() },
                      onSubmitText: { coordinator.submitTyped($0) },
                      onMic: { coordinator.startListening() },
@@ -196,6 +201,8 @@ struct NotchContent: View {
     /// False during the onboarding demo run — scripted theater has nothing to STOP.
     var showStop: Bool = true
     let metrics: NotchMetrics
+    var recovery: SidekickRecovery? = nil
+    var onBack: () -> Void = {}
     var onStop: () -> Void = {}
     var onSubmitText: (String) -> Void = { _ in }
     /// The field's mic button → open the mic; the listening stop button → transcribe and fire.
@@ -247,7 +254,7 @@ struct NotchContent: View {
                 .clipShape(NotchShape(topCornerRadius: radii.top, bottomCornerRadius: radii.bottom))
         }
         .frame(width: size.width, height: size.height)
-        .accessibilityElement(children: .combine)        // on the notch itself, never the full canvas
+        .accessibilityElement(children: .contain)        // on the notch itself, never the full canvas
         .accessibilityLabel(a11yLabel)
         .scaleEffect(visible || hoverIdle ? 1 : 0.94, anchor: .top)
         .opacity(shellOpacity)                           // shell stays opaque & MERGES into a real notch on dismiss (fades only if there's none)
@@ -294,7 +301,18 @@ struct NotchContent: View {
     private func content(size: CGSize) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 0) {
-                SpinningLogo(size: metrics.controlSlot, fast: phase == .running)
+                if phase == .recovery {
+                    Button(action: onBack) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: metrics.controlSlot, height: metrics.controlSlot)
+                            .contentShape(Rectangle().inset(by: -6))
+                    }
+                    .buttonStyle(.plain).help("Back to Sidekick").accessibilityLabel("Back to Sidekick")
+                } else {
+                    SpinningLogo(size: metrics.controlSlot, fast: phase == .running)
+                }
                 Spacer(minLength: metrics.centerGap)
                 rightControl
                     .frame(width: metrics.controlSlot, height: metrics.controlSlot)   // same square as the logo → twinned size + center axis
@@ -303,7 +321,11 @@ struct NotchContent: View {
             }
             .frame(height: metrics.topRowHeight)
 
-            if phase == .typing {
+            if phase == .recovery, let recovery, let question = recovery.question {
+                SidekickRecoveryView(recovery: recovery, question: question)
+                    .id(question.id)
+                    .transition(.opacity)
+            } else if phase == .typing {
                 typingField
                     .frame(height: metrics.fieldRowHeight)
                     .transition(.opacity)
@@ -343,6 +365,13 @@ struct NotchContent: View {
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(Self.outcomeColor(outcome))
                 .allowsHitTesting(false)
+        case .recovery:
+            Button { recovery?.dismiss() } label: {
+                Image(systemName: "xmark").font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .contentShape(Rectangle().inset(by: -6))
+            }
+            .buttonStyle(.plain).help("Hide for now").accessibilityLabel("Hide for now")
         case .hidden, .opening, .notice:
             Color.clear.frame(width: 1, height: 18)
         }
@@ -584,6 +613,7 @@ struct NotchContent: View {
         case .running: return 3
         case .finishing: return 4
         case .notice: return 5
+        case .recovery: return 6
         }
     }
 
@@ -597,6 +627,7 @@ struct NotchContent: View {
         case .running: return "Sentient is working. \(statusLine)"
         case .finishing: return statusLine
         case .notice(let m): return m
+        case .recovery: return "Sidekick needs your help"
         }
     }
 

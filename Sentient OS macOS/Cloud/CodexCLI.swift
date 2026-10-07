@@ -755,19 +755,20 @@ actor CodexCLI {
             let nativeConfiguration = try OpenAIComputerUse.Configuration.resolve()
             nativeTask = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: nativeConfiguration)
             try Task.checkCancellation()
-            var overrides: [String] = []
+            var overrides = SidekickQuestionServer.connection?.codexOverrides ?? []
             var environment = nativeConfiguration.clientEnvironment
             if backend == .claude {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
                 // Claude supplies readable progress; Codex's structured events still carry
                 // tool activity needed by Sidekick recovery.
                 onLine("codex")
-                let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName })
+                let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName }
+                    + (SidekickQuestionServer.connection == nil ? [] : ["mcp__sentient_recovery"]))
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
                     timeout: timeout, namespaces: namespaces, onProgress: onLine)
                 bridge = relay
                 let configuration = try await relay.start()
-                overrides = configuration.overrides
+                overrides += configuration.overrides
                 environment.merge(configuration.environment) { _, new in new }
             }
             let args = try Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
@@ -1306,6 +1307,7 @@ actor CodexCLI {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
         let holder = ProcHolder(terminationGrace: terminationGrace)
         let childDirectory = ChildProcessDiagnostics.directory
+        let interaction = SidekickInteraction.current
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -1313,7 +1315,7 @@ actor CodexCLI {
                                                             cwd: cwd, timeout: timeout, extraEnv: extraEnv,
                                                             includeCustomProviderKey: includeCustomProviderKey,
                                                             retainStdoutLine: retainStdoutLine,
-                                                            onStdoutLine: onStdoutLine, procHolder: holder) }) }
+                                                            onStdoutLine: onStdoutLine, procHolder: holder, interaction: interaction) }) }
                     catch { cont.resume(throwing: error) }
                 }
             }
@@ -1329,7 +1331,7 @@ actor CodexCLI {
                                 includeCustomProviderKey: Bool = true,
                                 retainStdoutLine: (@Sendable (String) -> Bool)? = nil,
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,
-                                procHolder: ProcHolder? = nil) throws -> ExecResult {
+                                procHolder: ProcHolder? = nil, interaction: SidekickInteraction? = nil) throws -> ExecResult {
         let lease = try CodexRuntime.executionLease(for: binary, cancelled: { procHolder?.isCancelled == true })
         defer { lease?.unlock() }
         let binary = CodexRuntime.binaryAfterLease(binary)
@@ -1424,11 +1426,10 @@ actor CodexCLI {
         // Watchdog: terminate on timeout. waitUntilExit below unblocks either way; we tell a
         // timeout apart from a normal exit via the flag (terminate() looks like SIGTERM).
         let timedOut = OSAllocatedUnfairLock(initialState: false)
-        let watchdog = DispatchWorkItem { [weak proc] in
+        let watchdog = RunWatchdog(timeout: timeout, interaction: interaction) { [weak proc] in
             timedOut.withLock { $0 = true }
             if let procHolder { procHolder.terminate() } else { proc?.terminate() }
         }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
         proc.waitUntilExit()
         procHolder?.clear()
@@ -1483,6 +1484,7 @@ actor CodexCLI {
                                  extraEnv: [String: String] = [:],
                                  onLine: @escaping @Sendable (String) throws -> Void) async throws -> ExecResult {
         let holder = ProcHolder()
+        let interaction = SidekickInteraction.current
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -1561,10 +1563,9 @@ actor CodexCLI {
                 holder.set(proc)        // expose to the cancellation handler (STOP)
 
                 let timedOut = OSAllocatedUnfairLock(initialState: false)
-                let watchdog = DispatchWorkItem {
+                let watchdog = RunWatchdog(timeout: timeout, interaction: interaction) {
                     timedOut.withLock { $0 = true }; holder.terminate()
                 }
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
                 proc.waitUntilExit()
                 holder.clear()

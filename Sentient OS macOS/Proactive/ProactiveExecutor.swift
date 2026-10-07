@@ -434,9 +434,8 @@ actor ProactiveExecutor {
         Use the shell only if the runtime instructions explicitly document a tool command for it. \
         Never use AppleScript, \
         osascript, `open`, `screencapture`, or any other GUI-scripting shortcut, no unrelated \
-        commands, and do not touch unrelated apps or files. You cannot ask the user follow-up \
-        questions — the moment you stop responding, the attempt is over. If you cannot complete the \
-        task with computer use, STOP and reply with `STATUS: COULD_NOT — <reason>`.
+        commands, and do not touch unrelated apps or files. If you need help, use the Sidekick \
+        recovery question tool when available. If you cannot complete the task or ask for help, STOP and reply with `STATUS: COULD_NOT — <reason>`.
 
         \(servicesLine)<<<CONTENT
         \(content)

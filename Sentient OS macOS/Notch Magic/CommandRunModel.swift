@@ -46,6 +46,14 @@ final class CommandRunModel {
     /// Starts the finishing presentation, including immediately on an offline interruption.
     /// The one-task lock remains held until backend cleanup completes.
     var onFinished: ((Outcome) -> Void)?
+    let recovery = SidekickRecovery()
+    @ObservationIgnored var onRecoveryResumed: (() -> Void)?
+    private(set) var interaction: SidekickInteraction?
+    private(set) var runID = UUID()
+    @ObservationIgnored private var retryAction: ((String) -> Void)?
+    @ObservationIgnored private var queuedRetry: (() -> Void)?
+    private var recoveryCancelled = false
+    private var lastAttemptDetail = ""
 
     /// Supplied by the mounted home through a weak model capture. Read once at launch so
     /// edits, dismissals, or a new deck cannot change context halfway through this request.
@@ -75,10 +83,14 @@ final class CommandRunModel {
                                                  // the scoreboard + analytics method tag
     private var connectorRecoveryContext = ""
 
-    func start(_ text: String, mode: AgentMode, source: String = "command") {
+    func start(_ text: String, mode: AgentMode, source: String = "command", retryContext: String = "") {
         guard !isRunning else { return }
         let task0 = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !task0.isEmpty else { return }
+        prepareRecovery(context: retryContext) { [weak self] guidance in
+            self?.start(task0, mode: mode, source: source, retryContext: retryContext + guidance)
+        }
+        let generation = runID
         self.mode = mode
         self.source = source
         self.runStarted = Date()
@@ -104,6 +116,7 @@ final class CommandRunModel {
         let started = Date()
         Diagnostics.$current.withValue(Diagnostics.Operation("command")) {
             ModelBackend.$runOverride.withValue(ModelBackend.current) {
+              SidekickInteraction.$current.withValue(interaction) {
                 task = Task { [weak self] in
                     guard !Task.isCancelled else {
                         self?.complete(.stopped, line: "■ stopped")
@@ -167,11 +180,12 @@ final class CommandRunModel {
                                     #if DEBUG
                                     Log("CMD │ \(line)")
                                     #endif
-                                    self?.push(line)
+                                    if self?.runID == generation { self?.push(line) }
                                 }
                             }
                         }
                         let secs = Int(Date().timeIntervalSince(started))
+                        self?.lastAttemptDetail = out
                         #if DEBUG
                         Log("CMD: final → \(out.suffix(1200))")
                         #endif
@@ -185,7 +199,7 @@ final class CommandRunModel {
                             Log("CMD: reason → \(reason)")
                             #endif
                             self?.complete(.failed,
-                                           line: reason.isEmpty ? "✗ couldn't do it" : "✗ \(String(reason.prefix(160)))",
+                                           line: reason.isEmpty ? "✗ couldn't do it" : "✗ \(reason)",
                                            board: .refused)
                         case .done:
                             Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
@@ -207,7 +221,44 @@ final class CommandRunModel {
                         }
                     }
                 }
+              }
             }
+        }
+    }
+
+    private func prepareRecovery(context: String, retry: ((String) -> Void)?) {
+        recovery.cancel()
+        runID = UUID(); recoveryCancelled = false; queuedRetry = nil
+        retryAction = retry; lastAttemptDetail = ""
+        let generation = runID
+        interaction = SidekickInteraction(retryContext: context) { [weak self] question in
+            guard let self, self.runID == generation, self.isRunning, !self.isOffline, !self.recoveryCancelled else { throw CancellationError() }
+            self.clearRemembering()
+            if let error = question.error { SidekickHistory.recordError(error) }
+            let answer = try await self.recovery.ask(question) { [weak self] in self?.stop() }
+            guard self.runID == generation, self.isRunning, !self.recoveryCancelled else { throw CancellationError() }
+            self.onRecoveryResumed?()
+            return answer
+        }
+    }
+
+    private func presentFailure(_ line: String) {
+        guard !isDemo, !recoveryCancelled else { return }
+        SidekickHistory.recordError(line)
+        let generation = runID
+        let retry = retryAction
+        let detail = lastAttemptDetail.isEmpty ? line : line + "\n" + lastAttemptDetail
+        recovery.present(.failure(line), fallback: true) { [weak self] answer in
+            guard let self, self.runID == generation else { return }
+            guard let answer, answer.selectedAnswer != 1 else { self.stop(); return }
+            guard let retry else { self.recoveryCancelled = true; return }
+            let context = SidekickInteraction.retryInstructions(error: detail, guidance: answer.text)
+            let resume = { [weak self] in
+                guard let self, self.runID == generation else { return }
+                retry(context); self.onRecoveryResumed?()
+            }
+            if self.isRunning { self.queuedRetry = resume }
+            else { resume() }
         }
     }
 
@@ -223,6 +274,7 @@ final class CommandRunModel {
     private func connectorLeg(_ task0: String, slug: String, name: String, operation: SlackConnector.Operation?, mailOperation: OutlookMailConnector.Operation?, calendarOperation: OutlookCalendarConnector.Operation?,
                               screenshots: [URL], kbContext: String, cardContext: String,
                               started: Date) async throws -> Bool {
+        let generation = runID
         executedMethod = "mcp"
         statusLine = "Using \(name)'s tools…"
         let basePrompt = Self.connectorPrompt(task: task0, name: name,
@@ -251,10 +303,11 @@ final class CommandRunModel {
                         #if DEBUG
                         Log("CMD │ \(line)")
                         #endif
-                        self?.push(line)
+                        if self?.runID == generation { self?.push(line) }
                     }
                 }
             }
+            lastAttemptDetail = env.result
             let secs = Int(Date().timeIntervalSince(started))
             #if DEBUG
             Log("CMD: final → \(env.result.suffix(1200))")
@@ -318,7 +371,10 @@ final class CommandRunModel {
     }
 
     func stop() {
-        guard isRunning, !isOffline else { return }
+        guard !recoveryCancelled else { return }
+        recoveryCancelled = true; queuedRetry = nil
+        recovery.cancel()
+        guard isRunning else { return }
         stopWatchingConnectivity()
         clearRemembering()
         statusLine = "Stopping…"
@@ -334,8 +390,10 @@ final class CommandRunModel {
     /// out until it ends. The work itself stays in the caller's Task; `onStopRequest` is how any
     /// STOP surface (notch, bar) reaches it. Silently refuses while a run is live — the
     /// caller checks the coordinator's `beginExternalRun` return.
-    func adoptExternal(caption: String, onStopRequest: @escaping @MainActor () -> Void) {
+    func adoptExternal(caption: String, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
+                       onStopRequest: @escaping @MainActor () -> Void) {
         guard !isRunning else { return }
+        prepareRecovery(context: retryContext, retry: onRetry)
         mode = .computer
         source = "proactive_card"        // log/analytics honesty only — external ends never reach complete()
         runStarted = Date()
@@ -355,15 +413,15 @@ final class CommandRunModel {
 
     /// One raw codex line from the adopted run, through the same cleaning a native run gets
     /// (stderr strip, section tracking, the "Remembering" bloom, the bar filter).
-    func externalPush(_ line: String) {
-        guard isExternal else { return }
+    func externalPush(_ line: String, runID: UUID? = nil) {
+        guard isExternal, runID == nil || runID == self.runID else { return }
         push(line)
     }
 
     /// End the adopted run — no scoreboard, no analytics (ProactiveExecutor already recorded the
     /// fire); just the shared epilogue. Idempotent: a late second arrival no-ops.
-    func completeExternal(_ outcome: Outcome, line: String) {
-        guard isRunning, isExternal else { return }
+    func completeExternal(_ outcome: Outcome, line: String, runID: UUID? = nil) {
+        guard isRunning, isExternal, runID == nil || runID == self.runID else { return }
         finish(outcome, line: line)
     }
 
@@ -377,6 +435,8 @@ final class CommandRunModel {
     /// (onFinished → the coordinator's ✓ flourish + retract); stop() cancels it like any run.
     func startOnboardingDemo() {
         guard !isRunning else { return }
+        recovery.cancel(); recoveryCancelled = false; runID = UUID()
+        retryAction = nil; interaction = nil
         mode = .computer
         isDemo = true
         isOffline = false
@@ -426,7 +486,7 @@ final class CommandRunModel {
         let line = alreadyFinishing || (!isDemo && outcome == .failed && NetworkSnapshot.shared.current.status == "unsatisfied")
             ? Self.offlineMessage : line
         stopWatchingConnectivity()
-        if !isDemo { SidekickHistory.close(outcome, line: line) }   // theater never touches history
+        if !isDemo { SidekickHistory.close(outcome, line: line, recordDisplayedError: false) }
         clearRemembering()
         isOffline = false
         statusLine = line
@@ -435,14 +495,16 @@ final class CommandRunModel {
         isExternal = false
         externalStop = nil
         task = nil
-        // Offline detection already started the five-second flourish. Cleanup must not restart it.
-        if !alreadyFinishing { onFinished?(outcome) }
+        if let retry = queuedRetry { queuedRetry = nil; retry(); return }
+        // Offline already presented recovery. Backend cleanup must not reset its window or draft.
+        if outcome == .failed, !isDemo, !alreadyFinishing, !recoveryCancelled { presentFailure(line) }
+        else if !alreadyFinishing || recoveryCancelled { onFinished?(outcome) }
         statusClearTask?.cancel()
         statusClearTask = Task { [weak self] in
             // Failures hold longest — the ✗ line carries the give-up REASON and must be readable.
             let linger: Double = outcome == .success ? 2.5 : (outcome == .failed ? 6.0 : 4.5)
             try? await Task.sleep(for: .seconds(linger))
-            if let self, !Task.isCancelled, !self.isRunning { self.statusLine = "" }
+            if let self, !Task.isCancelled, !self.isRunning, !self.recovery.isPending { self.statusLine = "" }
         }
     }
 
@@ -468,7 +530,7 @@ final class CommandRunModel {
         isOffline = true
         clearRemembering()
         stopWatchingConnectivity()
-        onFinished?(.failed)
+        presentFailure(Self.offlineMessage)
         if let externalStop { externalStop() } else { task?.cancel() }
         return true
     }
@@ -611,7 +673,7 @@ final class CommandRunModel {
     }
 
     private static func short(_ error: Error) -> String {
-        String(((error as? LocalizedError)?.errorDescription ?? "\(error)").prefix(160))
+        (error as? LocalizedError)?.errorDescription ?? "\(error)"
     }
 
     /// The knowledge-base context inlined into every command prompt: the root README (the portrait +
@@ -757,7 +819,7 @@ final class CommandRunModel {
 
         \(servicesLine)\(Self.injectionGuard)
 
-        You will not be able to ask me follow-up questions to clarify: in this harness, the moment you stop responding I see the task attempt as completed. So don't stop to ask trivial follow-up questions. Either do the task, or if it's genuinely way too ambiguous to act on (like in case of critical TTS fumble), just stop. No follow-up questions are possible.
+        When blocked or needing a meaningful decision, use the Sidekick recovery tool if available. Ask through that tool instead of ending the task with a question in prose. If the tool is unavailable, report the complete blocker honestly.
         \(contextLine)\(history.isEmpty ? "" : "\n\(history)\n")
         \(cardContext.isEmpty ? "" : "\n\(cardContext)\n")
         \(Self.knowledgeBlock(kbContext))

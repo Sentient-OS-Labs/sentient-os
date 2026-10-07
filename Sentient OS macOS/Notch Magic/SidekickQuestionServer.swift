@@ -1,0 +1,209 @@
+// A per-invocation, authenticated loopback MCP tool that waits for a real notch answer.
+// The app owns listener, calls and cancellation; repeated RPC IDs reuse the same question/result.
+// Doc: Documentation - Sidekick - General.md
+
+import Foundation
+import Network
+
+actor SidekickQuestionServer {
+    nonisolated static let name = "sentient_recovery"
+    nonisolated static let maximumWait: TimeInterval = 86_400
+    @TaskLocal static var connection: Connection?
+
+    struct Connection: Sendable {
+        let url: String
+        let token: String
+        var codexOverrides: [String] {
+            let key = "mcp_servers.\(SidekickQuestionServer.name)"
+            return ["\(key).url=\(DirectMCPRuntime.quoted(url))",
+                "\(key).http_headers={Authorization=\(DirectMCPRuntime.quoted("Bearer " + token))}",
+                "\(key).default_tools_approval_mode=\"approve\"", "\(key).required=true",
+                "\(key).tool_timeout_sec=\(Int(SidekickQuestionServer.maximumWait))"]
+        }
+        var claudeServer: [String: Any] {
+            ["type": "http", "url": url, "headers": ["Authorization": "Bearer " + token]]
+        }
+    }
+
+    private let interaction: SidekickInteraction
+    private let token = UUID().uuidString + UUID().uuidString
+    private var listener: NWListener?
+    private var startup: CheckedContinuation<UInt16, Error>?
+    private var clients: [UUID: NWConnection] = [:]
+    private var handlers: [UUID: Task<Void, Never>] = [:]
+    private var closed = false
+    private struct Call {
+        let fingerprint: Data
+        let task: Task<SidekickAnswer, Error>
+    }
+    private var calls: [String: Call] = [:]
+    private var activeCall: String?
+
+    init(interaction: SidekickInteraction) { self.interaction = interaction }
+
+    /// Extend the existing recipe wall and hooks without replacing connector policy.
+    nonisolated static func addToClaudeArguments(_ arguments: [String]) throws -> [String] {
+        guard let connection else { return arguments }
+        var args = arguments
+        if let flag = args.firstIndex(of: "--mcp-config"), flag + 1 < args.count {
+            guard var config = try JSONSerialization.jsonObject(with: Data(args[flag + 1].utf8)) as? [String: Any] else { throw URLError(.cannotParseResponse) }
+            var servers = config["mcpServers"] as? [String: Any] ?? [:]
+            servers[name] = connection.claudeServer; config["mcpServers"] = servers
+            args[flag + 1] = String(decoding: try json(config), as: UTF8.self)
+        } else {
+            args += ["--mcp-config", String(decoding: try json(["mcpServers": [name: connection.claudeServer]]), as: UTF8.self)]
+        }
+        for flag in args.indices where args[flag] == "--settings" && flag + 1 < args.count {
+            guard var settings = try JSONSerialization.jsonObject(with: Data(args[flag + 1].utf8)) as? [String: Any] else { throw URLError(.cannotParseResponse) }
+            if var wall = settings["allowedMcpServers"] as? [[String: Any]] {
+                wall.append(["serverName": name]); settings["allowedMcpServers"] = wall
+                args[flag + 1] = String(decoding: try json(settings), as: UTF8.self)
+            }
+        }
+        return args
+    }
+
+    @MainActor static func withConnection<T>(enabled: Bool = true, _ body: () async throws -> T) async throws -> T {
+        guard enabled, let interaction = SidekickInteraction.current else {
+            return try await $connection.withValue(nil) { try await body() }
+        }
+        let server = SidekickQuestionServer(interaction: interaction)
+        do {
+            let configuration = try await server.start()
+            let result = try await withTaskCancellationHandler {
+                try await $connection.withValue(configuration) { try await body() }
+            } onCancel: { Task { await server.stop() } }
+            await server.stop()
+            return result
+        } catch { await server.stop(); throw error }
+    }
+
+    func start() async throws -> Connection {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let server = try NWListener(using: parameters)
+        listener = server
+        server.newConnectionHandler = { [weak self] client in Task { await self?.accept(client) } }
+        server.stateUpdateHandler = { [weak self] state in Task { await self?.changed(state) } }
+        let deadline = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled { await self?.startupFailed() }
+        }
+        defer { deadline.cancel() }
+        let port = try await withCheckedThrowingContinuation { continuation in
+            startup = continuation; server.start(queue: DispatchQueue(label: "sentient.recovery.listener"))
+        }
+        try Task.checkCancellation()
+        return Connection(url: "http://127.0.0.1:\(port)/mcp", token: token)
+    }
+
+    private func changed(_ state: NWListener.State) {
+        switch state {
+        case .ready:
+            if let port = listener?.port?.rawValue { startup?.resume(returning: port); startup = nil }
+        case .failed: startupFailed()
+        default: break
+        }
+    }
+    private func startupFailed() {
+        startup?.resume(throwing: URLError(.cannotConnectToHost)); startup = nil
+        listener?.cancel(); listener = nil
+    }
+
+    func stop() {
+        guard !closed else { return }
+        closed = true; startup?.resume(throwing: CancellationError()); startup = nil
+        listener?.cancel(); listener = nil
+        calls.values.forEach { $0.task.cancel() }; calls.removeAll()
+        handlers.values.forEach { $0.cancel() }; handlers.removeAll()
+        clients.values.forEach { $0.cancel() }; clients.removeAll()
+    }
+
+    private func accept(_ client: NWConnection) {
+        guard !closed, clients.count < 16 else { client.cancel(); return }
+        let id = UUID(); clients[id] = client
+        client.start(queue: DispatchQueue(label: "sentient.recovery.client"))
+        handlers[id] = Task { await serve(client, id: id) }
+    }
+
+    private func serve(_ client: NWConnection, id: UUID) async {
+        defer { client.cancel(); clients[id] = nil; handlers[id] = nil }
+        do {
+            let request = try await LoopbackHTTP.read(client, maximumBody: 1_048_576) { [token] headers in
+                headers["authorization"] == "Bearer " + token && headers["origin"] == nil
+            }
+            guard request.path == "/mcp", request.method == "POST", !closed else {
+                try await LoopbackHTTP.write(client, LoopbackHTTP.response(status: 404)); return
+            }
+            guard let rpc = try JSONSerialization.jsonObject(with: request.body) as? [String: Any] else { throw URLError(.badServerResponse) }
+            guard rpc["id"] != nil else {
+                try await LoopbackHTTP.write(client, LoopbackHTTP.response(status: 202)); return
+            }
+            let body = try await response(rpc)
+            try await LoopbackHTTP.write(client, LoopbackHTTP.response(status: 200, body: body))
+        } catch {
+            let status = (error as? URLError)?.code == .userAuthenticationRequired ? 403 : 400
+            try? await LoopbackHTTP.write(client, LoopbackHTTP.response(status: status))
+        }
+    }
+
+    func response(_ rpc: [String: Any]) async throws -> Data {
+        guard !closed, let id = rpc["id"], id is String || id is NSNumber else { throw CancellationError() }
+        func reply(_ result: [String: Any]) throws -> Data { try Self.json(["jsonrpc": "2.0", "id": id, "result": result]) }
+        switch rpc["method"] as? String {
+        case "initialize":
+            let params = rpc["params"] as? [String: Any]
+            return try reply(["protocolVersion": params?["protocolVersion"] as? String ?? "2024-11-05",
+                "capabilities": ["tools": [:]], "serverInfo": ["name": "Sidekick recovery", "version": "1"]])
+        case "ping": return try reply([:])
+        case "tools/list": return try reply(["tools": [Self.tool]])
+        case "tools/call":
+            guard let params = rpc["params"] as? [String: Any], params["name"] as? String == "ask_user",
+                  let arguments = params["arguments"] as? [String: Any],
+                  let question = arguments["question"] as? String, let answers = arguments["answers"] as? [String],
+                  Set(arguments.keys) == ["error", "question", "answers"],
+                  arguments["error"] is NSNull || arguments["error"] is String else {
+                return try reply(Self.invalidArguments)
+            }
+            let key = String(decoding: try Self.json(id), as: UTF8.self)
+            let fingerprint = try Self.json(arguments)
+            let call: Call
+            if let existing = calls[key] {
+                guard existing.fingerprint == fingerprint else { return try reply(Self.invalidArguments) }
+                call = existing
+            } else {
+                guard activeCall == nil, !interaction.hasActiveTools, calls.count < 64,
+                      let value = try? SidekickQuestion(error: arguments["error"] as? String, question: question, answers: answers) else {
+                    return try reply(Self.invalidArguments)
+                }
+                activeCall = key
+                call = Call(fingerprint: fingerprint, task: Task { [interaction] in try await interaction.ask(value) })
+                calls[key] = call
+            }
+            do {
+                let answer = try await call.task.value
+                if activeCall == key { activeCall = nil }
+                return try reply(["content": [["type": "text", "text": String(decoding: try JSONEncoder().encode(answer), as: UTF8.self)]]])
+            } catch {
+                if activeCall == key { activeCall = nil }
+                throw error
+            }
+        default: return try Self.json(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Method unavailable"]])
+        }
+    }
+
+    private static var invalidArguments: [String: Any] {
+        ["isError": true, "content": [["type": "text", "text": "Ask one nonempty question with exactly two distinct, concise answers. Only one question may be pending, and all other tool calls must finish first. Do not reuse an earlier request ID with changed arguments."]]]
+    }
+    private static var tool: [String: Any] {
+        ["name": "ask_user", "description": "Pause Sidekick and ask the user for help in the notch. Returns only their actual answer. Call alone after other tools finish; never act while waiting.",
+         "inputSchema": ["type": "object", "properties": [
+            "error": ["type": ["string", "null"], "description": "The complete error to display, or null for a clarification."],
+            "question": ["type": "string", "minLength": 1, "maxLength": 500],
+            "answers": ["type": "array", "minItems": 2, "maxItems": 2, "items": ["type": "string", "minLength": 1, "maxLength": 160]]],
+            "required": ["error", "question", "answers"], "additionalProperties": false]]
+    }
+    nonisolated private static func json(_ value: Any) throws -> Data {
+        try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .withoutEscapingSlashes, .fragmentsAllowed])
+    }
+}

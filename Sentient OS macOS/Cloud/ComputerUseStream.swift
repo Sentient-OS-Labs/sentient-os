@@ -9,7 +9,9 @@ nonisolated enum ComputerUseStream {
     static func run(binary: String, args: [String], timeout: TimeInterval,
                     extraEnv: [String: String] = [:], narrate: Bool = true,
                     onLine: @escaping @Sendable (String) -> Void) async throws -> CodexCLI.ExecResult {
+        let recovery = SidekickInteraction.current
         return try await CodexCLI.executeStreaming(binary: binary, args: args, timeout: timeout, extraEnv: extraEnv) { line in
+            try recovery?.observeToolEvent(line)
             if narrate { progress(from: line).forEach(onLine) }
         }
     }
