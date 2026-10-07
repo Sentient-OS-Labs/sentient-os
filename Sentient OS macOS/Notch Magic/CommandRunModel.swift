@@ -149,10 +149,11 @@ final class CommandRunModel {
                         // A canceled router also returns .computer. STOP must end the request
                         // before that fallback can start a new computer-use invocation.
                         try Task.checkCancellation()
-                        let prompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
+                        let basePrompt = Self.commandPrompt(task: task0, mode: mode, screenshots: shots.count,
                                                         spoken: source == "voice", kbContext: kb, history: history,
                                                         cardContext: cardContext)
                             + (self?.connectorRecoveryContext ?? "")
+                        let prompt = SidekickHistory.appendingErrors(to: basePrompt)
                         Log("CMD: launching agent command (\(mode.promptPhrase) · bypass sandbox · screenshots: \(shots.count))…")
                         #if DEBUG   // B7: prompt + live output + final carry the user's command, KB context, and codex
                                     // play-by-play — DEBUG-only so they can never become a Release breadcrumb.
@@ -226,8 +227,9 @@ final class CommandRunModel {
                               started: Date) async throws -> Bool {
         executedMethod = "mcp"
         statusLine = "Using \(name)'s tools…"
-        let prompt = Self.connectorPrompt(task: task0, name: name,
-                                          screenshots: screenshots.count, kbContext: kbContext, cardContext: cardContext)
+        let basePrompt = Self.connectorPrompt(task: task0, name: name,
+                                              screenshots: screenshots.count, kbContext: kbContext, cardContext: cardContext)
+        let prompt = SidekickHistory.appendingErrors(to: basePrompt)
         var inv = CodexCLI.Invocation(prompt: prompt)
         inv.feature = "sidekick-mcp"
         inv.effort = .medium
