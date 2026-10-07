@@ -1,8 +1,7 @@
 //
 // ConnectorConnectSheet.swift
-// Gmail-style connection popup for catalog apps and all detected accounts. Uses the pane's live
-// discovery state and starts direct browser sign-in here. Settings exposes the knowledge toggle;
-// onboarding uses the picker's automatic selection. Direct accounts retain their IDs.
+// Hosted connection popups save the user's selection immediately. Direct accounts retain their
+// browser OAuth, account IDs, knowledge toggle and cancellation lifecycle.
 // Doc: Documentation - Settings.md
 //
 
@@ -23,7 +22,9 @@ struct ConnectorConnectSheet: View {
     @State private var disconnecting = false
     @State private var message: String?
     @State private var operation: Task<Void, Never>?
-    @State private var checkingEmail = false
+    @AppStorage private var hostedSelected: Bool
+    @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
+    private let hostedBackend: ModelBackend
 
     init(source: ConnectorSource, connectors: Binding<[ConnectorCensus.DetectedConnector]>,
          context: KnowledgeSourcesPicker.Context = .settings) {
@@ -31,6 +32,13 @@ struct ConnectorConnectSheet: View {
         _connectors = connectors
         self.context = context
         _boundConnectorID = State(initialValue: source.connector?.id)
+        _hostedSelected = AppStorage(wrappedValue: false,
+            ConnectorRegistry.kbKey(source.connector?.slug ?? source.serviceSlug))
+        switch source.connector?.origin {
+        case .claude: hostedBackend = .claude
+        case .chatgpt: hostedBackend = .chatgpt
+        default: hostedBackend = ModelBackend.current
+        }
     }
 
     private var connector: ConnectorCensus.DetectedConnector? {
@@ -53,7 +61,7 @@ struct ConnectorConnectSheet: View {
 
     private var selectionSlug: String { connector?.slug ?? source.serviceSlug }
     private var connecting: Bool { connectionPhase != nil }
-    private var busy: Bool { connecting || disconnecting || checkingEmail }
+    private var busy: Bool { connecting || disconnecting }
     private var connectTitle: String {
         switch connectionPhase {
         case .openingBrowser: "Opening sign-in…"
@@ -64,79 +72,71 @@ struct ConnectorConnectSheet: View {
         }
     }
     private var name: String { ConnectorRegistry.pack(forSlug: source.serviceSlug)?.displayName ?? source.displayName }
-    private var origin: ConnectorCensus.DetectedConnector.Origin? {
-        (connector ?? source.connector)?.origin ?? .init(backend: ModelBackend.current)
+    private var reader: String { hostedBackend == .claude ? "Claude" : "ChatGPT" }
+    private var hostedCanRead: Bool { ConnectorRegistry.kbEligible(source.serviceSlug, backend: hostedBackend) }
+    private var hostedConnected: Bool {
+        if hostedCanRead { return hostedSelected }
+        // Task-only apps have no reading preference. Keep their saved declaration without
+        // inventing an analysis opt-in or treating a cached health result as a setup gate.
+        guard let origin = ConnectorCensus.DetectedConnector.Origin(backend: hostedBackend) else { return false }
+        return ConnectorCensus.cached(for: origin).contains { $0.slug == selectionSlug }
     }
-    private var reader: String { origin == .claude ? "Claude" : "ChatGPT" }
 
     var body: some View {
         VStack(spacing: 0) {
             serviceIcon
-            Text("Connect \(name)")
+            Text(usesDirect ? "Connect \(name)" : name)
                 .display(20).foregroundStyle(Theme.Ink.statusInk)
                 .multilineTextAlignment(.center)
 
-            VStack(alignment: .leading, spacing: 9) {
-                if usesDirect {
+            if usesDirect {
+                VStack(alignment: .leading, spacing: 9) {
                     bullet("link", "Sign in to \(name) in your browser")
                     bullet("lock", "Your connection stays in this Mac's Keychain")
                     bullet("sparkles", "Your selected AI processes the content you request")
-                } else {
-                    bullet("person.crop.circle", "Read \(name) through your own \(reader) account")
-                    bullet("link", "Link your account on \(reader)'s connectors page")
-                    bullet("lock", "Sign in directly with your provider")
-                    if origin == .claude && ["outlook-mail", "outlook-calendar"].contains(source.serviceSlug) {
-                        bullet("building.2", "Uses Microsoft 365 with a work or school account")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 14)
+
+                if let direct {
+                    VStack(spacing: 4) {
+                        Text(direct.label).foregroundStyle(Theme.Ink.bright)
+                        Text(direct.accountLabel ?? "Uses the account you approved in the browser.")
+                            .foregroundStyle(Theme.Ink.body)
                     }
+                    .font(.system(size: 11)).multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 16)
                 }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, 14)
 
-            if !usesDirect && (source.serviceSlug == "gmail" || OutlookMailConnector.isMail(source.serviceSlug)) {
-                Text(MailAccountCollection.storageDisclosure)
-                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
-            }
-
-            if let direct {
-                VStack(spacing: 4) {
-                    Text(direct.label).foregroundStyle(Theme.Ink.bright)
-                    Text(direct.accountLabel ?? "Uses the account you approved in the browser.")
-                        .foregroundStyle(Theme.Ink.body)
-                }
-                .font(.system(size: 11)).multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 16)
-            }
-
-            if ConnectorRegistry.kbEligible(selectionSlug) {
-                if context == .settings {
-                    ConnectorKnowledgeControl(slug: selectionSlug)
-                        .disabled(busy)
+                if ConnectorRegistry.kbEligible(selectionSlug) {
+                    if context == .settings {
+                        ConnectorKnowledgeControl(slug: selectionSlug)
+                            .disabled(busy)
+                            .padding(.top, 20)
+                    }
+                } else if connector != nil {
+                    taskOnlyNotice
                         .padding(.top, 20)
                 }
-            } else if connector != nil {
-                Text("Available for tasks. This app does not support knowledge-base analysis.")
-                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 20)
-            }
 
-            actionButton(connectTitle,
-                         primary: true, external: !connecting, action: connect)
-                .padding(.top, 26)
-                .disabled(busy)
-            actionButton(checkingEmail ? "Checking…" : "Done", action: done)
-                .padding(.top, 10).disabled(busy)
+                actionButton(connectTitle,
+                             primary: true, external: !connecting, action: connect)
+                    .padding(.top, 26)
+                    .disabled(busy)
+                actionButton("Done", action: done)
+                    .padding(.top, 10).disabled(busy)
 
-            statusLine.padding(.top, 14).frame(minHeight: 42, alignment: .top)
+                statusLine.padding(.top, 14).frame(minHeight: 42, alignment: .top)
 
-            if direct != nil {
-                Button(disconnecting ? "Disconnecting…" : "Disconnect account", action: disconnect)
-                    .buttonStyle(.plain).font(.system(size: 11))
-                    .foregroundStyle(Theme.Ink.deepMuted)
-                    .padding(.top, 18).disabled(busy)
+                if direct != nil {
+                    Button(disconnecting ? "Disconnecting…" : "Disconnect account", action: disconnect)
+                        .buttonStyle(.plain).font(.system(size: 11))
+                        .foregroundStyle(Theme.Ink.deepMuted)
+                        .padding(.top, 18).disabled(busy)
+                }
+            } else {
+                hostedControls
             }
         }
         .padding(.horizontal, 36).padding(.top, 40).padding(.bottom, 24)
@@ -148,7 +148,59 @@ struct ConnectorConnectSheet: View {
             // Once linked, never silently move this popup to another account of the service.
             if boundConnectorID == nil { boundConnectorID = id }
         }
+        .onChange(of: backendRaw) { if !usesDirect { dismiss() } }
         .onDisappear(perform: cancelOperation)
+    }
+
+    private var hostedControls: some View {
+        VStack(spacing: 16) {
+            Button(action: connect) {
+                HStack(spacing: 7) {
+                    Text(hostedConnected ? "Open connector settings" : "Connect \(name)")
+                        .font(.system(size: 14, weight: .medium))
+                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
+                }
+                .foregroundStyle(Theme.Ink.bright)
+                .frame(minHeight: 32)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(PressScaleStyle())
+
+            if hostedConnected {
+                if hostedCanRead {
+                    Button("Stop reading \(name)", action: stopHostedReading)
+                        .buttonStyle(.plain).font(.system(size: 11))
+                        .foregroundStyle(Theme.Ink.deepMuted)
+                } else {
+                    taskOnlyNotice
+                }
+            } else {
+                actionButton("Done", primary: true, action: done)
+                Text(hostedCanRead
+                     ? "Sentient reads \(name) through your \(reader) connector. Enable it and sign in there, then press Done."
+                     : "Enable \(name) in your \(reader) connectors and sign in there, then press Done to use it for tasks.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+
+                if hostedBackend == .claude && ["outlook-mail", "outlook-calendar"].contains(source.serviceSlug) {
+                    Text("Uses Microsoft 365 with a work or school account.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.faint)
+                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                }
+                if source.serviceSlug == "gmail" || OutlookMailConnector.isMail(source.serviceSlug) {
+                    Text(MailAccountCollection.storageDisclosure)
+                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.top, 26)
+    }
+
+    private var taskOnlyNotice: some View {
+        Text("Available for tasks. This app does not support knowledge-base analysis.")
+            .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+            .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
     }
 
     @ViewBuilder private var serviceIcon: some View {
@@ -188,9 +240,7 @@ struct ConnectorConnectSheet: View {
 
     private var statusLine: some View {
         Group {
-            if checkingEmail {
-                Text("Checking your connected email…").foregroundStyle(Theme.Ink.body)
-            } else if let message {
+            if let message {
                 Text(message).foregroundStyle(Theme.Ink.amber)
             } else if let connectionPhase {
                 switch connectionPhase {
@@ -204,8 +254,7 @@ struct ConnectorConnectSheet: View {
                     Text("Signed in. Checking available tools. This can take a moment.").foregroundStyle(Theme.Ink.body)
                 }
             } else {
-                Text(usesDirect ? "Sign in in your browser, then press Done."
-                                : "Linked it on the page? Press Done to use it in Sentient.")
+                Text("Sign in in your browser, then press Done.")
                     .foregroundStyle(Theme.faint)
             }
         }
@@ -217,9 +266,7 @@ struct ConnectorConnectSheet: View {
         guard !busy else { return }
         message = nil
         guard usesDirect else {
-            openedConnectorPage = true
-            NSWorkspace.shared.open(ConnectorLinks.page(for: source.serviceSlug,
-                backend: origin == .claude ? .claude : .chatgpt))
+            openConnectorPage()
             return
         }
         guard let provider = direct?.provider ?? source.directProvider else { return }
@@ -261,6 +308,14 @@ struct ConnectorConnectSheet: View {
         }
     }
 
+    private func openConnectorPage() {
+        guard ModelBackend.current == hostedBackend, hostedBackend != .custom else { dismiss(); return }
+        if NSWorkspace.shared.open(ConnectorLinks.page(for: source.serviceSlug, backend: hostedBackend)) {
+            openedConnectorPage = true
+            HostedConnectorSetup.settingsOpened(slug: source.serviceSlug, backend: hostedBackend)
+        }
+    }
+
     private func nextAccountLabel(for provider: DirectMCPProvider) -> String {
         let accounts = DirectMCPStore.connections().filter { $0.providerSlug == provider.slug }
         var label = "Account"
@@ -285,31 +340,23 @@ struct ConnectorConnectSheet: View {
     }
 
     private func done() {
-        if !usesDirect && (source.serviceSlug == "gmail" || OutlookMailConnector.isMail(source.serviceSlug)) {
-            guard !busy, let engine = MailAccount.Engine(rawValue: origin?.rawValue ?? "") else { return }
-            checkingEmail = true; message = nil
-            operation = Task {
-                defer { checkingEmail = false }
-                do {
-                    let result = try await MailAccountCollection.collect(engine: engine,
-                        provider: source.serviceSlug == "gmail" ? .gmail : .outlook)
-                    try Task.checkCancellation()
-                    guard ModelBackend.current.rawValue == engine.rawValue else { return }
-                    if result.connectionAvailable { confirmDone() } else { dismiss() }
-                } catch is CancellationError { return }
-                catch { message = (error as? MailAccountError)?.errorDescription ?? "Account details couldn't be saved. Please try again." }
-            }
+        guard !busy else { return }
+        if !usesDirect {
+            _ = HostedConnectorSetup.confirm(slug: source.serviceSlug, backend: hostedBackend,
+                                              reconnected: openedConnectorPage)
+            dismiss()
             return
         }
-        confirmDone()
-    }
-
-    private func confirmDone() {
-        if !usesDirect { ConnectorCensus.confirmSelection(slug: selectionSlug, reconnected: openedConnectorPage) }
         if ConnectorRegistry.kbEligible(selectionSlug),
            UserDefaults.standard.object(forKey: ConnectorRegistry.kbKey(selectionSlug)) == nil {
             ConnectorRegistry.setKBEnabled(selectionSlug, true)
         }
+        dismiss()
+    }
+
+    private func stopHostedReading() {
+        guard ModelBackend.current == hostedBackend else { dismiss(); return }
+        hostedSelected = false
         dismiss()
     }
 

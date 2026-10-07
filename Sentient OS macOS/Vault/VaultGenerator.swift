@@ -62,6 +62,20 @@ actor VaultGenerator {
         var inputSourceIDs: [String]? = nil
         /// Only survivor summaries, keyed by opaque Mail identities. Rechecked before resuming.
         var mailInputHashes: [String: String]? = nil
+        /// CLI sessions only exist in the runtime that created them. Older tokens have no
+        /// scope and must restart from the retained summaries, never import a CLI session.
+        var sessionScope: String? = nil
+
+        static func scope(for backend: ModelBackend) -> String {
+            switch backend {
+            case .claude: "claude:v1"
+            case .chatgpt, .custom: "\(backend.rawValue):\(CodexRuntime.sessionScope)"
+            }
+        }
+
+        func matchingRuntime(_ backend: ModelBackend) -> Self? {
+            sessionScope == Self.scope(for: backend) ? self : nil
+        }
     }
 
     enum VaultError: LocalizedError {
@@ -172,6 +186,8 @@ actor VaultGenerator {
                            onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
         var invocation = invocation
         invocation.claudeModel = .opus     // the Claude engine's heavy leg: vault work earns Opus
+        let backend = ModelBackend.current
+        let sessionScope = ResumeToken.scope(for: backend)
         onProgress(.calling)
         let poller = Task.detached {
             while !Task.isCancelled {
@@ -182,12 +198,15 @@ actor VaultGenerator {
         }
         defer { poller.cancel() }
         do {
-            return try await FrontierRun.run(invocation, onLine: onLine)
+            return try await ModelBackend.$runOverride.withValue(backend) {
+                try await FrontierRun.run(invocation, onLine: onLine)
+            }
         } catch let CodexCLI.CLIError.usageLimit(message, sessionID) {
             // Staging is deliberately KEPT — the resume token points at it (survives an app restart).
             Log("VaultGenerator: ⚠️ usage limit (thread \(sessionID ?? "nil")); staging kept for resume")
             throw VaultError.usageLimit(message: message,
-                                        resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path))
+                                        resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path,
+                                                            sessionScope: sessionScope))
         }
     }
 
@@ -203,6 +222,18 @@ actor VaultGenerator {
         resume: ResumeToken? = nil,
         onProgress: @Sendable @escaping (Progress) -> Void = { _ in },
         onLine: (@Sendable (String) -> Void)? = nil
+    ) async throws -> Result {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            try await generatePinned(notes: notes, resume: resume?.matchingRuntime(backend),
+                                     onProgress: onProgress, onLine: onLine)
+        }
+    }
+
+    private func generatePinned(
+        notes: [CloudNote], resume: ResumeToken?,
+        onProgress: @Sendable @escaping (Progress) -> Void,
+        onLine: (@Sendable (String) -> Void)?
     ) async throws -> Result {
         onProgress(.gathering(notes.count))
         let fm = FileManager.default

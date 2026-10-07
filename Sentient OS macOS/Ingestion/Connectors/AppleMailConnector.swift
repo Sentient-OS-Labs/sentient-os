@@ -7,7 +7,9 @@ import Foundation
 nonisolated enum AppleMailSelection {
     static let key = "sources.appleMail.accounts"
     static var accounts: Set<String> {
-        Set((UserDefaults.standard.string(forKey: key) ?? "").split(separator: ",")
+        // Retain saved choices, but do not count or analyze Mail on unsupported macOS versions.
+        guard AppleMailSource.isSupported else { return [] }
+        return Set((UserDefaults.standard.string(forKey: key) ?? "").split(separator: ",")
             .map(String.init).filter { UUID(uuidString: $0) != nil }.map { $0.uppercased() })
     }
 }

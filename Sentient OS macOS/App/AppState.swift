@@ -31,6 +31,9 @@ final class AppState {
     /// fresh deck mid-teardown. In-memory on purpose — a persisted key would pollute the wipe.
     var isUninstalling = false
 
+    /// Offer the missing ChatGPT login once per launch; the home action can always reopen it.
+    var hasOfferedCodexSignIn = false
+
     /// The in-app scheduler — only ever runs while the app is alive (DEV TOOLS "Scheduled run").
     let scheduler = OvernightScheduler()
 
@@ -73,7 +76,6 @@ final class AppState {
 
         Task { await MailAccountCloud.shared.retryPendingSync() }
 
-        CodexRuntimeMigration.start(existingUser: hasCompletedOnboarding && ModelBackend.current != .claude)
         CuaDriver.rememberExistingInstallation()
         ComputerUseUpgrade.shared.prepareForLaunch { [weak self] in
             self?.startInterfaceIfReady()

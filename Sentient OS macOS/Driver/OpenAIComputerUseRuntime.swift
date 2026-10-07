@@ -61,7 +61,7 @@ final class OpenAIComputerUseRuntime {
                 if let launched, !launched.app.isTerminated,
                    launched.app.processIdentifier == app.processIdentifier,
                    launched.configuration != configuration,
-                   url.resolvingSymlinksInPath() == configuration.appURL.resolvingSymlinksInPath() {
+                   url.standardizedFileURL == configuration.appURL.standardizedFileURL {
                     self.checked = nil
                     throw OpenAIComputerUse.RuntimeError.restartRequired
                 }
@@ -75,7 +75,7 @@ final class OpenAIComputerUseRuntime {
             let app: NSRunningApplication
             do { app = try await NSWorkspace.shared.openApplication(at: configuration.appURL, configuration: options) }
             catch { throw OpenAIComputerUse.RuntimeError.launchFailed }
-            guard app.bundleURL?.resolvingSymlinksInPath() == configuration.appURL.resolvingSymlinksInPath() else {
+            guard app.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL else {
                 throw OpenAIComputerUse.RuntimeError.helperRunning
             }
             self.launched = (app, configuration)
@@ -192,7 +192,7 @@ final class OpenAIComputerUseRuntime {
         try Task.checkCancellation()
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
         guard running.count <= 1, running.allSatisfy({
-            $0.bundleURL?.resolvingSymlinksInPath() == configuration.appURL.resolvingSymlinksInPath()
+            $0.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL
         }) else { throw OpenAIComputerUse.RuntimeError.helperRunning }
         if let app = running.first {
             guard app.terminate() else { throw OpenAIComputerUse.RuntimeError.helperRunning }

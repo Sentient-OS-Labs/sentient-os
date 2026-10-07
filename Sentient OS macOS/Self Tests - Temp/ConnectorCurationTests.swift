@@ -97,7 +97,7 @@ enum ConnectorCurationTests {
         }
         let slug = "google-drive"
         var fixture = saved
-        fixture["mcp.connectors.chatgpt.bundled.\(CodexRuntime.accountIdentity!)"] = try! JSONEncoder().encode([
+        fixture["mcp.connectors.chatgpt.\(CodexRuntime.sessionScope).\(CodexRuntime.accountIdentity!)"] = try! JSONEncoder().encode([
             ConnectorCensus.DetectedConnector(slug: slug, displayName: "Google Drive", origin: .chatgpt,
                 serverURL: nil, catalogID: "connector_5f3c8c41a1e54ad7a76272c89e2554fa", iconPath: nil,
                 healthy: true, lastSeen: Date())])

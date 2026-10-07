@@ -4,7 +4,7 @@
 //
 //  The shared frontier-engine picker — the five engine pills (EngineTab) over each engine's
 //  setup panel, rendered identically by Settings → Frontier Model Choice and onboarding's
-//  choose-your-frontier-model step. Owns the tab state, the endpoint fields
+//  choose-your-frontier-model step. Shares its visible tab with the host and owns the endpoint fields
 //  (ModelBackend/CustomProvider — the one source of truth), Test & Select (vision-gated
 //  activation: an unproven model can never become the engine), and the honest local-models
 //  warning. The ChatGPT panel is the host's slot: Settings points at Permissions & Health,
@@ -21,33 +21,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     /// the jumpy-rewrap of 2026-07-24), or onboarding's single centered row of five.
     enum Layout { case settingsGrid, singleRow }
 
-    /// The five engine tabs. OpenRouter, LM Studio, and Custom share the endpoint plumbing;
-    /// LM Studio's tab raises the honest local-models warning on first visit (model
-    /// capability, not plumbing, is the local blocker — the translator solved the plumbing).
-    enum Tab: String, CaseIterable, Identifiable {
-        case chatgpt, claude, openRouter, lmStudio, custom
-        var id: Self { self }
-
-        var label: String {
-            switch self {
-            case .chatgpt:    return "ChatGPT Subscription"
-            case .claude:     return "Claude Subscription"
-            case .openRouter: return "OpenRouter"
-            case .lmStudio:   return "LM Studio"
-            case .custom:     return "Custom"
-            }
-        }
-
-        var badge: String? {
-            switch self {
-            case .chatgpt:  return "recommended"
-            case .claude:   return "beta"
-            case .lmStudio: return "local"
-            case .custom:   return "local"
-            case .openRouter: return nil
-            }
-        }
-    }
+    typealias Tab = FrontierEngineTab
 
     /// The one model that cleared the computer-use bar in the 2026-07-24 survey (~10 models,
     /// real tasks). Prefilled on the OpenRouter tab and named in its note.
@@ -60,9 +34,11 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     let chatgptHealthy: Bool
     private let chatgptPanel: () -> ChatGPTPanel
 
-    init(layout: Layout = .settingsGrid,
+    init(tab: Binding<Tab>,
+         layout: Layout = .settingsGrid,
          chatgptHealthy: Bool = true,
          @ViewBuilder chatgptPanel: @escaping () -> ChatGPTPanel) {
+        self._tab = tab
         self.layout = layout
         self.chatgptHealthy = chatgptHealthy
         self.chatgptPanel = chatgptPanel
@@ -76,7 +52,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     /// Set only by a passing Test Model run; any edit below clears it.
     @AppStorage(CustomProvider.visionVerifiedKey) private var verified = false
 
-    @State private var tab: Tab = .chatgpt
+    @Binding private var tab: Tab
     @State private var claude = ClaudeSetup.shared
     @State private var claudePreparationTask: Task<Void, Never>?
     @State private var apiKey = ""
@@ -93,16 +69,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     /// The tab wearing the "active engine" dot.
     private var activeTab: Tab {
-        switch backend {
-        case .chatgpt: return .chatgpt
-        case .claude:  return .claude
-        case .custom:
-            switch savedPreset {
-            case .openRouter: return .openRouter
-            case .lmStudio:   return .lmStudio
-            case .custom:     return .custom
-            }
-        }
+        Tab(backend: backend, preset: savedPreset)
     }
 
     var body: some View {
@@ -480,6 +447,8 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     }
 
     private func runTest(preset: CustomProvider.Preset) {
+        // A pending probe cannot borrow the previous preset's ready state for Continue.
+        verified = false
         // OpenRouter's URL is pinned (no field on that tab); elsewhere only fill an empty one.
         if preset == .openRouter {
             baseURL = preset.defaultBaseURL
