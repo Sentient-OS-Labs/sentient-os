@@ -351,7 +351,8 @@ final class NotchWindowController {
         let hoverIdle = hovering && coordinator.phase == .hidden
         let s = hoverIdle ? metrics.hoverSize
                           : metrics.size(for: coordinator.phase, readBack: coordinator.readBack,
-                                         remembering: coordinator.run.remembering)
+                                         remembering: coordinator.run.remembering,
+                                         recoveryQuestion: coordinator.run.recovery.question)
         let p = location ?? NSEvent.mouseLocation            // screen coords, origin bottom-left
         let localX = p.x - (screen.frame.midX - s.width / 2)
         let depthFromTop = screen.frame.maxY - p.y           // 0 at the bezel, increasing downward
