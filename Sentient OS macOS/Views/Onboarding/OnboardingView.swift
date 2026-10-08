@@ -221,6 +221,7 @@ struct OnboardingNextButton: View {
     let title: String
     var enabled: Bool = true
     var glow: Double = 0
+    var minimumLabelWidth: CGFloat = 0
     let action: () -> Void
 
     var body: some View {
@@ -228,6 +229,7 @@ struct OnboardingNextButton: View {
             Text(title)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(enabled ? .black : .white.opacity(0.35))
+                .frame(minWidth: minimumLabelWidth)
                 .padding(.horizontal, 36)
                 .padding(.vertical, 12)
                 .background(Capsule(style: .continuous)

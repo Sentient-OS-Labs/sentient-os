@@ -35,20 +35,25 @@ struct ChatGPTSignInSheet: View {
                 .padding(.top, 24)
             }
 
-            Button(action: signIn) {
-                HStack(spacing: 8) {
-                    if busy { ProgressView().controlSize(.small).tint(.black) }
-                    Text(codex.loggingIn ? "Open sign-in again" : "Sign in with ChatGPT")
-                        .font(.system(size: 14, weight: .semibold))
+            if codex.loggingIn {
+                LoginLinkButton(url: codex.loginURL)
+                    .padding(.top, 26)
+            } else {
+                Button(action: signIn) {
+                    HStack(spacing: 8) {
+                        if busy { ProgressView().controlSize(.small).tint(.black) }
+                        Text("Sign in with ChatGPT")
+                            .font(.system(size: 14, weight: .semibold))
+                    }
+                    .foregroundStyle(.black)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .background(Capsule().fill(.white.opacity(busy ? 0.5 : 1)))
+                    .contentShape(Capsule())
                 }
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .background(Capsule().fill(.white.opacity(busy ? 0.5 : 1)))
-                .contentShape(Capsule())
+                .buttonStyle(PressScaleStyle())
+                .disabled(busy || !codex.installed)
+                .padding(.top, 26)
             }
-            .buttonStyle(PressScaleStyle())
-            .disabled(busy || !codex.installed)
-            .padding(.top, 26)
 
             if let status = codex.loginStatusLine, status.hasPrefix("✗") {
                 Text(status.dropFirst().trimmingCharacters(in: .whitespacesAndNewlines))

@@ -238,7 +238,8 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 .disabled(claude.preparing || claude.installing)
             }
         } else if claude.loggingIn {
-            Text("Finish signing in in your browser. This screen notices on its own.")
+            LoginLinkButton(url: claude.loginURL)
+            Text("Finish signing in in your browser.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.Ink.body)
             MonoWaitLine("waiting for the browser sign-in…")

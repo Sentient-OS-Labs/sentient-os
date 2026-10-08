@@ -188,17 +188,35 @@ final class ClaudeSetup {
     private(set) var plan: String?
     /// A login flow is in progress — the browser opened, awaiting the user to finish.
     private(set) var loggingIn = false
+    /// Exact automatic browser URL for this attempt, never persisted or logged.
+    private(set) var loginURL: URL?
     /// Latest status line for step 2.
     private(set) var loginStatusLine: String?
     /// The running `claude auth login` process — kept so we can terminate it on restart/cleanup.
     private var loginProcess: Process?
+    private var loginGeneration = UUID()
+    private var loginStatusProbe = UUID()
 
     /// Re-check login + plan — call on appear, on foreground, and while a login is out.
     func refreshLoginStatus() async {
+        guard !Task.isCancelled else { return }
+        let generation = loginGeneration
+        let probe = UUID()
+        loginStatusProbe = probe
         let status = await ClaudeAuth.refresh()
+        guard !Task.isCancelled, generation == loginGeneration, probe == loginStatusProbe else { return }
         loggedIn = status.loggedIn
         plan = ClaudeAuth.planDisplayName
-        if loggedIn { loggingIn = false }
+        if loggedIn {
+            loggingIn = false
+            loginURL = nil
+            if loginProcess?.isRunning != true { loginProcess = nil }
+        } else if let process = loginProcess, !process.isRunning {
+            loginProcess = nil
+            loggingIn = false
+            loginURL = nil
+            loginStatusLine = "✗ Sign-in didn't finish. Please try again."
+        }
     }
 
     /// Step 2a — start the interactive login. Spawns `claude auth login` (opens the browser) and
@@ -206,18 +224,30 @@ final class ClaudeSetup {
     func startLogin(force: Bool = false) {
         guard installed else { loginStatusLine = "✗ Install Claude Code first"; return }
         if !force, loggedIn { loginStatusLine = "✓ Already signed in"; return }
-        loginProcess?.terminate()
-        loginProcess = nil
+        cancelLogin()
+        let generation = loginGeneration
         do {
-            // URLs elided from the stream: the flow prints the OAuth URL (PKCE/state params),
-            // and every Log() line ships as a Release breadcrumb.
-            loginProcess = try ClaudeCLI.startLogin { line in
-                Log("[claude-signin] \(line.contains("://") ? "<url elided>" : line)")
-            }
+            loginProcess = try ClaudeCLI.startLogin(onURL: { [weak self] url in
+                guard let self else { return }
+                Task { @MainActor in
+                    guard self.loginGeneration == generation, self.loggingIn,
+                          self.loginProcess?.isRunning == true else { return }
+                    self.loginURL = url
+                }
+            }, onExit: { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    guard self.loginGeneration == generation else { return }
+                    self.loginURL = nil
+                    await self.refreshLoginStatus()
+                }
+            })
+            loggedIn = false
             loggingIn = true
             loginStatusLine = "A browser window opened; finish signing in there. Sentient notices on its own when you're done."
         } catch {
             loggingIn = false
+            loginURL = nil
             loginStatusLine = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
             stepFailed(.login, error)
         }
@@ -226,9 +256,13 @@ final class ClaudeSetup {
     /// Stop a login attempt that's still out (tab switched away, restart) — the process is the
     /// localhost OAuth callback server; it self-exits after a finished sign-in anyway.
     func cancelLogin() {
-        loginProcess?.terminate()
+        loginGeneration = UUID()
+        loginStatusProbe = UUID()
+        if let process = loginProcess, process.isRunning { process.terminate() }
         loginProcess = nil
         loggingIn = false
+        loginURL = nil
+        loginStatusLine = nil
     }
 
     // MARK: Diagnostics

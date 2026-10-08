@@ -336,21 +336,25 @@ actor CodexCLI {
 
     /// Open the browser login against Sentient's private home. Login holds an exclusive lease
     /// so an account cannot change underneath a running task or connector refresh.
-    /// OAuth URLs and account details are discarded rather than sent to diagnostics.
-    static func startLogin() throws -> Process {
+    /// OAuth URLs go only to the current setup UI, never to diagnostics.
+    static func startLogin(onURL: @escaping @Sendable (URL) -> Void = { _ in },
+                           onExit: @escaping @Sendable () -> Void = {}) throws -> Process {
         guard let bin = locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
         let lease = try CodexRuntime.executionLease(for: bin, exclusive: true)
         if bin == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: bin)
-        proc.terminationHandler = { _ in lease?.unlock() }
+        proc.terminationHandler = { _ in lease?.unlock(); onExit() }
         proc.currentDirectoryURL = CodexRuntime.home
         proc.arguments = CodexRuntime.arguments(["login"], binary: bin)
         proc.environment = CodexRuntime.environment(richEnvironment(binDir: (bin as NSString).deletingLastPathComponent), binary: bin)
         proc.standardInput = FileHandle.nullDevice
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
+        let output = Pipe(), errors = Pipe()
+        proc.standardOutput = output
+        proc.standardError = errors
         do { try proc.run() } catch { lease?.unlock(); throw CLIError.launchFailed("\(error)") }
+        LoginLink.read(output, onURL: onURL)
+        LoginLink.read(errors, onURL: onURL)
         return proc
     }
 

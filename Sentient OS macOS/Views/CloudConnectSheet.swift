@@ -7,7 +7,7 @@
 //  ChatGPT backend links on OpenAI's hosted connector page, the Claude backend on claude.ai's
 //  connector directory (GmailConnect/CalendarConnect.connectorURL pick; the copy follows). Flow:
 //    Connect …  → opens the engine's connector page (the user links Google there).
-//    Done       → immediately saves the user's selection; optional account work runs in background.
+//    Done       → appears after Connect opens the browser; saves the user's selection.
 //    ✕ (top-left) → closes without saving.
 //  Already connected → "Stop reading …" clears selection, not the provider connection.
 //
@@ -60,21 +60,20 @@ struct CloudConnectSheet: View {
                 .foregroundStyle(Theme.Ink.statusInk)
                 .padding(.top, 18)
 
+            if !selected {
+                Text(openedConnectorPage
+                     ? "Connect \(service.title) to your \(backend == .claude ? "Claude" : "ChatGPT") account, and then come back to Sentient."
+                     : "Sentient reads through your \(backend == .claude ? "Claude" : "ChatGPT") connector. Enable it and sign in on that page, then press Done.")
+                    .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true).padding(.top, 14)
+            }
+
             connectButton.padding(.top, 26)
             if selected {
                 stopLink.padding(.top, 18)
-            } else {
+            } else if openedConnectorPage {
                 doneButton.padding(.top, 14)
-                Text("Sentient reads through your \(backend == .claude ? "Claude" : "ChatGPT") connector. Enable it and sign in on that page, then press Done.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
-                    .multilineTextAlignment(.center)
-                    .fixedSize(horizontal: false, vertical: true).padding(.top, 18)
-                if service == .gmail {
-                    Text(MailAccountCollection.storageDisclosure)
-                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
-                }
             }
         }
         .padding(.horizontal, 36).padding(.top, 40).padding(.bottom, 24)
@@ -87,17 +86,8 @@ struct CloudConnectSheet: View {
     // MARK: - The two buttons (+ the ✕)
 
     private var connectButton: some View {
-        Button(action: openConnectorPage) {
-            HStack(spacing: 7) {
-                Text(selected ? "Open connector settings" : service.connectTitle)
-                    .font(.system(size: 14, weight: .medium))
-                Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
-            }
-            .foregroundStyle(Theme.Ink.bright)
-            .frame(minHeight: 32)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PressScaleStyle())
+        ConnectorActionButton(title: selected ? "Open connector settings" : service.connectTitle,
+                              action: openConnectorPage)
     }
 
     private func openConnectorPage() {
@@ -109,15 +99,7 @@ struct CloudConnectSheet: View {
     }
 
     private var doneButton: some View {
-        Button(action: done) {
-            Text("Done")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.black)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .background(Capsule().fill(.white))
-                .contentShape(Capsule())
-        }
-        .buttonStyle(PressScaleStyle())
+        ConnectorActionButton(title: "Done", kind: .done, action: done)
     }
 
     private var closeButton: some View {

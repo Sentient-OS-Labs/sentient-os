@@ -11,6 +11,11 @@
 import Foundation
 import SwiftUI
 
+// Browser helper arguments contain an OAuth URL. Handle them before any diagnostics or UI.
+if CommandLine.arguments.dropFirst().first == ClaudeLoginBrowser.helperArgument {
+    exit(ClaudeLoginBrowser.runHelper(arguments: CommandLine.arguments))
+}
+
 #if DEBUG
 // Native computer-use validation starts before AppState or any production startup side effect.
 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "nativecua",
