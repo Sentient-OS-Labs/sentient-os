@@ -41,21 +41,23 @@ nonisolated enum DirectMCPRuntime {
 
     static func prepare(slugs: [String], mode: Mode, subset: [String]? = nil,
                         timeout: TimeInterval) async throws -> [Attachment] {
-        var result: [Attachment] = []
-        for slug in Set(slugs).sorted() where slug.hasPrefix("direct-") {
-            guard let connection = DirectMCPStore.connection(slug) else { throw DirectMCPError.connectionChanged }
-            let verified = try await DirectMCPConnections.verify(connection)
-            let names: [String]
-            switch mode {
-            case .read: names = Array((verified.provider?.reviewedReads ?? []).intersection(Set(verified.readNames))).sorted()
-            case .action: names = verified.actionNames
+        return try await Diagnostics.boundary(.connectorFailed, phase: .setup, reason: "direct_attachment", source: "direct_connector") {
+            var result: [Attachment] = []
+            for slug in Set(slugs).sorted() where slug.hasPrefix("direct-") {
+                guard let connection = DirectMCPStore.connection(slug) else { throw DirectMCPError.connectionChanged }
+                let verified = try await DirectMCPConnections.verify(connection)
+                let names: [String]
+                switch mode {
+                case .read: names = Array((verified.provider?.reviewedReads ?? []).intersection(Set(verified.readNames))).sorted()
+                case .action: names = verified.actionNames
+                }
+                let allowed = subset ?? names
+                guard !allowed.isEmpty, Set(allowed).isSubset(of: Set(names)) else { throw DirectMCPError.policyUnavailable }
+                result.append(.init(connection: verified, allowed: allowed,
+                                    deadline: Date().addingTimeInterval(min(timeout, 21_600) + 30), target: slug))
             }
-            let allowed = subset ?? names
-            guard !allowed.isEmpty, Set(allowed).isSubset(of: Set(names)) else { throw DirectMCPError.policyUnavailable }
-            result.append(.init(connection: verified, allowed: allowed,
-                                deadline: Date().addingTimeInterval(min(timeout, 21_600) + 30), target: slug))
+            return result
         }
-        return result
     }
     static func execute<T: Sendable>(_ attachments: [Attachment],
                                     operation: @escaping @Sendable () async throws -> T) async throws -> T {

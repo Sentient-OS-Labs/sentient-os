@@ -24,6 +24,8 @@ import AppKit
 struct OnboardingCodexLoginPanel: View {
     @State private var codex = CodexSetup.shared
     @State private var preparationTask: Task<Void, Never>?
+    @State private var loginRequestID = UUID()
+    @State private var ownedLoginAttempt: UUID?
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
 
     private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
@@ -47,7 +49,7 @@ struct OnboardingCodexLoginPanel: View {
                 await codex.refreshLoginStatus()
             }
         }
-        .onDisappear { preparationTask?.cancel() }
+        .onDisappear { cancelOwnedLogin() }
     }
 
     /// The login state machine: done → browser out → install failed → the button.
@@ -66,7 +68,8 @@ struct OnboardingCodexLoginPanel: View {
                 .disabled(codex.preparing || codex.installing)
             }
         } else if codex.loggingIn {
-            Text("Finish signing in in your browser. This screen notices on its own.")
+            LoginLinkButton(url: codex.loginURL)
+            Text("Finish signing in in your browser.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.Ink.body)
             MonoWaitLine("waiting for the browser sign-in…")
@@ -90,9 +93,34 @@ struct OnboardingCodexLoginPanel: View {
     }
 
     private func prepareAndLogin() {
+        preparationTask?.cancel()
+        let request = UUID()
+        loginRequestID = request
         preparationTask = Task {
-            guard await codex.ensureCurrent(), !Task.isCancelled else { return }
-            await codex.startLogin()
+            defer { if loginRequestID == request { preparationTask = nil } }
+            guard await codex.ensureCurrent(), !Task.isCancelled, loginRequestID == request else { return }
+            let attempt = await codex.startLogin()
+            guard !Task.isCancelled, loginRequestID == request else {
+                if let attempt { await codex.cancelLogin(ifAttempt: attempt) }
+                return
+            }
+            if let attempt { ownedLoginAttempt = attempt }
+        }
+    }
+
+    /// Leaving this tab releases its callback server and runtime lease. A later login started
+    /// by Settings belongs to that surface, and a completed private sign-in remains saved.
+    private func cancelOwnedLogin() {
+        loginRequestID = UUID()
+        preparationTask?.cancel()
+        preparationTask = nil
+        if let attempt = ownedLoginAttempt {
+            ownedLoginAttempt = nil
+            Task {
+                guard !codex.loggedIn else { return }
+                await codex.cancelLogin(ifAttempt: attempt)
+                if ModelBackend.current == .chatgpt { await codex.refreshLoginStatus() }
+            }
         }
     }
 }

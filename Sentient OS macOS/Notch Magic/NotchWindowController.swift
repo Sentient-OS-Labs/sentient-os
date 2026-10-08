@@ -51,6 +51,7 @@ final class NotchWindowController {
     /// pattern as the hotkey (mouse monitors are not keyboard-class; zero TCC contact). They only ever
     /// BEGIN a hover; exit + click-through are the cursor poll's job while the swell is up.
     private var hoverMonitors: [Any] = []
+    private var clickMonitors: [Any] = []
     /// Retries the hover-monitor install until the app has finished launching (lesson 14 — an NSEvent
     /// monitor registered mid-NSApplicationMain wedges event routing for the life of the process).
     private var hoverInstallTimer: Timer?
@@ -144,6 +145,7 @@ final class NotchWindowController {
     private func observePhase() {
         withObservationTracking {
             _ = coordinator.phase
+            _ = coordinator.run.recovery.isPending // refresh return zones when a hidden question expires
         } onChange: { [weak self] in
             guard let self else { return }
             Task { @MainActor in
@@ -155,6 +157,7 @@ final class NotchWindowController {
 
     private func applyPhase() {
         guard let panel else { return }
+        refreshHoverEntryRect()
         sizeToken &+= 1
         let token = sizeToken
 
@@ -179,7 +182,9 @@ final class NotchWindowController {
         if coordinator.phase != .hidden {
             placeCanvas()                                   // the fixed canvas — NEVER resized per morph
             reveal(makeKey: wantsKey)
+            if coordinator.phase == .recovery { coordinator.run.recovery.setFocused(panel.isKeyWindow) }
         } else if !hovering {
+            panel.resignKey()
             // Order the window out only AFTER the SwiftUI retract animation has played.
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(Self.settleDelay))
@@ -209,7 +214,7 @@ final class NotchWindowController {
             panel.makeKeyAndOrderFront(nil)
             typingKeyAt = Date()
         } else {
-            if panel.isKeyWindow { panel.orderOut(nil) }
+            if panel.isKeyWindow, coordinator.phase != .recovery { panel.orderOut(nil) }
             panel.orderFrontRegardless()
         }
         NotchSpace.shared?.pin(panel)
@@ -223,7 +228,7 @@ final class NotchWindowController {
     /// The fixed window size: big enough for the widest/tallest notch state plus slack. It only changes
     /// on a display/notch change — never during a morph — so the notch stays pinned to the bezel.
     private var canvasSize: CGSize {
-        let phases: [NotchPhase] = [.opening, .listening, .transcribing, .typing, .running, .notice("")]
+        let phases: [NotchPhase] = [.opening, .listening, .transcribing, .typing, .running, .recovery, .notice("")]
         let maxW = phases.map { metrics.size(for: $0).width }.max() ?? 360
         let baseMaxH = phases.map { metrics.size(for: $0).height }.max() ?? 100
         let maxH = max(baseMaxH, metrics.runningHeight(caption: metrics.maxReadBackCaptionHeight))   // tallest read-back
@@ -263,7 +268,7 @@ final class NotchWindowController {
     /// absorbed rather than passed to whatever sits under it.
     private static func isInteractive(_ phase: NotchPhase) -> Bool {
         switch phase {
-        case .running, .typing, .listening, .transcribing: return true
+        case .running, .typing, .listening, .transcribing, .recovery: return true
         default: return false
         }
     }
@@ -334,19 +339,22 @@ final class NotchWindowController {
         // The canvas box gates the EXPENSIVE silhouette test (a Path build + the read-back text
         // measurement): a far cursor can't be over the silhouette, so it never pays for one.
         let receive = interactive && cursorNearNotch() && cursorOverSilhouette()
+        if coordinator.phase == .recovery { coordinator.run.recovery.setHovering(receive) }
         if panel.ignoresMouseEvents == receive { panel.ignoresMouseEvents = !receive }
     }
 
     /// Is the cursor over the actual notch shape right now? Works in screen coordinates (no view-flip
     /// guesswork): a bounding-box early-out, then the exact `NotchShape` path test. During a hover the
     /// live silhouette is the swollen hover shape, not the phase's.
-    private func cursorOverSilhouette() -> Bool {
+    private func cursorOverSilhouette(at location: NSPoint? = nil) -> Bool {
         guard let screen = activeScreen() else { return false }
         let hoverIdle = hovering && coordinator.phase == .hidden
         let s = hoverIdle ? metrics.hoverSize
                           : metrics.size(for: coordinator.phase, readBack: coordinator.readBack,
-                                         remembering: coordinator.run.remembering)
-        let p = NSEvent.mouseLocation                        // screen coords, origin bottom-left
+                                         remembering: coordinator.run.remembering,
+                                         personalizing: coordinator.run.isPersonalizing,
+                                         recoveryContent: coordinator.run.recovery.content)
+        let p = location ?? NSEvent.mouseLocation            // screen coords, origin bottom-left
         let localX = p.x - (screen.frame.midX - s.width / 2)
         let depthFromTop = screen.frame.maxY - p.y           // 0 at the bezel, increasing downward
         guard localX >= 0, localX <= s.width, depthFromTop >= 0, depthFromTop <= s.height else { return false }
@@ -395,9 +403,33 @@ final class NotchWindowController {
             return event
         })
         if let local { hoverMonitors.append(local) }
+        if clickMonitors.isEmpty {
+            let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
+            if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] event in
+                self?.recoveryMouseDown(at: Self.screenLocation(of: event))
+            }) { clickMonitors.append(global) }
+            if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
+                self?.recoveryMouseDown(at: Self.screenLocation(of: event))
+                return event
+            }) { clickMonitors.append(local) }
+        }
         if !hoverMonitors.isEmpty {
             Log("notch hover affordance armed (mouseMoved NSEvent monitors, zero-permission)")
         }
+    }
+
+    private func recoveryMouseDown(at location: NSPoint) {
+        guard coordinator.phase == .recovery else { return }
+        // Accessibility clients can emit an off-display focus click before typing. It is
+        // not a user clicking away; real clicks must land on one of the attached displays.
+        guard NSScreen.screens.contains(where: {
+            location.x >= $0.frame.minX && location.x <= $0.frame.maxX
+                && location.y >= $0.frame.minY && location.y <= $0.frame.maxY
+        }) else { return }
+        if cursorOverSilhouette(at: location) {
+            panel?.makeKey()
+            coordinator.run.recovery.setFocused(true)
+        } else { coordinator.run.recovery.dismiss() }
     }
 
     /// The event's own screen-coord location — spares a per-move window-server query
@@ -429,6 +461,12 @@ final class NotchWindowController {
     /// notch-less Mac — gets `.null` (matches nothing). The rect extends 2pt past the screen's top
     /// edge so a cursor pinned at the very top still counts.
     private func refreshHoverEntryRect() {
+        if coordinator.run.recovery.isPending, let screen = activeScreen() {
+            let size = Self.metrics(for: screen).size(for: .hidden)
+            hoverEntryRect = NSRect(x: screen.frame.midX - size.width / 2,
+                y: screen.frame.maxY - size.height, width: size.width, height: size.height + 2)
+            return
+        }
         guard let screen = Self.builtInNotchScreen(), let notch = screen.notchSize else {
             hoverEntryRect = .null
             return
@@ -457,6 +495,9 @@ final class NotchWindowController {
     /// to the grown shape: the dismiss retract-merge trick, played in reverse.
     private func beginHover() {
         guard panel != nil else { return }
+        if coordinator.run.recovery.isPending {
+            if coordinator.run.recovery.reopen() { return }
+        }
         hovering = true
         sizeToken &+= 1                       // cancel any pending orderOut (a just-finished retract)
         coordinator.setNotchHovering(true)
@@ -523,10 +564,22 @@ final class NotchWindowController {
         // (the setup transient re-keys itself right after) → dismiss. The typingKeyAt re-read keeps a
         // freshly reopened field (its own grace running) out of reach.
         if let panel {
+            observers.append(nc.addObserver(forName: NSWindow.didBecomeKeyNotification,
+                                            object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, self.coordinator.phase == .recovery else { return }
+                    self.coordinator.run.recovery.setFocused(true)
+                }
+            })
             observers.append(nc.addObserver(forName: NSWindow.didResignKeyNotification,
                                             object: panel, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    guard let self, self.coordinator.phase == .typing else { return }
+                    guard let self else { return }
+                    if self.coordinator.phase == .recovery {
+                        self.coordinator.run.recovery.setFocused(false)
+                        return
+                    }
+                    guard self.coordinator.phase == .typing else { return }
                     if Date().timeIntervalSince(self.typingKeyAt) > 0.4 {
                         self.coordinator.dismissTyping()
                     } else {
@@ -557,6 +610,7 @@ final class NotchWindowController {
         observers.forEach { NotificationCenter.default.removeObserver($0) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         hoverMonitors.forEach { NSEvent.removeMonitor($0) }
+        clickMonitors.forEach { NSEvent.removeMonitor($0) }
     }
 
     // MARK: Screen helpers
@@ -582,7 +636,7 @@ final class NotchWindowController {
     }
 
     static func metrics(for screen: NSScreen) -> NotchMetrics {
-        NotchMetrics(hardwareNotch: screen.notchSize)
+        NotchMetrics(availableSize: screen.frame.size, hardwareNotch: screen.notchSize)
     }
 }
 

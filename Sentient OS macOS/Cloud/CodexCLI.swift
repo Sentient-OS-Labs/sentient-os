@@ -287,7 +287,9 @@ actor CodexCLI {
             case .timedOut(let t):                return "\(claude ? "claude -p" : "codex exec") timed out after \(Int(t))s"
             case .exitFailure(let code, let m):   return "\(binary) exited \(code): \(m.prefix(300))"
             case .badEnvelope(let m):             return "Unparseable \(binary) output: \(m.prefix(300))"
-            case .usageLimit(let m, _):           return "\(engine) usage limit: \(m.prefix(200))"
+            case .usageLimit(let m, _):
+                if ModelBackend.current == .custom { return "Model usage limit: \(m.prefix(200))" }
+                return "You're out of your \(claude ? "Claude" : "Codex") subscription 5 hour usage, try again later."
             case .inputTooLarge(let c):           return claude
                 ? "Prompt too large for Claude Code: \(c) chars"
                 : "Prompt too large for codex: \(c) chars (server cap 1,048,576)"
@@ -302,7 +304,6 @@ actor CodexCLI {
     /// The only CLI Sentient adopts. Global, Homebrew and desktop installations stay independent.
     static var managedBinaryPath: String { CodexRuntime.executable.path }
     static func locateBinary() -> String? {
-        if CodexRuntimeMigration.isPending, let legacy = CodexRuntimeMigration.legacyBinary { return legacy }
         return CodexRuntime.cliPresent ? managedBinaryPath : nil
     }
 
@@ -335,20 +336,25 @@ actor CodexCLI {
 
     /// Open the browser login against Sentient's private home. Login holds an exclusive lease
     /// so an account cannot change underneath a running task or connector refresh.
-    /// OAuth URLs and account details are discarded rather than sent to diagnostics.
-    static func startLogin() throws -> Process {
+    /// OAuth URLs go only to the current setup UI, never to diagnostics.
+    static func startLogin(onURL: @escaping @Sendable (URL) -> Void = { _ in },
+                           onExit: @escaping @Sendable () -> Void = {}) throws -> Process {
         guard let bin = locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
         let lease = try CodexRuntime.executionLease(for: bin, exclusive: true)
         if bin == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: bin)
-        proc.terminationHandler = { _ in lease?.unlock() }
+        proc.terminationHandler = { _ in lease?.unlock(); onExit() }
+        proc.currentDirectoryURL = CodexRuntime.home
         proc.arguments = CodexRuntime.arguments(["login"], binary: bin)
         proc.environment = CodexRuntime.environment(richEnvironment(binDir: (bin as NSString).deletingLastPathComponent), binary: bin)
         proc.standardInput = FileHandle.nullDevice
-        proc.standardOutput = FileHandle.nullDevice
-        proc.standardError = FileHandle.nullDevice
+        let output = Pipe(), errors = Pipe()
+        proc.standardOutput = output
+        proc.standardError = errors
         do { try proc.run() } catch { lease?.unlock(); throw CLIError.launchFailed("\(error)") }
+        LoginLink.read(output, onURL: onURL)
+        LoginLink.read(errors, onURL: onURL)
         return proc
     }
 
@@ -485,7 +491,7 @@ actor CodexCLI {
     }
 
     private static func backendFingerprint() -> String {
-        let runtime = "\(locateBinary() ?? "")|\(CodexRuntime.activeHome.path)|\(CodexRuntime.accountIdentity ?? "")"
+        let runtime = "\(locateBinary() ?? "")|\(CodexRuntime.home.path)|\(CodexRuntime.accountIdentity ?? "")"
         guard ModelBackend.current == .custom else { return "chatgpt|\(runtime)" }
         let p = CustomProvider.current
         return "custom|\(p.baseURL)|\(p.modelName)|\(runtime)"
@@ -690,7 +696,7 @@ actor CodexCLI {
                                effortArg: String,
                                providerOverrides: [String] = [],
                                nativeConfiguration: OpenAIComputerUse.Configuration? = nil) throws -> [String] {
-        var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--dangerously-bypass-approvals-and-sandbox",
+        var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--json", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
@@ -753,20 +759,20 @@ actor CodexCLI {
             let nativeConfiguration = try OpenAIComputerUse.Configuration.resolve()
             nativeTask = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: nativeConfiguration)
             try Task.checkCancellation()
-            var overrides: [String] = []
+            var overrides = SidekickToolServer.connection?.codexOverrides ?? []
             var environment = nativeConfiguration.clientEnvironment
             if backend == .claude {
                 guard let claude = ClaudeCLI.locateBinary() else { throw CLIError.notAvailable(.notInstalled) }
-                // Claude supplies the readable progress for this run. Keep one producer:
-                // Codex's prompt echo otherwise leaves the notch in its hidden `user` section
-                // while Claude is narrating and the native tools are already working.
+                // Claude supplies readable progress; Codex's structured events still carry
+                // tool activity needed by Sidekick recovery.
                 onLine("codex")
-                let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName })
+                let namespaces = Set(["mcp__sentient_native"] + DirectMCPRuntime.current.map { "mcp__" + $0.connection.serverName }
+                    + (SidekickToolServer.connection == nil ? [] : ["mcp__sentient_recovery"]))
                 let relay = ClaudeSubscriptionBridge(binary: claude, model: modelID, effort: effortArg,
                     timeout: timeout, namespaces: namespaces, onProgress: onLine)
                 bridge = relay
                 let configuration = try await relay.start()
-                overrides = configuration.overrides
+                overrides += configuration.overrides
                 environment.merge(configuration.environment) { _, new in new }
             }
             let args = try Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
@@ -777,10 +783,8 @@ actor CodexCLI {
             let ownedBridge = bridge
             let out = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
-                return try await Self.executeStreaming(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
-                    extraEnv: environment) { line in
-                        if backend != .claude { onLine(line) }
-                    }
+                return try await ComputerUseStream.run(binary: nativeConfiguration.cliURL.path, args: args, timeout: timeout,
+                    extraEnv: environment, narrate: backend != .claude, onLine: onLine)
             } onCancel: {
                 // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
                 Task { await ownedBridge?.stop() }
@@ -791,14 +795,11 @@ actor CodexCLI {
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             nativeTask = nil
             Self.noteStaleSignatureIfPresent(out.stderr)
-            guard out.status == 0 else {
-                let detail = Self.failureDetail(out)
-                if let stale = Self.staleClientError(in: out.stderr, detail) { throw stale }
-                throw CLIError.exitFailure(code: out.status, message: String(detail.prefix(600)))
-            }
+            if let error = Self.agentFailure(out) { throw error }
+            let result = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(t0) * 1000)).result
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
-            return out.stdout.isEmpty ? out.stderr : out.stdout
+            return result
         } catch {
             await bridge?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
@@ -861,6 +862,7 @@ actor CodexCLI {
         }
         let reason = CodexFailureReason.classify(error)
         let trigger = CodexTrigger.current
+        if phase == "ping", trigger == .probe, [.notInstalled, .notLoggedIn, .planDenied].contains(reason) { return }
         let net = NetworkSnapshot.shared.current
         let auth = CodexAuthSnapshot.read()
         let custom = ModelBackend.current == .custom
@@ -875,16 +877,23 @@ actor CodexCLI {
         extra["first_cloud_call_this_launch"] = String(!sessionHadSuccess)   // not "*_session": a scrubber word
         extra["hours_since_launch"] = String(Int(Date().timeIntervalSince(Self.launchedAt) / 3600))
         extra["secs_since_wake"] = diagnosticsRunStart.map { String(Int(Date().timeIntervalSince($0))) } ?? "-1"
-        // Computer-use failures carry the pinned driver version (a constant, never free text), so
-        // a field regression after a driver bump is attributable to the bump.
-        if feature == "computer" { extra["cua_driver"] = CuaDriver.version }
-        extra.merge(auth.extras) { cur, _ in cur }
+        // Attribute a dependency regression to the runtime this run actually selected.
+        if feature == "computer" {
+            let runtime = ComputerUseBackend.selected(for: ModelBackend.current)
+            extra["computer_runtime"] = runtime.rawValue
+            if runtime == .cua { extra["cua_driver"] = CuaDriver.version }
+            else {
+                extra["helper_version"] = CodexRuntime.release.helper.version
+                extra["helper_build"] = String(CodexRuntime.release.helperBuild)
+            }
+        }
+        if ModelBackend.current != .claude { extra.merge(auth.extras) { cur, _ in cur } }
 
         var tags: [String: String] = [
             "feature": feature,
             "error": caseName,
-            "model": custom ? "custom" : modelID,
-            "backend": custom ? "custom" : "chatgpt",
+            "model": ModelBackend.current == .claude ? "claude_subscription" : (custom ? "custom" : modelID),
+            "backend": ModelBackend.current.rawValue,
             "phase": phase,
             "availability": availability,
             "reason": reason.rawValue,
@@ -893,9 +902,13 @@ actor CodexCLI {
             "interface": net.interface,
             "codex_version": cachedVersion ?? "unknown",
         ]
-        tags.merge(auth.tags) { cur, _ in cur }
+        if ModelBackend.current == .claude {
+            tags["login_mode"] = "claude_subscription"
+            tags["plan"] = ClaudeAuth.cachedPlan ?? "unknown"
+        } else { tags.merge(auth.tags) { cur, _ in cur } }
+        Diagnostics.current?.markReported(error)
         CrashReporting.captureEvent(event, level: level, tags: tags, extra: extra,
-            fingerprint: ["codex", feature, caseName, reason.rawValue, trigger.rawValue])
+            fingerprint: ["codex", ModelBackend.current.rawValue, feature, caseName, reason.rawValue, trigger.rawValue])
     }
 
     /// Fast mode applies to every Exec path, including probes and resumed sessions.
@@ -1086,9 +1099,29 @@ actor CodexCLI {
 
     // MARK: JSONL parsing
 
-    private static let usageLimitMarkers = ["usage limit", "rate limit", "limit reached",
-                                            "limit resets", "quota", "too many requests",
+    private static let usageLimitMarkers = ["usage limit", "usage_limit_reached", "rate limit",
+                                            "rate_limit_exceeded", "limit reached", "limit resets", "quota", "too many requests",
                                             "out of extra usage", "plan limit"]
+
+    /// Read structured terminal failures, with ERROR lines retained for legacy callers.
+    /// Prompt echoes and ordinary tool output must not become usage-limit errors.
+    static func agentFailure(_ out: ExecResult) -> CLIError? {
+        guard out.status != 0 else { return nil }
+        func lastErrorLine(in text: String) -> String? {
+            text.split(separator: "\n").reversed()
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { $0.hasPrefix("ERROR:") }
+        }
+        let terminalError = streamErrors(in: out.stdout).last
+            ?? lastErrorLine(in: out.stderr) ?? lastErrorLine(in: out.stdout)
+        let detail = terminalError ?? failureDetail(out)
+        if let terminalError,
+           usageLimitMarkers.contains(where: { terminalError.lowercased().contains($0) }) {
+            return .usageLimit(message: String(detail.prefix(600)), sessionID: nil)
+        }
+        if let stale = staleClientError(in: out.stderr, detail) { return stale }
+        return .exitFailure(code: out.status, message: String(detail.prefix(600)))
+    }
 
     /// The stale-client signature: an older CLI failing to deserialize a `~/.codex` cache a newer
     /// codex wrote (field-found on 1.3: `codex_models_manager: failed to renew cache TTL: missing
@@ -1250,6 +1283,8 @@ actor CodexCLI {
         env["PATH"] = env["PATH"].map { "\(richPath):\($0)" } ?? richPath
         // Same unconditional endpoint-key injection as the sanitized env (see execute()).
         env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue
+        env[ChildProcessDiagnostics.environmentKey] = ChildProcessDiagnostics.directory?.path
+        if ChildProcessDiagnostics.directory != nil { env["TMPDIR"] = FileManager.default.temporaryDirectory.path }
         return env
     }
 
@@ -1275,14 +1310,16 @@ actor CodexCLI {
                              onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
         let holder = ProcHolder(terminationGrace: terminationGrace)
+        let childDirectory = ChildProcessDiagnostics.directory
+        let interaction = SidekickInteraction.current
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
-                    do { cont.resume(returning: try execute(binary: binary, args: args, stdinText: stdinText,
+                    do { cont.resume(returning: try ChildProcessDiagnostics.$directory.withValue(childDirectory) { try execute(binary: binary, args: args, stdinText: stdinText,
                                                             cwd: cwd, timeout: timeout, extraEnv: extraEnv,
                                                             includeCustomProviderKey: includeCustomProviderKey,
                                                             retainStdoutLine: retainStdoutLine,
-                                                            onStdoutLine: onStdoutLine, procHolder: holder)) }
+                                                            onStdoutLine: onStdoutLine, procHolder: holder, interaction: interaction) }) }
                     catch { cont.resume(throwing: error) }
                 }
             }
@@ -1298,10 +1335,9 @@ actor CodexCLI {
                                 includeCustomProviderKey: Bool = true,
                                 retainStdoutLine: (@Sendable (String) -> Bool)? = nil,
                                 onStdoutLine: (@Sendable (String) -> Void)? = nil,
-                                procHolder: ProcHolder? = nil) throws -> ExecResult {
+                                procHolder: ProcHolder? = nil, interaction: SidekickInteraction? = nil) throws -> ExecResult {
         let lease = try CodexRuntime.executionLease(for: binary, cancelled: { procHolder?.isCancelled == true })
         defer { lease?.unlock() }
-        let binary = CodexRuntime.binaryAfterLease(binary)
         if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
         if procHolder?.isCancelled == true { throw CancellationError() }
         let proc = Process()
@@ -1322,6 +1358,8 @@ actor CodexCLI {
         // here also blocks the ChatGPT-token fallthrough on keyless local servers.)
         if includeCustomProviderKey { env[CustomProvider.apiKeyEnvName] = CustomProvider.apiKeyEnvValue }
         env.merge(extraEnv) { _, new in new }
+        env[ChildProcessDiagnostics.environmentKey] = ChildProcessDiagnostics.directory?.path
+        if ChildProcessDiagnostics.directory != nil { env["TMPDIR"] = FileManager.default.temporaryDirectory.path }
         proc.environment = CodexRuntime.environment(env, binary: binary)
         if let cwd { proc.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
@@ -1337,6 +1375,14 @@ actor CodexCLI {
         // whole; stdout LINE-streams to `onStdoutLine` (when present) so callers see codex's --json
         // play-by-play live, while still accumulating the full buffer for parseEnvelope.
         let outDrain = PipeDrain(), errDrain = PipeDrain()
+        let interactionViolated = OSAllocatedUnfairLock(initialState: false)
+        let observeInteraction: @Sendable (String) -> Void = { line in
+            do { try interaction?.observeToolEvent(line) }
+            catch {
+                interactionViolated.withLock { $0 = true }
+                procHolder?.terminate()
+            }
+        }
         let drained = DispatchGroup()
         drained.enter()
         DispatchQueue.global(qos: .utility).async {
@@ -1346,7 +1392,7 @@ actor CodexCLI {
         drained.enter()
         DispatchQueue.global(qos: .utility).async {
             let handle = outPipe.fileHandleForReading
-            guard onStdoutLine != nil || retainStdoutLine != nil else {
+            guard onStdoutLine != nil || retainStdoutLine != nil || interaction != nil else {
                 outDrain.set(handle.readDataToEndOfFile())     // no streaming → drain whole
                 drained.leave(); return
             }
@@ -1358,6 +1404,7 @@ actor CodexCLI {
                 if retainStdoutLine == nil { all.append(chunk) }
                 while let nl = buf.firstIndex(of: 0x0A) {
                     let line = String(decoding: buf[..<nl], as: UTF8.self)
+                    observeInteraction(line)
                     onStdoutLine?(line)
                     if retainStdoutLine?(line) == true { all.append(Data((line + "\n").utf8)) }
                     buf = Data(buf[buf.index(after: nl)...])
@@ -1365,6 +1412,7 @@ actor CodexCLI {
             }
             if !buf.isEmpty {
                 let line = String(decoding: buf, as: UTF8.self)
+                observeInteraction(line)
                 onStdoutLine?(line)
                 if retainStdoutLine?(line) == true { all.append(buf) }
             }
@@ -1391,17 +1439,17 @@ actor CodexCLI {
         // Watchdog: terminate on timeout. waitUntilExit below unblocks either way; we tell a
         // timeout apart from a normal exit via the flag (terminate() looks like SIGTERM).
         let timedOut = OSAllocatedUnfairLock(initialState: false)
-        let watchdog = DispatchWorkItem { [weak proc] in
+        let watchdog = RunWatchdog(timeout: timeout, interaction: interaction) { [weak proc] in
             timedOut.withLock { $0 = true }
             if let procHolder { procHolder.terminate() } else { proc?.terminate() }
         }
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
         proc.waitUntilExit()
         procHolder?.clear()
         watchdog.cancel()
         drained.wait()
 
+        if interactionViolated.withLock({ $0 }) { throw SidekickInteraction.Failure.toolWhileWaiting }
         if timedOut.withLock({ $0 }) { throw CLIError.timedOut(after: timeout) }
         return ExecResult(status: proc.terminationStatus, stdout: outDrain.text, stderr: errDrain.text)
     }
@@ -1444,20 +1492,19 @@ actor CodexCLI {
     /// codex's play-by-play live — while accumulating the full text. No stdin (the prompt rides in
     /// argv). Byte-level line splitting so multibyte UTF-8 across a read boundary never garbles.
     /// Honors Task cancellation: cancelling the awaiting Task terminates codex (the STOP button).
+    /// A throwing line consumer also terminates the child and preserves its typed failure.
     /// Internal (not private): ClaudeCLI's agent runs ride the same streaming plumbing.
     static func executeStreaming(binary: String, args: [String], timeout: TimeInterval,
                                  extraEnv: [String: String] = [:],
-                                 onLine: @escaping @Sendable (String) -> Void) async throws -> ExecResult {
+                                 onLine: @escaping @Sendable (String) throws -> Void) async throws -> ExecResult {
         let holder = ProcHolder()
+        let interaction = SidekickInteraction.current
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
                 let lease: CodexRuntime.FileLock?
-                let selected = binary
-                let binary: String
                 do {
-                    lease = try CodexRuntime.executionLease(for: selected, cancelled: { holder.isCancelled })
-                    binary = CodexRuntime.binaryAfterLease(selected)
+                    lease = try CodexRuntime.executionLease(for: binary, cancelled: { holder.isCancelled })
                     if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
                     if holder.isCancelled { throw CancellationError() }
                 } catch { cont.resume(throwing: error); return }
@@ -1478,12 +1525,20 @@ actor CodexCLI {
                 proc.standardError = errPipe
 
                 let outSink = LineSink(), errSink = LineSink()
+                let streamFailure = OSAllocatedUnfairLock<Error?>(initialState: nil)
                 // Codex can warn when it cannot sweep an old arg0 helper directory, then
                 // continue normally. Keep stderr for diagnostics, but do not show this one
                 // startup cleanup warning in live computer-use progress.
                 let showLine: @Sendable (String) -> Void = { line in
                     guard !line.hasPrefix("stderr: WARNING: failed to clean up stale arg0 temp dirs:") else { return }
-                    onLine(line)
+                    // One callback at a time, including stderr. Once an event interrupts the
+                    // run, suppress later progress and terminate through the same STOP path.
+                    let shouldStop = streamFailure.withLock { failure in
+                        guard failure == nil else { return false }
+                        do { try onLine(line); return false }
+                        catch { failure = error; return true }
+                    }
+                    if shouldStop { holder.terminate() }
                 }
                 let group = DispatchGroup()
                 for (pipe, sink, prefix) in [(outPipe, outSink, ""), (errPipe, errSink, "stderr: ")] {
@@ -1519,16 +1574,16 @@ actor CodexCLI {
                 holder.set(proc)        // expose to the cancellation handler (STOP)
 
                 let timedOut = OSAllocatedUnfairLock(initialState: false)
-                let watchdog = DispatchWorkItem {
+                let watchdog = RunWatchdog(timeout: timeout, interaction: interaction) {
                     timedOut.withLock { $0 = true }; holder.terminate()
                 }
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout, execute: watchdog)
 
                 proc.waitUntilExit()
                 holder.clear()
                 watchdog.cancel()
                 group.wait()
 
+                if let failure = streamFailure.withLock({ $0 }) { cont.resume(throwing: failure); return }
                 if timedOut.withLock({ $0 }) { cont.resume(throwing: CLIError.timedOut(after: timeout)); return }
                 cont.resume(returning: ExecResult(status: proc.terminationStatus,
                                                   stdout: outSink.text, stderr: errSink.text))

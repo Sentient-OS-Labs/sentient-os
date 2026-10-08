@@ -286,35 +286,27 @@ actor ClaudeCLI {
     /// sign-in and self-exits once the OAuth callback lands (credentials go to the user's
     /// Keychain — shared with their own Claude Code, by decision). Same contract as
     /// CodexCLI.startLogin: returns the running Process, never awaited to completion.
-    static func startLogin(onLine: @escaping @Sendable (String) -> Void) throws -> Process {
+    static func startLogin(onURL: @escaping @Sendable (URL) -> Void,
+                           onExit: @escaping @Sendable () -> Void) throws -> Process {
         guard let bin = locateBinary() else { throw CodexCLI.CLIError.notAvailable(.notInstalled) }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: bin)
         proc.arguments = ["auth", "login"]
         var env = CodexCLI.richEnvironment(binDir: (bin as NSString).deletingLastPathComponent)
         env.merge(baseEnv) { _, new in new }
+        // stdout contains Claude's manual-code URL, not the URL it opens automatically.
+        // Override only this child's browser launcher; the user's settings stay untouched.
+        let browser = try? ClaudeLoginBrowser(onURL: onURL)
+        if let browser { env.merge(browser.environment) { _, new in new } }
         proc.environment = env
         proc.standardInput = FileHandle.nullDevice
-        let outPipe = Pipe(), errPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = errPipe
-        for (pipe, prefix) in [(outPipe, ""), (errPipe, "stderr: ")] {
-            DispatchQueue.global(qos: .utility).async {
-                var buf = Data()
-                let handle = pipe.fileHandleForReading
-                while true {
-                    let chunk = handle.availableData
-                    if chunk.isEmpty { break }
-                    buf.append(chunk)
-                    while let nl = buf.firstIndex(of: 0x0A) {
-                        onLine(prefix + String(decoding: buf[..<nl], as: UTF8.self))
-                        buf = Data(buf[buf.index(after: nl)...])
-                    }
-                }
-                if !buf.isEmpty { onLine(prefix + String(decoding: buf, as: UTF8.self)) }
-            }
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { _ in browser?.stop(); onExit() }
+        do { try proc.run() } catch {
+            browser?.stop()
+            throw CodexCLI.CLIError.launchFailed("\(error)")
         }
-        do { try proc.run() } catch { throw CodexCLI.CLIError.launchFailed("\(error)") }
         return proc
     }
 
@@ -413,12 +405,16 @@ actor ClaudeCLI {
             args += ["--debug-file", directory.appending(path: "claude-\(UUID().uuidString).log").path]
         }
         #endif
+        var environment = Self.environment(for: invocation)
+        if SidekickToolServer.connection != nil {
+            environment["MCP_TOOL_TIMEOUT"] = String(Int(SidekickToolServer.maximumWait * 1_000))
+        }
         let out = try await CodexCLI.executeAsync(binary: bin,
                                                   args: args,
                                                   stdinText: invocation.prompt,
                                                   cwd: invocation.cwd,
                                                   timeout: invocation.timeout,
-                                                  extraEnv: Self.environment(for: invocation),
+                                                  extraEnv: environment,
                                                   onStdoutLine: stdoutLine)
         let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
         Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
@@ -552,6 +548,12 @@ actor ClaudeCLI {
         }
         recipeAllows += direct.flatMap(\.allAllowed)
         recipeDenies += direct.flatMap(\.denied)
+        if SidekickToolServer.connection != nil {
+            recipeAllows.append("mcp__sentient_recovery__ask_user")
+            if SidekickInteraction.current?.personalization != nil {
+                recipeAllows.append("mcp__sentient_recovery__" + SidekickPersonalization.toolName)
+            }
+        }
 
         var args = ["-p",
                     "--output-format", "stream-json", "--verbose",
@@ -639,7 +641,7 @@ actor ClaudeCLI {
         if !allowed.isEmpty { args += ["--allowedTools", allowed.joined(separator: ",")] }
         if !disallowed.isEmpty { args += ["--disallowedTools", disallowed.joined(separator: ",")] }
         if let schema = inv.outputSchema { args += ["--json-schema", schema] }
-        return args
+        return try SidekickToolServer.addToClaudeArguments(args)
     }
 
     /// `{"allowedMcpServers":[{"serverName":"cua_driver"},{"serverUrl":"https://host/*"},…]}` —
@@ -678,8 +680,9 @@ actor ClaudeCLI {
     /// Claude's usage-limit wording (the subscription windows) plus the generic family — checked
     /// against a failed run's error text, exactly like codex's marker scan, but here the
     /// structured `rate_limit_event` (persisted below) usually already told us the reset time.
-    private static let usageLimitMarkers = ["hit your session limit", "hit your weekly limit",
+    private static let usageLimitMarkers = ["hit your limit", "hit your session limit", "hit your weekly limit",
                                             "hit your opus limit", "usage limit", "rate limit",
+                                            "rate_limit_error", "rate_limit_exceeded",
                                             "limit resets", "too many requests",
                                             "out of credits", "credit balance"]
 
@@ -700,6 +703,7 @@ actor ClaudeCLI {
     static func parseEnvelope(_ out: CodexCLI.ExecResult, durationMS: Int) throws -> CodexCLI.Envelope {
         var sessionID: String?
         var resultObj: [String: Any]?
+        var rateLimitRejected = false
 
         for line in out.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
@@ -709,7 +713,10 @@ actor ClaudeCLI {
             case "system":
                 if sessionID == nil { sessionID = obj["session_id"] as? String }
             case "rate_limit_event":
-                if let info = obj["rate_limit_info"] as? [String: Any] { noteRateLimit(info) }
+                if let info = obj["rate_limit_info"] as? [String: Any] {
+                    noteRateLimit(info)
+                    rateLimitRejected = info["status"] as? String == "rejected"
+                }
             case "result":
                 resultObj = obj
             default:
@@ -731,10 +738,12 @@ actor ClaudeCLI {
         }
 
         if out.status != 0 || isError || text.isEmpty {
-            let detail = !text.isEmpty ? text
+            let resultDetail = ([text] + (resultObj?["errors"] as? [String] ?? []))
+                .filter { !$0.isEmpty }.joined(separator: " · ")
+            let detail = !resultDetail.isEmpty ? resultDetail
                 : (out.stderr.isEmpty ? String(out.stdout.suffix(600)) : out.stderr)
             let lowered = detail.lowercased()
-            if usageLimitMarkers.contains(where: { lowered.contains($0) }) {
+            if rateLimitRejected || usageLimitMarkers.contains(where: { lowered.contains($0) }) {
                 throw CodexCLI.CLIError.usageLimit(message: String(detail.prefix(600)),
                                                    sessionID: sessionID)
             }
@@ -848,12 +857,22 @@ actor ClaudeCLI {
         default: (caseName, level) = (String(describing: type(of: error)), .error)
         }
         let reason = CodexFailureReason.classify(error)
+        if phase == "ping", CodexTrigger.current == .probe, [.notInstalled, .notLoggedIn, .planDenied].contains(reason) { return }
         let net = NetworkSnapshot.shared.current
         extra["effort"] = effort
         extra["resumed"] = String(resumed)
         extra["duration_ms"] = String(durationMS)
         extra["timeout_s"] = String(timeoutS ?? -1)
-        if feature == "computer" { extra["cua_driver"] = CuaDriver.version }
+        if feature == "computer" {
+            let runtime = ComputerUseBackend.selected(for: ModelBackend.current)
+            extra["computer_runtime"] = runtime.rawValue
+            if runtime == .cua { extra["cua_driver"] = CuaDriver.version }
+            else {
+                extra["helper_version"] = CodexRuntime.release.helper.version
+                extra["helper_build"] = String(CodexRuntime.release.helperBuild)
+            }
+        }
+        Diagnostics.current?.markReported(error)
         CrashReporting.captureEvent(event, level: level, tags: [
             "feature": feature,
             "error": caseName,

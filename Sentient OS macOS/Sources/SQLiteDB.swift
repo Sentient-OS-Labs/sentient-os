@@ -53,8 +53,10 @@ nonisolated enum SQLiteDB {
             // data" (silent stale reads). Surface it (breadcrumb via Log) instead of `try?`-hiding it.
             do { try fm.copyItem(atPath: dbPath + sib, toPath: dst.path + sib) }
             catch {
+                Diagnostics.report(.sourceSnapshotDegraded, phase: .snapshot, reason: "sidecar_copy", error: error,
+                                   flags: [.completeSnapshot: false, .previousStateRetained: requireCompleteWAL])
                 if requireCompleteWAL { throw error }
-                Log("SQLiteDB: \(name)\(sib) copy failed (may read stale) — \(error)")
+                Log("SQLiteDB: database sidecar copy failed (may read stale) — \(ErrorLabel(error))")
             }
         }
         completed = true
@@ -70,7 +72,8 @@ nonisolated final class SQLiteReader {
     private let dbName: String   // the DB basename (chat.db / ChatStorage.sqlite / …) — a diagnostics tag
 
     init(path: String) throws {
-        dbName = URL(fileURLWithPath: path).lastPathComponent
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        dbName = ["chat.db", "ChatStorage.sqlite", "NoteStore.sqlite", "Envelope Index", "sms.db"].contains(name) ? name : "other"
         guard sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
             let msg = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
             sqlite3_close(db); db = nil
@@ -90,7 +93,7 @@ nonisolated final class SQLiteReader {
             let errmsg = String(cString: sqlite3_errmsg(db))
             CrashReporting.captureEvent("db.schema_error", level: .error,
                 tags: ["db": dbName],
-                extra: ["msg": String(errmsg.prefix(200))],
+                extra: ["sqlite_code": String(sqlite3_errcode(db)), "sqlite_extended_code": String(sqlite3_extended_errcode(db))],
                 fingerprint: ["db", "schema_error", dbName])
             throw SQLiteDB.DBError.prepare(errmsg)
         }

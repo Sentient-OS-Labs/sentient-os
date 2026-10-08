@@ -100,7 +100,7 @@ struct AppleCalendarConnectSheet: View {
         switch authorization {
         case .restricted: "Calendar access is restricted on this Mac. Your administrator can help change it."
         case .denied: "Calendar access is off. Enable Full Access for Sentient in System Settings to read your selected calendars."
-        default: "macOS calls permission to read calendars ‘Full Access’. Sentient uses it here only to read the calendars you choose. No Full Disk Access or separate sign-in is needed."
+        default: "macOS calls permission to read calendars ‘Full Access’. Sentient uses it here only to read the calendars you choose. No separate sign-in is needed."
         }
     }
 

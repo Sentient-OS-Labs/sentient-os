@@ -41,6 +41,6 @@ verified-launch plist into `/Library/LaunchDaemons` (see the Scheduling doc).
 The team lives ONLY in `Signing.xcconfig` (the committed default is the paid shipping team; a
 per-dev override goes in the gitignored `Signing.local.xcconfig`). Never pick a team in Xcode's Signing
 & Capabilities dropdown; that writes `DEVELOPMENT_TEAM` into the project file. Release builds are
-`dwarf-with-dsym`, Debug is `dwarf`. Deployment target macOS 15.0; Hardened Runtime on; App Sandbox
+`dwarf-with-dsym`, Debug is `dwarf`. Deployment target macOS 15.4; Hardened Runtime on; App Sandbox
 off (Full Disk Access requires it); the one entitlement is `com.apple.security.device.audio-input`
 (the mic prompt does not appear without it under the Hardened Runtime).

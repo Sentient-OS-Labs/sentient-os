@@ -166,7 +166,6 @@ private nonisolated final class MailProbeProcess: @unchecked Sendable {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         self.directory = directory
         runtimeLease = try CodexRuntime.executionLease(for: binary, cancelled: { self.cancellation.withLock { $0 } })
-        let binary = CodexRuntime.binaryAfterLease(binary)
         if binary == CodexRuntime.executable.path { try CodexRuntime.verifyCLIForLaunch() }
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = CodexRuntime.arguments(arguments, binary: binary)

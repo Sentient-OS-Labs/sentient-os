@@ -124,7 +124,7 @@ struct OnboardingView: View {
         // context menu (Reload…), and no onboarding surface has a legitimate right-click.
         // Window-scoped, gone with this view.
         .background(RightClickBlocker())
-        // A quiet back door on every screen but the first (and never over the analysis takeover,
+        // A shared back button on every screen but the first (and never over the analysis takeover,
         // which owns its own pause/exit). One shared code path, so every step gets it for free.
         .overlay(alignment: .topLeading) {
             if step > 0 && !analyzing {
@@ -221,6 +221,7 @@ struct OnboardingNextButton: View {
     let title: String
     var enabled: Bool = true
     var glow: Double = 0
+    var minimumLabelWidth: CGFloat = 0
     let action: () -> Void
 
     var body: some View {
@@ -228,6 +229,7 @@ struct OnboardingNextButton: View {
             Text(title)
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(enabled ? .black : .white.opacity(0.35))
+                .frame(minWidth: minimumLabelWidth)
                 .padding(.horizontal, 36)
                 .padding(.vertical, 12)
                 .background(Capsule(style: .continuous)
@@ -240,28 +242,15 @@ struct OnboardingNextButton: View {
     }
 }
 
-/// The subtle onboarding back door — a small arrow + "Back", top-left on every screen but the
-/// first. Quiet by default, brightening on hover, so it never competes with the screen's CTA.
+/// The shared white Back pill, top-left on every onboarding screen but the first.
 struct OnboardingBackButton: View {
     let action: () -> Void
-    @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Back")
-                    .font(.system(size: 13))
-            }
-            .foregroundStyle(hovering ? Theme.secondary : Theme.faint)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .contentShape(Rectangle())
+            Label("Back", systemImage: "chevron.left")
         }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .animation(.easeInOut(duration: 0.15), value: hovering)
+        .buttonStyle(BackButtonStyle())
     }
 }
 

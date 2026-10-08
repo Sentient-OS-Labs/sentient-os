@@ -86,7 +86,10 @@ actor VaultCloud {
     /// A previously accepted input can disappear after account opt-out or Mail reclassification.
     /// Restart that staged merge without touching the live vault or resuming its old cloud session.
     private func validatedResume(_ token: VaultGenerator.ResumeToken?, notes: [CloudNote]) -> VaultGenerator.ResumeToken? {
-        guard let token, let previous = token.mailInputHashes else { return token }
+        // An interrupted slice may be only partly written despite sliceIndex already pointing
+        // at its successor. Drop the whole handle on a runtime change, not only its session ID.
+        guard let token = token?.matchingRuntime(ModelBackend.current) else { return nil }
+        guard let previous = token.mailInputHashes else { return token }
         let current = Self.mailHashes(notes)
         guard previous.allSatisfy({ current[$0.key] == $0.value }) else {
             let staging = URL(fileURLWithPath: token.stagingPath).standardizedFileURL
@@ -134,6 +137,15 @@ actor VaultCloud {
     func create(notes: [CloudNote],
                 onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void = { _ in },
                 onLine: (@Sendable (String) -> Void)? = nil) async throws -> VaultGenerator.Result {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            try await createPinned(notes: notes, onProgress: onProgress, onLine: onLine)
+        }
+    }
+
+    private func createPinned(notes: [CloudNote],
+                              onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void,
+                              onLine: (@Sendable (String) -> Void)?) async throws -> VaultGenerator.Result {
         let notes = await AppleMailEvidence.validatedCloud(notes)
         setCreateResume(validatedResume(createResume, notes: notes))
         lastConsumedSourceIDs = []
@@ -165,6 +177,15 @@ actor VaultCloud {
     func update(notes: [CloudNote],
                 onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void = { _ in },
                 onLine: (@Sendable (String) -> Void)? = nil) async throws -> Int {
+        let backend = ModelBackend.current
+        return try await ModelBackend.$runOverride.withValue(backend) {
+            try await updatePinned(notes: notes, onProgress: onProgress, onLine: onLine)
+        }
+    }
+
+    private func updatePinned(notes: [CloudNote],
+                              onProgress: @Sendable @escaping (VaultGenerator.Progress) -> Void,
+                              onLine: (@Sendable (String) -> Void)?) async throws -> Int {
         let notes = await AppleMailEvidence.validatedCloud(notes)
         setUpdateResume(validatedResume(updateResume, notes: notes))
         lastConsumedSourceIDs = []
@@ -291,6 +312,20 @@ actor VaultCloud {
                 throw CloudError.vaultChanged
             }
             CorpusSlicer.deleteCorpus(in: staging)              // the snapshot must never enter the vault
+            if let previous = VaultGenerator.diagnosticShape(vault), let staged = VaultGenerator.diagnosticShape(staging) {
+                let counts: [Diagnostics.Count: Int] = [.filesBefore: previous.files, .filesAfter: staged.files,
+                    .bytesBefore: previous.bytes, .bytesAfter: staged.bytes, .items: notes.count]
+                if staged.files == 0 || (previous.files >= 10 && staged.files * 5 < previous.files)
+                    || (previous.bytes >= 10_000 && staged.bytes * 5 < previous.bytes) {
+                    Diagnostics.report(.vaultOutputInvalid, phase: .validate, reason: "staged_vault_shrink", counts: counts)
+                }
+                if !staged.indexPresent {
+                    Diagnostics.report(.vaultOutputInvalid, phase: .validate, reason: "missing_index", counts: counts)
+                }
+                CrashReporting.diagnosticBreadcrumb("vault.output_checked", data: ["files_before": String(previous.files),
+                    "files_after": String(staged.files), "bytes_before": String(previous.bytes), "bytes_after": String(staged.bytes),
+                    "changed": String(VaultGenerator.vaultFingerprint(staging) != baseline)])
+            }
             try VaultGenerator.swapStagingIntoVault(staging)    // atomic; live vault untouched until here
             setUpdateResume(nil)
             lastConsumedSourceIDs = Set(inputIDs)

@@ -81,6 +81,7 @@ enum CalendarConnect {
     }
 
     private static func readInitial(onProgress: @Sendable @escaping (Progress) -> Void, replaceNotes: Bool) async throws -> Int {
+        let origin = GoogleSourceRead.origin(bucket: bucketKey)
         let runStart = Date()
         let cal = Calendar.current
         let today = cal.startOfDay(for: runStart)
@@ -114,7 +115,7 @@ enum CalendarConnect {
         }
         // High-water mark = run start. Iterative reads everything after it (a little overlap is
         // harmless — the cloud updater synthesizes — and beats a boundary gap).
-        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, replace: replaceNotes)
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, origin: origin, replace: replaceNotes)
         Log("CalendarConnect.runInitial: ✅ \(recorded)/\(initialMonths) monthly summaries recorded; pointer → \(runStart)")
         return recorded
     }
@@ -131,8 +132,9 @@ enum CalendarConnect {
     }
 
     private static func readIterative(onProgress: @Sendable @escaping (Progress) -> Void) async throws -> Int {
+        let origin = GoogleSourceRead.origin(bucket: bucketKey)
         guard let checkpoint = try await CycleStore.shared.mcpCheckpoint(bucketKey),
-              checkpoint.origin == GoogleSourceRead.origin(bucket: bucketKey) else {
+              checkpoint.origin == origin else {
             return try await readInitial(onProgress: onProgress, replaceNotes: false)
         }
         let mark = checkpoint.mark
@@ -154,7 +156,7 @@ enum CalendarConnect {
             onProgress(.windowDone(step: 1, total: 1, label: sinceLabel,
                                    summary: nil, events: 0, keptSoFar: 0))
         }
-        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart)
+        try await GoogleSourceRead.commit(bucket: bucketKey, notes: pending, through: runStart, origin: origin)
         Log("CalendarConnect.runIterative: ✅ \(recorded) summary since \(since); pointer → \(runStart)")
         return recorded
     }

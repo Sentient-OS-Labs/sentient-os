@@ -100,7 +100,7 @@ enum CodexAuth {
 
     /// nonisolated: read from the CodexCLI actor and background diagnostics too (pure file path).
     private nonisolated static var authURL: URL {
-        CodexRuntime.activeAuth
+        CodexRuntime.auth
     }
 
     /// Decode the plan from auth.json's JWT claims. Pure file read — safe to call every launch,
@@ -108,7 +108,7 @@ enum CodexAuth {
     /// callers treat nil as full (fail open). nonisolated: a pure file read, safe from any executor
     /// (CodexAuthSnapshot reads it off the CodexCLI actor).
     nonisolated static func currentPlan() -> Plan? {
-        guard let data = try? Data(contentsOf: authURL),
+        guard let data = try? CodexRuntime.readAuthData(),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let tokens = root["tokens"] as? [String: Any] else { return nil }
         // id_token first (the one codex itself parses for plan display), access_token as backstop.
@@ -185,7 +185,7 @@ enum CodexAuth {
         let earliest = UserDefaults.standard.double(forKey: earliestRefreshKey)
         if Date().timeIntervalSince1970 < earliest { return currentPlan() }
 
-        guard let data = try? Data(contentsOf: authURL),
+        guard let data = try? CodexRuntime.readAuthData(),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let tokens = root["tokens"] as? [String: Any],
               let refreshToken = tokens["refresh_token"] as? String else {
@@ -241,9 +241,8 @@ enum CodexAuth {
 
         let out = try JSONSerialization.data(withJSONObject: updated,
                                              options: [.prettyPrinted, .withoutEscapingSlashes])
-        // A migrated standalone path is a compatibility link. Always replace its backing
-        // file so a refresh during migration recovery cannot detach the two installations.
-        let target = authURL.resolvingSymlinksInPath()
+        try CodexRuntime.prepareHome()
+        let target = authURL
         let tmp = target.deletingLastPathComponent()
             .appendingPathComponent("auth.json.sentient-\(UUID().uuidString.prefix(8))")
         try out.write(to: tmp)

@@ -11,7 +11,6 @@ final class OpenAIComputerUseRuntime {
     static let shared = OpenAIComputerUseRuntime()
     private init() {}
 
-    private(set) var isReady = false
     private var activeTasks: Set<UUID> = []
     private var activeConfiguration: OpenAIComputerUse.Configuration?
     private var launched: (app: NSRunningApplication, configuration: OpenAIComputerUse.Configuration)?
@@ -35,13 +34,23 @@ final class OpenAIComputerUseRuntime {
         }
         if let starting {
             let sameConfiguration = startingConfiguration == configuration
-            let app = try await withTaskCancellationHandler { try await starting.value } onCancel: { starting.cancel() }
-            try Task.checkCancellation()
+            let app = try await awaitStartup(starting, id: startingID)
             if sameConfiguration, !app.isTerminated { return app }
         }
         guard !restarting else { throw OpenAIComputerUse.RuntimeError.helperRunning }
+        let id = UUID()
         let task = Task { @MainActor in
-            _ = try await OpenAIComputerUse.validate(at: configuration.appURL, configuration: configuration)
+            defer {
+                if self.startingID == id {
+                    self.starting = nil; self.startingID = nil; self.startingConfiguration = nil
+                }
+            }
+            // Startup owns its lease independently of its waiters. STOP may release a caller
+            // while Settings or another request still needs this shared preparation.
+            let startupLease = try await CodexRuntime.sharedRuntimeLease()
+            defer { startupLease.unlock() }
+            let configuration = try configuration.afterRuntimeLease()
+            _ = try await OpenAIComputerUse.validate(at: configuration.appURL)
             try Task.checkCancellation()
             let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
             if let app = running.first {
@@ -52,13 +61,12 @@ final class OpenAIComputerUseRuntime {
                 if let launched, !launched.app.isTerminated,
                    launched.app.processIdentifier == app.processIdentifier,
                    launched.configuration != configuration,
-                   url.resolvingSymlinksInPath() == configuration.appURL.resolvingSymlinksInPath() {
-                    self.isReady = false
+                   url.standardizedFileURL == configuration.appURL.standardizedFileURL {
+                    self.checked = nil
                     throw OpenAIComputerUse.RuntimeError.restartRequired
                 }
                 return app
             }
-            self.isReady = false
             self.checked = nil
             let options = NSWorkspace.OpenConfiguration()
             options.activates = false
@@ -67,7 +75,7 @@ final class OpenAIComputerUseRuntime {
             let app: NSRunningApplication
             do { app = try await NSWorkspace.shared.openApplication(at: configuration.appURL, configuration: options) }
             catch { throw OpenAIComputerUse.RuntimeError.launchFailed }
-            guard app.bundleURL?.resolvingSymlinksInPath() == configuration.appURL.resolvingSymlinksInPath() else {
+            guard app.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL else {
                 throw OpenAIComputerUse.RuntimeError.helperRunning
             }
             self.launched = (app, configuration)
@@ -75,19 +83,28 @@ final class OpenAIComputerUseRuntime {
             try Task.checkCancellation()
             return app
         }
-        let id = UUID()
         starting = task
         startingID = id
         startingConfiguration = configuration
-        defer {
-            if startingID == id { starting = nil; startingID = nil; startingConfiguration = nil }
+        do { return try await awaitStartup(task, id: id) }
+        catch {
+            if !(error is CancellationError) { invalidate() }
+            throw error
         }
-        do { return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() } }
-        catch { isReady = false; checked = nil; throw error }
     }
 
-    /// A live service check, after consent. Short caching avoids a background Codex process on
-    /// every Settings refresh; task startup requests a fresh check before invoking the model.
+    /// Await shared startup without transferring cancellation to it. Poll only the task's
+    /// lifetime, not the helper; this also lets STOP release the run promptly.
+    private func awaitStartup(_ task: Task<NSRunningApplication, Error>, id: UUID?) async throws -> NSRunningApplication {
+        while let id, startingID == id {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try Task.checkCancellation()
+        return try await task.value
+    }
+
+    /// A live service diagnostic for explicit setup and repair, after consent. Ordinary tasks
+    /// establish their own required MCP connection instead of starting an extra Codex process.
     func check(configuration selected: OpenAIComputerUse.Configuration, fresh: Bool = false) async throws {
         let lease = try await CodexRuntime.sharedRuntimeLease()
         defer { lease.unlock() }
@@ -108,18 +125,16 @@ final class OpenAIComputerUseRuntime {
                 if !fresh, let checked, !checked.app.isTerminated,
                    checked.app.processIdentifier == app.processIdentifier,
                    checked.configuration == configuration, Date().timeIntervalSince(checked.at) < 30 {
-                    self.isReady = true
                     return
                 }
                 try await OpenAIComputerUseProbe.check(configuration)
                 try Task.checkCancellation()
                 self.checked = (app, configuration, Date())
-                self.isReady = true
                 Log("Native computer use: service check passed")
             } catch {
                 self.checked = nil
-                self.isReady = false
                 if !Task.isCancelled, !(error is CancellationError) {
+                    if !Diagnostics.isExpected(error) { Diagnostics.report(.readinessFailed, phase: .probe, error: error) }
                     let reason = (error as? OpenAIComputerUse.RuntimeError).map { String(describing: $0) } ?? "unexpected"
                     Log("Native computer use: service check failed (\(reason))")
                 }
@@ -145,7 +160,10 @@ final class OpenAIComputerUseRuntime {
         activeTasks.insert(id)
         activeConfiguration = configuration
         do {
-            try await check(configuration: configuration, fresh: true)
+            _ = try await start(configuration: configuration)
+            guard await Permissions.nativeAutomationState() == .granted else {
+                throw OpenAIComputerUse.RuntimeError.permissionRequired
+            }
             try Task.checkCancellation()
             return id
         } catch { endTask(id); throw error }
@@ -156,7 +174,7 @@ final class OpenAIComputerUseRuntime {
         if activeTasks.isEmpty { activeConfiguration = nil }
     }
 
-    func invalidate() { isReady = false; checked = nil }
+    func invalidate() { checked = nil }
 
     /// Invoked only by the visible Restart button, whose copy asks the user to finish other
     /// apps' computer-use tasks. Never force-kill, never terminate a different installed bundle.
@@ -168,14 +186,13 @@ final class OpenAIComputerUseRuntime {
             throw OpenAIComputerUse.RuntimeError.helperRunning
         }
         restarting = true
-        isReady = false
         checked = nil
         defer { restarting = false }
-        _ = try await OpenAIComputerUse.validate(at: configuration.appURL, configuration: configuration)
+        _ = try await OpenAIComputerUse.validate(at: configuration.appURL)
         try Task.checkCancellation()
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
         guard running.count <= 1, running.allSatisfy({
-            $0.bundleURL?.resolvingSymlinksInPath() == configuration.appURL.resolvingSymlinksInPath()
+            $0.bundleURL?.standardizedFileURL == configuration.appURL.standardizedFileURL
         }) else { throw OpenAIComputerUse.RuntimeError.helperRunning }
         if let app = running.first {
             guard app.terminate() else { throw OpenAIComputerUse.RuntimeError.helperRunning }

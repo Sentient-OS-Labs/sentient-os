@@ -253,6 +253,11 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
 }
 
 nonisolated enum AppleMailSource {
+    static var isSupported: Bool {
+        if #available(macOS 26, *) { return true }
+        return false
+    }
+
     // Bump when triage/privacy policy changes so earlier acceptances are re-evaluated locally.
     static let classificationVersion = 1
     static func root() throws -> URL {

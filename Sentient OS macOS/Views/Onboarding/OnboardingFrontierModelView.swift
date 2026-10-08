@@ -5,10 +5,10 @@
 //  Onboarding's frontier-model step (grew out of the codex-login-only screen, 2026-07-25): the
 //  five engine pills in one centered row over the SAME per-engine panels Settings renders
 //  (FrontierEnginePicker), with the live codex login embedded as the ChatGPT panel
-//  (OnboardingCodexLoginPanel). Continue gates on the ACTIVE engine being healthy — ChatGPT
-//  logged in, or a custom endpoint that passed Test & Select. Continue also prepares the CLI
-//  through its shared setup engine, so an existing login cannot bypass its update check.
-//  Browsing tabs only detects state; downloads start at a commitment action.
+//  (OnboardingCodexLoginPanel). Continue prepares and commits a signed-in Claude choice;
+//  other choices must already be the active, healthy engine, including the selected custom
+//  preset. Every choice prepares its CLI, so an existing login cannot bypass its update check.
+//  Joins shared Codex preparation at launch; browsing tabs never changes the saved engine.
 //  Doc: Views/Onboarding/Documentation - Onboarding.md
 //
 
@@ -20,24 +20,33 @@ struct OnboardingFrontierModelView: View {
 
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
+    @State private var tab: FrontierEngineTab = .chatgpt
     @State private var continueAttempt: UUID?
     @State private var continueTask: Task<Void, Never>?
+    @State private var continueStatus: String?
     private var continuing: Bool { continueAttempt != nil }
     private var enginePreparing: Bool {
-        backendRaw == ModelBackend.claude.rawValue
+        tab == .claude
             ? claude.preparing || claude.installing
             : codex.preparing || codex.installing
     }
 
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
+    @AppStorage(CustomProvider.presetKey) private var presetRaw = CustomProvider.Preset.openRouter.rawValue
     /// Observed so a passing Test & Select re-evaluates `engineReady` in place.
     @AppStorage(CustomProvider.visionVerifiedKey) private var visionVerified = false
 
-    /// The one Continue gate: the ACTIVE engine is healthy. ChatGPT = logged in to codex;
-    /// Claude = logged in to Claude Code; a custom endpoint = configured AND vision-verified
-    /// (a passing Test & Select).
+    private var activeTab: FrontierEngineTab {
+        FrontierEngineTab(backend: ModelBackend(rawValue: backendRaw) ?? .chatgpt,
+                          preset: CustomProvider.Preset(rawValue: presetRaw) ?? .openRouter)
+    }
+
+    /// Claude needs a login; Continue prepares and commits it. Other displayed engines must
+    /// already be committed and healthy, including a passing Test & Select for custom endpoints.
     private var engineReady: Bool {
         _ = visionVerified
+        if tab == .claude { return claude.loggedIn }
+        guard tab == activeTab else { return false }
         switch ModelBackend(rawValue: backendRaw) ?? .chatgpt {
         case .custom:  return CustomProvider.current.isUsable
         case .claude:  return claude.loggedIn
@@ -67,15 +76,17 @@ struct OnboardingFrontierModelView: View {
                             .frame(maxWidth: 640)
                     }
 
-                    FrontierEnginePicker(layout: .singleRow,
+                    FrontierEnginePicker(tab: $tab, layout: .singleRow,
                                          chatgptHealthy: codex.loggedIn) {
                         OnboardingCodexLoginPanel()
                     }
 
-                    if backendRaw != ModelBackend.claude.rawValue {
+                    if tab != .claude {
                         if codex.preparing || codex.installing { MonoWaitLine("preparing codex…") }
                         OnboardingStatusText(codex.installStatus)
                     }
+
+                    OnboardingStatusText(continueStatus)
 
                     // The quiet reward: the halo lights only once an engine is actually
                     // ready (GlowHalo's `active` rides `enabled`), at the armed-CTA subtlety.
@@ -100,10 +111,12 @@ struct OnboardingFrontierModelView: View {
                 .padding(.trailing, 36).padding(.bottom, 28)
         }
         .onAppear {
-            // Observe the shared Codex setup already started by AppState. Claude Code is
-            // prepared by its commitment/sign-in action; appearing here only refreshes status.
-            Task { await codex.refreshInstalled() }
-            Task { await codex.refreshLoginStatus() }
+            // Join launch preparation, including adoption of a portable existing login into
+            // the private runtime. A legacy CLI's login alone cannot make this screen ready.
+            Task {
+                _ = await codex.ensureCurrent()
+                await codex.refreshLoginStatus()
+            }
             Task {
                 await claude.refreshInstalled()
                 await claude.refreshLoginStatus()
@@ -122,27 +135,51 @@ struct OnboardingFrontierModelView: View {
             }
         }
         .onChange(of: backendRaw) { cancelContinue() }
+        .onChange(of: presetRaw) { cancelContinue() }
+        .onChange(of: tab) { cancelContinue() }
         .onDisappear { cancelContinue() }
     }
 
     private func continueWithEngine() {
         guard engineReady, !continuing else { return }
-        let selectedBackend = backendRaw
+        let initialBackend = backendRaw
+        let selectedTab = tab
         let attempt = UUID()
+        continueStatus = nil
         continueAttempt = attempt
         continueTask = Task {
             defer {
                 if continueAttempt == attempt { continueAttempt = nil; continueTask = nil }
             }
-            if selectedBackend == ModelBackend.claude.rawValue {
-                guard await claude.ensureCurrent(), !Task.isCancelled else { return }
-                await claude.refreshLoginStatus()
+            let prepared: Bool
+            if selectedTab == .claude {
+                prepared = await claude.ensureCurrent()
             } else {
-                guard await codex.ensureCurrent(), !Task.isCancelled else { return }
-                if selectedBackend == ModelBackend.chatgpt.rawValue { await codex.refreshLoginStatus() }
+                prepared = await codex.ensureCurrent()
+            }
+            guard !Task.isCancelled, continueAttempt == attempt,
+                  backendRaw == initialBackend, tab == selectedTab else { return }
+            guard prepared else {
+                continueStatus = selectedTab == .claude
+                    ? claude.installStatus ?? "✗ Claude Code couldn't be prepared. Try again."
+                    : codex.installStatus ?? "✗ Codex couldn't be prepared. Try again."
+                return
+            }
+            if selectedTab == .claude {
+                await claude.refreshLoginStatus()
+            } else if selectedTab == .chatgpt {
+                await codex.refreshLoginStatus()
             }
             // The user can browse or select another engine while preparation is in flight.
-            guard !Task.isCancelled, backendRaw == selectedBackend, engineReady else { return }
+            guard !Task.isCancelled, continueAttempt == attempt,
+                  backendRaw == initialBackend, tab == selectedTab else { return }
+            guard engineReady else {
+                continueStatus = "✗ Sign in to your selected provider, then try Continue again."
+                return
+            }
+            // Commit only after preparation and a fresh login check succeed, immediately
+            // before navigation so the next step sees the selected provider.
+            if selectedTab == .claude { backendRaw = ModelBackend.claude.rawValue }
             onContinue()
         }
     }
@@ -151,6 +188,7 @@ struct OnboardingFrontierModelView: View {
         continueTask?.cancel()
         continueTask = nil
         continueAttempt = nil
+        continueStatus = nil
     }
 }
 

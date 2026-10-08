@@ -18,6 +18,8 @@ actor ClaudeSubscriptionBridge {
     private let binary: String
     private let model: String
     private let effort: String
+    private let interaction: SidekickInteraction?
+    private var transportTimeout: TimeInterval { timeout + (interaction == nil ? 0 : SidekickToolServer.maximumWait) }
     private let timeout: TimeInterval
     private let namespaces: Set<String>
     private let onProgress: @Sendable (String) -> Void
@@ -36,6 +38,7 @@ actor ClaudeSubscriptionBridge {
     private var finalUsage: [String: Any]?
 
     private struct Call {
+        let recovery: Bool
         let fingerprint: String
         var waiters: [CheckedContinuation<Data, Error>]
         var outputFingerprint: String?
@@ -53,6 +56,7 @@ actor ClaudeSubscriptionBridge {
 
     init(binary: String, model: String, effort: String, timeout: TimeInterval,
          namespaces: Set<String>, onProgress: @escaping @Sendable (String) -> Void) {
+        self.interaction = SidekickInteraction.current
         self.binary = binary; self.model = model; self.effort = effort; self.timeout = timeout
         self.namespaces = namespaces; self.onProgress = onProgress
     }
@@ -91,7 +95,7 @@ actor ClaudeSubscriptionBridge {
         try writePrivate(Wire.json(mcp), to: directory.appendingPathComponent("mcp.json"))
         let table = "model_providers.sentient_claude={name=\"Claude subscription\",base_url=\"\(base)/v1\","
             + "wire_api=\"responses\",env_key=\"\(Self.environmentKey)\",requires_openai_auth=false,"
-            + "supports_websockets=false,request_max_retries=2,stream_max_retries=2,stream_idle_timeout_ms=\(Int(timeout * 1000))}"
+            + "supports_websockets=false,request_max_retries=2,stream_max_retries=2,stream_idle_timeout_ms=\(Int(transportTimeout * 1000))}"
         return Configuration(overrides: [table, "model_provider=\"sentient_claude\"",
             "model_catalog_json=\(OpenAIComputerUse.tomlString(catalog.path))", "web_search=\"disabled\"",
             "features.apps=false", "features.plugins=false", "features.multi_agent=false",
@@ -253,6 +257,11 @@ actor ClaudeSubscriptionBridge {
                 guard call.outputFingerprint == nil else { throw Failure.staleRetry }
                 return try await withCheckedThrowingContinuation { calls[owner]?.waiters.append($0) }
             }
+            let recovery = tool.namespace == "mcp__sentient_recovery"
+            let pending = calls.values.filter { $0.outputFingerprint == nil }
+            if (recovery && !pending.isEmpty) || pending.contains(where: { $0.recovery }) {
+                return try reply(["isError": true, "content": [["type": "text", "text": "Finish the pending tool call before starting another. A Sidekick question must run alone; wait for the user's answer."]]])
+            }
             guard calls.count < 2_000 else { throw Failure.contextLimit }
             let callID = "call_" + UUID().uuidString
             var item: [String: Any] = ["id": "fc_" + UUID().uuidString, "type": "function_call", "status": "completed",
@@ -260,7 +269,7 @@ actor ClaudeSubscriptionBridge {
                 "arguments": String(decoding: try Wire.json(arguments), as: UTF8.self)]
             if !tool.namespace.isEmpty { item["namespace"] = tool.namespace }
             return try await withCheckedThrowingContinuation { continuation in
-                calls[owner] = Call(fingerprint: fingerprint, waiters: [continuation])
+                calls[owner] = Call(recovery: recovery, fingerprint: fingerprint, waiters: [continuation])
                 callOwners[callID] = owner
                 queue.append(item)
                 onProgress(Self.toolProgress(tool, arguments: arguments))
@@ -290,22 +299,24 @@ actor ClaudeSubscriptionBridge {
             "--system-prompt-file", systemFile.path]
         var environment = ClaudeCLI.baseEnv
         environment.merge(["ENABLE_TOOL_SEARCH": "false", "MCP_CONNECTION_NONBLOCKING": "0",
-            "MCP_TIMEOUT": "30000", "MCP_CONNECT_TIMEOUT_MS": "30000", "MCP_TOOL_TIMEOUT": String(Int(timeout * 1_000)),
+            "MCP_TIMEOUT": "30000", "MCP_CONNECT_TIMEOUT_MS": "30000", "MCP_TOOL_TIMEOUT": String(Int(transportTimeout * 1_000)),
             "MAX_MCP_OUTPUT_TOKENS": "50000"]) { _, new in new }
         guard let executable = Bundle.main.executableURL?.path else { throw Failure.unavailable }
         let invocation = ClaudeSubscriptionProcess.Invocation(parent: getpid(), binary: binary,
-            arguments: arguments, input: input, environment: environment, timeout: timeout)
+            arguments: arguments, input: input, environment: environment, timeout: transportTimeout)
         let invocationJSON = String(decoding: try JSONEncoder().encode(invocation), as: UTF8.self)
         let timeout = timeout, directory = directory, onProgress = onProgress
         claudeTask = Task {
             let began = Date()
             do {
-                let result = try await CodexCLI.executeAsync(binary: executable,
+                let result = try await SidekickInteraction.$current.withValue(interaction) {
+                    try await CodexCLI.executeAsync(binary: executable,
                     args: [ClaudeSubscriptionProcess.argument], stdinText: invocationJSON,
                     cwd: directory.path, timeout: timeout + 5, includeCustomProviderKey: false,
                     terminationGrace: 3, retainStdoutLine: ClaudeSubscriptionProcess.retainEnvelopeLine) { line in
                         for progress in Self.narrationLines(fromStreamJSON: line) { onProgress(progress) }
                     }
+                }
                 try Task.checkCancellation()
                 if result.status == 124 { throw CodexCLI.CLIError.timedOut(after: timeout) }
                 let envelope = try ClaudeCLI.parseEnvelope(result, durationMS: Int(Date().timeIntervalSince(began) * 1_000))

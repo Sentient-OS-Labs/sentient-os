@@ -10,7 +10,7 @@
 //
 //  The chrome is deliberately quiet: a wordmark, and four doors at the top-right —
 //  Analysis ▾ and Give AIs Knowledge ▾ (glanceable popovers, HomePopovers.swift) · Knowledge and
-//  Settings (their own windows). Status lives inside Analysis, never cluttering the home.
+//  Settings (pages in this window). Status lives inside Analysis, never cluttering the home.
 //
 //  WHEN THERE ARE NO CARDS, the living Orb blooms into the vacated center with "I'm here to
 //  help." — the orb appears ONLY here (its one home), turning the empty state into a launchpad
@@ -31,6 +31,8 @@ import SwiftUI
 import AppKit
 
 struct HomeView: View {
+    var isPresented = true
+
     // Live context from RootView (the analyze/source switchboard).
     var thingsUnderstood: Int = 0
     var sources: HomeSources = .init()
@@ -65,6 +67,9 @@ struct HomeView: View {
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
     @State private var showCalendarConnect = false
+    @State private var codex = CodexSetup.shared
+    @State private var showCodexSignIn = false
+    @State private var dismissedCodexSignInReminder = false
     /// The morning-after caution (last night's scheduled run hit a known snag) — nil = no banner.
     @State private var caution: OvernightCaution.Record?
     /// Kept separately from whole-cycle failures: successfully processing the other sources
@@ -127,6 +132,17 @@ struct HomeView: View {
             probeHealth()
         }
         .onDisappear { appState.commandCoordinator.run.proactiveCards = nil }
+        .onChange(of: isPresented) { _, visible in
+            if visible {
+                planUpgraded = previewUpgraded ?? (kbOnly && CodexAuth.currentPlan()?.tier == .full)
+                caution = OvernightCaution.latest()
+                probeHealth()
+            } else {
+                showAnalysis = false
+                showShareKnowledge = false
+                showCodexSignIn = false
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil {
                 Task { await MailAccountCloud.shared.retryPendingSync() }
@@ -135,6 +151,16 @@ struct HomeView: View {
             // night's caution) — re-probe so the banner melts away the moment they return.
             withAnimation(.easeInOut(duration: 0.25)) { caution = OvernightCaution.latest() }
             probeHealth()
+            Task { await refreshCodexSignIn() }
+        }
+        .task(id: canCheckCodexSignIn) { await refreshCodexSignIn() }
+        .onChange(of: canOfferCodexSignIn) { _, _ in offerCodexSignInIfNeeded() }
+        .onChange(of: codex.loggedIn) { _, signedIn in
+            if signedIn {
+                showCodexSignIn = false
+                dismissedCodexSignInReminder = false
+                probeHealth(forceCodexRecheck: true)
+            }
         }
         .onChange(of: deck) { _, v in
             // The teardown's defaults wipe re-publishes the deck key — never re-deal mid-uninstall.
@@ -144,10 +170,16 @@ struct HomeView: View {
         .onChange(of: computerSetup.ready) { _, _ in probeHealth() }
         .onChange(of: computerSetup.isInstalling) { _, _ in probeHealth() }
         .onChange(of: ComputerUseGate.shared.automation) { _, _ in probeHealth() }
-        .onChange(of: backendRaw) { _, _ in probeHealth() }
+        .onChange(of: backendRaw) { _, _ in
+            if backendRaw != ModelBackend.chatgpt.rawValue { showCodexSignIn = false }
+            probeHealth()
+        }
         .onChange(of: appState.isUninstalling) { _, tearing in
             // Uninstall began → take every card off the table; a cancel deals them back in.
-            if tearing { withAnimation(.easeInOut(duration: 0.3)) { model.clear() } }
+            if tearing {
+                showCodexSignIn = false
+                withAnimation(.easeInOut(duration: 0.3)) { model.clear() }
+            }
             else { model.beginVisit(deck: deck) }
         }
         .animation(.spring(response: 0.5, dampingFraction: 0.82), value: model.entries.isEmpty)
@@ -166,6 +198,9 @@ struct HomeView: View {
         // Gmail / Calendar connect sheets — the SAME sheets Dev Tools opens (connect / select / remove).
         .sheet(isPresented: $showGmailConnect) { CloudConnectSheet(.gmail) }
         .sheet(isPresented: $showCalendarConnect) { CloudConnectSheet(.calendar) }
+        .sheet(isPresented: $showCodexSignIn, onDismiss: {
+            Task { await refreshCodexSignIn() }
+        }) { ChatGPTSignInSheet() }
     }
 
     // MARK: Chrome — the top-bar nav + the editorial greeting
@@ -186,10 +221,12 @@ struct HomeView: View {
             Spacer()
             NavItem(title: "Analysis", dot: Theme.Ink.green) { showAnalysis = true }
                 .popover(isPresented: $showAnalysis) { analysisPopover }
-            NavItem(title: "Knowledge") { openWindow(id: KnowledgeView.windowID) }
+            NavItem(title: "Knowledge") { HomeWindowOpening.open(.knowledge) }
             NavItem(title: "Give AIs Knowledge") { showShareKnowledge = true }
                 .popover(isPresented: $showShareKnowledge) { shareKnowledgePopover }
-            NavItem(icon: "gearshape") { openWindow(id: SettingsView.windowID) }
+            NavItem(icon: "gearshape") { HomeWindowOpening.open(.settings) }
+                .accessibilityLabel("Settings")
+                .help("Settings (⌘,)")
         }
         .padding(.horizontal, 30).padding(.top, 18)
     }
@@ -220,7 +257,17 @@ struct HomeView: View {
 
     private var cautionBanner: some View {
         Group {
-            if let issue = liveIssue {
+            if needsCodexSignIn && !dismissedCodexSignInReminder {
+                CautionCapsule(message: "Sign in to ChatGPT to keep Sentient working for you.",
+                               accent: Theme.Ink.amber, actionTitle: "Sign in",
+                               onAction: presentCodexSignIn,
+                               onDismiss: {
+                                   dismissedCodexSignInReminder = true
+                                   HealthCaution.dismiss(.codexSignedOut)
+                                   if case .codexSignedOut? = liveIssue { liveIssue = nil }
+                               })
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if let issue = liveIssue {
                 CautionCapsule(message: issue.message, accent: Theme.Ink.red,
                                actionTitle: "Open Settings", onAction: openHealthSettings,
                                onDismiss: {
@@ -258,7 +305,7 @@ struct HomeView: View {
                     UpdateNoticeCapsule()
                     // The offer waits until update notices are dismissed and the home is
                     // active. Keeping it here also postpones it behind every caution above.
-                    if deck == .real && !letterShown && !showAnalysis && !showShareKnowledge {
+                    if isPresented && deck == .real && !letterShown && !showAnalysis && !showShareKnowledge {
                         InviteBanner()
                     }
                 }
@@ -296,24 +343,60 @@ struct HomeView: View {
     /// Land directly on Permissions & Health — every banner's fix lives there; never strand the
     /// user on the default pane.
     private func openHealthSettings() {
-        SettingsView.requestedPane = .health
-        openWindow(id: SettingsView.windowID)
+        HomeWindowOpening.open(.settings, settingsPane: .health)
     }
 
     private func openSourceSettings() {
-        SettingsView.open(.sources, using: openWindow)
+        HomeWindowOpening.open(.settings, settingsPane: .sources)
     }
 
     /// Run HealthCaution's ladder off the main thread of thought: cheap sync probes, plus a
     /// cached codex login check (forced fresh while a codex banner is up, so a fix clears on the
     /// very next foreground). Quiet on pitch decks (demo cards must never share the stage with a
     /// red capsule) and on the free home (HealthCaution guards kbOnly too — defense in depth).
-    private func probeHealth() {
+    private func probeHealth(forceCodexRecheck: Bool = false) {
         guard deck == .real, !kbOnly else { return }
         Task {
-            let issue = await HealthCaution.probe(forceCodexRecheck: liveIssue?.kindKey == "codex")
+            let issue = await HealthCaution.probe(forceCodexRecheck: forceCodexRecheck || liveIssue?.kindKey == "codex")
             withAnimation(.easeInOut(duration: 0.25)) { liveIssue = issue }
         }
+    }
+
+    // A private login starts unknown. Wait for Codex installation before checking it,
+    // then offer sign-in once per app session; closing and reopening Home never re-prompts.
+    private var canCheckCodexSignIn: Bool {
+        appState.hasCompletedOnboarding && !appState.isUninstalling && isPresented && deck == .real
+            && backendRaw == ModelBackend.chatgpt.rawValue
+            && codex.installed && !codex.preparing && !codex.installing
+            && ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil
+    }
+
+    private var needsCodexSignIn: Bool {
+        canCheckCodexSignIn && codex.loginStatusChecked && !codex.loggedIn
+    }
+
+    private var canOfferCodexSignIn: Bool {
+        needsCodexSignIn && !appState.hasOfferedCodexSignIn
+            && !letterShown && !showAnalysis && !showShareKnowledge
+            && !showWhatsAppPicker && !showIMessagePicker && !showGmailConnect && !showCalendarConnect
+    }
+
+    private func refreshCodexSignIn() async {
+        guard canCheckCodexSignIn else { return }
+        await codex.refreshLoginStatus()
+        guard !Task.isCancelled, canCheckCodexSignIn else { return }
+        offerCodexSignInIfNeeded()
+    }
+
+    private func offerCodexSignInIfNeeded() {
+        guard canOfferCodexSignIn, NSApplication.shared.isActive else { return }
+        presentCodexSignIn()
+    }
+
+    private func presentCodexSignIn() {
+        guard needsCodexSignIn else { return }
+        appState.hasOfferedCodexSignIn = true
+        showCodexSignIn = true
     }
 
     private var greeting: String {
@@ -506,8 +589,7 @@ struct HomeView: View {
     }
 
     private func openSystemPane() {
-        SettingsView.requestedPane = .system
-        openWindow(id: SettingsView.windowID)
+        HomeWindowOpening.open(.settings, settingsPane: .system)
     }
 
     private func previewRow(_ icon: String, _ text: String) -> some View {
@@ -550,7 +632,7 @@ struct HomeView: View {
     private var bottomDock: some View {
         VStack(spacing: 16) {
             if !kbOnly {   // knowledge-base-only mode: computer use has no quota — no command bar
-                PromptBar(onSend: { text, mode in appState.commandCoordinator.submit(text, mode: mode, source: .promptBar) },
+                PromptBar(isPresented: isPresented, onSend: { text, mode in appState.commandCoordinator.submit(text, mode: mode, source: .promptBar) },
                           onStop: { appState.commandCoordinator.stop() },
                           isRunning: appState.commandCoordinator.run.isRunning,
                           statusLine: appState.commandCoordinator.run.statusLine)
@@ -782,7 +864,7 @@ final class ForYouModel {
     /// once, here, when `fire` unwinds (it always returns, even cancelled). `beginExternalRun`'s
     /// refusal doubles as the re-check for a fire the permission gate held while another task
     /// started.
-    private func runReal(_ id: String, _ action: PreparedAction) {
+    private func runReal(_ id: String, _ action: PreparedAction, retryContext: String = "") {
         let v = visit
         let external = ProactiveExecutor.isFireable(action)
         if external {
@@ -795,28 +877,37 @@ final class ForYouModel {
             guard let coordinator,
                   coordinator.beginExternalRun(
                       caption: entry(id)?.b.title ?? fallback,
+                      retryContext: retryContext,
+                      onRetry: { guidance in self.runReal(id, action, retryContext: retryContext + guidance) },
                       onStopRequest: { [weak self] in self?.stopRun(id) })
             else { Log("card fire blocked at launch — a task already owns the run"); return }
         }
         update(id) { $0.phase = .working(0); $0.liveLines = [] }
         InviteProgram.shared.record(.proactive)
+        let adoptedRun = external ? coordinator?.run : nil
+        let generation = adoptedRun?.runID
+        let interaction = adoptedRun?.interaction
         let task = Task {
             let progress: @Sendable (String) -> Void = { line in
                 Task { @MainActor in
-                    guard self.visit == v else { return }
+                    guard self.visit == v, !external || adoptedRun?.runID == generation else { return }
                     self.appendLine(id, line)                                  // the card (raw)
-                    if external { self.coordinator?.run.externalPush(line) }   // the notch (cleaned)
+                    if external { self.coordinator?.run.externalPush(line, runID: generation) }
                 }
             }
-            let outcome = await ProactiveExecutor.shared.fire(action, progress: progress)
+            let outcome = await SidekickInteraction.$current.withValue(interaction) {
+                await ProactiveExecutor.shared.fire(action, progress: progress)
+            }
             let adopted = external ? self.coordinator?.run : nil
+            if external, adopted?.runID != generation { return }
+            self.runTasks[id] = nil
             guard self.visit == v, !Task.isCancelled else {
-                adopted?.completeExternal(.stopped, line: "■ stopped")   // any stop/re-deal lands here
+                adopted?.completeExternal(.stopped, line: "■ stopped", runID: generation)
                 return
             }
             switch outcome {
             case .fired:
-                adopted?.completeExternal(.success, line: "✓ done")
+                adopted?.completeExternal(.success, line: "✓ done", runID: generation)
                 withAnimation(.spring(response: 0.5, dampingFraction: 0.8)) { self.update(id) { $0.phase = .done } }
                 self.removeFromLatest(id)
                 try? await Task.sleep(for: .seconds(2.6))
@@ -824,13 +915,12 @@ final class ForYouModel {
                 self.dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
                                                 height: -CGFloat.random(in: 350...560)))
             case .notFireable(let m), .failed(let m):
-                adopted?.completeExternal(.failed, line: "✗ \(String(m.prefix(160)))")
+                adopted?.completeExternal(.failed, line: "✗ \(m)", runID: generation)
                 self.appendLine(id, "✗ \(m)")
                 try? await Task.sleep(for: .seconds(1.4))
-                guard self.visit == v else { return }
+                guard self.visit == v, !external || adopted?.runID == generation else { return }
                 withAnimation { self.update(id) { $0.phase = .offer } }   // back to offer — edit + retry
             }
-            self.runTasks[id] = nil
         }
         runTasks[id] = task
     }
@@ -1148,7 +1238,7 @@ private struct LetterView: View {
             withAnimation(.easeInOut(duration: 0.2)) { giftSaved = true }
             NSWorkspace.shared.activateFileViewerSelecting([url])   // sharing = one drag from here
         } catch {
-            Log("GiftShareImage: save failed — \(error)")
+            Log("GiftShareImage: save failed — \(ErrorLabel(error))")
         }
     }
 

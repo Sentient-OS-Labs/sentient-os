@@ -21,87 +21,94 @@ actor DirectMCPConnections {
         let clean = label.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !removingAll else { throw DirectMCPError.busy }
         guard !clean.isEmpty, clean.count <= 60, !clean.contains(where: { $0.isNewline }) else { throw DirectMCPError.invalidResponse }
-        let id = id ?? UUID()
-        guard !DirectMCPStore.connections().contains(where: { $0.id != id && $0.providerSlug == provider.slug
-            && $0.label.caseInsensitiveCompare(clean) == .orderedSame }) else { throw DirectMCPError.duplicateLabel }
-        attempts[id]?.task.cancel()
-        DirectMCPRuntime.cancel(connectionID: id)
-        let previousConnection = DirectMCPStore.connection(id: id)
-        let previousGrant = try await DirectMCPStore.withGrantLock(id) { () -> DirectMCPGrant? in
-            if var old = try DirectMCPStore.optionalGrant(id) {
-                let previous = old
-                old.revoked = true
-                try DirectMCPStore.saveGrant(old)
-                return previous
-            }
-            return nil
-        }
-        var pendingConnection = DirectMCPConnection(id: id, providerSlug: provider.slug, label: clean,
-            generation: UUID(), state: .verifying)
-        // Preserve only the tool policy. On first use, verify() binds the new account and
-        // reclassifies if any definition or the policy revision has changed.
-        if let previousConnection, previousConnection.providerSlug == provider.slug, previousConnection.policyValid {
-            pendingConnection.tools = previousConnection.tools
-            pendingConnection.policy = previousConnection.policy
-            pendingConnection.policyFingerprint = previousConnection.policyFingerprint
-            pendingConnection.policyRevision = previousConnection.policyRevision
-        }
-        let connection = pendingConnection
-        try DirectMCPStore.save(connection)
-        let task = Task {
-            await onProgress(.openingBrowser)
-            let grant = try await DirectMCPAuth.connect(connection, onProgress: onProgress, openBrowser: openBrowser)
-            try await DirectMCPStore.withGrantLock(id) {
-                try Task.checkCancellation()
-                guard DirectMCPStore.connection(id: id)?.generation == connection.generation else { throw DirectMCPError.connectionChanged }
-                try DirectMCPStore.saveGrant(grant)
-            }
-            // OAuth has already produced the grant. Account and tool checks belong to use.
-            try Task.checkCancellation()
-            guard var saved = DirectMCPStore.connection(id: id),
-                  saved.generation == connection.generation else { throw DirectMCPError.connectionChanged }
-            saved.state = .connected
-            try DirectMCPStore.save(saved)
-        }
-        attempts[id] = (connection.generation, task)
-        do {
-            try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
-            if attempts[id]?.generation == connection.generation { attempts[id] = nil }
-            return id
-        } catch {
-            if var current = DirectMCPStore.connection(id: id), current.generation == connection.generation {
-                let registrationExpired: Bool
-                if case DirectMCPError.registrationExpired = error { registrationExpired = true } else { registrationExpired = false }
-                if let previousConnection, let previousGrant,
-                   !registrationExpired, (try? DirectMCPStore.readGrant(id))?.generation == previousGrant.generation {
-                    // Cleanup survives cancellation. Restore only if no newer grant or attempt
-                    // replaced this transaction while the browser was open.
-                    let restored = await Task.detached { () -> Bool in
-                        do {
-                            return try await DirectMCPStore.withGrantLock(id) {
-                                guard DirectMCPStore.connection(id: id)?.generation == connection.generation,
-                                      try DirectMCPStore.readGrant(id).generation == previousGrant.generation else { return false }
-                                try DirectMCPStore.saveGrant(previousGrant)
-                                try DirectMCPStore.save(previousConnection)
-                                return true
-                            }
-                        } catch { return false }
-                    }.value
-                    if !restored && DirectMCPStore.connection(id: id)?.generation == connection.generation {
-                        current.state = .reconnect; try? DirectMCPStore.save(current)
+        return try await Diagnostics.withOperation("connector_setup") {
+            try await Diagnostics.boundary(.connectorFailed, phase: .connect, reason: "setup_connection", source: "direct_connector") {
+                let id = id ?? UUID()
+                guard !DirectMCPStore.connections().contains(where: { $0.id != id && $0.providerSlug == provider.slug
+                    && $0.label.caseInsensitiveCompare(clean) == .orderedSame }) else { throw DirectMCPError.duplicateLabel }
+                attempts[id]?.task.cancel()
+                DirectMCPRuntime.cancel(connectionID: id)
+                let previousConnection = DirectMCPStore.connection(id: id)
+                Diagnostics.step(.write, source: "direct_connector")
+                let previousGrant = try await DirectMCPStore.withGrantLock(id) { () -> DirectMCPGrant? in
+                    if var old = try DirectMCPStore.optionalGrant(id) {
+                        let previous = old
+                        old.revoked = true
+                        try DirectMCPStore.saveGrant(old)
+                        return previous
                     }
-                } else {
-                    if case DirectMCPError.accountSetupRequired = error { current.state = .reconnect }
-                    else {
-                        current.state = (try? DirectMCPStore.readGrant(id)).map {
-                            $0.generation == current.generation && !$0.revoked && !$0.accessToken.isEmpty
-                        } == true ? .policyRequired : .reconnect
-                    }
-                    try? DirectMCPStore.save(current)
+                    return nil
                 }
-                if attempts[id]?.generation == connection.generation { attempts[id] = nil }
+                var pendingConnection = DirectMCPConnection(id: id, providerSlug: provider.slug, label: clean,
+                    generation: UUID(), state: .verifying)
+                // Preserve only the tool policy. On first use, verify() binds the new account and
+                // reclassifies if any definition or the policy revision has changed.
+                if let previousConnection, previousConnection.providerSlug == provider.slug, previousConnection.policyValid {
+                    pendingConnection.tools = previousConnection.tools
+                    pendingConnection.policy = previousConnection.policy
+                    pendingConnection.policyFingerprint = previousConnection.policyFingerprint
+                    pendingConnection.policyRevision = previousConnection.policyRevision
+                }
+                let connection = pendingConnection
+                try DirectMCPStore.save(connection)
+                let task = Task {
+                    await onProgress(.openingBrowser)
+                    Diagnostics.step(.connect, source: "direct_connector")
+                    let grant = try await DirectMCPAuth.connect(connection, onProgress: onProgress, openBrowser: openBrowser)
+                    Diagnostics.step(.write, source: "direct_connector")
+                    try await DirectMCPStore.withGrantLock(id) {
+                        try Task.checkCancellation()
+                        guard DirectMCPStore.connection(id: id)?.generation == connection.generation else { throw DirectMCPError.connectionChanged }
+                        try DirectMCPStore.saveGrant(grant)
+                    }
+                    // OAuth has already produced the grant. Account and tool checks belong to use.
+                    try Task.checkCancellation()
+                    guard var saved = DirectMCPStore.connection(id: id),
+                          saved.generation == connection.generation else { throw DirectMCPError.connectionChanged }
+                    saved.state = .connected
+                    try DirectMCPStore.save(saved)
+                }
+                attempts[id] = (connection.generation, task)
+                do {
+                    try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+                    if attempts[id]?.generation == connection.generation { attempts[id] = nil }
+                    return id
+                } catch {
+                    if var current = DirectMCPStore.connection(id: id), current.generation == connection.generation {
+                        let registrationExpired: Bool
+                        if case DirectMCPError.registrationExpired = error { registrationExpired = true } else { registrationExpired = false }
+                        if let previousConnection, let previousGrant,
+                           !registrationExpired, (try? DirectMCPStore.readGrant(id))?.generation == previousGrant.generation {
+                            // Cleanup survives cancellation. Restore only if no newer grant or attempt
+                            // replaced this transaction while the browser was open.
+                            let restored = await Task.detached { () -> Bool in
+                                do {
+                                    return try await DirectMCPStore.withGrantLock(id) {
+                                        guard DirectMCPStore.connection(id: id)?.generation == connection.generation,
+                                              try DirectMCPStore.readGrant(id).generation == previousGrant.generation else { return false }
+                                        try DirectMCPStore.saveGrant(previousGrant)
+                                        try DirectMCPStore.save(previousConnection)
+                                        return true
+                                    }
+                                } catch { return false }
+                            }.value
+                            if !restored && DirectMCPStore.connection(id: id)?.generation == connection.generation {
+                                current.state = .reconnect; try? DirectMCPStore.save(current)
+                            }
+                        } else {
+                            if case DirectMCPError.accountSetupRequired = error { current.state = .reconnect }
+                            else {
+                                current.state = (try? DirectMCPStore.readGrant(id)).map {
+                                    $0.generation == current.generation && !$0.revoked && !$0.accessToken.isEmpty
+                                } == true ? .policyRequired : .reconnect
+                            }
+                            try? DirectMCPStore.save(current)
+                        }
+                        if attempts[id]?.generation == connection.generation { attempts[id] = nil }
+                    }
+                    throw error
+                }
             }
-            throw error
         }
     }
 
@@ -113,6 +120,10 @@ actor DirectMCPConnections {
             let snapshot = try await DirectMCPProbe.capture(connection: connection, includeAccount: true)
             await Log("Direct MCP: account and inventory fetched in \(Int(Date().timeIntervalSince(started) * 1_000))ms")
             let tools = snapshot.tools
+            if !connection.tools.isEmpty, tools.count * 5 < connection.tools.count {
+                Diagnostics.report(.inventoryDegraded, phase: .inventory, reason: "tool_count_collapsed", source: "direct_connector",
+                                   counts: [.before: connection.tools.count, .after: tools.count])
+            }
             let identity = DirectMCPIdentity.parse(snapshot.account)
             if let previous = connection.accountFingerprint, previous != identity?.fingerprint {
                 throw DirectMCPError.connectionChanged
@@ -150,6 +161,7 @@ actor DirectMCPConnections {
             return updated
         } catch {
             if Task.isCancelled || error is CancellationError { throw CancellationError() }
+            if !Diagnostics.isExpected(error) { Diagnostics.report(.connectorFailed, phase: .inventory, reason: "verify_connection", error: error, source: "direct_connector", terminal: true) }
             recordFailure(error, connection: connection)
             throw error
         }

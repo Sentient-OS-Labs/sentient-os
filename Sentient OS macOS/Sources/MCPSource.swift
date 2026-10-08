@@ -240,6 +240,7 @@ enum MCPSource {
             let sourceNow = try (GranolaSource.isGranola(slug) ? GranolaSource.canonicalDate(now) : now)
             let now = try (Microsoft365Connector.contains(slug) ? OutlookMailSource.canonicalDate(sourceNow) : sourceNow)
             try Task.checkCancellation()
+            await HostedConnectorSetup.processingStarted(slug: slug, backend: backend)
             try requireReadable(slug)
             guard claim(slug) else { throw MCPError.alreadyRunning }
             PipelineActivity.begin()

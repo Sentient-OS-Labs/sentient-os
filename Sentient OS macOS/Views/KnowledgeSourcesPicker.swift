@@ -199,7 +199,7 @@ struct KnowledgeSourcesPicker: View {
     // MARK: - Hosted and direct connectors
 
     private var emailAndCalendarGroup: some View {
-        SettingsGroup(label: "Email & Calendar") {
+        SettingsGroup(label: "Email & calendar") {
             VStack(alignment: .leading, spacing: 12) {
                 ViewThatFits(in: .horizontal) {
                     HStack(alignment: .top, spacing: 18) {
@@ -222,33 +222,38 @@ struct KnowledgeSourcesPicker: View {
     }
 
     private var emailColumn: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        let mailSupported = AppleMailSource.isSupported
+        return VStack(alignment: .leading, spacing: 9) {
             KnowledgeSourcePill(label: "Gmail", asset: "GmailMark", selected: runGmail,
                                 featured: true, locked: CodexAuth.connectorsLocked) { showGmailConnect = true }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-mail" }) { source in
                 connectorPill(source, featured: true)
             }
-            KnowledgeSourcePill(label: "Apple Mail", asset: "AppleMailMark",
-                                selected: !appleMailAccounts.isEmpty, featured: true) {
+            KnowledgeSourcePill(label: "Apple Mail", detail: mailSupported ? nil : "Requires macOS 26",
+                                asset: "AppleMailMark", selected: !appleMailAccounts.isEmpty,
+                                featured: true, locked: !mailSupported) {
                 showAppleMailPicker = true
             }
-            .accessibilityValue(appleMailAccounts.isEmpty ? "Not selected"
+            .saturation(mailSupported ? 1 : 0)
+            .accessibilityValue(!mailSupported ? "Requires macOS 26 or later"
+                : appleMailAccounts.isEmpty ? "Not selected"
                 : "\(AppleMailSelection.accounts.count) \(AppleMailSelection.accounts.count == 1 ? "account" : "accounts") selected for analysis")
-            .help("Choose which Apple Mail accounts to include.")
+            .help(mailSupported ? "Choose which Apple Mail accounts to include."
+                : "Apple Mail requires macOS 26 or later.")
         }
         .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
     }
 
     private var calendarColumn: some View {
         VStack(alignment: .leading, spacing: 9) {
-            KnowledgeSourcePill(label: "Apple Calendar", detail: appleCalendarDetail,
-                                asset: "AppleCalendarMark", selected: AppleCalendarSource.isEnabled,
-                                featured: true) { showAppleCalendarConnect = true }
             KnowledgeSourcePill(label: "Google Calendar", asset: "GoogleCalendarMark", selected: runCalendar,
                                 featured: true, locked: CodexAuth.connectorsLocked) { showCalendarConnect = true }
             ForEach(connectorSources.filter { $0.serviceSlug == "outlook-calendar" }) { source in
                 connectorPill(source, featured: true)
             }
+            KnowledgeSourcePill(label: "Apple Calendar", detail: appleCalendarDetail,
+                                asset: "AppleCalendarMark", selected: AppleCalendarSource.isEnabled,
+                                featured: true) { showAppleCalendarConnect = true }
         }
         .frame(minWidth: 235, maxWidth: .infinity, alignment: .leading)
     }

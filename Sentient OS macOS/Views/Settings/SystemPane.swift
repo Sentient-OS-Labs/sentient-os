@@ -22,7 +22,6 @@ struct SystemPane: View {
     @AppStorage("diagnosticsEnabled") private var crashReportsEnabled = true
     @AppStorage("analyticsEnabled") private var analyticsEnabled = true
 
-    @Environment(\.dismiss) private var dismiss   // Reset closes Settings to reveal onboarding
 
     @State private var launchAtLogin = LoginItem.isEnabled
     @State private var confirmLoginOff = false
@@ -36,48 +35,41 @@ struct SystemPane: View {
     var body: some View {
         SettingsPane(title: "System", whisper: "How Sentient lives on this Mac.") {
             VStack(alignment: .leading, spacing: 34) {
-                // Three chapters, two dividers: how Sentient runs · privacy · the exit door —
-                // the second line is red on purpose (you cross it into destructive territory).
-                overnightGroup
                 startupGroup
-                updatesGroup
-                InviteSettingsSection()
-                SettingsHairline(opacity: 0.12)
-                    .padding(.vertical, -8)
                 privacyGroup
-                protectionGroup
-                SettingsHairline(color: Theme.Ink.red, opacity: 0.25)
-                    .padding(.vertical, -8)
-                dangerGroup
-                uninstallGroup
+                InviteSettingsSection()
+                SettingsGroup(label: "Danger zone", description: "Remove your knowledge or uninstall Sentient.", inset: 0, destructive: true) {
+                    VStack(spacing: 0) {
+                        dangerGroup
+                        SettingsHairline(opacity: 0.10)
+                        uninstallGroup
+                    }
+                }
+
             }
         }
         .task { launchAtLogin = LoginItem.isEnabled }   // live status — revocable in System Settings
     }
 
-    // MARK: - Overnight intelligence (the story, not a setting)
-
-    private var overnightGroup: some View {
-        SettingsGroup(label: "Overnight Intelligence") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Your Sentient works the night shift.")
-                    .font(.system(size: 13.5, weight: .medium)).foregroundStyle(.white)
-                SettingsProse(PrivacyCopy.overnight)
-                Text("Runs while your Mac rests.")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Theme.Ink.deepMuted)
-                    .padding(.top, 3)
-            }
-        }
-    }
-
-    // MARK: - Launch at login
+    // MARK: - General
 
     private var startupGroup: some View {
-        SettingsGroup(label: "Startup") {
-            SettingToggleLine(title: "Launch Sentient at login",
-                              sub: "Keeps Sentient quietly alive in your menu bar, so the 3 AM run can happen.",
-                              isOn: $launchAtLogin)
+        SettingsGroup(label: "General", inset: 0) {
+            VStack(spacing: 0) {
+                SettingToggleLine(title: "Launch at login",
+                                  sub: "Keep Sentient ready in your menu bar.", isOn: $launchAtLogin)
+                SettingsHairline(opacity: 0.10)
+                SettingsRow(title: "Overnight intelligence", subtitle: "New knowledge and morning suggestions, prepared at 3 AM.") {
+                    Text("3:00 AM").font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(SettingsStyle.secondary)
+                }
+                SettingsDetails(title: "When does overnight intelligence run?") {
+                    SettingsProse(PrivacyCopy.overnight)
+                }
+                .padding(.horizontal, 20).padding(.bottom, 20)
+                SettingsHairline(opacity: 0.10)
+                updatesGroup
+            }
         }
         .onChange(of: launchAtLogin) { _, on in
             if on {
@@ -103,23 +95,21 @@ struct SystemPane: View {
     // MARK: - Updates (Sparkle — the story is "we keep you current", not a dial)
 
     private var updatesGroup: some View {
-        SettingsGroup(label: "Updates") {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsProse(UpdateController.appUpdatesEnabled
-                    ? "Sentient keeps itself up to date automatically. When a new version is ready, Sentient asks you to update before continuing, so you're always on the latest, safest version."
-                    : "App updates are disabled in this development build. Rebuild in Xcode to use your latest changes.")
-                HStack(spacing: 6) {
-                    Text("Version \(UpdateController.currentVersionString)")
-                        .font(.system(size: 12.5, weight: .medium)).foregroundStyle(.white)
-                    if let last = appState.update.lastCheckDate {
-                        Text("· checked \(last.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
-                    }
-                }
-                SettingsPillButton(title: "Check for Updates Now") {
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(title: "Updates", subtitle: "Version \(UpdateController.currentVersionString)") {
+                SettingsPillButton(title: "Check for updates") {
                     appState.update.checkForUpdatesNow(from: .settings)
                 }
                 .disabled(!UpdateController.appUpdatesEnabled)
+            }
+            if let last = appState.update.lastCheckDate {
+                Text("Last checked \(last.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
+                    .padding(.horizontal, 20).padding(.bottom, 16)
+            }
+            if !UpdateController.appUpdatesEnabled {
+                SettingsProse("Updates are disabled in this development build.")
+                    .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
     }
@@ -127,44 +117,27 @@ struct SystemPane: View {
     // MARK: - Privacy
 
     private var privacyGroup: some View {
-        SettingsGroup(label: "Privacy") {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsProse("Privacy-preserving diagnostics help us improve this open-source app for you.")
-                    .padding(.bottom, 6)
-                SettingToggleLine(title: "Share crash reports",
-                                  sub: PrivacyCopy.crashReports,
+        SettingsGroup(label: "Privacy", inset: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingToggleLine(title: "Share crash reports", sub: PrivacyCopy.crashReports,
                                   isOn: $crashReportsEnabled)
-                SettingsHairline()
-                SettingToggleLine(title: "Share extended usage analytics",
-                                  sub: PrivacyCopy.extendedAnalytics,
+                SettingsHairline(opacity: 0.10)
+                SettingToggleLine(title: "Share extended usage analytics", sub: PrivacyCopy.extendedAnalytics,
                                   isOn: $analyticsEnabled)
                 if !analyticsEnabled {
-                    // The core-tier disclosure — keeps the switch honest (Analytics.swift, Tier.core):
-                    // the five always-on, extremely anonymized usage-count pings.
-                    Text(PrivacyCopy.coreAnalytics)
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(Theme.Ink.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 1)
+                    SettingsProse(PrivacyCopy.coreAnalytics)
+                        .padding(.horizontal, 20).padding(.bottom, 20)
                         .transition(.opacity)
+                }
+                SettingsHairline(opacity: 0.10)
+                SettingsRow(title: "Your data", subtitle: PrivacyCopy.headline) {
+                    SettingsPillButton(title: "Privacy policy") { showPrivacyPolicy = true }
                 }
             }
             .animation(.easeInOut(duration: 0.2), value: analyticsEnabled)
         }
         .onChange(of: crashReportsEnabled) { _, _ in CrashReporting.applyEnabledChange() }
         .onChange(of: analyticsEnabled) { _, _ in Analytics.applyEnabledChange() }
-    }
-
-    // MARK: - How we protect your data (the door to the full policy)
-
-    private var protectionGroup: some View {
-        SettingsGroup(label: "How We Protect Your Data") {
-            HStack(spacing: 14) {
-                Text(PrivacyCopy.headline)
-                    .font(.system(size: 13, weight: .medium)).foregroundStyle(.white)
-                SettingsPillButton(title: "Read More") { showPrivacyPolicy = true }
-            }
-        }
         .sheet(isPresented: $showPrivacyPolicy) { PrivacyPolicyView() }
     }
 
@@ -173,17 +146,22 @@ struct SystemPane: View {
     private static let dangerRed = Color(red: 1.0, green: 0.36, blue: 0.36)
 
     private var dangerGroup: some View {
-        SettingsGroup(label: "Danger Zone") {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsProse(PrivacyCopy.reset)
-                SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…",
-                                   tint: Self.dangerRed) { confirmReset = true }
-                    .disabled(resetting || activity.isRunning)
-                if activity.isRunning {
-                    Text("A run is in progress. Reset unlocks when it finishes.")
-                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(title: "Reset Sentient", subtitle: "Erase learned knowledge and return to setup.") {
+                SettingsPillButton(title: resetting ? "Erasing…" : "Reset Sentient…", tint: Self.dangerRed) {
+                    confirmReset = true
                 }
-                if let resetError { Text(resetError).font(.system(size: 11)).foregroundStyle(Theme.Ink.amber) }
+                .disabled(resetting || activity.isRunning)
+            }
+            SettingsDetails(title: "What gets removed?") { SettingsProse(PrivacyCopy.reset) }
+                .padding(.horizontal, 20).padding(.bottom, 20)
+            if activity.isRunning {
+                SettingsProse("Reset is available after the current run finishes.")
+                    .padding(.horizontal, 20).padding(.bottom, 16)
+            }
+            if let resetError {
+                Text(resetError).font(.system(size: 13)).foregroundStyle(Theme.Ink.amber)
+                    .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
         .alert("Erase everything Sentient has learned?", isPresented: $confirmReset) {
@@ -194,7 +172,7 @@ struct SystemPane: View {
                     resetError = nil
                     let completed = await FactoryReset.run(appState: appState)
                     resetting = false
-                    if completed { dismiss() }
+                    if completed { HomeWindowOpening.open() }
                     else { resetError = "Reset couldn’t clear saved app connections. Unlock your Mac and try again." }
                 }
             }
@@ -206,17 +184,16 @@ struct SystemPane: View {
     // MARK: - Uninstall (the full teardown — UninstallView + System/Uninstall.swift)
 
     private var uninstallGroup: some View {
-        SettingsGroup(label: "Uninstall") {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsProse(PrivacyCopy.uninstall)
-                SettingsPillButton(title: "Uninstall Sentient…", tint: Self.dangerRed) {
-                    showUninstall = true
-                }
-                .disabled(activity.isRunning)
-                if activity.isRunning {
-                    Text("A run is in progress. Uninstall unlocks when it finishes.")
-                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.amber)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsRow(title: "Uninstall Sentient", subtitle: "Remove Sentient and its local data from this Mac.") {
+                SettingsPillButton(title: "Uninstall…", tint: Self.dangerRed) { showUninstall = true }
+                    .disabled(activity.isRunning)
+            }
+            SettingsDetails(title: "What gets removed?") { SettingsProse(PrivacyCopy.uninstall) }
+                .padding(.horizontal, 20).padding(.bottom, 20)
+            if activity.isRunning {
+                SettingsProse("Uninstall is available after the current run finishes.")
+                    .padding(.horizontal, 20).padding(.bottom, 16)
             }
         }
         .sheet(isPresented: $showUninstall) { UninstallView() }

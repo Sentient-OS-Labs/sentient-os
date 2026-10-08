@@ -4,7 +4,7 @@
 //
 //  The shared frontier-engine picker — the five engine pills (EngineTab) over each engine's
 //  setup panel, rendered identically by Settings → Frontier Model Choice and onboarding's
-//  choose-your-frontier-model step. Owns the tab state, the endpoint fields
+//  choose-your-frontier-model step. Shares its visible tab with the host and owns the endpoint fields
 //  (ModelBackend/CustomProvider — the one source of truth), Test & Select (vision-gated
 //  activation: an unproven model can never become the engine), and the honest local-models
 //  warning. The ChatGPT panel is the host's slot: Settings points at Permissions & Health,
@@ -15,38 +15,13 @@
 import SwiftUI
 
 struct FrontierEnginePicker<ChatGPTPanel: View>: View {
+    @Environment(\.settingsFormStyle) private var formStyle
 
     /// Settings' fixed two-row grid (3 + 2 — a scrollbar appearing must never reflow the strip,
     /// the jumpy-rewrap of 2026-07-24), or onboarding's single centered row of five.
     enum Layout { case settingsGrid, singleRow }
 
-    /// The five engine tabs. OpenRouter, LM Studio, and Custom share the endpoint plumbing;
-    /// LM Studio's tab raises the honest local-models warning on first visit (model
-    /// capability, not plumbing, is the local blocker — the translator solved the plumbing).
-    enum Tab: String, CaseIterable, Identifiable {
-        case chatgpt, claude, openRouter, lmStudio, custom
-        var id: Self { self }
-
-        var label: String {
-            switch self {
-            case .chatgpt:    return "ChatGPT Subscription"
-            case .claude:     return "Claude Subscription"
-            case .openRouter: return "OpenRouter"
-            case .lmStudio:   return "LM Studio"
-            case .custom:     return "Custom"
-            }
-        }
-
-        var badge: String? {
-            switch self {
-            case .chatgpt:  return "recommended"
-            case .claude:   return "beta"
-            case .lmStudio: return "local"
-            case .custom:   return "local"
-            case .openRouter: return nil
-            }
-        }
-    }
+    typealias Tab = FrontierEngineTab
 
     /// The one model that cleared the computer-use bar in the 2026-07-24 survey (~10 models,
     /// real tasks). Prefilled on the OpenRouter tab and named in its note.
@@ -59,9 +34,11 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     let chatgptHealthy: Bool
     private let chatgptPanel: () -> ChatGPTPanel
 
-    init(layout: Layout = .settingsGrid,
+    init(tab: Binding<Tab>,
+         layout: Layout = .settingsGrid,
          chatgptHealthy: Bool = true,
          @ViewBuilder chatgptPanel: @escaping () -> ChatGPTPanel) {
+        self._tab = tab
         self.layout = layout
         self.chatgptHealthy = chatgptHealthy
         self.chatgptPanel = chatgptPanel
@@ -75,7 +52,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     /// Set only by a passing Test Model run; any edit below clears it.
     @AppStorage(CustomProvider.visionVerifiedKey) private var verified = false
 
-    @State private var tab: Tab = .chatgpt
+    @Binding private var tab: Tab
     @State private var claude = ClaudeSetup.shared
     @State private var claudePreparationTask: Task<Void, Never>?
     @State private var apiKey = ""
@@ -92,16 +69,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     /// The tab wearing the "active engine" dot.
     private var activeTab: Tab {
-        switch backend {
-        case .chatgpt: return .chatgpt
-        case .claude:  return .claude
-        case .custom:
-            switch savedPreset {
-            case .openRouter: return .openRouter
-            case .lmStudio:   return .lmStudio
-            case .custom:     return .custom
-            }
-        }
+        Tab(backend: backend, preset: savedPreset)
     }
 
     var body: some View {
@@ -119,7 +87,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             }
             // The Settings editorial measure — panels never stretch wider than prose stays
             // readable, in either host (SettingsPane caps at the same width).
-            .frame(maxWidth: 640, alignment: .leading)
+            .frame(maxWidth: formStyle ? .infinity : 640, alignment: .leading)
             .id(tab)
             // A quiet crossfade — no lateral slide: panels differ in height, and a slide on
             // top of the height change read as an abrupt jump (field feedback 2026-07-25).
@@ -143,25 +111,31 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     // MARK: - The engine tab strip
 
-    private var tabStrip: some View {
-        Group {
-            switch layout {
-            case .settingsGrid:
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        pill(.chatgpt); pill(.claude); pill(.openRouter)
+    @ViewBuilder private var tabStrip: some View {
+        if formStyle {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                ForEach(Tab.allCases) { pill($0) }
+            }
+        } else {
+            Group {
+                switch layout {
+                case .settingsGrid:
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            pill(.chatgpt); pill(.claude); pill(.openRouter)
+                        }
+                        HStack(spacing: 8) {
+                            pill(.lmStudio); pill(.custom)
+                        }
                     }
+                case .singleRow:
                     HStack(spacing: 8) {
-                        pill(.lmStudio); pill(.custom)
+                        ForEach(Tab.allCases) { pill($0) }
                     }
-                }
-            case .singleRow:
-                HStack(spacing: 8) {
-                    ForEach(Tab.allCases) { pill($0) }
                 }
             }
+            .fixedSize()
         }
-        .fixedSize()
     }
 
     private func pill(_ t: Tab) -> some View {
@@ -212,17 +186,23 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     // MARK: - Claude (the claude -p engine)
 
     private var claudePanel: some View {
-        SettingsGroup(label: "Your Claude") {
+        SettingsGroup(label: formStyle ? "Claude" : "Your Claude") {
             VStack(alignment: .leading, spacing: 14) {
-                SettingsProse("Claude Code runs on your own Claude subscription (Pro, Max, or Team), so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, computer use.")
+                SettingsProse(formStyle ? "Use your Claude Pro, Max, or Team subscription for knowledge, morning suggestions, and Sidekick." : "Claude Code runs on your own Claude subscription (Pro, Max, or Team), so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, computer use.")
 
                 claudeStates
 
                 if claude.preparing || claude.installing { MonoWaitLine("preparing claude code…") }
                 OnboardingStatusText(claude.installStatus)
 
-                SettingsHairline()
-                SettingsProse("Gmail and Calendar can ride your claude.ai connectors: connect them once at claude.ai, under Settings, then Connectors, and Sentient's reads use them here.")
+                if formStyle {
+                    SettingsDetails(title: "Using Gmail and Google Calendar") {
+                        SettingsProse("Connect them in Claude’s Settings → Connectors to use them in Sentient.")
+                    }
+                } else {
+                    SettingsHairline()
+                    SettingsProse("Gmail and Calendar can ride your claude.ai connectors: connect them once at claude.ai, under Settings, then Connectors, and Sentient's reads use them here.")
+                }
             }
         }
         .onAppear {
@@ -243,7 +223,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         .onDisappear { claudePreparationTask?.cancel() }
     }
 
-    /// The Claude state machine: signed in (plan named, Use Claude or the live line) → browser
+    /// The Claude state machine: signed in (Use Claude in Settings; onboarding uses Continue) → browser
     /// out → install failed → the sign-in CTA (which lazily installs the CLI first).
     @ViewBuilder private var claudeStates: some View {
         if claude.loggedIn {
@@ -251,14 +231,15 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                                ?? "Signed in to Claude Code")
             if backend == .claude {
                 FrontierActiveLine("Sentient is running on your Claude.")
-            } else {
+            } else if layout == .settingsGrid {
                 SettingsPillButton(title: "Use Claude") {
                     prepareClaude(signIn: false)
                 }
                 .disabled(claude.preparing || claude.installing)
             }
         } else if claude.loggingIn {
-            Text("Finish signing in in your browser. This screen notices on its own.")
+            LoginLinkButton(url: claude.loginURL)
+            Text("Finish signing in in your browser.")
                 .font(.system(size: 12.5))
                 .foregroundStyle(Theme.Ink.body)
             MonoWaitLine("waiting for the browser sign-in…")
@@ -309,12 +290,18 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                 case .openRouter:
                     SettingsProse("Any model on OpenRouter, billed to your own key.")
                 case .lmStudio:
-                    SettingsProse("A model running on your own hardware, through LM Studio's local server. Sentient's translator makes it a first-class engine, computer use included; whether the model is up to the job is the honest question (see the note when this tab opens).")
+                    SettingsProse(formStyle
+                        ? "Use an image-capable model from LM Studio. Keep its local server running while you use Sentient."
+                        : "A model running on your own hardware, through LM Studio's local server. Sentient's translator makes it a first-class engine, computer use included; whether the model is up to the job is the honest question (see the note when this tab opens).")
                 case .custom:
                     SettingsProse("Any endpoint that speaks the OpenAI Responses API (a /v1/responses route). Base URL, model name, key if it needs one.")
                 }
                 if preset != .lmStudio {
-                    SettingsProse("For computer use, consider GPT-6 Sol at low reasoning or Claude Sonnet 5 with reasoning off. Of the open-weights models we tested, Kimi K3 at low reasoning is the only one we can recommend for reliably driving computer use.")
+                    if formStyle {
+                        SettingsDetails(title: "Choosing a model for computer use") {
+                            modelGuidance
+                        }
+                    } else { modelGuidance }
                 }
 
                 // OpenRouter's base URL is fixed — no field, the tab pins it itself.
@@ -335,7 +322,9 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
                 reasoningField
 
-                SettingsProse("Your model has to be able to see: Sentient acts on your Mac by looking at the screen, so a text-only model can't drive it. The test below checks that for you by asking your model to read a picture.")
+                SettingsProse(formStyle
+                    ? "Test the model’s image support before using it."
+                    : "Your model has to be able to see: Sentient acts on your Mac by looking at the screen, so a text-only model can't drive it. The test below checks that for you by asking your model to read a picture.")
 
                 HStack(spacing: 10) {
                     SettingsPillButton(title: testing ? "Testing…" : "Test & Select",
@@ -351,10 +340,16 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                     SettingsProse(testVerdict)
                 }
 
-                SettingsHairline()
-                SettingsProse(PrivacyCopy.customProvider)
+                if !formStyle {
+                    SettingsHairline()
+                    SettingsProse(PrivacyCopy.customProvider)
+                }
             }
         }
+    }
+
+    private var modelGuidance: some View {
+        SettingsProse("For computer use, consider GPT-6 Sol at low reasoning or Claude Sonnet 5 with reasoning off. Of the open-weights models we tested, Kimi K3 at low reasoning is the only one we can recommend for reliably driving computer use.")
     }
 
     /// The endpoint's ONE reasoning level — free text, because models speak different dialects
@@ -367,8 +362,11 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
             fieldRow(label: "REASONING",
                      placeholder: "low · none · xhigh · whatever your model supports",
                      text: $reasoningRaw)
-            MonoCaps("applies everywhere this model runs", size: 7.5, tracking: 1.6,
-                     color: Theme.Ink.deepMuted)
+            if formStyle {
+                Text("Applies wherever this model runs.").font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
+            } else {
+                MonoCaps("applies everywhere this model runs", size: 7.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+            }
         }
     }
 
@@ -376,11 +374,11 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     private func fieldRow(label: String, placeholder: String, text: Binding<String>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            MonoCaps(label, size: 8.5, tracking: 2.0, color: Theme.Ink.deepMuted)
+            fieldLabel(label)
             TextField(placeholder, text: text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.statusInk)
-                .padding(.horizontal, 12).padding(.vertical, 8)
+                .font(.system(size: formStyle ? 14 : 11.5)).foregroundStyle(Theme.Ink.statusInk)
+                .padding(.horizontal, 12).padding(.vertical, formStyle ? 11 : 8)
                 .background(Color.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .strokeBorder(Theme.stroke, lineWidth: 1))
@@ -400,11 +398,11 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 
     private func secureRow(label: String, placeholder: String) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            MonoCaps(label, size: 8.5, tracking: 2.0, color: Theme.Ink.deepMuted)
+            fieldLabel(label)
             SecureField(placeholder, text: $apiKey)
                 .textFieldStyle(.plain)
-                .font(.system(size: 11.5)).foregroundStyle(Theme.Ink.statusInk)
-                .padding(.horizontal, 12).padding(.vertical, 8)
+                .font(.system(size: formStyle ? 14 : 11.5)).foregroundStyle(Theme.Ink.statusInk)
+                .padding(.horizontal, 12).padding(.vertical, formStyle ? 11 : 8)
                 .background(Color.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .strokeBorder(Theme.stroke, lineWidth: 1))
@@ -417,7 +415,21 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                     }
                     invalidate()
                 }
-            MonoCaps("stored in your mac's keychain", size: 7.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+            if formStyle {
+                Text("Stored in your Mac’s Keychain.").font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
+            } else {
+                MonoCaps("stored in your mac's keychain", size: 7.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+            }
+        }
+    }
+
+    @ViewBuilder private func fieldLabel(_ label: String) -> some View {
+        if formStyle {
+            Text(["BASE URL": "Base URL", "MODEL": "Model", "REASONING": "Reasoning",
+                  "API KEY": "API key", "OPENROUTER API KEY": "OpenRouter API key"][label] ?? label)
+                .font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
+        } else {
+            MonoCaps(label, size: 8.5, tracking: 2.0, color: Theme.Ink.deepMuted)
         }
     }
 
@@ -436,6 +448,8 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
     }
 
     private func runTest(preset: CustomProvider.Preset) {
+        // A pending probe cannot borrow the previous preset's ready state for Continue.
+        verified = false
         // OpenRouter's URL is pinned (no field on that tab); elsewhere only fill an empty one.
         if preset == .openRouter {
             baseURL = preset.defaultBaseURL
@@ -513,6 +527,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
 /// engine wears the small green status dot (the same honest LED the health rows use). Badges
 /// whisper in mono-caps under the label.
 struct EngineTab: View {
+    @Environment(\.settingsFormStyle) private var formStyle
     static var pillWidth: CGFloat { 176 }
     static var pillHeight: CGFloat { 52 }
 
@@ -527,21 +542,25 @@ struct EngineTab: View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
                     if active { HealthDot(color: Theme.Ink.green) }
-                    Text(label)
-                        .font(.system(size: 12.5, weight: selected ? .medium : .regular))
+                    Text(formStyle ? label.replacingOccurrences(of: " Subscription", with: "") : label)
+                        .font(.system(size: formStyle ? 15 : 12.5, weight: selected ? .medium : .regular))
                         .foregroundStyle(selected ? .white : Theme.Ink.body)
                         .lineLimit(1)
                         .minimumScaleFactor(0.92)
                 }
                 if let badge {
-                    MonoCaps(badge, size: 7, tracking: 1.4,
-                             color: badge == "recommended" ? Theme.Ink.green.opacity(0.85)
-                                                           : .white.opacity(0.45))
+                    if formStyle {
+                        Text(label == "Custom" ? "Your endpoint" : badge.capitalized)
+                            .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
+                    } else {
+                        MonoCaps(badge, size: 7, tracking: 1.4,
+                                 color: badge == "recommended" ? Theme.Ink.green.opacity(0.85) : .white.opacity(0.45))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
-            .frame(width: Self.pillWidth, height: Self.pillHeight)
+            .frame(width: formStyle ? nil : Self.pillWidth, height: formStyle ? 68 : Self.pillHeight)
             .background(selected ? Theme.elevated : Color.white.opacity(0.02),
                         in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(
@@ -555,13 +574,14 @@ struct EngineTab: View {
 /// The green "this engine is live" line — shared by the picker's endpoint panels and the
 /// Settings pane's ChatGPT panel.
 struct FrontierActiveLine: View {
+    @Environment(\.settingsFormStyle) private var formStyle
     let text: String
     init(_ text: String) { self.text = text }
 
     var body: some View {
         HStack(spacing: 8) {
             HealthDot(color: Theme.Ink.green)
-            Text(text).font(.system(size: 12, weight: .medium)).foregroundStyle(.white)
+            Text(text).font(.system(size: formStyle ? 14 : 12, weight: .medium)).foregroundStyle(.white)
         }
     }
 }

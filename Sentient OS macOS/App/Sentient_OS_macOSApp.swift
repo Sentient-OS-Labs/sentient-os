@@ -3,7 +3,7 @@
 //  Sentient OS macOS
 //
 //  @main app shell. The main window IS the proactive home (HomeView ⟷ processing takeover);
-//  Knowledge, Settings, and Connect-your-AIs each open as their own window; plus an
+//  Settings and Knowledge are pages in that same window. Connect-your-AIs is a guide; plus an
 //  always-present MenuBarExtra. The live store is CycleStore (Ingestion/CycleStore.swift),
 //  reached directly by the views — the app shell owns no store.
 //
@@ -19,7 +19,7 @@ struct SentientOSApp: App {
     /// Scene id for the primary home window, so the menu bar's "Open Sentient OS" can reopen/focus it.
     static let homeWindowID = "home"
 
-    /// True when `window` is the home WindowGroup's window. SwiftUI suffixes the scene id on the
+    /// True when `window` is the single main scene's window. SwiftUI suffixes the scene id on the
     /// NSWindow identifier ("home-AppWindow-1"), so match the id exactly or as a prefix.
     static func isHomeWindow(_ window: NSWindow) -> Bool {
         guard let raw = window.identifier?.rawValue else { return false }
@@ -35,7 +35,7 @@ struct SentientOSApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: Self.homeWindowID) {
+        Window("Sentient OS", id: Self.homeWindowID) {
             RootView()
                 .environment(appState)
                 .preferredColorScheme(.dark)   // Sentient OS is dark-only — no light mode
@@ -50,19 +50,17 @@ struct SentientOSApp: App {
         .windowStyle(.hiddenTitleBar)            // OLED black runs edge-to-edge; no gray trim
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1180, height: 880)   // the proactive home's canvas
-        // Always present the home at launch: after a quit with only Settings open, state
-        // restoration would otherwise bring back JUST the Settings window — an app with no home.
-        // The ONE exception: the relaunch after a SILENT auto-update (UpdateNotice's consumed
-        // flag) stays windowless — a background update must never shove the home at a user who
-        // was living with Sentient in the menu bar.
-        .defaultLaunchBehavior(UpdateNotice.suppressHomeThisLaunch ? .suppressed : .presented)
-
-        // Every auxiliary window below carries .restorationBehavior(.disabled): the home is the
-        // app's ONLY launch surface, so macOS window restoration must never reopen a stray
-        // Settings/Knowledge/dev window at launch. This can't be handled by sweeping files —
-        // on macOS 26 the restoration record lives outside the app's reach (~/Library/Saved
-        // Application State is gone entirely), field-proven by the post-uninstall relaunch
-        // resurrecting the Settings window (2026-07-11).
+        // Launch presentation is decided after AppKit delivers the opening Apple event, when
+        // login-item launches can be distinguished reliably. Explicit reopen uses our router.
+        .defaultLaunchBehavior(.suppressed)
+        .restorationBehavior(.disabled)
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { HomeWindowOpening.open(.settings) }
+                    .keyboardShortcut(",", modifiers: .command)
+                    .disabled(!appState.hasCompletedOnboarding || ComputerUseUpgrade.shared.isBlockingInterface)
+            }
+        }
 
         // PROACTIVE · EXECUTE — the dev window for PART 3 (the executor). Lists the real
         // ready-to-fire actions from the latest research+prepare run, each with a working FIRE
@@ -76,32 +74,7 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 760, height: 820)
         .restorationBehavior(.disabled)
-
-        // The Knowledge reader is its OWN resizable window (native traffic-light controls, closed
-        // with the red button) — an Obsidian-style browser over the on-disk markdown vault.
-        // Single-instance; `openWindow` brings it up. Title is intentionally blank: the in-app
-        // serif "Knowledge" header is the title, so we don't want the native titlebar repeating it.
-        Window("", id: KnowledgeView.windowID) {
-            KnowledgeView()
-                .environment(appState)
-                .preferredColorScheme(.dark)
-                .modifier(ComputerUseWindowGuard())
-        }
-        .windowResizability(.contentMinSize)
-        .defaultSize(width: 1100, height: 720)
-        .restorationBehavior(.disabled)
-
-        // Settings — its own window, opened from the home's top-bar gear. Two-pane layout
-        // (sidebar + pane), so it wants a wider canvas than the old single-column placeholder.
-        Window("", id: SettingsView.windowID) {
-            SettingsView()
-                .environment(appState)
-                .preferredColorScheme(.dark)
-                .modifier(ComputerUseWindowGuard())
-        }
-        .windowResizability(.contentMinSize)
-        .defaultSize(width: 940, height: 660)
-        .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
 
         // Connect your AIs — the guided setup (per-AI video steps + the sharing toggle), opened
         // by the glow CTAs in the Give-AIs-Knowledge popover and Settings pane of the same name.
@@ -114,6 +87,7 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1120, height: 900)
         .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
 
         // Overnight Processing — the dev cockpit for the 3am scheduler (helper approval, launch-at-
         // login, 14h auto-enable, manual arm). Opened from DEV TOOLS → "Overnight Processing…".
@@ -126,6 +100,7 @@ struct SentientOSApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 780)
         .restorationBehavior(.disabled)
+        .defaultLaunchBehavior(.suppressed)
 
         MenuBarExtra {
             MenuBarView()
@@ -142,6 +117,30 @@ struct SentientOSApp: App {
 final class SentientAppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
         Notify.installRouting()
+        // SMAppService owns launch-at-login. Prevent a second, state-restoration login launch
+        // from reopening the main window independently of that preference.
+        NSApp.disableRelaunchOnLogin()
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        if ComputerUseUpgrade.shared.isBlockingInterface {
+            NSApp.setActivationPolicy(.regular)
+            ComputerUseUpgrade.shared.maybePresent()
+        } else if LaunchPresentation.staysInMenuBar {
+            DockPolicy().reevaluate()
+        } else {
+            HomeWindowOpening.presentCurrentPage()
+        }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let navigation = MainNavigation.shared
+        guard navigation.page == .knowledge, navigation.leaveKnowledge != nil else { return .terminateNow }
+        navigation.confirmLeavingKnowledge { approved in
+            // Defer the reply until AppKit has received terminateLater, even for a clean note.
+            Task { @MainActor in sender.reply(toApplicationShouldTerminate: approved) }
+        }
+        return .terminateLater
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -156,12 +155,10 @@ final class SentientAppDelegate: NSObject, NSApplicationDelegate {
 /// The menu-bar label exists even on a windowless launch. Keep its scene action available for
 /// notification clicks, including clicks received before SwiftUI finishes creating the scenes.
 private struct NotificationRouting: ViewModifier {
-    @Environment(\.openWindow) private var openWindow
-
     func body(content: Content) -> some View {
         content.onAppear {
             Notify.setKnowledgeSourcesHandler {
-                SettingsView.open(.sources, using: openWindow)
+                HomeWindowOpening.open(.settings, settingsPane: .sources)
                 NSApp.activate(ignoringOtherApps: true)
             }
         }

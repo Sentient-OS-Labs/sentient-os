@@ -345,12 +345,19 @@ actor ProactiveResearch {
         } else { span = result }
         guard let data = span.data(using: .utf8),
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            Diagnostics.report(.modelOutputInvalid, phase: .prepare, reason: "invalid_json", counts: [.bytes: result.utf8.count])
             return ReadyResult(ready: [], dropped: [])
+        }
+        if !(obj["ready"] is [[String: Any]]) || !(obj["dropped"] is [[String: Any]]) {
+            Diagnostics.report(.modelOutputInvalid, phase: .prepare, reason: "invalid_collection", counts: [.bytes: result.utf8.count])
         }
         let ready: [PreparedAction] = (obj["ready"] as? [[String: Any]] ?? []).compactMap { d in
             guard let title = (d["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !title.isEmpty else { return nil }
             let due = (d["due_date"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if (d["method"] as? String).flatMap({ PreparedAction.Method(rawValue: $0.lowercased()) }) == nil {
+                Diagnostics.report(.modelOutputInvalid, phase: .prepare, reason: "invalid_method")
+            }
             let method = PreparedAction.Method(rawValue: (d["method"] as? String)?.lowercased() ?? "research") ?? .research
             // Normalize the mcp slug: trimmed + lowercased, "" → nil, and nil for every other
             // method. A missing/unknown target never crashes — the card just isn't fireable
@@ -384,6 +391,22 @@ actor ProactiveResearch {
             guard let title = (d["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !title.isEmpty else { return nil }
             return DroppedItem(title: title, reason: (d["reason"] as? String) ?? "")
+        }
+        let incomplete = (obj["ready"] as? [[String: Any]] ?? []).filter { item in
+            let required = ["prepared_content", "card_summary", "verification", "target", "status", "due_date",
+                            "execution_recipe", "recipient", "button_text", "detail_label", "review_note"]
+            return required.contains { !(item[$0] is String) }
+                || !(item["sources"] is [String])
+                || (item["status"] as? String).flatMap { PreparedAction.Status(rawValue: $0.lowercased()) } == nil
+                || (item["urgency"] as? String).flatMap { ActionItem.Urgency(rawValue: $0.lowercased()) } == nil
+                || (item["method"] as? String == "mcp" && (item["method_target"] as? String)?.isEmpty != false)
+        }.count
+        if incomplete > 0 {
+            Diagnostics.report(.modelOutputInvalid, phase: .prepare, reason: "missing_payload", counts: [.rejected: incomplete])
+        }
+        let proposed = (obj["ready"] as? [[String: Any]])?.count ?? 0
+        if ready.count != proposed {
+            Diagnostics.report(.modelOutputInvalid, phase: .prepare, reason: "invalid_item", counts: [.items: proposed, .accepted: ready.count, .rejected: proposed - ready.count])
         }
         return ReadyResult(ready: ready, dropped: dropped)
     }

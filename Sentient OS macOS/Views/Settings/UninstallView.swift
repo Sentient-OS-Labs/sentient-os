@@ -42,7 +42,7 @@ struct UninstallView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 34).padding(.top, 30).padding(.bottom, 24)
-        .frame(width: 470)
+        .frame(width: 560)
         .background(Theme.bg)
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(phase != .farewell)   // mid-teardown there's no walking away
@@ -63,7 +63,7 @@ struct UninstallView: View {
             prose("Something here didn’t land for you, and we would love to hear what. We read every note.")
                 .padding(.top, 10)
 
-            MonoCaps("Uninstalling includes", size: 9, tracking: 2.2, color: Theme.Ink.label, weight: .semibold)
+            Text("Uninstalling includes").font(.system(size: 16, weight: .medium)).foregroundStyle(.white)
                 .padding(.top, 22)
             Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 9) {
                 GridRow {
@@ -116,7 +116,7 @@ struct UninstallView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.Ink.label)
                 .frame(width: 15)
-            Text(text).font(.system(size: 12.5)).foregroundStyle(Theme.Ink.body)
+            Text(text).font(.system(size: 14)).foregroundStyle(Theme.Ink.body)
         }
     }
 
@@ -124,7 +124,7 @@ struct UninstallView: View {
 
     private var working: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps(stage.whisper, size: 9.5, tracking: 2.4, color: .white.opacity(0.7), weight: .semibold)
+            Text(stage.whisper).font(.system(size: 14)).foregroundStyle(SettingsStyle.secondary)
                 .id(stage)
                 .transition(.opacity)
                 .animation(.easeInOut(duration: 0.3), value: stage)
@@ -144,7 +144,7 @@ struct UninstallView: View {
 
     private var helperPrompt: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps("One more step", size: 9.5, tracking: 2.4, color: .white.opacity(0.7), weight: .semibold)
+            Text("One more step").font(.system(size: 14)).foregroundStyle(SettingsStyle.secondary)
             Text("This part needs your password.")
                 .display(24).foregroundStyle(.white)
                 .padding(.top, 12)
@@ -166,7 +166,7 @@ struct UninstallView: View {
     private func quietLink(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 11.5))
+                .font(.system(size: 13))
                 .foregroundStyle(Theme.Ink.bright.opacity(0.9))
         }
         .buttonStyle(PressScaleStyle())
@@ -176,7 +176,7 @@ struct UninstallView: View {
 
     private var gone: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps("All clear", size: 9.5, tracking: 2.4, color: .white.opacity(0.7), weight: .semibold)
+            Text("All clear").font(.system(size: 14)).foregroundStyle(SettingsStyle.secondary)
             Text("Sentient is gone from this Mac.")
                 .display(24).foregroundStyle(.white)
                 .padding(.top, 12)
@@ -223,7 +223,7 @@ struct UninstallView: View {
 
     private func prose(_ text: String) -> some View {
         Text(text)
-            .font(.system(size: 12.5)).foregroundStyle(Theme.Ink.body)
+            .font(.system(size: 14)).foregroundStyle(Theme.Ink.body)
             .lineSpacing(3.5)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -233,7 +233,7 @@ struct UninstallView: View {
             HStack(spacing: 6) {
                 Image(systemName: feedbackCopied ? "checkmark" : "envelope").font(.system(size: 10))
                 Text(feedbackCopied ? "feedback@sentient-os.ai copied" : "Email the founders")
-                    .font(.system(size: 11.5))
+                    .font(.system(size: 13))
             }
             .foregroundStyle(Theme.Ink.bright.opacity(0.9))
         }
@@ -295,9 +295,9 @@ private struct FarewellPill: View {
                 .foregroundStyle(ink)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
-                .background(Capsule().fill(fill))
-                .overlay(Capsule().strokeBorder(stroke, lineWidth: 1))
-                .contentShape(Capsule())
+                .background(RoundedRectangle(cornerRadius: 8).fill(fill))
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(stroke, lineWidth: 1))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(PressScaleStyle())
     }

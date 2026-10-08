@@ -26,17 +26,80 @@ enum ConnectorReadFailure {
            result["tool_failure"] as? String == "auth" {
             throw MCPSource.MCPError.connectorAuth(slug: slug)
         }
-        let calls = MCPCallEvidence.receipts(raw: envelope.raw, backend: ModelBackend.current)
-        guard !calls.contains(where: { $0.status == .succeeded }) else { return }
-        let authMessages = ["invalid_grant", "invalid_token", "unauthenticated", "not connected",
-                            "authentication required", "reauthentication required", "token expired",
-                            "expired token", "sign in to", "please reconnect"]
+        let backend = ModelBackend.current
+        let calls = MCPCallEvidence.receipts(raw: envelope.raw, backend: backend)
         if calls.contains(where: { call in
-            guard call.status == .failed, let data = call.output,
-                  let text = String(data: data, encoding: .utf8)?.lowercased() else { return false }
-            return authMessages.contains(where: text.contains)
+            call.status == .failed && belongsToSource(call, slug: slug, backend: backend)
+                && (authenticationFailure(call.failure) || authenticationFailure(call.output))
         }) {
             throw MCPSource.MCPError.connectorAuth(slug: slug)
         }
+    }
+
+    /// Successful discovery or WaitForMcpServers cannot excuse a later failed source read.
+    /// Conversely, another source's failure must not label this connection as disconnected.
+    private static func belongsToSource(_ call: MCPCallEvidence.Receipt, slug: String, backend: ModelBackend) -> Bool {
+        let slug = ConnectorRegistry.canonicalSlug(slug)
+        guard let pack = ConnectorRegistry.pack(forSlug: slug) else { return false }
+        switch backend {
+        case .claude:
+            guard let prefix = pack.claudeToolPrefix, call.tool.hasPrefix(prefix) else { return false }
+            return pack.readTools?.contains(String(call.tool.dropFirst(prefix.count))) == true
+        case .chatgpt:
+            guard call.server == "codex_apps" else { return false }
+            let namespaces: [String]
+            switch slug {
+            case "gmail": namespaces = ["gmail"]
+            case "google-calendar": namespaces = ["gcal", "google_calendar"]
+            case "google-drive": namespaces = ["gdrive", "google_drive"]
+            case "slack": namespaces = ["slack"]
+            case "outlook-mail": namespaces = ["microsoft_outlook_email"]
+            case "outlook-calendar": namespaces = ["microsoft_outlook_calendar"]
+            default: return false
+            }
+            let prefixes: [String] = namespaces.flatMap { namespace -> [String] in
+                let qualified = "mcp__codex_apps__" + namespace
+                return [namespace + ".", qualified + "__", qualified + "_", qualified + "."]
+            }
+            guard let prefix = prefixes.first(where: call.tool.hasPrefix) else { return false }
+            return pack.codexReadTools?.contains(String(call.tool.dropFirst(prefix.count))) == true
+        case .custom: return false
+        }
+    }
+
+    /// Inspect only native failure diagnostics, not arbitrary fields in email/event payloads.
+    /// A successful message containing "please reconnect" is ordinary source content.
+    nonisolated private static func authenticationFailure(_ data: Data?) -> Bool {
+        guard let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+        if authenticationDiagnostic(object) { return true }
+        for key in ["structured_content", "structuredContent"] {
+            if let value = object[key], authenticationDiagnostic(value) { return true }
+        }
+        if let text = object["content"] as? String { return authenticationDiagnostic(text) }
+        let blocks = object["content"] as? [[String: Any]] ?? []
+        return blocks.contains { block in
+            block["type"] as? String == "text" && block["text"].map(authenticationDiagnostic) == true
+        }
+    }
+
+    nonisolated private static func authenticationDiagnostic(_ value: Any) -> Bool {
+        if let object = value as? [String: Any] {
+            return ["error", "code", "message", "error_description", "status", "status_code", "http_status"]
+                .contains { object[$0].map(authenticationDiagnostic) == true }
+        }
+        if let code = value as? Int { return code == 401 || code == 403 }
+        guard let text = value as? String else { return false }
+        // Error text sometimes wraps JSON. Decode diagnostic keys rather than searching
+        // quoted subjects, bodies or other user-controlled fields inside that payload.
+        if let nested = try? JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed) {
+            return authenticationDiagnostic(nested)
+        }
+        let diagnostic = text.replacingOccurrences(of: #""(?:\\.|[^"\\])*"|'[^'\r\n]*'"#,
+                                                   with: " ", options: .regularExpression).lowercased()
+        let phrases = ["invalid_grant", "invalid_token", "unauthenticated", "unauthorized",
+                       "authentication required", "reauthentication required", "token expired",
+                       "expired token", "sign in to", "please reconnect"]
+        return phrases.contains(where: diagnostic.contains)
+            || (diagnostic.contains("not connected") && !diagnostic.contains("internet") && !diagnostic.contains("network"))
     }
 }

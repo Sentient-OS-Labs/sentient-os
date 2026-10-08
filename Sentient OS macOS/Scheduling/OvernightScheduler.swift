@@ -246,7 +246,7 @@ final class OvernightScheduler {
             let target = Self.nextOccurrence(minutesSinceMidnight: minutes)
             statusLine = "armed for \(Self.clock(target))"
             log.line("arming wake for \(target)")
-            _ = await WakeHelperClient.shared.armWake(at: target)
+            let armed = await WakeHelperClient.shared.armWake(at: target)
 
             // Wait for the target. Re-arm every ~5 min while awake (idempotent — keeps the helper's
             // record fresh so its force-quit auto-cancel always knows what to cancel).
@@ -256,6 +256,11 @@ final class OvernightScheduler {
             }
             if Task.isCancelled { break }
 
+            let lateness = Date().timeIntervalSince(target)
+            if armed, lateness > 900 {
+                Diagnostics.report(.wakeMissed, phase: .begin, reason: "armed_run_started_late",
+                                   counts: [.elapsedMS: Int(lateness * 1000)], cooldown: 86_400)
+            }
             statusLine = "running…"
             await runNight(log: log)
             statusLine = "armed (next \(Self.clock(Self.nextOccurrence(minutesSinceMidnight: minutes))))"
@@ -268,50 +273,52 @@ final class OvernightScheduler {
     /// sleep ourselves, and record the morning caution; the loop then re-arms tomorrow's wake as
     /// usual. A healthy night wins the race and none of this is visible.
     private func runNight(log: SchedulerLog) async {
-        let pulse = NightPulse()
-        // A task group would await every child at scope exit, including a child awaiting the
-        // wedged run. A one-shot stream lets the watchdog report without waiting for that run.
-        let (outcomes, result) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingOldest(1))
-        let run = Task {
-            await self.runProcessing(log: log, pulse: pulse)
-            result.yield(false)
-            result.finish()
-        }
-        let watchdog = Task {
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .seconds(60)) }
-                catch { return }
-                if pulse.secondsSinceProgress > Self.stallSeconds {
-                    result.yield(true)
-                    result.finish()
-                    return
+        await Diagnostics.withOperation("overnight") {
+            let pulse = NightPulse()
+            // A task group would await every child at scope exit, including a child awaiting the
+            // wedged run. A one-shot stream lets the watchdog report without waiting for that run.
+            let (outcomes, result) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingOldest(1))
+            let run = Task {
+                await self.runProcessing(log: log, pulse: pulse)
+                result.yield(false)
+                result.finish()
+            }
+            let watchdog = Task {
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .seconds(60)) }
+                    catch { return }
+                    if pulse.secondsSinceProgress > Self.stallSeconds {
+                        result.yield(true)
+                        result.finish()
+                        return
+                    }
                 }
             }
-        }
-        let stalled = await withTaskCancellationHandler {
-            var iterator = outcomes.makeAsyncIterator()
-            return await iterator.next() ?? false
-        } onCancel: {
-            run.cancel()
-            result.finish()
-        }
-        watchdog.cancel()
-        guard stalled, !Task.isCancelled else { return }
+            let stalled = await withTaskCancellationHandler {
+                var iterator = outcomes.makeAsyncIterator()
+                return await iterator.next() ?? false
+            } onCancel: {
+                run.cancel()
+                result.finish()
+            }
+            watchdog.cancel()
+            guard stalled, !Task.isCancelled else { return }
 
-        // The silent-wedge net. Latch FIRST so every exit path the cancelled run might later thaw
-        // into knows sleep is already handled and leaves the helper alone (by then a NEXT night
-        // could legitimately be holding the Mac awake).
-        pulse.markSleepRestored()
-        run.cancel()
-        log.line("STALLED — no progress for \(Int(Self.stallSeconds / 60)) min; ending the night, restoring sleep.")
-        OvernightCaution.record(.stalled)
-        // A stall is defect-shaped (unlike the weather kinds), so Sentry hears about it too — structure only.
-        CrashReporting.captureEvent("overnight.stalled", level: .warning,
-                                    tags: ["trigger": "overnight"],
-                                    extra: ["stall_minutes": String(Int(Self.stallSeconds / 60))],
-                                    fingerprint: ["overnight", "stalled"])
-        let ended = await WakeHelperClient.shared.endAwake()
-        log.line("watchdog endAwake: \(ended ? "OK" : "FAILED — the helper's deadman/ceiling still net it")")
+            // The silent-wedge net. Latch FIRST so every exit path the cancelled run might later thaw
+            // into knows sleep is already handled and leaves the helper alone (by then a NEXT night
+            // could legitimately be holding the Mac awake).
+            pulse.markSleepRestored()
+            run.cancel()
+            log.line("STALLED — no progress for \(Int(Self.stallSeconds / 60)) min; ending the night, restoring sleep.")
+            OvernightCaution.record(.stalled)
+            // A stall is defect-shaped (unlike the weather kinds), so Sentry hears about it too — structure only.
+            CrashReporting.captureEvent("overnight.stalled", level: .warning,
+                                        tags: ["trigger": "overnight"],
+                                        extra: ["stall_minutes": String(Int(Self.stallSeconds / 60))],
+                                        fingerprint: ["overnight", "stalled"])
+            let ended = await WakeHelperClient.shared.endAwake()
+            log.line("watchdog endAwake: \(ended ? "OK" : "FAILED — the helper's deadman/ceiling still net it")")
+        }
     }
 
     /// The actual run: keep awake → read the selected connectors with `.auto` (+ Gmail/Calendar) →
@@ -368,10 +375,10 @@ final class OvernightScheduler {
         log.line("network: \(netAtStart.status)/\(netAtStart.interface) \(Int(Date().timeIntervalSince(woke)))s since wake")
         let signin = CodexAuthSnapshot.read()
         log.line(signin.logLine)
-        var legs: [String: String] = ["gmail": "skipped", "calendar": "skipped", "mcp": "skipped", "vault": "ok", "proactive": "skipped"]
+        var legs: [String: String] = ["gmail": "skipped", "calendar": "skipped", "mcp": "skipped", "vault": "pending", "proactive": "skipped", "device": "skipped", "awake": began ? "ok" : "failed", "sleep": "pending"]
         var unavailableConnectors: Set<String> = []
         var firstCloudCallAt: Date?
-        var deviceItems = 0, deviceKept = 0, deviceFailed = 0, deviceSeconds = 0
+        var deviceItems = 0, deviceKept = 0, deviceFailed = 0, deviceExtractionFailed = 0, deviceSeconds = 0
         let heart = Task {
             while !Task.isCancelled && !pulse.sleepWasRestored {
                 _ = await WakeHelperClient.shared.heartbeat()
@@ -397,7 +404,8 @@ final class OvernightScheduler {
                 return
             }
             let ended = await WakeHelperClient.shared.endAwake()
-            log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — run complete, Mac will sleep.")
+            legs["sleep"] = ended ? "ok" : "failed"
+            log.line("endAwake (disablesleep 0): \(ended ? "OK" : "FAILED") — processing ended.")
         }
 
         if Task.isCancelled { await releaseAwake(); return }
@@ -409,7 +417,8 @@ final class OvernightScheduler {
                 throttle.maybe { log.line("  … \(pr.done)/\(pr.total)  kept=\(pr.survivors) junk=\(pr.junk) failed=\(pr.failed)") }
             }
             log.line("device DONE: \(p.survivors) kept · \(p.junk) junk · \(p.failed) failed of \(p.total)")
-            deviceItems = p.total; deviceKept = p.survivors; deviceFailed = p.failed
+            deviceItems = p.total; deviceKept = p.survivors; deviceFailed = p.failed; deviceExtractionFailed = p.extractionFailed
+            legs["device"] = deviceFailed > 0 || deviceExtractionFailed > 0 || p.mailIncomplete ? "partial" : "ok"
             deviceSeconds = Int(Date().timeIntervalSince(woke))
             // A full disk stopped the read (see IterativeRun): nothing more can be saved tonight, and
             // the cloud legs write too (marks, the knowledge-base staging copy). Record the morning
@@ -479,13 +488,12 @@ final class OvernightScheduler {
             log.line("proactive cycle ended with a failure (summaries kept for retry)")
             switch failure.stage {
             case .vault:      legs["vault"] = failure.reason.rawValue; legs["proactive"] = "skipped"
-            case .deciding, .preparing: legs["proactive"] = failure.reason.rawValue
+            case .deciding, .preparing: legs["vault"] = "ok"; legs["proactive"] = failure.reason.rawValue
             }
-        }
+        } else { legs["vault"] = "ok" }
 
         if Task.isCancelled { await releaseAwake(); return }
         await releaseAwake()
-        Analytics.signal("Scheduler.overnightCompleted", tier: .core)   // always-on usage ping: an overnight run finished cleanly
 
         // ONE row per user-night: did the cloud stage work, and if not, which leg failed why —
         // read against the network + login baseline taken at wake. Replaces reading three
@@ -495,12 +503,14 @@ final class OvernightScheduler {
         let ran = legs.values.filter { $0 != "skipped" }
         let offlineReasons: Set<String> = ["dns", "connect_timeout", "tls"]
         let outcome: String
-        if failed.isEmpty { outcome = "ok" }
+        if failed.isEmpty { outcome = Diagnostics.current?.hasFailure == true ? "degraded" : "ok" }
         else if netAtStart.status != "satisfied" || failed.allSatisfy({ offlineReasons.contains($0) }) { outcome = "offline" }
         else if failed.count < ran.count { outcome = "partial" }
         else { outcome = "failed" }
+        if outcome == "ok" { Analytics.signal("Scheduler.overnightCompleted", tier: .core) }
         var tags: [String: String] = [
             "trigger": "overnight", "outcome": outcome,
+            "device": legs["device"]!, "awake": legs["awake"]!, "sleep": legs["sleep"]!,
             "gmail": legs["gmail"]!, "calendar": legs["calendar"]!, "mcp": legs["mcp"]!,
             "vault": legs["vault"]!, "proactive": legs["proactive"]!,
             "network_at_start": netAtStart.status, "interface_at_start": netAtStart.interface,
@@ -509,7 +519,7 @@ final class OvernightScheduler {
         tags.merge(signin.tags) { cur, _ in cur }
         var extra: [String: String] = [
             "device_items": String(deviceItems), "device_kept": String(deviceKept),
-            "device_failed": String(deviceFailed), "secs_device_stage": String(deviceSeconds),
+            "device_failed": String(deviceFailed), "device_extraction_failed": String(deviceExtractionFailed), "secs_device_stage": String(deviceSeconds),
             "mcp_connectors": String(mcpSlugs.count),
             "pings": String(diag.pings), "ping_ms_first": diag.firstPingMS.map(String.init) ?? "n/a",
             "secs_wake_to_first_cloud_call": String(Int((firstCloudCallAt ?? Date()).timeIntervalSince(woke))),
@@ -532,6 +542,9 @@ final class OvernightScheduler {
             if Task.isCancelled || error is CancellationError { return "cancelled" }
             if ConnectorReadFailure.isConnectionFailure(error) { return "connector_auth" }
             let reason = CodexFailureReason.classify(error)
+            if !Diagnostics.isExpected(error) {
+                Diagnostics.report(.sourceReadFailed, phase: .read, reason: "scheduled_cloud_source", error: error, source: name.lowercased(), terminal: true)
+            }
             log.line("\(name) FAILED: \(ErrorLabel(error)) — \(reason.rawValue)")
             return reason.rawValue
         }

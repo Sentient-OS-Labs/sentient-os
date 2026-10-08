@@ -214,8 +214,11 @@ actor Proactive {
         } else { span = result }
         guard let data = span.data(using: .utf8),
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let arr = obj["action_items"] as? [[String: Any]] else { return [] }
-        return arr.compactMap { d in
+              let arr = obj["action_items"] as? [[String: Any]] else {
+            Diagnostics.report(.modelOutputInvalid, phase: .judge, reason: "invalid_collection", counts: [.bytes: result.utf8.count])
+            return []
+        }
+        let items: [ActionItem] = arr.compactMap { d in
             guard let title = (d["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !title.isEmpty else { return nil }
             let due = (d["due_date"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -227,6 +230,15 @@ actor Proactive {
                 sources: (d["sources"] as? [String]) ?? [],
                 urgency: ActionItem.Urgency(rawValue: (d["urgency"] as? String)?.lowercased() ?? "medium") ?? .medium)
         }
+        let incomplete = arr.filter { item in
+            ["action", "importance", "due_date"].contains { !(item[$0] is String) }
+                || !(item["sources"] is [String])
+                || (item["urgency"] as? String).flatMap { ActionItem.Urgency(rawValue: $0.lowercased()) } == nil
+        }.count
+        if items.count != arr.count || incomplete > 0 {
+            Diagnostics.report(.modelOutputInvalid, phase: .judge, reason: "invalid_item", counts: [.items: arr.count, .accepted: items.count, .rejected: max(arr.count - items.count, incomplete)])
+        }
+        return items
     }
 
     // MARK: The prompt — accuracy-first, detailed (the judgment IS the product)

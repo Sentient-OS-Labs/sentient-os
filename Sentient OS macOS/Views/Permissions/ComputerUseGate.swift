@@ -46,7 +46,6 @@ final class ComputerUseGate {
     private(set) var nativePermissionError: String?
     private(set) var nativeRestartRequired = false
     private(set) var restartingNative = false
-    var nativeRuntimeReady: Bool { OpenAIComputerUseRuntime.shared.isReady }
     @ObservationIgnored private var automationProbe: Task<Void, Never>?
     @ObservationIgnored private var lastAutomationProbe: Date?
     var setup: ComputerUseSetup { .instance(for: backend) }
@@ -67,7 +66,7 @@ final class ComputerUseGate {
     }
 
     var allRequiredGranted: Bool {
-        localRequirementsReady && (backend == .cua || (automation == .granted && nativeRuntimeReady))
+        localRequirementsReady && (backend == .cua || (automation == .granted && nativePermissionError == nil))
     }
 
     /// The visible setup surface owns the native consent request. Already-granted and denied
@@ -88,7 +87,7 @@ final class ComputerUseGate {
             defer { requestingAutomation = false; lastAutomationProbe = Date() }
             do {
                 let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
-                guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled(nativeConfiguration: configuration) else {
+                guard await ComputerUseSetup.instance(for: .openAI).ensureInstalled() else {
                     throw OpenAIComputerUse.RuntimeError.incomplete
                 }
                 _ = await automationProbe?.value
@@ -124,7 +123,9 @@ final class ComputerUseGate {
         _ = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration)
         automation = await Permissions.nativeAutomationState(ask: ask)
         if automation == .granted {
-            try await OpenAIComputerUseRuntime.shared.check(configuration: configuration)
+            // Only explicit setup/repair diagnoses the live service. Routine refresh is a
+            // local launch + macOS preflight; the real task will authenticate its own connection.
+            if ask { try await OpenAIComputerUseRuntime.shared.check(configuration: configuration) }
             nativePermissionError = nil
             nativeRestartRequired = false
         } else {
@@ -139,6 +140,9 @@ final class ComputerUseGate {
         nativePermissionError = error.localizedDescription
         let failure = error as? OpenAIComputerUse.RuntimeError
         nativeRestartRequired = failure == .restartRequired || failure == .backendUnavailable
+        if !Diagnostics.isExpected(error) {
+            Diagnostics.report(.readinessFailed, phase: .probe, error: error)
+        }
     }
 
     // MARK: The gate
@@ -153,11 +157,43 @@ final class ComputerUseGate {
         set { UserDefaults.standard.set(newValue, forKey: micSpeechOfferedKey) }
     }
 
-    private var pending: (@MainActor () -> Void)?
+    private struct PendingAction {
+        let id: UUID
+        let proceed: @MainActor () -> Void
+        let cancel: @MainActor () -> Void
+    }
+    private var pending: PendingAction?
     @ObservationIgnored private var pendingCheck: Task<Void, Never>?
     private var presentedBlocking = false   // window up because a REQUIRED grant is missing (vs. the optional offer)
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
+
+    /// The request already owns the notch and the one-task lock while waiting here. Closing a
+    /// blocking setup or pressing STOP releases it; no late permission result can revive it.
+    func waitUntilReady() async throws {
+        while setup.isInstalling { try await Task.sleep(for: .milliseconds(100)) }
+        try Task.checkCancellation()
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                let intent = PendingAction(id: id,
+                    proceed: { continuation.resume() },
+                    cancel: { continuation.resume(throwing: CancellationError()) })
+                if !intercept(intent) { continuation.resume() }
+            }
+            try Task.checkCancellation()
+        } onCancel: {
+            Task { @MainActor in
+                guard self.pending?.id == id else { return }
+                self.cancelPendingAction()
+                self.dismissWindow()
+            }
+        }
+    }
 
     /// Returns true when the gate holds the action, either for a quiet readiness check or a
     /// setup window; false when the caller may proceed. Setup appears in two cases:
@@ -169,20 +205,22 @@ final class ComputerUseGate {
     ///     and closing still FIRES the held command, so an optional nudge never eats what the user
     ///     fired.
     func intercept(_ action: @escaping @MainActor () -> Void) -> Bool {
+        intercept(PendingAction(id: UUID(), proceed: action, cancel: {}))
+    }
+
+    private func intercept(_ intent: PendingAction) -> Bool {
         // A newer user intent replaces the held one. Cancelling this waiter must not cancel the
         // shared native probe, which Settings or health may also be awaiting.
-        cancelPendingCheck()
-        pending = nil
+        cancelPendingAction()
         refresh()
         if canProceedWithoutSetup {
             dismissWindow()
             return false
         }
-        pending = action
+        pending = intent
         if backend == .openAI, localRequirementsReady, !allRequiredGranted,
            window == nil, !requestingAutomation {
-            // A cold helper can clear runtime readiness after an earlier successful permission
-            // check. Join the current probe, or request one even inside the normal poll interval.
+            // Join a cold helper's local permission preflight before offering setup.
             refreshAutomation(force: true)
             if checkingAutomation {
                 Log("ComputerUseGate: waiting for native readiness before presenting setup")
@@ -191,7 +229,7 @@ final class ComputerUseGate {
                         let action = gate.pending
                         gate.pending = nil
                         Log("ComputerUseGate: native readiness confirmed; resuming held action")
-                        action?()
+                        action?.proceed()
                     } else {
                         gate.presentPendingAction()
                     }
@@ -230,20 +268,12 @@ final class ComputerUseGate {
         return checkingAutomation ? "native readiness check pending" : "native service unavailable"
     }
 
-    /// Hold a notch click or hotkey tap before opening the field. A successful quiet check or
-    /// Continue resumes that same intent; it must not require another press to try again.
-    @discardableResult
-    func interceptBeforeStart(_ action: @escaping @MainActor () -> Void) -> Bool {
-        intercept(action)
-    }
-
     /// Escape can cancel a held intent even before a window or typing field is visible.
     /// Visible setup keeps its existing close/Continue behavior.
     @discardableResult
     func cancelBeforePresentation() -> Bool {
         guard window == nil, pendingCheck != nil else { return false }
-        cancelPendingCheck()
-        pending = nil
+        cancelPendingAction()
         Log("ComputerUseGate: held action cancelled before setup")
         return true
     }
@@ -345,12 +375,12 @@ final class ComputerUseGate {
             let runtime = gate.backend
             Analytics.signal("PermissionGate.continued", parameters: ["all_granted": "true"])
             gate.dismissWindow()
-            // CUA needs a fresh daemon after a permission change; native startup checks its
-            // own live service again before every computer task.
+            // CUA needs a fresh daemon after a permission change. Native tasks establish their
+            // required connection themselves, after checking the selected helper and grants.
             if runtime == .cua {
-                Task { await CuaDriverHost.shared.markGrantsChanged(); action?() }
+                Task { await CuaDriverHost.shared.markGrantsChanged(); action?.proceed() }
             } else {
-                action?()
+                action?.proceed()
             }
         }
     }
@@ -358,6 +388,13 @@ final class ComputerUseGate {
     private func cancelPendingCheck() {
         pendingCheck?.cancel()
         pendingCheck = nil
+    }
+
+    private func cancelPendingAction() {
+        cancelPendingCheck()
+        let action = pending
+        pending = nil
+        action?.cancel()
     }
 
     // MARK: Window lifecycle (AppKit-owned — it must be able to appear over OTHER apps, since
@@ -413,9 +450,10 @@ final class ComputerUseGate {
             refreshGrants()
             if presentedBlocking || !localRequirementsReady {
                 Log("ComputerUseGate: blocking setup dismissed; held action dropped")
+                action.cancel()
             } else if allRequiredGranted {
                 Log("ComputerUseGate: optional-grants offer dismissed — firing the held command")
-                action()
+                action.proceed()
             } else {
                 // Closing the optional offer must not eat a command just because its native
                 // check is still running. A real failure drops it without reopening a window.
@@ -426,9 +464,10 @@ final class ComputerUseGate {
                     gate.pending = nil
                     guard gate.allRequiredGranted else {
                         Log("ComputerUseGate: dismissed offer dropped held action (\(gate.blockingReason))")
+                        action?.cancel()
                         return
                     }
-                    action?()
+                    action?.proceed()
                 }
             }
         }

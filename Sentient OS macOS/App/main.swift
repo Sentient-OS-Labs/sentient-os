@@ -11,6 +11,11 @@
 import Foundation
 import SwiftUI
 
+// Browser helper arguments contain an OAuth URL. Handle them before any diagnostics or UI.
+if CommandLine.arguments.dropFirst().first == ClaudeLoginBrowser.helperArgument {
+    exit(ClaudeLoginBrowser.runHelper(arguments: CommandLine.arguments))
+}
+
 #if DEBUG
 // Native computer-use validation starts before AppState or any production startup side effect.
 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "nativecua",
@@ -34,16 +39,26 @@ if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "connectorlab",
 }
 #endif
 
+let childDiagnostics = ChildProcessDiagnostics.Role.from(CommandLine.arguments.dropFirst().first).flatMap { ChildProcessDiagnostics.begin(role: $0) }
+
 if CommandLine.arguments.dropFirst().first == ClaudeSubscriptionProcess.argument {
-    Task.detached { exit(await ClaudeSubscriptionProcess.run()) }
+    Task.detached {
+        let status = await ClaudeSubscriptionProcess.run()
+        childDiagnostics?.finish(status); exit(status)
+    }
     dispatchMain()
 } else if CommandLine.arguments.dropFirst().first == "--outlook-tool-policy" {
-    exit(OutlookToolPolicy.runHelper(arguments: CommandLine.arguments))
+    let status = OutlookToolPolicy.runHelper(arguments: CommandLine.arguments)
+    childDiagnostics?.finish(status); exit(status)
 } else if CommandLine.arguments.dropFirst().first == "--slack-tool-policy" {
-    exit(SlackToolPolicy.runHelper(arguments: CommandLine.arguments))
+    let status = SlackToolPolicy.runHelper(arguments: CommandLine.arguments)
+    childDiagnostics?.finish(status); exit(status)
 } else if CommandLine.arguments.dropFirst().first.map({ ["--direct-mcp-headers", "--direct-mcp-policy"].contains($0) }) == true {
     let arguments = CommandLine.arguments
-    Task.detached { exit(await DirectMCPRuntime.runHelper(arguments: arguments)) }
+    Task.detached {
+        let status = await DirectMCPRuntime.runHelper(arguments: arguments)
+        childDiagnostics?.finish(status); exit(status)
+    }
     dispatchMain()
 } else if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
     CrashReporting.start(.wakeHelper)   // crash reporting for the root overnight path

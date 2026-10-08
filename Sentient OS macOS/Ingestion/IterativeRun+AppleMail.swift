@@ -14,6 +14,14 @@ extension IterativeRun {
         var generations = 0
         var modelFailures = 0
         let deadline = Date().addingTimeInterval(3600)
+        var diagnosticPhase: Diagnostics.Phase = .snapshot
+        defer {
+            if !Task.isCancelled, p.failed > 0 || p.extractionFailed > 0 {
+                Diagnostics.report(.sourceReadDegraded, phase: .complete, reason: "mail_deferred", source: "apple_mail",
+                                   counts: [.attempted: p.done, .failed: p.failed, .deferred: p.mailDeferred, .skipped: p.extractionFailed],
+                                   flags: [.partial: p.mailIncomplete, .retriable: true])
+            }
+        }
         do {
             let snapshot = try await Task.detached(priority: .utility) {
                 try AppleMailSnapshot(root: AppleMailSource.root(), selected: connector.accounts)
@@ -41,6 +49,7 @@ extension IterativeRun {
                     $0.messageKey.map { !eligibleKeys.contains($0) }
                         ?? ($0.generation != snapshot.generation || !eligible.contains($0.rowID))
                 }.map(\.identity))
+                diagnosticPhase = .commit
                 let start = await store.commitMail(bucketKey: bucket, state: state, remove: invalid)
                 guard start == .saved else { p.diskFull = start == .diskFull; throw MailRunFailure.storage }
                 for identity in invalid { receipts.removeValue(forKey: identity) }
@@ -60,6 +69,7 @@ extension IterativeRun {
                     var failureReason: String?
                     if !row.excluded || row.previewJunk {
                         do {
+                            diagnosticPhase = .extract
                             let message = try await Task.detached(priority: .utility) { try snapshot.body(row, includeJunkPreview: true) }.value
                             loadedBody = true
                             let forcedJunk = row.excluded || AppleMailMIME.excluded(message.headers)
@@ -85,6 +95,7 @@ extension IterativeRun {
                                 // missing privacy decisions or save a partially parsed response.
                                 for attempt in 0..<2 {
                                     try Task.checkCancellation()
+                                    diagnosticPhase = .generate
                                     let response = try await engine.generate(prompt: prompt + (attempt == 0 ? "" : Triage.mailRetryInstruction))
                                     generations += 1
                                     seconds = (seconds ?? 0) + response.totalTime
@@ -92,7 +103,10 @@ extension IterativeRun {
                                     case .success(let result): parsed = result
                                     case .failure(let reason):
                                         Log("Apple Mail reply deferred: \(reason.rawValue), attempt=\(attempt + 1), bytes=\(response.text.utf8.count)")
-                                        if attempt == 1 { throw reason }
+                                        if attempt == 1 {
+                                            Diagnostics.report(.modelOutputInvalid, phase: .parse, reason: "mail_reply", error: reason, source: "apple_mail", counts: [.bytes: response.text.utf8.count, .retries: 1])
+                                            throw reason
+                                        }
                                     }
                                     if parsed != nil { break }
                                 }
@@ -119,6 +133,9 @@ extension IterativeRun {
                             remove = Set(receipts.values.filter { $0.generation == snapshot.generation && $0.rowID == row.id }.map(\.identity))
                         } catch is CancellationError { throw CancellationError() }
                         catch {
+                            if loadedBody {
+                                Diagnostics.report(.sourceReadFailed, phase: diagnosticPhase, error: error, source: "apple_mail", flags: [.retriable: true], terminal: true)
+                            }
                             retry = true; receipt = nil; draft = nil
                             if loadedBody {
                                 p.failed += 1
@@ -148,6 +165,7 @@ extension IterativeRun {
                     try Task.checkCancellation()
                     var next = state
                     next.finish(item, retry: retry)
+                    diagnosticPhase = .commit
                     let outcome = await store.commitMail(bucketKey: bucket, state: next, note: draft, receipt: receipt, remove: remove)
                     guard outcome == .saved else { p.diskFull = outcome == .diskFull; throw MailRunFailure.storage }
                     p.mailDeferred += next.deferred.count - state.deferred.count
@@ -157,6 +175,7 @@ extension IterativeRun {
                     // Display/counters only after a successful commit. Junk text stays in this ephemeral card.
                     // Keep the previous card intact if this attempt is cancelled or cannot be saved.
                     p.lastPath = "Apple Mail"; p.lastFilePath = nil; p.lastPrompt = nil
+                    p.lastItemDate = row.date.timeIntervalSince1970 > 0 ? row.date : nil
                     p.lastTitle = nil; p.lastSummary = nil; p.lastVerdict = nil
                     p.lastSeconds = seconds; p.totalSeconds += seconds ?? 0
                     if let decision {
@@ -195,6 +214,7 @@ extension IterativeRun {
                     }
                 }
                 state.completePass(rows: rows, now: Date())
+                diagnosticPhase = .commit
                 let end = await store.commitMail(bucketKey: bucket, state: state)
                 guard end == .saved else { p.diskFull = end == .diskFull; throw MailRunFailure.storage }
                 if state.backfillBefore != nil || rows.contains(where: { $0.id > state.highWater }) { p.mailIncomplete = true }
@@ -205,9 +225,11 @@ extension IterativeRun {
             AppleMailHealth.save(deferred: p.mailDeferred, incomplete: true, failed: false)
         }
         catch MailRunFailure.deadline {
+            Diagnostics.report(.sourceReadDegraded, phase: diagnosticPhase, reason: "deadline", source: "apple_mail", flags: [.partial: true, .retriable: true])
             p.mailIncomplete = true
             AppleMailHealth.save(deferred: p.mailDeferred, incomplete: true, failed: false)
         } catch {
+            Diagnostics.report(.sourceReadDegraded, phase: diagnosticPhase, error: error, source: "apple_mail", flags: [.partial: true, .retriable: true])
             p.failed += 1; p.mailIncomplete = true
             let issue: AppleMailHealth.Issue = error is MailRunFailure
                 ? (error as? MailRunFailure == .storage ? .storage : .model) : .read

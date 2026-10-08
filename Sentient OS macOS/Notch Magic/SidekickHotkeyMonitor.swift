@@ -147,6 +147,7 @@ final class SidekickHotkeyMonitor {
             return event
         }
         if globalMonitor == nil || localMonitor == nil {
+            Diagnostics.report(.inputFailed, phase: .monitor, reason: "monitor_install", source: "hotkey", cooldown: 3600)
             Log("hotkey: monitor install failed (global \(globalMonitor != nil) · local \(localMonitor != nil)) — will retry on the health tick")
         } else {
             Log("hotkey: listening for \(key.label) (flagsChanged NSEvent monitors, zero-permission)")

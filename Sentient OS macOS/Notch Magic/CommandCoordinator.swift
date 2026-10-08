@@ -31,6 +31,7 @@ enum NotchPhase: Equatable {
     case listening                          // the mic is open — the field row shows "Listening…" + the stop button
     case transcribing                       // stopped → finalizing speech
     case running                            // codex is acting — orb + status line + STOP
+    case recovery                           // one pending question or an app-owned retry
     case finishing(CommandRunModel.Outcome) // a brief success / stopped / failed flourish
     case notice(String)                     // a short serif aside: "didn't catch that", mic-off, …
 }
@@ -100,6 +101,28 @@ final class CommandCoordinator {
     private var phaseToken = 0              // guards delayed phase transitions against newer ones
     private var readBackToken = 0
     private var lastPressAt: Date?          // the previous hotkey press — two inside DoubleTap.window are a double tap
+    private var returningFromRecovery = false
+    private var deferredSubmission: (String, AgentMode, TriggerSource)?
+
+    init() {
+        run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
+        run.onRecoveryResumed = { [weak self] in self?.setPhase(.running) }
+        run.recovery.onChange = { [weak self] in
+            guard let self else { return }
+            if self.run.recovery.isPending {
+                self.clearReadBack()
+                self.setPhase(self.run.recovery.isVisible ? .recovery : .hidden)
+            } else if self.phase == .recovery { self.setPhase(.hidden) }
+        }
+    }
+
+    func backFromRecovery() {
+        guard run.recovery.isPending else { return }
+        run.stop()
+        returningFromRecovery = run.isRunning
+        deferredSubmission = nil
+        clearReadBack(); setPhase(.typing)
+    }
 
     // MARK: Lifecycle
 
@@ -134,7 +157,15 @@ final class CommandCoordinator {
     func submit(_ text: String, mode: AgentMode, source: TriggerSource) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard !run.isRunning else { Log("submit ignored — a task is already running"); return }
+        guard !run.isRunning else {
+            if returningFromRecovery {
+                deferredSubmission = (trimmed, mode, source)
+                setPhase(.running)
+            } else { Log("submit ignored — a task is already running"); return }
+            return
+        }
+        returningFromRecovery = false
+        run.recovery.cancel()
 
         // The home command bar starts a fresh main-display interaction. Voice and notchTyped submits
         // arrive MID-session (the anchor was set at their press/click) and must not move a
@@ -153,16 +184,11 @@ final class CommandCoordinator {
             return
         }
 
-        // First-use permission gate: while any of the four action grants is missing, the one-time
-        // setup window takes over and holds this command — Continue fires it, close drops it.
-        if ComputerUseGate.shared.intercept({ [weak self] in self?.launch(trimmed, mode: mode, source: source) }) {
-            setPhase(.hidden)   // the gate window owns the moment; the notch steps aside
-            return
-        }
         launch(trimmed, mode: mode, source: source)
     }
 
-    /// The actual fire — everything after the gate. Only submit() and the gate's Continue call this.
+    /// Own the run immediately. Permission/setup waiting happens inside its cancellable task,
+    /// so the notch stays visible and every other entry point sees the same one-task lock.
     private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource) {
         guard !run.isRunning else { Log("launch ignored — a task is already running"); return }
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
@@ -185,7 +211,11 @@ final class CommandCoordinator {
     /// (an adopted card fire included — run.stop() routes to the card's own cancel). Reached from the
     /// notch's and the bar's STOP buttons and from Esc at the transcript beat; never from the hotkey.
     func stop() {
-        if phase == .running, readBack != nil, run.remembering == nil { setPhase(.hidden) }
+        if returningFromRecovery {
+            deferredSubmission = nil
+            setPhase(.hidden)
+        }
+        if phase == .running, readBack != nil, run.remembering == nil && !run.isPersonalizing { setPhase(.hidden) }
         run.stop()
     }
 
@@ -198,11 +228,12 @@ final class CommandCoordinator {
     /// for minutes re-answers the lock here. Completion needs no coordinator API: the card's
     /// completeExternal rides onFinished → runFinished → the normal finishing flourish.
     @discardableResult
-    func beginExternalRun(caption: String, onStopRequest: @escaping @MainActor () -> Void) -> Bool {
+    func beginExternalRun(caption: String, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
+                          onStopRequest: @escaping @MainActor () -> Void) -> Bool {
         guard !run.isRunning else { return false }
         clearReadBack()
         notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
-        run.adoptExternal(caption: caption, onStopRequest: onStopRequest)
+        run.adoptExternal(caption: caption, retryContext: retryContext, onRetry: onRetry, onStopRequest: onStopRequest)
         setPhase(.running)
         Log("▶︎ external run adopted (\(caption))")
         return true
@@ -263,6 +294,11 @@ final class CommandCoordinator {
     }
 
     private func hotkeyPressed() {
+        if run.recovery.isPending {
+            if run.recovery.isVisible { run.recovery.dismiss() }
+            else { run.recovery.reopen() }
+            return
+        }
         if let keyChanged = doubleTapDemoKeyChanged {
             if NSApp.isActive, doubleTapDemoWindow?.isKeyWindow == true { keyChanged(true) }
             return
@@ -303,7 +339,7 @@ final class CommandCoordinator {
         case .listening, .transcribing:
             cancelCurrent()               // the press also bails a capture or a stuck finalize (there is no global Esc)
             return
-        case .hidden, .running, .finishing, .notice:
+        case .hidden, .running, .finishing, .notice, .recovery:
             break                         // a fresh press (.running only reaches here for the demo, which the guards below ignore)
         }
         guard !run.isRunning else { Log("hotkey ignored — busy"); return }
@@ -319,16 +355,8 @@ final class CommandCoordinator {
             Log("hotkey blocked — knowledge-base-only plan (Sidekick needs Plus)")
             return
         }
-        // A quiet native preflight or visible setup holds this tap. Once it is ready, open the
-        // field without replaying the hotkey (which could otherwise count as another double tap).
-        let permissionToken = phaseToken
-        if ComputerUseGate.shared.interceptBeforeStart({ [weak self] in
-            self?.resumeTypingAfterPermissions(token: permissionToken, anchor: .mainDisplay)
-        }) {
-            Log("hotkey press held for computer-use readiness")
-            return
-        }
         setPhase(.opening)                                // you're pulling it open — reveal the instant you press
+        ComputerUseGate.shared.refresh()                 // prepare locally while the user types
         // The field waits out the double-tap window: a second press in time means a reply draft,
         // not a task (and the notch must still be non-key then — see the MARK above). The notch is
         // already open and glowing, so the wait reads as the unfold, not as lag.
@@ -432,6 +460,7 @@ final class CommandCoordinator {
             try? await Task.sleep(for: .seconds(15))
             guard let self, self.phaseToken == token, self.phase == .transcribing else { return }
             let downloading = VoiceCapture.isModelDownloading
+            if !downloading { Diagnostics.report(.inputFailed, phase: .finalize, reason: "transcription_deadline", source: "voice", counts: [.deadlineMS: 15_000]) }
             Log("✗ transcription timed out — cancelling the capture (\(downloading ? "model still downloading" : "capture stalled"))")
             self.listening = false
             self.voiceStartTask?.cancel(); self.voiceStartTask = nil
@@ -462,7 +491,8 @@ final class CommandCoordinator {
             } catch {
                 guard self.phaseToken == token else { return }   // the watchdog already spoke
                 self.listening = false
-                Log("✗ transcription failed — \(error.localizedDescription)")
+                Diagnostics.report(.inputFailed, phase: .finalize, error: error, source: "voice")
+                Log("✗ transcription failed — \(ErrorLabel(error))")
                 self.flash("didn’t catch that")
             }
         }
@@ -477,7 +507,8 @@ final class CommandCoordinator {
             flash("turn on the microphone to talk to Sentient")
             return
         }
-        Log("voice start failed — \(error.localizedDescription)")
+        Diagnostics.report(.inputFailed, phase: .start, error: error, source: "voice")
+        Log("voice start failed — \(ErrorLabel(error))")
         // Only speak up if we're still in the voice moment — a late failure must never clobber a
         // newer phase (the watchdog's notice, an open type field, a running task).
         switch phase {
@@ -507,6 +538,7 @@ final class CommandCoordinator {
     /// Esc · click-away · empty-⏎ — close the type field with no action.
     func dismissTyping() {
         guard phase == .typing else { return }
+        deferredSubmission = nil
         setPhase(.hidden)
         Log("notch typing dismissed")
     }
@@ -522,10 +554,11 @@ final class CommandCoordinator {
 
     /// A click on the idle, hover-swollen notch — the pointer's twin of a hotkey TAP: open the
     /// type field. Mirrors hotkeyPressed's doors without the double-tap wait (a click can only mean
-    /// the field): the knowledge-base-only aside, then the first-use permission gate, then the
-    /// field. The window controller makes the panel key on .typing, same as the hotkey path.
+    /// the field): the knowledge-base-only aside, then the field. Permissions are checked when
+    /// submitting. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
         guard doubleTapDemoKeyChanged == nil else { return }
+        if run.recovery.isPending { run.recovery.reopen(); return }
         guard phase == .hidden, !run.isRunning else { return }
         notchAnchor = .builtInNotch       // the whole session lives on the bezel that was clicked
         if onboardingDemoArmed { beginNotchDemo(door: "notch click"); return }
@@ -536,26 +569,9 @@ final class CommandCoordinator {
             Log("notch click blocked — knowledge-base-only plan (Sidekick needs Plus)")
             return
         }
-        let permissionToken = phaseToken
-        if ComputerUseGate.shared.interceptBeforeStart({ [weak self] in
-            self?.resumeTypingAfterPermissions(token: permissionToken, anchor: .builtInNotch)
-        }) {
-            Log("notch click held for computer-use readiness")
-            return
-        }
         setPhase(.typing)
+        ComputerUseGate.shared.refresh()   // background preparation never holds the input field
         Log("notch clicked → typing")
-    }
-
-    /// Permission checks can finish after another interaction, task or onboarding transition.
-    /// Resume only the still-current typing intent, on the display where it was requested.
-    private func resumeTypingAfterPermissions(token: Int, anchor: NotchAnchor) {
-        guard phaseToken == token, !run.isRunning, !DoubleTap.shared.isDrafting,
-              doubleTapDemoKeyChanged == nil, !onboardingDemoArmed,
-              !interceptForOnboarding(), !CodexAuth.knowledgeBaseOnly else { return }
-        notchAnchor = anchor
-        setPhase(.typing)
-        Log("notch → typing after computer-use readiness")
     }
 
     // MARK: The native Double Tap lesson
@@ -651,6 +667,7 @@ final class CommandCoordinator {
     /// via a hotkey press for the listening and transcribing beats (hotkeyPressed).
     @discardableResult
     func cancelCurrent() -> Bool {
+        if phase == .recovery { run.recovery.dismiss(); return true }
         switch phase {
         case .opening:
             setPhase(.hidden)
@@ -666,9 +683,13 @@ final class CommandCoordinator {
             setPhase(.hidden)
             Log("notch voice capture cancelled")
             return true
+        case .running where run.isPreparing:
+            stop()
+            Log("Sidekick preparation cancelled (Esc)")
+            return true
         // Only while the transcript is actually shown (readBack up AND not yet replaced by "Remembering") —
         // not once computer use is working, so Esc stays free for the user's own apps then.
-        case .running where readBack != nil && run.remembering == nil:
+        case .running where readBack != nil && run.remembering == nil && !run.isPersonalizing:
             stop()                       // transcript shown → stop() dismisses instantly (no flourish), run cancelled
             Log("notch transcript cancelled (Esc) — immediate dismiss")
             return true
@@ -680,9 +701,16 @@ final class CommandCoordinator {
     // MARK: Run completion → the notch's finishing flourish
 
     private func runFinished(_ outcome: CommandRunModel.Outcome) {
+        if returningFromRecovery {
+            returningFromRecovery = false
+            if let (text, mode, source) = deferredSubmission {
+                deferredSubmission = nil; submit(text, mode: mode, source: source)
+            }
+            return
+        }
         clearReadBack()
         // Only flourish if the notch is actually up (a stop/dismiss may have already hidden it).
-        guard phase == .running else { setPhase(.hidden); return }
+        guard phase == .running else { return }
         setPhase(.finishing(outcome))
         // ✓/stopped are a quick flourish; a failure holds longer — its caption carries the ✗ REASON
         // (the sentinel's give-up explanation or the error), and that has to be readable.
