@@ -53,8 +53,11 @@ finished browser sign-in on their own (a 2 s status poll plus a foreground re-ch
 automatic install gave up (no network, a reset connection, a region block), the panels show the
 manual-install fallback (`CodexInstallFailedPanel` links the official guide and suggests a VPN; the
 Claude panel shows the one-line Terminal command); the polls pick a CLI up the moment it lands.
-Continue gates on the ACTIVE engine being healthy: ChatGPT logged in, Claude signed in, or a custom
-endpoint that passed Test & Select.
+For signed-in Claude, Continue prepares Claude Code, rechecks the login, saves Claude as the engine,
+then advances; onboarding has no separate Use Claude button. Failed preparation or an expired login
+keeps the current engine and stays on this step. Sign-in and installation retry actions remain when
+needed, and Settings keeps its explicit Use Claude action. Other choices require the visible tab to
+match the active engine: ChatGPT logged in, or the selected custom endpoint that passed Test & Select.
 
 **2 · The plan crossroads.** Only free/go ChatGPT accounts see it; full plans, the Claude engine,
 and custom engines auto-advance before a pixel renders (Back knows to skip over it for them). "We noticed you're not on

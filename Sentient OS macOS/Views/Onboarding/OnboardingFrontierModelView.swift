@@ -5,9 +5,9 @@
 //  Onboarding's frontier-model step (grew out of the codex-login-only screen, 2026-07-25): the
 //  five engine pills in one centered row over the SAME per-engine panels Settings renders
 //  (FrontierEnginePicker), with the live codex login embedded as the ChatGPT panel
-//  (OnboardingCodexLoginPanel). Continue requires the VISIBLE choice to be the active, healthy
-//  engine, including the selected custom preset. Continue also prepares the CLI
-//  through its shared setup engine, so an existing login cannot bypass its update check.
+//  (OnboardingCodexLoginPanel). Continue prepares and commits a signed-in Claude choice;
+//  other choices must already be the active, healthy engine, including the selected custom
+//  preset. Every choice prepares its CLI, so an existing login cannot bypass its update check.
 //  Joins shared Codex preparation at launch; browsing tabs never changes the saved engine.
 //  Doc: Views/Onboarding/Documentation - Onboarding.md
 //
@@ -41,11 +41,11 @@ struct OnboardingFrontierModelView: View {
                           preset: CustomProvider.Preset(rawValue: presetRaw) ?? .openRouter)
     }
 
-    /// The one Continue gate: the displayed engine is committed AND healthy. ChatGPT = logged in to codex;
-    /// Claude = logged in to Claude Code; a custom endpoint = configured AND vision-verified
-    /// (a passing Test & Select).
+    /// Claude needs a login; Continue prepares and commits it. Other displayed engines must
+    /// already be committed and healthy, including a passing Test & Select for custom endpoints.
     private var engineReady: Bool {
         _ = visionVerified
+        if tab == .claude { return claude.loggedIn }
         guard tab == activeTab else { return false }
         switch ModelBackend(rawValue: backendRaw) ?? .chatgpt {
         case .custom:  return CustomProvider.current.isUsable
@@ -142,7 +142,7 @@ struct OnboardingFrontierModelView: View {
 
     private func continueWithEngine() {
         guard engineReady, !continuing else { return }
-        let selectedBackend = backendRaw
+        let initialBackend = backendRaw
         let selectedTab = tab
         let attempt = UUID()
         continueStatus = nil
@@ -152,31 +152,34 @@ struct OnboardingFrontierModelView: View {
                 if continueAttempt == attempt { continueAttempt = nil; continueTask = nil }
             }
             let prepared: Bool
-            if selectedBackend == ModelBackend.claude.rawValue {
+            if selectedTab == .claude {
                 prepared = await claude.ensureCurrent()
             } else {
                 prepared = await codex.ensureCurrent()
             }
             guard !Task.isCancelled, continueAttempt == attempt,
-                  backendRaw == selectedBackend, tab == selectedTab else { return }
+                  backendRaw == initialBackend, tab == selectedTab else { return }
             guard prepared else {
                 continueStatus = selectedTab == .claude
                     ? claude.installStatus ?? "✗ Claude Code couldn't be prepared. Try again."
                     : codex.installStatus ?? "✗ Codex couldn't be prepared. Try again."
                 return
             }
-            if selectedBackend == ModelBackend.claude.rawValue {
+            if selectedTab == .claude {
                 await claude.refreshLoginStatus()
-            } else if selectedBackend == ModelBackend.chatgpt.rawValue {
+            } else if selectedTab == .chatgpt {
                 await codex.refreshLoginStatus()
             }
             // The user can browse or select another engine while preparation is in flight.
             guard !Task.isCancelled, continueAttempt == attempt,
-                  backendRaw == selectedBackend, tab == selectedTab else { return }
+                  backendRaw == initialBackend, tab == selectedTab else { return }
             guard engineReady else {
                 continueStatus = "✗ Sign in to your selected provider, then try Continue again."
                 return
             }
+            // Commit only after preparation and a fresh login check succeed, immediately
+            // before navigation so the next step sees the selected provider.
+            if selectedTab == .claude { backendRaw = ModelBackend.claude.rawValue }
             onContinue()
         }
     }

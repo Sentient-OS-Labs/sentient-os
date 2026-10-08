@@ -97,10 +97,11 @@ import Foundation
     var continueTask: Task<Void, Never>?
     var continueStatus: String?
     var advances = 0
+    var advancedBackend: String?
     var ready: Bool { engineReady }
     func tapContinue() { continueWithEngine() }
     func disappear() { cancelContinue() }
-    func onContinue() { advances += 1 }
+    func onContinue() { advances += 1; advancedBackend = backendRaw }
 __METHODS__
 }
 
@@ -125,8 +126,8 @@ __METHODS__
         await initial.continueTask?.value
         check(initial.advances == 1 && initial.codex.preparationCalls == 1, "Default Continue did not advance exactly once")
 
-        // All five displayed choices have distinct active identities. A prior
-        // healthy provider may never authorize a different visible panel.
+        // Claude can be committed by Continue once signed in. Other choices
+        // still require their own active identity, including custom presets.
         let states: [(ModelBackend, CustomProvider.Preset, FrontierEngineTab)] = [
             (.chatgpt, .openRouter, .chatgpt), (.claude, .openRouter, .claude),
             (.custom, .openRouter, .openRouter), (.custom, .lmStudio, .lmStudio),
@@ -137,7 +138,7 @@ __METHODS__
             for visible in FrontierEngineTab.allCases {
                 let flow = OnboardingFixture()
                 flow.backendRaw = backend.rawValue; flow.presetRaw = preset.rawValue; flow.tab = visible
-                check(flow.ready == (visible == expected), "A different visible provider was authorized")
+                check(flow.ready == (visible == .claude || visible == expected), "Wrong readiness for visible provider")
             }
         }
 
@@ -160,6 +161,74 @@ __METHODS__
         claudeFlow.tapContinue(); await claudeFlow.continueTask?.value
         check(claudeFlow.advances == 1 && claudeFlow.claude.preparationCalls == 1, "Committed Claude did not advance")
         check(claudeFlow.claude.loginChecks == 1 && claudeFlow.codex.preparationCalls == 0, "Claude prepared the wrong login")
+
+        // Existing Claude login: browsing preserves the saved engine; one Continue
+        // prepares Claude, verifies its login, then commits it before navigation.
+        for (backend, preset, _) in states {
+            let selection = OnboardingFixture()
+            selection.backendRaw = backend.rawValue; selection.presetRaw = preset.rawValue
+            selection.codex.loggedIn = false
+            selection.tab = .claude
+            check(selection.ready && selection.backendRaw == backend.rawValue, "Browsing Claude changed the engine or required Use Claude")
+            let prepareGate = Gate(); let loginGate = Gate()
+            selection.claude.prepare = { await prepareGate.wait(); return true }
+            selection.claude.refresh = { await loginGate.wait() }
+            selection.tapContinue(); selection.tapContinue()
+            let pending = selection.continueTask!
+            await waitFor(prepareGate)
+            check(selection.backendRaw == backend.rawValue && selection.advances == 0, "Claude committed before preparation")
+            prepareGate.release(); await waitFor(loginGate)
+            check(selection.backendRaw == backend.rawValue && selection.advances == 0, "Claude committed before login validation")
+            loginGate.release(); await pending.value
+            check(selection.advances == 1 && selection.advancedBackend == "claude", "Continue did not commit Claude before advancing once")
+            check(selection.claude.preparationCalls == 1 && selection.claude.loginChecks == 1 && selection.codex.preparationCalls == 0,
+                  "Claude Continue prepared the wrong provider or ran twice")
+        }
+
+        for expires in [false, true] {
+            let selection = OnboardingFixture()
+            selection.tab = .claude
+            selection.claude.prepare = { expires }
+            selection.claude.refresh = { selection.claude.loggedIn = false }
+            selection.tapContinue(); await selection.continueTask?.value
+            check(selection.backendRaw == "chatgpt" && selection.advances == 0 && selection.continueAttempt == nil,
+                  "Failed Claude selection changed the engine or advanced")
+            check(selection.continueStatus != nil, "Claude selection failed silently")
+            selection.claude.prepare = { true }
+            selection.claude.refresh = {}
+            selection.claude.loggedIn = true
+            selection.tapContinue(); await selection.continueTask?.value
+            check(selection.advances == 1 && selection.advancedBackend == "claude", "Claude selection retry did not recover")
+        }
+
+        let loggedOutClaude = OnboardingFixture()
+        loggedOutClaude.tab = .claude; loggedOutClaude.claude.loggedIn = false
+        loggedOutClaude.tapContinue()
+        check(!loggedOutClaude.ready && loggedOutClaude.continueTask == nil, "Saved ChatGPT login authorized logged-out Claude")
+
+        // A stale Claude continuation must never overwrite a newer choice, even
+        // before SwiftUI delivers the change callback, or after leaving the step.
+        for duringLogin in [false, true] {
+            for observe in [false, true] {
+                for change in ["tab", "backend", "leave"] {
+                    let selection = OnboardingFixture()
+                    selection.tab = .claude; selection.observesChanges = observe
+                    let gate = Gate()
+                    if duringLogin { selection.claude.refresh = { await gate.wait() } }
+                    else { selection.claude.prepare = { await gate.wait(); return true } }
+                    selection.tapContinue(); let pending = selection.continueTask!
+                    await waitFor(gate)
+                    switch change {
+                    case "tab": selection.tab = .chatgpt
+                    case "backend": selection.backendRaw = "custom"
+                    default: selection.disappear()
+                    }
+                    let savedBackend = selection.backendRaw
+                    gate.release(); await pending.value
+                    check(selection.advances == 0 && selection.backendRaw == savedBackend, "Stale Claude Continue committed or navigated")
+                }
+            }
+        }
         for backend in [ModelBackend.chatgpt, .claude] {
             let loggedOut = OnboardingFixture()
             loggedOut.backendRaw = backend.rawValue

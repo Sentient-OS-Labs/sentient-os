@@ -223,7 +223,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
         .onDisappear { claudePreparationTask?.cancel() }
     }
 
-    /// The Claude state machine: signed in (plan named, Use Claude or the live line) → browser
+    /// The Claude state machine: signed in (Use Claude in Settings; onboarding uses Continue) → browser
     /// out → install failed → the sign-in CTA (which lazily installs the CLI first).
     @ViewBuilder private var claudeStates: some View {
         if claude.loggedIn {
@@ -231,7 +231,7 @@ struct FrontierEnginePicker<ChatGPTPanel: View>: View {
                                ?? "Signed in to Claude Code")
             if backend == .claude {
                 FrontierActiveLine("Sentient is running on your Claude.")
-            } else {
+            } else if layout == .settingsGrid {
                 SettingsPillButton(title: "Use Claude") {
                     prepareClaude(signIn: false)
                 }
