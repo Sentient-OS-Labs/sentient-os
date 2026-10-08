@@ -30,7 +30,7 @@ nonisolated enum AgentStatus {
             let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed.uppercased().hasPrefix("COULD NOT") {
                 return .couldNot(reason: String(String(trimmed.dropFirst("COULD NOT".count))
-                    .trimmingCharacters(in: trimSet).prefix(300)))
+                    .trimmingCharacters(in: trimSet)))
             }
         }
         return parsed
@@ -41,7 +41,7 @@ nonisolated enum AgentStatus {
     /// The display-ready text after the marker on a `STATUS: COULD_NOT — <reason>` line.
     private static func reason(of line: String) -> String {
         guard let r = line.range(of: "COULD_NOT", options: [.backwards, .caseInsensitive]) else { return "" }
-        return String(String(line[r.upperBound...]).trimmingCharacters(in: trimSet).prefix(300))
+        return String(line[r.upperBound...]).trimmingCharacters(in: trimSet)
     }
 
     /// Strips the sentinel's separators/backticks around the reason (em/en dashes, colons, ticks).

@@ -80,7 +80,9 @@ actor ProactiveExecutor {
     func fire(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
         // trigger=card: every codex call under a card fire reports it (task-local, inherited).
         await ModelBackend.$runOverride.withValue(ModelBackend.current) {
-            await CodexTrigger.$current.withValue(.card) { await fireBody(action, progress: progress) }
+            await CodexTrigger.$current.withValue(.card) {
+                await Diagnostics.withOperation("proactive_action") { await fireBody(action, progress: progress) }
+            }
         }
     }
 
@@ -135,7 +137,7 @@ actor ProactiveExecutor {
         if !stopped {
             ExecutorScoreboard.record(method: channel, source: "proactive_card",
                 outcome: r.board, durationS: Date().timeIntervalSince(t0),
-                statusPresent: r.statusPresent, errorClass: r.errorClass)
+                statusPresent: r.statusPresent, errorClass: r.errorClass, error: r.error)
         }
         // The single most important number: a user fired a real action — which channel, did it land.
         // Core tier — the proactive-click count is always-on telemetry (disclosed in Settings).
@@ -191,6 +193,7 @@ actor ProactiveExecutor {
         let board: ExecutorScoreboard.Outcome
         let statusPresent: Bool
         let errorClass: String?
+        var error: Error? = nil
         static func notFireable(_ m: String) -> FireResult {
             FireResult(outcome: .notFireable(m), board: .notFireable, statusPresent: true, errorClass: nil)
         }
@@ -298,7 +301,7 @@ actor ProactiveExecutor {
         } catch {
             Log("ProactiveExecutor/\(channel): ✗ \(ErrorLabel(error))")
             return FireResult(outcome: .failed(describe(error)), board: .failed, statusPresent: true,
-                              errorClass: String(describing: type(of: error)))
+                              errorClass: String(describing: type(of: error)), error: error)
         }
     }
 
@@ -310,7 +313,8 @@ actor ProactiveExecutor {
         progress("Working on your Mac…")
         Log("ProactiveExecutor/computer: firing one computer-use task via codex (runAgentCommand)…")
         do {
-            let out = try await FrontierRun.runAgentCommand(Self.computerWrapper(routing: routing, content: content),
+            let prompt = Self.computerWrapper(routing: routing, content: content)
+            let out = try await FrontierRun.runAgentCommand(prompt,
                                                                 timeout: 900) { line in progress(line) }
             let lines = out.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let final = lines.last ?? "Done on your Mac."
@@ -325,7 +329,7 @@ actor ProactiveExecutor {
         } catch {
             Log("ProactiveExecutor/computer: ✗ \(ErrorLabel(error))")
             return FireResult(outcome: .failed(describe(error)), board: .failed, statusPresent: true,
-                              errorClass: String(describing: type(of: error)))
+                              errorClass: String(describing: type(of: error)), error: error)
         }
     }
 
@@ -430,9 +434,8 @@ actor ProactiveExecutor {
         Use the shell only if the runtime instructions explicitly document a tool command for it. \
         Never use AppleScript, \
         osascript, `open`, `screencapture`, or any other GUI-scripting shortcut, no unrelated \
-        commands, and do not touch unrelated apps or files. You cannot ask the user follow-up \
-        questions — the moment you stop responding, the attempt is over. If you cannot complete the \
-        task with computer use, STOP and reply with `STATUS: COULD_NOT — <reason>`.
+        commands, and do not touch unrelated apps or files. If you need help, use the Sidekick \
+        recovery question tool when available. If you cannot complete the task or ask for help, STOP and reply with `STATUS: COULD_NOT — <reason>`.
 
         \(servicesLine)<<<CONTENT
         \(content)

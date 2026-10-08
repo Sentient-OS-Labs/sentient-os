@@ -350,13 +350,20 @@ struct ProcessingView: View {
                             .blur(radius: verdict == .sensitive && progress.lastSummary != nil ? 6 : 0)
                     }
                     if let path = progress.lastPath {
-                        Text(path)
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.3))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: 340, alignment: .leading)
-                            .padding(.top, 2)
+                        HStack(alignment: .firstTextBaseline, spacing: 12) {
+                            Text(path)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            if let date = progress.lastItemDate {
+                                Spacer(minLength: 0)
+                                Text(date, format: .dateTime.month(.abbreviated).day().year())
+                                    .fixedSize()
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.3))
+                        .frame(maxWidth: 340, alignment: .leading)
+                        .padding(.top, 2)
                     }
                 }
                 .id(progress.done)
@@ -549,7 +556,10 @@ struct ProcessingView: View {
             Text(Self.failBody(kind: kind, message: message)).font(.caption).foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             HStack(spacing: 12) {
-                Button("Back", action: onExitEarly ?? onDone).buttonStyle(.bordered).tint(.white)
+                Button(action: onExitEarly ?? onDone) {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(BackButtonStyle())
                 if kind == .loggedOut {
                     Button("Retry") { Task { started = false; await startIfNeeded() } }
                         .buttonStyle(.bordered).tint(.white)
@@ -857,6 +867,7 @@ struct ProcessingView: View {
                 p.total = baseTotal + total
                 p.lastPrompt = prompt
                 p.lastPath = "Gmail · \(label)"
+                p.lastItemDate = nil
                 box.value = p
                 yield(p)
             case let .windowDone(total, label, summary, threads, completed, keptSoFar):
@@ -870,6 +881,7 @@ struct ProcessingView: View {
                 p.lastVerdict = summary == nil ? .junk : .survivor
                 p.lastFilePath = nil
                 p.lastPath    = "Gmail · \(label)" + (threads > 0 ? " · \(threads) threads" : "")
+                p.lastItemDate = nil
                 p.lastSeconds = nil
                 box.value = p
                 yield(p)
@@ -888,7 +900,9 @@ struct ProcessingView: View {
                 return base
             }
             var p = box.value
+            Diagnostics.report(.sourceReadFailed, phase: .read, reason: "hosted_source", error: error, source: "gmail")
             p.lastTitle = "Gmail failed"
+            p.lastItemDate = nil
             p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             p.lastVerdict = .junk
             p.lastFilePath = nil
@@ -913,6 +927,7 @@ struct ProcessingView: View {
                 p.done  = baseDone + (step - 1)
                 p.lastPrompt = prompt
                 p.lastPath = "Calendar · \(label)"
+                p.lastItemDate = nil
                 box.value = p
                 yield(p)
             case let .windowDone(step, total, label, summary, events, keptSoFar):
@@ -926,6 +941,7 @@ struct ProcessingView: View {
                 p.lastVerdict = summary == nil ? .junk : .survivor
                 p.lastFilePath = nil
                 p.lastPath    = "Calendar · \(label)" + (events > 0 ? " · \(events) events" : "")
+                p.lastItemDate = nil
                 p.lastSeconds = nil
                 box.value = p
                 yield(p)
@@ -943,7 +959,9 @@ struct ProcessingView: View {
                 return base
             }
             var p = box.value
+            Diagnostics.report(.sourceReadFailed, phase: .read, reason: "hosted_source", error: error, source: "google-calendar")
             p.lastTitle = "Calendar failed"
+            p.lastItemDate = nil
             p.lastSummary = (error as? LocalizedError)?.errorDescription ?? "\(error)"
             p.lastVerdict = .junk
             p.lastFilePath = nil
@@ -1020,6 +1038,21 @@ private nonisolated final class ProgressBox: @unchecked Sendable {
 /// actual pipeline on appear, so this factory pre-sets `started` — `startIfNeeded()` no-ops and
 /// the REAL layout renders with nothing running.
 extension ProcessingView {
+    static func appleMailPreview() -> ProcessingView {
+        var view = ProcessingView(modelPath: "", connectors: [], mode: .auto, pausable: true, onDone: {})
+        view._started = State(initialValue: true)
+        view._state = State(initialValue: .processing)
+        var progress = RunProgress()
+        progress.total = 600; progress.done = 63; progress.junk = 63
+        progress.lastPath = "Apple Mail"
+        progress.lastItemDate = ISO8601DateFormatter().date(from: "2026-09-06T12:00:00Z")
+        progress.lastTitle = "Weekly reading digest"
+        progress.lastSummary = "A roundup of articles and product updates for this week."
+        progress.lastVerdict = .junk; progress.lastSeconds = 3.2
+        view._progress = State(initialValue: progress)
+        return view
+    }
+
     static func connectorPreview(_ status: String) -> ProcessingView {
         var view = ProcessingView(modelPath: "", connectors: [], mode: .auto, mcpSlugs: ["fixture"], onDone: {})
         view._started = State(initialValue: true)
@@ -1071,5 +1104,8 @@ extension ProcessingView {
 #Preview("Preparing — cloud tail") {
     ProcessingView.preparingPreview()
         .frame(width: 1160, height: 780)
+}
+#Preview("Apple Mail message date") {
+    ProcessingView.appleMailPreview().frame(width: 1040, height: 800)
 }
 #endif

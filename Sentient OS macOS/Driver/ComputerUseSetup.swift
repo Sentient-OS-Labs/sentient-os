@@ -50,12 +50,11 @@ final class ComputerUseSetup {
     private(set) var status: String?
     private(set) var failure: Error?
     private var lastInstallSucceeded = false
-    private var verificationFailed = false
 
     /// Cheap re-detect — call on appear and after a setup.
     func refresh() {
         guard !isInstalling else { return }
-        ready = backend.isInstalled && !verificationFailed
+        ready = backend.isInstalled
     }
 
     enum UpdateNotice: Equatable { case hidden, updating, failed, ready }
@@ -104,6 +103,9 @@ final class ComputerUseSetup {
             defer {
                 isInstalling = false
                 installTask = nil
+                // Warm the local helper after installation, even when health/upgrade checks
+                // are deferred by migration. This never requests consent or contacts a model.
+                if lastInstallSucceeded, backend == .current { ComputerUseGate.shared.refresh() }
             }
             do {
                 try await installDependency(force: force, onProgress: { [weak self] progress in
@@ -122,7 +124,6 @@ final class ComputerUseSetup {
                         self?.status = line
                     }
                 }
-                verificationFailed = false
                 ready = true
                 lastInstallSucceeded = true
                 status = backend == .openAI ? "✓ Computer use installed" : "✓ Computer use ready"
@@ -131,7 +132,7 @@ final class ComputerUseSetup {
                 return true
             } catch {
                 failure = error
-                ready = backend.isInstalled && !verificationFailed
+                ready = backend.isInstalled
                 status = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
                 if updateNotice == .updating { updateNotice = .failed }
                 if !Task.isCancelled { recordFailure(error) }
@@ -144,26 +145,15 @@ final class ComputerUseSetup {
     /// The install's own network deadline is authoritative; a slow connection must not hit the
     /// former two-minute waiter ceiling while the same download legitimately continues.
     @discardableResult
-    func ensureInstalled(nativeConfiguration: OpenAIComputerUse.Configuration? = nil) async -> Bool {
+    func ensureInstalled() async -> Bool {
         if backend == .openAI, await !CodexSetup.shared.ensureComputerUseCLI() {
             failure = OpenAIComputerUse.RuntimeError.cliUnavailable
             status = "Computer use needs Codex CLI. Prepare it in Permissions & Health."
             return false
         }
         if !isInstalling, backend.isInstalled {
-            if backend == .openAI {
-                do { try await OpenAIComputerUse.validate(at: OpenAIComputerUse.appURL, configuration: nativeConfiguration) }
-                catch {
-                    if !Task.isCancelled {
-                        failure = error
-                        verificationFailed = (error as? OpenAIComputerUse.RuntimeError) != .cliUnavailable
-                        ready = false
-                        status = "✗ " + error.localizedDescription
-                    }
-                    return false
-                }
-            }
-            verificationFailed = false
+            // Runtime.start verifies the selected bundle under its runtime lease, once for
+            // all callers sharing that startup. Do not also initialize an MCP client here.
             failure = nil
             ready = true
             return !Task.isCancelled
@@ -201,8 +191,17 @@ final class ComputerUseSetup {
     }
 
     private func recordFailure(_ error: Error) {
+        guard !Diagnostics.isExpected(error) else { return }
+        let phase: String
+        switch progress {
+        case .downloading: phase = "download"
+        case .verifying, .checkingSignature, .checkingVersion: phase = "verify"
+        case .unpacking: phase = "unpack"
+        case .installing: phase = "install"
+        default: phase = "setup"
+        }
         CrashReporting.captureEvent("computer_use.setup_failed", level: .warning,
-            tags: ["runtime": backend.rawValue, "error": String(describing: type(of: error))],
-            fingerprint: ["computer_use", "setup_failed", backend.rawValue])
+            tags: Diagnostics.errorFields(error).merging(["runtime": backend.rawValue, "phase": phase, "dependency_version": backend == .cua ? CuaDriver.version : CodexRuntime.release.helper.version]) { _, new in new },
+            fingerprint: ["computer_use", "setup_failed", backend.rawValue, Diagnostics.errorFields(error)["error_case"] ?? Diagnostics.errorFields(error)["error_code"] ?? "unknown"])
     }
 }

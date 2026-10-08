@@ -15,18 +15,22 @@ import SwiftUI
 
 struct FrontierModelPane: View {
 
+    @State private var tab: FrontierEngineTab = .chatgpt
+
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
 
     private var backend: ModelBackend { ModelBackend(rawValue: backendRaw) ?? .chatgpt }
 
     var body: some View {
         SettingsPane(title: "Frontier Model Choice",
-                     whisper: PrivacyCopy.frontierSummary) {
+                     whisper: "Choose the AI behind your knowledge, suggestions, and Sidekick.") {
             VStack(alignment: .leading, spacing: 26) {
-                SettingsProse(PrivacyCopy.frontierDetail)
-
-                FrontierEnginePicker {
+                FrontierEnginePicker(tab: $tab) {
                     chatgptPanel
+                }
+                SettingsDetails(title: "How your models work together") {
+                    SettingsProse(PrivacyCopy.frontierDetail)
+                    SettingsProse(PrivacyCopy.customProvider)
                 }
             }
         }
@@ -35,12 +39,17 @@ struct FrontierModelPane: View {
     // MARK: - ChatGPT (Settings' own panel — login honesty lives in Permissions & Health)
 
     private var chatgptPanel: some View {
-        SettingsGroup(label: "Your ChatGPT") {
+        SettingsGroup(label: "ChatGPT") {
             VStack(alignment: .leading, spacing: 14) {
-                SettingsProse("Codex runs on your own ChatGPT subscription, so a plan you already pay for powers everything: knowledge base, morning cards, Sidekick, and the Gmail and Calendar connectors. Recommended, and the most battle-tested engine.")
+                SettingsProse("Use your ChatGPT subscription for knowledge, morning suggestions, and Sidekick.")
                 if backend == .chatgpt {
-                    FrontierActiveLine("Sentient is running on your ChatGPT.")
-                    SettingsProse("Login and plan live in Permissions & Health.")
+                    HStack {
+                        FrontierActiveLine("Using ChatGPT")
+                        Spacer()
+                        SettingsPillButton(title: "Manage account") {
+                            MainNavigation.shared.show(.settings, settingsPane: .health)
+                        }
+                    }
                 } else {
                     SettingsPillButton(title: "Use ChatGPT") {
                         backendRaw = ModelBackend.chatgpt.rawValue

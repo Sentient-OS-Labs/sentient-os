@@ -62,7 +62,7 @@ enum OutlookCalendarCurationTests {
         check(projected.map(\.slug) == ["outlook-mail", slug], "one suite produces two logical services")
         check(ConnectorCensus.logicalServices(projected + [suite]) == projected, "repeated projection is idempotent")
         domain["mcp.connectors.claude"] = try! JSONEncoder().encode([suite])
-        let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.bundled." + $0 } ?? "mcp.connectors.chatgpt"
+        let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.\(CodexRuntime.sessionScope)." + $0 } ?? "mcp.connectors.chatgpt"
         domain[codexKey] = try! JSONEncoder().encode([
             ConnectorCensus.DetectedConnector(slug: slug, displayName: "Outlook Calendar", origin: .chatgpt,
                 serverURL: nil, catalogID: "connector_e6a7394682e24467ac68c60696f275a4", iconPath: nil, healthy: true, lastSeen: Date()),

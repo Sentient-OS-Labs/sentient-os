@@ -147,6 +147,7 @@ enum GoogleSourceRead {
         for attempt in 1...2 {
             try Task.checkCancellation()
             let result = try await FrontierRun.run(request)
+            var diagnosticPhase: Diagnostics.Phase = .parse
             do {
                 try ConnectorReadFailure.validate(result, slug: slug)
                 if let data = result.jsonResult.data(using: .utf8),
@@ -155,10 +156,15 @@ enum GoogleSourceRead {
                     throw MCPSource.MCPError.toolFailure(slug: slug)
                 }
                 let summary = try parse(result.result, countKey: countKey, cap: cap)
+                diagnosticPhase = .validate
                 try validateDiscovery(result, slug: slug, calendarWindow: calendarWindow)
                 return summary
             } catch Failure.invalidResponse {
-                if attempt == 2 { throw Failure.invalidResponse }
+                if attempt == 2 {
+                    Diagnostics.report(.modelOutputInvalid, phase: diagnosticPhase, reason: "google_response", source: slug,
+                                       counts: [.bytes: result.result.utf8.count, .retries: attempt - 1], flags: [.previousStateRetained: true])
+                    throw Failure.invalidResponse
+                }
                 Log("Google source read: incomplete result; retrying once")
                 request.prompt += "\nThe previous attempt had invalid output or no successful discovery receipt. Wait for the connector if necessary, then perform the actual bounded search. Return all required fields with their exact types. Never invent an empty result when tools are unavailable."
             }
@@ -166,11 +172,16 @@ enum GoogleSourceRead {
         throw Failure.invalidResponse
     }
 
-    static func commit(bucket: String, notes: [NoteDraft], through date: Date, replace: Bool = false) async throws {
+    /// Keep the connection generation captured before reading. Opening provider settings may
+    /// invalidate it during a read or while the store actor is busy; neither may consume the
+    /// new generation's backfill by stamping an older read with the latest origin.
+    static func commit(bucket: String, notes: [NoteDraft], through date: Date,
+                       origin expectedOrigin: String, replace: Bool = false) async throws {
         try Task.checkCancellation()
+        guard origin(bucket: bucket) == expectedOrigin else { throw MCPSource.MCPError.connectionChanged }
         let result = await CycleStore.shared.commitMCPRead(bucketKey: bucket, notes: notes,
             through: ItemKey(order: date.timeIntervalSince1970, tiebreak: ""),
-            origin: origin(bucket: bucket), replaceNotes: replace)
+            origin: expectedOrigin, replaceNotes: replace)
         if result == .diskFull { throw CocoaError(.fileWriteOutOfSpace) }
         guard result == .saved else { throw Failure.storage }
     }

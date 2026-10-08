@@ -72,19 +72,19 @@ enum CommandRouter {
     /// Route one command. Never throws and never stalls the run: ANY failure — a router error,
     /// a timeout, an unparseable or unlisted answer — is `.computer`. Duration is always
     /// measured and logged; the command text itself is never logged in Release.
-    static func route(_ command: String, cardContext: String = "") async -> Route {
+    static func route(_ command: String, cardContext: String = "", standingInstructions: String = "") async -> Route {
         guard isActive else {
             Log("router: skipped (no connectors)")
             return .computer
         }
-        return await route(command, services: routableServices(), cardContext: cardContext)
+        return await route(command, services: routableServices(), cardContext: cardContext, standingInstructions: standingInstructions)
     }
 
     /// The same router with explicit services lets the lab test account ambiguity without
     /// disclosing any connected account's labels or content.
-    static func route(_ command: String, services: [Service], cardContext: String = "") async -> Route {
+    static func route(_ command: String, services: [Service], cardContext: String = "", standingInstructions: String = "") async -> Route {
         let t0 = Date()
-        var inv = CodexCLI.Invocation(prompt: prompt(command: command, services: services, cardContext: cardContext))
+        var inv = CodexCLI.Invocation(prompt: prompt(command: command, services: services, cardContext: cardContext, standingInstructions: standingInstructions))
         inv.model = .gpt6luna          // → haiku on the Claude tier map
         inv.effort = .low
         inv.sandbox = .readOnly
@@ -175,7 +175,7 @@ enum CommandRouter {
 
     // MARK: The prompt (tune ONLY against the lab's routereval)
 
-    private static func prompt(command: String, services: [Service], cardContext: String = "") -> String {
+    private static func prompt(command: String, services: [Service], cardContext: String = "", standingInstructions: String = "") -> String {
         let list = services.map {
             $0.description.isEmpty ? "- \($0.slug): \($0.name)"
                                    : "- \($0.slug): \($0.name) (\($0.description))"
@@ -187,6 +187,7 @@ enum CommandRouter {
         THE COMMAND (spoken or typed by the user just now):
         \(command)
         \(cardContext.isEmpty ? "" : "\n\(cardContext)\n")
+        \(standingInstructions)
 
         THE TWO ROUTES:
         - "connector": the ENTIRE task can be completed with one connected service's

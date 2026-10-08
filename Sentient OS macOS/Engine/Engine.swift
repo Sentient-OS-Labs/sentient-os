@@ -68,6 +68,8 @@ actor Engine {
 
     /// Loads the model and initializes the native engine. Expensive (~10s) — do it once per batch.
     func load() async throws {
+        let diagnosticWatchdog = Diagnostics.Watchdog(phase: .load, seconds: 300)
+        defer { diagnosticWatchdog.finish() }
         guard FileManager.default.fileExists(atPath: modelPath) else {
             throw EngineError.modelNotFound(modelPath)
         }
@@ -112,6 +114,8 @@ actor Engine {
 
     /// One stateless generation: fresh Conversation, optional image + prompt → text.
     func generate(prompt: String, imageData: Data? = nil) async throws -> Result {
+        let diagnosticWatchdog = Diagnostics.Watchdog(phase: .generate, seconds: 300)
+        defer { diagnosticWatchdog.finish() }
         guard let native else { throw EngineError.notLoaded }
 
         // Low temperature (0.15) → near-deterministic, reliable JSON + faithful instruction-following

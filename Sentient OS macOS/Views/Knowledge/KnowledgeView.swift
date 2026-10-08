@@ -2,15 +2,14 @@
 //  KnowledgeView.swift
 //  Sentient OS macOS
 //
-//  The Knowledge window — a minimal Obsidian-style reader / editor / manager over the real markdown
+//  The Knowledge page — a minimal Obsidian-style reader / editor / manager over the real markdown
 //  vault (~/Sentient OS - Knowledge Base/). Two-pane split: a folder tree (pinned "Overview" = the
 //  root README, search, disclosure folders; create via the header "+", a folder-hover "+", or
 //  right-click) and a rendered-markdown reader on the right. [[Wikilinks]] jump between notes (Back walks the trail);
-//  the titlebar carries Edit / Delete (→ Trash) / Reveal in Finder. Every edit/create/delete commits
+//  the page header carries Home / Edit / Delete (→ Trash) / Reveal in Finder. Every edit/create/delete commits
 //  locally and DEBOUNCE-syncs to the cloud MCP (VaultActivity.markChanged → the sidebar status line).
-//  The window OPENS in the "Constellation View" graph (Graph/NightSkyView.swift — the default);
-//  native SkyDoor toolbar buttons swap between it and the reader (sky: top-center · reader:
-//  top-left; ⌘⇧G). Click a star to read that note; Back (or Esc) returns to the sky where you left it.
+//  The page opens in the "Constellation View" graph (Graph/NightSkyView.swift — the default);
+//  SkyDoor buttons in its header swap between it and the reader (⌘⇧G). Click a star to read that note; Back (or Esc) returns to the sky where you left it.
 //
 //  Replaced the old DatabaseView (a dev CycleStore-summaries inspector, still in Dev Tools via
 //  SummariesView). Data: VaultTree.swift · rendering: MarkdownView.swift.
@@ -21,15 +20,14 @@ import SwiftUI
 import AppKit
 
 struct KnowledgeView: View {
-    /// Scene id for the standalone Knowledge window (opened via `openWindow`). Same string the old
-    /// window used, so the app scene + the home's nav item wire up by type name alone.
-    static let windowID = "knowledge"
+    var isPresented = true
 
     @State private var vault: KnowledgeVault?
     @State private var loaded = false
     @State private var selection: URL?
     @State private var expanded: Set<URL> = []
     @State private var search = ""
+    @State private var sidebarVisible = true
 
     // Navigation history (back / forward), so a wikilink jump can be undone.
     @State private var history: [URL] = []
@@ -70,24 +68,37 @@ struct KnowledgeView: View {
     private enum Mode { case reader, sky }
 
     /// A navigation parked behind the unsaved-edits prompt.
-    private enum PendingNav { case open(URL), follow(URL), back, sky }
+    private enum PendingNav { case open(URL), follow(URL), back, sky, leave((Bool) -> Void) }
 
     var body: some View {
         Group {
-            if mode == .sky {
-                skyPane.transition(.opacity)
-            } else {
-                splitView.transition(.opacity)
+            if isPresented {
+                VStack(spacing: 0) {
+                    pageHeader
+                    if mode == .sky {
+                        skyPane
+                    } else {
+                        splitView
+                    }
+                }
+                .frame(minWidth: 900, minHeight: 600)
+                .background(Theme.bg)
             }
         }
-        .frame(minWidth: 900, minHeight: 600)
-        .background(Theme.bg)
-        .background(WindowChrome())   // transparent titlebar from launch (no "grey until resize")
-        .task { await loadVault() }
+        .task(id: isPresented) {
+            guard isPresented else { return }
+            MainNavigation.shared.leaveKnowledge = requestLeave
+            await loadVault()
+        }
+        .onDisappear {
+            cancelPendingNavigation()
+            MainNavigation.shared.leaveKnowledge = nil
+            VaultActivity.shared.editorBusy = false
+        }
         .alert("You have unsaved edits", isPresented: $showDiscardPrompt) {
             Button("Save") { promptSave() }
             Button("Discard", role: .destructive) { promptDiscard() }
-            Button("Cancel", role: .cancel) { pendingNav = nil }
+            Button("Cancel", role: .cancel) { cancelPendingNavigation() }
         } message: {
             Text("Save your changes to this note, or discard them?")
         }
@@ -104,12 +115,10 @@ struct KnowledgeView: View {
 
     /// The reader half: the familiar sidebar + rendered-markdown split.
     private var splitView: some View {
-        NavigationSplitView {
-            sidebar.navigationSplitViewColumnWidth(min: 280, ideal: 320, max: 430)
-        } detail: {
-            reader
+        HSplitView {
+            if sidebarVisible { sidebar.frame(minWidth: 250, idealWidth: 290, maxWidth: 400) }
+            reader.frame(minWidth: 500)
         }
-        .navigationSplitViewStyle(.balanced)
         // Window-open focus lands in the search box, not the sidebar's "+" button. defaultFocus
         // declares it; the delayed onAppear claim backs it up (AppKit assigns the initial key
         // view a beat after SwiftUI's appear — same pattern as PromptBar's launch focus).
@@ -125,10 +134,7 @@ struct KnowledgeView: View {
         NightSkyView(vault: vault, vaultLoaded: loaded, model: skyModel,
                      onOpen: { openFromSky($0) },
                      onExit: { requestMode(.reader) })
-            .toolbar {
-                SkyDoorToolbarItem(icon: "doc.plaintext", label: "Reader View",
-                                   help: "Back to the reader (Esc or ⌘⇧G)") { requestMode(.reader) }
-            }
+
     }
 
     private func loadVault() async {
@@ -137,7 +143,14 @@ struct KnowledgeView: View {
         vault = v
         loaded = true
         mirrorEnabled = await MirrorClient.shared.isEnabled
-        guard selection == nil else { return }
+        // A nightly refresh may replace files while this page is away. Keep the reading place
+        // when it still exists, refresh its content, and recover to Overview when it vanished.
+        if let selection, v?.allNotes.contains(where: { $0.url == selection }) == true || selection == v?.readme {
+            if !editing { note = KnowledgeVault.read(selection) }
+            return
+        }
+        history = []; historyIndex = -1
+        selection = nil; note = nil
         if let r = v?.readme { open(r) }                          // greet with the portrait
         else if let first = v?.allNotes.first { open(first.url) }
     }
@@ -215,6 +228,22 @@ struct KnowledgeView: View {
         backAction()
     }
 
+    private func requestLeave(_ action: @escaping (Bool) -> Void) {
+        if editing && isDirty {
+            cancelPendingNavigation()
+            pendingNav = .leave(action)
+            showDiscardPrompt = true
+        } else {
+            if editing { exitEdit() }
+            action(true)
+        }
+    }
+
+    private func cancelPendingNavigation() {
+        if case .leave(let completion) = pendingNav { completion(false) }
+        pendingNav = nil
+    }
+
     /// Back walks the wikilink trail; with the trail exhausted, it returns to the Night Sky if
     /// that's where this reading trip began.
     private func backAction() {
@@ -229,7 +258,12 @@ struct KnowledgeView: View {
     /// reconstruction). Refreshes whether the cloud mirror is on, so Save knows if it should sync.
     private func beginEdit() {
         guard let url = selection else { return }
-        let raw = (try? String(contentsOf: url, encoding: .utf8)) ?? (note?.markdown ?? "")
+        let raw: String
+        do { raw = try String(contentsOf: url, encoding: .utf8) }
+        catch {
+            Diagnostics.report(.knowledgeFailed, phase: .read, reason: "editor_source", error: error)
+            raw = note?.markdown ?? ""
+        }
         editText = raw; savedText = raw
         editing = true
         VaultActivity.shared.editorBusy = true
@@ -252,7 +286,9 @@ struct KnowledgeView: View {
         do {
             try editText.write(to: url, atomically: true, encoding: .utf8)
         } catch {
+            Diagnostics.report(.knowledgeFailed, phase: .write, reason: "save_note", error: error)
             Log("Knowledge editor: save failed — \(ErrorLabel(error))")
+            cancelPendingNavigation() // also reply “cancel” to an AppKit quit waiting on this save
             return   // stay in edit mode so the user's text isn't lost
         }
         savedText = editText
@@ -278,6 +314,7 @@ struct KnowledgeView: View {
         case .follow(let u): follow(u)
         case .back:          backAction()
         case .sky:           enterSky()
+        case .leave(let action): action(true)
         }
     }
 
@@ -294,6 +331,7 @@ struct KnowledgeView: View {
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
         } catch {
+            Diagnostics.report(.knowledgeFailed, phase: .remove, reason: "trash_item", error: error)
             Log("Knowledge: delete failed — \(ErrorLabel(error))")
             return
         }
@@ -357,6 +395,7 @@ struct KnowledgeView: View {
         do {
             try "# \(title)\n\n".write(to: url, atomically: true, encoding: .utf8)
         } catch {
+            Diagnostics.report(.knowledgeFailed, phase: .create, reason: "create_note", error: error)
             Log("Knowledge: create note failed — \(ErrorLabel(error))")
             return
         }
@@ -372,6 +411,7 @@ struct KnowledgeView: View {
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
         } catch {
+            Diagnostics.report(.knowledgeFailed, phase: .create, reason: "create_folder", error: error)
             Log("Knowledge: create folder failed — \(ErrorLabel(error))")
             return
         }
@@ -565,33 +605,44 @@ struct KnowledgeView: View {
         readerContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.bg)
-            .toolbar {
-                // The actions live in the window's titlebar (no extra row): the glowing
-                // "Constellation View" door leads top-left (mode switches funnel through
-                // requestMode, so unsaved edits are never dropped), Back rides in beside it
-                // after a wikilink jump (or a star click — then it returns to the sky); Edit +
-                // Reveal in Finder sit TOGETHER at the top-right. (One ToolbarItemGroup, not two
-                // ToolbarItems — split-view detail toolbars left-align multiple separate
-                // .primaryAction items; a single group trails correctly.)
-                if vault != nil {
-                    SkyDoorToolbarItem(icon: "sparkles", label: "Constellation View",
-                                       help: "See your knowledge as a galaxy (⌘⇧G)",
-                                       placement: .navigation) { requestMode(.sky) }
+    }
+
+    /// Page chrome stays inside the main canvas, so Knowledge never installs a window toolbar
+    /// that could resize Home or Settings. The note's Back trail remains distinct from Home.
+    private var pageHeader: some View {
+        HStack(spacing: 16) {
+            HomeNavigationButton()
+            Rectangle().fill(.white.opacity(0.12)).frame(width: 1, height: 20)
+            Text("Knowledge").font(.system(size: 18, weight: .medium)).foregroundStyle(.white)
+            if mode == .reader {
+                Button { sidebarVisible.toggle() } label: {
+                    Label(sidebarVisible ? "Hide sidebar" : "Show sidebar", systemImage: "sidebar.left")
                 }
-                if canGoBack || cameFromSky {
-                    ToolbarItem(placement: .navigation) {
-                        Button(action: requestBack) { Label("Back", systemImage: "chevron.left") }
-                            .help(canGoBack ? "Back" : "Back to the Night Sky")
-                    }
-                }
-                if selection != nil {
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        editToolbarItem
-                        if !editing { deleteToolbarButton }
-                        revealToolbarButton
-                    }
-                }
+                .labelStyle(.iconOnly)
+                .help(sidebarVisible ? "Hide sidebar" : "Show sidebar")
+                .keyboardShortcut("s", modifiers: [.command, .control])
             }
+            if mode == .reader, canGoBack || cameFromSky {
+                Button(action: requestBack) { Label("Back", systemImage: "chevron.left") }
+                    .buttonStyle(BackButtonStyle())
+                    .help(canGoBack ? "Previous note" : "Back to the constellation")
+            }
+            Spacer(minLength: 20)
+            SkyDoor(icon: mode == .sky ? "doc.plaintext" : "sparkles",
+                    label: mode == .sky ? "Reader View" : "Constellation View") {
+                requestMode(mode == .sky ? .reader : .sky)
+            }
+            if mode == .reader, selection != nil {
+                editToolbarItem
+                if !editing { deleteToolbarButton }
+                revealToolbarButton
+            }
+        }
+        .buttonStyle(SettingsActionStyle())
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .background(Color(white: 0.035))
+        .overlay(alignment: .bottom) { Rectangle().fill(.white.opacity(0.08)).frame(height: 1) }
     }
 
     /// Move the open note to the macOS Trash (icon-only, between Edit and Reveal — reading mode only).
@@ -921,28 +972,6 @@ private struct ExponentialFade: ViewModifier, Animatable {
 private func rowBackground(selected: Bool, hover: Bool) -> some View {
     RoundedRectangle(cornerRadius: 7, style: .continuous)
         .fill(selected ? Theme.knowledgeAccent.opacity(0.15) : (hover ? Color.white.opacity(0.05) : .clear))
-}
-
-// MARK: - Window chrome
-
-/// Grabs the hosting NSWindow and makes its titlebar transparent (dark, unified with the OLED
-/// content) from launch. Without this, a SwiftUI window with a toolbar renders an opaque GREY
-/// titlebar until the first window resize forces a relayout — this applies the final look up front.
-private struct WindowChrome: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView {
-        let v = NSView()
-        DispatchQueue.main.async { configure(v.window) }
-        return v
-    }
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { configure(nsView.window) }
-    }
-    private func configure(_ window: NSWindow?) {
-        guard let window else { return }
-        window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
-        window.backgroundColor = .black
-    }
 }
 
 #Preview("Knowledge") {

@@ -213,12 +213,19 @@ actor MirrorClient {
     /// The one-click delete — removes the cloud copy (and its access log). The local vault
     /// is untouched. The password is kept so re-enabling reuses the same share URL.
     func deleteRemote() async throws {
-        guard let password = Keychain.read(Self.passwordKey) else { throw MirrorError.notEnabled }
-        var req = URLRequest(url: URL(string: "\(Self.baseURL)/u_\(MirrorCrypto.userID(password))/p_\(password)/vault")!)
-        req.httpMethod = "DELETE"
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try Self.check(resp, data)
-        UserDefaults.standard.removeObject(forKey: Self.lastPushKey)   // no cloud copy → no synced stamp
+        do {
+            guard let password = Keychain.read(Self.passwordKey) else { throw MirrorError.notEnabled }
+            var req = URLRequest(url: URL(string: "\(Self.baseURL)/u_\(MirrorCrypto.userID(password))/p_\(password)/vault")!)
+            req.httpMethod = "DELETE"
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            try Self.check(resp, data)
+            UserDefaults.standard.removeObject(forKey: Self.lastPushKey)   // no cloud copy → no synced stamp
+        } catch {
+            if case MirrorError.notEnabled = error {} else {
+                Diagnostics.report(.mirrorFailed, phase: .remove, reason: "delete_remote", error: error, source: "mirror")
+            }
+            throw error
+        }
     }
 
     /// Opt out: flip mirroring OFF and delete the cloud copy, but KEEP the token so re-enabling
@@ -243,17 +250,27 @@ actor MirrorClient {
         if let old { try? await deleteRemoteFor(password: old) }   // best-effort nuke of the old vault
         Analytics.signal("Mirror.regenerated")
         guard let url = shareURL else { throw MirrorError.keychainWriteFailed }
-        if isEnabled { try? await push() }
+        if isEnabled {
+            do { try await push() }
+            catch { Diagnostics.report(.mirrorFailed, phase: .rotate, reason: "replacement_push", error: error, source: "mirror") }
+        }
         return url
     }
 
     /// DELETE the cloud copy belonging to a SPECIFIC password (used by regenerate to nuke the old
     /// identity after the new one is safely in the Keychain).
     private func deleteRemoteFor(password: String) async throws {
-        var req = URLRequest(url: URL(string: "\(Self.baseURL)/u_\(MirrorCrypto.userID(password))/p_\(password)/vault")!)
-        req.httpMethod = "DELETE"
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        try Self.check(resp, data)
+        do {
+            var req = URLRequest(url: URL(string: "\(Self.baseURL)/u_\(MirrorCrypto.userID(password))/p_\(password)/vault")!)
+            req.httpMethod = "DELETE"
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            try Self.check(resp, data)
+        } catch {
+            if case MirrorError.notEnabled = error {} else {
+                Diagnostics.report(.mirrorFailed, phase: .remove, reason: "retire_previous_identity", error: error, source: "mirror")
+            }
+            throw error
+        }
     }
 
     /// The "your AIs read N notes" numbers for the home screen. nil if not enabled / no vault yet.
@@ -358,11 +375,16 @@ enum Keychain {
         let data = Data(value.utf8)
         let status = SecItemUpdate(identity as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecSuccess { return true }
-        guard status == errSecItemNotFound else { return false }
+        guard status == errSecItemNotFound else {
+            Diagnostics.report(.keychainFailed, phase: .update, counts: [.osStatus: Int(status)])
+            return false
+        }
         var newItem = identity
         newItem[kSecValueData as String] = data
         newItem[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        return SecItemAdd(newItem as CFDictionary, nil) == errSecSuccess
+        let added = SecItemAdd(newItem as CFDictionary, nil)
+        if added != errSecSuccess { Diagnostics.report(.keychainFailed, phase: .create, counts: [.osStatus: Int(added)]) }
+        return added == errSecSuccess
     }
 
     static func read(_ key: String) -> String? {
@@ -374,9 +396,16 @@ enum Keychain {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let data = item as? Data else { return nil }
-        return String(data: data, encoding: .utf8)
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess else {
+            if status != errSecItemNotFound { Diagnostics.report(.keychainFailed, phase: .read, counts: [.osStatus: Int(status)]) }
+            return nil
+        }
+        guard let data = item as? Data, let value = String(data: data, encoding: .utf8) else {
+            Diagnostics.report(.keychainFailed, phase: .read, reason: "invalid_data")
+            return nil
+        }
+        return value
     }
 
     @discardableResult
@@ -386,6 +415,9 @@ enum Keychain {
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ] as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound {
+            Diagnostics.report(.keychainFailed, phase: .remove, counts: [.osStatus: Int(status)])
+        }
         return status == errSecSuccess || status == errSecItemNotFound
     }
 }

@@ -21,55 +21,60 @@ nonisolated enum DirectMCPAuth {
     }
 
     static func discover(_ provider: DirectMCPProvider) async throws -> Discovery {
-        let probe = try await DirectMCPHTTP.request(provider.endpoint, provider: provider, method: "POST",
-            headers: ["Content-Type": "application/json", "Accept": "application/json, text/event-stream"],
-            body: DirectMCPHTTP.json(DirectMCPSession.initializeBody(id: 1)))
-        guard probe.status == 401 else { throw DirectMCPError.unsupportedRegistration }
-        let challenge = try challengeParameters(probe.headers["www-authenticate"] ?? "")
-        var candidates: [URL] = []
-        if let value = challenge["resource_metadata"] {
-            guard let url = URL(string: value) else { throw DirectMCPError.invalidMetadata }
-            candidates = [url]
-        } else {
-            var c = URLComponents(url: provider.endpoint, resolvingAgainstBaseURL: false)!
-            c.query = nil
-            let path = c.path
-            c.path = "/.well-known/oauth-protected-resource" + (path == "/" ? "" : path)
-            if let url = c.url { candidates.append(url) }
-            c.path = "/.well-known/oauth-protected-resource"
-            if let url = c.url, !candidates.contains(url) { candidates.append(url) }
-        }
-        let resourceMetadata = try await firstMetadata(candidates, provider: provider)
-        guard let resourceString = resourceMetadata["resource"] as? String, let resource = URL(string: resourceString),
-              resource.query == nil,
-              resource.host == provider.endpoint.host,
-              resource.port == provider.endpoint.port,
-              provider.endpoint.path == resource.path || provider.endpoint.path.hasPrefix(resource.path.hasSuffix("/") ? resource.path : resource.path + "/") || resource.path.isEmpty,
-              let issuers = resourceMetadata["authorization_servers"] as? [String], !issuers.isEmpty,
-              let issuer = URL(string: issuers[0]), issuer.query == nil else { throw DirectMCPError.invalidMetadata }
-        try provider.validate(resource)
-        try provider.validate(issuer)
-        let metadata = try await firstMetadata(metadataURLs(issuer), provider: provider)
-        guard metadata["issuer"] as? String == issuer.absoluteString,
-              (metadata["code_challenge_methods_supported"] as? [String])?.contains("S256") == true,
-              (metadata["token_endpoint_auth_methods_supported"] as? [String])?.contains("none") == true else {
-            throw DirectMCPError.invalidMetadata
-        }
-        func endpoint(_ key: String, required: Bool = true) throws -> URL? {
-            guard let value = metadata[key] as? String, let url = URL(string: value) else {
-                if required { throw DirectMCPError.invalidMetadata }; return nil
+        return try await Diagnostics.withOperation("direct_connection") {
+            try await Diagnostics.boundary(.connectorFailed, phase: .discovery, reason: "connection_phase", source: "direct_connector") {
+                Diagnostics.step(.discovery, source: "direct_connector")
+                let probe = try await DirectMCPHTTP.request(provider.endpoint, provider: provider, method: "POST",
+                    headers: ["Content-Type": "application/json", "Accept": "application/json, text/event-stream"],
+                    body: DirectMCPHTTP.json(DirectMCPSession.initializeBody(id: 1)))
+                guard probe.status == 401 else { throw DirectMCPError.unsupportedRegistration }
+                let challenge = try challengeParameters(probe.headers["www-authenticate"] ?? "")
+                var candidates: [URL] = []
+                if let value = challenge["resource_metadata"] {
+                    guard let url = URL(string: value) else { throw DirectMCPError.invalidMetadata }
+                    candidates = [url]
+                } else {
+                    var c = URLComponents(url: provider.endpoint, resolvingAgainstBaseURL: false)!
+                    c.query = nil
+                    let path = c.path
+                    c.path = "/.well-known/oauth-protected-resource" + (path == "/" ? "" : path)
+                    if let url = c.url { candidates.append(url) }
+                    c.path = "/.well-known/oauth-protected-resource"
+                    if let url = c.url, !candidates.contains(url) { candidates.append(url) }
+                }
+                let resourceMetadata = try await firstMetadata(candidates, provider: provider)
+                guard let resourceString = resourceMetadata["resource"] as? String, let resource = URL(string: resourceString),
+                      resource.query == nil,
+                      resource.host == provider.endpoint.host,
+                      resource.port == provider.endpoint.port,
+                      provider.endpoint.path == resource.path || provider.endpoint.path.hasPrefix(resource.path.hasSuffix("/") ? resource.path : resource.path + "/") || resource.path.isEmpty,
+                      let issuers = resourceMetadata["authorization_servers"] as? [String], !issuers.isEmpty,
+                      let issuer = URL(string: issuers[0]), issuer.query == nil else { throw DirectMCPError.invalidMetadata }
+                try provider.validate(resource)
+                try provider.validate(issuer)
+                let metadata = try await firstMetadata(metadataURLs(issuer), provider: provider)
+                guard metadata["issuer"] as? String == issuer.absoluteString,
+                      (metadata["code_challenge_methods_supported"] as? [String])?.contains("S256") == true,
+                      (metadata["token_endpoint_auth_methods_supported"] as? [String])?.contains("none") == true else {
+                    throw DirectMCPError.invalidMetadata
+                }
+                func endpoint(_ key: String, required: Bool = true) throws -> URL? {
+                    guard let value = metadata[key] as? String, let url = URL(string: value) else {
+                        if required { throw DirectMCPError.invalidMetadata }; return nil
+                    }
+                    try provider.validate(url)
+                    return url
+                }
+                var scopes = challenge["scope"].map { $0.split(separator: " ").map(String.init) }
+                    ?? (resourceMetadata["scopes_supported"] as? [String] ?? [])
+                if let offline = provider.offlineScope,
+                   (metadata["scopes_supported"] as? [String])?.contains(offline) == true { scopes.append(offline) }
+                return try Discovery(issuer: issuer, resource: resource,
+                    authorization: endpoint("authorization_endpoint")!, token: endpoint("token_endpoint")!,
+                    registration: endpoint("registration_endpoint", required: false),
+                    revocation: endpoint("revocation_endpoint", required: false), scopes: Array(Set(scopes)).sorted())
             }
-            try provider.validate(url)
-            return url
         }
-        var scopes = challenge["scope"].map { $0.split(separator: " ").map(String.init) }
-            ?? (resourceMetadata["scopes_supported"] as? [String] ?? [])
-        if let offline = provider.offlineScope,
-           (metadata["scopes_supported"] as? [String])?.contains(offline) == true { scopes.append(offline) }
-        return try Discovery(issuer: issuer, resource: resource,
-            authorization: endpoint("authorization_endpoint")!, token: endpoint("token_endpoint")!,
-            registration: endpoint("registration_endpoint", required: false),
-            revocation: endpoint("revocation_endpoint", required: false), scopes: Array(Set(scopes)).sorted())
     }
 
     static func metadataURLs(_ issuer: URL) -> [URL] {
@@ -109,128 +114,147 @@ nonisolated enum DirectMCPAuth {
                         openBrowser: @escaping @Sendable (URL) async -> Bool = { url in
                             await MainActor.run { NSWorkspace.shared.open(url) }
                         }) async throws -> DirectMCPGrant {
-        guard let provider = connection.provider else { throw DirectMCPError.unsupportedProvider }
-        return try await withThrowingTaskGroup(of: DirectMCPGrant.self) { group in
-            group.addTask {
-                let discovery = try await discover(provider)
-                await Log("Direct MCP: discovery complete")
-                let state = try DirectMCPCrypto.random()
-                let verifier = try DirectMCPCrypto.random()
-                let callback = try DirectMCPCallback(state: state, issuer: discovery.issuer, providerSlug: provider.slug)
-                defer { callback.cancel() }
-                let redirect = try await callback.start()
-                await Log("Direct MCP: callback listener ready")
-                let clientID: String
-                let existingGrant = try DirectMCPStore.optionalGrant(connection.id)
-                // Reuse an existing registration for the same issuer. Loopback ports may change.
-                if let old = existingGrant, old.issuer == discovery.issuer,
-                   old.providerSlug == provider.slug, old.authenticationMethod == "none", old.registrationValid != false {
-                    clientID = old.clientID
-                } else {
-                    guard let registration = discovery.registration else { throw DirectMCPError.unsupportedRegistration }
-                    let metadata: [String: Any] = ["client_name": "Sentient OS", "client_uri": "https://sentient-os.ai",
-                        "redirect_uris": [redirect.absoluteString], "grant_types": ["authorization_code", "refresh_token"],
-                        "response_types": ["code"], "token_endpoint_auth_method": "none", "application_type": "native"]
-                    let reply = try await DirectMCPHTTP.request(registration, provider: provider, method: "POST",
-                        headers: ["Content-Type": "application/json"], body: DirectMCPHTTP.json(metadata), limit: 128_000)
-                    let value = try DirectMCPHTTP.object(reply)
-                    guard let id = value["client_id"] as? String, !id.isEmpty,
-                          value["token_endpoint_auth_method"] as? String == "none" else {
-                        throw DirectMCPError.unsupportedRegistration
-                    }
-                    clientID = id
-                }
-                await Log("Direct MCP: client registration ready")
-                var grant = DirectMCPGrant(connectionID: connection.id, generation: connection.generation,
-                    providerSlug: provider.slug, issuer: discovery.issuer, resource: discovery.resource,
-                    tokenEndpoint: discovery.token, revocationEndpoint: discovery.revocation, clientID: clientID,
-                    clientSecret: nil, authenticationMethod: "none", accessToken: "", refreshToken: nil,
-                    expiresAt: nil, issuedAt: Date(), scopes: discovery.scopes)
-                if existingGrant == nil {
-                    // Save registration before browser interaction so a retry can reuse it.
-                    var pending = grant
-                    pending.revoked = true
-                    let registration = pending
-                    try await DirectMCPStore.withGrantLock(connection.id) {
-                        if let current = DirectMCPStore.connection(id: connection.id), current.generation != connection.generation {
-                            throw DirectMCPError.connectionChanged
+        return try await Diagnostics.withOperation("direct_connection") {
+            try await Diagnostics.boundary(.connectorFailed, phase: .connect, reason: "connection_phase", source: "direct_connector") {
+                guard let provider = connection.provider else { throw DirectMCPError.unsupportedProvider }
+                return try await withThrowingTaskGroup(of: DirectMCPGrant.self) { group in
+                    group.addTask {
+                        let discovery = try await discover(provider)
+                        await Log("Direct MCP: discovery complete")
+                        Diagnostics.step(.random, source: "direct_connector")
+                        let state = try DirectMCPCrypto.random()
+                        let verifier = try DirectMCPCrypto.random()
+                        Diagnostics.step(.callback, source: "direct_connector")
+                        let callback = try DirectMCPCallback(state: state, issuer: discovery.issuer, providerSlug: provider.slug)
+                        defer { callback.cancel() }
+                        let redirect = try await callback.start()
+                        await Log("Direct MCP: callback listener ready")
+                        let clientID: String
+                        Diagnostics.step(.read, source: "direct_connector")
+                        let existingGrant = try DirectMCPStore.optionalGrant(connection.id)
+                        // Reuse an existing registration for the same issuer. Loopback ports may change.
+                        if let old = existingGrant, old.issuer == discovery.issuer,
+                           old.providerSlug == provider.slug, old.authenticationMethod == "none", old.registrationValid != false {
+                            clientID = old.clientID
+                        } else {
+                            Diagnostics.step(.create, source: "direct_connector")
+                            guard let registration = discovery.registration else { throw DirectMCPError.unsupportedRegistration }
+                            let metadata: [String: Any] = ["client_name": "Sentient OS", "client_uri": "https://sentient-os.ai",
+                                "redirect_uris": [redirect.absoluteString], "grant_types": ["authorization_code", "refresh_token"],
+                                "response_types": ["code"], "token_endpoint_auth_method": "none", "application_type": "native"]
+                            let reply = try await DirectMCPHTTP.request(registration, provider: provider, method: "POST",
+                                headers: ["Content-Type": "application/json"], body: DirectMCPHTTP.json(metadata), limit: 128_000)
+                            let value = try DirectMCPHTTP.object(reply)
+                            guard let id = value["client_id"] as? String, !id.isEmpty,
+                                  value["token_endpoint_auth_method"] as? String == "none" else {
+                                throw DirectMCPError.unsupportedRegistration
+                            }
+                            clientID = id
                         }
-                        guard try DirectMCPStore.optionalGrant(connection.id) == nil else { throw DirectMCPError.connectionChanged }
-                        try DirectMCPStore.saveGrant(registration)
-                    }
-                }
-                var url = URLComponents(url: discovery.authorization, resolvingAgainstBaseURL: false)!
-                // Do not let metadata supply conflicting authorization parameters.
-                guard url.query == nil else { throw DirectMCPError.invalidMetadata }
-                let parameters = ["response_type": "code", "client_id": clientID, "redirect_uri": redirect.absoluteString,
-                    "code_challenge": DirectMCPCrypto.challenge(verifier), "code_challenge_method": "S256", "state": state,
-                    "resource": discovery.resource.absoluteString]
-                url.queryItems = parameters.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
-                if !discovery.scopes.isEmpty { url.queryItems?.append(.init(name: "scope", value: discovery.scopes.joined(separator: " "))) }
-                guard let authorizeURL = url.url, await openBrowser(authorizeURL) else { throw DirectMCPError.network }
-                await Log("Direct MCP: waiting for browser sign-in")
-                await onProgress(.waitingForBrowser)
-                let code = try await callback.response()
-                await Log("Direct MCP: browser response verified")
-                let reply = try await DirectMCPHTTP.request(discovery.token, provider: provider, method: "POST",
-                    headers: ["Content-Type": "application/x-www-form-urlencoded"], body: DirectMCPHTTP.form([
-                        "grant_type": "authorization_code", "code": code, "code_verifier": verifier,
-                        "redirect_uri": redirect.absoluteString, "client_id": clientID, "resource": discovery.resource.absoluteString]), limit: 128_000)
-                do { grant = try replacingTokens(grant, response: reply) }
-                catch DirectMCPError.registrationExpired {
-                    try await DirectMCPStore.withGrantLock(connection.id) {
-                        if var stored = try DirectMCPStore.optionalGrant(connection.id), stored.clientID == clientID {
-                            stored.registrationValid = false; stored.revoked = true
-                            try DirectMCPStore.saveGrant(stored)
+                        await Log("Direct MCP: client registration ready")
+                        var grant = DirectMCPGrant(connectionID: connection.id, generation: connection.generation,
+                            providerSlug: provider.slug, issuer: discovery.issuer, resource: discovery.resource,
+                            tokenEndpoint: discovery.token, revocationEndpoint: discovery.revocation, clientID: clientID,
+                            clientSecret: nil, authenticationMethod: "none", accessToken: "", refreshToken: nil,
+                            expiresAt: nil, issuedAt: Date(), scopes: discovery.scopes)
+                        if existingGrant == nil {
+                            Diagnostics.step(.write, source: "direct_connector")
+                            // Save registration before browser interaction so a retry can reuse it.
+                            var pending = grant
+                            pending.revoked = true
+                            let registration = pending
+                            try await DirectMCPStore.withGrantLock(connection.id) {
+                                if let current = DirectMCPStore.connection(id: connection.id), current.generation != connection.generation {
+                                    throw DirectMCPError.connectionChanged
+                                }
+                                guard try DirectMCPStore.optionalGrant(connection.id) == nil else { throw DirectMCPError.connectionChanged }
+                                try DirectMCPStore.saveGrant(registration)
+                            }
                         }
+                        var url = URLComponents(url: discovery.authorization, resolvingAgainstBaseURL: false)!
+                        Diagnostics.step(.validate, source: "direct_connector")
+                        // Do not let metadata supply conflicting authorization parameters.
+                        guard url.query == nil else { throw DirectMCPError.invalidMetadata }
+                        let parameters = ["response_type": "code", "client_id": clientID, "redirect_uri": redirect.absoluteString,
+                            "code_challenge": DirectMCPCrypto.challenge(verifier), "code_challenge_method": "S256", "state": state,
+                            "resource": discovery.resource.absoluteString]
+                        url.queryItems = parameters.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+                        if !discovery.scopes.isEmpty { url.queryItems?.append(.init(name: "scope", value: discovery.scopes.joined(separator: " "))) }
+                        Diagnostics.step(.callback, source: "direct_connector")
+                        guard let authorizeURL = url.url, await openBrowser(authorizeURL) else { throw DirectMCPError.network }
+                        await Log("Direct MCP: waiting for browser sign-in")
+                        await onProgress(.waitingForBrowser)
+                        let code = try await callback.response()
+                        await Log("Direct MCP: browser response verified")
+                        Diagnostics.step(.exchange, source: "direct_connector")
+                        let reply = try await DirectMCPHTTP.request(discovery.token, provider: provider, method: "POST",
+                            headers: ["Content-Type": "application/x-www-form-urlencoded"], body: DirectMCPHTTP.form([
+                                "grant_type": "authorization_code", "code": code, "code_verifier": verifier,
+                                "redirect_uri": redirect.absoluteString, "client_id": clientID, "resource": discovery.resource.absoluteString]), limit: 128_000)
+                        do { grant = try replacingTokens(grant, response: reply) }
+                        catch DirectMCPError.registrationExpired {
+                            try await DirectMCPStore.withGrantLock(connection.id) {
+                                if var stored = try DirectMCPStore.optionalGrant(connection.id), stored.clientID == clientID {
+                                    stored.registrationValid = false; stored.revoked = true
+                                    try DirectMCPStore.saveGrant(stored)
+                                }
+                            }
+                            throw DirectMCPError.registrationExpired
+                        }
+                        await Log("Direct MCP: access exchange complete")
+                        try Task.checkCancellation()
+                        await onProgress(.savingConnection)
+                        return grant
                     }
-                    throw DirectMCPError.registrationExpired
+                    group.addTask { try await Task.sleep(for: .seconds(300)); throw DirectMCPError.timedOut }
+                    defer { group.cancelAll() }
+                    guard let grant = try await group.next() else { throw DirectMCPError.invalidResponse }
+                    return grant
                 }
-                await Log("Direct MCP: access exchange complete")
-                try Task.checkCancellation()
-                await onProgress(.savingConnection)
-                return grant
             }
-            group.addTask { try await Task.sleep(for: .seconds(300)); throw DirectMCPError.timedOut }
-            defer { group.cancelAll() }
-            guard let grant = try await group.next() else { throw DirectMCPError.invalidResponse }
-            return grant
         }
     }
 
     static func accessToken(id: UUID, generation: UUID, refresh: Bool = false) async throws -> String {
-        try await DirectMCPStore.withGrantLock(id) {
-            var grant = try DirectMCPStore.readGrant(id)
-            guard grant.generation == generation else { throw DirectMCPError.connectionChanged }
-            guard !grant.revoked else { throw DirectMCPError.reconnectRequired }
-            guard let provider = DirectMCPProvider.find(grant.providerSlug) else { throw DirectMCPError.unsupportedProvider }
-            try provider.validate(grant.tokenEndpoint)
-            try provider.validate(grant.resource)
-            let expiring = grant.expiresAt.map { $0.timeIntervalSinceNow < 120 } ?? true
-            if let refreshToken = grant.refreshToken, expiring || refresh {
-                let reply = try await DirectMCPHTTP.request(grant.tokenEndpoint, provider: provider, method: "POST",
-                    headers: ["Content-Type": "application/x-www-form-urlencoded"], body: DirectMCPHTTP.form([
-                        "grant_type": "refresh_token", "refresh_token": refreshToken,
-                        "client_id": grant.clientID, "resource": grant.resource.absoluteString]), limit: 128_000)
-                do { grant = try replacingTokens(grant, response: reply) }
-                catch DirectMCPError.reconnectRequired {
-                    grant.revoked = true
-                    try DirectMCPStore.saveGrant(grant)
-                    throw DirectMCPError.reconnectRequired
+        return try await Diagnostics.withOperation("direct_connection") {
+            try await Diagnostics.boundary(.connectorFailed, phase: .refresh, reason: "connection_phase", source: "direct_connector") {
+                Diagnostics.step(.read, source: "direct_connector")
+                return try await DirectMCPStore.withGrantLock(id) {
+                    var grant = try DirectMCPStore.readGrant(id)
+                    guard grant.generation == generation else { throw DirectMCPError.connectionChanged }
+                    guard !grant.revoked else { throw DirectMCPError.reconnectRequired }
+                    guard let provider = DirectMCPProvider.find(grant.providerSlug) else { throw DirectMCPError.unsupportedProvider }
+                    try provider.validate(grant.tokenEndpoint)
+                    try provider.validate(grant.resource)
+                    let expiring = grant.expiresAt.map { $0.timeIntervalSinceNow < 120 } ?? true
+                    if let refreshToken = grant.refreshToken, expiring || refresh {
+                        Diagnostics.step(.refresh, source: "direct_connector")
+                        let reply = try await DirectMCPHTTP.request(grant.tokenEndpoint, provider: provider, method: "POST",
+                            headers: ["Content-Type": "application/x-www-form-urlencoded"], body: DirectMCPHTTP.form([
+                                "grant_type": "refresh_token", "refresh_token": refreshToken,
+                                "client_id": grant.clientID, "resource": grant.resource.absoluteString]), limit: 128_000)
+                        do { grant = try replacingTokens(grant, response: reply) }
+                        catch DirectMCPError.reconnectRequired {
+                            grant.revoked = true
+                            try DirectMCPStore.saveGrant(grant)
+                            throw DirectMCPError.reconnectRequired
+                        }
+                        catch DirectMCPError.registrationExpired {
+                            grant.revoked = true; grant.registrationValid = false
+                            try DirectMCPStore.saveGrant(grant)
+                            throw DirectMCPError.registrationExpired
+                        }
+                        // Persist even if cancellation arrived after the provider rotated the token.
+                        Diagnostics.step(.write, source: "direct_connector")
+                        try DirectMCPStore.saveGrant(grant)
+                    } else if grant.expiresAt.map({ $0 <= Date() }) == true {
+                        throw DirectMCPError.reconnectRequired
+                    }
+                    try Task.checkCancellation()
+                    guard !grant.accessToken.isEmpty else { throw DirectMCPError.reconnectRequired }
+                    return grant.accessToken
                 }
-                catch DirectMCPError.registrationExpired {
-                    grant.revoked = true; grant.registrationValid = false
-                    try DirectMCPStore.saveGrant(grant)
-                    throw DirectMCPError.registrationExpired
-                }
-                // Persist even if cancellation arrived after the provider rotated the token.
-                try DirectMCPStore.saveGrant(grant)
-            } else if grant.expiresAt.map({ $0 <= Date() }) == true {
-                throw DirectMCPError.reconnectRequired
             }
-            try Task.checkCancellation()
-            guard !grant.accessToken.isEmpty else { throw DirectMCPError.reconnectRequired }
-            return grant.accessToken
         }
     }
 

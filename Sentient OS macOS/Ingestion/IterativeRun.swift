@@ -84,7 +84,16 @@ struct IterativeRun {
     @discardableResult
     func run(_ connectors: [any Connector], mode: Mode,
              onProgress: @Sendable @escaping (RunProgress) -> Void = { _ in }) async -> RunProgress {
+        if Diagnostics.current == nil {
+            return await Diagnostics.withOperation("ingestion") { await self.run(connectors, mode: mode, onProgress: onProgress) }
+        }
         var p = RunProgress()
+        defer {
+            if !Task.isCancelled, p.failed > 0 {
+                Diagnostics.report(.sourceReadDegraded, phase: .complete, reason: "items_skipped",
+                                   counts: [.attempted: p.done, .failed: p.failed, .skipped: p.extractionFailed])
+            }
+        }
         guard !connectors.isEmpty else { return p }
         // Even an engine-load failure must invalidate an earlier pending calendar snapshot.
         if connectors.contains(where: { $0.kind == .appleCalendar }) {
@@ -116,7 +125,7 @@ struct IterativeRun {
             // §7.1/F1 + §7.12: a load failure here silently yields a 0-item run (the whole overnight
             // batch does nothing). Escalate to an event — error TYPE only, plus whether the model
             // file resolved (never the path).
-            Log("IterativeRun: engine load failed — \(error)")
+            Log("IterativeRun: engine load failed — \(ErrorLabel(error))")
             CrashReporting.captureEvent("engine.load_failed", level: .error,
                 tags: ["error": String(describing: type(of: error))],
                 extra: ["model_present": String(ModelLocator.resolve() != nil)],
@@ -138,11 +147,13 @@ struct IterativeRun {
 
         func reloadEngine(reason: String) async {
             p.lastFilePath = nil; p.lastVerdict = nil
+            p.lastItemDate = nil
             p.lastTitle = "Resetting on-device engine…"
             p.lastSummary = "The GPU runtime needs a quick reset; resuming shortly."
             onProgress(p)
             Analytics.signal("Engine.reloaded", parameters: ["reason": reason])   // GPU-wedge self-heal health metric
-            try? await engine.reload()
+            do { try await engine.reload() }
+            catch { Diagnostics.report(.engineReloadFailed, phase: .reload, error: error) }
             sinceReload = 0
         }
 
@@ -158,6 +169,7 @@ struct IterativeRun {
                     try autoreleasepool { try connector.load(cand) }
                 }
             } catch {
+                Diagnostics.report(.ingestionSkipped, phase: .extract, error: error, source: connector.kind.rawValue)
                 p.lastSummary = "(extraction skipped: \(error))"
                 return .extractionFailed
             }
@@ -179,6 +191,7 @@ struct IterativeRun {
                 case .junk:      p.junk += 1
                 case .sensitive: p.sensitive += 1
                 }
+                SourceHealth.recordTriage(source: connector.kind.rawValue, failed: outcome.reason == .parseFailed)
                 if outcome.reason == .parseFailed { p.parseFailures += 1 }   // §7.13
                 p.lastTitle = outcome.title
                 p.lastSummary = outcome.summary.isEmpty ? nil : outcome.summary
@@ -190,6 +203,7 @@ struct IterativeRun {
                 #endif
                 return .ok(draft)
             } catch {
+                Diagnostics.report(.ingestionSkipped, phase: .generate, error: error, source: connector.kind.rawValue)
                 p.lastSummary = "(generate skipped: \(error))"
                 return .generateFailed
             }
@@ -334,6 +348,7 @@ struct IterativeRun {
 
                     p.lastPath = w.item.metadata["displayPath"] ?? w.item.metadata["name"]
                     p.lastFilePath = w.item.metadata["path"]
+                    p.lastItemDate = nil
 
                     var result = await attempt(w.item, connector: connector)
                     // B10: only a GENERATE failure implicates the engine → the GPU-wedge reload path.
@@ -361,8 +376,9 @@ struct IterativeRun {
                     // failed (a generate failure still means the content extracted fine). Feeds the
                     // rolling extraction-rate sensor.
                     if connector.kind == .file {
-                        if case .extractionFailed = result { SourceHealth.recordExtraction(succeeded: false) }
-                        else { SourceHealth.recordExtraction(succeeded: true) }
+                        let format = URL(fileURLWithPath: w.item.metadata["path"] ?? "").pathExtension
+                        if case .extractionFailed = result { SourceHealth.recordExtraction(succeeded: false, format: format) }
+                        else { SourceHealth.recordExtraction(succeeded: true, format: format) }
                     }
                     let draft: NoteDraft?
                     switch result {
@@ -391,6 +407,14 @@ struct IterativeRun {
                         break runLoop
                     }
                     if outcome == .failed { p.failed += 1; break runLoop }
+                    if outcome == .saved {
+                        switch result {
+                        case .ok: break
+                        case .extractionFailed, .generateFailed:
+                            Diagnostics.report(.ingestionSkipped, phase: .commit, reason: "failed_item_mark_advanced",
+                                               source: connector.kind.rawValue, flags: [.checkpointAdvanced: true])
+                        }
+                    }
                     sinceReload += 1; p.done += 1; processedThisConnector += 1
                     onProgress(p)
                 }

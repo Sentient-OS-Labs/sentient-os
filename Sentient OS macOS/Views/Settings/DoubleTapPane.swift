@@ -16,68 +16,69 @@ struct DoubleTapPane: View {
 
     var body: some View {
         SettingsPane(title: "Double Tap", whisper: "Replies in your voice, ready for you to review.") {
-            VStack(alignment: .leading, spacing: 30) {
-                SettingsGroup(label: "Custom instructions") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SettingsProse("Tell Double Tap how you like to write. You can set different preferences for texts and emails.")
-                        SettingsTextBox(
-                            placeholder: "e.g. Always write in lowercase when responding to texts, but not when responding to email.",
-                            text: $instructions)
+            VStack(alignment: .leading, spacing: 32) {
+                SettingsGroup(label: "Custom instructions", description: "Tell Double Tap how you like to write.") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        SettingsTextBox(placeholder: "Keep texts casual and lowercase. Use a professional tone for email.", text: $instructions)
                             .frame(height: 112)
                             .accessibilityLabel("Double Tap custom instructions")
                         if instructions.trimmingCharacters(in: .whitespacesAndNewlines).utf8.count > CustomInstructions.doubleTapByteLimit {
-                            Text("These instructions are too long. Please shorten them before using Double Tap.")
-                                .font(.system(size: 11)).foregroundStyle(Theme.Ink.red)
+                            Text("These instructions are too long. Shorten them before using Double Tap.")
+                                .font(.system(size: 13)).foregroundStyle(Theme.Ink.red)
                         } else {
-                            Text("Saved automatically. Applies to every Double Tap reply.")
-                                .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.label)
+                            Text("Saved automatically for every reply.")
+                                .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
                         }
                     }
                 }
 
-                SettingsHairline(opacity: 0.12).padding(.vertical, -7)
-
-                SettingsGroup(label: "Your writing style") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SettingsProse(PrivacyCopy.writingSamples)
-                        SettingsProse(PrivacyCopy.writingSources)
-                        SettingsPillButton(title: "Show writing examples in Finder") {
-                            NSWorkspace.shared.activateFileViewerSelecting([
-                                VaultGenerator.vaultRoot.appendingPathComponent(WritingStyle.fileName)
-                            ])
+                SettingsGroup(label: "Writing style", inset: 0) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        SettingsRow(title: "Your writing examples", subtitle: hasWritingExamples
+                                    ? "A one-time snapshot you can inspect and edit."
+                                    : "Available after Double Tap setup finishes.") {
+                            SettingsPillButton(title: "Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([
+                                    VaultGenerator.vaultRoot.appendingPathComponent(WritingStyle.fileName)
+                                ])
+                            }
+                            .disabled(!hasWritingExamples)
                         }
-                        .disabled(!hasWritingExamples)
-                        if !hasWritingExamples {
-                            SettingsProse("Your writing examples will appear here after Double Tap setup finishes.")
+                        SettingsDetails(title: "How writing examples are used") {
+                            SettingsProse(PrivacyCopy.writingSamples)
+                            SettingsProse(PrivacyCopy.writingSources)
                         }
+                        .padding(.horizontal, 20).padding(.bottom, 20)
                     }
                 }
 
-                SettingsHairline(opacity: 0.12).padding(.vertical, -7)
-
-                SettingsGroup(label: "Double Tap Inference Provider") {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Picker("Double Tap Inference Provider", selection: $providerRaw) {
-                            ForEach(DoubleTapProvider.allCases) { provider in
-                                Text(provider.label).tag(provider.rawValue)
+                SettingsGroup(label: "Drafting model", inset: 0) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        SettingsRow(title: "Provider", subtitle: "Independent of your Sidekick model.") {
+                            SettingsMenu(title: "Double Tap provider", value: provider.label, selection: $providerRaw) {
+                                ForEach(DoubleTapProvider.allCases) { provider in
+                                    Text(provider.label).tag(provider.rawValue)
+                                }
+                            }
+                            .frame(width: 200)
+                        }
+                        SettingsHairline(opacity: 0.10)
+                        VStack(alignment: .leading, spacing: 18) {
+                            if provider == .sentient {
+                                SettingsProse(PrivacyCopy.doubleTapCovered)
+                            } else {
+                                DoubleTapCredentials(provider: provider).id(provider)
+                            }
+                            SettingsDetails(title: "What is shared with this provider?") {
+                                SettingsProse(PrivacyCopy.doubleTapContext)
+                                SettingsProse(provider == .sentient
+                                    ? "This context passes through Sentient’s relay to OpenAI."
+                                    : provider.hasCustomEndpoint
+                                    ? "This context goes directly to your configured endpoint. For local drafting, use a local model served on this Mac."
+                                    : "This context goes directly to your chosen \(provider.name) provider, under its policies and your account settings.")
                             }
                         }
-                        .pickerStyle(.menu).labelsHidden().controlSize(.large)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                        if provider == .sentient {
-                            SettingsProse(PrivacyCopy.doubleTapCovered)
-                        } else {
-                            DoubleTapCredentials(provider: provider)
-                                .id(provider)
-                        }
-
-                        SettingsProse(PrivacyCopy.doubleTapContext)
-                        SettingsProse(provider == .sentient
-                            ? "This context passes through Sentient’s relay to OpenAI."
-                            : provider.hasCustomEndpoint
-                            ? "This context goes directly to your configured endpoint. For local drafting, use a local model served on this Mac."
-                            : "This context goes directly to your chosen \(provider.name) provider, under its policies and your account settings.")
+                        .padding(20)
                     }
                 }
             }
@@ -125,12 +126,12 @@ private struct DoubleTapCredentials: View {
             }
             VStack(alignment: .leading, spacing: 9) {
                 Text(provider.requiresKey ? "\(provider.name) API key" : "API key (optional)")
-                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
+                    .font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
                 HStack(spacing: 10) {
                     SecureField(keySaved ? "Enter a replacement key"
                                 : provider.requiresKey ? "Enter your API key" : "Optional for keyless servers", text: $keyDraft)
                         .textFieldStyle(.plain)
-                        .font(.system(size: 12))
+                        .font(.system(size: 14))
                         .padding(11)
                         .background(.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 9))
                         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.stroke, lineWidth: 1))
@@ -159,23 +160,23 @@ private struct DoubleTapCredentials: View {
                              : "Leave empty if your server does not require an API key.")
                     }
                 }
-                .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.label)
+                .font(.system(size: 12)).foregroundStyle(Theme.Ink.label)
                 if let keyError {
-                    Text(keyError).font(.system(size: 11)).foregroundStyle(Theme.Ink.red)
+                    Text(keyError).font(.system(size: 13)).foregroundStyle(Theme.Ink.red)
                 }
             }
 
             VStack(alignment: .leading, spacing: 9) {
                 Text("Model")
-                    .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
+                    .font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
                 if provider.hasModelPresets {
-                    Picker("Model", selection: modelSelection) {
+                    SettingsMenu(title: "Model", value: DoubleTapProvider.modelPresets.first(where: { provider.modelID($0.id) == model })?.label ?? "Other model…", selection: modelSelection) {
                         ForEach(DoubleTapProvider.modelPresets, id: \.id) { preset in
                             Text(preset.label).tag(provider.modelID(preset.id))
                         }
                         Text("Other model…").tag("other")
                     }
-                    .pickerStyle(.menu).labelsHidden().controlSize(.large)
+                    .frame(width: 240)
                 }
                 if !provider.hasModelPresets || editingOtherModel || !isPreset {
                     inputField(provider == .openRouter ? "provider/model-id"
@@ -186,7 +187,7 @@ private struct DoubleTapCredentials: View {
                 if provider.hasCustomEndpoint {
                     SettingsProse("Choose a model with enough context for your knowledge base. If you use a local server, keep it running with the model loaded. Double Tap stops after 30 seconds.")
                     Text("Saved automatically. Applies to the next Double Tap reply.")
-                        .font(.system(size: 10.5)).foregroundStyle(Theme.Ink.label)
+                        .font(.system(size: 12)).foregroundStyle(Theme.Ink.label)
                 } else {
                     SettingsProse("Usage is billed to your \(provider.name) account.")
                 }
@@ -198,23 +199,23 @@ private struct DoubleTapCredentials: View {
     private var endpointFields: some View {
         VStack(alignment: .leading, spacing: 9) {
             Text("Base URL")
-                .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
+                .font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
             inputField(provider.defaultBaseURL.isEmpty ? "https://your-endpoint.example/v1" : provider.defaultBaseURL,
                        text: $baseURL, label: "\(provider.name) base URL")
             if DoubleTapProvider.endpoint(baseURL: baseURL,
                                           api: DoubleTapProvider.API(rawValue: apiRaw) ?? .chatCompletions) == nil {
                 Text("Enter a valid http:// or https:// base URL, including its API prefix (usually /v1).")
-                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.red)
+                    .font(.system(size: 13)).foregroundStyle(Theme.Ink.red)
             }
             Text("API format")
-                .font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
+                .font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.Ink.statusInk)
                 .padding(.top, 7)
-            Picker("API format", selection: $apiRaw) {
+            SettingsMenu(title: "API format", value: (DoubleTapProvider.API(rawValue: apiRaw) ?? .chatCompletions).label, selection: $apiRaw) {
                 ForEach(DoubleTapProvider.API.allCases) { api in
                     Text(api.label).tag(api.rawValue)
                 }
             }
-            .pickerStyle(.menu).labelsHidden().controlSize(.large)
+            .frame(width: 240)
             SettingsProse("Use Chat Completions for most compatible servers, or Responses if your endpoint requires it.")
         }
     }
@@ -222,7 +223,7 @@ private struct DoubleTapCredentials: View {
     private func inputField(_ placeholder: String, text: Binding<String>, label: String) -> some View {
         TextField(placeholder, text: text)
             .textFieldStyle(.plain)
-            .font(.system(size: 12, design: .monospaced))
+            .font(.system(size: 14, design: .monospaced))
             .padding(11)
             .background(.white.opacity(0.02), in: RoundedRectangle(cornerRadius: 9))
             .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(Theme.stroke, lineWidth: 1))

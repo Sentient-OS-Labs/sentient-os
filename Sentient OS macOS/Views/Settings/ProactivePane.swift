@@ -25,82 +25,69 @@ struct ProactivePane: View {
     /// carries ONE reasoning level set in Frontier Model Choice (provider quirks make per-run
     /// tuning unsafe there), so only .custom locks it.
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
-    @State private var speedHover = false
 
     private var sliderLive: Bool { (ModelBackend(rawValue: backendRaw) ?? .chatgpt) != .custom }
 
     var body: some View {
         SettingsPane(title: "Proactive & Sidekick",
-                     whisper: "Morning suggestions, and the Sidekick magic in your notch.") {
-            VStack(alignment: .leading, spacing: 30) {
-                SettingsGroup(label: "Proactive Intelligence") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SettingsProse("Every morning, Sentient surfaces a few things worth doing, already done and waiting for your go. Tell it what you care about, and what to skip.")
-                        SettingsTextBox(placeholder: "e.g. Don't give me suggestions about Chase Bank alerts.",
-                                        text: $proactiveInstructions)
-                    }
-                }
-                SettingsHairline(opacity: 0.12)
-                    .padding(.vertical, -7)   // sit tighter than the pane's 30pt group rhythm
-                SettingsGroup(label: "Sidekick") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        SettingsProse("Tap the shortcut key, then type or click the mic and just talk (\u{201C}finish this for me\u{201D}), and Sidekick acts on whatever you're looking at.")
-                        ChipFlow {
-                            SettingsChip(label: "Right ⌘", on: sidekickHotkey == "rightCommand") {
-                                sidekickHotkey = "rightCommand"
+                     whisper: "Make everyday help feel like your own.") {
+            VStack(alignment: .leading, spacing: 32) {
+                SettingsGroup(label: "Sidekick", inset: 0) {
+                    VStack(spacing: 0) {
+                        SettingsRow(title: "Shortcut key", subtitle: "Tap to open Sidekick. Double tap to draft a reply.") {
+                            SettingsMenu(title: "Sidekick shortcut", value: sidekickHotkey == "rightOption" ? "Right ⌥" : "Right ⌘", selection: $sidekickHotkey) {
+                                Text("Right ⌘").tag("rightCommand")
+                                Text("Right ⌥").tag("rightOption")
                             }
-                            SettingsChip(label: "Right ⌥", on: sidekickHotkey == "rightOption") {
-                                sidekickHotkey = "rightOption"
+                            .frame(width: 136)
+                            .onChange(of: sidekickHotkey) {
+                                NotificationCenter.default.post(name: .sidekickHotkeyChanged, object: nil)
                             }
                         }
-                        .onChange(of: sidekickHotkey) {
-                            // Re-key the live monitor immediately — no restart.
-                            NotificationCenter.default.post(name: .sidekickHotkeyChanged, object: nil)
+                        SettingsHairline(opacity: 0.10)
+                        VStack(alignment: .leading, spacing: 12) {
+                            instructionLabel("Custom instructions", detail: "Sidekick learns your preferences as you work. Edit its instructions anytime.")
+                            SettingsTextBox(placeholder: "Use WhatsApp for messages and Safari for browsing.", text: Binding(
+                                get: { sidekickContext }, set: { CustomInstructions.saveSidekick($0) }))
+                                .frame(height: 104)
+                                .accessibilityLabel("Sidekick custom instructions")
                         }
-                        SettingsTextBox(placeholder: "e.g. When I say text someone, use WhatsApp. My main browser is Microsoft Edge.",
-                                        text: $sidekickContext)
+                        .padding(20)
                     }
                 }
-                SettingsGroup(label: "Speed vs Intelligence") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        SettingsProse("How hard your AI thinks when acting on your Mac: Sidekick, the command bar, and firing a card. Faster is right for most tasks; Smarter takes its time on the tricky ones.")
+
+                SettingsGroup(label: "Speed & intelligence",
+                              description: "Choose how much thought goes into computer tasks.") {
+                    VStack(alignment: .leading, spacing: 16) {
                         SpeedIntelligenceSlider(selection: Binding(
                             get: { ComputerUseSpeed(rawValue: speedRaw) ?? .faster },
                             set: { speedRaw = $0.rawValue }))
+                            .disabled(!sliderLive)
+                            .allowsHitTesting(sliderLive)
+                            .opacity(sliderLive ? 1 : 0.4)
+                        SettingsProse(sliderLive
+                            ? "Faster for everyday tasks. Smarter for the tricky ones."
+                            : "Your custom model uses the reasoning level set in Frontier Model Choice.")
                     }
-                    // Locked only on a custom backend: it rides ONE reasoning level (set in
-                    // Frontier Model Choice) — the dimmed slider + hover tip say so honestly.
-                    .opacity(sliderLive ? 1 : 0.4)
-                    .allowsHitTesting(sliderLive)
-                    .contentShape(Rectangle())
-                    .onHover { hovering in
-                        if !sliderLive { speedHover = hovering } else { speedHover = false }
-                    }
-                    .overlay(alignment: .topLeading) {
-                        if !sliderLive && speedHover { speedLockedTip.offset(y: -34) }
-                    }
-                    .animation(.easeInOut(duration: 0.15), value: speedHover)
                 }
+
+                SettingsGroup(label: "Morning suggestions",
+                              description: "Tell Sentient what to focus on, and what to skip.") {
+                    SettingsTextBox(placeholder: "Focus on work follow-ups. Skip shopping and bank alerts.", text: $proactiveInstructions)
+                        .frame(height: 104)
+                        .accessibilityLabel("Morning suggestion instructions")
+                }
+                Text("Instructions and preferences save automatically.")
+                    .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
             }
         }
     }
-}
 
-extension ProactivePane {
-    /// The instant hover notice on the dimmed slider (custom backend active) — the same quiet
-    /// capsule voice as LockedChipTip, sized for a sentence.
-    private var speedLockedTip: some View {
-        Text("Only for ChatGPT and Claude subscription logins. Your model's reasoning lives in Frontier Model Choice.")
-            .font(.system(size: 10.5, weight: .medium))
-            .foregroundStyle(.white.opacity(0.88))
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(Color(white: 0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(.white.opacity(0.14), lineWidth: 1))
-            .frame(maxWidth: 340, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .allowsHitTesting(false)
-            .transition(.opacity)
+    private func instructionLabel(_ title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
+            SettingsProse(detail)
+        }
     }
 }
 
@@ -132,12 +119,23 @@ private struct SpeedIntelligenceSlider: View {
             // model spec under the right — both live during a drag.
             HStack(alignment: .firstTextBaseline) {
                 Text(hovered.label)
-                    .font(.system(size: 12.5, weight: .semibold))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.white)
                 Spacer()
-                MonoCaps(hovered.modelLine, size: 8.5, tracking: 1.6, color: Theme.Ink.deepMuted)
+                Text(hovered.modelLine)
+                    .font(.system(size: 12)).foregroundStyle(SettingsStyle.secondary)
             }
             .frame(width: Self.width)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Speed and intelligence")
+        .accessibilityValue("\(selection.label), \(selection.modelLine)")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: selection = Self.tier(nearest: min(Self.fraction(of: selection) + 0.5, 1))
+            case .decrement: selection = Self.tier(nearest: max(Self.fraction(of: selection) - 0.5, 0))
+            @unknown default: break
+            }
         }
     }
 

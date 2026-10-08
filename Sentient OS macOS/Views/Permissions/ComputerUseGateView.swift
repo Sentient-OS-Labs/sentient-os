@@ -173,9 +173,10 @@ struct SentientPermissionRows: View {
 
 /// Native helper grants are shared by the first-use gate, upgrade flow and Settings.
 struct NativeComputerUsePermissionRows: View {
+    @Environment(\.settingsFormStyle) private var formStyle
     let gate: ComputerUseGate
     var body: some View {
-        SettingsGroup(label: "Computer Use") {
+        SettingsGroup(label: formStyle ? "Computer use" : "Computer Use") {
             VStack(alignment: .leading, spacing: 2) {
                 StatusLine(title: "Accessibility",
                            health: gate.helperAccessibility ? .ok : .bad,
@@ -185,6 +186,7 @@ struct NativeComputerUsePermissionRows: View {
                            fix: !gate.setup.ready || gate.helperAccessibility ? nil : {
                     PermissionGuide.shared.guide(.accessibility, dragging: OpenAIComputerUse.appURL)
                 })
+                if formStyle { SettingsHairline(opacity: 0.10) }
                 StatusLine(title: "Screen Recording",
                            health: gate.helperScreen ? .ok : .bad,
                            note: gate.helperScreen ? "granted" : "not granted",
@@ -209,8 +211,8 @@ struct NativeComputerUsePermissionRows: View {
                         SettingsPillButton(title: "Try again") { gate.requestAutomation() }
                             .disabled(gate.checkingAutomation)
                     }
-                } else if gate.setup.ready, gate.checkingAutomation, !gate.nativeRuntimeReady {
-                    SettingsProse("Checking computer use…")
+                } else if gate.setup.ready, gate.checkingAutomation, gate.automation != .granted {
+                    SettingsProse("Checking permissions…")
                 }
             }
         }

@@ -81,8 +81,8 @@ enum PrivacyCopy {
         Section(id: "voice", title: "Privacy-focused voice input.", paragraphs: [
             "Sentient uses Apple’s on-device speech recognition where supported. When on-device recognition is unavailable, Apple’s speech service may process the audio. The resulting transcript becomes your Sidekick request and follows your chosen model’s processing settings.",
         ]),
-        Section(id: "contact", title: "A direct line to the people building Sentient.", paragraphs: [
-            "When you finish connecting Gmail or Outlook through a supported AI account, Sentient can save your email address so the founders can occasionally reach out to a small sample of users to ask for feedback. (We never collect your knowledge base or the contents of your tasks for product analytics. Asking you directly is how we learn what you use Sentient for.) Any feedback email will include a way to opt out.",
+        Section(id: "contact", title: "Send us feedback.", paragraphs: [
+            "When you finish connecting Gmail or Outlook through a supported AI account, Sentient can save your email address for occasional feedback invitations sent to a small sample of users. Your knowledge base and the contents of your tasks are never collected for product analytics. Feedback helps improve Sentient without collecting that private context. Any feedback email will include a way to opt out.",
             "For this feedback list, we collect your email address and nothing else, ever. The list is stored in Supabase.",
             "A random installation credential lets us provide covered inference and manage usage limits. Invitations and lifetime access are recorded separately in Supabase so you keep your access.",
         ]),

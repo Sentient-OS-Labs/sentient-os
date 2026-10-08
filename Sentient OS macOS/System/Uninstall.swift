@@ -3,7 +3,7 @@
 //  Sentient OS macOS  ·  System/
 //
 //  The one full teardown — FactoryReset's strict superset, driven by Settings → System →
-//  Uninstall Sentient (UninstallView). Removes EVERYTHING Sentient ever created on this Mac:
+//  Uninstall Sentient (UninstallView). Removes Sentient's active installation data:
 //  the root wake helper (+ its /Library files), the cloud mirror copy AND the Keychain identity,
 //  the knowledge base, the on-device model + the cua driver (both under the swept SentientOS
 //  root), the cycle store, the login item, the legacy 1.x Automation TCC row, caches, and the
@@ -12,7 +12,8 @@
 //
 //  Deliberately NOT touched: the .app bundle itself (the gone screen asks the user to drag it to
 //  the Trash — decided 2026-07-10), ALL of ~/.codex (config.toml, any 1.x-era computer-use
-//  payload, and the user's own codex login stay), the Desktop gift keepsakes, and the
+//  payload, and the user's own codex login stay), the retired Bundled Codex directory (older
+//  releases may have made it the backing store for a standalone login), the Desktop gift keepsakes, and the
 //  SIP-protected system TCC rows. A destructive sequence must never drift — change it HERE only.
 //
 //  Key members: Stage (the sheet's whisper per step) · run(appState:progress:helperDecision:)
@@ -21,6 +22,7 @@
 
 import Foundation
 import AppKit
+import Darwin
 
 enum Uninstall {
     static var lastFailure: String?
@@ -98,8 +100,11 @@ enum Uninstall {
         // Request knowledge-mirror deletion while its credential remains. Contact records are
         // retained remotely; only their local snapshot and credentials are removed.
         progress(.cloud)
+        await HostedConnectorSetup.beginTeardown()
+        defer { HostedConnectorSetup.endTeardown() }
         do { try await MailAccountCloud.shared.forgetLocalState() }
         catch {
+            Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "contact_credentials", error: error)
             lastFailure = "Uninstall paused because local contact credentials couldn't be removed. Unlock your Mac and retry."
             appState?.isUninstalling = false
             return false
@@ -115,6 +120,7 @@ enum Uninstall {
         }
         do { try await DirectMCPConnections.shared.removeAll() }
         catch {
+            Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "connector_credentials", error: error)
             Log("Uninstall: direct-connection Keychain cleanup needs retry")
             lastFailure = "Uninstall paused because saved app connections couldn't be removed from Keychain. Unlock your Mac and retry to finish removing Sentient."
             appState?.isUninstalling = false
@@ -129,12 +135,11 @@ enum Uninstall {
 
         progress(.knowledge)
         await CycleStore.shared.wipeEverything()     // close out SwiftData cleanly before its files go
-        try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
+        Diagnostics.removeForCleanup(VaultGenerator.vaultRoot, phase: .uninstall, reason: "vault")
         VaultGenerator.sweepOrphanStaging(keeping: nil)
         await beat()
 
         progress(.model)
-        await CodexRuntimeMigration.cancel()
         await CodexSetup.shared.cancelInstallation()
         await ComputerUseSetup.cancelAll()
         await CuaDriverHost.shared.stop()
@@ -143,11 +148,9 @@ enum Uninstall {
                 ? try CodexRuntime.FileLock(CodexRuntime.root.appendingPathComponent(".runtime.lock"), exclusive: true) : nil
             defer { lease?.unlock() }
             try await OpenAIComputerUse.stopOwnedHelper()
-            try CodexRuntimeMigration.restoreLegacyAuthentication()
-            if FileManager.default.fileExists(atPath: URL.sentientSupport.path) {
-                try FileManager.default.removeItem(at: URL.sentientSupport)
-            }
+            try removeSupportFiles(at: URL.sentientSupport)
         } catch {
+            Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "runtime", error: error)
             lastFailure = "Uninstall paused because Sentient's runtime is still in use or couldn't be removed. Finish active tasks and retry."
             appState?.isUninstalling = false
             return false
@@ -159,14 +162,14 @@ enum Uninstall {
         let library = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library")
         for sub in ["Caches/\(bundleID)", "HTTPStorages/\(bundleID)", "WebKit/\(bundleID)",
                     "Saved Application State/\(bundleID).savedState", "Logs/SentientOS"] {
-            try? FileManager.default.removeItem(at: library.appendingPathComponent(sub, isDirectory: true))
+            Diagnostics.removeForCleanup(library.appendingPathComponent(sub, isDirectory: true), phase: .uninstall, reason: "app_cache")
         }
         // Every setting, flag, and latch at once — LAST, so a live observer can't re-persist a key.
         d.removePersistentDomain(forName: bundleID)
         d.synchronize()
         await beat()
 
-        Log("Uninstall: removed wake helper + cloud copy + keychain identity + knowledge base + model + cua driver + store + caches + TCC grant + defaults · left the .app, ~/.codex, and gift keepsakes untouched")
+        Log("Uninstall: cleanup attempts finished; individual failures are reported")
         return true
     }
 
@@ -182,16 +185,60 @@ enum Uninstall {
     static func finishAndQuit() -> Never {
         Log("Uninstall: goodbye — spawning the post-exit sweeper and exiting")
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let stragglers = ["\(home)/Library/Application Support/SentientOS",
-                          "\(home)/Library/Preferences/\(bundleID).plist",
+        let stragglers = ["\(home)/Library/Preferences/\(bundleID).plist",
                           "\(home)/Library/Caches/\(bundleID)",
                           "\(home)/Library/Saved Application State/\(bundleID).savedState"]
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
-        p.arguments = ["-c", "sleep 2; rm -rf " + stragglers.map { "'\($0)'" }.joined(separator: " ")]
+        p.arguments = ["-c", "sleep 2\n" + postExitCleanupScript, "sentient-uninstall",
+                       URL.sentientSupport.path, retiredRuntimeDirectoryName] + stragglers
         try? p.run()
         exit(0)
     }
+
+    // Preserve this entire retired subtree without opening it or checking a standalone home.
+    // Its old auth.json may still back a compatibility link created by a previous release.
+    static let retiredRuntimeDirectoryName = "Bundled Codex"
+
+    static func removeSupportFiles(at support: URL) throws {
+        var info = stat()
+        guard lstat(support.path, &info) == 0 else {
+            if errno == ENOENT { return }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        guard (info.st_mode & S_IFMT) == S_IFDIR else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(ENOTDIR))
+        }
+        let fm = FileManager.default
+        for child in try fm.contentsOfDirectory(at: support, includingPropertiesForKeys: [], options: []) {
+            guard child.lastPathComponent != retiredRuntimeDirectoryName else { continue }
+            try fm.removeItem(at: child)
+        }
+        // rmdir cannot descend into or remove preserved data, including files recreated during exit.
+        if rmdir(support.path) != 0, errno != ENOTEMPTY, errno != EEXIST, errno != ENOENT {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+    }
+
+    /// Paths are positional arguments, never shell source. Skip the retired name before even
+    /// checking its file type; an old shared credential must survive both cleanup passes.
+    static let postExitCleanupScript = #"""
+    support=$1
+    retired=$2
+    shift 2
+    if [ -L "$support" ]; then exit 1; fi
+    if [ -d "$support" ]; then
+        for entry in "$support"/* "$support"/.[!.]* "$support"/..?*; do
+            [ "${entry##*/}" = "$retired" ] && continue
+            [ -e "$entry" ] || [ -L "$entry" ] || continue
+            rm -rf -- "$entry"
+        done
+        rmdir "$support" 2>/dev/null || :
+    fi
+    for entry in "$@"; do
+        rm -rf -- "$entry"
+    done
+    """#
 
     /// A short breath between stages so each whisper is readable — the work itself is near-instant,
     /// and a label vanishing mid-word reads as a glitch, not a considered teardown.

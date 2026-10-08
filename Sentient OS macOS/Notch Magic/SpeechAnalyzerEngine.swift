@@ -41,7 +41,7 @@ final class SpeechAnalyzerEngine: QuickTranscriptionEngine {
         do {
             try await ensureModelReady()
         } catch {
-            Log("voice: prewarm skipped — \(error.localizedDescription)")
+            Log("voice: prewarm skipped — \(ErrorLabel(error))")
         }
     }
 

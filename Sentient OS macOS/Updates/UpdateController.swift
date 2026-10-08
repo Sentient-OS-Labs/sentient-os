@@ -70,7 +70,8 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
                 updater.checkForUpdatesInBackground()
             }
         } catch {
-            Log("Sparkle: updater failed to start — \(error.localizedDescription)")
+            Diagnostics.report(.updateFailed, phase: .start, error: error)
+            Log("Sparkle: updater failed to start — \(ErrorLabel(error))")
         }
     }
 
@@ -105,7 +106,12 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
                  didFinishUpdateCycleFor updateCheck: SPUUpdateCheck,
                  error: Error?) {
         if let error {
-            Log("Sparkle: update cycle finished with error — \((error as NSError).localizedDescription)")
+            let ns = error as NSError
+            // Sparkle documents these as ordinary cycle completion, not failed updates.
+            if ns.domain != SUSparkleErrorDomain || ![Int(SUError.noUpdateError.rawValue), Int(SUError.installationCanceledError.rawValue)].contains(ns.code) {
+                Diagnostics.report(.updateFailed, phase: .complete, error: error)
+            }
+            Log("Sparkle: update cycle finished with error — \(ErrorLabel(error))")
         }
     }
 
@@ -153,9 +159,9 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
         install()   // Sparkle terminates, installs, and relaunches us — zero UI.
     }
 
-    /// Two invariants: never relaunch out from under an in-flight processing run, and never yank the
-    /// app away from a user who's actively using it (UserPresence: not frontmost, or idle 5+ min).
+    /// Never relaunch during processing or an open Knowledge edit, even if the user has been
+    /// away for a while. Otherwise wait until Sentient is not frontmost or idle for 5+ minutes.
     private var isSafeToRelaunch: Bool {
-        !PipelineActivity.shared.isRunning && UserPresence.isAwayFromApp
+        !PipelineActivity.shared.isRunning && !VaultActivity.shared.editorBusy && UserPresence.isAwayFromApp
     }
 }

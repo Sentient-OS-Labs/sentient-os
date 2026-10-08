@@ -1,18 +1,13 @@
 // MailAccountCollection.swift
-// Collects and queues connected email addresses after an explicit connect/update action.
+// Collects and queues email addresses when the connected mailbox starts processing.
 // Missing connections and unknown addresses are skipped without a popup or manual entry.
 // Doc: Documentation - Connected Email Accounts.md
 
 import Foundation
 
 nonisolated enum MailAccountCollection {
-    static let storageDisclosure = "By pressing Done, you save your email address to Sentient's cloud database. Message bodies are not uploaded."
-
     enum Outcome: Sendable {
         case noConnection, noAddress, saved, pending
-        var connectionAvailable: Bool {
-            switch self { case .noConnection: false; default: true }
-        }
     }
 
     static func collect(engine: MailAccount.Engine, provider: MailAccount.Provider? = nil) async throws -> Outcome {

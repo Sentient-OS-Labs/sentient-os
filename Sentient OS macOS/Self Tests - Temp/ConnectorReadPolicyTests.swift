@@ -36,7 +36,7 @@ enum ConnectorReadPolicyTests {
                  .init(slug: "slack", displayName: "Slack", origin: .chatgpt,
                        serverURL: nil, catalogID: slackID, iconPath: nil, healthy: true, lastSeen: Date())]
             } ?? []
-            let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.bundled." + $0 } ?? "mcp.connectors.chatgpt"
+            let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.\(CodexRuntime.sessionScope)." + $0 } ?? "mcp.connectors.chatgpt"
             domain[codexKey] = try! JSONEncoder().encode(connectors)
             domain["mcp.connectors.claude"] = try! JSONEncoder().encode([
                 ConnectorCensus.DetectedConnector(slug: "slack", displayName: "Slack", origin: .claude,

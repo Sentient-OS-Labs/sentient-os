@@ -23,14 +23,21 @@ enum FactoryReset {
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil) async -> Bool {
+        // Invalidate in-flight learning before any suspension; explicit settings survive.
+        SidekickInstructionStore.resetLearning()
+        await HostedConnectorSetup.beginTeardown()
+        defer { HostedConnectorSetup.endTeardown() }
         // Retain contact records and their local identity, like invitation access. Reset clears
         // learned knowledge and app connections, not the founders' feedback contact list.
         do { try await DirectMCPConnections.shared.removeAll() }
-        catch { Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false }
+        catch {
+            Diagnostics.report(.cleanupFailed, phase: .reset, reason: "connector_credentials", error: error)
+            Log("FactoryReset: direct-connection Keychain cleanup needs retry"); return false
+        }
         await CycleStore.shared.wipeEverything()
-        try? FileManager.default.removeItem(at: VaultGenerator.vaultRoot)
+        Diagnostics.removeForCleanup(VaultGenerator.vaultRoot, phase: .reset, reason: "vault")
         ProactiveCycle.resetAll()
-        try? FileManager.default.removeItem(at: OutlookCalendarToolPolicy.pendingDirectory)
+        Diagnostics.removeForCleanup(OutlookCalendarToolPolicy.pendingDirectory, phase: .reset, reason: "pending_actions")
         LifetimeStats.reset()
         try? await MirrorClient.shared.deleteRemote()   // best-effort — offline reset still works
         let d = UserDefaults.standard
@@ -47,7 +54,7 @@ enum FactoryReset {
         d.removeObject(forKey: ComputerUseGate.micSpeechOfferedKey)         // re-offer the optional voice grant on rebuild
         d.removeObject(forKey: HealthCaution.nativeComputerUseEverReadyKey)
         d.removeObject(forKey: HealthCaution.computerUseEverReadyKey)       // the home's computer-use banner re-arms at the rebuild's own gate
-        d.removeObject(forKey: SidekickHistory.key)                         // recent Sidekick requests are learnings — a rebuild starts blank
+        SidekickHistory.reset()                                          // paired requests and outcomes start blank on rebuild
         // The overnight scheduler starts over too: the 14h clock re-stamps at the REBUILD's first
         // cycle (not the wiped one's), the auto-enable one-shot is re-armed, and the production
         // flag comes off — otherwise a 3am run could fire mid-onboarding, racing the user's own
@@ -70,7 +77,7 @@ enum FactoryReset {
         appState?.scheduler.reevaluate()                // prod flag is gone → stops the loop + cancels the armed wake
         appState?.hasCompletedOnboarding = false        // live flip (didSet re-persists false)
         ComputerUseUpgrade.shared.reset()              // clear pending migration after the onboarding rewind
-        Log("FactoryReset: wiped cycle store + knowledge base + proactive traces + lifetime counters + cloud mirror copy + scheduler state + connector state · rewound to onboarding")
+        Log("FactoryReset: cleanup attempts finished; individual failures are reported · rewound to onboarding")
         return true
     }
 }

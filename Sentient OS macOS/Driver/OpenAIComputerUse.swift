@@ -11,13 +11,12 @@ nonisolated enum OpenAIComputerUse {
     static let serviceRelativePath = "Contents/MacOS/SkyComputerUseService"
     static let clientRelativePath = "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
 
-    static var codexHome: URL { CodexRuntime.activeHome }
+    static var codexHome: URL { CodexRuntime.home }
 
     static var appURL: URL { codexHome.appendingPathComponent("computer-use/Codex Computer Use.app", isDirectory: true) }
     static var clientURL: URL { appURL.appendingPathComponent(clientRelativePath) }
 
-    /// One executable choice for the model, native client, and GUI service. Resolve the managed
-    /// install's symlink so switching its current-version link cannot redirect an in-flight task.
+    /// One private executable and home for the model, native client, and GUI service.
     struct Configuration: Equatable, Sendable {
         let cliURL: URL
         let home: URL
@@ -28,6 +27,12 @@ nonisolated enum OpenAIComputerUse {
         init(cliPath: String, home: URL = OpenAIComputerUse.codexHome,
              environment inherited: [String: String] = ProcessInfo.processInfo.environment) throws {
             let original = URL(fileURLWithPath: cliPath).standardizedFileURL
+            guard original == CodexRuntime.executable.standardizedFileURL,
+                  home.standardizedFileURL == CodexRuntime.home.standardizedFileURL else {
+                throw RuntimeError.cliUnavailable
+            }
+            try CodexRuntime.prepareHome()
+            try CodexRuntime.verifyCLIForLaunch()
             let resolved = original.resolvingSymlinksInPath()
             guard FileManager.default.isExecutableFile(atPath: resolved.path),
                   (try? resolved.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
@@ -35,10 +40,9 @@ nonisolated enum OpenAIComputerUse {
             }
             cliURL = resolved
             self.home = home.standardizedFileURL.resolvingSymlinksInPath()
-            if resolved == CodexRuntime.executable.resolvingSymlinksInPath() { try CodexRuntime.verifyCLIForLaunch() }
             var environment = inherited.filter { ["HOME", "USER", "LOGNAME", "TMPDIR", "PATH"].contains($0.key) }
             let userHome = inherited["HOME"] ?? FileManager.default.homeDirectoryForCurrentUser.path
-            // Keep the shim's original directory too: npm/nvm may keep node beside the shim.
+            // Explicit CODEX_CLI_PATH chooses Sentient's binary; PATH serves its utility children.
             let directories = [resolved.deletingLastPathComponent().path, original.deletingLastPathComponent().path,
                 "\(userHome)/.local/bin", "/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin",
                 "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
@@ -50,10 +54,11 @@ nonisolated enum OpenAIComputerUse {
             self.environment = environment
         }
 
-        /// A permission check may have selected the old home just before migration published.
+        /// Refuse stale or externally supplied routing after waiting for a runtime lease.
         func afterRuntimeLease() throws -> Self {
-            if CodexRuntimeMigration.completed, home == CodexRuntimeMigration.legacyHome.resolvingSymlinksInPath() {
-                return try Self.resolve()
+            guard cliURL == CodexRuntime.executable.standardizedFileURL.resolvingSymlinksInPath(),
+                  home == CodexRuntime.home.standardizedFileURL.resolvingSymlinksInPath() else {
+                throw RuntimeError.changedInstallation
             }
             return self
         }
@@ -63,7 +68,7 @@ nonisolated enum OpenAIComputerUse {
             return try Self(cliPath: binary)
         }
 
-        /// Discovery can invoke a login shell for npm/nvm installs; never block a permission UI.
+        /// Package verification touches disk; never block a permission UI.
         static func resolveForSetup() async throws -> Self {
             let configuration = try await Task.detached(priority: .utility) { try resolve() }.value
             try Task.checkCancellation()
@@ -105,8 +110,7 @@ nonisolated enum OpenAIComputerUse {
               let version = info["CFBundleShortVersionString"] as? String,
               let buildString = info["CFBundleVersion"] as? String,
               let build = Int(buildString) else { return nil }
-        let legacy = CodexRuntimeMigration.isPending && app.resolvingSymlinksInPath() == CodexRuntimeMigration.legacyHelper.resolvingSymlinksInPath()
-        guard legacy ? build >= 1_001_093 : (build == CodexRuntime.release.helperBuild && version == CodexRuntime.release.helper.version) else { return nil }
+        guard build == CodexRuntime.release.helperBuild && version == CodexRuntime.release.helper.version else { return nil }
         return Installation(version: version, build: build)
     }
 
@@ -133,14 +137,11 @@ nonisolated enum OpenAIComputerUse {
         }
     }
 
+    /// Local integrity and signature checks only. The required MCP connection authenticates at
+    /// task execution; setup and repair can explicitly run OpenAIComputerUseProbe as a diagnostic.
     @discardableResult
-    @concurrent static func validate(at app: URL, configuration supplied: Configuration? = nil) async throws -> Installation {
-        if !(CodexRuntimeMigration.isPending && app.resolvingSymlinksInPath() == CodexRuntimeMigration.legacyHelper.resolvingSymlinksInPath()) {
-            try CodexRuntime.verify(CodexRuntime.release.helper, at: app)
-        }
-        let configuration: Configuration
-        if let selected = supplied { configuration = selected }
-        else { configuration = try await .resolveForSetup() }
+    @concurrent static func validate(at app: URL) async throws -> Installation {
+        try CodexRuntime.verify(CodexRuntime.release.helper, at: app)
         guard let installation = installation(at: app) else { throw RuntimeError.incomplete }
         if let data = try? Data(contentsOf: app.appendingPathComponent("Contents/Info.plist")),
            let info = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any],
@@ -156,36 +157,23 @@ nonisolated enum OpenAIComputerUse {
                 stdinText: nil, cwd: nil, timeout: 30)
             guard result.status == 0 else { throw RuntimeError.invalidSignature }
         }
-        // An MCP initialize handshake is read-only and does not inspect any app or require a
-        // model call. It catches a signed but incompatible/missing client at setup time.
-        let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"sentient-setup","version":"1"}}}"# + "\n"
-        let probe = try await CodexCLI.executeAsync(binary: app.appendingPathComponent(clientRelativePath).path,
-            args: ["mcp"], stdinText: initialize, cwd: nil, timeout: 15,
-            extraEnv: configuration.clientEnvironment)
-        let initialized = probe.stdout.split(separator: "\n").contains { line in
-            guard let message = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
-                  message["id"] as? Int == 1, let result = message["result"] as? [String: Any],
-                  let capabilities = result["capabilities"] as? [String: Any] else { return false }
-            return capabilities["tools"] != nil
-        }
-        guard probe.status == 0, initialized else { throw RuntimeError.incomplete }
         try Task.checkCancellation()
         return installation
     }
 
-    /// The compatibility helper may finish existing work after the private home is published.
-    /// Its native clients receive the selected private CLI and home on every connection.
+    /// An already-running helper is reusable only at the exact private installation path.
+    /// Never inspect another installation's files to decide whether it is compatible.
     @concurrent static func acceptsRunningHelper(at url: URL, configuration: Configuration) async -> Bool {
-        if url.resolvingSymlinksInPath() == configuration.appURL.resolvingSymlinksInPath() { return true }
-        return CodexRuntimeMigration.completed
-            && url.resolvingSymlinksInPath() == CodexRuntimeMigration.legacyHelper.resolvingSymlinksInPath()
-            && (try? CodexRuntime.verify(CodexRuntime.release.helper, at: url)) != nil
+        url.standardizedFileURL == configuration.appURL.standardizedFileURL
     }
 
     /// Uninstall stops only the helper launched from Sentient's directory.
     @MainActor static func stopOwnedHelper() async throws {
+        // Compare the owned path itself. Resolving a replaced app symlink could make a
+        // standalone helper appear to be ours and terminate another application's process.
+        let ownedURL = CodexRuntime.helper.standardizedFileURL
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).filter {
-            $0.bundleURL?.resolvingSymlinksInPath() == CodexRuntime.helper.resolvingSymlinksInPath()
+            $0.bundleURL?.standardizedFileURL == ownedURL
         }
         for app in running { app.terminate() }
         for _ in 0..<30 {

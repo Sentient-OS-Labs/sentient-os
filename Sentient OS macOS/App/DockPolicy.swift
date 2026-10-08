@@ -2,8 +2,8 @@
 //  DockPolicy.swift
 //  Sentient OS macOS
 //
-//  The Dock icon belongs to the HOME window: it shows while home is up and drops when home
-//  closes — auxiliary windows (Settings, Knowledge, Connect AIs) float without a Dock tile,
+//  The Dock icon belongs to the main window, on Home, Settings, or Knowledge. It drops when
+//  that window closes — auxiliary guides (Connect AIs) float without a Dock tile,
 //  like a menu-bar app's panels, with the menu bar item as the ever-present anchor. Flips
 //  NSApp between .regular (home is up) and .accessory (it isn't), driven by NSWindow
 //  open/close notifications. `start()` once from AppState; `reevaluate()` does the check.
@@ -17,9 +17,8 @@ final class DockPolicy {
 
     private var observers: [NSObjectProtocol] = []
 
-    /// Begin watching windows. Call once (AppState.init). We deliberately DON'T evaluate eagerly:
-    /// the app launches .regular (no LSUIElement), the home/onboarding window opens and keeps us
-    /// there, and we only ever drop to .accessory on a real close — so there's no launch flicker.
+    /// Begin watching windows once. The app delegate applies the initial policy after launch;
+    /// subsequent main-window open/close events keep the Dock in sync.
     func start() {
         let nc = NotificationCenter.default
         func watch(_ name: Notification.Name, closing: Bool) {

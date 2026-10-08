@@ -78,7 +78,7 @@ final class ComputerUseUpgrade {
     }
 
     func prepareForLaunch(onSetupFinished: @escaping @MainActor () -> Void) {
-        guard !isBlockingInterface, !CodexRuntimeMigration.isPending else { return }
+        guard !isBlockingInterface else { return }
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: AppState.onboardingKey) else { return }
         migrationBackend = .current

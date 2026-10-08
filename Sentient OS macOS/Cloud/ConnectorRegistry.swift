@@ -475,6 +475,9 @@ nonisolated enum ConnectorRegistry {
     static func readOrigin(slug: String, backend: ModelBackend) -> String {
         if let direct = DirectMCPStore.connection(slug) { return "direct:\(direct.id):\(direct.generation)" }
         let generation = UserDefaults.standard.integer(forKey: readGenerationKey(slug, backend.rawValue))
+        if backend == .chatgpt {
+            return "v2:chatgpt:\(CodexRuntime.sessionScope):\(CodexRuntime.accountIdentity ?? "signed-out"):\(generation)"
+        }
         return "v1:\(backend.rawValue):\(generation)"
     }
 

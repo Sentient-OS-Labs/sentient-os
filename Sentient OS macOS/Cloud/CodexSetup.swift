@@ -82,15 +82,17 @@ final class CodexSetup {
     }
 
     /// Used by engine commitment and by startup when computer use needs a compatible CLI.
-    /// Downloads the approved private runtime; a user-managed CLI is untouched.
+    /// Downloads only the approved private runtime. Every user signs in to this profile directly.
     /// Concurrent callers await the same preparation, and failed preparation is always retryable.
     func ensureCurrent() async -> Bool {
         guard !shuttingDown else { return false }
-        CodexRuntimeMigration.start(existingUser: true)
-        if CodexRuntimeMigration.isPending { return await CodexRuntimeMigration.finishCurrentAttempt() }
         if let preparationTask { return await preparationTask.value }
         preparing = true
-        let task = Task { await prepareCurrent() }
+        let task = Task {
+            guard await prepareCurrent(), !Task.isCancelled else { return false }
+            await refreshLoginStatus()
+            return !Task.isCancelled
+        }
         preparationTask = task
         let ready = await task.value
         preparationTask = nil
@@ -243,7 +245,7 @@ final class CodexSetup {
     /// Verify the pinned runtime at most daily, while idle. Repair a missing or modified package.
     func updateIfDue(trigger: String) async {
         // Every engine uses the private Codex runtime for computer tasks.
-        guard !shuttingDown, !CodexRuntimeMigration.isPending else { return }
+        guard !shuttingDown else { return }
         guard !installing, !preparing, !PipelineActivity.shared.isRunning, runLockHeld?() != true else { return }
         guard FileManager.default.fileExists(atPath: CodexRuntime.root.path) else { return }
         // Once a day; a stale-client signal on a successful run pulls the next attempt forward,
@@ -322,14 +324,9 @@ final class CodexSetup {
     func cancelInstallation() async {
         shuttingDown = true
         keepCurrentTimer?.invalidate()
-        loginGeneration = UUID()
+        await cancelLogin()
         connectorRefreshTask?.cancel()
         _ = await connectorRefreshTask?.value
-        if let process = loginProcess, process.isRunning {
-            process.terminate()
-            await Task.detached { process.waitUntilExit() }.value
-        }
-        loginProcess = nil
         preparationTask?.cancel()
         installTask?.cancel()
         _ = await preparationTask?.value
@@ -341,8 +338,12 @@ final class CodexSetup {
     /// Is codex logged in? Ground truth = `codex login status` (refreshed async — there's no cheap
     /// synchronous check). No subscription gate needed: codex is in every OpenAI plan, free included.
     private(set) var loggedIn = false
+    /// True only after a noncancelled status check for the current private login attempt.
+    private(set) var loginStatusChecked = false
     /// A login flow is in progress — the browser opened, awaiting the user to finish + confirm.
     private(set) var loggingIn = false
+    /// The active attempt's automatic browser link. Kept only in memory until it ends.
+    private(set) var loginURL: URL?
     /// Latest status line for step 2.
     private(set) var loginStatusLine: String?
     /// The running `codex login` process (the localhost OAuth callback server) — kept so we can
@@ -350,70 +351,123 @@ final class CodexSetup {
     private var loginProcess: Process?
     private var startingLogin = false
     private var loginGeneration = UUID()
+    private var loginStatusProbe = UUID()
     private var connectorRefreshTask: Task<Void, Never>?
     private var refreshedAccount: String?
     private var lastConnectorRefresh: Date?
 
-    /// Re-check login status via `codex login status` — call on appear and after a confirm.
+    /// Re-check only the private profile. A stale probe cannot overwrite a newer sign-in or dismissal.
     func refreshLoginStatus() async {
-        loggedIn = await CodexCLI.loginStatus()
-        if loggedIn {
-            loggingIn = false
-            refreshConnectorsAfterLogin()
-        }
+        _ = await checkLoginStatus()
     }
 
-    /// Step 2a — start the interactive login. Spawns `codex login` (opens the browser) and flips into
-    /// the "awaiting browser" state; the user finishes in the browser, then taps "Finished logging
-    /// into codex" → `confirmLogin()`. Both onboarding and the dev button call THIS.
-    func startLogin(force: Bool = false) async {
-        guard !shuttingDown, !startingLogin else { return }
+    private func checkLoginStatus() async -> Bool? {
+        guard !shuttingDown, !Task.isCancelled else { return nil }
+        let generation = loginGeneration
+        let probe = UUID()
+        loginStatusProbe = probe
+        let ok = await CodexCLI.loginStatus()
+        guard !Task.isCancelled, !shuttingDown, generation == loginGeneration,
+              probe == loginStatusProbe else { return nil }
+        loggedIn = ok
+        loginStatusChecked = true
+        if ok {
+            loggingIn = false
+            loginURL = nil
+            if loginProcess?.isRunning != true { loginProcess = nil }
+            refreshConnectorsAfterLogin()
+        } else if let process = loginProcess, !process.isRunning {
+            loginProcess = nil
+            loggingIn = false
+            loginURL = nil
+            loginStatusLine = "✗ Sign-in didn't finish. Please try again."
+        }
+        return ok
+    }
+
+    /// Opens ChatGPT sign-in for this profile. The returned token owns only the login this call
+    /// starts, so dismissing one surface cannot cancel a later login started elsewhere.
+    @discardableResult
+    func startLogin(force: Bool = false) async -> UUID? {
+        guard !shuttingDown, !startingLogin, !Task.isCancelled else { return nil }
+        guard installed else { loginStatusLine = "✗ Install the Codex CLI first"; return nil }
+        if !force, loggedIn { loginStatusLine = "✓ Already logged in"; return nil }
         startingLogin = true
         defer { startingLogin = false }
-        let generation = loginGeneration
-        guard installed else { loginStatusLine = "✗ Install the Codex CLI first"; return }
-        if !force, loggedIn { loginStatusLine = "✓ Already logged in"; return }   // self-guard; "Log in again" passes force
-        if let process = loginProcess, process.isRunning {
-            process.terminate()
-            await Task.detached { process.waitUntilExit() }.value
-        }
-        guard !Task.isCancelled, generation == loginGeneration else { return }
+        let generation = UUID()
+        loginGeneration = generation
+        loginStatusProbe = UUID()
+        loginStatusChecked = false
+        let previous = loginProcess
         loginProcess = nil
+        loggingIn = false
+        loginURL = nil
+        if let previous, previous.isRunning {
+            previous.terminate()
+            await Task.detached { previous.waitUntilExit() }.value
+        }
+        connectorRefreshTask?.cancel()
+        _ = await connectorRefreshTask?.value
+        guard !Task.isCancelled, !shuttingDown, generation == loginGeneration else { return nil }
         do {
-            loginProcess = try CodexCLI.startLogin()
+            loginProcess = try CodexCLI.startLogin(onURL: { [weak self] url in
+                guard let self else { return }
+                Task { @MainActor in
+                    guard self.loginGeneration == generation, self.loggingIn,
+                          self.loginProcess?.isRunning == true else { return }
+                    self.loginURL = url
+                }
+            }, onExit: { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    guard self.loginGeneration == generation else { return }
+                    self.loginURL = nil
+                    await self.refreshLoginStatus()
+                }
+            })
             loggedIn = false
             refreshedAccount = nil
             lastConnectorRefresh = nil
             loggingIn = true
-            // UI-neutral on purpose: onboarding and Settings → Health both auto-notice the
-            // finished sign-in (no confirm button); only the dev sheet still has one.
             loginStatusLine = "A browser window opened; finish signing in there. Sentient notices on its own when you're done."
+            return generation
         } catch {
             loggingIn = false
+            loginURL = nil
             loginStatusLine = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
             stepFailed(.login, error)
+            return nil
         }
     }
 
-    /// Step 2b — the "Finished logging into codex" button. Checks `codex login status`; on success
-    /// cleans up the (by now finished) login process. On failure, leaves the flow open to retry.
+    /// Stop this surface's callback server without removing any saved login. An ownership token
+    /// makes late dismissal harmless when another surface has already started a replacement.
+    func cancelLogin(ifAttempt attempt: UUID? = nil) async {
+        guard attempt == nil || attempt == loginGeneration else { return }
+        loginGeneration = UUID()
+        loginStatusProbe = UUID()
+        loginStatusChecked = false
+        loggingIn = false
+        loginURL = nil
+        loginStatusLine = nil
+        let process = loginProcess
+        loginProcess = nil
+        if let process, process.isRunning {
+            process.terminate()
+            await Task.detached { process.waitUntilExit() }.value
+        }
+    }
+
+    /// Manual confirmation shares the same status check as automatic observation.
     func confirmLogin() async {
         loginStatusLine = "Checking…"
-        let ok = await CodexCLI.loginStatus()
-        loggedIn = ok
-        if ok {
-            loggingIn = false
-            loginProcess?.terminate()      // the OAuth callback server already did its job
-            loginProcess = nil
-            loginStatusLine = "✓ Logged in to Codex"
-            refreshConnectorsAfterLogin()
-        } else {
-            loginStatusLine = "✗ Not logged in yet; finish in the browser, then tap again."
-        }
+        guard let ok = await checkLoginStatus() else { return }
+        loginStatusLine = ok ? "✓ Logged in to Codex"
+            : "✗ Not logged in yet; finish in the browser, then tap again."
     }
 
     private func refreshConnectorsAfterLogin() {
-        guard !shuttingDown, !CodexRuntimeMigration.isPending, let account = CodexRuntime.accountIdentity, account != refreshedAccount,
+        guard !shuttingDown, let account = CodexRuntime.accountIdentity, account != refreshedAccount,
               connectorRefreshTask == nil, loginProcess?.isRunning != true,
               lastConnectorRefresh.map({ Date().timeIntervalSince($0) >= 60 }) ?? true else { return }
         lastConnectorRefresh = Date()

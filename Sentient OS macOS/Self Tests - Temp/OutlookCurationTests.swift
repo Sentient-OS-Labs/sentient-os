@@ -22,7 +22,7 @@ enum OutlookCurationTests {
         let saved = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
         defer { defaults.setVolatileDomain(saved, forName: UserDefaults.argumentDomain) }
         var domain = saved
-        let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.bundled." + $0 } ?? "mcp.connectors.chatgpt"
+        let codexKey = CodexRuntime.accountIdentity.map { "mcp.connectors.chatgpt.\(CodexRuntime.sessionScope)." + $0 } ?? "mcp.connectors.chatgpt"
         domain[codexKey] = try! JSONEncoder().encode([
             ConnectorCensus.DetectedConnector(slug: "outlook-email", displayName: "Outlook Email", origin: .chatgpt,
                 serverURL: nil, catalogID: fixtureID, iconPath: nil, healthy: true, lastSeen: Date())])

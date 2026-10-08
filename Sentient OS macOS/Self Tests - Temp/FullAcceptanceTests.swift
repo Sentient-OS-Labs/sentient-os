@@ -130,7 +130,7 @@ enum FullAcceptanceTests {
         }
         if env["LAB_GOOGLE_ITERATIVE_ONLY"] == "1" {
             let since = Date().addingTimeInterval(-86_400)
-            try await GoogleSourceRead.commit(bucket: slug, notes: [], through: since)
+            try await GoogleSourceRead.commit(bucket: slug, notes: [], through: since, origin: GoogleSourceRead.origin(bucket: slug))
             let count = try await FrontierRun.$acceptanceRun.withValue(capture) {
                 slug == "gmail" ? try await GmailConnect.runIterative() : try await CalendarConnect.runIterative()
             }
