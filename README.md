@@ -1,6 +1,8 @@
-# your mac, sentient.
-
-**Hand off the work you're already doing.**
+<p align="center">
+  <a href="https://sentient-os.ai/">
+    <img src=".github/readme/hero.jpg" width="1200" alt="Sentient OS: hand off the work you're already doing. On-device understanding, computer use with its own cursor, and replies in your voice in two taps. Privacy at the core. Backed by Y Combinator." />
+  </a>
+</p>
 
 Sentient OS is an open-source personal AI for your Mac. It understands the context of your life and work overnight, so you can hand off a task, draft the right reply in two taps, or wake up to useful work already prepared for your approval. Your own apps. Your logged-in browser. The stuff you were about to do yourself.
 
