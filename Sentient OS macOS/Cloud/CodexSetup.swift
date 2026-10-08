@@ -342,6 +342,8 @@ final class CodexSetup {
     private(set) var loginStatusChecked = false
     /// A login flow is in progress — the browser opened, awaiting the user to finish + confirm.
     private(set) var loggingIn = false
+    /// The active attempt's automatic browser link. Kept only in memory until it ends.
+    private(set) var loginURL: URL?
     /// Latest status line for step 2.
     private(set) var loginStatusLine: String?
     /// The running `codex login` process (the localhost OAuth callback server) — kept so we can
@@ -371,11 +373,13 @@ final class CodexSetup {
         loginStatusChecked = true
         if ok {
             loggingIn = false
+            loginURL = nil
             if loginProcess?.isRunning != true { loginProcess = nil }
             refreshConnectorsAfterLogin()
         } else if let process = loginProcess, !process.isRunning {
             loginProcess = nil
             loggingIn = false
+            loginURL = nil
             loginStatusLine = "✗ Sign-in didn't finish. Please try again."
         }
         return ok
@@ -397,6 +401,7 @@ final class CodexSetup {
         let previous = loginProcess
         loginProcess = nil
         loggingIn = false
+        loginURL = nil
         if let previous, previous.isRunning {
             previous.terminate()
             await Task.detached { previous.waitUntilExit() }.value
@@ -405,7 +410,21 @@ final class CodexSetup {
         _ = await connectorRefreshTask?.value
         guard !Task.isCancelled, !shuttingDown, generation == loginGeneration else { return nil }
         do {
-            loginProcess = try CodexCLI.startLogin()
+            loginProcess = try CodexCLI.startLogin(onURL: { [weak self] url in
+                guard let self else { return }
+                Task { @MainActor in
+                    guard self.loginGeneration == generation, self.loggingIn,
+                          self.loginProcess?.isRunning == true else { return }
+                    self.loginURL = url
+                }
+            }, onExit: { [weak self] in
+                guard let self else { return }
+                Task { @MainActor in
+                    guard self.loginGeneration == generation else { return }
+                    self.loginURL = nil
+                    await self.refreshLoginStatus()
+                }
+            })
             loggedIn = false
             refreshedAccount = nil
             lastConnectorRefresh = nil
@@ -414,6 +433,7 @@ final class CodexSetup {
             return generation
         } catch {
             loggingIn = false
+            loginURL = nil
             loginStatusLine = "✗ \((error as? LocalizedError)?.errorDescription ?? "\(error)")"
             stepFailed(.login, error)
             return nil
@@ -428,6 +448,7 @@ final class CodexSetup {
         loginStatusProbe = UUID()
         loginStatusChecked = false
         loggingIn = false
+        loginURL = nil
         loginStatusLine = nil
         let process = loginProcess
         loginProcess = nil

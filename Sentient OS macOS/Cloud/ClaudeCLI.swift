@@ -286,35 +286,27 @@ actor ClaudeCLI {
     /// sign-in and self-exits once the OAuth callback lands (credentials go to the user's
     /// Keychain — shared with their own Claude Code, by decision). Same contract as
     /// CodexCLI.startLogin: returns the running Process, never awaited to completion.
-    static func startLogin(onLine: @escaping @Sendable (String) -> Void) throws -> Process {
+    static func startLogin(onURL: @escaping @Sendable (URL) -> Void,
+                           onExit: @escaping @Sendable () -> Void) throws -> Process {
         guard let bin = locateBinary() else { throw CodexCLI.CLIError.notAvailable(.notInstalled) }
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: bin)
         proc.arguments = ["auth", "login"]
         var env = CodexCLI.richEnvironment(binDir: (bin as NSString).deletingLastPathComponent)
         env.merge(baseEnv) { _, new in new }
+        // stdout contains Claude's manual-code URL, not the URL it opens automatically.
+        // Override only this child's browser launcher; the user's settings stay untouched.
+        let browser = try? ClaudeLoginBrowser(onURL: onURL)
+        if let browser { env.merge(browser.environment) { _, new in new } }
         proc.environment = env
         proc.standardInput = FileHandle.nullDevice
-        let outPipe = Pipe(), errPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = errPipe
-        for (pipe, prefix) in [(outPipe, ""), (errPipe, "stderr: ")] {
-            DispatchQueue.global(qos: .utility).async {
-                var buf = Data()
-                let handle = pipe.fileHandleForReading
-                while true {
-                    let chunk = handle.availableData
-                    if chunk.isEmpty { break }
-                    buf.append(chunk)
-                    while let nl = buf.firstIndex(of: 0x0A) {
-                        onLine(prefix + String(decoding: buf[..<nl], as: UTF8.self))
-                        buf = Data(buf[buf.index(after: nl)...])
-                    }
-                }
-                if !buf.isEmpty { onLine(prefix + String(decoding: buf, as: UTF8.self)) }
-            }
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        proc.terminationHandler = { _ in browser?.stop(); onExit() }
+        do { try proc.run() } catch {
+            browser?.stop()
+            throw CodexCLI.CLIError.launchFailed("\(error)")
         }
-        do { try proc.run() } catch { throw CodexCLI.CLIError.launchFailed("\(error)") }
         return proc
     }
 

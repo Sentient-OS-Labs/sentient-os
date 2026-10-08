@@ -15,6 +15,8 @@ import Foundation
 final class Process: @unchecked Sendable {
     var isRunning = true
     var terminated = false
+    var onURL: (@Sendable (URL) -> Void)?
+    var onExit: (@Sendable () -> Void)?
     func terminate() { terminated = true; isRunning = false }
     func waitUntilExit() {}
 }
@@ -24,9 +26,11 @@ final class Process: @unchecked Sendable {
     static var processes: [Process] = []
     enum Failure: Error { case launch }
     static func loginStatus() async -> Bool { await status() }
-    static func startLogin() throws -> Process {
+    static func startLogin(onURL: @escaping @Sendable (URL) -> Void,
+                           onExit: @escaping @Sendable () -> Void) throws -> Process {
         if launchFails { throw Failure.launch }
-        let process = Process(); processes.append(process); return process
+        let process = Process(); process.onURL = onURL; process.onExit = onExit
+        processes.append(process); return process
     }
 }
 @MainActor final class Gate {
@@ -56,6 +60,8 @@ __METHODS__
         fatalError("Fixture didn't reach suspended state")
     }
     @MainActor static func main() async {
+        let link = URL(string: "https://example.com/attempt-one")!
+        let otherLink = URL(string: "https://example.com/attempt-two")!
         let setup = Setup()
         check(!setup.loggedIn && !setup.loginStatusChecked, "No green state before the private check")
         await setup.refreshLoginStatus()
@@ -67,16 +73,27 @@ __METHODS__
         let first = await setup.startLogin()
         check(first != nil && setup.loggingIn && !setup.loginStatusChecked, "Own login resets verdict and owns callback")
         let firstProcess = CodexCLI.processes.last!
+        firstProcess.onURL?(link)
+        for _ in 0..<100 { await Task.yield() }
+        check(setup.loginURL == link && setup.loggingIn, "Capturing a link preserves the waiting login")
         gate.release(); await stale.value
         check(!setup.loginStatusChecked && setup.loggingIn, "Old check cannot overwrite newer login")
 
         let second = await setup.startLogin(force: true)
         let secondProcess = CodexCLI.processes.last!
+        check(setup.loginURL == nil, "Replacement clears previous link immediately")
+        firstProcess.onURL?(link); firstProcess.onExit?()
+        secondProcess.onURL?(otherLink)
+        for _ in 0..<100 { await Task.yield() }
+        check(setup.loginURL == otherLink && setup.loggingIn, "Late URL and exit from old attempt cannot replace current link")
         check(second != nil && second != first && firstProcess.terminated, "Replacement stops only previous own callback")
         await setup.cancelLogin(ifAttempt: first)
         check(setup.loggingIn && !secondProcess.terminated, "Old sheet cannot stop Settings replacement")
         await setup.cancelLogin(ifAttempt: second)
         check(!setup.loggingIn && secondProcess.terminated, "Matching cancellation stops callback")
+        secondProcess.onURL?(otherLink)
+        for _ in 0..<100 { await Task.yield() }
+        check(setup.loginURL == nil, "Cancellation rejects a late URL")
 
         let lateGate = Gate()
         CodexCLI.status = { await lateGate.wait(); return true }
@@ -104,6 +121,7 @@ __METHODS__
         CodexCLI.status = { true }
         await setup.confirmLogin()
         check(setup.loggedIn && setup.loginStatusChecked && setup.refreshes == 1, "Confirmed own auth refreshes connectors")
+        check(setup.loginURL == nil, "Successful sign-in exposes no stale copy link")
         let processCount = CodexCLI.processes.count
         let noStart = await setup.startLogin()
         check(noStart == nil && CodexCLI.processes.count == processCount, "Already signed in does not open browser")
@@ -116,6 +134,8 @@ __METHODS__
         await exited.refreshLoginStatus()
         check(exited.loggingIn, "Negative check while callback runs keeps browser flow open")
         CodexCLI.processes.last!.isRunning = false
+        CodexCLI.processes.last!.onExit?()
+        for _ in 0..<100 { await Task.yield() }
         await exited.refreshLoginStatus()
         check(!exited.loggingIn && !exited.loggedIn && exited.loginStatusLine?.contains("try again") == true,
               "Exited callback without auth restores onboarding retry button")

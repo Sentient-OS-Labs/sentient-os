@@ -15,6 +15,7 @@ struct ConnectorConnectSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var openedConnectorPage = false
+    @State private var startedDirectConnection = false
     @State private var boundConnectorID: String?
     @State private var connectionPhase: DirectMCPConnectPhase?
     @State private var newConnectionID: UUID?
@@ -120,12 +121,20 @@ struct ConnectorConnectSheet: View {
                         .padding(.top, 20)
                 }
 
-                actionButton(connectTitle,
-                             primary: true, external: !connecting, action: connect)
+                if startedDirectConnection {
+                    Text("Sign in to \(name) in your browser, and then come back to Sentient.")
+                        .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Ink.body)
+                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 14)
+                }
+
+                ConnectorActionButton(title: connectTitle, isLoading: connecting, action: connect)
                     .padding(.top, 26)
                     .disabled(busy)
-                actionButton("Done", action: done)
-                    .padding(.top, 10).disabled(busy)
+                if startedDirectConnection {
+                    ConnectorActionButton(title: "Done", kind: .done, action: done)
+                        .padding(.top, 14).disabled(busy)
+                }
 
                 statusLine.padding(.top, 14).frame(minHeight: 42, alignment: .top)
 
@@ -153,48 +162,49 @@ struct ConnectorConnectSheet: View {
     }
 
     private var hostedControls: some View {
-        VStack(spacing: 16) {
-            Button(action: connect) {
-                HStack(spacing: 7) {
-                    Text(hostedConnected ? "Open connector settings" : "Connect \(name)")
-                        .font(.system(size: 14, weight: .medium))
-                    Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold))
+        VStack(spacing: 0) {
+            if !hostedConnected {
+                Text(hostedInstructions)
+                    .font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.Ink.body)
+                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 14)
+
+                if hostedBackend == .claude && ["outlook-mail", "outlook-calendar"].contains(source.serviceSlug) {
+                    Text("Uses Microsoft 365 with a work or school account.")
+                        .font(.system(size: 11)).foregroundStyle(Theme.faint)
+                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 12)
                 }
-                .foregroundStyle(Theme.Ink.bright)
-                .frame(minHeight: 32)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(PressScaleStyle())
+
+            ConnectorActionButton(title: hostedConnected ? "Open connector settings" : "Connect \(name)",
+                                  action: connect)
+                .padding(.top, 26)
 
             if hostedConnected {
                 if hostedCanRead {
                     Button("Stop reading \(name)", action: stopHostedReading)
                         .buttonStyle(.plain).font(.system(size: 11))
                         .foregroundStyle(Theme.Ink.deepMuted)
+                        .padding(.top, 18)
                 } else {
                     taskOnlyNotice
+                        .padding(.top, 18)
                 }
-            } else {
-                actionButton("Done", primary: true, action: done)
-                Text(hostedCanRead
-                     ? "Sentient reads \(name) through your \(reader) connector. Enable it and sign in there, then press Done."
-                     : "Enable \(name) in your \(reader) connectors and sign in there, then press Done to use it for tasks.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-
-                if hostedBackend == .claude && ["outlook-mail", "outlook-calendar"].contains(source.serviceSlug) {
-                    Text("Uses Microsoft 365 with a work or school account.")
-                        .font(.system(size: 11)).foregroundStyle(Theme.faint)
-                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                }
-                if source.serviceSlug == "gmail" || OutlookMailConnector.isMail(source.serviceSlug) {
-                    Text(MailAccountCollection.storageDisclosure)
-                        .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
-                        .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                }
+            } else if openedConnectorPage {
+                ConnectorActionButton(title: "Done", kind: .done, action: done)
+                    .padding(.top, 14)
             }
         }
-        .padding(.top, 26)
+    }
+
+    private var hostedInstructions: String {
+        if openedConnectorPage {
+            return "Connect \(name) to your \(reader) account, and then come back to Sentient."
+        }
+        return hostedCanRead
+            ? "Sentient reads \(name) through your \(reader) connector. Enable it and sign in there, then press Done."
+            : "Enable \(name) in your \(reader) connectors and sign in there, then press Done to use it for tasks."
     }
 
     private var taskOnlyNotice: some View {
@@ -217,25 +227,6 @@ struct ConnectorConnectSheet: View {
             Text(text).font(.system(size: 12)).foregroundStyle(Theme.Ink.body)
                 .fixedSize(horizontal: false, vertical: true)
         }
-    }
-
-    private func actionButton(_ title: String, primary: Bool = false, external: Bool = false,
-                              action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                if connecting && primary {
-                    ProgressView().controlSize(.mini)
-                }
-                Text(title).font(.system(size: primary ? 14 : 13.5, weight: primary ? .semibold : .medium))
-                if external { Image(systemName: "arrow.up.right").font(.system(size: 10, weight: .bold)) }
-            }
-            .foregroundStyle(primary ? .black : Theme.Ink.bright)
-            .frame(maxWidth: .infinity, minHeight: primary ? 44 : 40)
-            .background(Capsule().fill(.white.opacity(primary ? 1 : 0.07)))
-            .overlay(Capsule().strokeBorder(.white.opacity(primary ? 0 : 0.16), lineWidth: 1))
-            .contentShape(Capsule())
-        }
-        .buttonStyle(PressScaleStyle())
     }
 
     private var statusLine: some View {
@@ -270,6 +261,7 @@ struct ConnectorConnectSheet: View {
             return
         }
         guard let provider = direct?.provider ?? source.directProvider else { return }
+        startedDirectConnection = true
         let existing = direct
         let id = existing?.id ?? newConnectionID ?? UUID()
         let label = existing?.label ?? nextAccountLabel(for: provider)
