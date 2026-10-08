@@ -30,3 +30,6 @@ build/
 # Per-developer signing override (see Signing.xcconfig) — each dev's own DEVELOPMENT_TEAM.
 Signing.local.xcconfig
 
+# Local agent instructions
+[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
+[Cc][Ll][Aa][Uu][Dd][Ee].[Mm][Dd]
