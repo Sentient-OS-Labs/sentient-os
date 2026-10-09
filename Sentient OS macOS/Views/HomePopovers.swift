@@ -37,6 +37,7 @@ struct AnalysisPopover: View {
     var onPickWhatsApp: () -> Void = {}    // tapping WhatsApp / iMessage opens the chat picker (in HomeView)
     var onPickIMessage: () -> Void = {}
     var onPickGmail: () -> Void = {}       // tapping Gmail / Calendar opens the connect sheet (in HomeView)
+    var onPickAppleMail: () -> Void = {}
     var onPickCalendar: () -> Void = {}
     var customRoots: [URL] = []            // session folders added in Dev Tools — shown so this mirrors the picker exactly
 
@@ -46,6 +47,7 @@ struct AnalysisPopover: View {
     @AppStorage("dbg.run.desktop")        private var runDesktop = true
     @AppStorage("dbg.run.documents")      private var runDocuments = true
     @AppStorage("dbg.run.notes")          private var runNotes = false
+    @AppStorage(AppleMailSelection.key)    private var appleMailAccounts = ""
     @AppStorage("dbg.whatsapp.chats")     private var whatsappCSV = ""
     @AppStorage("dbg.imessage.chats")     private var imessageCSV = ""
     @AppStorage("dbg.run.gmail")          private var runGmail = false
@@ -61,7 +63,7 @@ struct AnalysisPopover: View {
     private var anyArmed: Bool {
         runDownloads || runDesktop || runDocuments || runNotes || !customRoots.isEmpty
             || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
-            || runGmail || runCalendar || !MCPSource.kbSlugs().isEmpty
+            || !appleMailAccounts.isEmpty || runGmail || runCalendar || !MCPSource.kbSlugs().isEmpty
     }
     private var armed: Bool { anyArmed && !modelMissing }
 
@@ -102,7 +104,10 @@ struct AnalysisPopover: View {
                     SourceChip("iMessage", on: !imessageCSV.isEmpty, action: onPickIMessage)
                 }
                 HStack(spacing: 8) {
-                    SourceChip("Notes",    on: runNotes) { runNotes.toggle() }
+                    SourceChip("Notes", on: runNotes) { runNotes.toggle() }
+                    SourceChip("Apple Mail", on: !appleMailAccounts.isEmpty, action: onPickAppleMail)
+                }
+                HStack(spacing: 8) {
                     SourceChip("Gmail",    on: runGmail,
                                locked: CodexAuth.connectorsLocked, action: onPickGmail)
                     SourceChip("Calendar", on: runCalendar,

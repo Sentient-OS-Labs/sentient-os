@@ -138,6 +138,9 @@ actor Proactive {
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 
         var inv = CodexCLI.Invocation(prompt: Self.prompt(recent: recent, now: now, calendarContext: calendarContext, calendarContextScoped: calendarContextScoped))
+        if recent.contains(where: { $0.kind == .appleMail }) {
+            inv.prompt += "\nFor every candidate supported by Apple Mail, include the exact opaque appleMail: reference from each supporting summary in sources. Preserve these references verbatim; research uses them to read and verify the original messages."
+        }
         inv.feature = "proactive"
         inv.effort = .high                  // gpt-6-sol → high (this judgment is the product)
         inv.sandbox = .readOnly             // never writes or acts
