@@ -317,12 +317,9 @@ final class ComputerUseGate {
         } else {
             micSpeech = .notAsked
         }
-        // Preflight is the running process's view — it stays false until a relaunch even after the
-        // user flips the switch. The TCC read (we hold FDA) is the LIVE truth, so the row can go
-        // green the moment they grant; the tip still says a restart is needed for capture.
+        // Match ScreenCapture's effective permission. A stored TCC row may authorize an older
+        // signing identity, so its bundle ID alone must not turn this row green.
         sentientScreen = Permissions.hasScreenRecording()
-            || Permissions.isTCCGranted(service: "kTCCServiceScreenCapture",
-                                        clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS")
         sentientAccessibility = Permissions.hasAccessibility()
     }
 

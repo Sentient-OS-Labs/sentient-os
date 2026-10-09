@@ -22,7 +22,6 @@ enum PrivacyCopy {
     static let coreAnalytics = "Basic usage, launch/session, and install/uninstall counts remain enabled. These counts and optional, privacy-preserving crash reports help us improve this open-source app for you."
     static let fullDiskAccess = "Lets Sentient’s on-device model analyze local files, Apple Mail, notes, and selected conversations. Your chosen AI organizes the useful summaries. Double Tap’s one-time writing examples are prepared separately and are yours to inspect and edit."
     static let screenCapture = "Lets Sidekick and Double Tap understand the screen you’re asking about. Sidekick uses your selected AI. Double Tap uses its own drafting provider, including Sentient’s OpenAI API route with Zero Data Retention by default."
-    static let screenFooter = "Screen context follows the AI provider you choose for each feature."
     static let voiceInput = "Privacy-focused voice input, using Apple’s on-device speech recognition where supported. Your words become a Sidekick request."
     static let frontierSummary = "Your Mac understands your local sources. Your chosen AI organizes that knowledge and helps get things done."
     static let frontierDetail = "Sentient’s on-device model prepares useful summaries from your local sources. Choose the AI that organizes your knowledge, prepares proactive suggestions, and powers Sidekick: your ChatGPT or Claude account, OpenRouter, or a compatible local model."

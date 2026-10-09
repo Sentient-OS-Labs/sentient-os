@@ -69,6 +69,11 @@ final class DoubleTap {
     /// second one just started, and the paste would arrive twice.
     func start(completion: @escaping @MainActor (Result) -> Void) {
         guard task == nil else { Log("⌘⌘ double tap ignored — a reply is already being drafted"); return }
+        guard !DoubleTapPermissionGate.shared.intercept() else {
+            Log("⌘⌘ double tap needs permission setup")
+            completion(.stopped)
+            return
+        }
         let runID = UUID()
         let operation = Diagnostics.Operation("doubletap", doubleTapProvider: DoubleTapProvider.current)
         activeRunID = runID

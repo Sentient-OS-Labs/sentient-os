@@ -519,12 +519,8 @@ struct HealthPane: View {
         loginOn = LoginItem.isEnabled
         await refreshDaemon()
         refreshMicSpeech()
-        // The preflight is this process's view (stale until relaunch after a grant), so the
-        // FDA-backed TCC read rides along as the live truth — same manners as the gate.
+        // Match the effective permission used by capture and the setup gates.
         screenRec = Permissions.hasScreenRecording()
-            || (fdaGranted && Permissions.isTCCGranted(
-                    service: "kTCCServiceScreenCapture",
-                    clientBundleID: Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS"))
         notifStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
         ComputerUseSetup.current.refresh()
         // Only the LIVE engine's rows are probed (the login checks shell out, seconds each).
