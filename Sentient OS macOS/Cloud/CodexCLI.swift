@@ -174,6 +174,7 @@ actor CodexCLI {
         var connectorOnlyRead = false
         /// Native tool-inventory classification does not need any model-accessible tools.
         var toolsDisabled = false
+        var appleMailResearch: AppleMailResearch? = nil // app-owned, scoped reads for proactive research
         /// Optional narrowing for a single connector, using the current engine's bare names.
         /// Every name must already be curated; a cross-engine mismatch refuses the run.
         var mcpReadToolNames: [String]? = nil
@@ -946,6 +947,7 @@ actor CodexCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: Invocation, modelID: String, effortArg: String,
                           schemaFile: String?) throws -> [String] {
+        try ResearchToolServer.validateInvocation(inv)
         let inv = inv.canonicalConnectorTargets()
         if inv.mcpReadToolNames != nil, inv.mcpReadConnectors.count != 1 {
             throw CLIError.notAvailable(.notWorking("read-tool narrowing requires one connector"))
@@ -986,7 +988,7 @@ actor CodexCLI {
         // path below continues with a flag (--ignore-user-config, the bypass flag, or a -c),
         // which terminates it — the same dodge as probeCustomEndpoint's probe image.
         if !inv.imagePaths.isEmpty { args += ["-i"] + inv.imagePaths }
-        if !inv.includeUserConfig || connectorRead || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(inv.mcpActionServer ?? "") || !direct.isEmpty || inv.toolsDisabled {
+        if !inv.includeUserConfig || connectorRead || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(inv.mcpActionServer ?? "") || !direct.isEmpty || inv.toolsDisabled || ResearchToolServer.connection != nil {
             // Hosted account apps survive hermetic runs. User MCP servers, plugins and
             // per-tool/account approvals must not widen an unattended read's tool policy.
             args += ["--ignore-user-config"]
@@ -1013,7 +1015,7 @@ actor CodexCLI {
             }
         }
         for override in inv.configOverrides { args += ["-c", override] }
-        if inv.connectorOnlyRead || inv.toolsDisabled || Microsoft365Connector.contains(inv.mcpActionServer ?? "") {
+        if inv.connectorOnlyRead || inv.toolsDisabled || Microsoft365Connector.contains(inv.mcpActionServer ?? "") || ResearchToolServer.connection != nil {
             for override in ["project_doc_max_bytes=0", "features.shell_tool=false", "features.view_image=false",
                              "features.browser_use=false", "features.computer_use=false", "features.multi_agent=false",
                              "features.code_mode=false", "features.image_generation=false", "features.goals=false",
@@ -1061,7 +1063,15 @@ actor CodexCLI {
             args += ["-c", "features.apps=false", "-c", "apps._default.enabled=false"]
         }
         for override in DirectMCPRuntime.codexOverrides(direct) { args += ["-c", override] }
-        if inv.webSearch { args += ["-c", "tools.web_search=true"] }
+        if let connection = ResearchToolServer.connection {
+            args += ["--ephemeral"]
+            if inv.mcpReadConnectors.isEmpty { args += ["-c", "features.apps=false", "-c", "apps._default.enabled=false"] }
+            for override in connection.codexOverrides { args += ["-c", override] }
+        }
+        if inv.webSearch {
+            args += ["-c", "tools.web_search=true"]
+            if ResearchToolServer.connection != nil { args += ["-c", "web_search=\"live\""] }
+        }
         if let schemaFile { args += ["--output-schema", schemaFile] }
         args.append("-")                       // the prompt arrives on stdin
         return args

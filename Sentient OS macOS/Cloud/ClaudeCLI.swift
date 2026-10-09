@@ -130,13 +130,14 @@ actor ClaudeCLI {
 
     static func environment(for invocation: CodexCLI.Invocation) -> [String: String] {
         var environment = baseEnv
-        if invocation.mcpAttachServer != nil || invocation.mcpActionServer != nil || !invocation.mcpReadConnectors.isEmpty {
+        if invocation.mcpAttachServer != nil || invocation.mcpActionServer != nil || !invocation.mcpReadConnectors.isEmpty || invocation.appleMailResearch != nil {
             // Headless connector work needs a settled tool surface before its first query.
             // Keep the wait bounded; failed connections still fail closed in the readers.
             environment["MCP_CONNECTION_NONBLOCKING"] = "0"
             environment["MCP_CONNECT_TIMEOUT_MS"] = "30000"
         }
         if invocation.mcpAttachServer != nil || invocation.mcpActionServer == "slack"
+            || invocation.appleMailResearch != nil
             || (invocation.connectorOnlyRead && !invocation.mcpReadConnectors.isEmpty)
             || Microsoft365Connector.contains(invocation.mcpAttachServer ?? "") || Microsoft365Connector.contains(invocation.mcpActionServer ?? "")
             || invocation.mcpReadConnectors.contains(where: Microsoft365Connector.contains) {
@@ -455,6 +456,7 @@ actor ClaudeCLI {
     /// spawning (Self Tests - Temp; may return to private when the lab is deleted at Step 4).
     static func arguments(for inv: CodexCLI.Invocation, modelID: String,
                           effortArg: String) throws -> [String] {
+        try ResearchToolServer.validateInvocation(inv)
         let inv = inv.canonicalConnectorTargets()
         let direct = DirectMCPRuntime.current
         let requestedDirect = Set((inv.mcpReadConnectors + [inv.mcpActionServer].compactMap { $0 }).filter { $0.hasPrefix("direct-") })
@@ -555,12 +557,19 @@ actor ClaudeCLI {
             }
         }
 
+        if let connection = ResearchToolServer.connection {
+            recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
+            recipeDenies += ["Bash", "Read", "Glob", "Grep", "Write", "Edit", "Agent", "Task"]
+        }
         var args = ["-p",
                     "--output-format", "stream-json", "--verbose",
                     "--model", modelID,
                     "--effort", effortArg,
                     "--setting-sources", "",
                     "--disable-slash-commands"]
+        if ResearchToolServer.connection != nil {
+            args += ["--no-session-persistence"]
+        }
         if let sid = inv.resumeSessionID { args += ["--resume", sid] }
         if !direct.isEmpty {
             if recipeWallURLs.isEmpty { args += ["--strict-mcp-config"] }
@@ -625,8 +634,8 @@ actor ClaudeCLI {
         if inv.sandbox == .readOnly, !skippedPermissions {
             // Read-only parity: no Edit/Write in the tool surface at all; dontAsk additionally
             // auto-approves only Claude Code's read-only Bash command set.
-            var tools = inv.connectorOnlyRead || inv.toolsDisabled || Microsoft365Connector.contains(inv.mcpActionServer ?? "") ? [] : ["Bash", "Glob", "Grep", "Read"]
-            if inv.mcpAttachServer != nil || inv.mcpActionServer != nil || !inv.mcpReadConnectors.isEmpty {
+            var tools = inv.connectorOnlyRead || inv.toolsDisabled || ResearchToolServer.connection != nil || Microsoft365Connector.contains(inv.mcpActionServer ?? "") ? [] : ["Bash", "Glob", "Grep", "Read"]
+            if inv.mcpAttachServer != nil || inv.mcpActionServer != nil || !inv.mcpReadConnectors.isEmpty || ResearchToolServer.connection != nil {
                 tools.append("WaitForMcpServers")
                 allowed.append("WaitForMcpServers")
             }
@@ -641,7 +650,7 @@ actor ClaudeCLI {
         if !allowed.isEmpty { args += ["--allowedTools", allowed.joined(separator: ",")] }
         if !disallowed.isEmpty { args += ["--disallowedTools", disallowed.joined(separator: ",")] }
         if let schema = inv.outputSchema { args += ["--json-schema", schema] }
-        return try SidekickToolServer.addToClaudeArguments(args)
+        return try LocalMCPServer.addToClaudeArguments(SidekickToolServer.addToClaudeArguments(args), connection: ResearchToolServer.connection)
     }
 
     /// `{"allowedMcpServers":[{"serverName":"cua_driver"},{"serverUrl":"https://host/*"},…]}` —
