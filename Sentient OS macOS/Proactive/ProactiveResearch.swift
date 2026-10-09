@@ -212,7 +212,9 @@ actor ProactiveResearch {
             absence of a reply remains unverified. Drop requests that were already resolved.
             Return candidate_id="candidate-N" for every ready card, matching its input number.
             Return mail_evidence_refs containing the exact evidence_ref values of relevant successful
-            reads. Include [] for cards without Mail evidence. Search metadata alone is not a body read.
+            reads. For actionable cards, cite the read_thread receipts covering that card's sources;
+            a read_messages batch may include other candidates and does not establish conversation coverage.
+            Include [] for cards without Mail evidence. Search metadata alone is not a body read.
             Mail evidence can support ANY appropriate card destination, including calendar or a website.
             Use method=calendar only if Google Calendar is connected. When no suitable connector is
             available, use computer with the user's actual app/site, or research for a briefing.
@@ -303,7 +305,7 @@ actor ProactiveResearch {
             let targetsMail = action.target.localizedCaseInsensitiveContains("apple mail")
             if let mailReader {
                 do {
-                    let evidence = try await mailReader.evidence(action.mailEvidenceReferences ?? [])
+                    var evidence = try await mailReader.evidence(action.mailEvidenceReferences ?? [])
                     if targetsMail || !references.isEmpty || provenance.contains(where: { $0.localizedCaseInsensitiveContains("apple mail") }) {
                         guard !evidence.isEmpty, try await mailReader.covers(references, with: evidence) else { continue }
                     }
@@ -311,10 +313,12 @@ actor ProactiveResearch {
                         // Local Mail identity does not authorize sending through another email account.
                         if action.method == .gmail || action.methodTarget == OutlookMailConnector.slug { continue }
                         if action.method != .research {
-                            let threads = evidence.filter { $0.threadSeed != nil }
-                            guard !threads.isEmpty, evidence.flatMap(\.messages).allSatisfy({ message in
-                                threads.contains { $0.messages.contains { $0.locator == message.locator } }
-                            }) else { continue }
+                            // A body-read receipt can span several candidates. Persist only the
+                            // cited conversations for this action, and require those conversations
+                            // themselves to cover its original sources. Unrelated batch members
+                            // neither invalidate this card nor count toward its evidence.
+                            evidence = evidence.filter { $0.threadSeed != nil }
+                            guard !evidence.isEmpty, try await mailReader.covers(references, with: evidence) else { continue }
                         }
                         copy.mailEvidence = evidence
                         if !evidence.allSatisfy(\.localCoverageComplete) { copy.status = .unverified }

@@ -86,13 +86,19 @@ actor ProactiveExecutor {
         }
     }
 
-    private func fireBody(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
+    /// Reject stale Mail cards before UI setup, and recheck immediately before execution.
+    static func mailEvidenceIssue(_ action: PreparedAction) async -> String? {
         if let evidence = action.mailEvidence, !(await AppleMailEvidence.canExecuteResearch(evidence)) {
-            return .notFireable("The email evidence changed or research access was removed. Analyze again before using this card.")
+            return "The email evidence changed or research access was removed. Analyze again before using this card."
         }
         if let references = action.appleMailReferences, !(await AppleMailEvidence.canExecute(references)) {
-            return .notFireable("The Apple Mail message changed or is unavailable. Analyze again before using this card.")
+            return "The Apple Mail message changed or is unavailable. Analyze again before using this card."
         }
+        return nil
+    }
+
+    private func fireBody(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
+        if let issue = await Self.mailEvidenceIssue(action) { return .notFireable(issue) }
         let recipe = action.executionRecipe.trimmingCharacters(in: .whitespacesAndNewlines)
         let content = action.preparedContent     // the VERBATIM, possibly user-edited artifact to send
         // The routing the message channels act on: the (possibly user-EDITED) "To:" recipient first,

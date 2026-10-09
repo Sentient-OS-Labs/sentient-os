@@ -113,16 +113,19 @@ actor ResearchToolServer {
         } else {
             guard Set(args.keys) == ["query"], let query = args["query"] as? String, query.utf8.count <= 200 else { throw AppleMailResearch.Failure.invalidArguments }
             guard vault.resolvingSymlinksInPath() == vault,
-                  let files = FileManager.default.enumerator(at: vault, includingPropertiesForKeys: [.isSymbolicLinkKey], options: [.skipsHiddenFiles]) else { throw AppleMailResearch.Failure.unavailable }
+                  let files = FileManager.default.enumerator(atPath: vault.path) else { throw AppleMailResearch.Failure.unavailable }
             var matches: [[String: Any]] = [], scanned = 0, complete = true
-            for case let file as URL in files {
+            // Keep paths relative to the configured root. URL enumeration may expand macOS
+            // aliases (for example /tmp → /private/tmp), breaking the confinement comparison.
+            for case let path as String in files {
                 try Task.checkCancellation()
+                if path.split(separator: "/").contains(where: { $0.hasPrefix(".") }) { files.skipDescendants(); continue }
+                let file = vault.appendingPathComponent(path)
                 if (try? file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) == true { files.skipDescendants(); continue }
                 guard file.pathExtension.lowercased() == "md" else { continue }
                 guard scanned < 500, matches.count < 30 else { complete = false; break }
                 scanned += 1
                 guard let text = try? vaultText(file) else { complete = false; continue }
-                let path = String(file.path.dropFirst(vault.path.count + 1))
                 if query.isEmpty || path.localizedCaseInsensitiveContains(query) || text.localizedCaseInsensitiveContains(query) {
                     matches.append(["path": path, "preview": String(text.prefix(300))])
                 }
