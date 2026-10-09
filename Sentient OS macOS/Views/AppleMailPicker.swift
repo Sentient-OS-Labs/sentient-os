@@ -9,14 +9,19 @@ struct AppleMailPicker: View {
     @Environment(\.dismiss) private var dismiss
     @State private var accounts: [AppleMailAccount] = []
     @State private var selected = Set<String>()
+    @State private var researchEnabled = false
     @State private var loading = true
     @State private var failed = false
     @State private var failureMessage = ""
     @State private var accessIssue = false
+    #if DEBUG
+    private var previewing = false
+    #endif
 
     init(initialSelection: Set<String>, onDone: @escaping (Set<String>) -> Void) {
         self.onDone = onDone
         _selected = State(initialValue: initialSelection)
+        _researchEnabled = State(initialValue: AppleMailResearchAccess.scope != nil)
     }
 
     var body: some View {
@@ -26,6 +31,11 @@ struct AppleMailPicker: View {
             Text("Choose the accounts to include.")
                 .font(.system(size: 12)).foregroundStyle(Theme.Ink.body).padding(.top, 10)
             accountList.padding(.top, 22)
+            Toggle("Read emails for proactive suggestions", isOn: $researchEnabled)
+                .toggleStyle(.checkbox).font(.system(size: 12)).padding(.top, 18)
+            Text("Your chosen AI can read actual email text from these accounts to check and prepare suggestions. A cloud AI processes that text with its provider. This access only reads mail.")
+                .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
             HStack(spacing: 10) {
                 Button { dismiss() } label: {
                     Text("Cancel").font(.system(size: 13.5, weight: .medium))
@@ -36,7 +46,7 @@ struct AppleMailPicker: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(PressScaleStyle()).keyboardShortcut(.cancelAction)
-                Button { onDone(selected); dismiss() } label: {
+                Button { AppleMailResearchAccess.save(accounts: researchEnabled ? selected : []); onDone(selected); dismiss() } label: {
                     Text("Done").font(.system(size: 13.5, weight: .semibold))
                         .foregroundStyle(.black)
                         .frame(maxWidth: .infinity, minHeight: 40)
@@ -56,7 +66,12 @@ struct AppleMailPicker: View {
         .padding(.horizontal, 32).padding(.top, 36).padding(.bottom, 24)
         .frame(width: 460).background(Theme.bg)
         .overlay(alignment: .topLeading) { CloseHoverButton { dismiss() }.padding(12) }
-        .task { await load() }
+        .task {
+            #if DEBUG
+            if previewing { return }
+            #endif
+            await load()
+        }
     }
 
     private var accountList: some View {
@@ -106,4 +121,19 @@ struct AppleMailPicker: View {
         }
         loading = false
     }
+
+    #if DEBUG
+    static var researchPreview: AppleMailPicker {
+        var view = AppleMailPicker(initialSelection: ["work"]) { _ in }
+        view.previewing = true
+        view._accounts = State(initialValue: [.init(id: "work", name: "Work"), .init(id: "personal", name: "Personal")])
+        view._loading = State(initialValue: false)
+        view._researchEnabled = State(initialValue: true)
+        return view
+    }
+    #endif
 }
+
+#if DEBUG
+#Preview { AppleMailPicker.researchPreview.environment(\.colorScheme, .dark) }
+#endif

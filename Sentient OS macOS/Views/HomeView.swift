@@ -67,6 +67,7 @@ struct HomeView: View {
     @State private var showIMessagePicker = false
     @State private var showGmailConnect = false
     @State private var showCalendarConnect = false
+    @State private var showAppleMailPicker = false
     @State private var codex = CodexSetup.shared
     @State private var showCodexSignIn = false
     @State private var dismissedCodexSignInReminder = false
@@ -131,6 +132,14 @@ struct HomeView: View {
             caution = OvernightCaution.latest()
             probeHealth()
         }
+        .alert("Analyze again before using this card", isPresented: Binding(
+            get: { model.mailEvidenceIssue != nil },
+            set: { if !$0 { model.mailEvidenceIssue = nil } }
+        )) {
+            Button("OK", role: .cancel) { model.mailEvidenceIssue = nil }
+        } message: {
+            Text(model.mailEvidenceIssue ?? "")
+        }
         .onDisappear { appState.commandCoordinator.run.proactiveCards = nil }
         .onChange(of: isPresented) { _, visible in
             if visible {
@@ -187,6 +196,11 @@ struct HomeView: View {
             ChatPicker(sourceName: "WhatsApp", loadChats: { try WhatsAppSource().listChats() },
                        initialSelection: Set(whatsappCSV.split(separator: ",").map(String.init))) { sel in
                 whatsappCSV = sel.sorted().joined(separator: ","); runWhatsApp = !sel.isEmpty
+            }
+        }
+        .sheet(isPresented: $showAppleMailPicker) {
+            AppleMailPicker(initialSelection: AppleMailSelection.accounts) { accounts in
+                UserDefaults.standard.set(accounts.sorted().joined(separator: ","), forKey: AppleMailSelection.key)
             }
         }
         .sheet(isPresented: $showIMessagePicker) {
@@ -378,7 +392,7 @@ struct HomeView: View {
     private var canOfferCodexSignIn: Bool {
         needsCodexSignIn && !appState.hasOfferedCodexSignIn
             && !letterShown && !showAnalysis && !showShareKnowledge
-            && !showWhatsAppPicker && !showIMessagePicker && !showGmailConnect && !showCalendarConnect
+            && !showWhatsAppPicker && !showIMessagePicker && !showGmailConnect && !showCalendarConnect && !showAppleMailPicker
     }
 
     private func refreshCodexSignIn() async {
@@ -433,6 +447,7 @@ struct HomeView: View {
                         onPickWhatsApp: { showAnalysis = false; showWhatsAppPicker = true },
                         onPickIMessage: { showAnalysis = false; showIMessagePicker = true },
                         onPickGmail: { showAnalysis = false; showGmailConnect = true },
+                        onPickAppleMail: { showAnalysis = false; showAppleMailPicker = true },
                         onPickCalendar: { showAnalysis = false; showCalendarConnect = true },
                         customRoots: customRoots)
             .preferredColorScheme(.dark)
@@ -731,6 +746,7 @@ final class ForYouModel {
     }
 
     var entries: [Entry] = []
+    var mailEvidenceIssue: String?
     /// The app-lifetime command coordinator (HomeView sets it on appear) — the notch and the
     /// app-wide one-task lock. A computer-use card fire ADOPTS its run (lighting the notch and
     /// locking out Sidekick/the bar/other cards); gmail/calendar/research fires ignore it.
@@ -808,6 +824,7 @@ final class ForYouModel {
         visit += 1
         runTasks.values.forEach { $0.cancel() }; runTasks.removeAll()
         entries.removeAll()
+        mailEvidenceIssue = nil
         draftPreviews.removeAll()
     }
 
@@ -830,8 +847,20 @@ final class ForYouModel {
                 Log("card fire blocked — a task is already running (one at a time)")
                 return
             }
-            if ComputerUseGate.shared.intercept({ [weak self] in self?.runReal(id, action) }) { return }
-            runReal(id, action)
+            if action.mailEvidence != nil || action.appleMailReferences != nil {
+                let v = visit
+                update(id) { $0.phase = .working(0); $0.liveLines = ["Checking email evidence…"] }
+                runTasks[id] = Task { [weak self] in
+                    let issue = await ProactiveExecutor.mailEvidenceIssue(action)
+                    guard let self, self.visit == v, !Task.isCancelled else { return }
+                    self.runTasks[id] = nil
+                    self.update(id) { $0.phase = .offer; $0.liveLines = [] }
+                    if let issue { self.mailEvidenceIssue = issue; return }
+                    self.startWithPermissions(id, action)
+                }
+            } else {
+                startWithPermissions(id, action)
+            }
             return
         }
         let v = visit
@@ -851,6 +880,11 @@ final class ForYouModel {
             dismiss(id, toward: CGSize(width: CGFloat.random(in: 250...520),
                                        height: -CGFloat.random(in: 350...560)))
         }
+    }
+
+    private func startWithPermissions(_ id: String, _ action: PreparedAction) {
+        if ComputerUseGate.shared.intercept({ [weak self] in self?.runReal(id, action) }) { return }
+        runReal(id, action)
     }
 
     /// Fire a REAL card: route its action through the executor, stream codex's play-by-play into the

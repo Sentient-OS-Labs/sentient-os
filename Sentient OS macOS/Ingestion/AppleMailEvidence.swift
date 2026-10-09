@@ -5,6 +5,43 @@
 import Foundation
 
 enum AppleMailEvidence {
+    /// Only explicitly enabled research accounts expose raw text. Existing survivor references
+    /// locate candidate emails; subsequent searches can also see newly downloaded replies.
+    static func researchReader(references: Set<String>, store: CycleStore = .shared) async -> AppleMailResearch? {
+        guard let scope = AppleMailResearchAccess.scope else { return nil }
+        var saved: [(String, AppleMailReceiptValue)] = []
+        do {
+            for account in scope.accounts {
+                let receipts = try await store.mailReceipts("appleMail:" + account)
+                saved += receipts.values.filter { references.contains($0.identity) }.map { (account, $0) }
+            }
+            let receipts = saved
+            return try await Task.detached(priority: .utility) {
+                let root = try AppleMailSource.root()
+                let snapshot = try AppleMailSnapshot(root: root, selected: scope.accounts, includeAccountLabels: false)
+                var seeds: [AppleMailResearch.Seed] = []
+                for (account, receipt) in receipts {
+                    guard receipt.generation == snapshot.generation,
+                          let row = snapshot.rows.first(where: { $0.account == account && $0.id == receipt.rowID }), !row.excluded else { continue }
+                    try snapshot.indexFiles(account: account)
+                    guard let body = try? snapshot.body(row), AppleMailSource.contentDigest(body, sent: row.sent) == receipt.contentHash else { continue }
+                    seeds.append(.init(reference: receipt.identity, locator: .init(account: account, generation: snapshot.generation,
+                        rowID: row.id, messageIDHash: AppleMailSource.digest(row.messageID))))
+                }
+                return AppleMailResearch(scope: scope, root: root, seeds: seeds, permitted: { AppleMailResearchAccess.permits(scope) })
+            }.value
+        } catch { return nil }
+    }
+
+    static func canExecuteResearch(_ evidence: [AppleMailResearch.Evidence]) async -> Bool {
+        guard let scope = evidence.first?.scope, AppleMailResearchAccess.permits(scope) else { return false }
+        do {
+            let root = try await Task.detached(priority: .utility) { try AppleMailSource.root() }.value
+            let reader = AppleMailResearch(scope: scope, root: root, timeout: 60, permitted: { AppleMailResearchAccess.permits(scope) })
+            return try await reader.validate(evidence)
+        } catch { return false }
+    }
+
     static func validatedCloud(_ notes: [CloudNote], store: CycleStore = .shared) async -> [CloudNote] {
         guard notes.contains(where: { $0.kind == .appleMail }) else { return notes }
         let current = await validated(await store.notes(), store: store)

@@ -40,7 +40,7 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
     let rows: [AppleMailRow]
     private var files: [String: [Int64: [URL]]] = [:]
 
-    init(root: URL, selected: Set<String>? = nil) throws {
+    init(root: URL, selected: Set<String>? = nil, includeAccountLabels: Bool = true) throws {
         self.root = root
         let index = root.appendingPathComponent("MailData/Envelope Index")
         db = try Self.backup(index.path)
@@ -61,7 +61,7 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
                 if segments.contains(where: Self.hiddenMailbox) { hiddenBoxes.insert(id) }
                 if segments.contains(where: { ["sent", "sent mail", "sent messages"].contains($0) }) { sentBoxes.insert(id) }
             }
-            let labels = Self.accountLabels(found)
+            let labels = includeAccountLabels ? Self.accountLabels(found) : [:]
             accounts = found.sorted().enumerated().map { offset, id in
                 AppleMailAccount(id: id, name: labels[id] ?? "Local Mail account \(offset + 1) · \(id.prefix(4))")
             }
@@ -213,6 +213,7 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
 
     /// Build an ephemeral file locator, pruning attachment trees and all symbolic links.
     func indexFiles(account: String) throws {
+        if files[account] != nil { return }
         guard UUID(uuidString: account) != nil else { throw AppleMailError.filesystem }
         let directory = root.appendingPathComponent(account)
         let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .isRegularFileKey]
@@ -221,6 +222,7 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
             options: [.skipsHiddenFiles], errorHandler: { _, _ in failed = true; return false }) else { throw AppleMailError.filesystem }
         var mapping: [Int64: [URL]] = [:]
         for case let file as URL in enumerator {
+            try Task.checkCancellation()
             let values = try file.resourceValues(forKeys: Set(keys))
             if values.isSymbolicLink == true || file.lastPathComponent == "Attachments" {
                 enumerator.skipDescendants(); continue
@@ -233,7 +235,18 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
         files[account] = mapping
     }
 
-    func body(_ row: AppleMailRow, includeJunkPreview: Bool = false) throws -> AppleMailMIME.Message {
+    func body(_ row: AppleMailRow, includeJunkPreview: Bool = false, preserveContext: Bool = false) throws -> AppleMailMIME.Message {
+        try read(row, includeJunkPreview: includeJunkPreview) {
+            try AppleMailMIME.read($0, expectedMessageID: row.messageID, includeJunkPreview: includeJunkPreview, preserveContext: preserveContext)
+        }
+    }
+
+    func headers(_ row: AppleMailRow) throws -> [String: String] {
+        try read(row) { try AppleMailMIME.readHeaders($0, expectedMessageID: row.messageID) }
+    }
+
+    private func read<T>(_ row: AppleMailRow, includeJunkPreview: Bool = false, load: (URL) throws -> T) throws -> T {
+        try Task.checkCancellation()
         guard !row.excluded || (includeJunkPreview && row.previewJunk) else { throw AppleMailMIME.Failure.excluded }
         let matches = files[row.account]?[row.id] ?? []
         var lastError: Error = AppleMailError.missingBody
@@ -243,8 +256,7 @@ nonisolated final class AppleMailSnapshot: @unchecked Sendable {
                 let resolved = url.resolvingSymlinksInPath().standardizedFileURL
                 guard resolved == url.standardizedFileURL,
                       resolved.path.hasPrefix(root.appendingPathComponent(row.account).path + "/") else { throw AppleMailError.filesystem }
-                let message = try AppleMailMIME.read(url, expectedMessageID: row.messageID, includeJunkPreview: includeJunkPreview)
-                return message
+                return try load(url)
             } catch AppleMailMIME.Failure.excluded { throw AppleMailMIME.Failure.excluded }
             catch { lastError = error }
         }

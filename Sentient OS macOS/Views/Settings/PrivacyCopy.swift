@@ -27,7 +27,7 @@ enum PrivacyCopy {
     static let frontierDetail = "Sentient’s on-device model prepares useful summaries from your local sources. Choose the AI that organizes your knowledge, prepares proactive suggestions, and powers Sidekick: your ChatGPT or Claude account, OpenRouter, or a compatible local model."
     static let customProvider = "Apple Mail and Apple Calendar work with your chosen model, without a ChatGPT or Claude subscription. Hosted Gmail and Google Calendar connectors use a supported subscription account. Double Tap and optional knowledge sharing have their own settings."
     static let conversationSources = "Analyzed on this Mac by Sentient’s on-device model. Your chosen AI uses the useful summaries. Double Tap’s one-time writing examples are prepared separately."
-    static let emailSources = "Apple Mail and Apple Calendar are analyzed on this Mac. Other services use the connections you choose; your selected AI puts their context to work."
+    static let emailSources = "Apple Mail and Apple Calendar are analyzed on this Mac. If you enable email reads for proactive suggestions, your chosen AI also receives actual Mail message text. Other services use the connections you choose; your selected AI puts their context to work."
     static let emailRecommendation = "Email and calendar give Sentient useful context for your day. Apple Mail and Apple Calendar are analyzed on this Mac and work with your chosen AI. You can also use supported connections through your ChatGPT or Claude account. Manage your choices in Settings."
     static let overnight = "At 3 AM, Sentient can wake your Mac to analyze new local sources, update your knowledge with your chosen AI, and prepare morning suggestions. It runs while plugged in, or on battery if you’ve enabled that in the Analysis menu, with Sentient running in your menu bar."
 
@@ -53,7 +53,7 @@ enum PrivacyCopy {
         Section(id: "local", title: "Understanding starts on your Mac.", paragraphs: [
             "Sentient OS, Inc. builds personal AI around on-device understanding, knowledge you own, and your choice of AI provider.",
             "Sentient’s on-device model analyzes the local sources you enable, including files, saved screenshots, Apple Notes, iMessage, WhatsApp, Apple Mail, and Apple Calendar. It prepares useful summaries, with checks that help filter out irrelevant material and common sensitive identifiers.",
-            "Your chosen AI consolidates those summaries into your knowledge base and prepares proactive suggestions. Your main knowledge base lives on your Mac. If you choose a cloud model, that provider processes the context used for this work.",
+            "Your chosen AI consolidates those summaries into your knowledge base and prepares proactive suggestions. With email research enabled in the Apple Mail account picker, it can also read actual email text from the selected accounts. A cloud provider processes that text under its own account settings and retention policies. Your main knowledge base lives on your Mac. If you choose a cloud model, that provider processes the context used for this work.",
             noSale,
         ]),
         Section(id: "providers", title: "Your AI, your choice.", paragraphs: [
