@@ -86,7 +86,19 @@ actor ProactiveExecutor {
         }
     }
 
+    /// Reject stale Mail cards before UI setup, and recheck immediately before execution.
+    static func mailEvidenceIssue(_ action: PreparedAction) async -> String? {
+        if let evidence = action.mailEvidence, !(await AppleMailEvidence.canExecuteResearch(evidence)) {
+            return "The email evidence changed or research access was removed. Analyze again before using this card."
+        }
+        if let references = action.appleMailReferences, !(await AppleMailEvidence.canExecute(references)) {
+            return "The Apple Mail message changed or is unavailable. Analyze again before using this card."
+        }
+        return nil
+    }
+
     private func fireBody(_ action: PreparedAction, progress: @escaping @Sendable (String) -> Void) async -> Outcome {
+        if let issue = await Self.mailEvidenceIssue(action) { return .notFireable(issue) }
         let recipe = action.executionRecipe.trimmingCharacters(in: .whitespacesAndNewlines)
         let content = action.preparedContent     // the VERBATIM, possibly user-edited artifact to send
         // The routing the message channels act on: the (possibly user-EDITED) "To:" recipient first,
@@ -115,13 +127,11 @@ actor ProactiveExecutor {
                 r = .notFireable("This card's connector isn't connected anymore; nothing was fired.")
             }
         case .computer:
-            if let references = action.appleMailReferences,
-               !(await AppleMailEvidence.canExecute(references)) {
-                r = .notFireable("The Apple Mail message changed or is unavailable. Analyze again before using this card.")
-            } else if action.target.localizedCaseInsensitiveContains("apple mail") && action.appleMailReferences == nil {
+            if action.target.localizedCaseInsensitiveContains("apple mail") && action.appleMailReferences == nil && action.mailEvidence == nil {
                 r = .notFireable("This Apple Mail card has no current local evidence. Analyze again to prepare it.")
             } else {
-                let mailCheck = action.appleMailReferences == nil ? "" : "In Apple Mail, first verify the current thread, sending account and recipient, and check whether this was already handled. If ambiguous, stop. Never open attachments. "
+                let mailCheck = action.target.localizedCaseInsensitiveContains("apple mail")
+                    ? "In Apple Mail, first verify the current thread, sending account and recipient, and check whether this was already handled. If ambiguous, stop. Never open attachments. " : ""
                 r = hasRecipe(recipe) ? await fireComputer(routing: mailCheck + routing, content: content, progress: progress)
                                       : .notFireable("No computer-use recipe to fire.")
             }

@@ -99,7 +99,7 @@ enum Deck { case real, demo }
     var isPresented = true, deck = Deck.real
     var backendRaw = ModelBackend.chatgpt.rawValue
     var letterShown = false, showAnalysis = false, showShareKnowledge = false
-    var showWhatsAppPicker = false, showIMessagePicker = false
+    var showWhatsAppPicker = false, showIMessagePicker = false, showAppleMailPicker = false
     var showGmailConnect = false, showCalendarConnect = false, showCodexSignIn = false
     init(_ appState: AppState = AppState()) { self.appState = appState }
     var canCheck: Bool { canCheckCodexSignIn }
@@ -175,7 +175,8 @@ enum Deck { case real, demo }
         await helperInstalling.refresh()
         check(helperInstalling.showCodexSignIn, "independent helper download does not delay private sign-in")
         for flag in [\HomeFixture.letterShown, \.showAnalysis, \.showShareKnowledge,
-                     \.showWhatsAppPicker, \.showIMessagePicker, \.showGmailConnect, \.showCalendarConnect] {
+                     \.showWhatsAppPicker, \.showIMessagePicker, \.showGmailConnect, \.showCalendarConnect,
+                     \.showAppleMailPicker] {
             let h = HomeFixture(); h[keyPath: flag] = true
             await h.refresh()
             check(!h.showCodexSignIn && !h.appState.hasOfferedCodexSignIn, "other sheet defers offer")

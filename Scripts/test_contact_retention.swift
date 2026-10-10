@@ -15,6 +15,7 @@ private final class ContactServer: @unchecked Sendable {
     private let lock = NSLock()
     private var paths: [String] = []
     private var retained: Set<String> = []
+    private var onboarding: Set<String> = []
     private var offline = false
     private var holdWrites = false
     private var completions: [@Sendable () -> Void] = []
@@ -36,6 +37,7 @@ private final class ContactServer: @unchecked Sendable {
     }
     var deletionRequests: Int { lock.withLock { paths.filter { $0.contains("delete") }.count } }
     func contains(_ email: String) -> Bool { lock.withLock { retained.contains(email) } }
+    func onboardingContains(_ email: String) -> Bool { lock.withLock { onboarding.contains(email) } }
 
     func reply(to request: URLRequest) -> Reply {
         lock.withLock {
@@ -49,7 +51,7 @@ private final class ContactServer: @unchecked Sendable {
                     "user": ["id": "10000000-0000-0000-0000-000000000001", "is_anonymous": true]
                 ])
             }
-            if path == "/rest/v1/rpc/add_feedback_emails" {
+            if path == "/rest/v1/rpc/add_feedback_emails" || path == "/rest/v1/rpc/add_onboarding_emails" {
                 var body = request.httpBody ?? Data()
                 if body.isEmpty, let stream = request.httpBodyStream {
                     stream.open(); defer { stream.close() }
@@ -63,7 +65,10 @@ private final class ContactServer: @unchecked Sendable {
                 let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any]
                 if let json {
                     payloads.append(json)
-                    for email in json["emails"] as? [String] ?? [] { retained.insert(email) }
+                    for email in json["emails"] as? [String] ?? [] {
+                        if path == "/rest/v1/rpc/add_onboarding_emails" { onboarding.insert(email) }
+                        else { retained.insert(email) }
+                    }
                 }
                 // Simulate an accepted server write whose response is still in flight.
                 if holdWrites { return .hold }
@@ -111,7 +116,7 @@ private final class ContactProtocol: URLProtocol, @unchecked Sendable {
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
         let prefix = "privacy-retention-test." + UUID().uuidString
-        let keys = ["saved", "pending", "inflight", "legacy-synced", "legacy-pending", "concurrent"].map { prefix + "." + $0 }
+        let keys = ["saved", "pending", "inflight", "legacy-synced", "legacy-pending", "concurrent", "onboarding"].map { prefix + "." + $0 }
         defer {
             for key in keys {
                 SecItemDelete([kSecClass as String: kSecClassGenericPassword,
@@ -250,6 +255,28 @@ private final class ContactProtocol: URLProtocol, @unchecked Sendable {
         try await concurrent.forgetLocalState()
         print("PASS: concurrent saves preserve both addresses; invalid batches are rejected atomically")
 
+        // Onboarding has its own durable queue and RPC; a relaunched retry preserves routing.
+        try check(MailAccountCloud.Destination.feedback.storageKey != MailAccountCloud.Destination.onboarding.storageKey,
+                  "Onboarding and connector contacts share a production queue")
+        server.configure(offline: true)
+        let onboarding = MailAccountCloud(session: session, storageKey: keys[6], destination: .onboarding)
+        let onboardingEmail = address("onboarding")
+        let onboardingSynced = try await onboarding.save([" ONBOARDING@example.invalid "])
+        try check(!onboardingSynced, "Offline onboarding save was not queued")
+        try expectEmailQueue(keys[6], [onboardingEmail])
+        server.configure()
+        let relaunched = MailAccountCloud(session: session, storageKey: keys[6], destination: .onboarding)
+        await relaunched.retryPendingSync()
+        try expectEmailQueue(keys[6], [])
+        try check(server.onboardingContains(onboardingEmail) && !server.contains(onboardingEmail),
+                  "Onboarding email reached the connector-feedback table")
+        try check(!server.onboardingContains(savedEmail), "Connector email reached the onboarding table")
+        try await onboarding.forgetLocalState()
+        try await relaunched.forgetLocalState()
+        try check(server.onboardingContains(onboardingEmail) && stored(keys[6]).isEmpty,
+                  "Onboarding cleanup did not preserve the remote contact and clear local state")
+        print("PASS: onboarding queue retries after relaunch into its own table; cleanup stays local")
+
         // Assert the actual wire payload, including retries and upgraded state, contains only emails.
         for payload in server.contactPayloads {
             try check(Set(payload.keys) == ["emails"], "Contact payload contains metadata fields")
@@ -266,6 +293,9 @@ private final class ContactProtocol: URLProtocol, @unchecked Sendable {
         let uninstall = try String(contentsOf: root.appendingPathComponent("Sentient OS macOS/System/Uninstall.swift"), encoding: .utf8)
         try check(!reset.contains("MailAccountCloud.shared."), "Reset changes the retained contact identity")
         try check(uninstall.contains("MailAccountCloud.shared.forgetLocalState()"), "Uninstall does not clear local contact state")
+        try check(uninstall.contains("MailAccountCloud.onboarding.forgetLocalState()"), "Uninstall does not clear onboarding contact state")
+        let startup = try String(contentsOf: root.appendingPathComponent("Sentient OS macOS/App/AppState.swift"), encoding: .utf8)
+        try check(startup.contains("MailAccountCloud.onboarding.retryPendingSync()"), "Launch does not retry onboarding contacts")
         try check(!uninstall.contains("MailAccountCloud.shared.erase()"), "Uninstall deletes remote contacts")
         print("PASS: Reset retains contact state; Uninstall performs local-only contact cleanup")
     }

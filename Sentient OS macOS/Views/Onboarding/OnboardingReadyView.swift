@@ -11,6 +11,8 @@ import SwiftUI
 struct OnboardingReadyView: View {
     let onStart: () -> Void
 
+    @AppStorage("onboarding.emailSubmitted") private var emailSubmitted = false
+    @State private var showEmailPrompt = false
     @State private var selectionCount = SourceSelection.selectionCount
     @State private var showConnectorRecommendation = false
     @State private var startAfterRecommendation = false
@@ -59,6 +61,7 @@ struct OnboardingReadyView: View {
                          color: canStart ? Theme.faint : Theme.Ink.amber)
 
                 GlowButton(title: "Start Analysis", active: canStart) {
+                    guard emailSubmitted else { showEmailPrompt = true; return }
                     // Recheck the persisted selection in case a connection changed this turn.
                     guard SourceSelection.selectionCount >= SourceSelection.minimumSelections else { return }
                     if !CodexAuth.connectorsLocked && !SourceSelection.hasEmailAndCalendar {
@@ -79,6 +82,13 @@ struct OnboardingReadyView: View {
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity)
             .background(Theme.bg)
+        }
+        .onAppear { showEmailPrompt = !emailSubmitted }
+        .sheet(isPresented: $showEmailPrompt) {
+            OnboardingEmailPrompt {
+                emailSubmitted = true
+                showEmailPrompt = false
+            }
         }
         .sheet(isPresented: $showConnectorRecommendation, onDismiss: {
             if startAfterRecommendation {
