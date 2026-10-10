@@ -116,7 +116,7 @@ private final class ContactProtocol: URLProtocol, @unchecked Sendable {
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
         let prefix = "privacy-retention-test." + UUID().uuidString
-        let keys = ["saved", "pending", "inflight", "legacy-synced", "legacy-pending", "concurrent", "onboarding"].map { prefix + "." + $0 }
+        let keys = ["saved", "pending", "inflight", "legacy-synced", "legacy-pending", "concurrent", "onboarding", "enqueue"].map { prefix + "." + $0 }
         defer {
             for key in keys {
                 SecItemDelete([kSecClass as String: kSecClassGenericPassword,
@@ -276,6 +276,17 @@ private final class ContactProtocol: URLProtocol, @unchecked Sendable {
         try check(server.onboardingContains(onboardingEmail) && stored(keys[6]).isEmpty,
                   "Onboarding cleanup did not preserve the remote contact and clear local state")
         print("PASS: onboarding queue retries after relaunch into its own table; cleanup stays local")
+
+        // The welcome can begin as soon as email is durable, even while the network is offline.
+        let queuedWelcome = MailAccountCloud(session: session, storageKey: keys[7], destination: .onboarding)
+        let beforeEnqueue = server.requestCount
+        try await queuedWelcome.enqueue([address("quick-welcome")])
+        try expectEmailQueue(keys[7], [address("quick-welcome")])
+        try check(server.requestCount == beforeEnqueue, "Enqueue waited on or started a foreground network request")
+        await queuedWelcome.retryPendingSync()
+        try check(server.onboardingContains(address("quick-welcome")), "Queued welcome contact did not sync")
+        try await queuedWelcome.forgetLocalState()
+        print("PASS: onboarding enqueue is durable before networking and uses the existing retry path")
 
         // Assert the actual wire payload, including retries and upgraded state, contains only emails.
         for payload in server.contactPayloads {
