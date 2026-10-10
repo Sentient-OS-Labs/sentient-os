@@ -1,6 +1,6 @@
 // OnboardingEmailPrompt.swift
 // Required email entry when onboarding reaches the source picker. submit() validates the
-// address; the save task uses the secure onboarding contact queue before allowing continuation.
+// address; a durable enqueue is followed by an optional company welcome before source selection.
 // Doc: Documentation - Onboarding.md
 
 import SwiftUI
@@ -11,9 +11,44 @@ struct OnboardingEmailPrompt: View {
     @State private var email = ""
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var welcome: YCCompanyWelcome?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var emailFocused: Bool
 
     var body: some View {
+        Group {
+            if let welcome {
+                OnboardingCompanyWelcome(company: welcome, onContinue: onSaved)
+                    .transition(.opacity)
+            } else {
+                emailForm.transition(.opacity)
+            }
+        }
+        .background(Theme.bg)
+        .preferredColorScheme(.dark)
+        .interactiveDismissDisabled()
+        .task(id: isSaving) {
+            guard isSaving, welcome == nil, let address = MailAccount.normalizedEmail(email) else { return }
+            do {
+                try await MailAccountCloud.onboarding.enqueue([address])
+                let match = await YCWelcomeClient.shared.lookup(email: address)
+                guard !Task.isCancelled else { return }
+                if let match {
+                    emailFocused = false
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.35)) { welcome = match }
+                } else {
+                    onSaved()
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                errorMessage = "Your email couldn’t be saved on this Mac. Please try again."
+                isSaving = false
+                emailFocused = true
+            }
+        }
+    }
+
+    private var emailForm: some View {
         VStack(alignment: .leading, spacing: 22) {
             Image(systemName: "envelope")
                 .font(.system(size: 25, weight: .light))
@@ -55,7 +90,7 @@ struct OnboardingEmailPrompt: View {
                 }
             }
 
-            Text("Only your email address is saved to our feedback list. No account is created.")
+            Text("Your email is saved for occasional feedback invitations.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondary)
                 .lineSpacing(3)
@@ -71,24 +106,7 @@ struct OnboardingEmailPrompt: View {
         }
         .padding(32)
         .frame(width: 460)
-        .background(Theme.bg)
-        .preferredColorScheme(.dark)
-        .interactiveDismissDisabled()
         .onAppear { emailFocused = true }
-        .task(id: isSaving) {
-            guard isSaving, let address = MailAccount.normalizedEmail(email) else { return }
-            do {
-                // A false result still means the address is safely queued for background retry.
-                _ = try await MailAccountCloud.onboarding.save([address])
-                guard !Task.isCancelled else { return }
-                onSaved()
-            } catch {
-                guard !Task.isCancelled else { return }
-                errorMessage = "Your email couldn’t be saved on this Mac. Please try again."
-                isSaving = false
-                emailFocused = true
-            }
-        }
     }
 
     private func submit() {
