@@ -10,57 +10,21 @@ struct ComputerUseGateView: View {
     let gate: ComputerUseGate
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            OnboardingWhisper("ONE-TIME SETUP")
-                .frame(maxWidth: .infinity)
+        PermissionSetupView(title: "Allow the permissions needed to control your computer",
+                            continueTitle: continueTitle, canContinue: gate.allRequiredGranted,
+                            onContinue: gate.continueNow) {
+            SentientPermissionRows(gate: gate)
 
-            Text("Allow the permissions needed to control your computer")
-                .display(23)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.top, 18)
-
-            VStack(alignment: .leading, spacing: 26) {
-                SentientPermissionRows(gate: gate)
-
-                SettingsGroup(label: "Sidekick") {
-                    StatusLine(title: "Microphone & Speech",
-                               health: gate.micSpeech == .granted ? .ok : .warn,   // optional — amber, never blocking
-                               note: micSpeechNote,
-                               tip: ComputerUseGate.micSpeechTip,
-                               fixTitle: gate.micSpeech == .notAsked ? "Allow…" : "Fix…") {
-                        fixMicSpeech()
-                    }
+            SettingsGroup(label: "Sidekick") {
+                StatusLine(title: "Microphone & Speech",
+                           health: gate.micSpeech == .granted ? .ok : .warn,   // optional — amber, never blocking
+                           note: micSpeechNote,
+                           tip: ComputerUseGate.micSpeechTip,
+                           fixTitle: gate.micSpeech == .notAsked ? "Allow…" : "Fix…") {
+                    fixMicSpeech()
                 }
             }
-            .padding(.top, 30)
-
-            // No bypass: while any required grant is red the button is disabled and says so, so a
-            // feature can never be fired half-granted. It enables the instant every row goes green
-            // (the rows re-probe on foreground + after the mic prompt).
-            OnboardingNextButton(title: continueTitle,
-                                 enabled: gate.allRequiredGranted) {
-                gate.continueNow()
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 32)
-
-            HStack(spacing: 8) {
-                Image(systemName: "shield").font(.system(size: 10)).foregroundStyle(Theme.Ink.label)
-                Text(PrivacyCopy.screenFooter)
-                    .font(.system(size: 11)).foregroundStyle(Theme.Ink.label)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.top, 18)
         }
-        .padding(.horizontal, 44)
-        .padding(.top, 34)
-        .padding(.bottom, 24)
-        .frame(width: 560)
-        .background(Color.black)
-        .preferredColorScheme(.dark)
         .task {
             while !Task.isCancelled {
                 gate.refresh()
@@ -108,9 +72,8 @@ struct ComputerUseGateView: View {
 
 }
 
-/// The REQUIRED pair — Sentient's own Accessibility (the driver's hands) and Screen Recording
-/// (its eyes) as StatusLine rows, with their fix flows. Shared by the first-fire gate and the
-/// update-migration window (ComputerUseUpgrade), so the two surfaces can never drift apart.
+/// The selected computer-use runtime's required grants. Sentient's own rows are also reused by
+/// Double Tap; the native helper's rows remain specific to computer use.
 /// `gate` is the one probe source; call `gate.refresh()` around presentation.
 struct SentientPermissionRows: View {
     let gate: ComputerUseGate
@@ -129,44 +92,8 @@ struct SentientPermissionRows: View {
                 }
             }
             if gate.backend == .openAI { NativeComputerUsePermissionRows(gate: gate) }
-            SettingsGroup(label: "Sentient Permissions") {
-                VStack(alignment: .leading, spacing: 2) {
-                    if gate.backend == .cua {
-                        StatusLine(title: "Accessibility (act in your apps)",
-                                   health: gate.sentientAccessibility ? .ok : .bad,
-                                   note: gate.sentientAccessibility ? "granted" : "not granted",
-                                   tip: "Lets Sentient read windows and act inside your apps in the background.",
-                                   fixTitle: "Allow…") { fixSentientAccessibility() }
-                    }
-                    StatusLine(title: "Screen Recording (see the screen)",
-                               health: gate.sentientScreen ? .ok : .bad,
-                               note: gate.sentientScreen ? "granted" : "not granted",
-                               tip: PrivacyCopy.screenCapture,
-                               fixTitle: "Allow…") { fixSentientScreen() }
-                }
-            }
-        }
-    }
-
-    /// The Screen Recording list is drag-authorizable, and Sentient may not be IN the list at all
-    /// (on Tahoe, CGRequestScreenCaptureAccess doesn't reliably add it — field-verified) — so the
-    /// guide always carries Sentient itself as the drag card. Dragging when the row already exists
-    /// is harmless; the user just flips the existing switch.
-    private func fixSentientScreen() {
-        guard !gate.sentientScreen else { return }
-        PermissionGuide.shared.guide(.screenRecording, dragging: Bundle.main.bundleURL)
-    }
-
-    /// Accessibility has a real system prompt (unlike Screen Recording on Tahoe), so ask for it
-    /// directly. macOS shows that prompt once per app identity, so a user who already dismissed it
-    /// gets nothing — hence the deep-link fallback a beat later, once the probe says it didn't take.
-    private func fixSentientAccessibility() {
-        guard !gate.sentientAccessibility else { return }
-        Permissions.requestAccessibility()
-        Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(600))
-            gate.refresh()
-            if !gate.sentientAccessibility { Permissions.openAccessibilitySettings() }
+            SentientAppPermissionRows(accessibility: gate.backend == .cua ? gate.sentientAccessibility : nil,
+                                     screen: gate.sentientScreen)
         }
     }
 }

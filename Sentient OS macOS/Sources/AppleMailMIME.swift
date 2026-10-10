@@ -9,12 +9,13 @@ nonisolated enum AppleMailMIME {
     struct Message: Sendable {
         let headers: [String: String]
         let text: String
+        var truncated = false
     }
     static let maximumBytes = 16 * 1_024 * 1_024
     static let maximumText = 24_000
 
     /// The decimal prefix counts RFC822 bytes, excluding the trailing Apple property list.
-    static func read(_ url: URL, expectedMessageID: String? = nil, includeJunkPreview: Bool = false) throws -> Message {
+    static func read(_ url: URL, expectedMessageID: String? = nil, includeJunkPreview: Bool = false, preserveContext: Bool = false) throws -> Message {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
         let prefix = try handle.read(upToCount: 64) ?? Data()
@@ -23,10 +24,10 @@ nonisolated enum AppleMailMIME {
               size > 0, size <= maximumBytes else { throw Failure.unsupported }
         try handle.seek(toOffset: UInt64(end + 1))
         guard let data = try handle.read(upToCount: size), data.count == size else { throw Failure.incompleteMessage }
-        return try parse(data, expectedMessageID: expectedMessageID, includeJunkPreview: includeJunkPreview)
+        return try parse(data, expectedMessageID: expectedMessageID, includeJunkPreview: includeJunkPreview, preserveContext: preserveContext)
     }
 
-    static func parse(_ data: Data, expectedMessageID: String? = nil, includeJunkPreview: Bool = false) throws -> Message {
+    static func parse(_ data: Data, expectedMessageID: String? = nil, includeJunkPreview: Bool = false, preserveContext: Bool = false) throws -> Message {
         guard data.count <= maximumBytes else { throw Failure.unsupported }
         let (headers, body) = try split(data)
         // Validate the locator before making ANY policy decision, including a rejection.
@@ -43,11 +44,43 @@ nonisolated enum AppleMailMIME {
             }
         }
         guard includeJunkPreview || !excluded(headers) else { throw Failure.excluded }
-        var parts = 0
-        let text = try extract(headers, body, depth: 0, parts: &parts)
+        var parts = 0, truncated = false
+        let text = try extract(headers, body, depth: 0, parts: &parts, truncated: &truncated, preserveContext: preserveContext)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw Failure.noText }
-        return Message(headers: headers, text: String(text.prefix(maximumText)))
+        return Message(headers: headers, text: bounded(text, truncated: &truncated), truncated: truncated)
+    }
+
+    private static func bounded(_ text: String, truncated: inout Bool) -> String {
+        if text.count > maximumText { truncated = true }
+        return String(text.prefix(maximumText))
+    }
+
+    /// Header-only research indexing avoids decoding every body in a mailbox. Never renders HTML.
+    static func readHeaders(_ url: URL, expectedMessageID: String) throws -> [String: String] {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let prefix = try handle.read(upToCount: 64) ?? Data()
+        guard let end = prefix.firstIndex(of: 10), end < 24,
+              let size = Int(String(decoding: prefix[..<end], as: UTF8.self).trimmingCharacters(in: .whitespaces)),
+              size > 0, size <= maximumBytes else { throw Failure.unsupported }
+        try handle.seek(toOffset: UInt64(end + 1))
+        var data = Data()
+        let limit = min(size, 128 * 1_024)
+        while data.count < limit {
+            try Task.checkCancellation()
+            let chunk = try handle.read(upToCount: min(4_096, limit - data.count)) ?? Data()
+            if chunk.isEmpty { break }
+            data.append(chunk)
+            if data.range(of: Data("\r\n\r\n".utf8)) != nil || data.range(of: Data("\n\n".utf8)) != nil { break }
+        }
+        let (headers, _) = try split(data)
+        func normalized(_ s: String) -> String { s.trimmingCharacters(in: .whitespacesAndNewlines).trimmingCharacters(in: CharacterSet(charactersIn: "<>")) }
+        guard !expectedMessageID.isEmpty, normalized(headers["message-id", default: ""]) == normalized(expectedMessageID) else {
+            throw AppleMailError.missingBody
+        }
+        guard !excluded(headers) else { throw Failure.excluded }
+        return headers
     }
 
     static func excluded(_ h: [String: String]) -> Bool {
@@ -108,7 +141,7 @@ nonisolated enum AppleMailMIME {
         return (fields[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), params)
     }
 
-    private static func extract(_ h: [String: String], _ body: Data, depth: Int, parts: inout Int) throws -> String {
+    private static func extract(_ h: [String: String], _ body: Data, depth: Int, parts: inout Int, truncated: inout Bool, preserveContext: Bool) throws -> String {
         parts += 1
         guard depth < 16, parts <= 256 else { throw Failure.unsupported }
         let content = parameters(h["content-type"] ?? "text/plain")
@@ -148,7 +181,7 @@ nonisolated enum AppleMailMIME {
                     if let rootID {
                         guard ph["content-id"] == rootID else { continue }
                     } else if index != 0 { continue }
-                    return try extract(ph, pb, depth: depth + 1, parts: &parts)
+                    return try extract(ph, pb, depth: depth + 1, parts: &parts, truncated: &truncated, preserveContext: preserveContext)
                 }
                 throw Failure.missingBodyPart
             }
@@ -157,7 +190,7 @@ nonisolated enum AppleMailMIME {
             for segment in segments {
                 let (ph, pb) = try split(segment)
                 do {
-                    let text = try extract(ph, pb, depth: depth + 1, parts: &parts)
+                    let text = try extract(ph, pb, depth: depth + 1, parts: &parts, truncated: &truncated, preserveContext: preserveContext)
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty { extracted.append((parameters(ph["content-type"] ?? "text/plain").type, text)) }
                 } catch {
@@ -174,7 +207,7 @@ nonisolated enum AppleMailMIME {
                 if let alternativeError { throw alternativeError }
                 return ""
             }
-            return String(extracted.map(\.text).joined(separator: "\n").prefix(maximumText))
+            return bounded(extracted.map(\.text).joined(separator: "\n"), truncated: &truncated)
         }
         guard content.type == "text/plain" || content.type == "text/html" else { return "" }
         if let length = h["x-apple-content-length"].flatMap(Int.init), length > 0,
@@ -202,7 +235,7 @@ nonisolated enum AppleMailMIME {
             encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cf))
         }
         guard let text = String(data: decoded, encoding: encoding) else { throw Failure.invalidText }
-        let result = content.type == "text/html" ? htmlText(text) : String(text.prefix(maximumText))
+        let result = bounded(content.type == "text/html" ? htmlText(text, preserveContext: preserveContext) : text, truncated: &truncated)
         return result
     }
 
@@ -253,15 +286,22 @@ nonisolated enum AppleMailMIME {
     }
 
     /// No WebKit, attributed-string importer, image fetches, CSS, or JavaScript execution.
-    static func htmlText(_ html: String) -> String {
+    /// Research retains quoted context and link destinations; ingestion keeps its existing text.
+    static func htmlText(_ html: String, preserveContext: Bool = false) -> String {
         var text = html
-        for pattern in ["(?is)<!--.*?-->", "(?is)<(script|style|head|template)\\b[^>]*>.*?</\\1\\s*>", "(?is)<blockquote\\b[^>]*>.*?</blockquote\\s*>"] {
+        var patterns = ["(?is)<!--.*?-->", "(?is)<(script|style|head|template)\\b[^>]*>.*?</\\1\\s*>"]
+        if !preserveContext { patterns.append("(?is)<blockquote\\b[^>]*>.*?</blockquote\\s*>") }
+        for pattern in patterns {
             text = text.replacingOccurrences(of: pattern, with: " ", options: .regularExpression)
+        }
+        if preserveContext {
+            text = text.replacingOccurrences(of: #"(?is)<a\b[^>]*\bhref\s*=\s*(['"])((?:https?://|mailto:)[^'"]{1,8192})\1[^>]*>(.*?)</a\s*>"#,
+                with: "$3 ($2)", options: .regularExpression)
         }
         text = text.replacingOccurrences(of: "(?is)<[^>]*>", with: " ", options: .regularExpression)
         for (entity, replacement) in [("&nbsp;", " "), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", "\""), ("&#39;", "'"), ("&amp;", "&")] {
             text = text.replacingOccurrences(of: entity, with: replacement)
         }
-        return String(text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression).prefix(maximumText))
+        return text.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
     }
 }

@@ -21,7 +21,8 @@ def main():
     psql = shutil.which('psql')
     if not psql:
         raise SystemExit('psql is required to run these local database checks.')
-    sql = (Path(__file__).resolve().parents[1] / 'supabase/tests/feedback_contacts.sql').read_text()
+    tests = Path(__file__).resolve().parents[1] / 'supabase/tests'
+    sql = '\n'.join((tests / name).read_text() for name in ('feedback_contacts.sql', 'onboarding_contacts.sql'))
     subprocess.run([psql, '-X', '--set=ON_ERROR_STOP=1', '--dbname', sys.argv[1]],
                    input='BEGIN;\n' + sql + '\nROLLBACK;\n', text=True, check=True)
 

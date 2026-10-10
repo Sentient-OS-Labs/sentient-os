@@ -102,7 +102,10 @@ enum Uninstall {
         progress(.cloud)
         await HostedConnectorSetup.beginTeardown()
         defer { HostedConnectorSetup.endTeardown() }
-        do { try await MailAccountCloud.shared.forgetLocalState() }
+        do {
+            try await MailAccountCloud.shared.forgetLocalState()
+            try await MailAccountCloud.onboarding.forgetLocalState()
+        }
         catch {
             Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "contact_credentials", error: error)
             lastFailure = "Uninstall paused because local contact credentials couldn't be removed. Unlock your Mac and retry."
