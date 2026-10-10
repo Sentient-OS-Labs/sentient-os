@@ -27,7 +27,7 @@ begin
     set local role authenticated;
     snapshot := public.invite_status();
     sender_code := snapshot->>'code';
-    if sender_code is null or sender_code !~ '^[0-9A-F]{16}$' or snapshot->>'redeemedAt' is not null then
+    if sender_code is null or sender_code !~ '^[0-9A-Z]{6}$' or snapshot->>'redeemedAt' is not null then
         raise exception 'New installation received an invalid code or an unearned grant';
     end if;
     if public.invite_status()->>'code' is distinct from sender_code then raise exception 'Code changed on retry'; end if;
@@ -46,7 +46,7 @@ begin
     select count(*) into n from public.invite_codes where owner_id = sender;
     if n <> 0 then raise exception 'Another installation code was readable'; end if;
     if public.redeem_invite('invalid')->>'error' is distinct from 'invalid_code' then raise exception 'Invalid code accepted'; end if;
-    granted := public.redeem_invite('  ' || lower(substr(sender_code, 1, 8)) || '-' || lower(substr(sender_code, 9)) || '  ');
+    granted := public.redeem_invite('  ' || lower(substr(sender_code, 1, 3)) || '-' || lower(substr(sender_code, 4)) || '  ');
     if granted->>'redeemedAt' is null then raise exception 'Formatted code did not redeem'; end if;
     if public.redeem_invite(sender_code)->>'redeemedAt' is distinct from granted->>'redeemedAt' then raise exception 'Retry duplicated grant'; end if;
     if public.redeem_invite(friend_code)->>'redeemedAt' is distinct from granted->>'redeemedAt' then raise exception 'Already granted recipient changed'; end if;
@@ -142,4 +142,106 @@ begin
     reset role;
 end;
 $$;
+
+-- Compatibility is exercised with isolated identities, never a real user's code.
+do $$
+declare
+    sender uuid := gen_random_uuid();
+    friend uuid := gen_random_uuid();
+    legacy text := upper(replace(gen_random_uuid()::text, '-', ''));
+    snapshot jsonb;
+begin
+    legacy := substr(legacy, 1, 16);
+    insert into auth.users(id, aud, role, is_anonymous)
+    values (sender, 'authenticated', 'authenticated', true),
+           (friend, 'authenticated', 'authenticated', true);
+    insert into public.invite_codes(owner_id, campaign_id, code)
+    values (sender, 'launch-lifetime', legacy);
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', sender, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    if public.invite_status()->>'code' is distinct from legacy then
+        raise exception 'An existing code was replaced';
+    end if;
+    begin
+        perform public.generate_invite_code();
+        raise exception 'Client called the server-only generator';
+    exception when insufficient_privilege then null;
+    end;
+    reset role;
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', friend, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    snapshot := public.redeem_invite(lower(substr(legacy, 1, 8)) || '-' || lower(substr(legacy, 9)));
+    if snapshot->>'redeemedAt' is null or snapshot->>'code' !~ '^[0-9A-Z]{6}$' then
+        raise exception 'Legacy redemption or new recipient code failed';
+    end if;
+    reset role;
+end;
+$$;
+
+-- Force a collision without depending on a random draw. Restore the real
+-- generator at the savepoint; the enclosing test transaction rolls back all rows.
+savepoint invite_collision_check;
+create temporary sequence invite_collision_attempts;
+create or replace function public.generate_invite_code()
+returns text
+language plpgsql volatile set search_path = ''
+as $$
+begin
+    if nextval('pg_temp.invite_collision_attempts') = 1 then
+        return current_setting('sentient.test_existing_code');
+    end if;
+    return current_setting('sentient.test_next_code');
+end;
+$$;
+do $$
+declare
+    existing_owner uuid := gen_random_uuid();
+    new_owner uuid := gen_random_uuid();
+    exhausted_owner uuid := gen_random_uuid();
+    existing_code text;
+    next_code text;
+    snapshot jsonb;
+begin
+    -- Pick two genuinely unused fixture values independently of the stubbed generator.
+    select upper(lpad(to_hex(n), 6, '0')) into existing_code from generate_series(0, 10000) n
+        where not exists (select 1 from public.invite_codes where code = upper(lpad(to_hex(n), 6, '0'))) limit 1;
+    select upper(lpad(to_hex(n), 6, '0')) into next_code from generate_series(0, 10000) n
+        where upper(lpad(to_hex(n), 6, '0')) <> existing_code
+        and not exists (select 1 from public.invite_codes where code = upper(lpad(to_hex(n), 6, '0'))) limit 1;
+    perform set_config('sentient.test_existing_code', existing_code, true);
+    perform set_config('sentient.test_next_code', next_code, true);
+    insert into auth.users(id, aud, role, is_anonymous)
+    values (existing_owner, 'authenticated', 'authenticated', true),
+           (new_owner, 'authenticated', 'authenticated', true),
+           (exhausted_owner, 'authenticated', 'authenticated', true);
+    insert into public.invite_codes(owner_id, campaign_id, code)
+    values (existing_owner, 'launch-lifetime', existing_code);
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', new_owner, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    snapshot := public.invite_status();
+    if snapshot->>'code' is distinct from next_code then raise exception 'Collision was not retried'; end if;
+    if public.invite_status()->>'code' is distinct from next_code then raise exception 'Retry changed the issued code'; end if;
+    reset role;
+    if currval('pg_temp.invite_collision_attempts') <> 2 then raise exception 'Unexpected collision retry count'; end if;
+    if (select code from public.invite_codes where owner_id = existing_owner) is distinct from existing_code then
+        raise exception 'Collision changed another owner code';
+    end if;
+    perform set_config('sentient.test_next_code', existing_code, true);
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', exhausted_owner, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    begin
+        perform public.invite_status();
+        raise exception 'Repeated collisions should fail within the retry bound';
+    exception when unique_violation then null;
+    end;
+    reset role;
+    if currval('pg_temp.invite_collision_attempts') <> 34 then raise exception 'Collision retry limit was not 32'; end if;
+    if exists (select 1 from public.invite_codes where owner_id = exhausted_owner) then
+        raise exception 'Failed allocation left an invite behind';
+    end if;
+end;
+$$;
+rollback to savepoint invite_collision_check;
+release savepoint invite_collision_check;
 select 'PASS: 27 recipients per code, stable sharing, replay, issuance, normalization, isolation, immutable grants, revocation, expiry, guess throttling, deletion, anonymous denial' as invitation_checks;
+select 'PASS: six-character issuance, legacy compatibility, private generator, collision retry and bounded exhaustion' as invitation_format_checks;

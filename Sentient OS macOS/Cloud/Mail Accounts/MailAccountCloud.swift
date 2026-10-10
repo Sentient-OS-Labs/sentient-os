@@ -100,6 +100,19 @@ actor MailAccountCloud {
 
     /// Add addresses without retaining their connector, source, or installation identity in the list.
     func save(_ emails: [String]) async throws -> Bool {
+        try queue(emails)
+        do { try await sync(); return true }
+        catch { scheduleRetry(); return false }
+    }
+
+    /// Onboarding can continue once the address is durable, without waiting on the network.
+    /// The same retry loop and launch recovery drain this queue into the existing contact table.
+    func enqueue(_ emails: [String]) throws {
+        try queue(emails)
+        scheduleRetry()
+    }
+
+    private func queue(_ emails: [String]) throws {
         guard !forgetting else { throw MailAccountError.busy }
         let normalized = emails.compactMap(MailAccount.normalizedEmail)
         guard !emails.isEmpty, emails.count <= 32, normalized.count == emails.count else {
@@ -108,8 +121,6 @@ actor MailAccountCloud {
         var next = try load()
         next.pendingEmails = Set(next.pendingEmails + normalized).sorted()
         try persist(next)
-        do { try await sync(); return true }
-        catch { scheduleRetry(); return false }
     }
 
     func retryPendingSync() async {

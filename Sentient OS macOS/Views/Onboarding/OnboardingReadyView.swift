@@ -83,6 +83,7 @@ struct OnboardingReadyView: View {
             .frame(maxWidth: .infinity)
             .background(Theme.bg)
         }
+        .disabled(!emailSubmitted)
         .onAppear { showEmailPrompt = !emailSubmitted }
         .sheet(isPresented: $showEmailPrompt) {
             OnboardingEmailPrompt {

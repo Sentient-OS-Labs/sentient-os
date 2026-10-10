@@ -83,6 +83,7 @@ enum PrivacyCopy {
         Section(id: "contact", title: "Send us feedback.", paragraphs: [
             "Onboarding asks for an email address before you choose your sources. Sentient saves it for occasional feedback invitations sent to a small sample of users. When you finish connecting Gmail or Outlook through a supported AI account, Sentient can also save that email address. Your knowledge base and the contents of your tasks are never collected for product analytics. Feedback helps improve Sentient without collecting that private context. Any feedback email will include a way to opt out.",
             "For this feedback list, we collect your email address and nothing else, ever. The list is stored in Supabase.",
+            "After you submit your onboarding email, Sentient may send just its domain to our company-welcome service. A recognized domain can show a company logo and a prepared welcome before source selection. Company and founder reference records are separate from submitted contacts; this does not verify your identity or connect your email to your knowledge. No verification email is sent.",
             "A random installation credential lets us provide covered inference and manage usage limits. Invitations and lifetime access are recorded separately in Supabase so you keep your access.",
         ]),
         Section(id: "diagnostics", title: "Useful diagnostics, focused on the app.", paragraphs: [

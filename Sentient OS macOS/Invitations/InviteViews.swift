@@ -50,7 +50,7 @@ struct InviteRedemptionView: View {
                 Text("Have an invite code?")
                     .font(.system(size: formStyle ? 15 : 13, weight: .medium)).foregroundStyle(.white)
                 HStack(spacing: 8) {
-                    TextField("Enter invite code", text: $code)
+                    TextField("Enter 6-character code", text: $code)
                         .textFieldStyle(.plain)
                         .font(.system(size: formStyle ? 14 : 12, design: .monospaced))
                         .foregroundStyle(.white)
@@ -273,7 +273,7 @@ private struct InviteHandIcon: Shape {
 
 #if DEBUG
 #Preview("Invite banner") {
-    InviteBannerView(code: "ABCD1234EFAB5678", dismiss: {})
+    InviteBannerView(code: "A7K2M9", dismiss: {})
         .frame(width: 380).padding(20).background(.gray.opacity(0.25))
 }
 #Preview("Invite redemption") {

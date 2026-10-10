@@ -58,7 +58,7 @@ final class InviteProgram {
     func redeem(_ code: String) async {
         guard !isBusy else { return }
         guard InviteSnapshot.isValidCode(code) else {
-            errorMessage = "Enter the 16-character invite code your friend shared."
+            errorMessage = "Enter the 6-character invite code your friend shared."
             return
         }
         _ = await perform(code: code)

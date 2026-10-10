@@ -22,7 +22,7 @@ enum FactoryReset {
     /// the next launch regardless.
     @MainActor
     @discardableResult
-    static func run(appState: AppState? = nil) async -> Bool {
+    static func run(appState: AppState? = nil, defaults: UserDefaults = .standard) async -> Bool {
         // Invalidate in-flight learning before any suspension; explicit settings survive.
         SidekickInstructionStore.resetLearning()
         await HostedConnectorSetup.beginTeardown()
@@ -40,11 +40,14 @@ enum FactoryReset {
         Diagnostics.removeForCleanup(OutlookCalendarToolPolicy.pendingDirectory, phase: .reset, reason: "pending_actions")
         LifetimeStats.reset()
         try? await MirrorClient.shared.deleteRemote()   // best-effort — offline reset still works
-        let d = UserDefaults.standard
+        let d = defaults
         for key in d.dictionaryRepresentation().keys where key.hasPrefix("connectedEmail.") {
             d.removeObject(forKey: key)
         }
         d.removeObject(forKey: "onboarding.step")
+        // Re-arm the email + company welcome flow while retaining the contact queue/identity.
+        // Keeping this UI latch would silently skip the prompt on every subsequent setup.
+        d.removeObject(forKey: "onboarding.emailSubmitted")
         d.removeObject(forKey: CodexAuth.kbOnlyKey)     // the crossroads re-detects the plan fresh
         d.removeObject(forKey: CodexAuth.assertedPlusKey)   // …and asks again before trusting
         // The Frontier Model Choice (ModelBackend/CustomProvider + its Keychain key) SURVIVES

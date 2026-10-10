@@ -80,6 +80,8 @@ struct GlowHalo: View {
     var reversed: Bool = false
     var colors: [Color]? = nil
     var intensity: Double = 0.85     // halo opacity when active
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.appearsActive) private var appearsActive
 
     /// The canonical warm→cool AI-gradient stops (shared: the Analyze Now CTA + the For You
     /// command bar's glow both use these).
@@ -97,8 +99,9 @@ struct GlowHalo: View {
 
     var body: some View {
         GeometryReader { geo in
-            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { ctx in
-                let t = ctx.date.timeIntervalSinceReferenceDate
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0,
+                                    paused: !active || reduceMotion || !appearsActive)) { ctx in
+                let t = reduceMotion ? 0 : ctx.date.timeIntervalSinceReferenceDate
                 let base = (t.truncatingRemainder(dividingBy: GlowHalo.period) / GlowHalo.period) * 360.0
                 let angle = reversed ? -base : base
                 Capsule(style: .continuous)
