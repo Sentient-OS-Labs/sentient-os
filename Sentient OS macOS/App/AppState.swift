@@ -75,6 +75,7 @@ final class AppState {
         guard ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil else { return }
 
         Task { await MailAccountCloud.shared.retryPendingSync() }
+        Task { await MailAccountCloud.onboarding.retryPendingSync() }
 
         CuaDriver.rememberExistingInstallation()
         ComputerUseUpgrade.shared.prepareForLaunch { [weak self] in

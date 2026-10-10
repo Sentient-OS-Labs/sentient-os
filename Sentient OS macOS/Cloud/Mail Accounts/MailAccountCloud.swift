@@ -1,6 +1,6 @@
 // MailAccountCloud.swift
-// Queues only disclosed email addresses in Keychain until Supabase accepts them.
-// The feedback list stores addresses alone; its Auth session is never attached to a contact row.
+// Queues disclosed email addresses in Keychain until Supabase accepts them. Onboarding and
+// connector feedback use separate queues and tables; Auth is never attached to contact rows.
 // Doc: Documentation - Connected Email Accounts.md
 
 import Foundation
@@ -8,8 +8,29 @@ import Security
 
 actor MailAccountCloud {
     static let shared = MailAccountCloud()
+    static let onboarding = MailAccountCloud(destination: .onboarding)
+
+    enum Destination: Sendable {
+        case feedback, onboarding
+
+        var storageKey: String {
+            switch self {
+            case .feedback: "connected-email.state.v1"
+            case .onboarding: "onboarding-email.state.v1"
+            }
+        }
+
+        var rpc: String {
+            switch self {
+            case .feedback: "add_feedback_emails"
+            case .onboarding: "add_onboarding_emails"
+            }
+        }
+    }
+
     private let session: URLSession
     private let storageKey: String
+    private let destination: Destination
     private var state: State?
     private var syncTask: Task<Void, Error>?
     private var retryTask: Task<Void, Never>?
@@ -60,8 +81,10 @@ actor MailAccountCloud {
         let user: User
     }
 
-    init(session: URLSession = .shared, storageKey: String = "connected-email.state.v1") {
-        self.session = session; self.storageKey = storageKey
+    init(session: URLSession = .shared, storageKey: String? = nil, destination: Destination = .feedback) {
+        self.session = session
+        self.storageKey = storageKey ?? destination.storageKey
+        self.destination = destination
     }
 
     func hasPendingSync() throws -> Bool {
@@ -133,7 +156,7 @@ actor MailAccountCloud {
         while try hasPendingSync() {
             try Task.checkCancellation()
             let emails = Array(try load().pendingEmails.prefix(32))
-            _ = try await authenticatedRequest(path: "rest/v1/rpc/add_feedback_emails", body: ["emails": emails])
+            _ = try await authenticatedRequest(path: "rest/v1/rpc/\(destination.rpc)", body: ["emails": emails])
             try Task.checkCancellation()
             // New addresses queued during the request remain pending for the next batch.
             var current = try load()
