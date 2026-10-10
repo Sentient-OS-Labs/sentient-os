@@ -24,11 +24,21 @@ nonisolated struct InviteSnapshot: Codable, Equatable, Sendable {
 
     static func isValidCode(_ code: String) -> Bool {
         let value = normalize(code)
-        return value.utf8.count == 16 && value.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) }
+        switch value.utf8.count {
+        case 6:
+            return value.utf8.allSatisfy { (48...57).contains($0) || (65...90).contains($0) }
+        case 16:
+            // Previously shared invites remain redeemable.
+            return value.utf8.allSatisfy { (48...57).contains($0) || (65...70).contains($0) }
+        default:
+            return false
+        }
     }
 
     static func displayCode(_ code: String) -> String {
-        let characters = Array(code)
+        let value = normalize(code)
+        guard value.count == 16 else { return value }
+        let characters = Array(value)
         return stride(from: 0, to: characters.count, by: 4)
             .map { String(characters[$0..<min($0 + 4, characters.count)]) }.joined(separator: "-")
     }

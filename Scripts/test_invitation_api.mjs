@@ -32,13 +32,18 @@ try {
   const sender = await newUser();
   const friend = await newUser();
   const anotherFriend = await newUser();
-  const senderState = await rpc(sender, 'invite_status');
+  const [senderState, senderReplay] = await Promise.all([
+    rpc(sender, 'invite_status'), rpc(sender, 'invite_status'),
+  ]);
+  assert.equal(senderState.code, senderReplay.code, 'Concurrent issuance returned different codes');
   const friendState = await rpc(friend, 'invite_status');
-  assert.match(senderState.code, /^[0-9A-F]{16}$/);
+  assert.match(senderState.code, /^[0-9A-Z]{6}$/);
+  assert.match(friendState.code, /^[0-9A-Z]{6}$/);
+  assert.notEqual(senderState.code, friendState.code);
   assert.equal(senderState.redeemedAt, null);
   assert.equal((await rpc(sender, 'redeem_invite', { p_code: senderState.code })).error, 'own_code');
   const [first, replay] = await Promise.all([
-    rpc(friend, 'redeem_invite', { p_code: senderState.code.toLowerCase().match(/.{4}/g).join('-') }),
+    rpc(friend, 'redeem_invite', { p_code: ` ${senderState.code.toLowerCase().match(/.{3}/g).join('-')} ` }),
     rpc(friend, 'redeem_invite', { p_code: senderState.code }),
   ]);
   assert.ok(first.redeemedAt > 0);
