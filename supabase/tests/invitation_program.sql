@@ -47,9 +47,11 @@ begin
     if n <> 0 then raise exception 'Another installation code was readable'; end if;
     if public.redeem_invite('invalid')->>'error' is distinct from 'invalid_code' then raise exception 'Invalid code accepted'; end if;
     granted := public.redeem_invite('  ' || lower(substr(sender_code, 1, 3)) || '-' || lower(substr(sender_code, 4)) || '  ');
-    if granted->>'redeemedAt' is null then raise exception 'Formatted code did not redeem'; end if;
+    if granted->>'redeemedAt' is null or granted->>'validatedCode' is distinct from substr(sender_code, 1, 3) || '-' || substr(sender_code, 4) then raise exception 'Formatted code did not validate and redeem'; end if;
     if public.redeem_invite(sender_code)->>'redeemedAt' is distinct from granted->>'redeemedAt' then raise exception 'Retry duplicated grant'; end if;
-    if public.redeem_invite(friend_code)->>'redeemedAt' is distinct from granted->>'redeemedAt' then raise exception 'Already granted recipient changed'; end if;
+    if public.redeem_invite(friend_code)->>'error' is distinct from 'own_code' then raise exception 'Saved grant bypassed self-invite check'; end if;
+    if public.redeem_invite('not-a-registered-code')->>'error' is distinct from 'invalid_code' then raise exception 'Saved grant accepted random code'; end if;
+    if public.invite_status()->>'redeemedAt' is distinct from granted->>'redeemedAt' then raise exception 'Rejected submission changed saved access'; end if;
     begin
         update public.invite_codes set revoked_at = null;
         raise exception 'Client could change invitation availability';
@@ -220,7 +222,7 @@ begin
         perform set_config('request.jwt.claims', jsonb_build_object('sub', friend, 'role', 'authenticated')::text, true);
         set local role authenticated;
         snapshot := public.redeem_invite(U&'\00A0' || lower(custom_code) || E'\n');
-        if snapshot->>'redeemedAt' is null then raise exception 'Custom invite did not redeem'; end if;
+        if snapshot->>'redeemedAt' is null or snapshot->>'validatedCode' is distinct from upper(custom_code) then raise exception 'Registered custom invite did not validate and redeem'; end if;
         reset role;
         if (select invite_id from public.invite_redemptions where recipient_id = friend) is distinct from invitation_id then
             raise exception 'Custom invite credited the wrong code';
@@ -359,3 +361,66 @@ release savepoint invite_collision_check;
 select 'PASS: 27 recipients per code, stable sharing, replay, issuance, normalization, isolation, immutable grants, revocation, expiry, guess throttling, deletion, anonymous denial' as invitation_checks;
 select 'PASS: six-character issuance, legacy compatibility, private generator, collision retry and bounded exhaustion' as invitation_format_checks;
 select 'PASS: arbitrary custom text, long codes, preserved spelling, normalized uniqueness, blank denial, client creation denial, exact-match precedence' as custom_invitation_checks;
+
+-- All registered gifts and referrals use the same validation, including saved grants.
+do $$
+declare
+    recipient uuid;
+    gift text;
+    snapshot jsonb;
+    receipt jsonb;
+    invitation uuid;
+    missing_code text := 'unregistered-' || gen_random_uuid()::text;
+begin
+    foreach gift in array array['WAITLIST_OGs', 'MACAPPS_1000', 'FINAL_1000'] loop
+        recipient := gen_random_uuid();
+        insert into auth.users(id, aud, role, is_anonymous)
+        values (recipient, 'authenticated', 'authenticated', true);
+        select id into invitation from public.invite_codes
+            where public.normalize_invite_code(code) = upper(gift);
+        if invitation is null then raise exception 'Founder code was not registered'; end if;
+        perform set_config('request.jwt.claims', jsonb_build_object('sub', recipient, 'role', 'authenticated')::text, true);
+        set local role authenticated;
+        if public.redeem_invite(missing_code)->>'error' is distinct from 'invalid_code' then raise exception 'New recipient accepted nonexistent code'; end if;
+        snapshot := public.redeem_invite(' ' || lower(gift) || E'\n');
+        if snapshot->>'redeemedAt' is null or snapshot->>'validatedCode' is distinct from upper(gift) then
+            raise exception 'Founder gift did not validate';
+        end if;
+        if snapshot->>'code' !~ '^[0-9A-Z]{6}$' or (snapshot->>'campaignActive')::boolean is distinct from true then
+            raise exception 'Gift recipient did not receive a shareable referral';
+        end if;
+        reset role;
+        select to_jsonb(r) into receipt from public.invite_redemptions r where recipient_id = recipient;
+        set local role authenticated;
+        if public.redeem_invite('FINAL_1000')->>'validatedCode' is distinct from 'FINAL_1000' then raise exception 'Valid replay not confirmed'; end if;
+        if public.redeem_invite(missing_code)->>'error' is distinct from 'invalid_code' then raise exception 'Existing grant accepted nonexistent code'; end if;
+        if public.redeem_invite(null)->>'error' is distinct from 'invalid_code' then raise exception 'Existing grant accepted null code'; end if;
+        reset role;
+        update public.invite_codes set revoked_at = now() where id = invitation;
+        set local role authenticated;
+        if public.redeem_invite(gift)->>'error' is distinct from 'invalid_code' then raise exception 'Existing grant bypassed revocation'; end if;
+        reset role;
+        update public.invite_codes set revoked_at = null where id = invitation;
+        update public.invite_campaigns set active = false where id = 'launch-lifetime';
+        set local role authenticated;
+        if public.redeem_invite(gift)->>'error' is distinct from 'offer_ended' then raise exception 'Existing grant bypassed campaign closure'; end if;
+        reset role;
+        update public.invite_campaigns set active = true, ends_at = now() - interval '1 second' where id = 'launch-lifetime';
+        set local role authenticated;
+        if public.redeem_invite(gift)->>'error' is distinct from 'offer_ended' then raise exception 'Existing grant bypassed expiry'; end if;
+        if public.invite_status()->>'redeemedAt' is distinct from snapshot->>'redeemedAt' then raise exception 'Validation failure removed saved access'; end if;
+        reset role;
+        update public.invite_campaigns set ends_at = null where id = 'launch-lifetime';
+        if (select to_jsonb(r) from public.invite_redemptions r where recipient_id = recipient) is distinct from receipt then
+            raise exception 'Replay or rejection changed original receipt';
+        end if;
+        -- All submissions, including previously granted recipients, remain throttled.
+        set local role authenticated;
+        perform public.redeem_invite(missing_code);
+        perform public.redeem_invite(missing_code);
+        if public.redeem_invite(gift)->>'error' is distinct from 'rate_limited' then raise exception 'Saved recipient bypassed throttle'; end if;
+        reset role;
+    end loop;
+end;
+$$;
+select 'PASS: founder gifts, generated referrals, explicit confirmation, validation before saved-access replay, revocation, closure, expiry and throttling' as verified_invitation_checks;

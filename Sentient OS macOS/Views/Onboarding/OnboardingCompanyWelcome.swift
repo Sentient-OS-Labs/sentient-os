@@ -82,10 +82,10 @@ struct OnboardingCompanyWelcome: View {
                 .padding(.top, 18)
                 .modifier(WelcomeArrival(arrived: arrived, delay: 0.3, reduceMotion: reduceMotion))
 
-            VStack(spacing: 6) {
+            VStack(spacing: 10) {
                 Text("From your fellow YC founders.")
                 if let attribution = company.displayAttributionLine {
-                    Text(verbatim: attribution)
+                    OnboardingWelcomeAttribution(line: attribution)
                 }
             }
             .font(.system(size: 12))
@@ -98,7 +98,7 @@ struct OnboardingCompanyWelcome: View {
 
             // The existing CTA supplies the shared Sentient spectrum. Reduced Motion gets
             // a static white capsule; no continuously spinning halo behind the button.
-            OnboardingNextButton(title: "Let’s get started", glow: reduceMotion ? 0 : 0.36,
+            OnboardingNextButton(title: "Let’s get started 🔥", glow: reduceMotion ? 0 : 0.36,
                                  minimumLabelWidth: 180, action: onContinue)
                 .keyboardShortcut(.defaultAction)
                 .padding(.top, 34)

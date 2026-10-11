@@ -42,20 +42,38 @@ try {
   assert.notEqual(senderState.code, friendState.code);
   assert.equal(senderState.redeemedAt, null);
   assert.equal((await rpc(sender, 'redeem_invite', { p_code: senderState.code })).error, 'own_code');
+  const unknown = `unregistered-${crypto.randomUUID()}`;
+  assert.equal((await rpc(friend, 'redeem_invite', { p_code: unknown })).error, 'invalid_code');
   const [first, replay] = await Promise.all([
     rpc(friend, 'redeem_invite', { p_code: ` ${senderState.code.toLowerCase().match(/.{3}/g).join('-')} ` }),
     rpc(friend, 'redeem_invite', { p_code: senderState.code }),
   ]);
   assert.ok(first.redeemedAt > 0);
+  assert.equal(first.validatedCode, senderState.code.match(/.{3}/g).join('-'));
+  assert.equal(replay.validatedCode, senderState.code);
+  assert.equal((await rpc(friend, 'redeem_invite', { p_code: unknown })).error, 'invalid_code', 'Saved access accepted random text');
+  assert.equal((await rpc(friend, 'redeem_invite', { p_code: friendState.code })).error, 'own_code');
   assert.equal(first.redeemedAt, replay.redeemedAt, 'Concurrent replay created different grants');
   const grants = await Promise.all([
     rpc(anotherFriend, 'redeem_invite', { p_code: senderState.code }),
     rpc(anotherFriend, 'redeem_invite', { p_code: friendState.code }),
   ]);
+  assert.equal(grants[0].validatedCode, senderState.code);
+  assert.equal(grants[1].validatedCode, friendState.code);
   assert.equal(grants[0].redeemedAt, grants[1].redeemedAt, 'Concurrent different codes created different grants');
   const senderAfter = await rpc(sender, 'invite_status');
   const friendAfter = await rpc(friend, 'invite_status');
   assert.equal(senderAfter.redemptionCount + friendAfter.redemptionCount, 2, 'A recipient was counted twice');
+  for (const code of ['WAITLIST_OGs', 'MACAPPS_1000', 'FINAL_1000']) {
+    const recipient = await newUser();
+    const gift = await rpc(recipient, 'redeem_invite', { p_code: ` ${code.toLowerCase()} ` });
+    assert.ok(gift.redeemedAt > 0);
+    assert.equal(gift.validatedCode, code.toUpperCase());
+    assert.match(gift.code, /^[0-9A-Z]{6}$/);
+    assert.equal(gift.campaignActive, true);
+    assert.equal((await rpc(recipient, 'redeem_invite', { p_code: unknown })).error, 'invalid_code');
+    assert.equal((await rpc(recipient, 'invite_status')).redeemedAt, gift.redeemedAt);
+  }
   const rows = await request('rest/v1/invite_redemptions?select=recipient_id', { user: friend, method: 'GET' });
   assert.deepEqual(rows.data.map(x => x.recipient_id), [friend.user.id]);
   const forged = await request('rest/v1/invite_redemptions', {
@@ -68,7 +86,7 @@ try {
   assert.equal(refreshed.status, 200);
   Object.assign(friend, refreshed.data);
   assert.equal((await rpc(friend, 'invite_status')).redeemedAt, first.redeemedAt, 'Token refresh lost access');
-  console.log('PASS: live Auth, code sharing, concurrent redemption/replay, RLS, forgery denial, token refresh');
+  console.log('PASS: live Auth, code sharing, concurrent redemption/replay, founder gifts, random-code denial before/after access, explicit confirmation, RLS, forgery denial, token refresh');
 } finally {
   let failures = 0;
   for (const user of users.reverse()) {
