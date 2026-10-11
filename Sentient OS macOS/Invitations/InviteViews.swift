@@ -50,15 +50,14 @@ struct InviteRedemptionView: View {
                 Text("Have an invite code?")
                     .font(.system(size: formStyle ? 15 : 13, weight: .medium)).foregroundStyle(.white)
                 HStack(spacing: 8) {
-                    TextField("Enter 6-character code", text: $code)
+                    TextField("Enter invite code", text: $code)
                         .textFieldStyle(.plain)
                         .font(.system(size: formStyle ? 14 : 12, design: .monospaced))
                         .foregroundStyle(.white)
                         .focused($codeFocused)
                         .onSubmit(redeem)
                         .accessibilityLabel("Invite code")
-                        .onChange(of: code) { _, value in
-                            if value.count > 64 { code = String(value.prefix(64)) }
+                        .onChange(of: code) {
                             program.clearError()
                         }
                     Button(action: redeem) {
@@ -158,15 +157,17 @@ struct InviteCopyButton: View {
                 if verified, program.snapshot?.canShare == true, let currentCode = program.snapshot?.code {
                     let pasteboard = NSPasteboard.general
                     pasteboard.clearContents()
-                    copied = pasteboard.setString(InviteSnapshot.displayCode(currentCode), forType: .string)
+                    copied = pasteboard.setString(currentCode, forType: .string)
                 }
                 copyFailed = !copied
                 copying = false
             }
         } label: {
             HStack(spacing: 10) {
-                Text(showsCode ? InviteSnapshot.displayCode(code) : actionTitle)
+                Text(showsCode ? code : actionTitle)
                     .font(.system(size: formStyle ? 14 : 12, weight: .medium, design: showsCode ? .monospaced : .default))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 Image(systemName: copied ? "checkmark" : (copyFailed ? "arrow.clockwise" : "doc.on.doc"))
                     .font(.system(size: formStyle ? 14 : 12)).frame(width: 16, height: 18)
             }
