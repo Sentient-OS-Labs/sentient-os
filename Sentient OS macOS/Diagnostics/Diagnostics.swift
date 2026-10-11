@@ -282,9 +282,17 @@ nonisolated enum Diagnostics {
     private static let repeats = Mutex<[String: RepeatState]>([:])
 
     /// Shared by existing and new events. Bounded memory; no durable user/content keys.
+    static func repeatKey(event: String, fingerprint: [String]?, tags: [String: String]) -> String {
+        // Legacy connector events use `slug`; newer reports use `source`. Both must
+        // separate providers before applying the per-process repeat cooldown.
+        let provider = tags["source"] ?? tags["slug"] ?? ""
+        return (fingerprint ?? [event]).joined(separator: ":") + ":" + provider
+            + ":" + (tags["backend"] ?? "") + ":" + (tags["runtime"] ?? "")
+    }
+
     static func claim(event: String, fingerprint: [String]?, tags: [String: String],
                       cooldown: TimeInterval, now: Date = Date()) -> Int? {
-        let key = (fingerprint ?? [event]).joined(separator: ":") + ":" + (tags["source"] ?? "") + ":" + (tags["backend"] ?? "") + ":" + (tags["runtime"] ?? "")
+        let key = repeatKey(event: event, fingerprint: fingerprint, tags: tags)
         return repeats.withLock { values in
             if var previous = values[key], now.timeIntervalSince(previous.sent) < cooldown {
                 previous.suppressed += 1; values[key] = previous; return nil

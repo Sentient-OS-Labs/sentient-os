@@ -143,30 +143,37 @@ enum GoogleSourceRead {
             let formatter = ISO8601DateFormatter()
             request.prompt += "\nCalendar discovery must use exactly these instants: \(formatter.string(from: window.start)) through \(formatter.string(from: window.end)). On Claude use list_events with startTime/endTime and pageSize at most 50; on Codex use search_events with time_min/time_max. Use the primary calendar and no keyword query. The first successful discovery must cover this whole window and return a native structured calendar response. Claude may omit events entirely for a genuine empty response that contains accessRole, defaultReminders, summary, timeZone and updated with no nextPageToken; accept that as empty and stop. A saved-to-file or oversized-result notice is not a readable result: retry the same full bounds with a smaller page size. Prefer the same bounds for supported pagination; any narrower follow-up must remain entirely inside this original interval. An empty successful result is valid: do not broaden the window, search other times, or use search_events on Claude to second-guess it."
         }
-        request.prompt += "\nIf the connector is missing, disconnected, or requires sign-in, return tool_failure=auth, no summary, zero items, and false for both flags. Use tool_failure=other for other tool errors, and an empty tool_failure on success."
+        request.prompt += "\nIf the connector is missing, disconnected, or requires sign-in, return tool_failure=auth, no summary, zero items, and false for both flags. Use tool_failure=other only for unresolved errors from this source's read tools. Repaired StructuredOutput validation errors are not connector failures. Include every schema field, with an empty tool_failure on success. If a tool reports an oversized result saved to a file, reduce its page size and repeat the same bounded query; that notice is not readable source data."
         for attempt in 1...2 {
             try Task.checkCancellation()
-            let result = try await FrontierRun.run(request)
+            var result: CodexCLI.Envelope?
             var diagnosticPhase: Diagnostics.Phase = .parse
             do {
-                try ConnectorReadFailure.validate(result, slug: slug)
-                if let data = result.jsonResult.data(using: .utf8),
+                let response = try await FrontierRun.run(request)
+                try Task.checkCancellation()
+                result = response
+                try ConnectorReadFailure.validateTools(response, slug: slug)
+                if let data = response.jsonResult.data(using: .utf8),
                    let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    object["tool_failure"] as? String == "other" {
-                    throw MCPSource.MCPError.toolFailure(slug: slug)
+                    // The native receipts contain no unresolved source failure. Ask for
+                    // one fresh, validated read instead of trusting a conflicting claim.
+                    throw Failure.invalidResponse
                 }
-                let summary = try parse(result.result, countKey: countKey, cap: cap)
+                let summary = try parse(response.result, countKey: countKey, cap: cap)
                 diagnosticPhase = .validate
-                try validateDiscovery(result, slug: slug, calendarWindow: calendarWindow)
+                try validateDiscovery(response, slug: slug, calendarWindow: calendarWindow)
                 return summary
-            } catch Failure.invalidResponse {
+            } catch {
+                try Task.checkCancellation()
+                guard (error as? Failure) == .invalidResponse || ConnectorReadFailure.isOutputValidationFailure(error) else { throw error }
                 if attempt == 2 {
                     Diagnostics.report(.modelOutputInvalid, phase: diagnosticPhase, reason: "google_response", source: slug,
-                                       counts: [.bytes: result.result.utf8.count, .retries: attempt - 1], flags: [.previousStateRetained: true])
+                                       counts: [.bytes: result?.result.utf8.count ?? 0, .retries: attempt - 1], flags: [.previousStateRetained: true])
                     throw Failure.invalidResponse
                 }
                 Log("Google source read: incomplete result; retrying once")
-                request.prompt += "\nThe previous attempt had invalid output or no successful discovery receipt. Wait for the connector if necessary, then perform the actual bounded search. Return all required fields with their exact types. Never invent an empty result when tools are unavailable."
+                request.prompt += "\nThe previous attempt had invalid output, a conflicting tool_failure, or no successful discovery receipt. Wait for the connector if necessary, then perform the actual bounded search. Return all required fields with their exact types at the structured-output tool's root. Distinguish an unresolved source read failure from a repaired output-formatting error. Never invent an empty result when tools are unavailable."
             }
         }
         throw Failure.invalidResponse

@@ -185,6 +185,56 @@ nonisolated struct DirectMCPTool: Codable, Sendable, Equatable {
     var destructiveHint: Bool { annotations["destructiveHint"] as? Bool == true }
     var readOnlyHint: Bool { annotations["readOnlyHint"] as? Bool == true && !destructiveHint }
 
+    var inputProperties: [String: Any]? { inputSchemaNode([])?["properties"] as? [String: Any] }
+
+    /// Resolve local schema references and nullable wrappers used by provider SDKs.
+    /// Ambiguous unions and external references remain unsupported; this does not
+    /// change the tool's read policy or permit a different argument surface.
+    func inputSchemaNode(_ path: [String]) -> [String: Any]? {
+        guard let definition = try? JSONSerialization.jsonObject(with: definition) as? [String: Any],
+              let root = definition["inputSchema"] as? [String: Any] else { return nil }
+        func resolve(_ value: [String: Any], depth: Int = 0) -> [String: Any]? {
+            guard depth < 16 else { return nil }
+            var value = value
+            if let reference = value.removeValue(forKey: "$ref") {
+                guard let reference = reference as? String, reference.hasPrefix("#/") else { return nil }
+                var target: Any = root
+                for part in reference.dropFirst(2).split(separator: "/", omittingEmptySubsequences: false) {
+                    let key = part.replacingOccurrences(of: "~1", with: "/").replacingOccurrences(of: "~0", with: "~")
+                    guard let next = (target as? [String: Any])?[key] else { return nil }
+                    target = next
+                }
+                guard let target = target as? [String: Any], let resolved = resolve(target, depth: depth + 1) else { return nil }
+                // Conflicting sibling constraints require full schema intersection.
+                guard value.keys.allSatisfy({ resolved[$0] == nil || ["title", "description"].contains($0) }) else { return nil }
+                value = resolved.merging(value) { _, sibling in sibling }
+            }
+            for key in ["anyOf", "oneOf", "allOf"] {
+                if let branches = value.removeValue(forKey: key) {
+                    guard let branches = branches as? [[String: Any]] else { return nil }
+                    let concrete = branches.filter { $0["type"] as? String != "null" }
+                    guard concrete.count == 1, key != "allOf" || branches.count == 1,
+                          let branch = resolve(concrete[0], depth: depth + 1),
+                          value.keys.allSatisfy({ branch[$0] == nil || ["title", "description"].contains($0) }) else { return nil }
+                    value = branch.merging(value) { _, sibling in sibling }
+                }
+            }
+            if let types = value["type"] as? [String] {
+                let concrete = types.filter { $0 != "null" }
+                guard concrete.count == 1 else { return nil }
+                value["type"] = concrete[0]
+            }
+            return value
+        }
+        guard var node = resolve(root) else { return nil }
+        for name in path {
+            guard let properties = node["properties"] as? [String: Any],
+                  let child = properties[name] as? [String: Any], let resolved = resolve(child) else { return nil }
+            node = resolved
+        }
+        return node
+    }
+
     static func fingerprint(_ tools: [Self]) -> String {
         let bytes = tools.sorted { $0.name < $1.name }.reduce(into: Data()) { result, tool in
             result.append(tool.definition); result.append(0)

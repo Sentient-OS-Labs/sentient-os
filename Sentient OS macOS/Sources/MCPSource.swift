@@ -193,6 +193,9 @@ enum MCPSource {
                                 message: (error as? LocalizedError)?.errorDescription ?? "The read failed."))
             }
         }
+        CrashReporting.diagnosticBreadcrumb("connector.read_results", data: ["outcomes": outcomes.map {
+            ConnectorRegistry.telemetrySlug($0.slug) + ":" + $0.result
+        }.joined(separator: ";")])
         return (outcomes, hitUsageLimit)
     }
 
