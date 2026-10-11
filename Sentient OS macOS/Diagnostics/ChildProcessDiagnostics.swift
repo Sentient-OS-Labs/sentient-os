@@ -4,10 +4,17 @@
 
 import Foundation
 import Darwin
+import Synchronization
 
 nonisolated enum ChildProcessDiagnostics {
     static let environmentKey = "SENTIENT_CHILD_DIAGNOSTICS"
     @TaskLocal static var directory: URL?
+    @TaskLocal static var intentionalStops: IntentionalStops?
+    final class IntentionalStops: Sendable {
+        private let pids = Mutex<Set<Int32>>([])
+        func record(_ pid: Int32) { pids.withLock { _ = $0.insert(pid) } }
+        func contains(_ pid: Int32) -> Bool { pids.withLock { $0.contains(pid) } }
+    }
     enum Role: String, Codable, Sendable {
         case claudeSubscription, outlookPolicy, slackPolicy, directHeaders, directPolicy
         static func from(_ argument: String?) -> Role? {
@@ -64,6 +71,7 @@ nonisolated enum ChildProcessDiagnostics {
         }
         defer { try? FileManager.default.removeItem(at: dir) }
         return try await $directory.withValue(dir) {
+          try await $intentionalStops.withValue(IntentionalStops()) {
             do {
                 let result = try await body()
                 // Give short-lived helpers time to record their normal EOF exit after the CLI exits.
@@ -75,6 +83,7 @@ nonisolated enum ChildProcessDiagnostics {
                 collect(dir, cancelled: Task.isCancelled || Diagnostics.isCancellation(error))
                 throw error
             }
+          }
         }
     }
 
@@ -83,9 +92,13 @@ nonisolated enum ChildProcessDiagnostics {
         for file in files.prefix(256) where file.pathExtension == "json" {
             guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 4096,
                   let data = try? Data(contentsOf: file), let record = try? JSONDecoder().decode(Record.self, from: data) else { continue }
+            // A nested provider may be intentionally stopped while the outer task succeeds.
+            guard intentionalStops?.contains(record.pid) != true else { continue }
             let reason: String
             if let status = record.status {
-                guard status != 0, status != 130, status != 143 else { continue }
+                // A cancellation is excluded by the caller. Outside it, SIGINT/SIGTERM
+                // exits are unexpected too and must not silently disappear.
+                guard status != 0 else { continue }
                 reason = "nonzero_exit"
             } else {
                 // A live helper can still be draining. Only an exited process missing its completion is suspicious.

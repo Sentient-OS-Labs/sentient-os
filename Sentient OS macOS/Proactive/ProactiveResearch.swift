@@ -352,16 +352,22 @@ actor ProactiveResearch {
     /// Persist the most recent run (Codable → UserDefaults JSON) so the For You surface / a dev viewer
     /// can show the ready-to-fire cards without re-running, and across app launches.
     static func saveLatest(_ result: ReadyResult) {
-        if let data = try? JSONEncoder().encode(result) {
+        do {
+            let data = try JSONEncoder().encode(result)
             UserDefaults.standard.set(data, forKey: latestKey)
+        } catch {
+            Diagnostics.report(.storeWriteFailed, phase: .encode, reason: "prepared_cards", error: error)
         }
     }
 
     /// The most recent run (nil if it never ran).
     static func latest() -> ReadyResult? {
-        guard let data = UserDefaults.standard.data(forKey: latestKey),
-              let result = try? JSONDecoder().decode(ReadyResult.self, from: data) else { return nil }
-        return result
+        guard let data = UserDefaults.standard.data(forKey: latestKey) else { return nil }
+        do { return try JSONDecoder().decode(ReadyResult.self, from: data) }
+        catch {
+            Diagnostics.report(.storeReadFailed, phase: .parse, reason: "prepared_cards", error: error)
+            return nil
+        }
     }
 
     /// Forget the last prepared deck (the dev "Reset everything" path) — the home's "For You" empties.

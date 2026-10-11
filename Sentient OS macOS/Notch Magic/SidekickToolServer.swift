@@ -1,4 +1,4 @@
-// Per-invocation authenticated MCP tools for real notch answers and automatic instruction updates.
+// Per-invocation MCP tools for notch answers, instruction updates and task usage descriptions.
 // The app owns listener, calls and cancellation; repeated RPC IDs reuse the same result.
 // Doc: Documentation - Sidekick - General.md
 
@@ -44,6 +44,7 @@ actor SidekickToolServer {
     func start() async throws -> Connection {
         var tools = ["ask_user"]
         if interaction.personalization != nil { tools.append(SidekickPersonalization.toolName) }
+        if interaction.taskSummary != nil { tools.append(SidekickTaskSummary.toolName) }
         let transport = LocalMCPServer(name: Self.name, tools: tools, timeout: Self.maximumWait, maximumBody: 1_048_576) { [weak self] data in
             guard let self, let rpc = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw CancellationError() }
             return try await self.response(rpc)
@@ -68,7 +69,9 @@ actor SidekickToolServer {
                 "capabilities": ["tools": [:]], "serverInfo": ["name": "Sidekick tools", "version": "2"]])
         case "ping": return try reply([:])
         case "tools/list":
-            return try reply(["tools": [Self.tool] + (interaction.personalization == nil ? [] : [SidekickPersonalization.tool])])
+            return try reply(["tools": [Self.tool]
+                + (interaction.personalization == nil ? [] : [SidekickPersonalization.tool])
+                + (interaction.taskSummary == nil ? [] : [SidekickTaskSummary.tool])])
         case "tools/call":
             guard let params = rpc["params"] as? [String: Any], let name = params["name"] as? String,
                   let arguments = params["arguments"] as? [String: Any] else {
@@ -82,6 +85,7 @@ actor SidekickToolServer {
                 call = existing
             } else {
                 guard activeCall == nil, !interaction.hasActiveTools, !interaction.isWaiting, calls.count < 64 else {
+                    if name == SidekickTaskSummary.toolName { return try reply(Self.rejectedSummary) }
                     if name == SidekickPersonalization.toolName {
                         return try reply(await Self.rejectedPersonalization(SidekickPersonalization.Failure.unavailable))
                     }
@@ -113,6 +117,12 @@ actor SidekickToolServer {
                         let message = try await interaction.updateInstructions(review)
                         return try Self.json(["message": message])
                     }
+                } else if name == SidekickTaskSummary.toolName, let summary = interaction.taskSummary {
+                    do { try summary.stage(arguments) }
+                    catch { return try reply(Self.rejectedSummary) }
+                    action = {
+                        try Self.json(["message": "Description received for privacy review after task completion. Emit the original task's final STATUS now."])
+                    }
                 } else { return try reply(Self.invalidArguments) }
                 activeCall = key
                 call = Call(fingerprint: fingerprint, task: Task { try await action() })
@@ -135,6 +145,10 @@ actor SidekickToolServer {
 
     private static var invalidArguments: [String: Any] {
         ["isError": true, "content": [["type": "text", "text": "Ask one nonempty question with exactly two distinct, concise answers. Only one question may be pending, and all other tool calls must finish first. Do not reuse an earlier request ID with changed arguments."]]]
+    }
+    private static var rejectedSummary: [String: Any] {
+        ["isError": true, "content": [["type": "text",
+            "text": "Description not accepted. Do not retry for analytics. Finish the original task with its required STATUS."]]]
     }
     @MainActor private static func rejectedPersonalization(_ error: Error) -> [String: Any] {
         let code = SidekickPersonalization.rejectionCode(error)

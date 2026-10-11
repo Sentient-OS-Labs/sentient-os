@@ -178,16 +178,22 @@ actor Proactive {
     /// Persist the most recent judge run's items (Codable → UserDefaults JSON) so the dev viewer can
     /// show them in detail without re-running — and across app launches.
     static func saveLatest(_ items: [ActionItem]) {
-        if let data = try? JSONEncoder().encode(items) {
+        do {
+            let data = try JSONEncoder().encode(items)
             UserDefaults.standard.set(data, forKey: latestKey)
+        } catch {
+            Diagnostics.report(.storeWriteFailed, phase: .encode, reason: "proactive_items", error: error)
         }
     }
 
     /// The most recent judge run's items (empty if it never ran). Sync — UserDefaults is thread-safe.
     static func latest() -> [ActionItem] {
-        guard let data = UserDefaults.standard.data(forKey: latestKey),
-              let items = try? JSONDecoder().decode([ActionItem].self, from: data) else { return [] }
-        return items
+        guard let data = UserDefaults.standard.data(forKey: latestKey) else { return [] }
+        do { return try JSONDecoder().decode([ActionItem].self, from: data) }
+        catch {
+            Diagnostics.report(.storeReadFailed, phase: .parse, reason: "proactive_items", error: error)
+            return []
+        }
     }
 
     /// Forget the last judge run (the dev "Reset everything" path).

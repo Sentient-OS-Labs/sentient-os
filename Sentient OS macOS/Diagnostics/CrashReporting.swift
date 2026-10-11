@@ -195,17 +195,18 @@ nonisolated enum CrashReporting {
                                          tags: [String: String] = [:],
                                          extra: [String: String] = [:],
                                          fingerprint: [String]? = nil,
-                                         cooldown: TimeInterval = 900) {
-        guard level != .info else { return } // successful-use signals belong to analytics
+                                         cooldown: TimeInterval = 900,
+                                         includeInformational: Bool = false,
+                                         affectsOperation: Bool = true) {
+        guard level != .info || includeInformational else { return } // opt in for diagnostic blockers, never usage
         let key = (fingerprint ?? [message]).joined(separator: ":") + ":" + (tags["source"] ?? "") + ":" + (tags["backend"] ?? "") + ":" + (tags["runtime"] ?? "")
-        if let operation = Diagnostics.current, !operation.claim(key) { return }
+        if level != .info, let operation = Diagnostics.current, !operation.claim(key, marksFailure: affectsOperation) { return }
         guard diagnosticsEnabled else { return }
         guard let suppressed = Diagnostics.claim(event: message, fingerprint: fingerprint, tags: tags, cooldown: cooldown) else { return }
         #if DEBUG
         Log("Diagnostic: \(message) phase=\(tags["phase"] ?? "unspecified") reason=\(tags["reason"] ?? "unspecified")")
         #endif
-        guard started else { return }
-        var details = extra
+        var details = correlationFields.merging(extra) { _, supplied in supplied }
         if suppressed > 0 { details["suppressed_count"] = String(suppressed) }
         if let operation = Diagnostics.current {
             details["operation_id"] = operation.id
@@ -213,6 +214,7 @@ nonisolated enum CrashReporting {
             details["operation"] = operation.name
             details["operation_elapsed_ms"] = String(Int(Date().timeIntervalSince(operation.began) * 1000))
         }
+        guard started else { return }
         SentrySDK.capture(message: message) { scope in
             scope.setLevel(sentryLevel(level))
             scope.setTag(value: osVersion, key: "os_version")
@@ -229,6 +231,7 @@ nonisolated enum CrashReporting {
         guard started, diagnosticsEnabled else { return }
         let crumb = Breadcrumb(level: .info, category: "log")
         crumb.message = message
+        crumb.data = correlationFields
         SentrySDK.addBreadcrumb(crumb)
     }
 
@@ -278,8 +281,22 @@ nonisolated enum CrashReporting {
         guard started, diagnosticsEnabled else { return }
         let crumb = Breadcrumb(level: .info, category: "operation")
         crumb.message = name
-        crumb.data = data
+        crumb.data = correlationFields.merging(data) { _, supplied in supplied }
         SentrySDK.addBreadcrumb(crumb)
+    }
+
+    /// Only app-generated IDs cross this boundary; provider thread/tool IDs stay local.
+    nonisolated static var correlationFields: [String: String] {
+        var fields: [String: String] = [:]
+        if let operation = Diagnostics.current {
+            fields["operation_id"] = operation.id
+            fields["root_operation_id"] = operation.rootID
+            if let parent = operation.parentID { fields["parent_operation_id"] = parent }
+        }
+        if let interaction = SidekickInteraction.current {
+            fields.merge(interaction.diagnosticFields) { _, new in new }
+        }
+        return fields
     }
 
     nonisolated static func scrubData(_ data: [String: Any]) -> [String: Any] {
@@ -291,7 +308,7 @@ nonisolated enum CrashReporting {
             if let values = value as? [Any] { return (key, values.map { scrubData(["value": $0])["value"]! } as Any) }
             return (key, value)
         }).merging(data.filter { key, value in
-            ["operation_id", "parent_operation_id"].contains(key) && (value as? String).flatMap(UUID.init(uuidString:)) != nil
+            ["operation_id", "parent_operation_id", "root_operation_id", "task_id"].contains(key) && (value as? String).flatMap(UUID.init(uuidString:)) != nil
         }) { _, safeID in safeID }
     }
 

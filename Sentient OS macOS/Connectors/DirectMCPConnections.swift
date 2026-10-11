@@ -90,7 +90,10 @@ actor DirectMCPConnections {
                                         try DirectMCPStore.save(previousConnection)
                                         return true
                                     }
-                                } catch { return false }
+                                } catch {
+                                    Diagnostics.report(.connectorFailed, phase: .restore, reason: "connection_rollback", error: error, source: "direct_connector")
+                                    return false
+                                }
                             }.value
                             if !restored && DirectMCPStore.connection(id: id)?.generation == connection.generation {
                                 current.state = .reconnect; try? DirectMCPStore.save(current)

@@ -8,10 +8,17 @@ import os
 nonisolated final class SidekickInteraction: Sendable {
     @TaskLocal static var current: SidekickInteraction?
     let id = UUID()
+    let diagnosticTaskID: UUID
+    let diagnosticAttempt: Int
+    private let diagnosticBackend = ModelBackend.current.rawValue
+    var diagnosticFields: [String: String] {
+        ["task_id": diagnosticTaskID.uuidString, "attempt": String(diagnosticAttempt)]
+    }
     let retryContext: String
     let historyContext: String
     let instructionsSnapshot: SidekickInstructionStore.Snapshot?
     let personalization: SidekickPersonalization?
+    let taskSummary: SidekickTaskSummary?
     let request: @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer
     private struct Wait: Sendable {
         var began: TimeInterval?
@@ -28,15 +35,20 @@ nonisolated final class SidekickInteraction: Sendable {
     init(retryContext: String = "", historyContext: String = "",
          instructionsSnapshot: SidekickInstructionStore.Snapshot? = nil,
          personalization: SidekickPersonalization? = nil,
+         taskSummary: SidekickTaskSummary? = nil,
+         diagnosticTaskID: UUID = UUID(), diagnosticAttempt: Int = 1,
          request: @escaping @MainActor @Sendable (SidekickQuestion) async throws -> SidekickAnswer) {
+        self.diagnosticTaskID = diagnosticTaskID; self.diagnosticAttempt = diagnosticAttempt
         self.retryContext = retryContext; self.historyContext = historyContext; self.request = request
         self.instructionsSnapshot = instructionsSnapshot; self.personalization = personalization
+        self.taskSummary = taskSummary
     }
     /// A snapshot taken before this request was recorded, shared by computer and connector legs.
     var promptInstructions: String {
         Self.instructions + (historyContext.isEmpty ? "" : "\n\n" + historyContext) + retryContext
             + "\n\n" + (instructionsSnapshot?.promptBlock ?? "")
             + "\n\n" + (personalization?.promptInstructions ?? "")
+            + (taskSummary == nil ? "" : "\n\n" + SidekickTaskSummary.promptInstructions)
     }
 
     var hasActiveTools: Bool { wait.withLock { !$0.activeTools.isEmpty } }
@@ -56,9 +68,32 @@ nonisolated final class SidekickInteraction: Sendable {
             }
         }
         personalization?.discardProposal()
-        let answer = try await request(question)
-        personalization?.recordAnswer(question.id, text: answer.text)
-        return answer
+        taskSummary?.discard()
+        let started = Date()
+        recordRecovery("asked", error: question.error)
+        do {
+            let answer = try await request(question)
+            recordRecovery("answered", error: question.error, elapsed: Date().timeIntervalSince(started))
+            personalization?.recordAnswer(question.id, text: answer.text)
+            return answer
+        } catch {
+            recordRecovery(Diagnostics.isCancellation(error) ? "cancelled" : "failed", error: question.error,
+                           elapsed: Date().timeIntervalSince(started))
+            throw error
+        }
+    }
+
+    /// Model-authored blockers are labelled as claims; no question, answer, or error text is sent.
+    func recordRecovery(_ stage: String, error: String? = nil, elapsed: TimeInterval = 0) {
+        let stage = ["asked", "answered", "cancelled", "failed", "final_failure", "retry", "dismissed"].contains(stage) ? stage : "unknown"
+        var fields = diagnosticFields
+        fields["wait_ms"] = String(max(0, Int(elapsed * 1000)))
+        fields["has_error"] = String(error != nil)
+        let evidence = ["answered", "retry", "dismissed"].contains(stage) ? "user_action" : (stage == "final_failure" ? "ui_outcome" : "model_report")
+        CrashReporting.captureEvent("sidekick.recovery", level: .info,
+            tags: ["stage": stage, "reason": error.map { AgentRunDiagnostics.Reason.classify($0).rawValue } ?? "clarification",
+                   "evidence": evidence, "backend": diagnosticBackend, "diagnostic_schema": "2"], extra: fields,
+            fingerprint: ["sidekick.recovery", stage], cooldown: 0, includeInformational: true)
     }
 
     func updateInstructions(_ review: SidekickPersonalization.Review) async throws -> String {
@@ -105,7 +140,10 @@ nonisolated final class SidekickInteraction: Sendable {
                 } else { state.activeTools.remove(change.id) }
             }
         }
-        if updates.contains(where: \.started) { personalization?.discardProposal() }
+        if updates.contains(where: \.started) {
+            personalization?.discardProposal()
+            taskSummary?.discard()
+        }
     }
 
     static let instructions = """

@@ -103,10 +103,16 @@ enum CommandRouter {
             struct Reply: Codable { let route: String; let target: String?; let slack_operation: String?; let outlook_operation: String?; let calendar_operation: String? }
             guard let data = env.jsonResult.data(using: .utf8),
                   let reply = try? JSONDecoder().decode(Reply.self, from: data),
-                  reply.route == "connector",
-                  let slug = reply.target,
-                  let hit = services.first(where: { $0.slug == slug }) else {
+                  ["computer", "connector"].contains(reply.route) else {
+                Diagnostics.report(.modelOutputInvalid, phase: .parse, reason: "router_response", counts: [.elapsedMS: ms])
+                return .computer
+            }
+            guard reply.route == "connector" else {
                 Log("router: computer in \(ms)ms")
+                return .computer
+            }
+            guard let slug = reply.target, let hit = services.first(where: { $0.slug == slug }) else {
+                Diagnostics.report(.modelOutputInvalid, phase: .validate, reason: "router_target")
                 return .computer
             }
             if let provider = hit.providerSlug,
@@ -115,7 +121,7 @@ enum CommandRouter {
                 Log("router: computer (account target is not explicit)")
                 return .computer
             }
-            Log("router: connector slug=\(slug) in \(ms)ms")
+            Log("router: connector source=\(ConnectorRegistry.telemetrySlug(slug)) in \(ms)ms")
             let operation = reply.slack_operation.flatMap(SlackConnector.Operation.init(rawValue:))
             if slug == "slack", operation == nil { return .computer }
             let mailOperation = reply.outlook_operation.flatMap(OutlookMailConnector.Operation.init(rawValue:))
@@ -129,6 +135,7 @@ enum CommandRouter {
                               calendarOperation: slug == OutlookCalendarConnector.slug ? calendarOperation : nil)
         } catch {
             if !Task.isCancelled {
+                CrashReporting.diagnosticBreadcrumb("router.fallback", data: Diagnostics.errorFields(error))
                 Log("router: computer (fail-closed — \(ErrorLabel(error))) in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             }
             return .computer

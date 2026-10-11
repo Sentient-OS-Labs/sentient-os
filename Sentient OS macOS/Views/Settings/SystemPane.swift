@@ -124,11 +124,8 @@ struct SystemPane: View {
                 SettingsHairline(opacity: 0.10)
                 SettingToggleLine(title: "Share extended usage analytics", sub: PrivacyCopy.extendedAnalytics,
                                   isOn: $analyticsEnabled)
-                if !analyticsEnabled {
-                    SettingsProse(PrivacyCopy.coreAnalytics)
-                        .padding(.horizontal, 20).padding(.bottom, 20)
-                        .transition(.opacity)
-                }
+                SettingsProse(PrivacyCopy.coreAnalytics)
+                    .padding(.horizontal, 20).padding(.bottom, 20)
                 SettingsHairline(opacity: 0.10)
                 SettingsRow(title: "Your data", subtitle: PrivacyCopy.headline) {
                     SettingsPillButton(title: "Privacy policy") { showPrivacyPolicy = true }

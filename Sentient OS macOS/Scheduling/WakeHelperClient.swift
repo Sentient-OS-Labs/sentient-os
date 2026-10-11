@@ -31,14 +31,18 @@ final class WakeHelperClient {
     @discardableResult
     func register() -> SMAppService.Status {
         let service = SMAppService.daemon(plistName: WakeHelperConfig.daemonPlistName)
-        do { try service.register() } catch { Log("WakeHelper register error: \(ErrorLabel(error))") }
+        do { try service.register() } catch {
+            Diagnostics.report(.wakeFailed, phase: .setup, reason: "daemon_register", error: error)
+            Log("WakeHelper register error: \(ErrorLabel(error))")
+        }
         Log("WakeHelper status after register: \(service.status.rawValue)")
         return service.status
     }
 
     func unregister() async {
         let service = SMAppService.daemon(plistName: WakeHelperConfig.daemonPlistName)
-        try? await service.unregister()
+        do { try await service.unregister() }
+        catch { Diagnostics.report(.wakeFailed, phase: .remove, reason: "daemon_unregister", error: error) }
     }
 
     /// Live registration status of the root daemon (`.enabled` = approved & ready · `.requiresApproval`
