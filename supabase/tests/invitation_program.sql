@@ -170,9 +170,122 @@ begin
     reset role;
     perform set_config('request.jwt.claims', jsonb_build_object('sub', friend, 'role', 'authenticated')::text, true);
     set local role authenticated;
-    snapshot := public.redeem_invite(lower(substr(legacy, 1, 8)) || '-' || lower(substr(legacy, 9)));
+    snapshot := public.redeem_invite(U&'\00A0' || lower(substr(legacy, 1, 8)) || '-' || lower(substr(legacy, 9)) || U&'\00A0');
     if snapshot->>'redeemedAt' is null or snapshot->>'code' !~ '^[0-9A-Z]{6}$' then
         raise exception 'Legacy redemption or new recipient code failed';
+    end if;
+    reset role;
+end;
+$$;
+
+-- Founder-issued text is opaque apart from case and surrounding whitespace.
+do $$
+declare
+    sender uuid;
+    friend uuid;
+    duplicate_owner uuid := gen_random_uuid();
+    custom_code text;
+    long_code text;
+    invitation_id uuid;
+    snapshot jsonb;
+begin
+    select string_agg(md5(n::text), '' order by n) into long_code from generate_series(1, 256) n;
+    insert into auth.users(id, aud, role, is_anonymous)
+    values (duplicate_owner, 'authenticated', 'authenticated', true);
+    foreach custom_code in array array['X', '-', 'HELLO', 'WELCOME', 'Founders2026Code!',
+                                      'Founder''s Circle / 2026! 🚀', 'Café-你好 🎉',
+                                      'Founders Circle', 'Founders  Circle', 'FoundersCircle', long_code] loop
+        sender := gen_random_uuid();
+        friend := gen_random_uuid();
+        insert into auth.users(id, aud, role, is_anonymous)
+        values (sender, 'authenticated', 'authenticated', true),
+               (friend, 'authenticated', 'authenticated', true);
+        insert into public.invite_codes(owner_id, campaign_id, code)
+        values (sender, 'launch-lifetime', custom_code) returning id into invitation_id;
+        begin
+            insert into public.invite_codes(owner_id, campaign_id, code)
+            values (duplicate_owner, 'launch-lifetime', E' \t' || lower(custom_code) || U&'\00A0');
+            raise exception 'Case/edge-space variant created a duplicate code';
+        exception when unique_violation then null;
+        end;
+        perform set_config('request.jwt.claims', jsonb_build_object('sub', sender, 'role', 'authenticated')::text, true);
+        set local role authenticated;
+        if public.invite_status()->>'code' is distinct from custom_code then
+            raise exception 'Custom code spelling changed';
+        end if;
+        if public.redeem_invite(custom_code)->>'error' is distinct from 'own_code' then
+            raise exception 'Custom self-invite accepted';
+        end if;
+        reset role;
+        perform set_config('request.jwt.claims', jsonb_build_object('sub', friend, 'role', 'authenticated')::text, true);
+        set local role authenticated;
+        snapshot := public.redeem_invite(U&'\00A0' || lower(custom_code) || E'\n');
+        if snapshot->>'redeemedAt' is null then raise exception 'Custom invite did not redeem'; end if;
+        reset role;
+        if (select invite_id from public.invite_redemptions where recipient_id = friend) is distinct from invitation_id then
+            raise exception 'Custom invite credited the wrong code';
+        end if;
+    end loop;
+
+    foreach custom_code in array array['', E' \t\n\r', U&'\00A0\200B\202F\3000'] loop
+        begin
+            insert into public.invite_codes(owner_id, campaign_id, code)
+            values (duplicate_owner, 'launch-lifetime', custom_code);
+            raise exception 'Blank code stored';
+        exception when check_violation then null;
+        end;
+    end loop;
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', duplicate_owner, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    foreach custom_code in array array[null, '', E' \t\n', U&'\00A0\200B\202F\3000'] loop
+        if public.redeem_invite(custom_code)->>'error' is distinct from 'invalid_code' then
+            raise exception 'Blank code redeemed';
+        end if;
+    end loop;
+    begin
+        insert into public.invite_codes(owner_id, campaign_id, code)
+        values (duplicate_owner, 'launch-lifetime', 'Client-created code');
+        raise exception 'Client could create a custom invite';
+    exception when insufficient_privilege then null;
+    end;
+    reset role;
+end;
+$$;
+
+-- An exact custom spelling wins over legacy separator handling, even if revoked.
+do $$
+declare
+    legacy_owner uuid := gen_random_uuid();
+    custom_owner uuid := gen_random_uuid();
+    friend uuid := gen_random_uuid();
+    another_friend uuid := gen_random_uuid();
+    legacy text;
+    custom_code text;
+    custom_id uuid;
+begin
+    select upper(lpad(to_hex(n), 6, '0')) into legacy from generate_series(0, 10000) n
+        where not exists (select 1 from public.invite_codes where code = upper(lpad(to_hex(n), 6, '0'))) limit 1;
+    custom_code := substr(legacy, 1, 3) || '-' || substr(legacy, 4);
+    insert into auth.users(id, aud, role, is_anonymous)
+    values (legacy_owner, 'authenticated', 'authenticated', true),
+           (custom_owner, 'authenticated', 'authenticated', true),
+           (friend, 'authenticated', 'authenticated', true),
+           (another_friend, 'authenticated', 'authenticated', true);
+    insert into public.invite_codes(owner_id, campaign_id, code) values (legacy_owner, 'launch-lifetime', legacy);
+    insert into public.invite_codes(owner_id, campaign_id, code)
+    values (custom_owner, 'launch-lifetime', custom_code) returning id into custom_id;
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', friend, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    if public.redeem_invite(lower(custom_code))->>'redeemedAt' is null then raise exception 'Exact custom spelling rejected'; end if;
+    reset role;
+    if (select invite_id from public.invite_redemptions where recipient_id = friend) is distinct from custom_id then
+        raise exception 'Legacy fallback overrode exact custom spelling';
+    end if;
+    update public.invite_codes set revoked_at = now() where id = custom_id;
+    perform set_config('request.jwt.claims', jsonb_build_object('sub', another_friend, 'role', 'authenticated')::text, true);
+    set local role authenticated;
+    if public.redeem_invite(custom_code)->>'error' is distinct from 'invalid_code' then
+        raise exception 'Revoked custom code fell back to another invite';
     end if;
     reset role;
 end;
@@ -245,3 +358,4 @@ rollback to savepoint invite_collision_check;
 release savepoint invite_collision_check;
 select 'PASS: 27 recipients per code, stable sharing, replay, issuance, normalization, isolation, immutable grants, revocation, expiry, guess throttling, deletion, anonymous denial' as invitation_checks;
 select 'PASS: six-character issuance, legacy compatibility, private generator, collision retry and bounded exhaustion' as invitation_format_checks;
+select 'PASS: arbitrary custom text, long codes, preserved spelling, normalized uniqueness, blank denial, client creation denial, exact-match precedence' as custom_invitation_checks;

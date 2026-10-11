@@ -15,7 +15,7 @@ enum Diagnostics {
 }
 
 @main struct InvitationStateTests {
-    @MainActor static func main() {
+    @MainActor static func main() async {
         let name = "sentient.invitation.tests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: name)!
         defer { defaults.removePersistentDomain(forName: name) }
@@ -40,14 +40,20 @@ enum Diagnostics {
         precondition(InviteSnapshot.isValidCode(" a7k-2m9 \n"))
         precondition(InviteSnapshot.isValidCode("012345"))
         precondition(InviteSnapshot.isValidCode("UVWXYZ"))
-        for invalid in ["A7K2M", "A7K2M90", "A7K2M!", "Ａ7K2M9", "A7K2Mé", "A7K2M😀"] {
-            precondition(!InviteSnapshot.isValidCode(invalid))
+        for code in ["A", "A7K2M", "A7K2M90", "A7K2M!", "Ａ7K2M9", "A7K2Mé", "A7K2M😀",
+                     "Founder's Circle / 2026! 🚀", "-", "ABCD-1234-EFAB-567Z", String(repeating: "Long!", count: 2_000)] {
+            precondition(InviteSnapshot.isValidCode(code))
+            precondition(InviteSnapshot.normalize(code) == code, "Custom invite text must be preserved")
         }
-        precondition(InviteSnapshot.displayCode("a7k-2m9") == "A7K2M9")
+        precondition(InviteSnapshot.normalize(" \ta7k-2m9\n") == "a7k-2m9")
+        precondition(InviteSnapshot.normalize("\u{00A0}Founder's Circle / 2026! 🚀\u{200B}") == "Founder's Circle / 2026! 🚀")
         precondition(InviteSnapshot.isValidCode(" abcd-1234-efab-5678 \n"))
-        precondition(!InviteSnapshot.isValidCode("ABCD-1234-EFAB-567Z"))
-        precondition(!InviteSnapshot.isValidCode(""))
-        precondition(InviteSnapshot.displayCode("ABCD1234EFAB5678") == "ABCD-1234-EFAB-5678")
+        for blank in ["", " \t\r\n", "\u{00A0}\u{200B}\u{202F}\u{3000}"] {
+            precondition(!InviteSnapshot.isValidCode(blank))
+            await program.redeem(blank)
+            precondition(program.errorMessage == "Enter the invite code you received.")
+            precondition(!program.isBusy && program.snapshot == nil)
+        }
         let expired = InviteSnapshot(code: "A7K2M9", campaignActive: true,
                                      endsAt: 1, redeemedAt: 1, redemptionCount: 2)
         precondition(!expired.canShare && expired.hasLifetimeAccess, "Expiry stops sharing, never lifetime access")
