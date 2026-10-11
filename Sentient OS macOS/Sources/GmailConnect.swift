@@ -246,10 +246,12 @@ enum GmailConnect {
         needing the user's attention. Finding what genuinely matters is the whole job.
 
         ## Fetch — be efficient, the inbox is heavy
-        - Use `gmail.search_emails` with EXACTLY this query: `\(query)`
+        - Search with EXACTLY this query: `\(query)`. On Claude use `search_threads`; on Codex use
+          `search_emails`. Start with a page size of 25 and use the connector's returned pagination.
         - Consider at most the newest \(threadCap) threads in that window; if there are more, take the \
         newest \(threadCap).
-        - Work from subjects, senders, and snippets. Open a thread with `gmail.read_email` ONLY when it \
+        - Work from subjects, senders, and snippets. Open a thread with `get_thread` on Claude or
+          `read_email` on Codex ONLY when it \
         looks genuinely important — a real request directed at the user, a deadline, a booking/renewal \
         window, or a personal/financial/work matter. DO NOT open newsletters, marketing, receipts, or \
         automated notifications, and DO NOT read every email. Over-reading wastes the budget.
@@ -272,7 +274,10 @@ enum GmailConnect {
         ## Output
         Return ONLY the JSON object matching the schema: `thread_count` (threads you considered, after \
         the cap), `notable` (anything worth a knowledge-base note?), `has_action_items` (anything the \
-        proactive engine should weigh?), and `summary` (the dense text; empty string when not notable).
+        proactive engine should weigh?), `summary` (the dense text; empty string when not notable),
+        and `tool_failure` ("" on success, "auth" for missing sign-in, "other" for an unresolved
+        Gmail tool error). Include all five fields at the root of the structured-output tool.
+        A repaired StructuredOutput validation error is not a Gmail tool failure.
         """
     }
 }

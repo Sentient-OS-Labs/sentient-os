@@ -17,6 +17,7 @@ nonisolated enum ModelBackend { case claude, chatgpt, custom; nonisolated(unsafe
 nonisolated enum MCPSource { enum MCPError: Error { case connectorAuth(slug: String), toolFailure(slug: String), clockMovedBackwards, connectionChanged } }
 nonisolated enum DirectMCPError: Error { case reconnectRequired, registrationExpired, accountSetupRequired, authorizationDenied, noTools, http(Int) }
 nonisolated enum CodexCLI {
+    enum CLIError: Error { case exitFailure(Int32, String) }
     struct Envelope { let result: String; let raw: String; var jsonResult: String { result } }
     struct Invocation { var prompt: String; var connectorOnlyRead = false; var webSearch = false }
 }

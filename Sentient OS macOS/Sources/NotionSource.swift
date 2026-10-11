@@ -95,23 +95,9 @@ enum NotionSource {
         let actorName = String(((account["user"] as? [String: Any])?["name"] as? String ?? "").prefix(200))
         let access = account["current_tool_access"] as? [String: Any] ?? [:]
         let aiAvailable = (access["ai_search"] as? [String: Any])?["status"] as? String == "available"
-        let search = aiAvailable ? "notion-ai-search" : "notion-search"
-
-        // Exact filters force Notion-only search, even when AI search is available. Raw search
-        // results never enter the model; their entity types and URLs are checked first.
-        let edited = try await call(search, searchArguments(window: window, edited: true, mode: mode))
-        let discovery: Discovery
-        if isEntitlementFailure(edited) {
-            let created = try await call(search, searchArguments(window: window, edited: false, mode: mode))
-            let recent = try await call("notion-list-recent-pages", ["limit": candidateCap])
-            let createdCandidates = try candidates(created, search: true)
-            let recentCandidates = try candidates(recent, search: false)
-            discovery = Discovery(candidates: unique(mode == .initial
-                ? recentCandidates + createdCandidates : createdCandidates + recentCandidates),
-                coverage: mode == .initial ? .historicalSample : .activitySample)
-        } else {
-            discovery = Discovery(candidates: try candidates(edited, search: true),
-                                  coverage: mode == .initial ? .historicalSample : .editedSample)
+        let discovery = try await discover(window: window, mode: mode, aiAvailable: aiAvailable,
+                                           tools: verified.tools) { name, arguments in
+            try await call(name, arguments)
         }
         Log("Notion read: coverage=\(discovery.coverage.rawValue), candidates=\(discovery.candidates.count)")
         onReceipt?(nil, nil, 1, "", "native_" + discovery.coverage.rawValue, calls)
@@ -252,6 +238,53 @@ enum NotionSource {
             "filters": [edited ? "last_edited_date_range" : "created_date_range": range]]
         if edited { result["sort"] = "last_edited" }
         return result
+    }
+
+    /// Empty workspace-search pages can still carry a cursor. Follow the advertised
+    /// cursor argument, and independently check recent pages before accepting no candidates.
+    static func discover(window: MCPSource.Window, mode: MCPSource.ReadMode, aiAvailable: Bool,
+                         tools: [DirectMCPTool],
+                         call: (String, [String: Any]) async throws -> [String: Any]) async throws -> Discovery {
+        let search = aiAvailable ? "notion-ai-search" : "notion-search"
+        func lane(_ name: String, arguments: [String: Any], isSearch: Bool) async throws -> [Candidate]? {
+            var arguments = arguments, found: [Candidate] = [], cursors = Set<String>()
+            let properties = tools.first { $0.name == name }?.inputProperties ?? [:]
+            let cursorKey = ["cursor", "start_cursor", "next_cursor"].first { properties[$0] != nil }
+            for _ in 0..<6 {
+                try Task.checkCancellation()
+                let result = try await call(name, arguments)
+                if isEntitlementFailure(result) { return nil }
+                let object = try payload(result)
+                found = unique(found + (try candidates(result, search: isSearch)))
+                if found.count == candidateCap { return found }
+                let raw = object["nextCursor"] ?? object["next_cursor"]
+                if raw == nil || raw is NSNull || raw as? String == "" {
+                    guard object["has_more"] as? Bool != true, object["hasMore"] as? Bool != true else {
+                        throw DirectMCPError.invalidResponse
+                    }
+                    return found
+                }
+                guard let cursor = raw as? String, cursor.utf8.count <= 8_192,
+                      let cursorKey, cursors.insert(cursor).inserted else { throw DirectMCPError.invalidResponse }
+                arguments[cursorKey] = cursor
+            }
+            // A bounded sample may stop with candidates, but an unfinished empty
+            // listing must never advance the checkpoint as a successful quiet read.
+            guard !found.isEmpty else { throw DirectMCPError.tooLarge }
+            return found
+        }
+        let edited = try await lane(search, arguments: searchArguments(window: window, edited: true, mode: mode), isSearch: true)
+        if let edited, !edited.isEmpty {
+            return Discovery(candidates: edited, coverage: mode == .initial ? .historicalSample : .editedSample)
+        }
+        let created = edited == nil
+            ? try await lane(search, arguments: searchArguments(window: window, edited: false, mode: mode), isSearch: true) ?? [] : []
+        guard let recent = try await lane("notion-list-recent-pages", arguments: ["limit": candidateCap], isSearch: false) else {
+            throw DirectMCPError.policyUnavailable
+        }
+        Log("Notion discovery: fallback candidates=\(recent.count), searchUnavailable=\(edited == nil)")
+        return Discovery(candidates: unique(mode == .initial ? recent + created : created + recent),
+                         coverage: mode == .initial ? .historicalSample : .activitySample)
     }
 
     static func payload(_ result: [String: Any]) throws -> [String: Any] {

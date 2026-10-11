@@ -11,9 +11,10 @@ import CryptoKit
 nonisolated enum DirectMCPIdentity {
     struct Identity: Sendable { let fingerprint: String; let label: String }
     static func parse(_ data: Data?) -> Identity? {
-        guard let data, let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard let data, let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              result["isError"] as? Bool != true, result["is_error"] as? Bool != true else { return nil }
         var candidates: [[String: Any]] = []
-        if let value = result["structuredContent"] as? [String: Any] { candidates.append(value) }
+        if let value = (result["structuredContent"] ?? result["structured_content"]) as? [String: Any] { candidates.append(value) }
         if let blocks = result["content"] as? [[String: Any]] {
             for block in blocks {
                 if let text = block["text"] as? String, let bytes = text.data(using: .utf8),
@@ -21,6 +22,7 @@ nonisolated enum DirectMCPIdentity {
             }
         }
         for candidate in candidates {
+            guard candidate["error"] == nil else { continue }
             // Notion's fetch(id: "self") wraps native workspace/user fields in `self`.
             let account = candidate["self"] as? [String: Any] ?? candidate
             let user = account["user"] as? [String: Any]

@@ -151,10 +151,18 @@ actor DirectMCPConnections {
                     updated.policy[tool.name] = .destructive
                 }
             }
+            // Closed provider/reason vocabulary only: never emit tool definitions or account IDs.
+            let provider = connection.provider?.slug ?? "other"
+            CrashReporting.diagnosticBreadcrumb("connector.policy_verified", data: ["source": provider,
+                "tools": String(tools.count), "read_tools": String(updated.readNames.count),
+                "native_reads": String(connection.provider?.nativeKnowledgeReads.intersection(Set(updated.readNames)).count ?? 0),
+                "account_verified": String(updated.accountFingerprint != nil)])
             try Task.checkCancellation()
             guard DirectMCPStore.connection(id: connection.id)?.generation == connection.generation else { throw DirectMCPError.connectionChanged }
             updated.verifiedAt = Date()
             if updated.actionNames.isEmpty {
+                CrashReporting.captureEvent("connector.knowledge_unavailable", tags: ["source": provider, "reason": "no_permitted_tools"],
+                    fingerprint: ["connector", "knowledge_unavailable", provider, "no_permitted_tools"])
                 updated.state = .policyRequired
                 try DirectMCPStore.save(updated)
                 throw DirectMCPError.policyUnavailable
@@ -203,14 +211,30 @@ actor DirectMCPConnections {
         inv.webSearch = false
         inv.timeout = 180
         inv.outputSchema = try classificationSchema(tools)
-        let result = try await FrontierRun.run(inv)
-        onResult?(result)
         struct Reply: Decodable { let tools: [String: DirectMCPTool.Category] }
-        guard let data = result.jsonResult.data(using: .utf8), let reply = try? JSONDecoder().decode(Reply.self, from: data),
-              reply.tools.count == tools.count, Set(reply.tools.keys) == Set(tools.map(\.name)) else {
-            throw DirectMCPError.policyUnavailable
+        for attempt in 1...2 {
+            try Task.checkCancellation()
+            do {
+                let result = try await FrontierRun.run(inv)
+                try Task.checkCancellation()
+                onResult?(result)
+                if let data = result.jsonResult.data(using: .utf8), let reply = try? JSONDecoder().decode(Reply.self, from: data),
+                   reply.tools.count == tools.count, Set(reply.tools.keys) == Set(tools.map(\.name)) {
+                    return reply.tools
+                }
+            } catch {
+                try Task.checkCancellation()
+                guard ConnectorReadFailure.isOutputValidationFailure(error) else { throw error }
+            }
+            if attempt == 1 {
+                await Log("Direct MCP: incomplete classification; retrying once")
+                inv.prompt += "\nThe previous output did not match the required schema. Return the tools object with EVERY exact captured tool name and a read, write, or destructive value for each. Include no other keys. Keep the same safety rules; do not call tools."
+            }
         }
-        return reply.tools
+        let source = ["Granola": "granola", "Notion": "notion"][providerName] ?? "other"
+        CrashReporting.captureEvent("connector.policy_invalid", tags: ["source": source, "reason": "classification_shape"],
+            extra: ["tool_count": String(tools.count)], fingerprint: ["connector", "policy_invalid", "classification_shape"])
+        throw DirectMCPError.policyUnavailable
     }
 
     static func classificationSchema(_ tools: [DirectMCPTool]) throws -> String {

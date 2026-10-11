@@ -12,11 +12,12 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     enum Reason: String, Sendable {
         case unknown, appUnavailable = "app_unavailable", staleTarget = "stale_target"
         case permission, authentication = "login_required", quota, timeout, connection, invalidArguments = "invalid_arguments"
-        case unavailableTool = "unavailable_tool", cancelled
+        case unavailableTool = "unavailable_tool", outputSchema = "output_schema", cancelled
 
         /// A text-derived category is a hint, never proof of an OS or permission state.
         static func classify(_ text: String) -> Self {
             let text = String(text.prefix(8192)).lowercased()
+            if text.contains("does not match required schema") || text.contains("structured output validation") { return .outputSchema }
             if text.contains("not running") || text.contains("app not found") || text.contains("application not found") || text.contains("can't be reached") { return .appUnavailable }
             if text.contains("re-query") || text.contains("stale") || text.contains("element not found") { return .staleTarget }
             if text.contains("permission") || text.contains("accessibility") || text.contains("not authorized") { return .permission }
@@ -96,6 +97,15 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         if server == "sentient_recovery" { return ("recovery", ["ask_user", "update_instructions"].contains(tool) ? tool : "other") }
         if server == "shell" { return ("shell", "command") }
         if server == "web" { return ("web", "search") }
+        if server.isEmpty {
+            let builtins: Set<String> = ["StructuredOutput", "WaitForMcpServers", "ToolSearch", "Read", "Write", "Edit", "Glob", "Grep"]
+            if builtins.contains(tool) { return ("builtin", tool) }
+        }
+        for pack in ConnectorRegistry.packs {
+            if pack.claudeToolPrefix == "mcp__" + server + "__", pack.readTools?.contains(tool) == true {
+                return ("connector", pack.slug + "." + tool)
+            }
+        }
         return ("connector", "other")
     }
 

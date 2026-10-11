@@ -47,15 +47,35 @@ enum WritingStyleMail {
         // the newest 15 sent messages out of 50 threads, and the light tier missed one in field
         // testing. The same reliability pin the other connector reads use.
         if backend == .claude { invocation.claudeModel = .sonnet }
-        let result = try await FrontierRun.run(invocation)
-        try Task.checkCancellation()
-        guard ModelBackend.current == backend,
-              ConnectorRegistry.readOrigin(slug: slug, backend: backend) == origin else {
-            throw MCPSource.MCPError.connectionChanged
+        for attempt in 1...2 {
+            do {
+                let result = try await FrontierRun.run(invocation)
+                try Task.checkCancellation()
+                guard ModelBackend.current == backend,
+                      ConnectorRegistry.readOrigin(slug: slug, backend: backend) == origin else {
+                    throw MCPSource.MCPError.connectionChanged
+                }
+                try ConnectorReadFailure.validateTools(result, slug: slug)
+                let samples = try validate(result, slug: slug, backend: backend)
+                Log("WritingStyleMail: verified \(samples.count) sent emails from \(slug)")
+                return samples
+            } catch {
+                try Task.checkCancellation()
+                let refusal = error as? ReceiptFailure
+                let retryable = refusal?.retryable == true || ConnectorReadFailure.isOutputValidationFailure(error)
+                guard attempt == 1, retryable else {
+                    if let refusal {
+                        CrashReporting.captureEvent("writing_samples.read_failed", tags: ["source": slug, "reason": refusal.rule],
+                            extra: ["attempts": String(attempt)], fingerprint: ["writing_samples", refusal.rule])
+                        throw WritingStyle.Failure.mail(slug)
+                    }
+                    throw error
+                }
+                Log("WritingStyleMail: retrying incomplete receipts once")
+                invocation.prompt += "\nThe previous read did not supply verifiable complete sent messages. Start a fresh discovery with page size 5, following returned pagination within the same limits. A saved-to-file or oversized-result notice is not the message data: reduce the page size again. Read the discovered sent message IDs with the content tool, even when search snippets look sufficient. Return every required structured-output field. Do not declare an empty mailbox without its native empty result."
+            }
         }
-        let samples = try validate(result, slug: slug, backend: backend)
-        Log("WritingStyleMail: verified \(samples.count) sent emails from \(slug)")
-        return samples
+        throw WritingStyle.Failure.mail(slug)
     }
 
     static func tools(slug: String, backend: ModelBackend) -> [String] {
@@ -68,9 +88,16 @@ enum WritingStyleMail {
     }
 
     /// Every refusal names its rule in the log, structure only, so a failed setup is diagnosable.
-    private static func refused(_ slug: String, _ rule: String) -> WritingStyle.Failure {
+    private struct ReceiptFailure: Error {
+        let rule: String
+        var retryable: Bool {
+            ["empty_unverified", "incomplete_payload", "discovery_incomplete", "newest_unread", "record_fields"].contains(rule)
+        }
+    }
+
+    private static func refused(_ slug: String, _ rule: String) -> ReceiptFailure {
         Log("WritingStyleMail: \(slug) receipts refused (\(rule))")
-        return .mail(slug)
+        return ReceiptFailure(rule: rule)
     }
 
     static func validate(_ envelope: CodexCLI.Envelope, slug: String, backend: ModelBackend) throws -> [Sample] {
@@ -428,7 +455,11 @@ enum WritingStyleMail {
             """
         } else if slug == "gmail" {
             source = """
-            Call search_threads once with query="in:sent -in:drafts" and pageSize=50. From every
+            Call search_threads with query="in:sent -in:drafts", starting with pageSize=10.
+            Follow its returned pagination to inspect at most 50 threads. A successful call that
+            returns only an oversized-result or saved-to-file notice is not readable evidence:
+            repeat the same query with a smaller page size. Never open the saved file.
+            From every
             thread it returns, collect each message whose labelIds include SENT (skip DRAFT), sort
             those messages by internalDate descending, and read exactly the first 15 with
             get_message using messageFormat=PLAIN_TEXT. Sort carefully across threads: a thread's
@@ -457,7 +488,8 @@ enum WritingStyleMail {
         IMPORTANT: Sentient reads the full raw bodies DIRECTLY from your successful tool receipts.
         Do NOT copy, paraphrase, summarize or reformat email bodies in your final answer. Do NOT write
         a file. Your job ends when the required reads succeed. Never retry a successful call merely
-        because its result uses multipart MIME or a responses array. Never read attachments.
+        because its result uses multipart MIME or a responses array. An oversized-result notice
+        is the exception: reduce the page size until the actual result is inline. Never read attachments.
         If fewer than 15 sent messages exist, read all available ones; preserve the actual pagination
         response so the app can distinguish an exhausted mailbox from incomplete discovery.
         Use only this connector's read tools. Tool discovery and WaitForMcpServers are allowed.

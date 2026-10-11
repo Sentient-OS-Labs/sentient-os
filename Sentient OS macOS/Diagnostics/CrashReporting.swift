@@ -199,7 +199,7 @@ nonisolated enum CrashReporting {
                                          includeInformational: Bool = false,
                                          affectsOperation: Bool = true) {
         guard level != .info || includeInformational else { return } // opt in for diagnostic blockers, never usage
-        let key = (fingerprint ?? [message]).joined(separator: ":") + ":" + (tags["source"] ?? "") + ":" + (tags["backend"] ?? "") + ":" + (tags["runtime"] ?? "")
+        let key = Diagnostics.repeatKey(event: message, fingerprint: fingerprint, tags: tags)
         if level != .info, let operation = Diagnostics.current, !operation.claim(key, marksFailure: affectsOperation) { return }
         guard diagnosticsEnabled else { return }
         guard let suppressed = Diagnostics.claim(event: message, fingerprint: fingerprint, tags: tags, cooldown: cooldown) else { return }

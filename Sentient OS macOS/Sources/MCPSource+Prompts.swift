@@ -335,7 +335,7 @@ extension MCPSource {
         """
     }
 
-    static let notionPromptRevision = "notion-v4-historical-initial"
+    static let notionPromptRevision = "notion-v5-paginated-history"
 
     private static func notionPrompt(mode: ReadMode, window: Window) -> String {
         """

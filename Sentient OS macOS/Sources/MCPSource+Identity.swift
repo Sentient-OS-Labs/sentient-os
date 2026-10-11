@@ -12,9 +12,10 @@ import os
 extension MCPSource {
     static func checkpointOrigin(slug: String, backend: ModelBackend, fingerprint: String?, fallback: String) -> String {
         let origin = fingerprint.map { "v2:\(backend.rawValue):account:\($0)" } ?? fallback
-        // One successful bounded backfill upgrades old Notion checkpoints. The revision is
-        // committed with the summaries, so failures retry and pending knowledge is preserved.
-        return ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" ? origin + ":notion-history-v1" : origin
+        // Discovery v2 follows empty search pages and checks recent pages. Revisit v1's
+        // possible false-empty backfills once; commit this revision only with a successful
+        // bounded read, preserving pending knowledge and retrying after failures.
+        return ConnectorRegistry.pack(forSlug: slug)?.slug == "notion" ? origin + ":notion-history-v2" : origin
     }
 
     static func readIdentity(slug: String, onReceipt: ReceiptObserver? = nil) async throws -> String? {
