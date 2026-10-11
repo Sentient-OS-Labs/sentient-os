@@ -55,13 +55,14 @@ final class InviteProgram {
         return await perform(reportErrors: !quietly)
     }
 
-    func redeem(_ code: String) async {
-        guard !isBusy else { return }
+    @discardableResult
+    func redeem(_ code: String) async -> Bool {
+        guard !isBusy else { return false }
         guard InviteSnapshot.isValidCode(code) else {
             errorMessage = "Enter the invite code you received."
-            return
+            return false
         }
-        _ = await perform(code: code)
+        return await perform(code: code)
     }
 
     func clearError() { errorMessage = nil }

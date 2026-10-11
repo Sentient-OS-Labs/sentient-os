@@ -100,16 +100,11 @@ struct OnboardingFrontierModelView: View {
             }
             .scrollBounceBehavior(.basedOnSize)
 
-            // Keep room for the persistent bottom-left privacy controls even when a tall
-            // custom-provider panel scrolls. The expanded telemetry card overlays the page.
-            Color.clear.frame(height: 160)
+            // Keep room for the privacy controls and invitation ticket while tall provider
+            // panels scroll. OnboardingView hosts the ticket so its gift covers all chrome.
+            Color.clear.frame(height: 220)
         }
         .overlay { OnboardingTelemetryConsent() }
-        .overlay(alignment: .bottomTrailing) {
-            InviteRedemptionView(startsCollapsed: true)
-                .frame(width: 320)
-                .padding(.trailing, 36).padding(.bottom, 28)
-        }
         .onAppear {
             // Join launch preparation, including adoption of a portable existing login into
             // the private runtime. A legacy CLI's login alone cannot make this screen ready.

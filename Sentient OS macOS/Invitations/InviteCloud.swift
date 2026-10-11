@@ -90,11 +90,23 @@ actor InviteCloud {
         if let error = try? JSONDecoder().decode(RPCError.self, from: result.0) {
             throw Failure.rejected(error.error)
         }
-        guard let snapshot = try? JSONDecoder().decode(InviteSnapshot.self, from: result.0) else { throw Failure.response }
-        if code != nil && !snapshot.hasLifetimeAccess { throw Failure.response }
+        return try Self.verifiedSnapshot(from: result.0, redeeming: code)
+    }
+
+    nonisolated static func verifiedSnapshot(from data: Data, redeeming code: String?) throws -> InviteSnapshot {
+        guard let snapshot = try? JSONDecoder().decode(InviteSnapshot.self, from: data) else { throw Failure.response }
+        if let code {
+            // An existing grant alone does not validate the code just entered. The RPC
+            // must confirm that exact code before onboarding can reveal its gift.
+            guard snapshot.hasLifetimeAccess,
+                  let confirmation = try? JSONDecoder().decode(RedemptionConfirmation.self, from: data),
+                  confirmation.validatedCode == InviteSnapshot.normalize(code).uppercased()
+            else { throw Failure.response }
+        }
         return snapshot
     }
     private nonisolated struct RPCError: Decodable { let error: String }
+    private nonisolated struct RedemptionConfirmation: Decodable { let validatedCode: String }
 
     private func authenticatedSession(forceRefresh: Bool = false) async throws -> Session {
         if let pendingSession {

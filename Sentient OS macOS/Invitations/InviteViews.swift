@@ -1,5 +1,5 @@
 // InviteViews.swift
-// The onboarding redemption field, Settings invitation section, and in-app offer content.
+// Settings' redemption field, invitation section, and the in-app sharing offer.
 // All surfaces use InviteProgram; presentation-only pieces also support offline previews.
 // Doc: Views/Documentation - Views - Home, Processing & Shared UI.md
 
@@ -280,7 +280,7 @@ private struct InviteHandIcon: Shape {
 #Preview("Invite redemption") {
     InviteRedemptionView().frame(width: 320).padding(28).background(.black)
 }
-#Preview("Onboarding invite disclosure") {
+#Preview("Settings invite disclosure") {
     InviteRedemptionView(startsCollapsed: true)
         .frame(width: 320).padding(28).background(.black)
 }
