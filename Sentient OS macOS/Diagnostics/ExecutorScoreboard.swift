@@ -27,9 +27,13 @@ enum ExecutorScoreboard {
         // "fired" WITHOUT the STATUS sentinel still reports: that's the false-success RISK the
         // sentinel exists to measure.
         guard outcome != .fired || !statusPresent else { return }
-        // A model may reasonably decline a request, and missing prerequisites are normal UI state.
-        if statusPresent && (outcome == .refused || outcome == .notFireable) { return }
-        if let error, Diagnostics.isExpected(error) { return }
+        CrashReporting.diagnosticBreadcrumb("executor.outcome", data: ["method": method, "source": source,
+            "outcome": outcome.rawValue, "status_present": String(statusPresent)])
+        // The frontier boundary records model failures with their tool timeline. Keep this
+        // fallback for prerequisites and paths that never reached that boundary.
+        if outcome == .refused, Diagnostics.current?.hasFailure == true { return }
+        let expected = outcome == .notFireable || error.map(Diagnostics.isExpected) == true
+        if let error, Diagnostics.isCancellation(error) { return }
         if let error, Diagnostics.current?.wasReported(error) == true {
             CrashReporting.diagnosticBreadcrumb("executor.failed_after_reported_cause", data: ["outcome": outcome.rawValue, "status_present": String(statusPresent)])
             return
@@ -40,11 +44,12 @@ enum ExecutorScoreboard {
         ]
         if let errorClass { extra["error_class"] = errorClass }
         if let error { extra.merge(Diagnostics.errorFields(error)) { _, new in new } }
-        CrashReporting.captureEvent("executor.fire", level: .warning,
+        CrashReporting.captureEvent("executor.fire", level: expected ? .info : .warning,
             tags: ["method": method, "source": source, "outcome": outcome.rawValue,
                    "backend": Diagnostics.current?.backend ?? ModelBackend.current.rawValue,
                    "runtime": method == "computer" ? ComputerUseBackend.selected(for: ModelBackend.current).rawValue : "connector",
                    "phase": "complete", "evidence": statusPresent ? "status_claim" : "missing_status"],
-            extra: extra, fingerprint: ["executor", "fire", method, outcome.rawValue])
+            extra: extra, fingerprint: ["executor", "fire", method, outcome.rawValue],
+            cooldown: 0, includeInformational: expected)
     }
 }

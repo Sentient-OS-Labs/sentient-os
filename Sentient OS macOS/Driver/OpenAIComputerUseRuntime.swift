@@ -12,6 +12,7 @@ final class OpenAIComputerUseRuntime {
     private init() {}
 
     private var activeTasks: Set<UUID> = []
+    private var taskHelpers: [UUID: NSRunningApplication] = [:]
     private var activeConfiguration: OpenAIComputerUse.Configuration?
     private var launched: (app: NSRunningApplication, configuration: OpenAIComputerUse.Configuration)?
     private var checked: (app: NSRunningApplication, configuration: OpenAIComputerUse.Configuration, at: Date)?
@@ -160,8 +161,16 @@ final class OpenAIComputerUseRuntime {
         activeTasks.insert(id)
         activeConfiguration = configuration
         do {
-            _ = try await start(configuration: configuration)
-            guard await Permissions.nativeAutomationState() == .granted else {
+            let app = try await start(configuration: configuration)
+            taskHelpers[id] = app
+            AgentRunDiagnostics.current?.recordHelper(running: !app.isTerminated, atStart: true)
+            let permission = await Permissions.nativeAutomationState()
+            CrashReporting.diagnosticBreadcrumb("computer_use.task_readiness", data: [
+                "helper_running": String(!app.isTerminated),
+                "automation_granted": String(permission == .granted),
+                "expected_helper_version": CodexRuntime.release.helper.version,
+                "expected_helper_build": String(CodexRuntime.release.helperBuild)])
+            guard permission == .granted else {
                 throw OpenAIComputerUse.RuntimeError.permissionRequired
             }
             try Task.checkCancellation()
@@ -170,6 +179,10 @@ final class OpenAIComputerUseRuntime {
     }
 
     func endTask(_ id: UUID) {
+        if let app = taskHelpers.removeValue(forKey: id) {
+            AgentRunDiagnostics.current?.recordHelper(running: !app.isTerminated, atStart: false)
+            CrashReporting.diagnosticBreadcrumb("computer_use.task_ended", data: ["helper_running": String(!app.isTerminated)])
+        }
         activeTasks.remove(id)
         if activeTasks.isEmpty { activeConfiguration = nil }
     }

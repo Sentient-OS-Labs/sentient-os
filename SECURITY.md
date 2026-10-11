@@ -119,14 +119,25 @@ for the schema, migration and synthetic-data tests.
 
 Release builds enable crash reports and extended analytics by default, with separate controls in
 Settings → System. Sentry receives technical crash/error reports and a random installation identifier;
-content scrubbing and disabled URL-capture defaults help exclude private material. TelemetryDeck
-receives usage counts and optional extended timings, setup and health signals. Turning extended
-analytics off leaves basic usage, launch/session and install/uninstall counts enabled.
+content scrubbing and disabled URL-capture defaults help exclude private material. Technical agent
+reports use bounded tool categories, outcomes and app-generated correlation IDs. Provider identifiers,
+tool arguments and output text are not reporting fields.
 
-Knowledge, task content, conversations and screenshots are excluded from product analytics by
-design. Generated identifiers allow repeat events to be recognized without asking for a name or
-email. The implementation and its limits are documented in the diagnostics guide; do not describe
-the controls as disabling every network request or make blanket anonymity guarantees.
+TelemetryDeck receives basic usage counts and reviewed, generalized phrases describing eligible
+Sidekick attempts. Timings, setup and health signals use the extended-analytics setting. Turning that
+setting off leaves basic usage, launch/session and install/uninstall counts and task descriptions
+enabled, as disclosed in onboarding and Settings.
+
+The task's selected AI proposes the phrase. Local format checks and a separate, tool-free call to
+the selected AI review it before submission. That review receives only the candidate phrase; it can
+approve the exact text or reject it. Missing, rejected or failed reviews produce an unavailable-summary
+status without the phrase or rejection reason. Raw prompts, conversations, screenshots, knowledge
+files and final responses are not accepted by the task-summary analytics sink.
+
+The review is a model-based safeguard, not a guarantee that identifying or sensitive meaning can
+never pass. Generated identifiers allow repeat events to be associated without asking for a name
+or email. The diagnostics guide documents these controls and limits; do not describe the switches
+as disabling every report or make blanket anonymity guarantees.
 
 ## Implementation references
 

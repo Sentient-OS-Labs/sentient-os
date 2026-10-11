@@ -247,8 +247,12 @@ final class CommandRunModel {
                 if self.isPersonalizing { self.clearRemembering() }
             }
         retryGuidance = nil
+        let diagnosticTaskID = context.isEmpty ? UUID() : (interaction?.diagnosticTaskID ?? UUID())
+        let diagnosticAttempt = context.isEmpty ? 1 : (interaction?.diagnosticAttempt ?? 0) + 1
         interaction = SidekickInteraction(retryContext: context, historyContext: SidekickHistory.promptBlock(),
-            instructionsSnapshot: snapshot, personalization: personalization) { [weak self] question in
+            instructionsSnapshot: snapshot, personalization: personalization,
+            taskSummary: userRequest == nil ? nil : SidekickTaskSummary(),
+            diagnosticTaskID: diagnosticTaskID, diagnosticAttempt: diagnosticAttempt) { [weak self] question in
             guard let self, self.runID == generation, self.isRunning, !self.isOffline, !self.recoveryCancelled else { throw CancellationError() }
             self.clearRemembering()
             if let error = question.error { SidekickHistory.recordError(error, for: self.historyID) }
@@ -261,15 +265,17 @@ final class CommandRunModel {
 
     private func presentFailure(_ line: String) {
         guard !isDemo, !recoveryCancelled else { return }
+        interaction?.recordRecovery("final_failure", error: line)
         SidekickHistory.recordError(line, for: historyID)
         let generation = runID
         let retry = retryAction
         let detail = lastAttemptDetail.isEmpty ? line : line + "\n" + lastAttemptDetail
         recovery.present(.failure(id: UUID(), error: line)) { [weak self] answer in
             guard let self, self.runID == generation else { return }
-            guard let answer else { self.stop(); return }
+            guard let answer else { self.interaction?.recordRecovery("dismissed"); self.stop(); return }
             guard let retry else { self.recoveryCancelled = true; return }
             let context = SidekickInteraction.retryInstructions(error: detail, guidance: answer.text)
+            self.interaction?.recordRecovery("retry")
             let resume = { [weak self] in
                 guard let self, self.runID == generation else { return }
                 self.retryGuidance = answer.text
@@ -507,6 +513,7 @@ final class CommandRunModel {
         stopWatchingConnectivity()
         if !isDemo {
             interaction?.personalization?.finish(success: outcome == .success && !recoveryCancelled)
+            interaction?.taskSummary?.finish(outcome: outcome, source: source, method: executedMethod)
         }
         isPersonalizing = false
         if !isDemo { SidekickHistory.close(historyID, outcome: outcome, line: line) }

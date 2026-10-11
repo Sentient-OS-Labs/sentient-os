@@ -89,6 +89,14 @@ nonisolated enum WritingStyle {
     /// selected sources have less history, including none. Errors and cancellation leave nothing
     /// behind, so the next setup can retry honestly.
     @MainActor static func collect(progress: @escaping @Sendable (String) -> Void = { _ in }) async throws -> String {
+        try await Diagnostics.withOperation("writing_style") {
+            try await Diagnostics.boundary(.knowledgeFailed, phase: .read, reason: "writing_samples") {
+                try await collectBody(progress: progress)
+            }
+        }
+    }
+
+    @MainActor private static func collectBody(progress: @escaping @Sendable (String) -> Void) async throws -> String {
         guard !generating else { throw Failure.busy }
         generating = true
         PipelineActivity.begin()
@@ -136,7 +144,11 @@ nonisolated enum WritingStyle {
     /// or another run's, always wins.
     @MainActor static func publishIfNeeded(_ content: String, in root: URL = VaultGenerator.vaultRoot) throws {
         if exists(in: root) { return }
-        try publish(content, in: root)
+        do { try publish(content, in: root) }
+        catch {
+            Diagnostics.report(.knowledgeFailed, phase: .publish, reason: "writing_samples", error: error)
+            throw error
+        }
         #if DEBUG
         // Scratch-vault checks must not alter the real vault's sync state or schedule a push.
         if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == nil { VaultActivity.shared.markChanged() }

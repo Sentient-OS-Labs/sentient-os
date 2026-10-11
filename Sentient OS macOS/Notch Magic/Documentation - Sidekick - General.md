@@ -25,6 +25,8 @@ screen stills, and the prompt. The window, the click-through mechanics, and the 
 | `SidekickHotkeyMonitor.swift` | The zero-permission global hotkey: NSEvent `flagsChanged` monitors (global + local) reading the right-key device bit. Press / hold-confirmed / release. |
 | `VoiceCapture.swift` · `QuickTranscriptionEngine.swift` · `SpeechAnalyzerEngine.swift` · `SFSpeechRecognizerEngine.swift` | Voice: permissions, engine selection (SpeechAnalyzer on macOS 26+, SFSpeechRecognizer on 15), start / stop-and-transcribe / cancel. |
 | `ScreenCapture.swift` | A still of EVERY display at fire time (main first), attached to the codex run so "finish this" resolves against real pixels. |
+| `SidekickInteraction.swift` · `SidekickToolServer.swift` | Per-attempt recovery tools, instruction updates, reporting capability, waiting state and task/attempt correlation. |
+| `SidekickTaskSummary.swift` | Stages a generalized workflow phrase and reviews it separately before passing approved text to analytics. |
 | `NotchWindowController.swift` · `NotchView.swift` · `NotchShape.swift` · `NotchSpace.swift` · `SpinningLogo.swift` | The window and visual (the other doc). |
 
 `AppState` owns one `CommandCoordinator` and one `NotchWindowController`. It starts both once at normal launch, or defers both until an eligible pending computer-use upgrade finishes. Closing/minimizing setup cannot start them; native migration can explicitly defer setup while first-use gates remain enforced.
@@ -183,6 +185,25 @@ A user starts each task. The notch shows progress, and STOP cancels the active r
 perform the actions the user requested, so this is an execution surface, not always a draft for a
 second confirmation. Prompt guardrails and tool policies guide the run; they are not a claim that
 all model mistakes or malicious page instructions are impossible.
+
+## Task reporting
+
+Technical diagnostics correlate operation scopes and retry attempts through app-generated IDs. Tool
+names use a fixed vocabulary or a broad family; model and process outcomes are recorded separately.
+Recovery reports omit question, answer and error text. See the diagnostics guide for reporting gates.
+
+Eligible user-requested Sidekick attempts can also provide a short workflow description for product
+analytics. The selected AI calls `describe_task_usage` after actions and instruction updates, before
+the final status. This bookkeeping does not mark success and is omitted from the progress display.
+Further actions or user answers invalidate a staged phrase. Completion consumes it once and releases
+the task normally while a separate, tool-free model call reviews only the candidate phrase.
+
+Local checks and review reject malformed, identifying or sensitive descriptions. Only exact approved
+text reaches the typed analytics sink; a missing or failed review reports an unavailable summary
+without text or a rejection reason. This is a model-based safeguard, not a guarantee of anonymity.
+Task descriptions remain enabled in Release independently of the extended-analytics switch, with
+disclosure in onboarding and Settings. Debug skips submission and background review. See
+`Diagnostics/Documentation - Diagnostics (Sentry & TelemetryDeck).md` and the repository's `SECURITY.md`.
 
 ## Rules
 

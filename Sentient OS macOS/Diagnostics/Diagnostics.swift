@@ -33,6 +33,7 @@ nonisolated enum Diagnostics {
         case updateFailed = "app_update.failed"
         case serviceFailed = "service.operation_failed"
         case readinessFailed = "computer_use.readiness_failed"
+        case storeWriteFailed = "store.write_failed"
     }
 
     enum Phase: String, Sendable {
@@ -76,11 +77,16 @@ nonisolated enum Diagnostics {
         let name: String
         private let parent: Operation?
         var parentID: String? { parent?.id }
+        var rootID: String { parent?.rootID ?? id }
         let began = Date()
         let backend: String
         private let failures = Mutex<Set<String>>([])
+        private let reportedEvents = Mutex<Set<String>>([])
         private let causes = Mutex<Set<String>>([])
         private let phaseValue = Mutex<Phase?>(nil)
+        private let outcomeValue = Mutex("completed")
+        var outcome: String { outcomeValue.withLock { $0 } }
+        func finish(outcome: String) { outcomeValue.withLock { $0 = outcome } }
         var phase: Phase? {
             get { phaseValue.withLock { $0 } }
             set { phaseValue.withLock { $0 = newValue } }
@@ -90,9 +96,12 @@ nonisolated enum Diagnostics {
             backend = doubleTapProvider?.rawValue ?? ModelBackend.current.rawValue
         }
         var hasFailure: Bool { failures.withLock { !$0.isEmpty } }
-        func claim(_ key: String) -> Bool {
-            parent?.noteChildFailure()
-            return failures.withLock { $0.insert(key).inserted }
+        func claim(_ key: String, marksFailure: Bool = true) -> Bool {
+            if marksFailure {
+                parent?.noteChildFailure()
+                failures.withLock { _ = $0.insert(key) }
+            }
+            return reportedEvents.withLock { $0.insert(key).inserted }
         }
         func markReported(_ error: Error) {
             let key = Diagnostics.causeKey(error)
@@ -114,12 +123,19 @@ nonisolated enum Diagnostics {
             defer {
                 CrashReporting.diagnosticBreadcrumb("operation.end", data: ["operation": operation.name,
                     "operation_id": operation.id, "failed": String(operation.hasFailure),
+                    "outcome": operation.outcome,
                     "elapsed_ms": String(Int(Date().timeIntervalSince(operation.began) * 1000))])
             }
-            if ["frontier_run", "computer_run"].contains(operation.name) {
-                return try await ChildProcessDiagnostics.observe { try await body() }
+            do {
+                if ["frontier_run", "computer_run"].contains(operation.name) {
+                    return try await ChildProcessDiagnostics.observe { try await body() }
+                }
+                return try await body()
+            } catch {
+                operation.finish(outcome: isCancellation(error) ? "cancelled" : (isExpected(error) ? "blocked" : "failed"))
+                if !isCancellation(error), !isExpected(error) { _ = operation.claim("thrown_error") }
+                throw error
             }
-            return try await body()
         }
     }
 
@@ -147,6 +163,8 @@ nonisolated enum Diagnostics {
         if reflected.displayStyle == .enum, let label = reflected.children.first?.label {
             fields["error_case"] = String(label.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }.prefix(64))
         }
+        // Payload-free native errors otherwise expose only an unstable numeric enum index.
+        if let native = error as? OpenAIComputerUse.RuntimeError { fields["error_case"] = String(describing: native) }
         let ns = error as NSError
         let domains: Set<String> = [NSCocoaErrorDomain, NSURLErrorDomain, NSPOSIXErrorDomain, NSOSStatusErrorDomain,
                                    "NSMachErrorDomain", "SQLite", "SQLiteError", "SUSparkleErrorDomain", "SUErrorDomain"]
@@ -179,6 +197,7 @@ nonisolated enum Diagnostics {
         switch error {
         case CodexRuntime.Failure.busy, OpenAIComputerUse.RuntimeError.helperRunning,
              OpenAIComputerUse.RuntimeError.permissionRequired, OpenAIComputerUse.RuntimeError.restartRequired,
+             WritingStyle.Failure.noVault, WritingStyle.Failure.busy, WritingStyle.Failure.permissions, WritingStyle.Failure.changed,
              DirectMCPError.authorizationDenied, DirectMCPError.connectionChanged, DirectMCPError.reconnectRequired,
              DirectMCPError.accountSetupRequired, DirectMCPError.duplicateLabel, DirectMCPError.busy: return true
         default: break
@@ -194,7 +213,10 @@ nonisolated enum Diagnostics {
                             _ body: () async throws -> T) async rethrows -> T {
         do { return try await body() }
         catch {
-            if !isExpected(error) { report(event, phase: current?.phase ?? phase, reason: reason, error: error, source: source, terminal: true) }
+            if isExpected(error) {
+                CrashReporting.diagnosticBreadcrumb("operation.blocked", data: errorFields(error).merging(
+                    ["reason": reason.description, "cancelled": String(isCancellation(error))]) { _, new in new })
+            } else { report(event, phase: current?.phase ?? phase, reason: reason, error: error, source: source, terminal: true) }
             throw error
         }
     }

@@ -19,6 +19,9 @@ actor ClaudeSubscriptionBridge {
     private let model: String
     private let effort: String
     private let interaction: SidekickInteraction?
+    // Network callbacks create fresh Tasks; retain the originating helper diagnostics scope.
+    private let diagnosticDirectory = ChildProcessDiagnostics.directory
+    private let diagnosticStops = ChildProcessDiagnostics.intentionalStops
     private var transportTimeout: TimeInterval { timeout + (interaction == nil ? 0 : SidekickToolServer.maximumWait) }
     private let timeout: TimeInterval
     private let namespaces: Set<String>
@@ -272,7 +275,9 @@ actor ClaudeSubscriptionBridge {
                 calls[owner] = Call(recovery: recovery, fingerprint: fingerprint, waiters: [continuation])
                 callOwners[callID] = owner
                 queue.append(item)
-                onProgress(Self.toolProgress(tool, arguments: arguments))
+                if tool.namespace != "mcp__sentient_recovery" || tool.name != SidekickTaskSummary.toolName {
+                    onProgress(Self.toolProgress(tool, arguments: arguments))
+                }
                 flush()
             }
         default:
@@ -309,12 +314,16 @@ actor ClaudeSubscriptionBridge {
         claudeTask = Task {
             let began = Date()
             do {
-                let result = try await SidekickInteraction.$current.withValue(interaction) {
-                    try await CodexCLI.executeAsync(binary: executable,
-                    args: [ClaudeSubscriptionProcess.argument], stdinText: invocationJSON,
-                    cwd: directory.path, timeout: timeout + 5, includeCustomProviderKey: false,
-                    terminationGrace: 3, retainStdoutLine: ClaudeSubscriptionProcess.retainEnvelopeLine) { line in
-                        for progress in Self.narrationLines(fromStreamJSON: line) { onProgress(progress) }
+                let result = try await ChildProcessDiagnostics.$directory.withValue(diagnosticDirectory) {
+                    try await ChildProcessDiagnostics.$intentionalStops.withValue(diagnosticStops) {
+                        try await SidekickInteraction.$current.withValue(interaction) {
+                            try await CodexCLI.executeAsync(binary: executable,
+                                args: [ClaudeSubscriptionProcess.argument], stdinText: invocationJSON,
+                                cwd: directory.path, timeout: timeout + 5, includeCustomProviderKey: false,
+                                terminationGrace: 3, retainStdoutLine: ClaudeSubscriptionProcess.retainEnvelopeLine) { line in
+                                    for progress in Self.narrationLines(fromStreamJSON: line) { onProgress(progress) }
+                                }
+                        }
                     }
                 }
                 try Task.checkCancellation()

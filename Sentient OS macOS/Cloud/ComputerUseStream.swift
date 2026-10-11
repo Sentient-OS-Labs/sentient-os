@@ -10,10 +10,14 @@ nonisolated enum ComputerUseStream {
                     extraEnv: [String: String] = [:], narrate: Bool = true,
                     onLine: @escaping @Sendable (String) -> Void) async throws -> CodexCLI.ExecResult {
         let recovery = SidekickInteraction.current
-        return try await CodexCLI.executeStreaming(binary: binary, args: args, timeout: timeout, extraEnv: extraEnv) { line in
+        let diagnostics = AgentRunDiagnostics.current
+        let result = try await CodexCLI.executeStreaming(binary: binary, args: args, timeout: timeout, extraEnv: extraEnv) { line in
+            diagnostics?.observe(line)
             try recovery?.observeToolEvent(line)
             if narrate { progress(from: line).forEach(onLine) }
         }
+        diagnostics?.recordProcess(status: result.status)
+        return result
     }
 
     static func progress(from line: String) -> [String] {
@@ -31,6 +35,8 @@ nonisolated enum ComputerUseStream {
             // Preserve the existing knowledge-read bloom without displaying command output.
             return ["exec", command, "codex"]
         case ("item.started", "mcp_tool_call"):
+            if item["server"] as? String == SidekickToolServer.name,
+               item["tool"] as? String == SidekickTaskSummary.toolName { return [] }
             let label = [item["server"] as? String, item["tool"] as? String]
                 .compactMap { $0 }.joined(separator: ".")
             return label.isEmpty ? [] : ["codex", "→ \(label)"]

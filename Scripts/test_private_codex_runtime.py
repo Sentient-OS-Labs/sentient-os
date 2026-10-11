@@ -102,7 +102,17 @@ nonisolated enum OpenAIComputerUse {
     static func validate(at url: URL) async throws -> Bool { fatalError("No helper execution") }
 }
 nonisolated enum CustomProvider { static let apiKeyEnvName = "SENTIENT_MODEL_API_KEY"; static let apiKeyEnvValue = "fixture-custom-only" }
-nonisolated enum ChildProcessDiagnostics { static let environmentKey = "FIXTURE_CHILD_DIAGNOSTICS"; @TaskLocal static var directory: URL? }
+// Diagnostics sinks are inert here; this suite exercises process/runtime behavior offline.
+nonisolated enum ChildProcessDiagnostics {
+    static let environmentKey = "FIXTURE_CHILD_DIAGNOSTICS"
+    @TaskLocal static var directory: URL?
+    @TaskLocal static var intentionalStops: IntentionalStops?
+    final class IntentionalStops: Sendable { func record(_ pid: Int32) { } }
+}
+nonisolated final class AgentRunDiagnostics: Sendable {
+    @TaskLocal static var current: AgentRunDiagnostics?
+    func observe(_ line: String) { }
+}
 nonisolated struct SidekickInteraction: Sendable {
     static let current: Self? = nil
     enum Failure: Error { case toolWhileWaiting }

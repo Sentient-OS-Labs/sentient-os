@@ -416,7 +416,9 @@ actor ClaudeCLI {
                                                   cwd: invocation.cwd,
                                                   timeout: invocation.timeout,
                                                   extraEnv: environment,
+                                                  observeAgentTools: true,
                                                   onStdoutLine: stdoutLine)
+        AgentRunDiagnostics.current?.recordProcess(status: out.status)
         let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
         Log("claude exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
         return env
@@ -554,6 +556,9 @@ actor ClaudeCLI {
             recipeAllows.append("mcp__sentient_recovery__ask_user")
             if SidekickInteraction.current?.personalization != nil {
                 recipeAllows.append("mcp__sentient_recovery__" + SidekickPersonalization.toolName)
+            }
+            if SidekickInteraction.current?.taskSummary != nil {
+                recipeAllows.append("mcp__sentient_recovery__" + SidekickTaskSummary.toolName)
             }
         }
 
@@ -798,6 +803,7 @@ actor ClaudeCLI {
                 if let text = block["text"] as? String, !text.isEmpty { lines.append(text) }
             case "tool_use":
                 let name = (block["name"] as? String) ?? ""
+                if name == "mcp__sentient_recovery__" + SidekickTaskSummary.toolName { continue }
                 let input = block["input"] as? [String: Any]
                 if name == "Bash" {
                     if let cmd = input?["command"] as? String, !cmd.isEmpty { lines.append("$ \(cmd)") }

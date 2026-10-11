@@ -10,18 +10,17 @@
 //    2. A TIERED consent switch — `analyticsEnabled` (default ON), the "Share anonymous analytics"
 //       toggle in Settings → System, gates the EXTENDED tier: the rich funnel + health signals
 //       (onboarding, processing stats, durations, scheduler internals, mirror, plan gates).
-//       A tiny always-on tier (the `.core` case) keeps sending even when the switch is off — just
-//       five extremely anonymized USAGE-COUNT pings: how many people use Sentient (install + SDK
-//       sessions), Sidekick fires, proactive cards (made and fired), overnight runs, and home opens. Counts only —
-//       no content, no account, no IP — so the SDK boots unconditionally in Release. Disclosed in
-//       the switch's own off-state caption (SystemPane), so the toggle is never a lie: off = "share
-//       the richer picture: no", not "invisible". Crash reports keep their separate switch
+//       The always-on tier (`.core`) keeps sending basic usage counts and a reviewed, generalized
+//       workflow phrase after Sidekick attempts, even when the extended switch is off. The
+//       Sidekick phrase is the sole free-text exception, through recordTaskSummary only.
+//       The SDK boots unconditionally in Release. The disclosure beside the switch (SystemPane)
+//       explains which reports remain enabled. Crash reports keep their separate switch
 //       (CrashReporting's `diagnosticsEnabled`), so a user can keep crash reports on while opting
 //       out (or vice versa).
 //  Identity is the same anonymous per-install UUID (`CrashReporting.installID`); TelemetryDeck hashes
-//  it again on-device and once more on their server, and stores no PII and no IP address by design —
-//  so this upholds the Privacy Constitution (no accounts, nothing personal leaves the Mac). Signals
-//  carry structure only (names + counts/enums/versions), never user content — clean at the source.
+//  it again on-device and once more on their server. This permits repeat-event association; it
+//  does not sanitize payload text. Ordinary signals carry structure only. Sidekick phrases pass
+//  local checks and a separate model review; that review reduces disclosure risk, not a proof of anonymity.
 //  `floatValue` is TelemetryDeck's one numeric field — dashboards can SUM it, which is how the
 //  worldwide totals work (suggestions generated, agent-seconds worked).
 //
@@ -60,13 +59,12 @@ enum Analytics {
     // MARK: - The consent tiers
 
     /// Which consent a signal rides. `.extended` (the default) is the rich picture, gated by the
-    /// "Share anonymous analytics" switch; `.core` is the tiny set of always-on, extremely
-    /// anonymized USAGE-COUNT pings (Release-only), disclosed in the switch's off-state caption.
-    /// The complete `.core` set is exactly five buckets: how many people use Sentient (the install
+    /// "Share extended usage analytics" switch; `.core` is the always-on tier, disclosed beside
+    /// the switch. It includes basic usage: how many people use Sentient (the install
     /// ping + SDK sessions), Sidekick fires (`Command.submitted`), proactive cards made AND fired
     /// (`Proactive.prepared` + `Proactive.actionFired`), overnight runs (`Scheduler.overnightCompleted`),
-    /// and home opens (`Home.opened`). Nothing else is `.core` — durations, funnels, and health all
-    /// ride `.extended`.
+    /// and home opens (`Home.opened`), plus `Sidekick.taskSummary` through its typed sink below.
+    /// Durations, funnels, and health ride `.extended`.
     enum Tier { case core, extended }
 
     private static let analyticsKey = "analyticsEnabled"
@@ -117,6 +115,30 @@ enum Analytics {
         guard started else { return }
         if tier == .extended, !analyticsEnabled { return }
         TelemetryDeck.signal(name, parameters: parameters, floatValue: floatValue)
+    }
+
+    /// Task descriptions are always-on in Release, independent of the extended toggle.
+    /// Debug stays entirely local, including the background privacy review.
+    static var taskSummariesEnabled: Bool { started }
+
+    /// Sole free-text analytics entry: Approved can only be created by SidekickTaskSummary's
+    /// privacy reviewer. No raw prompt, final response, history or rejection reason is accepted.
+    static func recordTaskSummary(_ summary: SidekickTaskSummary.Approved?,
+                                  outcome: CommandRunModel.Outcome, source: String, method: String) {
+        guard taskSummariesEnabled else { return }
+        TelemetryDeck.signal("Sidekick.taskSummary", parameters: taskSummaryParameters(summary,
+            outcome: outcome, source: source, method: method))
+    }
+
+    static func taskSummaryParameters(_ summary: SidekickTaskSummary.Approved?,
+                                      outcome: CommandRunModel.Outcome, source: String, method: String) -> [String: String] {
+        var fields = ["source": ["promptBar", "notchTyped", "voice", "command"].contains(source) ? source : "other",
+                      "method": ["computer", "mcp"].contains(method) ? method : "other",
+                      "outcome": outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed"),
+                      "summary_status": summary == nil ? "unavailable" : "available",
+                      "summary_version": "1"]
+        if let summary { fields["summary"] = summary.phrase }
+        return fields
     }
 
     // MARK: - Opt-out
