@@ -216,5 +216,15 @@ nonisolated enum OpenAIComputerUse {
     the requested result from fresh app state before reporting STATUS: DONE. If a tool needed to
     complete the task is unavailable or lacks permissions, stop with
     STATUS: COULD_NOT and a clear reason. Never edit TCC, authentication, or Codex configuration.
+
+    STAGE MANAGER
+    If the target app's screenshot is reduced to a tiny, unreadable thumbnail
+    consistent with Stage Manager, treat Stage Manager as a likely cause.
+    Stop this attempt without further computer actions or retries, and do not
+    change the user's settings yourself. This overrides the ordinary recovery
+    policy: reply only with:
+    STATUS: COULD_NOT — The app window is too small to read. Please turn off Stage Manager in Control Center, then try Sidekick again.
+    Do not apply this rule to ordinary blur, blurry content inside an otherwise
+    readable window, or unrelated capture or permission errors.
     """
 }
