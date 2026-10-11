@@ -42,8 +42,6 @@ Click the notch, tap your right Command key to type, or hold it to speak. **Side
   <img src=".github/readme/sidekick.gif" width="680" alt="Sidekick takes a short instruction through the notch, then prepares an email reply with availability and an attached proposal." />
 </p>
 
-<sub>The Sidekick recording from our homepage, looping. [More Sidekick in action.](https://youtu.be/wI6uwOlrTjA)</sub>
-
 **For your life:**
 
 - **Take over anything.** Sentient connects the dots across your life and work from the sources you choose. Hand off whatever you're doing with “finish this for me,” and let it pick up the task with your context already in place.
@@ -72,8 +70,6 @@ Put your cursor in a reply field and double tap your **right Command key**. Doub
 <p align="center">
   <img src=".github/readme/double-tap.gif" width="820" alt="Three Double Tap recordings play back to back: an informed email reply in Gmail, a project update in Slack, and a reply about weekend plans in iMessage. Each reply stays unsent." />
 </p>
-
-<sub>Email → Slack → iMessage, just like the homepage. Three short app recordings; every reply stays a draft.</sub>
 
 **For your life:**
 
