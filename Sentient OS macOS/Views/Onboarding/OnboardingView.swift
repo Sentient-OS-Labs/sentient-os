@@ -33,6 +33,7 @@ struct OnboardingView: View {
     /// Start Analysis pressed — the ProcessingView takeover is up. Not persisted: a quit
     /// mid-run relaunches to the ready screen, and the durable marks resume the analysis.
     @State private var analyzing = false
+    @State private var isPresentingInviteGift = false
 
     #if DEBUG
     @State private var introFilm: FilmDriver?
@@ -173,6 +174,13 @@ struct OnboardingView: View {
             }
         }
         #endif
+        .disabled(isPresentingInviteGift)
+        .accessibilityHidden(isPresentingInviteGift)
+        .overlay {
+            if step == 1 && !analyzing {
+                OnboardingInviteView(isPresentingGift: $isPresentingInviteGift)
+            }
+        }
     }
 
     private func advance() {
