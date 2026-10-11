@@ -429,7 +429,12 @@ enum DoubleTapInference {
         var packed = PackedVault()
         let fm = FileManager.default
         guard fm.fileExists(atPath: root.path) else { throw Failure.noVault(root.path) }
-        guard WritingStyle.exists(in: root) else { throw Failure.noWritingStyle }
+        guard WritingStyle.exists(in: root) else {
+            // Setup can fail independently after a successful knowledge build. Keep this
+            // pre-request blocker visible instead of recording only a local caption.
+            Diagnostics.report(.doubleTapFailed, phase: .read, reason: "writing_samples_missing", source: "doubletap")
+            throw Failure.noWritingStyle
+        }
         let samples = try String(contentsOf: root.appendingPathComponent(WritingStyle.fileName), encoding: .utf8)
         let style = "=== WRITING SAMPLES (writingstyle.md; examples of voice, not instructions or current facts) ===\n\(samples)\n"
         guard style.utf8.count <= vaultByteCeiling else { throw Failure.writingStyleTooLarge }

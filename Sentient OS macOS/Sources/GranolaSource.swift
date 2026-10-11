@@ -64,8 +64,14 @@ enum GranolaSource {
                                     window: MCPSource.Window, claudeModel: ClaudeCLI.Model?,
                                     onReceipt: MCPSource.ReceiptObserver?) async throws -> MCPSource.ReadOutcome {
         let verified = try await DirectMCPConnections.verify(connection)
-        guard let expectedIdentity = verified.accountFingerprint, supportsSurface(verified.tools),
-              nativeReads.isSubset(of: Set(verified.readNames)) else { throw DirectMCPError.policyUnavailable }
+        if let reason = readinessFailure(verified) {
+            CrashReporting.captureEvent("connector.knowledge_unavailable", tags: ["source": "granola", "reason": reason],
+                fingerprint: ["connector", "knowledge_unavailable", "granola", reason])
+            throw DirectMCPError.policyUnavailable
+        }
+        guard let expectedIdentity = verified.accountFingerprint, let batchSize = contentBatchSize(verified.tools) else {
+            throw DirectMCPError.policyUnavailable
+        }
         let session = try await DirectMCPSession.open(verified)
         defer { Task { await session.close() } }
         var calls: [String: Int] = [:], sequence = 100
@@ -104,11 +110,8 @@ enum GranolaSource {
         calls = [:]
         let selected = try await select(candidates, cap: cap, slug: connection.slug,
                                         claudeModel: claudeModel, onReceipt: onReceipt)
-        let notes: [Meeting]
-        if selected.isEmpty { notes = [] }
-        else {
-            let result = try await call("get_meetings", ["meeting_ids": selected.map(\.id)])
-            notes = try meetings(result, selected: selected, account: account, window: window)
+        let notes = try await collectMeetings(selected, batchSize: batchSize, account: account, window: window) { batch in
+            try await call("get_meetings", ["meeting_ids": batch.map(\.id)])
         }
         guard try await self.account(call("get_account_info", [:], limit: 64_000), expected: expectedIdentity) == account else {
             throw DirectMCPError.connectionChanged
@@ -167,28 +170,51 @@ enum GranolaSource {
     }
 
     static func supportsSurface(_ tools: [DirectMCPTool]) -> Bool {
-        func schemaProperties(_ name: String) -> [String: Any]? {
-            guard let tool = tools.first(where: { $0.name == name }),
-                  let object = try? JSONSerialization.jsonObject(with: tool.definition) as? [String: Any],
-                  let schema = object["inputSchema"] as? [String: Any] else { return nil }
-            return schema["properties"] as? [String: Any]
-        }
-        guard nativeReads.allSatisfy({ name in tools.first { $0.name == name }?.readOnlyHint == true }),
-              let list = tools.first(where: { $0.name == "list_meetings" }),
-              let definition = try? JSONSerialization.jsonObject(with: list.definition) as? [String: Any],
-              let schema = definition["inputSchema"] as? [String: Any],
-              let properties = schema["properties"] as? [String: Any],
-              let range = properties["time_range"] as? [String: Any],
-              (range["enum"] as? [String])?.contains("custom") == true,
-              properties["custom_start"] != nil, properties["custom_end"] != nil,
-              let involvement = properties["involvement"] as? [String: Any],
-              let conditions = involvement["properties"] as? [String: Any],
-              conditions["captured_by_me"] != nil, conditions["listed_as_participant"] != nil else { return false }
-        guard let batch = schemaProperties("get_meetings")?["meeting_ids"] as? [String: Any],
-              batch["type"] as? String == "array", let maximum = integer(batch["maxItems"]), maximum >= 6,
-              integer(batch["minItems"]) == 1,
-              (batch["items"] as? [String: Any])?["type"] as? String == "string" else { return false }
+        nativeReads.allSatisfy { name in tools.first { $0.name == name }?.readOnlyHint == true }
+            && supportsListing(tools) && contentBatchSize(tools) != nil
+    }
+
+    static func readinessFailure(_ connection: DirectMCPConnection) -> String? {
+        guard connection.accountFingerprint != nil else { return "account_identity" }
+        guard nativeReads.isSubset(of: Set(connection.readNames)) else { return "read_policy" }
+        guard nativeReads.allSatisfy({ name in connection.tools.first { $0.name == name }?.readOnlyHint == true }) else { return "read_annotations" }
+        guard supportsListing(connection.tools) else { return "listing_schema" }
+        guard contentBatchSize(connection.tools) != nil else { return "content_schema" }
+        return nil
+    }
+
+    private static func supportsListing(_ tools: [DirectMCPTool]) -> Bool {
+        guard let list = tools.first(where: { $0.name == "list_meetings" }),
+              (list.inputSchemaNode(["time_range"])?["enum"] as? [String])?.contains("custom") == true,
+              list.inputSchemaNode(["custom_start"]) != nil, list.inputSchemaNode(["custom_end"]) != nil,
+              list.inputSchemaNode(["involvement", "captured_by_me"]) != nil,
+              list.inputSchemaNode(["involvement", "listed_as_participant"]) != nil else { return false }
         return true
+    }
+
+    static func contentBatchSize(_ tools: [DirectMCPTool]) -> Int? {
+        guard let batch = tools.first(where: { $0.name == "get_meetings" })?.inputSchemaNode(["meeting_ids"]),
+              batch["type"] as? String == "array",
+              (batch["items"] as? [String: Any])?["type"] as? String == "string" else { return nil }
+        let minimum = batch["minItems"] == nil ? 0 : integer(batch["minItems"])
+        let maximum = batch["maxItems"] == nil ? 6 : integer(batch["maxItems"])
+        guard let minimum, minimum <= 1, minimum >= 0, let maximum, maximum >= 1 else { return nil }
+        return min(maximum, 6)
+    }
+
+    /// Validate every native batch before returning any content to the summarizer.
+    static func collectMeetings(_ selected: [Candidate], batchSize: Int, account: Account, window: MCPSource.Window,
+                                fetch: ([Candidate]) async throws -> [String: Any]) async throws -> [Meeting] {
+        guard (1...6).contains(batchSize), selected.count <= 6,
+              Set(selected.map(\.id)).count == selected.count else { throw DirectMCPError.invalidResponse }
+        var fetched: [Meeting] = []
+        for offset in stride(from: 0, to: selected.count, by: batchSize) {
+            try Task.checkCancellation()
+            let batch = Array(selected.dropFirst(offset).prefix(batchSize))
+            let result = try await fetch(batch)
+            fetched += try meetings(result, selected: batch, account: account, window: window)
+        }
+        return fetched
     }
 
     #if DEBUG

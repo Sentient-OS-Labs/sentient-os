@@ -36,6 +36,26 @@ enum ConnectorReadFailure {
         }
     }
 
+    /// An identical successful retry repairs a failed read. Built-in formatter and
+    /// discovery tools are not provider reads and cannot make an account fail.
+    static func validateTools(_ envelope: CodexCLI.Envelope, slug: String) throws {
+        try validate(envelope, slug: slug)
+        let backend = ModelBackend.current
+        let calls = MCPCallEvidence.receipts(raw: envelope.raw, backend: backend)
+            .filter { belongsToSource($0, slug: slug, backend: backend) }
+        for (index, call) in calls.enumerated() where call.status != .succeeded {
+            let repaired = calls.dropFirst(index + 1).contains {
+                $0.status == .succeeded && $0.tool == call.tool && $0.arguments == call.arguments
+            }
+            if !repaired { throw MCPSource.MCPError.toolFailure(slug: slug) }
+        }
+    }
+
+    nonisolated static func isOutputValidationFailure(_ error: Error) -> Bool {
+        guard case CodexCLI.CLIError.exitFailure(_, let message) = error else { return false }
+        return message.contains("StructuredOutput") && message.contains("does not match required schema")
+    }
+
     /// Successful discovery or WaitForMcpServers cannot excuse a later failed source read.
     /// Conversely, another source's failure must not label this connection as disconnected.
     private static func belongsToSource(_ call: MCPCallEvidence.Receipt, slug: String, backend: ModelBackend) -> Bool {

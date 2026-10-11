@@ -55,6 +55,7 @@ enum ConnectorLab {
         switch command {
         case "acceptance": await FullAcceptanceTests.run()
         case "googleaudit": await FullAcceptanceTests.googleAudit()
+        case "reliabilitycheck": await ConnectorReliabilityTests.run()
         case "acceptancewake": await WakeAcceptanceTests.run()
         case "acceptancehealth":
             if let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() {

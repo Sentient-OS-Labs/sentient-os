@@ -380,7 +380,7 @@ enum NotionCurationTests {
             let container = try ModelContainer(for: storeSchema, configurations: ModelConfiguration(schema: storeSchema, isStoredInMemoryOnly: true))
             let store = CycleStore(modelContainer: container)
             let bucket = MCPSource.bucketKey(connection.slug)
-            let legacyOrigin = ConnectorRegistry.readOrigin(slug: connection.slug, backend: .chatgpt)
+            let legacyOrigin = ConnectorRegistry.readOrigin(slug: connection.slug, backend: .chatgpt) + ":notion-history-v1"
             let pending = NoteDraft(kind: .mcp, sourceID: "notion-pending", folder: "Notion", itemDate: lower,
                 text: "Previously accepted context.", title: "Existing summary", reminderFlagged: false)
             _ = await store.commitMCPRead(bucketKey: bucket, notes: [pending], through: ItemKey(order: lower.timeIntervalSince1970, tiebreak: ""),
