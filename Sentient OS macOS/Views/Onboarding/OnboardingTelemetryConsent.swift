@@ -77,16 +77,12 @@ struct OnboardingTelemetryConsent: View {
             SettingToggleLine(title: "Extended analytics · TelemetryDeck",
                               sub: PrivacyCopy.extendedAnalytics,
                               isOn: $analyticsEnabled)
-            if !analyticsEnabled {
-                // The core-tier disclosure — keeps the switch honest (Analytics.swift,
-                // Tier.core), same caption as Settings shows on opt-out.
-                Text(PrivacyCopy.coreAnalytics)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(Theme.Ink.body)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 4)
-                    .transition(.opacity)
-            }
+            // Always visible: core reporting is independent of this switch.
+            Text(PrivacyCopy.coreAnalytics)
+                .font(.system(size: 10.5))
+                .foregroundStyle(Theme.Ink.body)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 4)
         }
         .animation(.easeInOut(duration: 0.2), value: analyticsEnabled)
         .padding(18)

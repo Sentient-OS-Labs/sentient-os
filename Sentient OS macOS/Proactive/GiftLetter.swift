@@ -71,7 +71,10 @@ actor GiftLetter {
             // The letter is the file the model wrote; fall back to its final message if it skipped it.
             let fromFile = (try? String(contentsOf: giftFile, encoding: .utf8)) ?? ""
             let letter = Self.cleanMarkdown(fromFile.isEmpty ? env.result : fromFile)
-            guard !letter.isEmpty else { throw GiftError.empty }
+            guard !letter.isEmpty else {
+                Diagnostics.report(.modelOutputInvalid, phase: .generate, reason: "empty_welcome_letter")
+                throw GiftError.empty
+            }
             Log("GiftLetter: ✅ welcome letter (\(letter.count) chars, turns \(env.numTurns ?? -1), \(env.outputTokens ?? -1) out)")
             Self.saveLatest(letter)
             return letter

@@ -25,6 +25,7 @@ enum FrontierRun {
     static func run(_ invocation: CodexCLI.Invocation,
                     onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
         return try await Diagnostics.withOperation("frontier_run") {
+          try await AgentRunDiagnostics.withRun(action: invocation.mcpActionServer != nil, feature: invocation.feature, result: { $0.result }) {
             return try await Diagnostics.boundary(.connectorFailed, phase: .identity, reason: "frontier_setup") {
                 #if DEBUG
                 if let acceptanceRun { return try await acceptanceRun(invocation) }
@@ -155,6 +156,7 @@ enum FrontierRun {
                     }
                 }
             }
+          }
         }
     }
 
@@ -163,6 +165,7 @@ enum FrontierRun {
                                 timeout: TimeInterval = 1_800,
                                 onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         return try await Diagnostics.withOperation("computer_run") {
+          try await AgentRunDiagnostics.withRun(action: true, computer: true, result: { $0 }) {
             let backend = ModelBackend.current
             let mailRunID = ConnectorRegistry.detectedForCurrentBackend().contains { Microsoft365Connector.contains($0.slug) } ? UUID() : nil
             defer { if let mailRunID { OutlookToolPolicy.cleanup(runID: mailRunID) } }
@@ -199,6 +202,7 @@ enum FrontierRun {
                     }
                 }
             }
+          }
         }
     }
 

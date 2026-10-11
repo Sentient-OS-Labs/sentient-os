@@ -674,7 +674,9 @@ actor CodexCLI {
                                               stdinText: invocation.prompt,
                                               cwd: invocation.cwd,
                                               timeout: invocation.timeout,
+                                              observeAgentTools: true,
                                               onStdoutLine: stdoutLine)
+        AgentRunDiagnostics.current?.recordProcess(status: out.status)
         let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
         sessionHadSuccess = true
         Log("codex exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
@@ -1257,6 +1259,8 @@ actor CodexCLI {
         case "command_execution", "local_shell_call":
             return nonEmpty(item["command"] as? String).map { "$ \($0)" }
         case "mcp_tool_call", "tool_call", "function_call":
+            if item["server"] as? String == SidekickToolServer.name,
+               item["tool"] as? String == SidekickTaskSummary.toolName { return nil }
             let label = [(item["server"] as? String) ?? "",
                          (item["tool"] as? String) ?? (item["name"] as? String) ?? ""]
                 .filter { !$0.isEmpty }.joined(separator: ".")
@@ -1316,12 +1320,18 @@ actor CodexCLI {
                              extraEnv: [String: String] = [:],
                              includeCustomProviderKey: Bool = true,
                              terminationGrace: TimeInterval = 1,
+                             observeAgentTools: Bool = false,
                              retainStdoutLine: (@Sendable (String) -> Bool)? = nil,
                              onStdoutLine: (@Sendable (String) -> Void)? = nil) async throws -> ExecResult {
         // Honor Task cancellation (a card's STOP): terminate the child so an in-flight send/action stops.
         let holder = ProcHolder(terminationGrace: terminationGrace)
         let childDirectory = ChildProcessDiagnostics.directory
         let interaction = SidekickInteraction.current
+        let diagnostics = observeAgentTools ? AgentRunDiagnostics.current : nil
+        let observedLine: @Sendable (String) -> Void = { line in
+            diagnostics?.observe(line)
+            onStdoutLine?(line)
+        }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { cont in
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -1329,7 +1339,7 @@ actor CodexCLI {
                                                             cwd: cwd, timeout: timeout, extraEnv: extraEnv,
                                                             includeCustomProviderKey: includeCustomProviderKey,
                                                             retainStdoutLine: retainStdoutLine,
-                                                            onStdoutLine: onStdoutLine, procHolder: holder, interaction: interaction) }) }
+                                                            onStdoutLine: diagnostics == nil ? onStdoutLine : observedLine, procHolder: holder, interaction: interaction) }) }
                     catch { cont.resume(throwing: error) }
                 }
             }
@@ -1478,6 +1488,7 @@ actor CodexCLI {
         private let lock = NSLock()
         private var proc: Process?
         private var cancelled = false
+        private let diagnosticStops = ChildProcessDiagnostics.intentionalStops
         var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelled }
         private let terminationGrace: TimeInterval
         init(terminationGrace: TimeInterval = 1) { self.terminationGrace = terminationGrace }
@@ -1489,6 +1500,7 @@ actor CodexCLI {
         func terminate() {
             lock.lock(); cancelled = true; let p = proc; lock.unlock()
             guard let p, p.isRunning else { return }
+            diagnosticStops?.record(p.processIdentifier)
             p.terminate()
             // A provider or MCP client must not hold STOP indefinitely by ignoring SIGTERM.
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + terminationGrace) { [weak p] in
@@ -1509,6 +1521,7 @@ actor CodexCLI {
                                  onLine: @escaping @Sendable (String) throws -> Void) async throws -> ExecResult {
         let holder = ProcHolder()
         let interaction = SidekickInteraction.current
+        let childDirectory = ChildProcessDiagnostics.directory
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ExecResult, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -1525,7 +1538,9 @@ actor CodexCLI {
                 // Full inherited env + rich PATH (see richEnvironment): computer use needs the real
                 // $TMPDIR + GUI session vars (the cua daemon's socket lives under the per-user temp
                 // dir), and so does `codex login`'s browser launch — the bare env won't do.
-                var env = richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
+                var env = ChildProcessDiagnostics.$directory.withValue(childDirectory) {
+                    richEnvironment(binDir: (binary as NSString).deletingLastPathComponent)
+                }
                 env.merge(extraEnv) { _, new in new }
                 proc.environment = CodexRuntime.environment(env, binary: binary)
 
