@@ -20,18 +20,16 @@ struct OnboardingPermissionsView: View {
     let onContinue: () -> Void
 
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
-    @State private var daemon: DaemonState = .notSetUp
+    @State private var wakeSetup = OvernightWakeSetup()
     @State private var loginOn = LoginItem.isEnabled
     @State private var loginNeedsApproval = LoginItem.needsApproval
 
-    private enum DaemonState { case ready, installing, notSetUp, disabled }
-
-    private var allGreen: Bool { fdaGranted && daemon == .ready && loginOn }
+    private var allGreen: Bool { fdaGranted && wakeSetup.ready && loginOn }
 
     // Sequential unlock: each row stays greyed until the previous one is granted (a row that's
     // already green never dims). FDA sits last on purpose — see the top-of-file comment.
-    private var loginUnlocked: Bool { daemon == .ready || loginOn }
-    private var fdaUnlocked: Bool { (daemon == .ready && loginOn) || fdaGranted }
+    private var loginUnlocked: Bool { wakeSetup.ready || loginOn }
+    private var fdaUnlocked: Bool { (wakeSetup.ready && loginOn) || fdaGranted }
 
     /// Grey + inert until unlocked.
     private func gated<V: View>(_ unlocked: Bool, _ row: V) -> some View {
@@ -54,13 +52,7 @@ struct OnboardingPermissionsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 SettingsGroup(label: "On-device Intelligence") {
                     VStack(alignment: .leading, spacing: 2) {
-                        StatusLine(title: "Overnight wake",
-                                   health: daemon == .ready ? .ok : .bad,
-                                   note: daemonNote,
-                                   tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep.\n\nIt only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
-                                   fixTitle: "Set Up…") {
-                            fixDaemon()
-                        }
+                        OvernightWakeRow(setup: wakeSetup)
                         gated(loginUnlocked,
                               StatusLine(title: "Launch at login",
                                          health: loginOn ? .ok : .warn,
@@ -121,52 +113,13 @@ struct OnboardingPermissionsView: View {
         }
     }
 
-    // MARK: Overnight wake daemon (same pattern as Settings → Health)
-
-    private var daemonNote: String {
-        switch daemon {
-        case .ready:      return "ready"
-        case .installing: return "installing…"
-        case .notSetUp:   return "not set up"
-        case .disabled:   return "turned off in login items"
-        }
-    }
-
-    /// Install for the normal case; a daemon that's installed but toggled off in System Settings
-    /// (possible after a Reset on a machine that had flipped it) can only be fixed at the switch.
-    private func fixDaemon() {
-        switch daemon {
-        case .ready, .installing:
-            return
-        case .disabled:
-            WakeHelperClient.shared.openLoginItemsSettings()
-        case .notSetUp:
-            daemon = .installing
-            Task {
-                _ = await WakeHelperInstaller.installAsync()
-                try? await Task.sleep(for: .seconds(1))   // let launchd settle before the XPC probe
-                daemon = await WakeHelperClient.shared.healthProbe() == .ready ? .ready : .notSetUp
-            }
-        }
-    }
-
     private func refresh() {
         fdaGranted = Permissions.hasFullDiskAccess()
         loginOn = LoginItem.isEnabled
         loginNeedsApproval = LoginItem.needsApproval
-        guard daemon != .installing else { return }
-        Task {
-            // The XPC ground truth, same as Settings → Health (a file check reads green even
-            // when the System Settings background toggle has the daemon off).
-            let verdict = await WakeHelperClient.shared.healthProbe()
-            guard daemon != .installing else { return }   // an install started mid-probe wins
-            switch verdict {
-            case .ready:    daemon = .ready
-            case .disabled: daemon = .disabled
-            case .notSetUp: daemon = .notSetUp
-            }
-        }
+        Task { await wakeSetup.refresh() }
     }
+
 }
 
 #Preview("Onboarding — permissions") {

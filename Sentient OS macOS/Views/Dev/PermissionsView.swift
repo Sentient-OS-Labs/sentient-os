@@ -167,7 +167,7 @@ struct PermissionsView: View {
     private var wakeDaemonPane: some View {
         pane(icon: "moon.zzz.fill", iconColor: daemonReady ? Theme.verdictColor(.survivor) : Theme.accent,
              title: "Overnight wake daemon (root)", granted: daemonReady,
-             description: "Sentient's 3am wake needs a tiny root helper to hold the Mac awake (lid shut) while it processes. macOS asks you to approve it once under Login Items — an approval toggle, not a typed password.",
+             description: "Sentient's 3am wake needs a tiny root helper to hold the Mac awake (lid shut) while it processes. Approve it under Login Items in System Settings. macOS may ask you to authenticate.",
              receipt: daemonStatus) {
             Button("Install / register daemon") {
                 let st = WakeHelperClient.shared.register()

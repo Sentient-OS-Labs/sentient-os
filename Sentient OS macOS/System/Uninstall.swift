@@ -26,11 +26,11 @@ import Darwin
 
 enum Uninstall {
     static var lastFailure: String?
+    static var helperWasSkipped = false
 
     /// The user-facing teardown stages, in run order — the farewell sheet renders each `whisper`
     /// (the mono-caps voice) while its stage runs. The helper goes FIRST: it's the only stage that
-    /// can ask for the user's password (and be declined), so a cancel there aborts the uninstall
-    /// before anything irreversible has happened.
+    /// can need approval in System Settings. Cancellation there preserves the app’s data.
     enum Stage: CaseIterable {
         case helper, cloud, keychain, knowledge, model, traces
         var whisper: String {
@@ -45,26 +45,27 @@ enum Uninstall {
         }
     }
 
-    /// The sheet's answer when the helper's admin prompt is declined.
+    /// The sheet’s answer when helper cleanup needs approval or a retry.
     enum HelperChoice { case retry, skip, cancel }
 
     private static var bundleID: String { Bundle.main.bundleIdentifier ?? "jesai.Sentient-OS-macOS" }
 
     /// The full teardown. `progress` fires on the main actor before each stage so the sheet can
-    /// render its whisper; `helperDecision` is asked ONLY when the root admin prompt is declined
+    /// render its whisper; `helperDecision` is asked when native helper cleanup cannot finish
     /// (Try Again / Skip / Cancel). Returns false on cancellation or an incomplete Keychain
-    /// cleanup. `lastFailure` distinguishes partial cleanup from a canceled admin prompt.
+    /// cleanup. `lastFailure` distinguishes partial cleanup from cancellation.
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil,
                     progress: @escaping @MainActor (Stage) -> Void = { _ in },
                     helperDecision: @escaping @MainActor () async -> HelperChoice = { .skip }) async -> Bool {
         lastFailure = nil
+        helperWasSkipped = false
         Analytics.countUninstall()   // fire-and-forget; the teardown never waits on the network
         appState?.isUninstalling = true   // the home clears its cards + won't re-deal off the defaults wipe
 
         // Quiet the scheduler FIRST so nothing re-arms a wake while the daemon comes down. The
-        // flags are snapshotted so a cancel at the password prompt restores them untouched.
+        // flags are snapshotted so a cancellation restores them untouched.
         let d = UserDefaults.standard
         let schedulerFlags = (dev: d.bool(forKey: OvernightScheduler.enabledKey),
                               prod: d.bool(forKey: OvernightScheduler.prodEnabledKey))
@@ -73,27 +74,27 @@ enum Uninstall {
         appState?.scheduler.needsSchedulerSetup = false
         appState?.scheduler.reevaluate()   // flags gone → stops the loop + cancels the armed wake
 
-        // The root daemon — the ONLY stage that can be declined, so it runs before anything
-        // irreversible. One native password prompt tears down the plist, the armed wake, and the
-        // root-owned /Library files (WakeHelperInstaller.uninstallAsync, the installer's mirror).
+        // Restore normal sleep and clear root state while the daemon can still execute. Only
+        // then unregister it. Legacy installs may need native approval to perform this cleanup.
         progress(.helper)
-        helperLoop: while !(await WakeHelperInstaller.uninstallAsync()) {
+        helperLoop: while !(await WakeHelperClient.shared.remove()) {
             switch await helperDecision() {
             case .retry:
                 continue helperLoop
             case .skip:
-                Log("Uninstall: wake helper left in place (admin prompt skipped)")
+                helperWasSkipped = true
+                Log("Uninstall: wake helper left in place (helper cleanup skipped)")
                 break helperLoop
             case .cancel:
+                await WakeHelperClient.shared.cancelRemoval()
                 if schedulerFlags.dev { d.set(true, forKey: OvernightScheduler.enabledKey) }
                 if schedulerFlags.prod { d.set(true, forKey: OvernightScheduler.prodEnabledKey) }
                 appState?.scheduler.reevaluate()
                 appState?.isUninstalling = false   // the home re-deals its deck
-                Log("Uninstall: cancelled at the admin prompt — nothing removed")
+                Log("Uninstall: cancelled before app data removal")
                 return false
             }
         }
-        await WakeHelperClient.shared.unregister()   // the dev-cockpit SMAppService path, if ever used
         await LoginItem.disable()
         await beat()
 

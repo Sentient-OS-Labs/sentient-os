@@ -3,14 +3,21 @@
 //  Sentient OS macOS  ·  Scheduling/
 //
 //  The XPC contract between the app (client) and the root "wake helper" — the SAME app binary
-//  that launchd relaunches with --wake-helper (see main.swift). Deliberately tiny: the only code
-//  that ever runs as root is these four operations (toggle keep-awake + schedule a wake), each
+//  that launchd relaunches in helper mode (see main.swift). The narrow API controls sleep,
+//  schedules wakes, and maintains only Sentient’s own helper files. Wake operations are
 //  guarded by a deadman so a crashed app can never leave the Mac unable to sleep.
 //
 
 import Foundation
 
 @objc protocol WakeHelperProtocol {
+    /// Verify readiness and retire the legacy daemon after native approval. Never prompts.
+    func prepare(withReply reply: @escaping (Bool) -> Void)
+    /// Restore sleep and remove only our wake/state before the app unregisters this daemon.
+    func prepareForRemoval(withReply reply: @escaping (Bool) -> Void)
+    /// Re-enable operations only when the user cancels an incomplete uninstall.
+    func cancelRemoval(withReply reply: @escaping (Bool) -> Void)
+
     /// Diagnostics use the signed GUI client's choice and anonymous UUID, never root's defaults.
     func configureDiagnostics(enabled: Bool, anonymousID: String, withReply reply: @escaping () -> Void)
 
@@ -33,20 +40,19 @@ import Foundation
 }
 
 /// Shared constants — the names here MUST match the LaunchDaemon plist we install in the bundle.
-enum WakeHelperConfig {
+nonisolated enum WakeHelperConfig {
     /// Mach service name (must equal the plist's `MachServices` key).
-    static let machServiceName = "jesai.Sentient-OS-macOS.WakeHelper"
+    static let machServiceName = "jesai.Sentient-OS-macOS.WakeHelper.Managed"
     /// LaunchDaemon plist filename in Contents/Library/LaunchDaemons/.
-    static let daemonPlistName = "jesai.Sentient-OS-macOS.WakeHelper.plist"
+    static let daemonPlistName = "jesai.Sentient-OS-macOS.WakeHelper.Managed.plist"
     /// CLI flag that puts the shared binary into root helper mode.
-    static let helperFlag = "--wake-helper"
+    static let helperFlag = "--wake-helper-managed"
+    // Keep the old entry point working until the newly approved daemon can retire it.
+    static let legacyHelperFlag = "--wake-helper"
+    static let legacyServiceName = "jesai.Sentient-OS-macOS.WakeHelper"
+    static let legacyPlistPath = "/Library/LaunchDaemons/\(legacyServiceName).plist"
     /// The absolute awake ceiling: no matter what the app does (even alive and heartbeating), the
     /// helper force-restores normal sleep this long after `beginAwake`. The last net under the
     /// deadman — a wedged-but-heartbeating run can never hold a Mac awake past this.
     static let maxAwakeSeconds = 6 * 3600
-    /// FALLBACK code-signing requirement for the helper's client gate. The primary gate is the
-    /// daemon's OWN designated requirement ("signed exactly like me" — `WakeHelper.clientRequirement`,
-    /// enforced by the system via `setCodeSigningRequirement`); this static string steps in only
-    /// if self-inspection fails. Bundle id + Apple anchor blocks arbitrary/other code.
-    static let clientRequirement = "anchor apple generic and identifier \"jesai.Sentient-OS-macOS\""
 }

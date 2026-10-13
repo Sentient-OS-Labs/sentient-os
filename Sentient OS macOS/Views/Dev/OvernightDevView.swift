@@ -76,12 +76,13 @@ struct OvernightDevView: View {
 
     private var helperStep: some View {
         stepCard("1", "Approve the root helper",
-                 "Lets the app wake your Mac at 3am. Click Approve, then flip “Sentient OS” ON in the System Settings window that opens. (Works on any signed build — no notarization needed.)") {
+                 "Lets the app wake your Mac at 3am. Click Approve, then flip “Sentient OS” ON in the System Settings window that opens. Distributed builds must be signed and notarized.") {
             HStack(spacing: 10) {
                 Button {
-                    let s = WakeHelperClient.shared.register()
-                    if s != .enabled { WakeHelperClient.shared.openLoginItemsSettings() }   // jump to approve
-                    refresh()
+                    Task {
+                        _ = await WakeHelperClient.shared.setUp()
+                        refresh()
+                    }
                 } label: {
                     Label(helperStatus == .enabled ? "Re-register helper" : "Approve helper", systemImage: "checkmark.shield")
                 }
