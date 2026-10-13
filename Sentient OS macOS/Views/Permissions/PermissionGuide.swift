@@ -31,6 +31,7 @@ final class PermissionGuide {
         case accessibility
         case screenRecording
         case loginItems
+        case overnightWake
 
         /// The list's name, for the panel copy.
         var title: String {
@@ -39,6 +40,7 @@ final class PermissionGuide {
             case .accessibility:   return "Accessibility"
             case .screenRecording: return "Screen Recording"
             case .loginItems:      return "Login Items"
+            case .overnightWake:   return "Overnight wake"
             }
         }
 
@@ -48,7 +50,7 @@ final class PermissionGuide {
             case .fullDiskAccess:  Permissions.openFullDiskAccessSettings()
             case .accessibility:   Permissions.openAccessibilitySettings()
             case .screenRecording: Permissions.openScreenRecordingSettings()
-            case .loginItems:      SMAppService.openSystemSettingsLoginItems()
+            case .loginItems, .overnightWake: SMAppService.openSystemSettingsLoginItems()
             }
         }
     }
@@ -77,8 +79,10 @@ final class PermissionGuide {
         let markdown: String
         if job.appURL != nil {
             markdown = "Drag **\(appName)** into the list, then flip its switch on."
+        } else if job.pane == .overnightWake {
+            markdown = "Turn on **Sentient OS** in the background activity list to allow overnight wake."
         } else if job.pane == .loginItems {
-            markdown = "Flip **Sentient OS** on under \"App Background Activity\"."
+            markdown = "Turn on **Sentient OS** in the background activity list."
         } else {
             markdown = "Flip **Sentient OS** on in the list."
         }

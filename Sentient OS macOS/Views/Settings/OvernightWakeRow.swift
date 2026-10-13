@@ -24,15 +24,22 @@ final class OvernightWakeSetup {
         let startedAt = revision
         let result = await WakeHelperClient.shared.healthProbe()
         checking = false
-        if !busy, startedAt == revision { health = result }
+        if !busy, startedAt == revision { updateHealth(result) }
     }
 
     func setUp() async {
         guard !busy else { return }
         revision += 1
         busy = true
-        health = await WakeHelperClient.shared.setUp()
+        updateHealth(await WakeHelperClient.shared.setUp())
         busy = false
+    }
+
+    private func updateHealth(_ result: WakeHelperClient.DaemonHealth) {
+        health = result
+        if ready, PermissionGuide.shared.job?.pane == .overnightWake {
+            PermissionGuide.shared.close()
+        }
     }
 
     func monitor() async {
@@ -56,10 +63,7 @@ struct OvernightWakeRow: View {
                 Task { await setup.setUp() }
             }
             .disabled(setup.busy)
-            if setup.health == .requiresApproval {
-                SettingsProse("In System Settings → General → Login Items & Extensions, allow Sentient OS to run in the background. This updates automatically when approved.")
-                    .padding(.bottom, 6)
-            } else if setup.health == .unavailable && !setup.busy {
+            if setup.health == .unavailable && !setup.busy {
                 SettingsProse("The wake helper couldn't start. Try Set Up again. If this continues, move Sentient to Applications and reopen it, or reinstall the app.")
                     .padding(.bottom, 6)
             }

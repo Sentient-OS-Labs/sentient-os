@@ -46,7 +46,9 @@ final class WakeHelperClient {
     /// Registration is consent, not liveness. Call healthProbe before scheduling any work.
     var status: SMAppService.Status { SMAppService.daemon(plistName: WakeHelperConfig.daemonPlistName).status }
     var isReady: Bool { !removing && status == .enabled }
-    func openLoginItemsSettings() { SMAppService.openSystemSettingsLoginItems() }
+    func openLoginItemsSettings() {
+        PermissionGuide.shared.guide(.overnightWake, dragging: nil)
+    }
 
     enum DaemonHealth { case ready, requiresApproval, notSetUp, unavailable }
 
