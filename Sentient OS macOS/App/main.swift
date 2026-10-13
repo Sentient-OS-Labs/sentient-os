@@ -3,7 +3,7 @@
 //  Sentient OS macOS
 //
 //  The process entry point. The SAME binary is reused as the root wake helper: launchd relaunches
-//  it with --wake-helper, and we branch into helper mode HERE — before SwiftUI exists — so the
+//  it with --wake-helper-managed, and we branch into helper mode HERE — before SwiftUI exists — so the
 //  privileged path never touches the UI. Without the flag, this is the normal app.
 //  (This is why SentientOSApp no longer carries @main: an explicit main.swift replaces it.)
 //
@@ -60,9 +60,10 @@ if CommandLine.arguments.dropFirst().first == ClaudeSubscriptionProcess.argument
         childDiagnostics?.finish(status); exit(status)
     }
     dispatchMain()
-} else if CommandLine.arguments.contains(WakeHelperConfig.helperFlag) {
+} else if CommandLine.arguments.contains(WakeHelperConfig.helperFlag)
+            || CommandLine.arguments.contains(WakeHelperConfig.legacyHelperFlag) {
     CrashReporting.start(.wakeHelper)   // crash reporting for the root overnight path
-    WakeHelper.run()                    // root LaunchDaemon mode — never returns
+    WakeHelper.run(legacy: CommandLine.arguments.contains(WakeHelperConfig.legacyHelperFlag))
 } else {
     CrashReporting.start(.app)          // crash reporting for the GUI app
     Analytics.start()                   // product analytics (TelemetryDeck) — GUI app only

@@ -5,9 +5,8 @@
 //  The farewell sheet (Settings → System → Uninstall Sentient…). Four phases: the farewell
 //  (the two-college-students note, the what-gets-removed manifest, Keep Sentient / the red
 //  Uninstall as a uniform pill pair, Email the Founders below, the GitHub mark bottom-right),
-//  the working teardown (Uninstall.Stage whispers over a quiet spinner), the helper-password
-//  interstitial (Enter Password / Skip, Cancel as a quiet link — shown only when the admin
-//  prompt is declined), and the gone screen (drag Sentient to the Trash, then Quit via
+//  the working teardown (Uninstall.Stage whispers over a quiet spinner), the helper-cleanup
+//  interstitial (Try Again / Skip, Cancel as a quiet link when cleanup needs attention), and the gone screen (drag Sentient to the Trash, then Quit via
 //  Uninstall.finishAndQuit). Drives System/Uninstall.swift; the teardown itself lives there.
 //
 
@@ -140,19 +139,19 @@ struct UninstallView: View {
         }
     }
 
-    // MARK: - Phase 3 · the helper needs a password (only if the admin prompt was declined)
+    // MARK: - Phase 3 · native helper cleanup needs attention
 
     private var helperPrompt: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text("One more step").font(.system(size: 14)).foregroundStyle(SettingsStyle.secondary)
-            Text("This part needs your password.")
+            Text("The wake helper needs attention.")
                 .display(24).foregroundStyle(.white)
                 .padding(.top, 12)
-            prose("Sentient set up a small system helper so it could wake your Mac for the overnight run. macOS asks for your password to remove it; that is the same prompt you saw when it was installed. You can also skip it for now, and Sentient will still clear everything else.")
+            prose("Sentient needs its wake helper to restore normal sleep and remove its system files. If System Settings opens, allow Sentient OS to run in the background, then try again. You can skip this step, but the helper and its system files may remain.")
                 .padding(.top, 14)
             HStack(spacing: 10) {
                 FarewellPill(title: "Skip for Now", style: .quiet) { helperResolver?(.skip) }
-                FarewellPill(title: "Enter Password", style: .bright) { helperResolver?(.retry) }
+                FarewellPill(title: "Try Again", style: .bright) { helperResolver?(.retry) }
             }
             .padding(.top, 26)
             quietLink("Cancel Uninstall") { helperResolver?(.cancel) }
@@ -176,11 +175,13 @@ struct UninstallView: View {
 
     private var gone: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("All clear").font(.system(size: 14)).foregroundStyle(SettingsStyle.secondary)
-            Text("Sentient is gone from this Mac.")
+            Text(Uninstall.helperWasSkipped ? "App data cleared" : "All clear").font(.system(size: 14)).foregroundStyle(SettingsStyle.secondary)
+            Text(Uninstall.helperWasSkipped ? "The wake helper may remain." : "Sentient is gone from this Mac.")
                 .display(24).foregroundStyle(.white)
                 .padding(.top, 12)
-            prose("Everything Sentient made here has been removed. To finish, drag the Sentient OS app from your Applications folder to the Trash. Thank you for giving Sentient a try; it meant a lot to the two of us.")
+            prose(Uninstall.helperWasSkipped
+                  ? "The wake helper and its system files may remain because you skipped that step. Turn off Sentient OS in System Settings → General → Login Items & Extensions, then drag the app to the Trash."
+                  : "Everything Sentient made here has been removed. To finish, drag the Sentient OS app from your Applications folder to the Trash. Thank you for giving Sentient a try; it meant a lot to the two of us.")
                 .padding(.top, 14)
             HStack(spacing: 10) {
                 FarewellPill(title: "Show App in Finder", style: .quiet) {

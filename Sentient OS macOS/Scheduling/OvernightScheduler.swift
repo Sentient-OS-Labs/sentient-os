@@ -146,13 +146,13 @@ final class OvernightScheduler {
         guard let fireAt = Self.autoEnableFireDate else { return }          // initial not finished yet
         if Date() < fireAt { armAutoEnableTimer(at: fireAt); return }       // not time yet — wait
 
-        // Time's up. Only enable if the overnight run can actually happen: an installed helper.
-        // The PRODUCTION install (WakeHelperInstaller — onboarding + Settings → Health) lives at
-        // /Library/LaunchDaemons and is INVISIBLE to SMAppService, so the plist check comes first;
-        // `isReady` is the dev cockpit's SMAppService approval path.
-        guard WakeHelperInstaller.isInstalledAndCurrent() || WakeHelperClient.shared.isReady else {
-            needsSchedulerSetup = true                                      // surface setup; retry next tick
+        // Native approval is required. The loop checks XPC readiness before arming a wake.
+        guard WakeHelperClient.shared.isReady else {
+            needsSchedulerSetup = true
             Log("Scheduler: 14h elapsed but root helper not installed — awaiting setup")
+            // Consent can arrive after the setup window closes. Recheck without registering
+            // anything or prompting, so approval does not require an app restart.
+            armAutoEnableTimer(at: Date().addingTimeInterval(30))
             return
         }
         // The app must be alive at 3am to host the run — enable launch-at-login, and treat a
@@ -187,55 +187,32 @@ final class OvernightScheduler {
 
     // MARK: - Helper readiness
 
-    /// Ensure the root daemon is ALIVE before arming — WakeHelperClient.healthProbe's XPC ground
-    /// truth, which covers both install paths (the admin-password plist AND the dev cockpit's
-    /// SMAppService daemon) and can't be fooled by the System Settings background toggle.
-    /// Toggled off → surface setup and stop (a reinstall can't override the switch). Not set up →
-    /// DEBUG self-installs (the proven admin fallback, so a clean dev slate still works); Release
-    /// flags `needsSchedulerSetup` for the setup UX — it never registers or prompts on its own (a
-    /// `register()` here would park a stray "Sentient OS" approval in System Settings > Login Items).
+    /// Both Debug and Release require explicit setup. Background work never requests approval.
     private func ensureHelperReady(log: SchedulerLog) async -> Bool {
-        // WakeHelperClient.healthProbe is the ground truth: the daemon must ANSWER over XPC —
-        // one probe covers BOTH install paths (the production plist and the dev cockpit's
-        // SMAppService daemon share the mach service), and it's the only check the System
-        // Settings background toggle can't fool (the toggle boots the daemon out of launchd
-        // while leaving every file check green — field-found 2026-07-11).
-        switch await WakeHelperClient.shared.healthProbe() {
-        case .ready:
-            needsSchedulerSetup = false
-            return true
-        case .disabled:
-            // Launchd honors the toggle over any bootstrap, so a reinstall can't help — only
-            // the user flipping it back on can (Health's row and the home's banner say so).
+        let health = await WakeHelperClient.shared.healthProbe()
+        guard health == .ready else {
+            let message = health == .requiresApproval ? "approve overnight wake in settings" : "wake helper needs setup"
+            if !needsSchedulerSetup || statusLine != message {
+                log.line("helper is not ready; awaiting setup in Permissions & Health")
+            }
             needsSchedulerSetup = true
-            statusLine = "background item turned off"
-            log.line("helper installed but unreachable — background item toggled off in System Settings")
+            statusLine = message
             return false
-        case .notSetUp:
-            break   // fall through to the install path below
         }
-        #if DEBUG
-        log.line("helper not installed — DEBUG fallback to the admin-password installer")
-        statusLine = "installing helper…"
-        let ok = await WakeHelperInstaller.installAsync()
-        log.line("helper install (admin): \(ok ? "OK" : "declined/failed")")
-        guard ok else { statusLine = "needs your password; toggle off then on to retry"; return false }
-        try? await Task.sleep(for: .seconds(1))   // let launchd settle before the first connection
         needsSchedulerSetup = false
         return true
-        #else
-        needsSchedulerSetup = true
-        statusLine = "helper not set up"
-        log.line("helper not installed — awaiting setup (onboarding / Settings → Health)")
-        return false
-        #endif
     }
 
     private func loop() async {
         let log = SchedulerLog()
 
-        // Make sure the root wake helper is installed & approved before arming any wake.
-        guard await ensureHelperReady(log: log) else { return }
+        // Stay available for approval even if the user closes Settings while approving it.
+        // These are passive checks: neither Debug nor Release installs from the scheduler.
+        while !Task.isCancelled {
+            if await ensureHelperReady(log: log) { break }
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+        }
+        guard !Task.isCancelled else { return }
 
         // Clean slate: wipe every existing scheduled wake (duplicates / stale), then arm exactly one.
         everArmed = true
