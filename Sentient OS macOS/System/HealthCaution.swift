@@ -4,8 +4,8 @@
 //
 //  The home's LIVE health banner — the sibling of OvernightCaution (which records a past event,
 //  this probes CURRENT state). One ladder, most severe first: ① an essential permission is off
-//  (Full Disk Access · launch at login · the wake helper once set up or scheduling is enabled;
-//  skipping optional wake setup is not a fault) → ② codex is gone, signed out, or out of date (a run
+//  (Full Disk Access · the overnight wake helper · launch at login — all gated green in
+//  onboarding, so any red here is drift) → ② codex is gone, signed out, or out of date (a run
 //  failed on the stale-client signature and the update hasn't landed) → ③ computer use broke
 //  AFTER it was once seen working (the everReady latch, so a user who never set it up is never
 //  nagged). The home renders the top un-muted rung as a red capsule (HomeView.cautionBanner) and
@@ -124,17 +124,11 @@ enum HealthCaution {
         let fda = Permissions.hasFullDiskAccess()
         var missing: [EssentialPermission] = []
         if !fda { missing.append(.fullDiskAccess) }
-        // Wake setup is optional in onboarding. Only warn once a helper was installed/approved
-        // or overnight scheduling was enabled. Files establish whether setup was attempted;
-        // the XPC probe still decides whether that helper is actually working.
-        let wakeWasSetUp = WakeHelperInstaller.isInstalled() || WakeHelperClient.shared.isReady
-        let defaults = UserDefaults.standard
-        let overnightEnabled = defaults.bool(forKey: OvernightScheduler.prodEnabledKey)
-            || defaults.bool(forKey: OvernightScheduler.enabledKey)
-        if wakeWasSetUp || overnightEnabled {
-            if await !WakeHelperClient.shared.isReachable() {
-                missing.append(.overnightWake)
-            }
+        // The same ground truth the scheduler gates on: the daemon ANSWERS over XPC. A file
+        // check reads green even when the System Settings background toggle has booted the
+        // daemon out of launchd (field-found 2026-07-11).
+        if await !WakeHelperClient.shared.isReachable() {
+            missing.append(.overnightWake)
         }
         if !LoginItem.isEnabled { missing.append(.launchAtLogin) }
         if !missing.isEmpty, !dismissed.contains("permissions") { return .permissions(missing) }
