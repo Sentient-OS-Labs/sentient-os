@@ -40,6 +40,30 @@ enum SidekickHistory {
         let legacySummary: String?
     }
 
+    struct DiagnosticEntry: Encodable, Sendable {
+        let at: Date
+        let request: String
+        let source: String
+        let outcome: String
+        let finalResponse: String?
+        let lastRecoveryError: String?
+        let legacySummary: String?
+    }
+
+    /// Only the saved request and final UI result, never the model/tool transcript or screen context.
+    /// Throws on corrupt storage so the export distinguishes unreadable history from no history.
+    static func diagnosticEntries(defaults: UserDefaults = .standard) throws -> [DiagnosticEntry] {
+        guard let data = defaults.data(forKey: key) else { return [] }
+        return try JSONDecoder().decode([Entry].self, from: data).suffix(capacity).reversed().map { entry in
+            DiagnosticEntry(at: entry.at, request: CrashReporting.scrub(text: entry.text),
+                source: entry.card ? "suggestion_card" : "user_request",
+                outcome: entry.result?.outcome ?? (entry.outcome == nil ? "unfinished" : legacyStatus(entry.outcome)),
+                finalResponse: entry.result.map { CrashReporting.scrub(text: $0.notchMessage) },
+                lastRecoveryError: entry.lastRecoveryError.map { CrashReporting.scrub(text: $0) },
+                legacySummary: entry.outcome.map { CrashReporting.scrub(text: $0) })
+        }
+    }
+
     /// Capture promptBlock() BEFORE recording a run so it sees the previous 15 requests, not itself.
     @discardableResult
     static func record(_ text: String, card: Bool = false) -> UUID {
