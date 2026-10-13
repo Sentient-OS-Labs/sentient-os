@@ -2,11 +2,15 @@
 //  OnboardingPermissionsView.swift
 //  Sentient OS macOS
 //
-//  Onboarding's permissions step, using the same StatusLine rows and fixes as Settings → Health.
-//  Overnight wake is optional. Launch at login unlocks Full Disk Access, which stays last because
-//  it requires a relaunch. Continue needs only those two required grants; the persisted onboarding
-//  step brings the user back after relaunch. Statuses re-probe when the app foregrounds.
-//  Doc: Documentation - Onboarding.md
+//  Onboarding's permissions step: Sentient's three core grants as the same StatusLine rows
+//  Settings → Health uses, with the same fix actions. The rows unlock SEQUENTIALLY (each greyed
+//  until the previous one is granted) and Full Disk Access is deliberately LAST: FDA is the one
+//  grant that forces an app relaunch, so it lands only once the other grants are banked. The
+//  frontier-model step (codex login included) comes BEFORE this screen — the relaunch never
+//  disturbs it, since auth.json and the engine choice persist on disk. Continue stays disabled
+//  until all three are green; the persisted onboarding step brings the user straight back here
+//  after the FDA relaunch. Statuses re-probe when the app foregrounds (returning from System
+//  Settings).
 //
 
 import SwiftUI
@@ -22,10 +26,12 @@ struct OnboardingPermissionsView: View {
 
     private enum DaemonState { case ready, installing, notSetUp, disabled }
 
-    private var requiredPermissionsGranted: Bool { fdaGranted && loginOn }
+    private var allGreen: Bool { fdaGranted && daemon == .ready && loginOn }
 
-    // The optional helper never blocks a required grant. An already-granted FDA row stays lit.
-    private var fdaUnlocked: Bool { loginOn || fdaGranted }
+    // Sequential unlock: each row stays greyed until the previous one is granted (a row that's
+    // already green never dims). FDA sits last on purpose — see the top-of-file comment.
+    private var loginUnlocked: Bool { daemon == .ready || loginOn }
+    private var fdaUnlocked: Bool { (daemon == .ready && loginOn) || fdaGranted }
 
     /// Grey + inert until unlocked.
     private func gated<V: View>(_ unlocked: Bool, _ row: V) -> some View {
@@ -48,25 +54,26 @@ struct OnboardingPermissionsView: View {
             VStack(alignment: .leading, spacing: 2) {
                 SettingsGroup(label: "On-device Intelligence") {
                     VStack(alignment: .leading, spacing: 2) {
-                        StatusLine(title: "Overnight wake (optional)",
-                                   health: daemon == .ready ? .ok : .warn,
+                        StatusLine(title: "Overnight wake",
+                                   health: daemon == .ready ? .ok : .bad,
                                    note: daemonNote,
-                                   tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep.\n\nIt only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.\n\nYou can set this up later in Settings → Permissions & Health.",
+                                   tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep.\n\nIt only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
                                    fixTitle: "Set Up…") {
                             fixDaemon()
                         }
-                        StatusLine(title: "Launch at login",
-                                   health: loginOn ? .ok : .warn,
-                                   note: loginOn ? "on" : (loginNeedsApproval ? "approve in system settings" : "off"),
-                                   tip: "Starts Sentient quietly in your menu bar when you log in, so the overnight run can happen and your Sentient can stay alive.",
-                                   fixTitle: loginNeedsApproval ? "Approve…" : "Turn On") {
+                        gated(loginUnlocked,
+                              StatusLine(title: "Launch at login",
+                                         health: loginOn ? .ok : .warn,
+                                         note: loginOn ? "on" : (loginNeedsApproval ? "approve in system settings" : "off"),
+                                         tip: "Starts Sentient quietly in your menu bar when you log in, so the overnight run can happen and your Sentient can stay alive.",
+                                         fixTitle: loginNeedsApproval ? "Approve…" : "Turn On") {
                             LoginItem.enableOrRequestApproval()
                             refresh()
                             // macOS wants the switch flipped by hand → escort the user to it.
                             if LoginItem.needsApproval {
                                 PermissionGuide.shared.guide(.loginItems, dragging: nil)
                             }
-                        }
+                        })
                         gated(fdaUnlocked,
                               StatusLine(title: "Full Disk Access",
                                          health: fdaGranted ? .ok : .bad,
@@ -96,7 +103,7 @@ struct OnboardingPermissionsView: View {
             }
             .frame(maxWidth: 560)
 
-            OnboardingNextButton(title: "Continue", enabled: requiredPermissionsGranted, action: onContinue)
+            OnboardingNextButton(title: "Continue", enabled: allGreen, action: onContinue)
 
             Spacer()
 
