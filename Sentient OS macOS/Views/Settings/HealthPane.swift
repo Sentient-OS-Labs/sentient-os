@@ -28,7 +28,7 @@ struct HealthPane: View {
 
     // Sentient's own grants
     @State private var fdaGranted = Permissions.hasFullDiskAccess()
-    @State private var daemon: DaemonState = .notSetUp
+    @State private var wakeSetup = OvernightWakeSetup()
     @State private var loginOn = LoginItem.isEnabled
     @State private var micSpeech: MicSpeechState = .notAsked
     @State private var screenRec = Permissions.hasScreenRecording()   // Sentient's own grant — the driver's eyes
@@ -46,7 +46,6 @@ struct HealthPane: View {
     init(expandEngine: Bool = false) { _codexExpanded = State(initialValue: expandEngine) }
     #endif
 
-    private enum DaemonState { case ready, installing, notSetUp, disabled }
     private enum MicSpeechState { case granted, notAsked, denied }
 
     /// The live engine's whole stack, healthy — what the group's collapse and the pane's
@@ -65,7 +64,7 @@ struct HealthPane: View {
     }
 
     private var allGreen: Bool {
-        fdaGranted && daemon == .ready && loginOn && micSpeech == .granted
+        fdaGranted && wakeSetup.ready && loginOn && micSpeech == .granted
             && screenRec
             && (notifStatus == .authorized || notifStatus == .provisional)
             && engineAllGreen
@@ -99,6 +98,13 @@ struct HealthPane: View {
         }
         .environment(\.settingsCompactLayout, true)
         .task { await refresh() }
+        .onChange(of: wakeSetup.ready) { _, ready in
+            if ready {
+                let needsSetup = appState?.scheduler.needsSchedulerSetup == true
+                appState?.scheduler.maybeAutoEnable()
+                if needsSetup { appState?.scheduler.reevaluate() }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refresh() }   // the user may just have fixed something in System Settings
         }
@@ -165,13 +171,7 @@ struct HealthPane: View {
                 }
                 .rise(0, revealed: revealed)
                 SettingsHairline(opacity: 0.10)
-                StatusLine(title: "Overnight wake",
-                           health: daemon == .ready ? .ok : .bad,
-                           note: daemonNote,
-                           tip: "A tiny system helper that wakes your Mac at 3 AM so Sentient's on-device intelligence can work while you sleep.\n\nIt only runs while your Mac is plugged in and Sentient is open in your menu bar. Installed once with your password.",
-                           fixTitle: daemon == .disabled ? "Turn On…" : "Set Up…") {
-                    fixDaemon()
-                }
+                OvernightWakeRow(setup: wakeSetup)
                 .rise(1, revealed: revealed)
                 SettingsHairline(opacity: 0.10)
                 StatusLine(title: "Launch at login",
@@ -220,50 +220,6 @@ struct HealthPane: View {
                 }
                 .rise(6, revealed: revealed)
             }
-        }
-    }
-
-    // MARK: Overnight wake daemon
-
-    private var daemonNote: String {
-        switch daemon {
-        case .ready:      return "ready"
-        case .installing: return "installing…"
-        case .notSetUp:   return "not set up"
-        case .disabled:   return "turned off in login items"
-        }
-    }
-
-    /// [DECIDED 2026-07-04] The password install IS the production path (no Login Items
-    /// migration — one native admin prompt, no trip to System Settings). Fix = run the installer —
-    /// EXCEPT when the daemon is installed but toggled off in System Settings: launchd honors that
-    /// switch over any bootstrap, so the only fix is the user flipping it back on.
-    private func fixDaemon() {
-        switch daemon {
-        case .ready, .installing:
-            return
-        case .disabled:
-            WakeHelperClient.shared.openLoginItemsSettings()
-        case .notSetUp:
-            daemon = .installing
-            Task {
-                _ = await WakeHelperInstaller.installAsync()
-                try? await Task.sleep(for: .seconds(1))   // let launchd settle before the XPC probe
-                await refreshDaemon()
-                // A fresh install may be the last missing prerequisite — re-run the 14h check now
-                // instead of waiting for the next launch (this app rarely relaunches).
-                if daemon == .ready { appState?.scheduler.maybeAutoEnable() }
-            }
-        }
-    }
-
-    /// Green = the daemon ANSWERS over XPC (the only check the System Settings background toggle
-    /// can't fool) — WakeHelperClient.healthProbe is the shared verdict.
-    private func refreshDaemon() async {
-        switch await WakeHelperClient.shared.healthProbe() {
-        case .ready:    daemon = .ready
-        case .disabled: daemon = .disabled
-        case .notSetUp: daemon = .notSetUp
         }
     }
 
@@ -517,7 +473,7 @@ struct HealthPane: View {
         computerGate.refresh()
         fdaGranted = Permissions.hasFullDiskAccess()
         loginOn = LoginItem.isEnabled
-        await refreshDaemon()
+        await wakeSetup.refresh()
         refreshMicSpeech()
         // Match the effective permission used by capture and the setup gates.
         screenRec = Permissions.hasScreenRecording()

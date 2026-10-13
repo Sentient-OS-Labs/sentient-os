@@ -9,7 +9,7 @@
 /* Begin PBXBuildFile section */
 		5A5A9A0001000000000000A1 /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 5A5A9A0001000000000000A2 /* Sparkle */; };
 		5A7E1D0002000000000000B1 /* TelemetryDeck in Frameworks */ = {isa = PBXBuildFile; productRef = 5A7E1D0002000000000000B2 /* TelemetryDeck */; };
-		5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.plist in Copy wake-helper daemon plist */ = {isa = PBXBuildFile; fileRef = 5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */; };
+		5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.Managed.plist in Copy wake-helper daemon plist */ = {isa = PBXBuildFile; fileRef = 5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.Managed.plist */; };
 		5AB7600E2FD12ABE00149A7F /* LiteRTLM in Frameworks */ = {isa = PBXBuildFile; productRef = 5AB7600D2FD12ABE00149A7F /* LiteRTLM */; };
 		5AE5710001000000000000A1 /* Sentry in Frameworks */ = {isa = PBXBuildFile; productRef = 5AE5710001000000000000A2 /* Sentry */; };
 /* End PBXBuildFile section */
@@ -21,7 +21,7 @@
 			dstPath = Contents/Library/LaunchDaemons;
 			dstSubfolderSpec = 1;
 			files = (
-				5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.plist in Copy wake-helper daemon plist */,
+				5A7E1D0003000000000000C2 /* jesai.Sentient-OS-macOS.WakeHelper.Managed.plist in Copy wake-helper daemon plist */,
 			);
 			name = "Copy wake-helper daemon plist";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -31,7 +31,7 @@
 /* Begin PBXFileReference section */
 		5A3F39112FD0F43300DD835E /* Sentient OS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Sentient OS.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		5A5167160C0F16AB00000001 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
-		5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "jesai.Sentient-OS-macOS.WakeHelper.plist"; sourceTree = "<group>"; };
+		5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.Managed.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "jesai.Sentient-OS-macOS.WakeHelper.Managed.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -62,7 +62,7 @@
 			children = (
 				5A3F39132FD0F43300DD835E /* Sentient OS macOS */,
 				5A5167160C0F16AB00000001 /* Signing.xcconfig */,
-				5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.plist */,
+				5A7E1D0003000000000000C3 /* jesai.Sentient-OS-macOS.WakeHelper.Managed.plist */,
 				5A3F39122FD0F43300DD835E /* Products */,
 			);
 			sourceTree = "<group>";
@@ -360,7 +360,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -377,7 +377,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.4;
-				MARKETING_VERSION = 2.0.1;
+				MARKETING_VERSION = 2.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "jesai.Sentient-OS-macOS";
 				PRODUCT_NAME = "Sentient OS";
 				REGISTER_APP_GROUPS = YES;
@@ -399,7 +399,7 @@
 				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 12;
+				CURRENT_PROJECT_VERSION = 13;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -416,7 +416,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 15.4;
-				MARKETING_VERSION = 2.0.1;
+				MARKETING_VERSION = 2.0.2;
 				PRODUCT_BUNDLE_IDENTIFIER = "jesai.Sentient-OS-macOS";
 				PRODUCT_NAME = "Sentient OS";
 				REGISTER_APP_GROUPS = YES;
