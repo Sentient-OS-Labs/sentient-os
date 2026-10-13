@@ -112,6 +112,25 @@ enum DoubleTapInference {
         case incomplete
         case cancelled
 
+        /// Local support history keeps the cause, never a path, provider payload, or draft text.
+        var diagnosticReason: String {
+            switch self {
+            case .noKey: "key_missing"
+            case .invalidModel: "invalid_model"
+            case .invalidEndpoint: "invalid_endpoint"
+            case .instructionsTooLarge: "instructions_too_large"
+            case .noVault: "knowledge_base_missing"
+            case .noWritingStyle: "writing_samples_missing"
+            case .writingStyleTooLarge: "writing_samples_too_large"
+            case .http(let status, _): "http_\(status)"
+            case .relay: "relay_rejected"
+            case .api: "provider_response_failed"
+            case .empty: "empty_reply"
+            case .incomplete: "incomplete_reply"
+            case .cancelled: "cancelled"
+            }
+        }
+
         /// Short, content-free line for the notch's ✗ caption.
         var label: String {
             switch self {

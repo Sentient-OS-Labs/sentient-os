@@ -31,6 +31,7 @@ final class OvernightScheduler {
 
     /// One-line status for the dev UI ("off" / "armed for 4:00 PM" / "running…").
     var statusLine = "off"
+    private(set) var nextWakeAt: Date?
 
     /// Set true when the 14h auto-enable wants to arm but a prerequisite is missing: the root
     /// helper isn't installed (onboarding's permissions step and Settings → Health own the
@@ -108,12 +109,14 @@ final class OvernightScheduler {
 
     private func start() {
         loopTask?.cancel()
+        nextWakeAt = nil
         loopTask = Task { await loop() }
     }
 
     private func stop() {
         loopTask?.cancel(); loopTask = nil
         statusLine = "off"
+        nextWakeAt = nil
         if everArmed {   // only reach out to the helper if we actually scheduled something
             everArmed = false
             Task { _ = await WakeHelperClient.shared.cancelWake() }
@@ -224,12 +227,18 @@ final class OvernightScheduler {
             statusLine = "armed for \(Self.clock(target))"
             log.line("arming wake for \(target)")
             let armed = await WakeHelperClient.shared.armWake(at: target)
+            guard !Task.isCancelled else { return }
+            nextWakeAt = armed ? target : nil
 
             // Wait for the target. Re-arm every ~5 min while awake (idempotent — keeps the helper's
             // record fresh so its force-quit auto-cancel always knows what to cancel).
             while Date() < target && !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(300))
-                if !Task.isCancelled && Date() < target { _ = await WakeHelperClient.shared.armWake(at: target) }
+                if !Task.isCancelled && Date() < target {
+                    let rearmed = await WakeHelperClient.shared.armWake(at: target)
+                    guard !Task.isCancelled else { return }
+                    nextWakeAt = rearmed ? target : nil
+                }
             }
             if Task.isCancelled { break }
 
@@ -239,6 +248,7 @@ final class OvernightScheduler {
                                    counts: [.elapsedMS: Int(lateness * 1000)], cooldown: 86_400)
             }
             statusLine = "running…"
+            nextWakeAt = nil
             await runNight(log: log)
             statusLine = "armed (next \(Self.clock(Self.nextOccurrence(minutesSinceMidnight: minutes))))"
         }
@@ -250,13 +260,14 @@ final class OvernightScheduler {
     /// sleep ourselves, and record the morning caution; the loop then re-arms tomorrow's wake as
     /// usual. A healthy night wins the race and none of this is visible.
     private func runNight(log: SchedulerLog) async {
+        let diagnosticID = DiagnosticHistory.begin(.overnight, provider: ModelBackend.current.rawValue)
         await Diagnostics.withOperation("overnight") {
             let pulse = NightPulse()
             // A task group would await every child at scope exit, including a child awaiting the
             // wedged run. A one-shot stream lets the watchdog report without waiting for that run.
             let (outcomes, result) = AsyncStream<Bool>.makeStream(bufferingPolicy: .bufferingOldest(1))
             let run = Task {
-                await self.runProcessing(log: log, pulse: pulse)
+                await self.runProcessing(log: log, pulse: pulse, diagnosticID: diagnosticID)
                 result.yield(false)
                 result.finish()
             }
@@ -279,7 +290,13 @@ final class OvernightScheduler {
                 result.finish()
             }
             watchdog.cancel()
-            guard stalled, !Task.isCancelled else { return }
+            guard stalled, !Task.isCancelled else {
+                DiagnosticHistory.finish(.overnight, id: diagnosticID,
+                    outcome: Task.isCancelled ? .stopped : .interrupted, reason: "no_final_result")
+                return
+            }
+            DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .stalled, reason: "no_progress",
+                measurements: ["stall_seconds": Int(Self.stallSeconds)])
 
             // The silent-wedge net. Latch FIRST so every exit path the cancelled run might later thaw
             // into knows sleep is already handled and leaves the helper alone (by then a NEXT night
@@ -300,13 +317,15 @@ final class OvernightScheduler {
 
     /// The actual run: keep awake → read the selected connectors with `.auto` (+ Gmail/Calendar) →
     /// run the shared `ProactiveCycle` tail (knowledge base → mirror → proactive → wipe) → release.
-    private func runProcessing(log: SchedulerLog, pulse: NightPulse) async {
+    private func runProcessing(log: SchedulerLog, pulse: NightPulse, diagnosticID: UUID) async {
         // Every codex call under this run reports trigger=overnight (task-local, inherited by the
         // child tasks the legs spawn) — the 3 AM failure population gets its own fingerprint.
-        await CodexTrigger.$current.withValue(.overnight) { await runProcessingBody(log: log, pulse: pulse) }
+        await CodexTrigger.$current.withValue(.overnight) {
+            await runProcessingBody(log: log, pulse: pulse, diagnosticID: diagnosticID)
+        }
     }
 
-    private func runProcessingBody(log: SchedulerLog, pulse: NightPulse) async {
+    private func runProcessingBody(log: SchedulerLog, pulse: NightPulse, diagnosticID: UUID) async {
         let woke = Date()
         log.line("WOKE at \(woke) — beginning the run.")
         Analytics.signal("Scheduler.overnightStarted")   // the 3am wake fired and we're processing
@@ -323,9 +342,15 @@ final class OvernightScheduler {
         // KB-toggled connectors (the generic nightly reads) — backend-scoped like the chips.
         let mcpSlugs = MCPSource.kbSlugs()
         log.line("FDA=\(fda) · detected: \(sources.isEmpty ? "none" : sources.map(\.label).joined(separator: ", ")) · gmail=\(runGmail) calendar=\(runCalendar) · connectors=\(mcpSlugs.count)")
-        guard !connectors.isEmpty || runGmail || runCalendar || !mcpSlugs.isEmpty else { log.line("nothing enabled — skipping run."); return }
+        guard !connectors.isEmpty || runGmail || runCalendar || !mcpSlugs.isEmpty else {
+            DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: "no_sources")
+            log.line("nothing enabled — skipping run."); return
+        }
         let modelPath = ModelLocator.resolve()
-        if !connectors.isEmpty && modelPath == nil { log.line("model not found — skipping run."); return }
+        if !connectors.isEmpty && modelPath == nil {
+            DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: "model_missing")
+            log.line("model not found — skipping run."); return
+        }
 
         // B6: go/no-go gate — a lid-shut 3am run holds the Mac fully awake + hammers the GPU, so only
         // when it's safe: on AC (not Low Power, not thermally critical), or on battery above the
@@ -335,6 +360,7 @@ final class OvernightScheduler {
         let battery = PowerState.batteryPercent().map { "\($0)%" } ?? "n/a"
         log.line("power: ac=\(PowerState.onACPower()) battery=\(battery) allowBattery=\(allowBattery) lowPower=\(PowerState.lowPowerMode) thermal=\(PowerState.thermalLabel)")
         if let blocked = PowerState.overnightBlockReason(allowBattery: allowBattery) {
+            DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .blocked, reason: blocked)
             log.line("GATED — \(blocked); skipping this run (retry next night).")
             // Telemetry, not a defect — TelemetryDeck counts it; Sentry stays quiet (2026-07-12).
             Analytics.signal("Scheduler.gated", parameters: ["reason": blocked])
@@ -401,6 +427,7 @@ final class OvernightScheduler {
             // the cloud legs write too (marks, the knowledge-base staging copy). Record the morning
             // caution and end the night here; the marks are per-item atomic, so tomorrow resumes.
             if p.diskFull {
+                DiagnosticHistory.finish(.overnight, id: diagnosticID, outcome: .failed, reason: "disk_full")
                 log.line("disk full — stopping the night here; the morning caution says so.")
                 OvernightCaution.record(.diskFull)
                 await releaseAwake()
@@ -484,6 +511,11 @@ final class OvernightScheduler {
         else if netAtStart.status != "satisfied" || failed.allSatisfy({ offlineReasons.contains($0) }) { outcome = "offline" }
         else if failed.count < ran.count { outcome = "partial" }
         else { outcome = "failed" }
+        DiagnosticHistory.finish(.overnight, id: diagnosticID,
+            outcome: outcome == "ok" ? .completed : (DiagnosticHistory.Outcome(rawValue: outcome) ?? .failed),
+            measurements: ["elapsed_ms": Int(Date().timeIntervalSince(woke) * 1000),
+                "device_items": deviceItems, "device_failed": deviceFailed,
+                "device_extraction_failed": deviceExtractionFailed], stages: legs)
         if outcome == "ok" { Analytics.signal("Scheduler.overnightCompleted", tier: .core) }
         var tags: [String: String] = [
             "trigger": "overnight", "outcome": outcome,
