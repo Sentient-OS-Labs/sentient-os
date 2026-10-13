@@ -21,6 +21,7 @@ processes those summaries; the raw source material is not uploaded for this loca
 | `ChatWindowing.swift` | Shared by WhatsApp and iMessage: `ChatMessage`, `ChatInfo`, the byte-budgeted window slicing, the prompt framing, and the limits. |
 | `AddressBookNames.swift` | Raw iMessage handles (phones, emails) → contact names, read from the AddressBook SQLite stores (already covered by FDA; no Contacts-framework prompt). |
 | `FilesSource.swift` | Folder walk with skip rules and caps, content extraction (PDF, Word, text, downsized images), and the `FileRoot` enum. |
+| `SiYuanNote.swift` | SiYuan workspace/notebook detection for the Files walk, and `.sy` note → Markdown (breadcrumb header, block tree, databases). |
 | `WhatsAppSource.swift` | ChatStorage.sqlite reader: session whitelist, group naming, per-chat windows. |
 | `iMessageSource.swift` | chat.db reader: the typedstream body decoder, hidden-chat filtering, per-chat windows. |
 | `NotesSource.swift` | NoteStore.sqlite reader: gunzip + protobuf walk to the note text. |
@@ -64,20 +65,26 @@ per synced account) builds a map keyed by lowercased email or the last 10 digits
 ## Files (`FilesSource`)
 
 Reads a folder root (Downloads, Desktop, Documents, or a custom folder), keeps only whitelisted
-extensions (`pdf doc docx md txt png jpg jpeg heic`), and extracts a bounded amount of content per type:
+extensions (`pdf doc docx md txt sy png jpg jpeg heic`), and extracts a bounded amount of content per type:
 the first 3 pages of a PDF, Word text via `NSAttributedString` (best-effort), plain text capped at 8,000
-characters, and images downsized to a 768 px JPEG for the vision model (Gemma 4 resizes to 768 anyway).
+characters, SiYuan notes flattened to Markdown, and images downsized to a 768 px JPEG for the vision model (Gemma 4 resizes to 768 anyway).
 
 Items are keyed on **date added** (what Finder shows), future-clamped, never on modification time, so
 edits are not reprocessed. Never Spotlight (silent failures).
 
 Three free layers decide what never reaches the model, all from filesystem metadata:
 
-1. **Subtree pruning** (`pruneReason`): `.noindex` names, dependency/build/dataset directory names, the `.metadata_never_index` marker, any `.git` (a survey of 38 repos found zero notes repos), known project manifests (`package.json`, `Cargo.toml`, `Makefile`, …), `.xcodeproj` / `.sln` bundles, code-density (≥10 extensioned entries and code or data/markup is the majority), and dataset folders (≥100 files, ≥90% one extension, ≥80% machine-generated names). Obsidian and Logseq vaults are always kept. Explicitly added custom roots are never themselves prune-checked (the escape hatch).
+1. **Subtree pruning** (`pruneReason`): `.noindex` names, dependency/build/dataset directory names, the `.metadata_never_index` marker, any `.git` (a survey of 38 repos found zero notes repos), known project manifests (`package.json`, `Cargo.toml`, `Makefile`, …), `.xcodeproj` / `.sln` bundles, code-density (≥10 extensioned entries and code or data/markup is the majority), and dataset folders (≥100 files, ≥90% one extension, ≥80% machine-generated names). Obsidian and Logseq vaults and SiYuan notebooks are always kept; a SiYuan workspace nested inside a walked folder is pruned, along with its internals (`history/`, `repo/`, `temp/`, `conf/`, `data/storage/`, …). Explicitly added custom roots are never themselves prune-checked (the escape hatch).
 2. **Per-file rejects** (`fileRejectReason`), by name and size only: camera-roll photo names (`IMG_`, `PXL_`, `DSC`, …; screenshots are deliberately kept), lock/temp files (`~$`), boilerplate names (README, LICENSE, …), empty files, and files over ~100 MB (the hang guard).
 3. **Caps** (`cappedNewestFirst`): a 1-year age cutoff on Downloads only, at most 300 files per directory, and the newest 1,000 per root. Do not lower the per-directory cap casually; a busy screenshots folder loses real keepers.
 
-Walk bounds: max depth 3, symlinks never followed, plus `IterativeRun`'s 30 s extraction timeout.
+Walk bounds: max depth 3 (8 below a SiYuan notebook), symlinks never followed, plus `IterativeRun`'s 30 s extraction timeout.
+**SiYuan.** Notes are `.sy` JSON block trees named by block ID, so `SiYuanNote` renders each one as
+Markdown under a "Notebook › Parent › Title" header, with database blocks read from
+`data/storage/av/<id>.json` as tables. A workspace is read only when it is added as its own folder: that
+gives it a fresh pointer and a full first-run backfill, where switching `.sy` on inside an existing
+Documents bucket would skip every note older than the bucket's high-water mark.
+
 `FileRoot.source` builds the correctly configured `FilesSource` for each root; use it rather than
 constructing one by hand. Thresholds were tuned on real Macs but are judgment calls; tune with evidence.
 

@@ -7,6 +7,7 @@
 //   • pdf              → first 3 pages of text (PDFKit)
 //   • doc / docx       → text (NSAttributedString, best-effort; legacy .doc may be empty)
 //   • md / txt         → text (char-capped)
+//   • sy               → SiYuan note, flattened to Markdown (SiYuanNote.swift)
 //   • png/jpg/jpeg/heic → downsized JPEG (~720p) for the vision model (never decodes full 4K)
 //
 //  The model is given the home-relative path (e.g. ~/Downloads/Useless Stuff/x.jpg) + creation
@@ -23,7 +24,7 @@
 //  inference — subtree pruning (`pruneReason`: code repos, datasets, data/markup dumps), per-file
 //  rejects (`fileRejectReason`: camera roll, lock/temp, boilerplate, empty, oversize), and caps
 //  (newest 1,000/root · 300/dir · Downloads 1-year). The walk is bounded too — max depth 3, symlinks
-//  skipped — and content extraction is timeout-guarded in IterativeRun.
+//  skipped (SiYuan notebooks get their own bound) — and content extraction is timeout-guarded in IterativeRun.
 //
 
 import Foundation
@@ -49,7 +50,7 @@ struct FilesSource: Sendable {
         self.maxAge = maxAge
     }
 
-    static let allowedExtensions: Set<String> = ["pdf", "doc", "docx", "md", "txt", "png", "jpg", "jpeg", "heic"]
+    static let allowedExtensions: Set<String> = ["pdf", "doc", "docx", "md", "txt", "sy", "png", "jpg", "jpeg", "heic"]
     static let perRootCap = 1_000   // connector limit (June 10): newest 1,000 per root, every root
     static let maxWalkDepth = 3                     // don't explore past 3 subfolder levels (bounds a pathological tree)
     static let maxFileBytes = 100 * 1_024 * 1_024   // skip files over ~100 MB — hang guard (never even open a giant file)
@@ -111,8 +112,11 @@ struct FilesSource: Sendable {
         guard let listing = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
         let names = Set(listing)
         if names.contains(".metadata_never_index") { return "never-index marker" }
-        // Obsidian/Logseq vaults — always keep, no further checks (even git-synced ones).
-        if names.contains(".obsidian") || names.contains("logseq") { return nil }
+        // SiYuan: a nested workspace and its internals are skipped (notes are read only when the
+        // workspace is its own root — see SiYuanNote.swift); a notebook is kept like a vault.
+        if let reason = SiYuanNote.pruneReason(dir, names: names) { return reason }
+        // Obsidian/Logseq vaults and SiYuan notebooks — always keep, no further checks (even git-synced ones).
+        if names.contains(".obsidian") || names.contains("logseq") || names.contains(".siyuan") { return nil }
 
         // Any other git repo is a code project (decision June 11 — surveyed 38 repos across the
         // standard folders: zero were notes). The 1% who git-sync a plain markdown journal have a
@@ -244,6 +248,7 @@ struct FilesSource: Sendable {
             }
         }
         var rows: [(candidate: Candidate, sortKey: Double)] = []
+        var notebookDepths: [String: Int] = [:]   // SiYuan notebook path → its depth under root
         for case let url as URL in enumerator {
             let vals = try? url.resourceValues(forKeys: keys)
             if vals == nil { resourceFailures += 1 }
@@ -251,8 +256,13 @@ struct FilesSource: Sendable {
             if vals?.isSymbolicLink == true { enumerator.skipDescendants(); continue }
             if vals?.isDirectory == true {
                 // Skip the subtree if it's noise (pruneReason) OR too deep (bounds a pathological tree).
-                if Self.pruneReason(url) != nil
-                    || url.pathComponents.count - rootDepth > Self.maxWalkDepth {
+                // Inside a SiYuan notebook the bound is relative to the notebook: sub-documents nest
+                // one folder per parent, well past the generic 3 levels.
+                let depth = url.pathComponents.count - rootDepth
+                if SiYuanNote.isNotebook(url) { notebookDepths[url.path] = depth }
+                let notebook = notebookDepths.first { url.path == $0.key || url.path.hasPrefix($0.key + "/") }
+                let maxDepth = notebook.map { $0.value + SiYuanNote.maxNotebookDepth } ?? Self.maxWalkDepth
+                if Self.pruneReason(url) != nil || depth > maxDepth {
                     enumerator.skipDescendants()
                 }
                 continue   // directories are never candidates themselves
@@ -334,6 +344,7 @@ struct FilesSource: Sendable {
         switch ext {
         case "pdf":          raw = pdfText(url)
         case "doc", "docx":  raw = wordText(url)
+        case "sy":           raw = SiYuanNote.text(url: url)
         default:             raw = plainText(url)   // md, txt
         }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
