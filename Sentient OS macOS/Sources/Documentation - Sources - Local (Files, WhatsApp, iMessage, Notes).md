@@ -1,10 +1,10 @@
 # Sources: the local readers (Sources/)
 
-The local readers cover **Files**, **WhatsApp**, **iMessage**, **Apple Notes**, **Apple Mail**, and **Apple Calendar**.
+The local readers cover **Files**, **WhatsApp**, **iMessage**, **Apple Notes**, **SiYuan**, **Apple Mail**, and **Apple Calendar**.
 Shared pieces provide source selection, value types, WAL-safe SQLite copies, chat windowing, and
 contact-name resolution. Hosted sources have their own doc in this folder.
 
-The message, Notes and Mail database readers need **Full Disk Access**; Files reads standard folders and custom roots.
+The message, Notes and Mail database readers need **Full Disk Access**; Files reads standard folders and custom roots, and SiYuan reads its workspaces as ordinary folders.
 Apple Calendar reads the Mac's synced calendars through EventKit with a separate Calendar grant.
 These readers and their first-pass model analysis run on-device. Mail and Calendar use data already
 synced to the Mac, so neither requires a ChatGPT or Claude subscription. Your chosen frontier AI then
@@ -24,6 +24,8 @@ processes those summaries; the raw source material is not uploaded for this loca
 | `WhatsAppSource.swift` | ChatStorage.sqlite reader: session whitelist, group naming, per-chat windows. |
 | `iMessageSource.swift` | chat.db reader: the typedstream body decoder, hidden-chat filtering, per-chat windows. |
 | `NotesSource.swift` | NoteStore.sqlite reader: gunzip + protobuf walk to the note text. |
+| `SiYuanSource.swift` | SiYuan reader: finds workspaces from SiYuan's registry, walks open notebooks, lists notes newest-updated first. |
+| `SiYuanNote.swift` | One `.sy` note → Markdown (block tree, plus database blocks read from `storage/av`). |
 | `AppleMailSource.swift` · `AppleMailMIME.swift` | Selected Mail accounts, safe index snapshots, bounded body extraction and local identity checks. |
 | `AppleCalendarSource.swift` | User-selected EventKit calendars, bounded occurrence snapshots, opaque local IDs, and validation before publication. |
 
@@ -39,7 +41,7 @@ production keys, persisted on user machines: `dbg.run.downloads` / `desktop` / `
 one newline-joined string under `files.customRoots` so any view can watch it with `@AppStorage`.
 `SourceSelection.current(fdaGranted:)` builds the run's `[RunSource]`; `selectionCount` counts armed
 selections for the shared **four-selection minimum** that onboarding's ready screen and Settings both
-enforce (each folder, each chat source with chats picked, Notes, Apple Mail, Apple Calendar, and each connected cloud source count
+enforce (each folder, each chat source with chats picked, Notes, SiYuan, Apple Mail, Apple Calendar, and each connected cloud source count
 as one; hosted sources require a supported subscription backend).
 
 **WAL-safe copy (`SQLiteDB`).** Copy the database plus its `-wal` and `-shm` siblings into a fresh temp
@@ -114,6 +116,21 @@ column name varies by macOS version, hence the `COALESCE`.
 - **The body is double-wrapped:** gzip outside (magic `1f 8b 08`), protobuf inside. `decodeBody` gunzips via the Compression framework, then walks the protobuf wire format down fields 2 → 3 → 2 with no schema. Fail-closed: anything undecodable is skipped. Measured at 100% on real notes; a real drop emits `notes.decode.degraded` (undownloaded iCloud notes are excluded from the denominator).
 - **One note = one item**, through the file-flavoured triage prompt (a note is a document the user wrote). Newest 1,000 by creation date, no time floor (old notes are often the most valuable). Keyed on **creation date**, so an edited note is not re-summarized.
 - One bucket, `notes`.
+
+## SiYuan (`SiYuanSource`, `SiYuanNote`)
+
+A **More of your world** pill, shown only when SiYuan is installed. One switch, `siyuan.enabled`, and
+no picker: every open notebook in every workspace is read. Workspaces come from SiYuan's own
+registry, `~/.config/siyuan/workspace.json`. Inside one, notes live at `data/<notebook-id>/<doc-id>.sy`,
+and a sub-document sits in a folder named after its parent document. Only `data/` is read, so SiYuan's
+internals (`history/` snapshots, which hold duplicate copies of edited notes, the sync `repo/`, `temp/`)
+never are. No Full Disk Access is needed.
+
+- **A note is JSON, not text.** Each `.sy` file is a block tree named by block ID. `SiYuanNote` renders it to Markdown (headings, lists, tasks, quotes, callouts, code, math, tables, tabs). A database block carries only an ID; its rows are read from `data/storage/av/<id>.json` and rendered as a table. The on-disk path is all IDs, so each note is framed as `SiYuan · Notebook › Parent › Title`.
+- **Skipped:** SiYuan's bundled User Guide notebooks (IDs read from the installed app, with a shipped fallback), closed notebooks, and title-only notes (sub-document folders, empty dailies).
+- **One note = one item**, through the file-flavoured triage prompt. Newest 1,000 by last edit, depth 8 below a notebook, body capped at 8,000 characters. Rendered at list time, like Apple Notes.
+- **Keyed on the last edit, unlike Apple Notes,** so an edited note IS re-summarized: SiYuan notes are living documents (a setup page rewritten when the setup changes). The edit time is the document's own `updated` stamp, which a sync rewrite does not move, or the save time of a database the note shows, if later. Editing a database row never touches the note's stamp.
+- One bucket, `siyuan`.
 
 ## Apple Mail (`AppleMailSource`, `AppleMailMIME`)
 

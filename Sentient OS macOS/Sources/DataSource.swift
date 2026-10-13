@@ -25,6 +25,7 @@ enum SourceKind: String, Codable, Sendable, CaseIterable {
     case whatsapp
     case imessage
     case notes
+    case siyuan
     case gmail
     case appleMail
     case calendar

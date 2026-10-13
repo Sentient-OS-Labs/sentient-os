@@ -60,7 +60,7 @@ enum SourceSelection {
     }
 
     /// How many SELECTIONS are armed — every folder (default or custom), each chat source with
-    /// chats picked, Notes, and each selected cloud source counts as ONE. The shared minimum
+    /// chats picked, Notes, SiYuan, and each selected cloud source counts as ONE. The shared minimum
     /// (at least 4) that onboarding's ready screen and Settings both enforce: the defaults alone
     /// (three folders) deliberately don't pass, so starting always takes one deliberate connect.
     static let minimumSelections = 4
@@ -73,6 +73,7 @@ enum SourceSelection {
         if bool("dbg.run.whatsapp", default: false) && !chatJIDs.isEmpty { n += 1 }
         if bool("dbg.run.imessage", default: false) && !imessageGUIDs.isEmpty { n += 1 }
         if bool("dbg.run.notes", default: false) { n += 1 }
+        if SiYuanSource.isEnabled { n += 1 }
         if !AppleMailSelection.accounts.isEmpty { n += 1 }
         if AppleCalendarSource.isEnabled { n += 1 }
         // Hosted Gmail and Calendar need a subscription backend, so they cannot count
@@ -114,6 +115,7 @@ enum SourceSelection {
             s.append(.imessage(chatGUIDs: imessageGUIDs))
         }
         if bool("dbg.run.notes", default: false) && fdaGranted { s.append(.notes) }
+        if SiYuanSource.isEnabled { s.append(.siyuan) }
         // Include selected Mail even when the broad FDA probe fails: its own read reports a
         // useful error instead of silently disappearing from analysis.
         if !AppleMailSelection.accounts.isEmpty { s.append(.appleMail(accounts: AppleMailSelection.accounts)) }

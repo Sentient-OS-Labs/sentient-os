@@ -27,6 +27,7 @@ enum RunSource: Hashable {
     case whatsapp(chatJIDs: Set<String>)    // the opt-in chats to analyze
     case imessage(chatGUIDs: Set<String>)   // the opt-in chats to analyze
     case notes                              // all notes (newest-1000 cap inside the source)
+    case siyuan                             // every open notebook (newest-1000 cap inside the source)
     case appleMail(accounts: Set<String>)
     case appleCalendar(calendarIDs: Set<String>)
 
@@ -36,6 +37,7 @@ enum RunSource: Hashable {
         case .whatsapp:        return "WhatsApp"
         case .imessage:        return "iMessage"
         case .notes:           return "Apple Notes"
+        case .siyuan:          return "SiYuan"
         case .appleMail:       return "Apple Mail"
         case .appleCalendar:   return "Apple Calendar"
         }
@@ -53,6 +55,7 @@ enum RunSource: Hashable {
             case .whatsapp(let jids):  connectors.append(WhatsAppConnector(chatJIDs: jids))
             case .imessage(let guids): connectors.append(iMessageConnector(chatGUIDs: guids))
             case .notes:               connectors.append(NotesConnector())
+            case .siyuan:              connectors.append(SiYuanConnector())
             case .appleMail(let accounts): connectors.append(AppleMailConnector(accounts: accounts))
             case .appleCalendar(let ids): connectors.append(AppleCalendarConnector(calendarIDs: ids))
             case .files:               break   // rolled into FilesConnector(roots:)
