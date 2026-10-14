@@ -108,7 +108,9 @@ struct HomeView: View {
                     bottomDock
                     chrome                     // on top → the nav stays clickable
                     cautionBanner              // health, updates, then invitations in the top-right
+                    #if DEBUG
                     devToolsOverlay
+                    #endif
                 }
                 .blur(radius: letterShown ? 7 : 0)
                 .opacity(letterShown ? 0.4 : 1)
@@ -618,9 +620,9 @@ struct HomeView: View {
     }
 
     /// A discreet DEV TOOLS handle pinned bottom-right (DX continuity from the old home).
-    /// Opens the DevToolsView sheet via RootView.
-    /// TEMP: exposed in Release for testing on another Mac. Restore the DEBUG guards around
-    /// this property and its use above when that testing is complete.
+    /// Opens the DevToolsView sheet via RootView. Compile-gated out of Release entirely —
+    /// this is DevToolsView's ONLY opener, so the sheet is unreachable in Release too.
+    #if DEBUG
     private var devToolsOverlay: some View {
         Button(action: onShowDevTools) {
             HStack(spacing: 5) {
@@ -638,6 +640,7 @@ struct HomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         .padding(.trailing, 22).padding(.bottom, 13)
     }
+    #endif
 
     // MARK: Floor — the command bar + trust footer
 
