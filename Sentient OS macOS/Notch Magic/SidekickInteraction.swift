@@ -126,6 +126,7 @@ nonisolated final class SidekickInteraction: Sendable {
             for block in blocks {
                 if kind == "assistant", block["type"] as? String == "tool_use",
                    let id = block["id"] as? String, let name = block["name"] as? String,
+                   name != "StructuredOutput", // final schema delivery is not another task action
                    !name.hasPrefix("mcp__\(SidekickToolServer.name)__") { changes.append((id, true)) }
                 if kind == "user", block["type"] as? String == "tool_result",
                    let id = block["tool_use_id"] as? String { changes.append((id, false)) }

@@ -8,8 +8,9 @@ import SwiftUI
 final class MainNavigation {
     static let shared = MainNavigation()
 
-    enum Page: Equatable { case home, settings, knowledge }
+    enum Page: Equatable { case home, settings, knowledge, sidekickHistory }
     private(set) var page: Page = .home
+    var sidekickResultID: String?
     var settingsPane: SettingsView.Pane = .sources
     private(set) var hasOpenedKnowledge = false
 
@@ -38,6 +39,7 @@ final class MainNavigation {
     func reset() {
         leaveKnowledge = nil
         page = .home
+        sidekickResultID = nil
         settingsPane = .sources
         hasOpenedKnowledge = false
     }

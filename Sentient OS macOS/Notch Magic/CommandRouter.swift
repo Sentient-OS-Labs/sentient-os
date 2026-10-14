@@ -83,6 +83,12 @@ enum CommandRouter {
     /// The same router with explicit services lets the lab test account ambiguity without
     /// disclosing any connected account's labels or content.
     static func route(_ command: String, services: [Service], cardContext: String = "", standingInstructions: String = "") async -> Route {
+        // A native Mail request must keep its app/account context even when Gmail is connected.
+        // The computer route still has connectors when the user explicitly authorizes a switch.
+        guard !requiresAppleMail(command) else {
+            Log("router: computer (explicit Apple Mail request)")
+            return .computer
+        }
         let t0 = Date()
         var inv = CodexCLI.Invocation(prompt: prompt(command: command, services: services, cardContext: cardContext, standingInstructions: standingInstructions))
         inv.model = .gpt6luna          // → haiku on the Claude tier map
@@ -212,6 +218,9 @@ enum CommandRouter {
         - The same service may have separate accounts. Choose one only when the command or its
           explicit context identifies the account, or exactly one matching account is listed.
           If the destination account is ambiguous, choose computer so it can be clarified.
+        - Apple Mail, Mail.app, or a preference to work in the Mac's Mail app requires "computer".
+          A connected Gmail or Outlook account does not identify the account or message visible in
+          Apple Mail. Never substitute a provider merely because both services handle email.
         - When in doubt, choose "computer".
         \(services.contains(where: { $0.slug == "slack" }) ? "- A Slack connector task supports one message or one other constructive change. Explicitly requested multiple Slack messages need computer so the broader workflow can handle them." : "")
         - "connector" is right ONLY when EVERY step of the command fits that ONE
@@ -248,6 +257,13 @@ enum CommandRouter {
     {"type":"object","additionalProperties":false,"required":["route","target"],"properties":{\
     "route":{"type":"string","enum":["computer","connector"]},"target":{"type":"string"}}}
     """
+
+    /// Conservative, deterministic routing for explicit native-app requests. Generic "email"
+    /// stays eligible for the provider router; a false positive here still preserves its tools.
+    static func requiresAppleMail(_ command: String) -> Bool {
+        command.range(of: #"(?<![\p{L}\p{N}_])(?:apple[ \t]+mail|mail\.app|com\.apple\.mail|(?:mac(?:os)?|native|desktop)[ \t]+mail|mail[ \t]+app(?:lication)?)(?![\p{L}\p{N}_])"#,
+                      options: [.regularExpression, .caseInsensitive]) != nil
+    }
 
     static func ambiguousMail(_ command: String, services: [Service]) -> Bool {
         guard services.contains(where: { $0.slug == "gmail" }), services.contains(where: { $0.slug == OutlookMailConnector.slug }) else { return false }

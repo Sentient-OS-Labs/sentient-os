@@ -235,6 +235,7 @@ struct HomeView: View {
             Spacer()
             NavItem(title: "Analysis", dot: Theme.Ink.green) { showAnalysis = true }
                 .popover(isPresented: $showAnalysis) { analysisPopover }
+            NavItem(title: "Sidekick History") { HomeWindowOpening.openHistory() }
             NavItem(title: "Knowledge") { HomeWindowOpening.open(.knowledge) }
             NavItem(title: "Give AIs Knowledge") { showShareKnowledge = true }
                 .popover(isPresented: $showShareKnowledge) { shareKnowledgePopover }

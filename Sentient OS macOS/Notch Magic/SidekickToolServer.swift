@@ -73,19 +73,34 @@ actor SidekickToolServer {
                 + (interaction.personalization == nil ? [] : [SidekickPersonalization.tool])
                 + (interaction.taskSummary == nil ? [] : [SidekickTaskSummary.tool])])
         case "tools/call":
-            guard let params = rpc["params"] as? [String: Any], let name = params["name"] as? String,
-                  let arguments = params["arguments"] as? [String: Any] else {
+            guard let params = rpc["params"] as? [String: Any], let name = params["name"] as? String else {
+                return try reply(Self.invalidArguments)
+            }
+            guard let arguments = params["arguments"] as? [String: Any] else {
+                if name == SidekickTaskSummary.toolName {
+                    interaction.taskSummary?.reject(.invalidArguments)
+                    return try reply(Self.rejectedSummary)
+                }
                 return try reply(Self.invalidArguments)
             }
             let key = String(decoding: try Self.json(id), as: UTF8.self)
             let fingerprint = try Self.json(["name": name, "arguments": arguments])
             let call: Call
             if let existing = calls[key] {
-                guard existing.fingerprint == fingerprint else { return try reply(Self.invalidArguments) }
+                guard existing.fingerprint == fingerprint else {
+                    if name == SidekickTaskSummary.toolName {
+                        interaction.taskSummary?.reject(.invalidArguments)
+                        return try reply(Self.rejectedSummary)
+                    }
+                    return try reply(Self.invalidArguments)
+                }
                 call = existing
             } else {
                 guard activeCall == nil, !interaction.hasActiveTools, !interaction.isWaiting, calls.count < 64 else {
-                    if name == SidekickTaskSummary.toolName { return try reply(Self.rejectedSummary) }
+                    if name == SidekickTaskSummary.toolName {
+                        interaction.taskSummary?.reject(.toolBusy)
+                        return try reply(Self.rejectedSummary)
+                    }
                     if name == SidekickPersonalization.toolName {
                         return try reply(await Self.rejectedPersonalization(SidekickPersonalization.Failure.unavailable))
                     }
@@ -121,7 +136,7 @@ actor SidekickToolServer {
                     do { try summary.stage(arguments) }
                     catch { return try reply(Self.rejectedSummary) }
                     action = {
-                        try Self.json(["message": "Description received for privacy review after task completion. Emit the original task's final STATUS now."])
+                        try Self.json(["message": "Description received for privacy review after the attempt ends. Continue the original task; if it has ended, emit its final answer and STATUS."])
                     }
                 } else { return try reply(Self.invalidArguments) }
                 activeCall = key
@@ -148,7 +163,7 @@ actor SidekickToolServer {
     }
     private static var rejectedSummary: [String: Any] {
         ["isError": true, "content": [["type": "text",
-            "text": "Description not accepted. Do not retry for analytics. Finish the original task with its required STATUS."]]]
+            "text": "Description not accepted. Do not retry for analytics. Continue the original task; when it ends, give its final answer and required STATUS."]]]
     }
     @MainActor private static func rejectedPersonalization(_ error: Error) -> [String: Any] {
         let code = SidekickPersonalization.rejectionCode(error)

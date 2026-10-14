@@ -15,6 +15,8 @@ struct MenuBarView: View {
 
     var body: some View {
         Button("Open Sentient OS") { openHome() }
+        Button("Sidekick History") { HomeWindowOpening.openHistory() }
+            .disabled(!appState.hasCompletedOnboarding || ComputerUseUpgrade.shared.isBlockingInterface)
 
         Divider()
         switch appState.status {

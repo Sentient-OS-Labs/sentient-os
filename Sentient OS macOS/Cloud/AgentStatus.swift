@@ -36,6 +36,25 @@ nonisolated enum AgentStatus {
         return parsed
     }
 
+    /// Keep the final answer for the local result view without showing the bookkeeping marker.
+    /// If the model wrote only a valid sentinel, its explanatory suffix is still useful to the user.
+    static func displayResponse(_ reply: String) -> String? {
+        var lines = reply.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
+        guard let last = lines.last else { return nil }
+        let status = parseConnector(reply)
+        if case .none = status {
+            let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+            return text.isEmpty ? nil : text
+        }
+        lines.removeLast()
+        let body = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !body.isEmpty { return body }
+        guard let range = last.range(of: #"^\s*STATUS:\s*(?:DONE|COULD_NOT)"#,
+                                    options: [.regularExpression, .caseInsensitive]) else { return nil }
+        let detail = String(last[range.upperBound...]).trimmingCharacters(in: trimSet)
+        return detail.isEmpty ? nil : detail
+    }
+
     static let unconfirmedComputerMessage = "Completion could not be confirmed. Check the app before trying again."
 
     /// The display-ready text after the marker on a `STATUS: COULD_NOT — <reason>` line.
