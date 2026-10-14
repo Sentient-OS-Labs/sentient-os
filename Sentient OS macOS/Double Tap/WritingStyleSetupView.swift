@@ -24,7 +24,7 @@ struct WritingStyleSetupView: View {
             Text(finished ? "Double Tap is ready" : "Setting up double tap")
                 .display(30)
                 .foregroundStyle(.white)
-            Text(failure ?? (finished ? "Double tap \(SidekickHotkey.current.label) in a reply box to write in your own voice." : status))
+            Text(failure ?? (finished ? "Double tap \(ShortcutPreferences.current.label) in a reply box to write in your own voice." : status))
                 .font(.system(size: 14))
                 .foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center)

@@ -1,5 +1,6 @@
 // OnboardingDoubleTapKeyboard.swift
-// A face-on crop of the lower keyboard and trackpad locates the right Command key.
+// A face-on keyboard locates the default right Command key. Custom bindings show their
+// own keycap and label without pointing at a different physical key.
 // The invitation's slow Sentient color field pauses outside the waiting beat and with
 // Reduce Motion. Each tap gently pulses the glow around the key, with no particles or expanding ring.
 // Doc: Documentation - Onboarding.md (this folder).
@@ -11,36 +12,39 @@ struct OnboardingDoubleTapKeyboard: View {
     let inviting: Bool
     let reduceMotion: Bool
     var tapFeedback: OnboardingDoubleTapDemo.TapFeedback? = nil
+    var key: ShortcutKey = .rightCommand
     let action: () -> Void
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            surroundings
-                .frame(width: 760, height: 200)
-                .mask {
-                    LinearGradient(stops: [.init(color: .clear, location: 0),
-                                           .init(color: .white.opacity(0.12), location: 0.12),
-                                           .init(color: .white.opacity(0.6), location: 0.25),
-                                           .init(color: .white, location: 0.4),
-                                           .init(color: .white, location: 0.65),
-                                           .init(color: .white.opacity(0.65), location: 0.8),
-                                           .init(color: .white.opacity(0.12), location: 0.92),
-                                           .init(color: .clear, location: 1)],
-                                   startPoint: .leading, endPoint: .trailing)
-                        .mask {
-                            LinearGradient(stops: [.init(color: .clear, location: 0),
-                                                   .init(color: .white.opacity(0.2), location: 0.08),
-                                                   .init(color: .white.opacity(0.75), location: 0.18),
-                                                   .init(color: .white, location: 0.30),
-                                                   .init(color: .white, location: 0.48),
-                                                   .init(color: .white.opacity(0.75), location: 0.62),
-                                                   .init(color: .white.opacity(0.25), location: 0.8),
-                                                   .init(color: .clear, location: 1)],
-                                           startPoint: .top, endPoint: .bottom)
-                        }
-                }
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
+            if key == .rightCommand {
+                surroundings
+                    .frame(width: 760, height: 200)
+                    .mask {
+                        LinearGradient(stops: [.init(color: .clear, location: 0),
+                                               .init(color: .white.opacity(0.12), location: 0.12),
+                                               .init(color: .white.opacity(0.6), location: 0.25),
+                                               .init(color: .white, location: 0.4),
+                                               .init(color: .white, location: 0.65),
+                                               .init(color: .white.opacity(0.65), location: 0.8),
+                                               .init(color: .white.opacity(0.12), location: 0.92),
+                                               .init(color: .clear, location: 1)],
+                                       startPoint: .leading, endPoint: .trailing)
+                            .mask {
+                                LinearGradient(stops: [.init(color: .clear, location: 0),
+                                                       .init(color: .white.opacity(0.2), location: 0.08),
+                                                       .init(color: .white.opacity(0.75), location: 0.18),
+                                                       .init(color: .white, location: 0.30),
+                                                       .init(color: .white, location: 0.48),
+                                                       .init(color: .white.opacity(0.75), location: 0.62),
+                                                       .init(color: .white.opacity(0.25), location: 0.8),
+                                                       .init(color: .clear, location: 1)],
+                                               startPoint: .top, endPoint: .bottom)
+                            }
+                    }
+                    .accessibilityHidden(true)
+                    .allowsHitTesting(false)
+            }
 
             // Keep the focal key and its soft glow outside the surrounding deck's fade.
             commandKey.position(x: 374, y: 85)
@@ -136,8 +140,10 @@ struct OnboardingDoubleTapKeyboard: View {
                         }
                         .overlay(alignment: .leading) {
                             VStack(alignment: .leading, spacing: 5) {
-                                Image(systemName: "command").font(.system(size: 22, weight: .medium))
-                                Text("command").font(.system(size: 8.5, weight: .medium))
+                                Text(String(key.label.suffix(1))).font(.system(size: 22, weight: .medium))
+                                Text(key == .rightCommand ? "command"
+                                     : String(key.spokenLabel.split(separator: " ").first ?? ""))
+                                    .font(.system(size: 8.5, weight: .medium))
                             }
                             .foregroundStyle(.white.opacity(inviting || pressed || tapFeedback != nil ? 1 : 0.65))
                             .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
@@ -154,8 +160,8 @@ struct OnboardingDoubleTapKeyboard: View {
             .contentShape(RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(KeyboardTapPressStyle(reduceMotion: reduceMotion))
-        .accessibilityLabel("Right Command key")
-        .accessibilityHint("Double-click this key, or double tap your right Command key, to fill the sample reply.")
+        .accessibilityLabel("\(key.spokenLabel) key")
+        .accessibilityHint("Double-click this key, or double tap your \(key.spokenLabel) key, to fill the sample reply.")
         .accessibilityValue(tapFeedback?.confirmed == false ? "One tap. Tap again." : "")
     }
 

@@ -13,7 +13,10 @@ struct OnboardingDoubleTapView: View {
     var coordinator: CommandCoordinator?
     let onContinue: () -> Void
     @State var demo = OnboardingDoubleTapDemo()
+    @AppStorage("sidekick.hotkey") private var shortcutRaw = ShortcutPreferences.current.rawValue
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var shortcut: ShortcutKey { ShortcutKey(rawValue: shortcutRaw) ?? .rightCommand }
 
     /// Matches SidekickScene.tsx's background headline: Instrument Serif 400, upright, 30 px
     /// at the desktop breakpoint. Load the bundled OFL font directly so previews and offline
@@ -51,7 +54,7 @@ struct OnboardingDoubleTapView: View {
                         // so changing samples cannot move the instruction or keyboard below.
                         .frame(height: 440)
 
-                    Text("Double tap your right command key")
+                    Text("Double tap your \(shortcut.spokenLabel) key")
                         .font(Self.instructionFont)
                         .foregroundStyle(.white)
                         .opacity(demo.instructionVisible ? (demo.phase == .waiting ? 1 : 0.42) : 0)
@@ -77,6 +80,7 @@ struct OnboardingDoubleTapView: View {
 
                     OnboardingDoubleTapKeyboard(pressed: demo.keyIsDown, inviting: demo.phase == .waiting,
                                                 reduceMotion: reduceMotion, tapFeedback: demo.tapFeedback,
+                                                key: shortcut,
                                                 action: { demo.clicked() })
                         .disabled(demo.phase != .waiting)
                         .opacity(demo.controlsVisible ? (demo.phase == .complete ? 0.55 : 1) : 0)
@@ -142,6 +146,7 @@ struct OnboardingDoubleTapView: View {
             }
         }
         .onChange(of: reduceMotion) { demo.setReduceMotion(reduceMotion) }
+        .onChange(of: shortcutRaw) { demo.resetGesture() }
         .onDisappear { demo.stop() }
         .preferredColorScheme(.dark)
     }
