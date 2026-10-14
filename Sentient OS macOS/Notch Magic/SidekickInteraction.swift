@@ -85,11 +85,12 @@ nonisolated final class SidekickInteraction: Sendable {
 
     /// Model-authored blockers are labelled as claims; no question, answer, or error text is sent.
     func recordRecovery(_ stage: String, error: String? = nil, elapsed: TimeInterval = 0) {
-        let stage = ["asked", "answered", "cancelled", "failed", "final_failure", "retry", "dismissed"].contains(stage) ? stage : "unknown"
+        let stage = ["asked", "answered", "cancelled", "failed", "final_failure", "retry", "dismissed", "expired"].contains(stage) ? stage : "unknown"
         var fields = diagnosticFields
         fields["wait_ms"] = String(max(0, Int(elapsed * 1000)))
         fields["has_error"] = String(error != nil)
-        let evidence = ["answered", "retry", "dismissed"].contains(stage) ? "user_action" : (stage == "final_failure" ? "ui_outcome" : "model_report")
+        let evidence = ["answered", "retry", "dismissed"].contains(stage) ? "user_action"
+            : (["final_failure", "expired"].contains(stage) ? "ui_outcome" : "model_report")
         CrashReporting.captureEvent("sidekick.recovery", level: .info,
             tags: ["stage": stage, "reason": error.map { AgentRunDiagnostics.Reason.classify($0).rawValue } ?? "clarification",
                    "evidence": evidence, "backend": diagnosticBackend, "diagnostic_schema": "2"], extra: fields,

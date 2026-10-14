@@ -159,17 +159,18 @@ nonisolated final class SidekickTaskSummary: Sendable {
         }
     }
 
-    @MainActor func finish(outcome: CommandRunModel.Outcome, source: String, method: String) {
+    @MainActor func finish(end: SidekickTaskEnd, source: String, method: String) {
         guard let submission = takeSubmission() else { return }
         // Debug runs neither send analytics nor spend a model call reviewing a discarded event.
         guard Analytics.taskSummariesEnabled else { return }
         let backend = backend
+        Analytics.recordTaskEnd(end, backend: backend, source: source, method: method)
         // No inherited Sidekick capability, history, diagnostic task ID or cancelled parent.
         // The review never keeps the task lock held and cannot trigger user-facing recovery.
         Task.detached(priority: .utility) {
             let review = await Self.review(submission, backend: backend)
             await Analytics.recordTaskSummary(review, phase: submission.phase,
-                backend: backend, outcome: outcome, source: source, method: method)
+                backend: backend, end: end, source: source, method: method)
         }
     }
 

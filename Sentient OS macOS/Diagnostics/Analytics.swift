@@ -11,7 +11,8 @@
 //       toggle in Settings → System, gates the EXTENDED tier: the rich funnel + health signals
 //       (onboarding, processing stats, durations, scheduler internals, mirror, plan gates).
 //       The always-on tier (`.core`) keeps sending basic usage counts and a reviewed, generalized
-//       workflow phrase after Sidekick attempts, even when the extended switch is off. The
+//       workflow phrase plus task outcomes and interruption categories after Sidekick attempts,
+//       even when the extended switch is off. The
 //       Sidekick phrase is the sole free-text exception, through recordTaskSummary only.
 //       The SDK boots unconditionally in Release. The disclosure beside the switch (SystemPane)
 //       explains which reports remain enabled. Crash reports keep their separate switch
@@ -63,7 +64,8 @@ enum Analytics {
     /// the switch. It includes basic usage: how many people use Sentient (the install
     /// ping + SDK sessions), Sidekick fires (`Command.submitted`), proactive cards made AND fired
     /// (`Proactive.prepared` + `Proactive.actionFired`), overnight runs (`Scheduler.overnightCompleted`),
-    /// and home opens (`Home.opened`), plus `Sidekick.taskSummary` through its typed sink below.
+    /// and home opens (`Home.opened`), plus `Sidekick.taskEnded` and `Sidekick.taskSummary`
+    /// through their typed sinks below.
     /// Durations, funnels, and health ride `.extended`.
     enum Tier { case core, extended }
 
@@ -121,27 +123,42 @@ enum Analytics {
     /// Debug stays entirely local, including the background privacy review.
     static var taskSummariesEnabled: Bool { started }
 
+    /// Core ending counts do not wait for a model review. This contains only enums, even when
+    /// no safe usage phrase exists. Count taskEnded and taskSummary separately, never add them.
+    static func recordTaskEnd(_ end: SidekickTaskEnd, backend: ModelBackend, source: String, method: String) {
+        signal("Sidekick.taskEnded", parameters: taskEndParameters(end, backend: backend,
+            source: source, method: method), tier: .core)
+    }
+
+    static func taskEndParameters(_ end: SidekickTaskEnd, backend: ModelBackend,
+                                  source: String, method: String) -> [String: String] {
+        end.parameters.merging([
+            "source": ["promptBar", "notchTyped", "voice", "command"].contains(source) ? source : "other",
+            "method": ["computer", "mcp"].contains(method) ? method : "other",
+            "backend": backend.rawValue
+        ]) { _, new in new }
+    }
+
     /// Sole free-text analytics entry: Approved can only be created by SidekickTaskSummary's
     /// privacy reviewer. No raw prompt, final response, history or free-form rejection text is accepted.
     static func recordTaskSummary(_ review: SidekickTaskSummary.Review,
                                   phase: SidekickTaskSummary.Phase?, backend: ModelBackend,
-                                  outcome: CommandRunModel.Outcome, source: String, method: String) {
+                                  end: SidekickTaskEnd, source: String, method: String) {
         guard taskSummariesEnabled else { return }
         TelemetryDeck.signal("Sidekick.taskSummary", parameters: taskSummaryParameters(review,
-            phase: phase, backend: backend, outcome: outcome, source: source, method: method))
+            phase: phase, backend: backend, end: end, source: source, method: method))
     }
 
     static func taskSummaryParameters(_ review: SidekickTaskSummary.Review,
                                       phase: SidekickTaskSummary.Phase?, backend: ModelBackend,
-                                      outcome: CommandRunModel.Outcome, source: String, method: String) -> [String: String] {
-        var fields = ["source": ["promptBar", "notchTyped", "voice", "command"].contains(source) ? source : "other",
-                      "method": ["computer", "mcp"].contains(method) ? method : "other",
-                      "outcome": outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed"),
+                                      end: SidekickTaskEnd, source: String, method: String) -> [String: String] {
+        var fields = taskEndParameters(end, backend: backend, source: source, method: method)
+        fields.merge([
                       "summary_status": review.summary == nil ? "unavailable" : "available",
                       "summary_reason": review.reason.rawValue,
                       "summary_phase": phase?.rawValue ?? "none",
                       "summary_backend": backend.rawValue,
-                      "summary_version": "2"]
+                      "summary_version": "2"]) { _, new in new }
         if let summary = review.summary { fields["summary"] = summary.phrase }
         return fields
     }

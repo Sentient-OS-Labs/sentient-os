@@ -168,6 +168,9 @@ final class ComputerUseGate {
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
 
+    /// Closing required setup is distinct from cancelling the owning task.
+    nonisolated struct SetupCancelled: Error {}
+
     /// The request already owns the notch and the one-task lock while waiting here. Closing a
     /// blocking setup or pressing STOP releases it; no late permission result can revive it.
     func waitUntilReady() async throws {
@@ -182,7 +185,7 @@ final class ComputerUseGate {
                 }
                 let intent = PendingAction(id: id,
                     proceed: { continuation.resume() },
-                    cancel: { continuation.resume(throwing: CancellationError()) })
+                    cancel: { continuation.resume(throwing: SetupCancelled()) })
                 if !intercept(intent) { continuation.resume() }
             }
             try Task.checkCancellation()

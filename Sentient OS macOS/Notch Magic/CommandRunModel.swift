@@ -24,8 +24,8 @@ import Foundation
 
 @MainActor @Observable
 final class CommandRunModel {
-    /// How a run ended — drives the notch's finishing glyph (and nothing else).
-    enum Outcome: Equatable { case success, stopped, failed }
+    /// Shared by the finishing presentation, local history, and structured task telemetry.
+    nonisolated enum Outcome: String, Sendable { case success, stopped, failed }
 
     static let offlineMessage = "You're currently not connected to internet. Try again later"
 
@@ -58,6 +58,7 @@ final class CommandRunModel {
     private(set) var lastResultID: UUID?
     private var finalResponse: String?
     private var recoveryCancelled = false
+    private var stopCause: SidekickTaskEnd.StopCause?
     private var lastAttemptDetail = ""
 
     /// Supplied by the mounted home through a weak model capture. Read once at launch so
@@ -208,20 +209,21 @@ final class CommandRunModel {
                             #endif
                             self?.complete(.failed,
                                            line: reason.isEmpty ? "✗ couldn't do it" : "✗ \(reason)",
-                                           board: .refused)
+                                           board: .refused, interruption: .modelReport(reason))
                         case .done:
                             Log("──────── 🤖 ✓ DONE in \(secs)s ────────")
                             self?.complete(.success, line: "✓ done")
                         case .none:
                             Log("CMD: computer task completion was not confirmed")
                             self?.complete(.failed, line: AgentStatus.unconfirmedComputerMessage,
-                                           board: .refused, statusPresent: false)
+                                           board: .refused, statusPresent: false, interruption: .unconfirmed)
                         }
                     } catch {
                         let secs = Int(Date().timeIntervalSince(started))
-                        if Task.isCancelled || error is CancellationError {
+                        if Task.isCancelled || error is CancellationError || error is ComputerUseGate.SetupCancelled {
                             Log("──────── 🤖 ■ STOPPED after \(secs)s ────────")
-                            self?.complete(.stopped, line: "■ stopped")
+                            self?.complete(.stopped, line: "■ stopped",
+                                           interruption: .error(Task.isCancelled ? CancellationError() : error))
                         } else {
                             Log("──────── 🤖 ✗ FAILED after \(secs)s ────────")
                             Log("CMD: \(ErrorLabel(error))")
@@ -238,6 +240,7 @@ final class CommandRunModel {
         interaction?.personalization?.finish(success: false)
         recovery.cancel()
         runID = UUID(); recoveryCancelled = false; queuedRetry = nil
+        stopCause = nil
         isPersonalizing = false
         if context.isEmpty { personalizationTaskID = UUID(); retryGuidance = nil }
         retryAction = retry; lastAttemptDetail = ""; finalResponse = nil
@@ -259,7 +262,9 @@ final class CommandRunModel {
             guard let self, self.runID == generation, self.isRunning, !self.isOffline, !self.recoveryCancelled else { throw CancellationError() }
             self.clearRemembering()
             if let error = question.error { SidekickHistory.recordError(error, for: self.historyID) }
-            let answer = try await self.recovery.ask(question) { [weak self] in self?.stop() }
+            let answer = try await self.recovery.ask(question) { [weak self] cause in
+                self?.stop(cause: cause == .expired ? .recoveryExpired : .user)
+            }
             guard self.runID == generation, self.isRunning, !self.recoveryCancelled else { throw CancellationError() }
             self.onRecoveryResumed?()
             return answer
@@ -273,9 +278,15 @@ final class CommandRunModel {
         let generation = runID
         let retry = retryAction
         let detail = lastAttemptDetail.isEmpty ? line : line + "\n" + lastAttemptDetail
-        recovery.present(.failure(id: UUID(), error: line)) { [weak self] answer in
+        recovery.present(.failure(id: UUID(), error: line)) { [weak self] resolution in
             guard let self, self.runID == generation else { return }
-            guard let answer else { self.interaction?.recordRecovery("dismissed"); self.stop(); return }
+            guard case .answered(let answer) = resolution else {
+                if case .cancelled(let cause) = resolution, cause != .interrupted {
+                    self.interaction?.recordRecovery(cause == .expired ? "expired" : "dismissed")
+                    self.stop(cause: cause == .expired ? .recoveryExpired : .user)
+                }
+                return
+            }
             guard let retry else { self.recoveryCancelled = true; return }
             let context = SidekickInteraction.retryInstructions(error: detail, guidance: answer.text)
             self.interaction?.recordRecovery("retry")
@@ -347,12 +358,12 @@ final class CommandRunModel {
             case .none:
                 Log("CMD: connector completion unconfirmed after \(secs)s")
                 complete(.failed, line: AgentStatus.unconfirmedConnectorMessage,
-                         statusPresent: false)
+                         statusPresent: false, interruption: .unconfirmed)
                 return true
             case .couldNot(let reason):
                 if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
                     complete(.failed, line: reason.isEmpty ? AgentStatus.unconfirmedConnectorMessage : reason,
-                             statusPresent: true)
+                             statusPresent: true, interruption: .modelReport(reason))
                     return true // a remote write may have succeeded; never repeat it on screen
                 }
                 Log("──────── 🤖 ⚠️ \(slug) COULD_NOT after \(secs)s (\(reason.count)-char reason) → falling back to computer use ────────")
@@ -363,9 +374,10 @@ final class CommandRunModel {
             }
         } catch {
             try Task.checkCancellation()   // the user's STOP → the caller's honest "stopped"
+            if error is CancellationError { throw error }
             if slug.hasPrefix("direct-") || ["slack", OutlookMailConnector.slug, OutlookCalendarConnector.slug].contains(slug) {
                 complete(.failed, line: (error as? DirectMCPError)?.errorDescription ?? AgentStatus.unconfirmedConnectorMessage,
-                         statusPresent: false)
+                         statusPresent: false, error: error)
                 return true
             }
             Log("CMD: connector leg failed (\(ErrorLabel(error))) → falling back to computer use")
@@ -400,8 +412,9 @@ final class CommandRunModel {
         """
     }
 
-    func stop() {
+    func stop(cause: SidekickTaskEnd.StopCause = .user) {
         guard !recoveryCancelled else { return }
+        if isRunning, stopCause == nil { stopCause = cause }
         recoveryCancelled = true; queuedRetry = nil
         interaction?.personalization?.finish(success: false)
         recovery.cancel()
@@ -467,6 +480,7 @@ final class CommandRunModel {
     func startOnboardingDemo() {
         guard !isRunning else { return }
         recovery.cancel(); recoveryCancelled = false; runID = UUID()
+        stopCause = nil
         retryAction = nil; interaction = nil
         mode = .computer
         isDemo = true
@@ -512,14 +526,18 @@ final class CommandRunModel {
     /// scoreboard + analytics), the demo's theater exit, and completeExternal. Sets the final
     /// status line, releases the run, tells the coordinator, and lets the line linger.
     private func finish(_ outcome: Outcome, line: String) {
+        finish(SidekickTaskEnd(outcome: outcome, stop: stopCause), line: line)
+    }
+
+    private func finish(_ end: SidekickTaskEnd, line: String) {
         let alreadyFinishing = isOffline
-        let outcome: Outcome = alreadyFinishing ? .failed : outcome
+        let outcome = end.outcome
         let line = alreadyFinishing || (!isDemo && outcome == .failed && NetworkSnapshot.shared.current.status == "unsatisfied")
-            ? Self.offlineMessage : line
+            ? Self.offlineMessage : (outcome == .stopped ? "■ stopped" : line)
         stopWatchingConnectivity()
         if !isDemo {
             interaction?.personalization?.finish(success: outcome == .success && !recoveryCancelled)
-            interaction?.taskSummary?.finish(outcome: outcome, source: source, method: executedMethod)
+            interaction?.taskSummary?.finish(end: end, source: source, method: executedMethod)
         }
         isPersonalizing = false
         if !isDemo {
@@ -568,6 +586,7 @@ final class CommandRunModel {
         guard !Task.isCancelled, isRunning, !isDemo, !isOffline,
               NetworkSnapshot.shared.current.status == "unsatisfied" else { return false }
         isOffline = true
+        if stopCause == nil { stopCause = .offline }
         interaction?.personalization?.finish(success: false)
         clearRemembering()
         stopWatchingConnectivity()
@@ -691,12 +710,17 @@ final class CommandRunModel {
     /// `board` overrides the outcome-derived scoreboard verdict (the sentinel's `.refused`);
     /// `statusPresent: false` = codex claimed done but never emitted the STATUS sentinel.
     private func complete(_ outcome: Outcome, line: String,
-                          board: ExecutorScoreboard.Outcome? = nil, statusPresent: Bool = true, error: Error? = nil) {
+                          board: ExecutorScoreboard.Outcome? = nil, statusPresent: Bool = true, error: Error? = nil,
+                          interruption: SidekickTaskEnd.Failure? = nil) {
+        guard isRunning else { return }
+        let end = SidekickTaskEnd(outcome: outcome, stop: stopCause,
+                                 failure: interruption ?? error.map(SidekickTaskEnd.Failure.error))
         // §7.19: feed the executor scoreboard (this IS the command-bar / voice computer-use path).
-        // Skip .stopped — that's a user cancel, not a health outcome. `fired` is now
+        // Skip .stopped — cancellation alone is not an executor defect. `fired` is now
         // sentinel-verified when statusPresent; without the sentinel it stays a flagged claim.
         // An offline interruption is expected environment state, not an executor defect.
-        let resolved = isOffline ? nil : (board ?? (outcome == .success ? .fired : (outcome == .failed ? .failed : nil)))
+        let resolved = isOffline || end.outcome == .stopped ? nil
+            : (board ?? (end.outcome == .success ? .fired : .failed))
         if let resolved {
             ExecutorScoreboard.record(method: executedMethod, source: source, outcome: resolved,
                                       durationS: Date().timeIntervalSince(runStarted),
@@ -706,11 +730,10 @@ final class CommandRunModel {
         // Extended tier: how long the agent worked this run — EVERY outcome (a stopped run still had
         // the notch lit that long). floatValue sums server-side into total agent-seconds, the
         // "Sidekick saved users N hours" headline.
-        let outcomeTag = isOffline ? "failed" : (outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed"))
         Analytics.signal("ComputerUse.finished",
-                         parameters: ["source": source, "method": executedMethod, "outcome": outcomeTag],
+                         parameters: end.parameters.merging(["source": source, "method": executedMethod]) { _, new in new },
                          floatValue: Date().timeIntervalSince(runStarted))
-        finish(outcome, line: line)
+        finish(end, line: line)
     }
 
     private static func short(_ error: Error) -> String {
