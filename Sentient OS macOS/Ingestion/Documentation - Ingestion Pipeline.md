@@ -26,7 +26,8 @@ Its own on-disk container: `~/Library/Application Support/SentientOS/IterativeCy
 - **`BucketPointer` (durable, one per bucket).** Normally the **high-water mark**: everything at or below `(order, tiebreak)` is done, everything newer is new. During a bucket's FIRST run it also carries a **floor**: the mark holds the top (the newest item this first run covers), and the floor is the oldest item done so far, sinking one item at a time. A non-nil floor is the single tell that a first run is mid-descent. When the descent reaches the bottom, the floor collapses and the mark becomes a normal high-water mark. Progress state survives a cycle; Apple Mail additionally retains its dedicated checkpoint and survivor identities.
 - **`CycleNote` (ephemeral, one per survivor).** The summary text, title, source kind, source id, folder tag, item date, and a `reminderFlagged` hint. Wiped at the end of every successful full cycle (`ProactiveCycle` step 4). Junk and sensitive items do not produce retained knowledge summaries. Progress checkpoints are separate.
 
-Bucket keys are the pointer namespace: `file:<root.id>` per folder root, `notes`, `siyuan`, `whatsapp:<jid>`,
+Bucket keys are the pointer namespace: `file:<root.id>` per folder root, `notes`,
+`siyuan:<workspace-hash>:<doc-id>` per SiYuan note, `whatsapp:<jid>`,
 `imessage:<guid>`, and the cloud legs' `gmail` / `calendar`.
 
 Write paths that matter:

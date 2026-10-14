@@ -30,21 +30,28 @@ struct SiYuanNote {
         body = Self.blocks(Self.children(doc), indent: "", avDir: databases)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let stamp = (props["updated"] as? String).flatMap { Self.parseStamp($0) }
-        let databaseSaves = Self.databaseIDs(in: data).compactMap { id in
+        let databaseSaves = Self.databaseIDs(in: doc).compactMap { id in
             databases.flatMap { try? $0.appendingPathComponent(id + ".json")
                 .resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
         }
         updated = ([stamp].compactMap { $0 } + databaseSaves).max()
     }
 
-    /// IDs of the databases a note embeds (`data-av-id="…"` in each database block's markup).
-    private static func databaseIDs(in data: Data) -> [String] {
-        let raw = String(decoding: data, as: UTF8.self)
-        let pattern = #"data-av-id=\\"([0-9]{14}-[0-9a-z]{7})\\""#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
-        return regex.matches(in: raw, range: NSRange(raw.startIndex..., in: raw)).compactMap {
-            Range($0.range(at: 1), in: raw).map { String(raw[$0]) }
-        }
+    /// Use the same reference for rendering and freshness. SiYuan persists AttributeViewID;
+    /// older notes may carry data-av-id in the block's Data markup instead.
+    private static func databaseID(_ n: Node) -> String? {
+        guard type(n) == "NodeAttributeView" else { return nil }
+        let legacyID = data(n).range(of: #"data-av-id="([^"]+)""#, options: .regularExpression)
+            .map { String(data(n)[$0].dropFirst(12).dropLast()) }
+        guard let id = n["AttributeViewID"] as? String ?? legacyID,
+              id.range(of: #"^[0-9]{14}-[0-9a-z]{7}$"#, options: .regularExpression) != nil else { return nil }
+        return id
+    }
+
+    private static func databaseIDs(in n: Node) -> Set<String> {
+        var ids = Set(databaseID(n).map { [$0] } ?? [])
+        for child in children(n) { ids.formUnion(databaseIDs(in: child)) }
+        return ids
     }
 
     /// SiYuan stamps (and block IDs' first 14 characters) are local-time `yyyyMMddHHmmss`.
@@ -123,11 +130,26 @@ struct SiYuanNote {
     private static func listItem(_ n: Node, indent: String, avDir: URL?) -> String {
         let list = n["ListData"] as? [String: Any] ?? [:]
         var marker = (list["Typ"] as? Int) == 1 ? "\(list["Num"] as? Int ?? 1). " : "- "
-        if (list["Typ"] as? Int) == 3 { marker += (list["Checked"] as? Bool) == true ? "[x] " : "[ ] " }
+        if (list["Typ"] as? Int) == 3 { marker += "[\(taskMarker(n))] " }
         let body = blocks(children(n), indent: indent + "  ", avDir: avDir)
         guard !body.isEmpty else { return "" }
         // Swap the first line's continuation indent for the marker.
         return indent + marker + body.dropFirst(indent.count + 2)
+    }
+
+    private static func taskMarker(_ n: Node) -> String {
+        let task = children(n).first { type($0) == "NodeTaskListItemMarker" }
+        // Current SiYuan also supports markers such as [/]. Preserve those states, including
+        // an explicit space, before falling back to the older checked boolean.
+        if let raw = task?["TaskListItemMarker"] as? Int, (32...126).contains(raw),
+           let scalar = UnicodeScalar(raw) {
+            return raw == 88 ? "x" : String(scalar)
+        }
+        // The marker's missing boolean means false (SiYuan omits false JSON fields). Only
+        // consult ListData when the marker node itself is absent in an older representation.
+        let checked = task.map { ($0["TaskListItemChecked"] as? Bool) == true }
+            ?? (((n["ListData"] as? Node)?["Checked"] as? Bool) == true)
+        return checked ? "x" : " "
     }
 
     private static func quoted(_ body: String, indent: String) -> String {
@@ -158,8 +180,7 @@ struct SiYuanNote {
 
     private static func database(_ n: Node, indent: String, avDir: URL?) -> String {
         guard let avDir,
-              let id = data(n).range(of: #"data-av-id="([^"]+)""#, options: .regularExpression)
-                .map({ String(data(n)[$0].dropFirst(12).dropLast()) }),
+              let id = databaseID(n),
               let av = document(avDir.appendingPathComponent(id + ".json")),
               let keyValues = av["keyValues"] as? [Node], !keyValues.isEmpty else { return "" }
         let columns = keyValues.filter { !($0["values"] as? [Node] ?? []).isEmpty }

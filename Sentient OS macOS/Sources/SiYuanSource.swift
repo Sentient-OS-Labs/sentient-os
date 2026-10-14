@@ -17,9 +17,14 @@
 //
 
 import Foundation
+import CryptoKit
 
 struct SiYuanSource: Sendable {
     let kind: SourceKind = .siyuan
+    private let workspaceURLs: [URL]?
+
+    /// Explicit workspaces also let offline fixtures exercise the real reader without user data.
+    init(workspaces: [URL]? = nil) { workspaceURLs = workspaces }
 
     static let maxNotes = 1_000          // newest-updated first, same cap as Apple Notes
     static let maxDepth = 8              // sub-document nesting below a notebook
@@ -70,7 +75,12 @@ struct SiYuanSource: Sendable {
     func eligibleNotes() -> [Candidate] {
         let guides = Self.guideIDs
         var out: [Candidate] = []
-        for workspace in Self.workspaces {
+        let workspaces = Set((workspaceURLs ?? Self.workspaces).map { $0.standardizedFileURL.resolvingSymlinksInPath() })
+        for workspace in workspaces.sorted(by: { $0.path < $1.path }) {
+            // Copies of a workspace retain SiYuan's document IDs. Scope identities to the
+            // canonical workspace path without putting the user's path in checkpoint keys.
+            let workspaceID = SHA256.hash(data: Data(workspace.path.utf8))
+                .map { String(format: "%02x", $0) }.joined()
             let dataDir = workspace.appendingPathComponent("data")
             let databases = dataDir.appendingPathComponent("storage/av")
             let entries = (try? FileManager.default.contentsOfDirectory(atPath: dataDir.path)) ?? []
@@ -78,10 +88,12 @@ struct SiYuanSource: Sendable {
                 let notebookDir = dataDir.appendingPathComponent(id)
                 guard let conf = Self.notebookConf(notebookDir), conf["closed"] as? Bool != true else { continue }
                 let name = conf["name"] as? String ?? "SiYuan"
-                walk(notebookDir, trail: [name], depth: 0, databases: databases, into: &out)
+                walk(notebookDir, trail: [name], depth: 0, databases: databases, workspaceID: workspaceID, into: &out)
             }
         }
-        let kept = out.sorted { $0.itemDate > $1.itemDate }.prefix(Self.maxNotes)
+        let kept = out.sorted {
+            $0.itemDate == $1.itemDate ? $0.id > $1.id : $0.itemDate > $1.itemDate
+        }.prefix(Self.maxNotes)
         SourceHealth.checkListingCollapse(source: "siyuan", bucketKey: "siyuan", count: kept.count)
         return Array(kept)
     }
@@ -92,7 +104,8 @@ struct SiYuanSource: Sendable {
     }
 
     /// One folder of documents. `trail` is the notebook name plus the titles of the documents above.
-    private func walk(_ dir: URL, trail: [String], depth: Int, databases: URL, into out: inout [Candidate]) {
+    private func walk(_ dir: URL, trail: [String], depth: Int, databases: URL,
+                      workspaceID: String, into out: inout [Candidate]) {
         guard depth <= Self.maxDepth,
               let entries = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return }
         for file in entries where file.hasSuffix(".sy") {
@@ -100,15 +113,16 @@ struct SiYuanSource: Sendable {
             guard let note = SiYuanNote(contentsOf: url, databases: databases) else { continue }
             let docID = String(file.dropLast(3))
             let path = trail + [note.title]
-            if !note.body.isEmpty, let candidate = Self.candidate(docID, note: note, path: path, file: url) {
+            if !note.body.isEmpty, let candidate = Self.candidate(docID, note: note, path: path, file: url, workspaceID: workspaceID) {
                 out.append(candidate)
             }
             // Sub-documents live in a sibling folder named after this document.
-            walk(dir.appendingPathComponent(docID), trail: path, depth: depth + 1, databases: databases, into: &out)
+            walk(dir.appendingPathComponent(docID), trail: path, depth: depth + 1,
+                 databases: databases, workspaceID: workspaceID, into: &out)
         }
     }
 
-    private static func candidate(_ docID: String, note: SiYuanNote, path: [String], file: URL) -> Candidate? {
+    private static func candidate(_ docID: String, note: SiYuanNote, path: [String], file: URL, workspaceID: String) -> Candidate? {
         let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
         guard let updated = note.updated ?? modified else { return nil }
         let created = SiYuanNote.parseStamp(docID)
@@ -121,7 +135,7 @@ struct SiYuanSource: Sendable {
             "noteText": String(text.prefix(maxContentChars)),
         ]
         if let created { metadata["created"] = dateFormatter.string(from: created) }
-        return Candidate(id: "siyuan:\(docID)", kind: .siyuan,
+        return Candidate(id: "siyuan:\(workspaceID):\(docID)", kind: .siyuan,
                          cursorKey: "siyuan", cursorValue: "",   // vestigial — the iterative core keys on ItemKey
                          itemDate: min(updated, Date()), metadata: metadata)
     }
