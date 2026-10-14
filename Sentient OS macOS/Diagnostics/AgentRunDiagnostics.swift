@@ -65,7 +65,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     private let feature: String
 
     init(feature: String = "computer") {
-        let known: Set<String> = ["computer", "sidekick-mcp", "task-summary-review", "router", "vault", "proactive", "proactive-research", "giftletter", "writingstyle", "mcp-read", "mcp-write", "gmail-write", "calendar-write", "calendar-context", "calendar-proactive", "calendar", "gmail", "classify", "census"]
+        let known: Set<String> = ["computer", "sidekick-mcp", "router", "vault", "proactive", "proactive-research", "giftletter", "writingstyle", "mcp-read", "mcp-write", "gmail-write", "calendar-write", "calendar-context", "calendar-proactive", "calendar", "gmail", "classify", "census"]
         self.feature = known.contains(feature) ? feature : "other"
     }
 

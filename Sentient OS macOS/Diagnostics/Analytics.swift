@@ -2,7 +2,7 @@
 //  Analytics.swift
 //  Sentient OS macOS
 //
-//  TelemetryDeck integration — the app's privacy-safe PRODUCT analytics (how many people use the app,
+//  TelemetryDeck integration — the app's PRODUCT analytics (how many people use the app,
 //  how far they get in onboarding, which features actually fire). The twin of CrashReporting.swift
 //  (Sentry, which is crashes/errors). Two gates:
 //    1. RELEASE builds only — a no-op in DEBUG, so a dev's day-to-day Debug runs never pollute the
@@ -10,7 +10,7 @@
 //    2. A TIERED consent switch — `analyticsEnabled` (default ON), the "Share anonymous analytics"
 //       toggle in Settings → System, gates the EXTENDED tier: the rich funnel + health signals
 //       (onboarding, processing stats, durations, scheduler internals, mirror, plan gates).
-//       The always-on tier (`.core`) keeps sending basic usage counts and a reviewed, generalized
+//       The always-on tier (`.core`) keeps sending basic usage counts and a model-generalized
 //       workflow phrase plus task outcomes and interruption categories after Sidekick attempts,
 //       even when the extended switch is off. The
 //       Sidekick phrase is the sole free-text exception, through recordTaskSummary only.
@@ -20,8 +20,8 @@
 //       out (or vice versa).
 //  Identity is the same anonymous per-install UUID (`CrashReporting.installID`); TelemetryDeck hashes
 //  it again on-device and once more on their server. This permits repeat-event association; it
-//  does not sanitize payload text. Ordinary signals carry structure only. Sidekick phrases pass
-//  local checks and a separate model review; that review reduces disclosure risk, not a proof of anonymity.
+//  does not sanitize payload text. Ordinary signals carry structure only. Sidekick's task model
+//  is instructed to omit private details; local format checks do not establish anonymity.
 //  `floatValue` is TelemetryDeck's one numeric field — dashboards can SUM it, which is how the
 //  worldwide totals work (suggestions generated, agent-seconds worked).
 //
@@ -120,11 +120,11 @@ enum Analytics {
     }
 
     /// Task descriptions are always-on in Release, independent of the extended toggle.
-    /// Debug stays entirely local, including the background privacy review.
+    /// Debug stays entirely local. Summary reporting never starts an additional model call.
     static var taskSummariesEnabled: Bool { started }
 
-    /// Core ending counts do not wait for a model review. This contains only enums, even when
-    /// no safe usage phrase exists. Count taskEnded and taskSummary separately, never add them.
+    /// Core ending counts contain only enums, even when no usage phrase is available.
+    /// Count taskEnded and taskSummary separately, never add them.
     static func recordTaskEnd(_ end: SidekickTaskEnd, backend: ModelBackend, source: String, method: String) {
         signal("Sidekick.taskEnded", parameters: taskEndParameters(end, backend: backend,
             source: source, method: method), tier: .core)
@@ -139,27 +139,26 @@ enum Analytics {
         ]) { _, new in new }
     }
 
-    /// Sole free-text analytics entry: Approved can only be created by SidekickTaskSummary's
-    /// privacy reviewer. No raw prompt, final response, history or free-form rejection text is accepted.
-    static func recordTaskSummary(_ review: SidekickTaskSummary.Review,
-                                  phase: SidekickTaskSummary.Phase?, backend: ModelBackend,
+    /// Sole free-text analytics entry: Validated can only be created after local format checks.
+    /// The task prompt owns privacy generalization; no separate model reviews the phrase.
+    static func recordTaskSummary(_ report: SidekickTaskSummary.Report, backend: ModelBackend,
                                   end: SidekickTaskEnd, source: String, method: String) {
         guard taskSummariesEnabled else { return }
-        TelemetryDeck.signal("Sidekick.taskSummary", parameters: taskSummaryParameters(review,
-            phase: phase, backend: backend, end: end, source: source, method: method))
+        TelemetryDeck.signal("Sidekick.taskSummary", parameters: taskSummaryParameters(report,
+            backend: backend, end: end, source: source, method: method))
     }
 
-    static func taskSummaryParameters(_ review: SidekickTaskSummary.Review,
-                                      phase: SidekickTaskSummary.Phase?, backend: ModelBackend,
+    static func taskSummaryParameters(_ report: SidekickTaskSummary.Report, backend: ModelBackend,
                                       end: SidekickTaskEnd, source: String, method: String) -> [String: String] {
         var fields = taskEndParameters(end, backend: backend, source: source, method: method)
         fields.merge([
-                      "summary_status": review.summary == nil ? "unavailable" : "available",
-                      "summary_reason": review.reason.rawValue,
-                      "summary_phase": phase?.rawValue ?? "none",
+                      "summary_status": report.summary == nil ? "unavailable" : "available",
+                      "summary_reason": report.reason.rawValue,
+                      "summary_phase": report.phase?.rawValue ?? "none",
                       "summary_backend": backend.rawValue,
-                      "summary_version": "2"]) { _, new in new }
-        if let summary = review.summary { fields["summary"] = summary.phrase }
+                      "summary_validation": "local_format",
+                      "summary_version": "3"]) { _, new in new }
+        if let summary = report.summary { fields["summary"] = summary.phrase }
         return fields
     }
 
