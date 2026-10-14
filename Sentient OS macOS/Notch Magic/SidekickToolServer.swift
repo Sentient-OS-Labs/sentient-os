@@ -136,7 +136,7 @@ actor SidekickToolServer {
                     do { try summary.stage(arguments) }
                     catch { return try reply(Self.rejectedSummary) }
                     action = {
-                        try Self.json(["message": "Description received for privacy review after the attempt ends. Continue the original task; if it has ended, emit its final answer and STATUS."])
+                        try Self.json(["message": "Description received for reporting after the attempt ends. Continue the original task; if it has ended, emit its final answer and STATUS."])
                     }
                 } else { return try reply(Self.invalidArguments) }
                 activeCall = key

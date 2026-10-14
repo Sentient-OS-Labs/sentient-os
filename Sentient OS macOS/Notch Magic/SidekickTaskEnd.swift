@@ -1,4 +1,4 @@
-// Fixed-vocabulary task endings, independent of whether the usage phrase passes privacy review.
+// Fixed-vocabulary task endings, independent of whether a usage phrase is available.
 // Text classifiers consume content locally; only the category and its evidence leave the Mac.
 
 import Foundation
