@@ -122,22 +122,27 @@ enum Analytics {
     static var taskSummariesEnabled: Bool { started }
 
     /// Sole free-text analytics entry: Approved can only be created by SidekickTaskSummary's
-    /// privacy reviewer. No raw prompt, final response, history or rejection reason is accepted.
-    static func recordTaskSummary(_ summary: SidekickTaskSummary.Approved?,
+    /// privacy reviewer. No raw prompt, final response, history or free-form rejection text is accepted.
+    static func recordTaskSummary(_ review: SidekickTaskSummary.Review,
+                                  phase: SidekickTaskSummary.Phase?, backend: ModelBackend,
                                   outcome: CommandRunModel.Outcome, source: String, method: String) {
         guard taskSummariesEnabled else { return }
-        TelemetryDeck.signal("Sidekick.taskSummary", parameters: taskSummaryParameters(summary,
-            outcome: outcome, source: source, method: method))
+        TelemetryDeck.signal("Sidekick.taskSummary", parameters: taskSummaryParameters(review,
+            phase: phase, backend: backend, outcome: outcome, source: source, method: method))
     }
 
-    static func taskSummaryParameters(_ summary: SidekickTaskSummary.Approved?,
+    static func taskSummaryParameters(_ review: SidekickTaskSummary.Review,
+                                      phase: SidekickTaskSummary.Phase?, backend: ModelBackend,
                                       outcome: CommandRunModel.Outcome, source: String, method: String) -> [String: String] {
         var fields = ["source": ["promptBar", "notchTyped", "voice", "command"].contains(source) ? source : "other",
                       "method": ["computer", "mcp"].contains(method) ? method : "other",
                       "outcome": outcome == .success ? "success" : (outcome == .stopped ? "stopped" : "failed"),
-                      "summary_status": summary == nil ? "unavailable" : "available",
-                      "summary_version": "1"]
-        if let summary { fields["summary"] = summary.phrase }
+                      "summary_status": review.summary == nil ? "unavailable" : "available",
+                      "summary_reason": review.reason.rawValue,
+                      "summary_phase": phase?.rawValue ?? "none",
+                      "summary_backend": backend.rawValue,
+                      "summary_version": "2"]
+        if let summary = review.summary { fields["summary"] = summary.phrase }
         return fields
     }
 

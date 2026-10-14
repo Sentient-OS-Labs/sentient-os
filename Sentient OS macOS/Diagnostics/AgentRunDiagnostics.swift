@@ -21,7 +21,9 @@ nonisolated final class AgentRunDiagnostics: Sendable {
             if text.contains("not running") || text.contains("app not found") || text.contains("application not found") || text.contains("can't be reached") { return .appUnavailable }
             if text.contains("re-query") || text.contains("stale") || text.contains("element not found") { return .staleTarget }
             if text.contains("permission") || text.contains("accessibility") || text.contains("not authorized") { return .permission }
-            if text.contains("unauthorized") || text.contains("sign in") || text.contains("not logged in") { return .authentication }
+            if text.contains("unauthorized") || text.contains("not logged in")
+                || text.range(of: #"\b(?:sign[ -]?in|log[ -]?in|authentication|reauthenticate)\b"#,
+                              options: .regularExpression) != nil { return .authentication }
             if text.contains("rate limit") || text.contains("usage limit") || text.contains("quota") { return .quota }
             if text.contains("timed out") || text.contains("timeout") { return .timeout }
             if text.contains("connection") || text.contains("disconnected") { return .connection }
@@ -63,7 +65,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     private let feature: String
 
     init(feature: String = "computer") {
-        let known: Set<String> = ["computer", "sidekick-mcp", "router", "vault", "proactive", "proactive-research", "giftletter", "writingstyle", "mcp-read", "mcp-write", "gmail-write", "calendar-write", "calendar-context", "calendar-proactive", "calendar", "gmail", "classify", "census"]
+        let known: Set<String> = ["computer", "sidekick-mcp", "task-summary-review", "router", "vault", "proactive", "proactive-research", "giftletter", "writingstyle", "mcp-read", "mcp-write", "gmail-write", "calendar-write", "calendar-context", "calendar-proactive", "calendar", "gmail", "classify", "census"]
         self.feature = known.contains(feature) ? feature : "other"
     }
 

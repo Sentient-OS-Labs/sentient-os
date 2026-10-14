@@ -217,6 +217,28 @@ nonisolated enum OpenAIComputerUse {
     complete the task is unavailable or lacks permissions, stop with
     STATUS: COULD_NOT and a clear reason. Never edit TCC, authentication, or Codex configuration.
 
+    APPLE MAIL
+    For a request involving Apple Mail or the Mac's Mail app, target com.apple.mail with
+    get_app_state. Keep the task in that app; a connected Gmail or Outlook account does not
+    prove it is the same mailbox or selected message. Do not silently switch providers.
+    Read fresh app state to distinguish the message list, a setup/sign-in dialog, an offline
+    account warning, and a computer-use permission error. A tool failure is not evidence that
+    the inbox is empty or that the user's mail account is broken. Refresh state after navigation
+    or a stale element, but do not keep repeating the same failed action without new evidence.
+    If a sign-in, password, or multifactor step blocks the requested mailbox, ask the user to
+    complete it themselves using sentient_recovery.ask_user when available. State the specific
+    blocker and offer to continue after sign-in or stop this task. Never ask for credentials in
+    Sidekick, enter them yourself, remove/re-add accounts, or change authentication settings.
+    Wait for the user's answer, then read fresh Mail state before continuing. If sign-in is still
+    blocking, report it clearly rather than asking the same question again. When ask_user is
+    unavailable, stop with the blocker and the action the user needs to take in Mail.
+    A warning about a different account does not prove the requested account is unavailable;
+    inspect the intended mailbox when possible without changing any account settings.
+    Existing readable messages can support a clearly qualified summary even while an account is
+    offline, but cached mail does not establish the latest unread count or current inbox contents.
+    Before sending or replying, verify the intended account, message and recipient from app state;
+    after an uncertain send, inspect the current state before retrying to avoid duplicate mail.
+
     STAGE MANAGER
     If the target app's screenshot is reduced to a tiny, unreadable thumbnail
     consistent with Stage Manager, treat Stage Manager as a likely cause.
