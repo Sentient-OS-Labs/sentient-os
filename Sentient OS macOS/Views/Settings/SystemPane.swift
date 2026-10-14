@@ -30,6 +30,9 @@ struct SystemPane: View {
     @State private var resetError: String?
     @State private var showUninstall = false
     @State private var showPrivacyPolicy = false
+    @State private var exportingDiagnostics = false
+    @State private var diagnosticFile: URL?
+    @State private var diagnosticError: String?
     @State private var activity = PipelineActivity.shared   // Reset + Uninstall lock while a run is active
 
     var body: some View {
@@ -37,6 +40,7 @@ struct SystemPane: View {
             VStack(alignment: .leading, spacing: 34) {
                 startupGroup
                 privacyGroup
+                diagnosticsGroup
                 InviteSettingsSection()
                 SettingsGroup(label: "Danger zone", description: "Remove your knowledge or uninstall Sentient.", inset: 0, destructive: true) {
                     VStack(spacing: 0) {
@@ -138,7 +142,54 @@ struct SystemPane: View {
         .sheet(isPresented: $showPrivacyPolicy) { PrivacyPolicyView() }
     }
 
-    // MARK: - Danger zone (the shared FactoryReset wipe)
+    // MARK: - Diagnostics
+
+    private var diagnosticsGroup: some View {
+        SettingsGroup(label: "Diagnostics", inset: 0) {
+            VStack(alignment: .leading, spacing: 0) {
+                SettingsRow(title: "Export diagnostic file",
+                            subtitle: "Send this diagnostics file to the devs to help us fix any bugs you're facing") {
+                    SettingsPillButton(title: exportingDiagnostics ? "Preparing…" : "Export…") {
+                        exportingDiagnostics = true
+                        diagnosticError = nil
+                        diagnosticFile = nil
+                        Task {
+                            defer { exportingDiagnostics = false }
+                            do { diagnosticFile = try await DiagnosticExport.save(appState: appState) }
+                            catch {
+                                diagnosticError = DiskSpace.isDiskFull(error)
+                                    ? "Your disk is full. Free up space and try exporting again."
+                                    : "The diagnostics file couldn't be saved. Try another location."
+                                Log("Diagnostics export: save failed (\(ErrorLabel(error)))")
+                            }
+                        }
+                    }
+                    .disabled(exportingDiagnostics)
+                    .accessibilityLabel("Export diagnostic file")
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    SettingsProse(DiagnosticExport.disclosure)
+                    SettingsProse(DiagnosticExport.sharingNote)
+                    if let diagnosticError {
+                        Text(diagnosticError).font(.system(size: 13)).foregroundStyle(Theme.Ink.amber)
+                    }
+                    if let diagnosticFile {
+                        HStack {
+                            Text("Saved. Review the file before sharing.")
+                                .font(.system(size: 13)).foregroundStyle(SettingsStyle.secondary)
+                            Spacer()
+                            SettingsPillButton(title: "Show in Finder") {
+                                NSWorkspace.shared.activateFileViewerSelecting([diagnosticFile])
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 20).padding(.bottom, 20)
+            }
+        }
+    }
+
+    // MARK: - Danger zone
 
     private static let dangerRed = Color(red: 1.0, green: 0.36, blue: 0.36)
 

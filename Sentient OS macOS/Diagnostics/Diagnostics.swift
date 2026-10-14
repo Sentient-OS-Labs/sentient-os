@@ -247,6 +247,7 @@ nonisolated enum Diagnostics {
         }
         if let error { current?.markReported(error) }
         let value = payload(event, phase: phase, reason: reason, error: error, source: source, counts: counts, flags: flags)
+        DiagnosticHistory.recordError(value)
         CrashReporting.captureEvent(value.event, tags: value.tags, extra: value.extra,
                                     fingerprint: value.fingerprint, cooldown: cooldown)
     }

@@ -33,6 +33,7 @@ struct OnboardingResetChecks {
         try check(defaults.integer(forKey: "onboarding.step") == 4, "Failed reset rewound setup")
         try check(app.hasCompletedOnboarding, "Failed reset changed the live screen")
         try check(HostedConnectorSetup.active == false, "Failed reset left teardown active")
+        try check(DiagnosticHistory.resetDefaults == nil, "Failed reset cleared diagnostic history")
         print("PASS: failed reset preserves onboarding state")
 
         DirectMCPConnections.shared.fail = false
@@ -44,6 +45,7 @@ struct OnboardingResetChecks {
         try check(!app.hasCompletedOnboarding, "Live app was not rewound")
         try check(defaults.bool(forKey: "mcp.mirror.enabled"), "Reset lost the mirror opt-in")
         try check(HostedConnectorSetup.active == false, "Successful reset left teardown active")
+        try check(DiagnosticHistory.resetDefaults === defaults, "Diagnostic reset must use the isolated preferences")
         print("PASS: successful reset re-arms email and company welcome")
 
         let reopened = UserDefaults(suiteName: suite)!
@@ -107,6 +109,10 @@ enum HealthCaution {
     static let computerUseEverReadyKey = "test.computerUseEverReady"
 }
 enum SidekickHistory { static func reset() {} }
+@MainActor enum DiagnosticHistory {
+    static var resetDefaults: UserDefaults?
+    static func reset(defaults: UserDefaults) { resetDefaults = defaults }
+}
 enum OvernightScheduler {
     static let firstCycleAtKey = "test.firstCycleAt"
     static let autoEnableFiredKey = "test.autoEnableFired"

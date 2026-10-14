@@ -58,6 +58,7 @@ enum FactoryReset {
         d.removeObject(forKey: HealthCaution.nativeComputerUseEverReadyKey)
         d.removeObject(forKey: HealthCaution.computerUseEverReadyKey)       // the home's computer-use banner re-arms at the rebuild's own gate
         SidekickHistory.reset()                                          // paired requests and outcomes start blank on rebuild
+        DiagnosticHistory.reset(defaults: d)
         // The overnight scheduler starts over too: the 14h clock re-stamps at the REBUILD's first
         // cycle (not the wiped one's), the auto-enable one-shot is re-armed, and the production
         // flag comes off — otherwise a 3am run could fire mid-onboarding, racing the user's own

@@ -57,6 +57,7 @@ final class DoubleTap {
     private var task: Task<Void, Never>?
     private var activeRunID: UUID?
     private var phase: Diagnostics.Phase = .capture
+    private var diagnosticReason: String?
     private let swirl = CaretSwirl()
 
     /// True from the second tap until the paste (or the fade). CommandCoordinator swallows every
@@ -69,18 +70,32 @@ final class DoubleTap {
     /// second one just started, and the paste would arrive twice.
     func start(completion: @escaping @MainActor (Result) -> Void) {
         guard task == nil else { Log("⌘⌘ double tap ignored — a reply is already being drafted"); return }
+        let provider = DoubleTapProvider.current
+        let runID = DiagnosticHistory.begin(.doubleTap, provider: provider.rawValue,
+                                             model: provider == .sentient ? nil : provider.model)
         guard !DoubleTapPermissionGate.shared.intercept() else {
+            DiagnosticHistory.finish(.doubleTap, id: runID, outcome: .blocked, reason: "permission_setup", phase: "setup")
             Log("⌘⌘ double tap needs permission setup")
             completion(.stopped)
             return
         }
-        let runID = UUID()
         let operation = Diagnostics.Operation("doubletap", doubleTapProvider: DoubleTapProvider.current)
         activeRunID = runID
         phase = .capture
+        diagnosticReason = nil
+        let began = Date()
         let work = Task { [weak self] in
             guard let self else { return }
             let result = await Diagnostics.$current.withValue(operation) { await self.perform() }
+            let outcome: DiagnosticHistory.Outcome = switch result {
+            case .pasted: .pasteDispatched
+            case .notAMessage: .notAMessage
+            case .stopped: .stopped
+            case .failed: .failed
+            }
+            DiagnosticHistory.finish(.doubleTap, id: runID, outcome: outcome, reason: self.diagnosticReason,
+                phase: (operation.phase ?? self.phase).rawValue,
+                measurements: ["elapsed_ms": Int(Date().timeIntervalSince(began) * 1000)])
             self.activeRunID = nil
             self.task = nil
             if case .pasted = result { InviteProgram.shared.record(.doubleTap) }
@@ -91,6 +106,8 @@ final class DoubleTap {
         Task {
             try? await Task.sleep(for: .seconds(Self.deadline))
             guard activeRunID == runID, !work.isCancelled else { return }
+            DiagnosticHistory.finish(.doubleTap, id: runID, outcome: .timedOut, reason: "deadline",
+                phase: (operation.phase ?? phase).rawValue, measurements: ["deadline_ms": Int(Self.deadline * 1000)])
             Diagnostics.$current.withValue(operation) {
                 Diagnostics.report(.doubleTapFailed, phase: operation.phase ?? phase, reason: "deadline",
                                    source: "doubletap", counts: [.deadlineMS: Int(Self.deadline * 1000)])
@@ -102,8 +119,12 @@ final class DoubleTap {
     func cancel() { task?.cancel() }
 
     private func perform() async -> Result {
-        if let problem = DoubleTapInference.configurationProblem { return .failed(problem) }
-        guard Permissions.hasAccessibility() else { return .failed("needs Accessibility to paste") }
+        if let problem = DoubleTapInference.configurationProblem {
+            diagnosticReason = "configuration"; return .failed(problem)
+        }
+        guard Permissions.hasAccessibility() else {
+            diagnosticReason = "accessibility"; return .failed("needs Accessibility to paste")
+        }
         // The light first: the caret is read at the instant of the tap, and the ring is up before
         // the screenshot starts. The panel is capture-visible (recordings should show the light),
         // so the shot carries the ring around the caret; the model reads through it.
@@ -111,12 +132,14 @@ final class DoubleTap {
         swirl.begin(at: target)
         let started = Date()
         guard let shot = await ScreenCapture.grabDisplayUnderCursor() else {
+            diagnosticReason = "screen_capture_unavailable"
             return .failed("no screenshot (Screen Recording?)")
         }
         defer { ScreenCapture.discard([shot]) }
         phase = .encode
         Diagnostics.step(.encode)
         guard let jpeg = ScreenCapture.downscaledJPEG(shot, maxLongEdge: Self.screenshotLongEdge) else {
+            diagnosticReason = "jpeg_failed"
             Diagnostics.report(.doubleTapFailed, phase: .encode, reason: "jpeg_failed", source: "doubletap")
             return .failed("screenshot encode failed")
         }
@@ -126,6 +149,16 @@ final class DoubleTap {
             phase = .request
             let outcome = try await DoubleTapInference.draft(screenshot: jpeg, vault: VaultGenerator.vaultRoot)
             let t = outcome.timing
+            if let activeRunID {
+                var counts = ["capture_ms": captureMs, "inference_ms": Int(t.total * 1000)]
+                counts["first_text_ms"] = t.firstToken.map { Int($0 * 1000) }
+                counts["input_tokens"] = t.inputTokens
+                counts["cached_tokens"] = t.cachedTokens
+                counts["cache_write_tokens"] = t.cacheWriteTokens
+                counts["output_tokens"] = t.outputTokens
+                counts["reasoning_tokens"] = t.reasoningTokens
+                DiagnosticHistory.doubleTapTiming(id: activeRunID, model: outcome.model, measurements: counts)
+            }
             lastReport = "\(outcome.model) · capture \(captureMs) ms"
                 + " · first text \(t.firstToken.map { "\(Int($0 * 1000)) ms" } ?? "—")"
                 + " · total \(Int(t.total * 1000)) ms · in \(t.inputTokens ?? 0) (cached \(t.cachedTokens ?? 0), cache writes \(t.cacheWriteTokens.map { String($0) } ?? "—"))"
@@ -143,12 +176,15 @@ final class DoubleTap {
                 if Task.isCancelled { return .stopped }
                 phase = .paste
                 Diagnostics.step(.paste)
-                guard ReplyPaste.insert(reply) else { return .failed("could not paste reply") }
+                guard ReplyPaste.insert(reply) else {
+                    diagnosticReason = "paste_failed"; return .failed("could not paste reply")
+                }
                 return .pasted
             }
         } catch DoubleTapInference.Failure.cancelled {
             return .stopped
         } catch let failure as DoubleTapInference.Failure {
+            diagnosticReason = failure.diagnosticReason
             switch failure {
             case .cancelled, .noKey, .invalidModel, .invalidEndpoint, .instructionsTooLarge, .noVault, .noWritingStyle, .writingStyleTooLarge, .relay: break
             case .http(let status, _) where [401, 402, 403, 429].contains(status): break
@@ -158,6 +194,7 @@ final class DoubleTap {
             lastReport = "✗ \(failure.label)"
             return .failed(failure.label)
         } catch {
+            diagnosticReason = Diagnostics.errorFields(error)["error_type"] ?? "unexpected"
             Diagnostics.report(.doubleTapFailed, phase: phase, error: error, source: "doubletap", terminal: true)
             return .failed(ErrorLabel(error))
         }

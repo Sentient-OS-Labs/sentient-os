@@ -43,6 +43,7 @@ production = 'nonisolated enum CodexCLI { enum CLIError: Error { case launchFail
 production += 'nonisolated enum CodexAuth {\n' + '\n'.join(declaration(auth, name) for name in [
     'enum Tier:', 'struct Plan:', 'private nonisolated static var authURL:',
     'nonisolated static func currentPlan(', 'private nonisolated static func planClaim(',
+    'private nonisolated static func claims(',
     'private static func writeBack(',
 ]).replace('private static func writeBack(', 'static func writeBack(', 1) + '\n}\n'
 production += declaration(diagnostics, 'nonisolated struct CodexAuthSnapshot:')

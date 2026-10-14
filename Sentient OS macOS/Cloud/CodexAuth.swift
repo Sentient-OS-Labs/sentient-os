@@ -128,15 +128,28 @@ enum CodexAuth {
     /// Extract `chatgpt_plan_type` from a JWT's payload segment (base64url, no signature check —
     /// we're reading our own user's token off their own disk, not authenticating anyone).
     private nonisolated static func planClaim(fromJWT jwt: String) -> String? {
+        let auth = claims(fromJWT: jwt)?["https://api.openai.com/auth"] as? [String: Any]
+        return auth?["chatgpt_plan_type"] as? String
+    }
+
+    /// Explicit diagnostic exports may include the account email, never the credential or other claims.
+    nonisolated static func diagnosticEmail() -> String? {
+        guard let data = try? CodexRuntime.readAuthData(),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = root["tokens"] as? [String: Any],
+              let jwt = tokens["id_token"] as? String,
+              let email = claims(fromJWT: jwt)?["email"] as? String else { return nil }
+        return MailAccount.normalizedEmail(email)
+    }
+
+    private nonisolated static func claims(fromJWT jwt: String) -> [String: Any]? {
         let segments = jwt.split(separator: ".")
         guard segments.count >= 2 else { return nil }
         var b64 = segments[1].replacingOccurrences(of: "-", with: "+")
                              .replacingOccurrences(of: "_", with: "/")
         b64 += String(repeating: "=", count: (4 - b64.count % 4) % 4)
-        guard let payload = Data(base64Encoded: b64),
-              let claims = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any],
-              let auth = claims["https://api.openai.com/auth"] as? [String: Any] else { return nil }
-        return auth["chatgpt_plan_type"] as? String
+        guard let payload = Data(base64Encoded: b64) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any]
     }
 
     // MARK: Refresh (the on-demand plan re-check)
