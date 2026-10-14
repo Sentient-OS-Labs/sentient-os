@@ -3,16 +3,14 @@
 //  Sentient OS macOS
 //
 //  The app-lifetime brain behind "do this for me." Owns the ONE shared codex run (CommandRunModel),
-//  the Sidekick hotkey (SidekickHotkeyMonitor — right ⌘ or right ⌥, the user's choice), and voice
+//  the Sidekick hotkey (SidekickHotkeyMonitor — one shared single key), and voice
 //  capture (VoiceCapture) — so whether the user taps the key and types, clicks the notch's mic and
 //  talks, or types in the home command bar, every door reaches the SAME backend and the SAME notch
 //  status (NotchPhase). This owns + drives `phase` and logs every transition.
 //
-//  Hotkey path: press → the notch OPENS (.opening) · no second press inside the double-tap window →
-//  a focused TYPE field (.typing) → ⏎ submits, or the field's mic button → .listening → its stop
-//  button (or ⏎) → transcribe → submit(.voice) · a SECOND press inside the window → Double Tap
-//  drafts a reply into the focused box (Double Tap/DoubleTap.swift), silently: it never touches the
-//  notch or the one-task lock, so it works mid computer use too. Prompt-bar path: submit(.promptBar).
+//  A completed standalone tap reveals the notch; after the double-tap window it focuses the
+//  type field. A second tap drafts a reply without taking focus. Both actions share one saved
+//  key. Voice starts from the field's mic button. Prompt-bar path: submit(.promptBar).
 //  Card-fire path: beginExternalRun (a proactive card's fire — computer, gmail, or calendar — adopts
 //  the same run — ONE task at a time, app-wide, and the notch shows it).
 //  Every command is computer use, which raises the notch. A hotkey press during a running task
@@ -100,7 +98,7 @@ final class CommandCoordinator {
     private var voiceStartTask: Task<Void, Never>?
     private var phaseToken = 0              // guards delayed phase transitions against newer ones
     private var readBackToken = 0
-    private var lastPressAt: Date?          // the previous hotkey press — two inside DoubleTap.window are a double tap
+    private var hotkeyPair = ShortcutTapPair()
     private var returningFromRecovery = false
     private var deferredSubmission: (String, AgentMode, TriggerSource)?
 
@@ -130,26 +128,25 @@ final class CommandCoordinator {
     /// (TODO: production should arm only after onboarding completes — kept always-on for now so the
     /// backend is testable immediately.)
     func start() {
-        hotkey.setKey(.current)                            // honor the user's Settings choice (right ⌘ / right ⌥)
-        hotkey.onPress = { [weak self] in self?.hotkeyPressed() }
-        hotkey.onRelease = { [weak self] in self?.doubleTapDemoKeyChanged?(false) }
-        // No global Esc: a keyDown tap is exactly what Input Monitoring gates, so the monitor
-        // listens to modifiers only. Esc still cancels via the window's LOCAL monitor whenever
-        // Sentient itself is frontmost; a hotkey press backs out of the type field and a live
-        // capture, never a running task (see hotkeyPressed).
+        guard hotkeyChangeObserver == nil else { return }
+        hotkey.onTap = { [weak self] key, time, activity in
+            self?.hotkeyTapped(key, at: time, activity: activity)
+        }
+        hotkey.onKeyChange = { [weak self] key, down in
+            guard let self, key == ShortcutPreferences.current,
+                  NSApp.isActive, self.doubleTapDemoWindow?.isKeyWindow == true else { return }
+            self.doubleTapDemoKeyChanged?(down)
+        }
+        hotkey.onInterruption = { [weak self] in self?.interruptHotkeyGesture() }
+        refreshHotkeys()
         hotkey.start()
-        // Live re-key when the user flips the choice in Settings — no restart needed. Double Tap
-        // rides the same key (two presses inside its window), so it follows the choice for free.
         hotkeyChangeObserver = NotificationCenter.default.addObserver(
-            forName: .sidekickHotkeyChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.doubleTapDemoKeyChanged == nil else { return }
-                self.hotkey.setKey(.current)
-            }
+            forName: .shortcutsChanged, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshHotkeys() }
         }
         voice.prewarm()
         run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
-        Log("CommandCoordinator armed (\(hotkey.key.label): tap to type, double tap to draft a reply · voice available: \(VoiceCapture.isAvailable))")
+        Log("CommandCoordinator armed (shared Sidekick and Double Tap key · voice available: \(VoiceCapture.isAvailable))")
     }
 
     // MARK: The one entry point — hotkey-voice AND the prompt bar both call this
@@ -241,13 +238,9 @@ final class CommandCoordinator {
 
     // MARK: The hotkey path (tap → type · double tap → a reply draft)
     //
-    // press → .opening (reveal NOW — you are pulling it open) · the double-tap window passes with no
-    // second press → .typing (the field; its mic button is the way to talk) · a second press inside
-    // the window → the notch retracts and Double Tap drafts, silently. The field never opens on the
-    // first press itself, because the second press must land on a notch that is NOT key: Double Tap
-    // ends in a ⌘V into the user's own focused box, and a key notch panel would swallow it.
-    // While a task is running the notch is busy with it, so the double tap is read from press
-    // timestamps instead (`lastPressAt`) and fires without touching the notch at all.
+    // A completed tap reveals a non-key notch. A second tap within the gesture window
+    // drafts into the original app; otherwise the notch becomes the focused type field.
+    // Double Tap remains available during a real task without changing its notch or task lock.
 
     /// The knowledge-base-only aside — one string for the press flash and the submit backstop.
     /// Short on purpose (the notch truncates around ~45 characters), and shaped like the mic
@@ -293,79 +286,86 @@ final class CommandCoordinator {
         return true
     }
 
-    private func hotkeyPressed() {
+    private func refreshHotkeys() {
+        interruptHotkeyGesture()
+        doubleTapDemoKeyChanged?(false)
+        let keys: Set<ShortcutKey>
+        if ShortcutPreferences.isRecording {
+            keys = []
+        } else {
+            keys = [ShortcutPreferences.current]
+        }
+        hotkey.setKeys(keys)
+    }
+
+    private func interruptHotkeyGesture() {
+        hotkeyPair.reset()
+        if phase == .opening { setPhase(.hidden) }
+    }
+
+    /// Completed standalone taps arrive here. Both actions use the same key; the first
+    /// tap waits for a possible second tap before Sidekick can take focus.
+    private func hotkeyTapped(_ key: ShortcutKey, at time: TimeInterval, activity: ShortcutActivity) {
+        guard !ShortcutPreferences.isRecording, doubleTapDemoKeyChanged == nil,
+              !DoubleTap.shared.isDrafting else { return }
+        guard key == ShortcutPreferences.current else { return }
         if run.recovery.isPending {
+            hotkeyPair.reset()
             if run.recovery.isVisible { run.recovery.dismiss() }
             else { run.recovery.reopen() }
             return
         }
-        if let keyChanged = doubleTapDemoKeyChanged {
-            if NSApp.isActive, doubleTapDemoWindow?.isKeyWindow == true { keyChanged(true) }
-            return
-        }
-        // While a reply is being drafted (≈2 s) every press is swallowed: a third tap must not open
-        // the type field (it would take key focus and catch the ⌘V) or stop anything.
-        if DoubleTap.shared.isDrafting { Log("hotkey press ignored — a reply is being drafted"); return }
-        let now = Date()
-        let isSecondPress = lastPressAt.map { now.timeIntervalSince($0) <= DoubleTap.window } ?? false
-        lastPressAt = now
-        // A press while a real task is running never stops it (decided 2026-09-21; until then
-        // it was the universal STOP, and a double tap mid computer use was impossible). The
-        // notch's STOP button, the bar's STOP, and Esc are the cancels. The key stays free for
-        // Double Tap: two presses inside the window draft a reply, with nothing on the notch.
-        // The onboarding demo is exempt (scripted theater; those presses fall to the guards below).
-        if run.isRunning, !run.isDemo {
-            if isSecondPress, DoubleTap.isEnabled { fireDoubleTap() }
-            else { Log("hotkey press during a run — ignored (double tap to draft a reply)") }
-            return
-        }
-        // The armed onboarding beat answers the hotkey too — the key variant's NAMED door
-        // ("press the right ⌘ key" on iMacs / external displays / clamshell), and a forgiving
-        // one during the click beat. Fired on press-DOWN, like every press.
         if onboardingDemoArmed, phase == .hidden, !run.isRunning {
-            notchAnchor = .mainDisplay    // hardware notch when it's main; software notch otherwise
-            beginNotchDemo(door: "hotkey press")
+            hotkeyPair.reset()
+            notchAnchor = .mainDisplay
+            beginNotchDemo(door: "hotkey tap")
             return
         }
+        if DoubleTap.isEnabled {
+            if hotkeyPair.register(key, at: time, activity: activity, window: DoubleTap.window,
+                                   lastInputTime: ShortcutActivity.lastInputTime) {
+                guard !interceptForOnboarding() else { return }
+                fireDoubleTap()
+                return
+            }
+        } else {
+            hotkeyPair.reset()
+        }
+        // A single tap cannot stop a real task. Double Tap remains available beside that task.
+        guard !run.isRunning else { return }
         switch phase {
-        case .opening:
-            // Inside the double-tap window. With Double Tap off, two quick taps still only mean
-            // "open Sidekick", so the field opens right away.
-            if DoubleTap.isEnabled { fireDoubleTap() } else { setPhase(.typing) }
-            return
         case .typing:
-            dismissTyping()               // a tap while the field is open toggles it closed — a quick way to back out
+            dismissTyping()
             return
         case .listening, .transcribing:
-            cancelCurrent()               // the press also bails a capture or a stuck finalize (there is no global Esc)
+            cancelCurrent()
             return
-        case .hidden, .running, .finishing, .notice, .recovery:
-            break                         // a fresh press (.running only reaches here for the demo, which the guards below ignore)
+        default:
+            break
         }
-        guard !run.isRunning else { Log("hotkey ignored — busy"); return }
-        notchAnchor = .mainDisplay        // the hotkey always lives on the main display (incl. the asides below)
-        // Before the home screen, Sidekick doesn't exist yet (the onboarding policy above) —
-        // and the permission gate below can therefore never rise during onboarding.
-        if interceptForOnboarding() { return }
-        // Knowledge-base-only plan (free/go): the notch answers the press INSTANTLY with the
-        // Plus aside — same immediate beat as the mic-perms notice — and never opens for
-        // typing. Checked live per press, so it can never go stale.
-        if CodexAuth.knowledgeBaseOnly {
+        notchAnchor = .mainDisplay
+        guard !interceptForOnboarding() else { hotkeyPair.reset(); return }
+        guard !CodexAuth.knowledgeBaseOnly else {
+            hotkeyPair.reset()
             flash(Self.needsPlusNotice, for: 2.0)
-            Log("hotkey blocked — knowledge-base-only plan (Sidekick needs Plus)")
             return
         }
-        setPhase(.opening)                                // you're pulling it open — reveal the instant you press
-        ComputerUseGate.shared.refresh()                 // prepare locally while the user types
-        // The field waits out the double-tap window: a second press in time means a reply draft,
-        // not a task (and the notch must still be non-key then — see the MARK above). The notch is
-        // already open and glowing, so the wait reads as the unfold, not as lag.
+        ComputerUseGate.shared.refresh()
+        guard DoubleTap.isEnabled else {
+            setPhase(.typing)
+            return
+        }
+        setPhase(.opening)
         let token = phaseToken
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(DoubleTap.window))
             guard let self, self.phaseToken == token, self.phase == .opening else { return }
+            // Typing or clicking during the pending gesture must not steal focus afterwards.
+            guard ShortcutActivity.current == activity else {
+                self.interruptHotkeyGesture()
+                return
+            }
             self.setPhase(.typing)
-            Log("hotkey tap → typing")
         }
     }
 
@@ -433,7 +433,9 @@ final class CommandCoordinator {
     /// the onboarding, plan, and permission doors) the reveal retracts first; from a running task
     /// the notch is left exactly as it was.
     private func fireDoubleTap() {
-        lastPressAt = nil                                  // both presses are spent; the next one starts a fresh count
+        hotkeyPair.reset()
+        // Never paste into the Sidekick field or disturb an active voice capture.
+        guard phase != .typing, phase != .listening, phase != .transcribing else { return }
         if phase == .opening { setPhase(.hidden) }
         Log("⌘⌘ double tap → drafting a reply" + (run.isRunning ? " (beside the running task)" : ""))
         DoubleTap.shared.start { result in
@@ -553,7 +555,7 @@ final class CommandCoordinator {
     }
 
     /// A click on the idle, hover-swollen notch — the pointer's twin of a hotkey TAP: open the
-    /// type field. Mirrors hotkeyPressed's doors without the double-tap wait (a click can only mean
+    /// type field. Mirrors hotkeyTapped's doors without the double-tap wait (a click can only mean
     /// the field): the knowledge-base-only aside, then the field. Permissions are checked when
     /// submitting. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
@@ -581,10 +583,8 @@ final class CommandCoordinator {
         doubleTapDemoID = id
         doubleTapDemoWindow = window
         doubleTapDemoKeyChanged = onKeyChange
-        lastPressAt = nil
-        // Fresh installs already use right Command. A replay of onboarding teaches the same
-        // gesture without overwriting an existing user's persisted alternative key.
-        hotkey.setKey(.rightCommand)
+        hotkeyPair.reset()
+        refreshHotkeys()
         if !run.isRunning { setPhase(.hidden) }
     }
 
@@ -594,8 +594,8 @@ final class CommandCoordinator {
         doubleTapDemoKeyChanged = nil
         doubleTapDemoWindow = nil
         doubleTapDemoID = nil
-        lastPressAt = nil
-        hotkey.setKey(.current)
+        hotkeyPair.reset()
+        refreshHotkeys()
     }
 
     // MARK: The onboarding notch demo (the film step's invitation beat — click or hotkey)
@@ -664,7 +664,7 @@ final class CommandCoordinator {
     /// "Remembering" line, cancel is left ALONE — computer use is now quietly running. Returns whether it
     /// consumed the event (so the key monitor swallows it). Reached via the window's LOCAL Esc monitor
     /// (works whenever Sentient is frontmost — no global keyDown tap, that's Input-Monitoring-gated) and
-    /// via a hotkey press for the listening and transcribing beats (hotkeyPressed).
+    /// via a hotkey press for the listening and transcribing beats (hotkeyTapped).
     @discardableResult
     func cancelCurrent() -> Bool {
         if phase == .recovery { run.recovery.dismiss(); return true }

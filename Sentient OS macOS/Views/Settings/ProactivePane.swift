@@ -5,9 +5,7 @@
 //  Settings → Proactive & Sidekick: the user's standing instructions for the proactive
 //  suggestion writer, Sidekick's shortcut key + standing context, and the speed-vs-intelligence
 //  slider (ComputerUseSpeed — the model/effort EVERY computer-use run rides, per engine). The strings
-//  persist and autosave. The hotkey choice (right ⌘ / right ⌥) is LIVE — toggling it posts
-//  `.sidekickHotkeyChanged`, which re-keys the running SidekickHotkeyMonitor with no restart (Double
-//  Tap rides the same key, so it follows the choice too). The
+//  persist and autosave. ShortcutSetting edits the shared Sidekick and Double Tap binding live. The
 //  two text fields are LIVE too: `proactive.instructions` feeds the proactive prompts
 //  (Proactive.instructionsBlock, PART 1 + 2) and `sidekick.context` feeds the command/Sidekick
 //  prompt (CommandRunModel.commandPrompt) — the two keys live in CustomInstructions so producer
@@ -18,7 +16,6 @@ import SwiftUI
 
 struct ProactivePane: View {
     @AppStorage(CustomInstructions.proactiveKey) private var proactiveInstructions = ""
-    @AppStorage("sidekick.hotkey") private var sidekickHotkey = "rightCommand"
     @AppStorage(CustomInstructions.sidekickKey) private var sidekickContext = ""
     @AppStorage(ComputerUseSpeed.key) private var speedRaw = ComputerUseSpeed.faster.rawValue
     /// The slider drives the subscription engines (ChatGPT and Claude); a custom frontier model
@@ -34,16 +31,7 @@ struct ProactivePane: View {
             VStack(alignment: .leading, spacing: 32) {
                 SettingsGroup(label: "Sidekick", inset: 0) {
                     VStack(spacing: 0) {
-                        SettingsRow(title: "Shortcut key", subtitle: "Tap to open Sidekick. Double tap to draft a reply.") {
-                            SettingsMenu(title: "Sidekick shortcut", value: sidekickHotkey == "rightOption" ? "Right ⌥" : "Right ⌘", selection: $sidekickHotkey) {
-                                Text("Right ⌘").tag("rightCommand")
-                                Text("Right ⌥").tag("rightOption")
-                            }
-                            .frame(width: 136)
-                            .onChange(of: sidekickHotkey) {
-                                NotificationCenter.default.post(name: .sidekickHotkeyChanged, object: nil)
-                            }
-                        }
+                        ShortcutSetting()
                         SettingsHairline(opacity: 0.10)
                         VStack(alignment: .leading, spacing: 12) {
                             instructionLabel("Custom instructions", detail: "Sidekick learns your preferences as you work. Edit its instructions anytime.")

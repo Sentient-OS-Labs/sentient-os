@@ -268,7 +268,7 @@ struct DevToolsView: View {
         let provider = DoubleTapProvider(rawValue: doubleTapRouteRaw) ?? .sentient
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Double Tap (\(SidekickHotkey.current.label) twice → draft a reply)")
+                Text("Double Tap (\(ShortcutPreferences.current.label) twice → draft a reply)")
                     .font(.callout.weight(.medium)).foregroundStyle(.white)
                 Spacer()
                 Toggle("", isOn: $doubleTapEnabled).toggleStyle(.switch).controlSize(.small).labelsHidden()
@@ -293,7 +293,7 @@ struct DevToolsView: View {
                     .foregroundStyle(report.hasPrefix("✗") ? .red : Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("\(provider.model) · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Rides Sidekick's key (\(SidekickHotkey.current.label), the Settings choice): one tap opens Sidekick, two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. On by default (Release has no way off); with this switch off, two taps just open Sidekick sooner.")
+            Text("\(provider.model) · the whole vault in context, read from \(VaultGenerator.vaultRoot.path). Shares Sidekick's key (\(ShortcutPreferences.current.label), the Settings choice): two taps within \(Int(DoubleTap.window * 1000)) ms draft the reply. On by default (Release has no way off).")
                 .font(.caption2).foregroundStyle(Theme.faint)
                 .fixedSize(horizontal: false, vertical: true)
         }
