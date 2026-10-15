@@ -138,7 +138,7 @@ struct KnowledgeView: View {
     }
 
     private func loadVault() async {
-        // A plain directory walk (~a handful of folders) — cheap enough to do inline on open.
+        // Scan the small vault and cache searchable content once on open.
         let v = KnowledgeVault.load()
         vault = v
         loaded = true
@@ -293,6 +293,7 @@ struct KnowledgeView: View {
         }
         savedText = editText
         note = KnowledgeVault.read(url)            // refresh the rendered view behind us
+        reloadVault()                             // refresh searchable titles and bodies
         exitEdit()
         VaultActivity.shared.markChanged()         // schedules the debounced mirror sync
         completion?()
@@ -443,8 +444,7 @@ struct KnowledgeView: View {
     }
 
     private var searchResults: [VaultNode] {
-        guard let v = vault, !search.isEmpty else { return [] }
-        return v.allNotes.filter { $0.name.localizedCaseInsensitiveContains(search) }
+        vault?.search(search) ?? []
     }
 
     // MARK: Sidebar
