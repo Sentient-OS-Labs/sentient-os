@@ -30,7 +30,7 @@ measure, one green.
 **Knowledge Sources.** The shared picker uses the same preferences as onboarding, the home,
 Dev Tools, and scheduled runs (`SourceSelection`, `CustomRoots`). Email & Calendar groups Gmail,
 Google Calendar, Apple Mail, Apple Calendar, and curated Outlook connections. Chats opens the shared WhatsApp
-and iMessage pickers; More of your world includes Apple Notes and other curated connections. Folders
+and iMessage pickers; More of your world includes Apple Notes, SiYuan (when installed) and other curated connections. Folders
 provides standard-folder toggles and persistent custom roots through an `NSOpenPanel`. Hosted
 connection sheets follow the chosen frontier engine and its availability. A fix-it line appears when
 Full Disk Access is missing. The shared four-selection minimum guards direct toggle-offs in Settings

@@ -22,6 +22,7 @@ struct KnowledgeSourcesPicker: View {
     @AppStorage("dbg.run.desktop")   private var runDesktop = true
     @AppStorage("dbg.run.documents") private var runDocuments = true
     @AppStorage("dbg.run.notes")     private var runNotes = false
+    @AppStorage(SiYuanSource.enabledKey) private var runSiYuan = false
     @AppStorage("dbg.run.whatsapp")  private var runWhatsApp = false
     @AppStorage("dbg.whatsapp.chats") private var whatsappCSV = ""
     @AppStorage("dbg.run.imessage")  private var runIMessage = false
@@ -276,6 +277,11 @@ struct KnowledgeSourcesPicker: View {
                     }
                     KnowledgeSourcePill(label: "Apple Notes", asset: "AppleNotesMark", selected: runNotes) {
                         toggleConnector($runNotes)
+                    }
+                    if SiYuanSource.isInstalled {
+                        KnowledgeSourcePill(label: "SiYuan", asset: "SiYuanMark", selected: runSiYuan) {
+                            toggleConnector($runSiYuan)
+                        }
                     }
                     // Connect More Apps is hidden for this release until discovery can
                     // reliably notice new hosted connections. Curated setup remains available.

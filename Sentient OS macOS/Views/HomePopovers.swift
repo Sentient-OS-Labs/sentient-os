@@ -47,6 +47,7 @@ struct AnalysisPopover: View {
     @AppStorage("dbg.run.desktop")        private var runDesktop = true
     @AppStorage("dbg.run.documents")      private var runDocuments = true
     @AppStorage("dbg.run.notes")          private var runNotes = false
+    @AppStorage(SiYuanSource.enabledKey)  private var runSiYuan = false
     @AppStorage(AppleMailSelection.key)    private var appleMailAccounts = ""
     @AppStorage("dbg.whatsapp.chats")     private var whatsappCSV = ""
     @AppStorage("dbg.imessage.chats")     private var imessageCSV = ""
@@ -61,7 +62,8 @@ struct AnalysisPopover: View {
     @State private var hasBattery = false   // desktop Macs hide the battery row entirely
 
     private var anyArmed: Bool {
-        runDownloads || runDesktop || runDocuments || runNotes || !customRoots.isEmpty
+        runDownloads || runDesktop || runDocuments || runNotes || (runSiYuan && SiYuanSource.isInstalled)
+            || !customRoots.isEmpty
             || !whatsappCSV.isEmpty || !imessageCSV.isEmpty
             || !appleMailAccounts.isEmpty || runGmail || runCalendar || !MCPSource.kbSlugs().isEmpty
     }
@@ -106,6 +108,11 @@ struct AnalysisPopover: View {
                 HStack(spacing: 8) {
                     SourceChip("Notes", on: runNotes) { runNotes.toggle() }
                     SourceChip("Apple Mail", on: !appleMailAccounts.isEmpty, action: onPickAppleMail)
+                }
+                if SiYuanSource.isInstalled {
+                    HStack(spacing: 8) {
+                        SourceChip("SiYuan", on: runSiYuan) { runSiYuan.toggle() }
+                    }
                 }
                 HStack(spacing: 8) {
                     SourceChip("Gmail",    on: runGmail,
