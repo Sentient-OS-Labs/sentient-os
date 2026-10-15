@@ -88,7 +88,6 @@ struct RootView: View {
                 if navigation.page == .settings {
                     SettingsView()
                 }
-                if navigation.page == .sidekickHistory { SidekickHistoryView() }
                 if navigation.hasOpenedKnowledge {
                     KnowledgeView(isPresented: navigation.page == .knowledge)
                 }
