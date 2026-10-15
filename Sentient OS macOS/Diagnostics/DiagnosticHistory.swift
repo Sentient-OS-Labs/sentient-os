@@ -111,11 +111,35 @@ nonisolated enum DiagnosticHistory {
     static func recordError(_ payload: Diagnostics.Payload, defaults: UserDefaults = .standard) {
         // No raw errors, breadcrumbs, tool events, stderr, arguments, or output cross this seam.
         let allowed: Set<String> = ["phase", "reason", "backend", "source", "error_type", "error_case",
-            "error_domain", "error_code", "http_status", "exit_code"]
+            "error_domain", "error_code", "http_status", "exit_code",
+            "underlying_1_domain", "underlying_1_code", "underlying_2_domain", "underlying_2_code",
+            "underlying_3_domain", "underlying_3_code"]
         var fields = payload.tags.filter { allowed.contains($0.key) }.mapValues { safe($0) }
         fields.merge(payload.extra.filter { Int($0.value) != nil || ["true", "false"].contains($0.value) }) { _, new in new }
         update(defaults) { state in
             state.errors.append(Failure(at: Date(), event: payload.event, fields: fields))
+            state.errors = Array(state.errors.suffix(100))
+        }
+    }
+
+    /// Agent diagnostics supply closed categories/counts only. No arguments, app selectors,
+    /// error text, successful tool output, or screenshots are retained in the export ledger.
+    static func recordAgentFailure(_ event: String, fields supplied: [String: String], defaults: UserDefaults = .standard) {
+        guard ["agent.tool_failed", "agent.run_diagnostic"].contains(event) else { return }
+        let categories: Set<String> = ["reason", "tool", "tool_family", "backend", "feature", "outcome",
+            "model_outcome", "runtime_outcome", "process_outcome", "error_type", "error_domain", "error_case"]
+        let numbers: Set<String> = ["call_index", "duration_ms", "error_code", "process_exit_code", "tool_calls",
+            "tool_completed", "tool_failed", "tool_incomplete", "tool_omitted", "tool_unknown"]
+        let booleans: Set<String> = ["helper_running_at_start", "helper_running_at_end"]
+        var fields: [String: String] = [:]
+        for (key, value) in supplied {
+            if categories.contains(key) { fields[key] = safe(value) }
+            else if numbers.contains(key), Int(value) != nil { fields[key] = value }
+            else if booleans.contains(key), ["true", "false", "unknown"].contains(value) { fields[key] = value }
+            else if ["operation_id", "root_operation_id", "task_id"].contains(key), UUID(uuidString: value) != nil { fields[key] = value }
+        }
+        update(defaults) { state in
+            state.errors.append(Failure(at: Date(), event: event, fields: fields))
             state.errors = Array(state.errors.suffix(100))
         }
     }

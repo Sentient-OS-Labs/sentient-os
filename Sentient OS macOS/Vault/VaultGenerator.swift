@@ -58,10 +58,14 @@ actor VaultGenerator {
         /// worth keeping even without a session id), and `sessionID` (when present) belongs to
         /// slice sliceIndex - 1, still in flight.
         var sliceIndex: Int? = nil
+        /// Persist boundaries so an app update cannot skip/repeat slices of an older resume.
+        var sliceBudget: Int? = nil
+        var sliceItemLimit: Int? = nil
         /// Exact accepted inputs for safe cleanup after a resumed merge. Optional for older tokens.
         var inputSourceIDs: [String]? = nil
         /// Only survivor summaries, keyed by opaque Mail identities. Rechecked before resuming.
         var mailInputHashes: [String: String]? = nil
+        var acceptedInputHashes: [String: String]? = nil
         /// CLI sessions only exist in the runtime that created them. Older tokens have no
         /// scope and must restart from the retained summaries, never import a CLI session.
         var sessionScope: String? = nil
@@ -81,10 +85,12 @@ actor VaultGenerator {
     enum VaultError: LocalizedError {
         case empty
         case usageLimit(message: String, resume: ResumeToken)
+        case interrupted(resume: ResumeToken)
 
         var errorDescription: String? {
             switch self {
             case .empty: return "The cloud returned no vault content."
+            case .interrupted: return "This knowledge-base batch took too long. Completed batches are saved. Run analysis again to continue."
             case .usageLimit(let message, _):
                 return "Your AI hit its usage limit; try again later and the run resumes where it left off. (\(message.prefix(160)))"
             }
@@ -182,12 +188,17 @@ actor VaultGenerator {
     /// mapping a usage limit to a resumable `VaultError.usageLimit` carrying the staging path. Shared
     /// by build + update so both get identical resume semantics.
     func runCodexInStaging(_ invocation: CodexCLI.Invocation, staging: URL,
+                           sliceIndex: Int? = nil, sliceBudget: Int? = nil, sliceItemLimit: Int? = nil,
                            onProgress: @Sendable @escaping (Progress) -> Void = { _ in },
                            onLine: (@Sendable (String) -> Void)? = nil) async throws -> CodexCLI.Envelope {
         var invocation = invocation
         invocation.claudeModel = .opus     // the Claude engine's heavy leg: vault work earns Opus
         let backend = ModelBackend.current
         let sessionScope = ResumeToken.scope(for: backend)
+        // A timeout never resumes half-written files. Keep the last completed boundary on
+        // the same volume, restore it after the child has stopped, and replay only this slice.
+        let checkpoint = try sliceIndex.map { _ in try VaultSliceCheckpoint(staging: staging) }
+        defer { checkpoint?.discard() }
         onProgress(.calling)
         let poller = Task.detached {
             while !Task.isCancelled {
@@ -206,7 +217,12 @@ actor VaultGenerator {
             Log("VaultGenerator: ⚠️ usage limit (thread \(sessionID ?? "nil")); staging kept for resume")
             throw VaultError.usageLimit(message: message,
                                         resume: ResumeToken(sessionID: sessionID, stagingPath: staging.path,
+                                                            sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
                                                             sessionScope: sessionScope))
+        } catch CodexCLI.CLIError.timedOut where checkpoint != nil {
+            try checkpoint!.restore()
+            throw VaultError.interrupted(resume: ResumeToken(sessionID: nil, stagingPath: staging.path,
+                sliceIndex: sliceIndex, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit, sessionScope: sessionScope))
         }
     }
 
@@ -253,6 +269,8 @@ actor VaultGenerator {
         // wrote. A mid-sequence resume re-slices the staging SNAPSHOT, never a fresh CycleStore
         // fetch (newest-first ordering would shift every boundary; see CorpusSlicer.saveCorpus).
         let slices: [[CloudNote]]
+        let sliceBudget = resume?.sliceBudget ?? (resume == nil ? CorpusSlicer.mergeBudget : CorpusSlicer.budget)
+        let sliceItemLimit = resume?.sliceItemLimit ?? (resume == nil ? CorpusSlicer.maximumItems : Int.max)
         var next: Int                               // the next unfed slice
         if let resume {
             if let idx = resume.sliceIndex {
@@ -262,7 +280,7 @@ actor VaultGenerator {
                     try? fm.removeItem(at: staging)
                     return try await generate(notes: notes, resume: nil, onProgress: onProgress, onLine: onLine)
                 }
-                slices = CorpusSlicer.slice(corpus)
+                slices = CorpusSlicer.slice(corpus, budget: sliceBudget, maximumItems: sliceItemLimit)
                 next = min(idx, slices.count)
             } else {
                 // Pre-slicing / single-slice token: session-resume only. If that session never wrote
@@ -277,11 +295,11 @@ actor VaultGenerator {
                 next = 0
             }
         } else {
-            slices = CorpusSlicer.slice(notes)
+            slices = CorpusSlicer.slice(notes, budget: sliceBudget, maximumItems: sliceItemLimit)
             next = 0
+            try CorpusSlicer.saveCorpus(notes, in: staging)
             if slices.count > 1 {
-                try CorpusSlicer.saveCorpus(notes, in: staging)
-                Log("VaultGenerator: corpus sliced into \(slices.count) parts (budget \(CorpusSlicer.budget) bytes)")
+                Log("VaultGenerator: corpus sliced into \(slices.count) parts (budget \(sliceBudget) bytes)")
             }
         }
 
@@ -314,7 +332,9 @@ actor VaultGenerator {
             invocation.timeout = 3_600
             invocation.diag = ["slices": "\(max(slices.count, 1))", "slice_index": "\(max(next - 1, 0))"]
             do {
-                record(try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine))
+                record(try await runCodexInStaging(invocation, staging: staging,
+                    sliceIndex: resume.sliceIndex.map { max(0, $0 - 1) }, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                    onProgress: onProgress, onLine: onLine))
             } catch let VaultError.usageLimit(message, token) {
                 var t = token; t.sliceIndex = resume.sliceIndex      // unchanged — still the same slice
                 throw VaultError.usageLimit(message: message, resume: t)
@@ -349,7 +369,9 @@ actor VaultGenerator {
                 Log("VaultGenerator: feeding slice \(next + 1)/\(slices.count) — \(slices[next].count) summaries, \(prompt.utf8.count) bytes")
             }
             do {
-                record(try await runCodexInStaging(invocation, staging: staging, onProgress: onProgress, onLine: onLine))
+                record(try await runCodexInStaging(invocation, staging: staging,
+                    sliceIndex: next, sliceBudget: sliceBudget, sliceItemLimit: sliceItemLimit,
+                    onProgress: onProgress, onLine: onLine))
             } catch let VaultError.usageLimit(message, token) {
                 guard slices.count > 1 else { throw VaultError.usageLimit(message: message, resume: token) }
                 // A session that never started can't be resumed — its slice stays the next unfed.

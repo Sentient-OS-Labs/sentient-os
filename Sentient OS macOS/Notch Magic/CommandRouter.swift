@@ -86,7 +86,7 @@ enum CommandRouter {
         // A native Mail request must keep its app/account context even when Gmail is connected.
         // The computer route still has connectors when the user explicitly authorizes a switch.
         guard !requiresAppleMail(command) else {
-            Log("router: computer (explicit Apple Mail request)")
+            Log("router: computer (mail application context)")
             return .computer
         }
         let t0 = Date()
@@ -218,7 +218,9 @@ enum CommandRouter {
         - The same service may have separate accounts. Choose one only when the command or its
           explicit context identifies the account, or exactly one matching account is listed.
           If the destination account is ambiguous, choose computer so it can be clarified.
-        - Apple Mail, Mail.app, or a preference to work in the Mac's Mail app requires "computer".
+        - Apple Mail, Mail.app, "my email app", "mail client", or a preference to use a desktop
+          email application requires "computer". An explicit exclusion such as "not Gmail"
+          must never route to that provider. Keep the named app/account context or clarify it.
           A connected Gmail or Outlook account does not identify the account or message visible in
           Apple Mail. Never substitute a provider merely because both services handle email.
         - When in doubt, choose "computer".
@@ -258,11 +260,14 @@ enum CommandRouter {
     "route":{"type":"string","enum":["computer","connector"]},"target":{"type":"string"}}}
     """
 
-    /// Conservative, deterministic routing for explicit native-app requests. Generic "email"
-    /// stays eligible for the provider router; a false positive here still preserves its tools.
+    /// Application requests and provider exclusions require the app/account context. Generic
+    /// email remains eligible for a connector; computer use can clarify an ambiguous application.
     static func requiresAppleMail(_ command: String) -> Bool {
-        command.range(of: #"(?<![\p{L}\p{N}_])(?:apple[ \t]+mail|mail\.app|com\.apple\.mail|(?:mac(?:os)?|native|desktop)[ \t]+mail|mail[ \t]+app(?:lication)?)(?![\p{L}\p{N}_])"#,
-                      options: [.regularExpression, .caseInsensitive]) != nil
+        let application = #"(?<![\p{L}\p{N}_])(?:apple[ \t]+mail|mail\.app|com\.apple\.mail|(?:mac(?:os)?|native|desktop)[ \t]+mail|(?:e[ -]?)?mail[ \t]+(?:app(?:lication)?|client))(?![\p{L}\p{N}_])"#
+        let excludedProvider = #"\b(?:not|never|except|excluding|instead\s+of|rather\s+than|don['’]?t\s+(?:use|check|open)|do\s+not\s+(?:use|check|open))\s+(?:my\s+|the\s+)?(?:gmail|google\s+mail|outlook)\b"#
+        return [application, excludedProvider].contains {
+            command.range(of: $0, options: [.regularExpression, .caseInsensitive]) != nil
+        }
     }
 
     static func ambiguousMail(_ command: String, services: [Service]) -> Bool {

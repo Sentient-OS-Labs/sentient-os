@@ -343,12 +343,28 @@ nonisolated enum CrashReporting {
         event.exceptions?.forEach { $0.value = scrub(text: $0.value) }
         event.tags = event.tags?.mapValues(scrub(text:))
         event.extra = event.extra.map(scrubData)
-        event.context = event.context?.mapValues(scrubData)
+        event.context = event.context.map(scrubContexts)
         event.breadcrumbs?.forEach { crumb in
             crumb.message = crumb.message.map(scrub(text:))
             crumb.data = crumb.data.map(scrubData)
         }
         return event
+    }
+
+    /// SDK trace identifiers are fixed-width hexadecimal, never free-text credentials.
+    /// Preserve them only in the trace context; arbitrary strings still use the PII scrubber.
+    nonisolated static func scrubContexts(_ contexts: [String: [String: Any]]) -> [String: [String: Any]] {
+        var clean = contexts.mapValues(scrubData)
+        if let trace = contexts["trace"] {
+            for (key, width) in [("trace_id", 32), ("span_id", 16), ("parent_span_id", 16)] {
+                if let value = trace[key] as? String, value.utf8.count == width,
+                   value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) || (65...70).contains($0) }),
+                   value.contains(where: { $0 != "0" }) {
+                    clean["trace"]?[key] = value
+                }
+            }
+        }
+        return clean
     }
 
     /// Redact home-dir paths, emails, phone numbers, and long token/base64 blobs from a string.

@@ -13,10 +13,14 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         case unknown, appUnavailable = "app_unavailable", staleTarget = "stale_target"
         case permission, authentication = "login_required", quota, timeout, connection, invalidArguments = "invalid_arguments"
         case unavailableTool = "unavailable_tool", outputSchema = "output_schema", cancelled
+        case screenCapture = "screen_capture", noWindows = "no_windows"
 
         /// A text-derived category is a hint, never proof of an OS or permission state.
         static func classify(_ text: String) -> Self {
             let text = String(text.prefix(8192)).lowercased()
+            let native = NativeComputerUseFailure.classify(text)
+            if native.kind == .capture { return .screenCapture }
+            if native.kind == .noWindows { return .noWindows }
             if text.contains("does not match required schema") || text.contains("structured output validation") { return .outputSchema }
             if text.contains("not running") || text.contains("app not found") || text.contains("application not found") || text.contains("can't be reached") { return .appUnavailable }
             if text.contains("re-query") || text.contains("stale") || text.contains("element not found") { return .staleTarget }
@@ -112,7 +116,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     }
 
     func observe(_ line: String) {
-        guard CrashReporting.diagnosticsEnabled else { return }
+        // The bounded local export ledger is independent of Sentry upload consent.
         guard line.utf8.count <= 16_777_216 else {
             state.withLock { $0.omitted += 1 }
             return
@@ -134,9 +138,19 @@ nonisolated final class AgentRunDiagnostics: Sendable {
                 let exit = item["exit_code"] as? Int
                 let failed = error != nil || item["error"] is String || status == "failed" || result?["isError"] as? Bool == true || result?["is_error"] as? Bool == true || (exit != nil && exit != 0)
                 let known = failed || status == "completed" || result != nil || exit == 0
+                let native = NativeComputerUseFailure.from(item: item)
                 // Read error text only after the protocol explicitly identifies a failure.
-                end(id, failed: failed, known: known, reason: failed ? Self.errorReason(error ?? result ?? item) : .unknown,
-                    code: error?["code"] as? Int)
+                let failureReason = native.map { failure -> Reason in
+                    switch failure.kind {
+                    case .capture: return .screenCapture
+                    case .noWindows: return .noWindows
+                    case .permission: return .permission
+                    case .connection: return .connection
+                    case .unknown: return .unknown
+                    }
+                } ?? Self.errorReason(error ?? result ?? item)
+                end(id, failed: failed, known: known, reason: failed ? failureReason : .unknown,
+                    code: native?.code ?? error?["code"] as? Int)
             }
         } else if let message = event["message"] as? [String: Any], let blocks = message["content"] as? [[String: Any]] {
             for block in blocks {
@@ -283,6 +297,8 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     }
 
     private func emit(_ name: String, tags: [String: String], extra: [String: String], informational: Bool = false, affectsOperation: Bool = true) {
+        DiagnosticHistory.recordAgentFailure(name, fields: correlation.merging(extra) { _, new in new }
+            .merging(tags) { _, new in new }.merging(["backend": backend, "feature": feature]) { _, new in new })
         Diagnostics.$current.withValue(operation) {
             CrashReporting.captureEvent(name, level: informational ? .info : .warning,
                 tags: tags.merging(["backend": backend, "trigger": trigger, "feature": feature, "diagnostic_schema": "2"]) { _, new in new },
