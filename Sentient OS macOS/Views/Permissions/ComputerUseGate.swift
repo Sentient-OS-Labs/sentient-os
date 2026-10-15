@@ -116,11 +116,13 @@ final class ComputerUseGate {
         }
     }
 
-    private func checkNativeAccess(ask: Bool, configuration supplied: OpenAIComputerUse.Configuration? = nil) async throws {
+    private func checkNativeAccess(ask: Bool, configuration supplied: OpenAIComputerUse.Configuration? = nil,
+                                   stoppingConflictingHelpers: Bool = false) async throws {
         let configuration: OpenAIComputerUse.Configuration
         if let supplied { configuration = supplied }
         else { configuration = try await OpenAIComputerUse.Configuration.resolveForSetup() }
-        _ = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration)
+        _ = try await OpenAIComputerUseRuntime.shared.start(configuration: configuration,
+            stoppingConflictingHelpers: ask || stoppingConflictingHelpers)
         automation = await Permissions.nativeAutomationState(ask: ask)
         if automation == .granted {
             // Only explicit setup/repair diagnoses the live service. Routine refresh is a
@@ -351,6 +353,13 @@ final class ComputerUseGate {
         pendingCheck = Task { [weak self] in
             guard let self else { return }
             await self.awaitAutomationRefresh()
+            guard !Task.isCancelled else { return }
+            // A held user action may take over a foreign helper that a passive refresh refused.
+            // Resolve that conflict before turning it into a blocking permission window.
+            if self.backend == .openAI, self.setup.ready, self.nativePermissionError != nil {
+                do { try await self.checkNativeAccess(ask: false, stoppingConflictingHelpers: true) }
+                catch { self.recordNativeFailure(error) }
+            }
             guard !Task.isCancelled else { return }
             self.pendingCheck = nil
             self.refreshGrants()

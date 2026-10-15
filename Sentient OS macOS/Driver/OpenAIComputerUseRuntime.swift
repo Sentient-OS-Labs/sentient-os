@@ -58,7 +58,7 @@ final class OpenAIComputerUseRuntime {
             let lease = try await CodexRuntime.sharedRuntimeLease()
             defer { lease.unlock() }
             let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
-            let helper = try await start(configuration: configuration)
+            let helper = try await start(configuration: configuration, stoppingConflictingHelpers: true)
             guard await Permissions.nativeAutomationState() == .granted else {
                 throw OpenAIComputerUse.RuntimeError.permissionRequired
             }
@@ -86,17 +86,24 @@ final class OpenAIComputerUseRuntime {
     }
 
     @discardableResult
-    func start(configuration selected: OpenAIComputerUse.Configuration) async throws -> NSRunningApplication {
+    func start(configuration selected: OpenAIComputerUse.Configuration,
+               stoppingConflictingHelpers: Bool = false) async throws -> NSRunningApplication {
         let lease = try await CodexRuntime.sharedRuntimeLease()
         defer { lease.unlock() }
         let configuration = try selected.afterRuntimeLease()
         if let activeConfiguration, !activeTasks.isEmpty, activeConfiguration != configuration {
             throw OpenAIComputerUse.RuntimeError.helperRunning
         }
-        if let starting {
+        while let starting {
             let sameConfiguration = startingConfiguration == configuration
-            let app = try await awaitStartup(starting, id: startingID)
-            if sameConfiguration, !app.isTerminated { return app }
+            do {
+                let app = try await awaitStartup(starting, id: startingID)
+                if sameConfiguration, !app.isTerminated { return app }
+            } catch OpenAIComputerUse.RuntimeError.conflictingHelper where stoppingConflictingHelpers {
+                // A task can arrive while a passive health check is refusing a foreign helper.
+                // Retry with takeover after that shared startup has settled.
+                try Task.checkCancellation()
+            }
         }
         guard !restarting else { throw OpenAIComputerUse.RuntimeError.helperRunning }
         let id = UUID()
@@ -113,7 +120,11 @@ final class OpenAIComputerUseRuntime {
             let configuration = try configuration.afterRuntimeLease()
             _ = try await OpenAIComputerUse.validate(at: configuration.appURL)
             try Task.checkCancellation()
+            if stoppingConflictingHelpers {
+                try await OpenAIComputerUse.stopConflictingHelpers(configuration: configuration)
+            }
             let running = NSRunningApplication.runningApplications(withBundleIdentifier: OpenAIComputerUse.bundleID)
+                .filter { !$0.isTerminated }
             if let app = running.first {
                 guard running.count == 1, let url = app.bundleURL,
                       await OpenAIComputerUse.acceptsRunningHelper(at: url, configuration: configuration) else {
@@ -179,7 +190,7 @@ final class OpenAIComputerUseRuntime {
         }
         let task = Task { @MainActor in
             do {
-                let app = try await self.start(configuration: configuration)
+                let app = try await self.start(configuration: configuration, stoppingConflictingHelpers: true)
                 guard await Permissions.nativeAutomationState() == .granted else {
                     throw OpenAIComputerUse.RuntimeError.permissionRequired
                 }
@@ -222,7 +233,7 @@ final class OpenAIComputerUseRuntime {
         activeTasks.insert(id)
         activeConfiguration = configuration
         do {
-            let app = try await start(configuration: configuration)
+            let app = try await start(configuration: configuration, stoppingConflictingHelpers: true)
             taskHelpers[id] = app
             AgentRunDiagnostics.current?.recordHelper(running: !app.isTerminated, atStart: true)
             let permission = await Permissions.nativeAutomationState()
