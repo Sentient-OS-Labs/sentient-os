@@ -98,6 +98,11 @@ actor ProactiveCycle {
                                                stage: .deciding, scheduled: scheduled, progress: progress) }
             }
             guard !notes.isEmpty || calendarContext?.hasOutlookEvents == true else {
+                if GiftLetter.needsWelcome(), FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path) {
+                    progress(.knowledgeBase("Writing your welcome…"))
+                    do { _ = try await GiftLetter.shared.generate(onLine: onLine) }
+                    catch { Log("GiftLetter: welcome skipped — \(ErrorLabel(error))") }
+                }
                 if calendarContext?.outlookComplete == true,
                    ProactiveResearch.latest()?.ready.contains(where: { $0.calendarContextOnly == true }) == true {
                     ProactiveResearch.saveLatest(Self.mergeCalendarOnly(ReadyResult(ready: [], dropped: []), existing: ProactiveResearch.latest()))
@@ -111,10 +116,14 @@ actor ProactiveCycle {
             }
 
             let giftPreexisted = GiftLetter.latest() != nil
+            let needsWelcome = GiftLetter.needsWelcome()
             var consumedSourceIDs = Set<String>()
             if !notes.isEmpty {
                 // 1) Knowledge base — create first time, else a surgical update. 2) Push the mirror.
                 let exists = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
+                CrashReporting.diagnosticBreadcrumb("vault.mode_selected", data: [
+                    "mode": exists ? "update" : "build", "vault_exists": String(exists),
+                    "pending_summaries": String(notes.count), "welcome_required": String(needsWelcome)])
                 progress(.knowledgeBase(exists ? "Updating your knowledge…"
                                                : "Creating your perfect knowledge base from everything we've analyzed…"))
                 // A sliced corpus (too big for one codex prompt) reports each part as it's fed — the
@@ -150,7 +159,7 @@ actor ProactiveCycle {
                 //      A gift that ALREADY existed before this cycle has had its day-one morning — it retires
                 //      when this cycle's proactive stage replaces the deck (kb-only mode has no replace, so
                 //      the free home's lone envelope lives on).
-                if !giftPreexisted {
+                if needsWelcome {
                     progress(.knowledgeBase("Writing your welcome…"))
                     do { _ = try await GiftLetter.shared.generate(onLine: onLine) }
                     catch { Log("GiftLetter: welcome skipped — \(ErrorLabel(error))") }   // type only: msg() embeds raw codex output → Sentry breadcrumb
@@ -202,7 +211,7 @@ actor ProactiveCycle {
                         }
                     }
                     // The deck was replaced (new cards or a clean empty) — a pre-existing gift's day is done.
-                    if giftPreexisted { GiftLetter.clear() }
+                    if giftPreexisted { GiftLetter.retire() }
                 } else if calendarContext?.outlookComplete == true {
                     ProactiveResearch.saveLatest(Self.mergeCalendarOnly(ReadyResult(ready: [], dropped: []), existing: ProactiveResearch.latest()))
                 }

@@ -10,17 +10,18 @@ import UniformTypeIdentifiers
 
 @MainActor
 enum DiagnosticExport {
-    static let disclosure = "Includes your account email, system and app status, the last 15 saved prompts and final responses, any saved errors, and technical Double Tap and overnight logs. No screen captures, captured screen content, computer-use history, or knowledge base (including Double Tap writing examples) is included."
+    static let disclosure = "Includes your account email, system and app status, the last 15 saved prompts and final responses, saved technical failure categories and counts, and Double Tap and overnight logs. No screen captures, app contents, tool arguments or results, or knowledge base (including Double Tap writing examples) is included."
     static let sharingNote = "Saved prompts and responses may contain personal information. Review the file before sharing. Nothing is sent automatically."
 
     struct Snapshot: Encodable, Sendable {
-        let schemaVersion = 1
+        let schemaVersion = 2
         let exportedAt: Date
         let disclosure = DiagnosticExport.disclosure
         let notes = [
             "Prompt history contains at most 15 saved requests, newest first. Requests are capped at 300 characters when recorded; final messages and the latest recovery error are retained.",
             "Common credentials, URLs, local paths and contact details in history text are scrubbed. Account email is included explicitly. Review free text before sharing.",
             "Technical history retains up to 50 Double Tap attempts, 30 overnight attempts and 100 structured errors. It starts with this feature; older attempts are unavailable.",
+            "The error list includes bounded Sidekick failure categories, tool names, counts and operation IDs. An empty list does not prove that earlier tasks succeeded.",
             "Missing fields mean unavailable or not yet recorded, not a successful run. Unfinished prompts have no saved final result.",
             "Connector and CLI status uses local cached/declarative state unless a field says otherwise; it does not prove that a service is reachable.",
             "Double Tap pasteDispatched means paste keystrokes were sent; delivery to the intended field was not verified. No drafts, screenshots, tool calls, or knowledge files are attached."
@@ -29,6 +30,7 @@ enum DiagnosticExport {
         let app: AppInfo
         let ai: AIInfo
         let sources: [String: Bool]
+        let sourceReadOutcomes: [String: String]
         let connectors: [ConnectorInfo]
         let permissions: [String: String]
         let promptHistory: [SidekickHistory.DiagnosticEntry]
@@ -60,6 +62,7 @@ enum DiagnosticExport {
         let version: String
         let build: String
         let buildConfiguration: String
+        let lastExplicitResetAt: Date?
         let launchAtLogin: Bool
         let onboardingComplete: Bool
         let analysisRunning: Bool
@@ -162,7 +165,8 @@ enum DiagnosticExport {
             thermalState: PowerState.thermalLabel),
             app: AppInfo(version: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown",
                 build: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown",
-                buildConfiguration: configuration, launchAtLogin: LoginItem.isEnabled,
+                buildConfiguration: configuration, lastExplicitResetAt: defaults.object(forKey: "diagnostics.lastExplicitResetAt") as? Date,
+                launchAtLogin: LoginItem.isEnabled,
                 onboardingComplete: defaults.bool(forKey: AppState.onboardingKey),
                 analysisRunning: PipelineActivity.shared.isRunning,
                 computerTaskRunning: appState.commandCoordinator.run.isRunning,
@@ -178,14 +182,17 @@ enum DiagnosticExport {
                 claude: CLIInfo(installed: ClaudeCLI.locateBinary() != nil, version: ClaudeSetup.shared.version.map(clean),
                     loggedIn: claude.loggedIn, plan: claude.plan, email: claude.email.flatMap(MailAccount.normalizedEmail),
                     statusSource: "local_cli_probe_with_cached_fallback"), computerUseHelperInstalled: OpenAIComputerUse.isInstalled),
-            sources: sourceStatus(defaults), connectors: connectorStatus(),
+            sources: sourceStatus(defaults), sourceReadOutcomes: SourceHealth.readStatuses(), connectors: connectorStatus(),
             permissions: ["fullDiskAccess": String(Permissions.hasFullDiskAccess()),
                 "accessibility": String(Permissions.hasAccessibility()), "screenRecording": String(Permissions.hasScreenRecording()),
                 "microphone": microphoneStatus(), "speechRecognition": speechStatus(),
                 "nativeHelperAccessibilityCached": String(ComputerUseGate.shared.helperAccessibility),
                 "nativeHelperScreenRecordingCached": String(ComputerUseGate.shared.helperScreen),
                 "nativeHelperAutomationCached": String(describing: ComputerUseGate.shared.automation),
-                "nativeHelperNeedsRestartCached": String(ComputerUseGate.shared.nativeRestartRequired)],
+                "nativeHelperNeedsRestartCached": String(ComputerUseGate.shared.nativeRestartRequired),
+                "nativeCaptureCheck": OpenAIComputerUseRuntime.shared.captureHealth.rawValue,
+                "nativeCaptureVerified": String(OpenAIComputerUseRuntime.shared.captureVerified),
+                "nativeExpectedHelperBuild": String(CodexRuntime.release.helperBuild)],
             promptHistory: prompts,
             doubleTap: DoubleTapInfo(enabled: DoubleTap.isEnabled, drafting: DoubleTap.shared.isDrafting,
                 provider: provider.rawValue, model: provider == .sentient ? nil : clean(provider.model), api: provider.api.rawValue),

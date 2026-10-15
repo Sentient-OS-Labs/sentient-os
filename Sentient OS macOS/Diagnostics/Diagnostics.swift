@@ -165,11 +165,26 @@ nonisolated enum Diagnostics {
         }
         // Payload-free native errors otherwise expose only an unstable numeric enum index.
         if let native = error as? OpenAIComputerUse.RuntimeError { fields["error_case"] = String(describing: native) }
+        if let native = error as? NativeComputerUseFailure {
+            fields["error_case"] = native.kind.rawValue
+            fields["error_domain"] = "native_computer_use"
+            if let code = native.code { fields["error_code"] = String(code) }
+            return fields
+        }
         let ns = error as NSError
         let domains: Set<String> = [NSCocoaErrorDomain, NSURLErrorDomain, NSPOSIXErrorDomain, NSOSStatusErrorDomain,
                                    "NSMachErrorDomain", "SQLite", "SQLiteError", "SUSparkleErrorDomain", "SUErrorDomain"]
         fields["error_domain"] = domains.contains(ns.domain) ? ns.domain : "application"
         fields["error_code"] = String(ns.code)
+        // Sparkle wraps download failures. Keep a bounded code/domain chain, never URLs,
+        // response headers, userInfo descriptions, or the raw provider error.
+        var underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError
+        for depth in 1...3 {
+            guard let cause = underlying else { break }
+            fields["underlying_\(depth)_domain"] = domains.contains(cause.domain) ? cause.domain : "application"
+            fields["underlying_\(depth)_code"] = String(cause.code)
+            underlying = cause.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
         switch error {
         case MirrorClient.MirrorError.http(let code, _): fields["http_status"] = String(code)
         case DoubleTapInference.Failure.http(let code, _): fields["http_status"] = String(code)

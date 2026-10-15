@@ -29,6 +29,8 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
 
     private let driver: SentientUpdateDriver
     private var updater: SPUUpdater?
+    private var retryTask: Task<Void, Never>?
+    private var networkRetries = 0
 
     /// Development products must never join the published app's update channel. Do not turn
     /// Sparkle preferences off: Debug and Release share those defaults on a developer's Mac.
@@ -80,6 +82,8 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
     /// update is found.
     func checkForUpdatesNow(from origin: UpdateModel.CheckOrigin) {
         guard let updater, updater.canCheckForUpdates else { return }
+        retryTask?.cancel(); retryTask = nil
+        networkRetries = 0
         model.userInitiated = true
         model.checkOrigin = origin
         updater.checkForUpdates()
@@ -112,7 +116,38 @@ final class UpdateController: NSObject, SPUUpdaterDelegate {
                 Diagnostics.report(.updateFailed, phase: .complete, error: error)
             }
             Log("Sparkle: update cycle finished with error — \(ErrorLabel(error))")
+            if !model.userInitiated, networkRetries < 2, Self.isTransientDownloadFailure(error) {
+                networkRetries += 1
+                let delay = networkRetries == 1 ? 30 : 120
+                retryTask?.cancel()
+                retryTask = Task { [weak self] in
+                    do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                    guard let self, !Task.isCancelled, !self.model.userInitiated,
+                          !self.model.isMidUpdate, updater.canCheckForUpdates else { return }
+                    updater.checkForUpdatesInBackground()
+                }
+            }
+        } else {
+            networkRetries = 0
+            retryTask?.cancel(); retryTask = nil
         }
+    }
+
+    /// Retry transport interruptions only. Signature, archive and installation failures
+    /// require attention; a generic Sparkle download error alone is not enough evidence.
+    nonisolated static func isTransientDownloadFailure(_ error: Error) -> Bool {
+        let root = error as NSError
+        guard root.domain == SUSparkleErrorDomain, root.code == Int(SUError.downloadError.rawValue) else { return false }
+        var cause = root.userInfo[NSUnderlyingErrorKey] as? NSError
+        for _ in 0..<3 {
+            guard let current = cause else { return false }
+            if current.domain == NSURLErrorDomain {
+                return [NSURLErrorTimedOut, NSURLErrorNetworkConnectionLost, NSURLErrorCannotFindHost,
+                        NSURLErrorCannotConnectToHost, NSURLErrorDNSLookupFailed, NSURLErrorNotConnectedToInternet].contains(current.code)
+            }
+            cause = current.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return false
     }
 
     /// Silent path: Sparkle has downloaded + staged an update for install-on-quit. Returning `true`

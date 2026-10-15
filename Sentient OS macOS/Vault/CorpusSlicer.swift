@@ -23,12 +23,12 @@ import Foundation
 
 enum CorpusSlicer {
 
-    /// UTF-8 bytes of rendered corpus per slice, ChatGPT backend. Headroom math: the vault
-    /// prompt core + output instructions + a merge skeleton stay well under the 1,048,576-char
-    /// server cap with ~33% margin (the server counts "characters" — measured within ~0.4% of
-    /// UTF-8 bytes on this corpus shape; the margin also absorbs Unicode counting ambiguity).
-    /// Shared with Proactive's window trim. Don't shave it.
+    /// Transport budget, also used by Proactive's read-only context window.
     static let defaultBudget = 700_000
+    /// Vault edits need smaller batches than a read-only prompt. Existing resume tokens
+    /// retain their original budget and item limit so boundaries stay deterministic.
+    static var mergeBudget: Int { min(100_000, budget) }
+    static let maximumItems = 120
 
     /// The live budget — `SENTIENT_SLICE_BUDGET` overrides in DEBUG so self-tests can force
     /// multi-slice runs from a tiny corpus (Release ignores the env, like SENTIENT_VAULT_ROOT).
@@ -64,7 +64,7 @@ enum CorpusSlicer {
     /// Walk entries in order, closing a slice when the next entry would cross the budget. Never
     /// splits an entry; an oversized single entry gets its own slice (loudly). No ranking, no
     /// sampling — a resume must re-derive identical slices from identical notes.
-    static func slice(_ notes: [CloudNote], budget: Int = budget) -> [[CloudNote]] {
+    static func slice(_ notes: [CloudNote], budget: Int = mergeBudget, maximumItems: Int = maximumItems) -> [[CloudNote]] {
         guard !notes.isEmpty else { return [] }
         let df = dateFormatter()
         var slices: [[CloudNote]] = []
@@ -75,7 +75,7 @@ enum CorpusSlicer {
             if cost > budget {
                 Log("CorpusSlicer: ⚠️ one entry (\(cost) bytes) exceeds the \(budget)-byte budget — it gets its own slice")
             }
-            if !current.isEmpty, bytes + cost > budget {
+            if !current.isEmpty, bytes + cost > budget || current.count >= max(1, maximumItems) {
                 slices.append(current); current = []; bytes = 0
             }
             current.append(n); bytes += cost

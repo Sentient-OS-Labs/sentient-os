@@ -4,10 +4,25 @@
 
 import Foundation
 import Darwin
+import ImageIO
 
 nonisolated enum OpenAIComputerUseProbe {
-    static func check(_ configuration: OpenAIComputerUse.Configuration) async throws {
-        let run = Run(configuration: configuration)
+    static func validateResult(_ result: [String: Any], requiresCapture: Bool) throws {
+        if result["isError"] as? Bool == true || result["is_error"] as? Bool == true {
+            throw NativeComputerUseFailure.classify(result)
+        }
+        guard let content = result["content"] as? [[String: Any]] else {
+            throw OpenAIComputerUse.RuntimeError.backendUnavailable
+        }
+        if requiresCapture, !content.contains(where: {
+            guard $0["type"] as? String == "image", let encoded = $0["data"] as? String,
+                  let data = Data(base64Encoded: encoded),
+                  let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
+            return CGImageSourceCreateImageAtIndex(source, 0, nil) != nil
+        }) { throw NativeComputerUseFailure(kind: .capture, code: nil) }
+    }
+    static func check(_ configuration: OpenAIComputerUse.Configuration, captureApp: String? = nil) async throws {
+        let run = Run(configuration: configuration, captureApp: captureApp)
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in run.start(continuation) }
         } onCancel: { run.cancel() }
@@ -16,6 +31,7 @@ nonisolated enum OpenAIComputerUseProbe {
     /// All mutable state lives on this queue, including cancellation before process launch.
     private final class Run: @unchecked Sendable {
         let configuration: OpenAIComputerUse.Configuration
+        let captureApp: String?
         let queue = DispatchQueue(label: "sentient.native-readiness")
         let process = Process()
         let input = Pipe()
@@ -28,7 +44,10 @@ nonisolated enum OpenAIComputerUseProbe {
         var expectedID = 1
         var receivedBytes = 0
 
-        init(configuration: OpenAIComputerUse.Configuration) { self.configuration = configuration }
+        init(configuration: OpenAIComputerUse.Configuration, captureApp: String?) {
+            self.configuration = configuration
+            self.captureApp = captureApp
+        }
 
         func start(_ continuation: CheckedContinuation<Void, Error>) {
             queue.async { [self] in
@@ -98,7 +117,9 @@ nonisolated enum OpenAIComputerUseProbe {
             guard outcome == nil, continuation != nil else { return }
             guard !data.isEmpty else { finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return }
             receivedBytes += data.count
-            guard receivedBytes <= 1_048_576 else { finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return }
+            guard receivedBytes <= (captureApp == nil ? 1_048_576 : 8_388_608) else {
+                finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return
+            }
             buffer.append(data)
             while let newline = buffer.firstIndex(of: 0x0A), outcome == nil {
                 let line = Data(buffer[..<newline])
@@ -131,11 +152,12 @@ nonisolated enum OpenAIComputerUseProbe {
                     }
                     expectedID = 3
                     send(["id": 3, "method": "mcpServer/tool/call", "params": [
-                        "threadId": id, "server": "sentient_native", "tool": "list_apps", "arguments": [:]]])
+                        "threadId": id, "server": "sentient_native",
+                        "tool": captureApp == nil ? "list_apps" : "get_app_state",
+                        "arguments": captureApp.map { ["app": $0] } ?? [:]]])
                 case 3:
-                    guard result["isError"] as? Bool != true, result["content"] is [[String: Any]] else {
-                        finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return
-                    }
+                    do { try OpenAIComputerUseProbe.validateResult(result, requiresCapture: captureApp != nil) }
+                    catch { finish(.failure(error)); return }
                     // Deliberately discard the app list; readiness is a boolean, not app telemetry.
                     finish(.success(()))
                 default: break

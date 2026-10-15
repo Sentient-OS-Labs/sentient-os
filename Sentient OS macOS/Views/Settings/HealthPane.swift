@@ -20,6 +20,7 @@ struct HealthPane: View {
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
     private var computerGate: ComputerUseGate { .shared }
+    private var nativeRuntime: OpenAIComputerUseRuntime { .shared }
     /// The live frontier-model choice — observed so switching engines re-renders the pane's
     /// engine group in place.
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
@@ -68,11 +69,13 @@ struct HealthPane: View {
             && screenRec
             && (notifStatus == .authorized || notifStatus == .provisional)
             && engineAllGreen
+            && (computerGate.backend != .openAI || nativeRuntime.captureVerified)
+            && sourceIssues.isEmpty
     }
 
     var body: some View {
         SettingsPane(title: "Permissions & Health",
-                     whisper: allGreen ? "All clear. Your Sentient is healthy."
+                     whisper: allGreen ? "Your setup checks have passed."
                                        : "Manage access and check that everything is ready.") {
             if !checked {
                 checkingLine
@@ -81,6 +84,14 @@ struct HealthPane: View {
                     onDeviceGroup
                     sidekickGroup
                     NativeComputerUsePermissionRows(gate: computerGate)
+                    if computerGate.backend == .openAI { captureCheckGroup }
+                    if !sourceIssues.isEmpty {
+                        SettingsGroup(label: "Sources to retry") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(sourceIssues, id: \.self) { SettingsProse($0) }
+                            }
+                        }
+                    }
                     Group {
                         if engineAllGreen && !codexExpanded {
                             SettingsGroup(label: engineSummaryLabel) { engineSummaryLine }
@@ -131,6 +142,65 @@ struct HealthPane: View {
     }
 
     // MARK: - SENTIENT (severity order)
+
+    @AppStorage(AppleCalendarSource.issueKey) private var calendarIssue = ""
+    @AppStorage(AppleMailHealth.key) private var mailHealth = ""
+    @AppStorage(AppleMailHealth.needsRetryKey) private var mailNeedsRetry = false
+    @AppStorage(SourceHealth.readStatusKey) private var readStatusData = Data()
+
+    private var sourceIssues: [String] {
+        var issues: [String] = []
+        if AppleCalendarSource.isEnabled, let message = AppleCalendarSource.issueMessage(calendarIssue) {
+            issues.append("Apple Calendar: " + message)
+        }
+        if !AppleMailSelection.accounts.isEmpty, mailNeedsRetry, !mailHealth.isEmpty { issues.append(mailHealth) }
+        let statuses = (try? JSONDecoder().decode([String: String].self, from: readStatusData)) ?? [:]
+        for slug in MCPSource.kbSlugs() {
+            guard let status = statuses[Diagnostics.source(slug)], status != "ok" else { continue }
+            let name = ConnectorRegistry.displayName(slug: slug)
+            issues.append(status == "connector_auth" ? "\(name): reconnect this source in Knowledge Sources."
+                : "\(name): the last analysis did not finish. Run analysis to retry; saved knowledge is retained.")
+        }
+        let defaults = UserDefaults.standard
+        let filesEnabled = !CustomRoots.urls.isEmpty || ["desktop", "documents", "downloads"].contains {
+            (defaults.object(forKey: "dbg.run." + $0) as? Bool) ?? true
+        }
+        for (source, name, enabled) in [("file", "Files", filesEnabled),
+            ("whatsapp", "WhatsApp", defaults.bool(forKey: "dbg.run.whatsapp")),
+            ("imessage", "iMessage", defaults.bool(forKey: "dbg.run.imessage")),
+            ("notes", "Notes", defaults.bool(forKey: "dbg.run.notes"))] {
+            guard enabled, let status = statuses[source], status != "ok" else { continue }
+            issues.append(status == "time_cap" ? "\(name): more items remain. Run analysis to continue from saved progress."
+                : "\(name): the last analysis did not finish. Check access and run analysis again.")
+        }
+        return issues
+    }
+
+    var captureCheckGroup: some View {
+        SettingsGroup(label: "App control check") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(nativeRuntime.captureVerified ? "Test window captured successfully."
+                    : nativeRuntime.captureHealth == .checking ? "Checking the test window…"
+                    : nativeRuntime.captureHealth == .failed ? "App control needs attention."
+                    : "App control has not been tested in this session.")
+                    .font(.system(size: 13)).foregroundStyle(SettingsStyle.secondary)
+                SettingsProse("Checks a Sentient test window. Other apps may still need their own permissions or an open window.")
+                if let failure = nativeRuntime.captureFailure { SettingsProse(failure) }
+                HStack(spacing: 16) {
+                    Button("Check app control") { Task { await nativeRuntime.checkCapture() } }
+                        .disabled(!nativeRuntime.canCheckCapture || !computerGate.allRequiredGranted)
+                    if nativeRuntime.captureHealth == .failed {
+                        Button("Restart computer use") { computerGate.restartComputerUse() }
+                            .disabled(computerGate.restartingNative)
+                    }
+                }
+                .buttonStyle(SettingsActionStyle())
+                if nativeRuntime.captureHealth == .failed {
+                    SettingsProse("Before restarting, finish any computer-use tasks in other apps. Then run the check again.")
+                }
+            }
+        }
+    }
 
     /// The first probe's stand-in — the codex login check shells out and takes seconds; without
     /// this the full board flashes and re-collapses.
@@ -510,6 +580,9 @@ private extension View {
 }
 
 #if DEBUG
+#Preview("App control check") {
+    HealthPane().captureCheckGroup.padding(24).frame(width: 620).background(Theme.bg)
+}
 #Preview("Permissions & Health pane") {
     HealthPane(expandEngine: true)
         .background(Theme.bg)

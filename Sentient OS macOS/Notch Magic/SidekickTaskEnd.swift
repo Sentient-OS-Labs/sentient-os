@@ -18,6 +18,7 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
         case invalidOutput = "invalid_output", inputTooLarge = "input_too_large"
         case completionUnconfirmed = "completion_unconfirmed", modelCouldNot = "model_could_not"
         case appUnavailable = "app_unavailable", staleTarget = "stale_target"
+        case screenCapture = "screen_capture"
         case invalidArguments = "invalid_arguments", unavailableTool = "unavailable_tool"
         case toolWhileWaiting = "tool_while_waiting"
     }
@@ -53,12 +54,24 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
                 case .timeoutOurs: reason = .timeout
                 case .staleClient: reason = .staleClient
                 case .spawnFailed: reason = .launchFailed
+                case .screenCapture: reason = .screenCapture
+                case .noWindows: reason = .appUnavailable
                 case .notInstalled: reason = .backendUnavailable
                 case .unknown: reason = textReason(text)
                 }
                 return reason.map { Self(reason: $0, evidence: .errorText) } ?? typed(fallback)
             }
             if error is CancellationError { return typed(.cancelledUnknown) }
+            if let native = error as? NativeComputerUseFailure {
+                switch native.kind {
+                case .capture: return typed(.screenCapture)
+                case .noWindows: return typed(.appUnavailable)
+                case .permission: return typed(.permission)
+                case .connection: return typed(.connection)
+                case .unknown: return typed(.unknown)
+                }
+            }
+            if error is ComputerUseStream.WindowUnavailable { return typed(.appUnavailable) }
             if error is ComputerUseGate.SetupCancelled { return .setupCancelled }
             if error is SidekickInteraction.Failure { return typed(.toolWhileWaiting) }
             if error is SlackActionEvidence.Failure || error is OutlookActionEvidence.Failure
@@ -133,6 +146,8 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
         private static func textReason(_ text: String) -> Reason? {
             switch AgentRunDiagnostics.Reason.classify(text) {
             case .appUnavailable: .appUnavailable
+            case .screenCapture: .screenCapture
+            case .noWindows: .appUnavailable
             case .staleTarget: .staleTarget
             case .permission: .permission
             case .authentication: .loginRequired

@@ -13,11 +13,25 @@ nonisolated enum ComputerUseStream {
                     onLine: @escaping @Sendable (String) -> Void) async throws -> CodexCLI.ExecResult {
         let recovery = SidekickInteraction.current
         let diagnostics = AgentRunDiagnostics.current
-        let result = try await CodexCLI.executeStreaming(binary: binary, args: args, timeout: timeout, extraEnv: extraEnv) { line in
+        let result: CodexCLI.ExecResult
+        do {
+          result = try await CodexCLI.executeStreaming(binary: binary, args: args, timeout: timeout, extraEnv: extraEnv) { line in
             diagnostics?.observe(line)
             try recovery?.observeToolEvent(line)
             if let failure = windowUnavailable(from: line) { throw failure }
+            if let data = line.data(using: .utf8),
+               let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               event["type"] as? String == "item.completed",
+               let item = event["item"] as? [String: Any],
+               let failure = NativeComputerUseFailure.from(item: item), failure.kind != .unknown {
+                // Stop a broken capture before the model repeats it or infers an empty app.
+                throw failure
+            }
             if narrate { progress(from: line).forEach(onLine) }
+          }
+        } catch let failure as NativeComputerUseFailure {
+            await MainActor.run { OpenAIComputerUseRuntime.shared.recordCaptureFailure(failure) }
+            throw failure
         }
         diagnostics?.recordProcess(status: result.status)
         return result

@@ -124,6 +124,7 @@ struct ProcessingView: View {
     @State private var prepStatus = "Preparing your suggestions…"
     /// The 10-minute patience flip for the cloud tail's bottom line (see `patienceLine`).
     @State private var patienceLong = false
+    @State private var updatingExistingKnowledge = false
     /// Phase-appropriate caption under the phase line (nil = none) — the proactive stages get
     /// the "things worth doing" promise; the knowledge-base/welcome phases speak for themselves.
     @State private var prepSubtext: String?
@@ -469,7 +470,8 @@ struct ProcessingView: View {
     /// themselves (the root wake helper).
     private var patienceLine: some View {
         VStack(spacing: 12) {
-            Text(patienceLong ? "STILL WORKING · ANOTHER 15 MINUTES OR SO" : "FIRST RUN · ABOUT 15 MINUTES")
+            Text(patienceLong ? "STILL WORKING · KEEP SENTIENT OPEN"
+                 : (updatingExistingKnowledge ? "UPDATING YOUR KNOWLEDGE" : "BUILDING YOUR KNOWLEDGE"))
                 .font(.caption2).tracking(1.5)
                 .foregroundStyle(.white.opacity(0.3))
             HStack(spacing: 9) {
@@ -480,7 +482,9 @@ struct ProcessingView: View {
                     .display(17)
                     .foregroundStyle(.white.opacity(0.92))
             }
-            Text("Just this once. In the future, Sentient can update your knowledge base at 3 AM even if your Mac's asleep with its lid closed, as long as it's plugged in and Sentient's alive in your menu bar.")
+            Text(updatingExistingKnowledge
+                 ? "Your existing knowledge stays in place while this update is prepared. Large libraries can take several passes; completed work is kept."
+                 : "The first analysis can take several passes for a large library. Completed work is kept, and future updates can run overnight while Sentient stays open in your menu bar.")
                 .font(.callout).foregroundStyle(.white.opacity(0.45))
                 .lineSpacing(2)
                 .padding(.top, 2)
@@ -770,6 +774,8 @@ struct ProcessingView: View {
 
     private func runBody() async {
         unavailableConnectors = []
+        updatingExistingKnowledge = FileManager.default.fileExists(atPath: VaultGenerator.vaultRoot.path)
+        patienceLong = false
         let generation = runGeneration   // this invocation's identity — stale once pause/stop bump it
         // Keep the display awake ONLY for the initial ingest — the long one. The home + 3am both run
         // `.auto`, so the honest "is this the first-ever descent" signal is the flag the 14h auto-enable
