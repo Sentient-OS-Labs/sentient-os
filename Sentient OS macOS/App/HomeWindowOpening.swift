@@ -27,11 +27,6 @@ enum HomeWindowOpening {
         presentCurrentPage()
     }
 
-    static func openHistory(id: UUID? = nil) {
-        MainNavigation.shared.sidekickResultID = id?.uuidString
-        open(.sidekickHistory)
-    }
-
     /// Bring forward the one main window without replacing a pending deep link or editor prompt.
     static func presentCurrentPage() {
         #if DEBUG

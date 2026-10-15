@@ -177,10 +177,8 @@ struct NotchView: View {
                      hovering: coordinator.notchHovering,
                      demoText: coordinator.demoDraft,
                      showStop: !coordinator.run.isDemo,
-                     hasResult: !coordinator.run.isDemo && coordinator.run.lastResultID != nil,
                      metrics: metrics,
                      recovery: coordinator.run.recovery,
-                     onResult: { coordinator.showLastResult() },
                      onBack: { coordinator.backFromRecovery() },
                      onStop: { coordinator.stop() },
                      onSubmitText: { coordinator.submitTyped($0) },
@@ -207,10 +205,8 @@ struct NotchContent: View {
     var demoText: String? = nil
     /// False during the onboarding demo run — scripted theater has nothing to STOP.
     var showStop: Bool = true
-    var hasResult = false
     let metrics: NotchMetrics
     var recovery: SidekickRecovery? = nil
-    var onResult: () -> Void = {}
     var onBack: () -> Void = {}
     var onStop: () -> Void = {}
     var onSubmitText: (String) -> Void = { _ in }
@@ -502,28 +498,12 @@ struct NotchContent: View {
             .animation(.easeInOut(duration: 0.35), value: statusLine)
             .allowsHitTesting(false)
         case .finishing(let outcome):
-            // Real tasks link to their persistent result; demo/preview statuses stay self-contained.
-            if hasResult {
-                Button(action: onResult) {
-                    HStack(spacing: 8) {
-                        Text(outcome == .success ? "Task complete" : (outcome == .stopped ? "Stopped" : "Couldn't finish"))
-                        Spacer(minLength: 0)
-                        Text("View result")
-                        Image(systemName: "arrow.up.right")
-                    }
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).help("Read the saved answer in Sidekick History")
-                .accessibilityIdentifier("sidekick.viewResult")
-            } else {
-                Text(statusLine)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.7))
-                    .lineLimit(outcome == .failed ? 2 : 1).truncationMode(.tail)
-                    .allowsHitTesting(false)
-            }
+            // Failures get a second line so the reason remains readable.
+            Text(statusLine)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(outcome == .failed ? 2 : 1).truncationMode(.tail)
+                .allowsHitTesting(false)
         case .notice(let message):
             Text(message)
                 .font(.system(size: 13, design: .serif)).italic()
@@ -834,10 +814,6 @@ private struct NotchPreviewStage<Content: View>: View {
 }
 #Preview("finishing") {
     NotchPreviewStage { NotchContent(phase: .finishing(.success), readBack: nil, statusLine: "✓ done", metrics: .preview) }
-}
-#Preview("finishing · saved result") {
-    NotchPreviewStage { NotchContent(phase: .finishing(.success), readBack: nil,
-                                     statusLine: "✓ done", hasResult: true, metrics: .preview) }
 }
 #Preview("finishing · failed (reason)") {
     NotchPreviewStage { NotchContent(phase: .finishing(.failed), readBack: nil,

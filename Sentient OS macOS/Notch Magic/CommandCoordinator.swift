@@ -576,12 +576,6 @@ final class CommandCoordinator {
         Log("notch clicked → typing")
     }
 
-    func showLastResult() {
-        guard !run.isDemo, let id = run.lastResultID else { return }
-        setPhase(.hidden)
-        HomeWindowOpening.openHistory(id: id)
-    }
-
     // MARK: The native Double Tap lesson
 
     func armOnboardingDoubleTapDemo(id: UUID, in window: NSWindow, onKeyChange: @escaping (Bool) -> Void) {
@@ -718,8 +712,8 @@ final class CommandCoordinator {
         // Only flourish if the notch is actually up (a stop/dismiss may have already hidden it).
         guard phase == .running else { return }
         setPhase(.finishing(outcome))
-        // Real tasks leave time to open the saved result. Keep the onboarding demo's short beat.
-        scheduleHide(after: run.isDemo ? 1.5 : 8.0)
+        // Success and stopped statuses are brief; failures leave time to read the reason.
+        scheduleHide(after: outcome == .failed ? 5.0 : 1.5)
     }
 
     // MARK: Phase + read-back plumbing (generation-guarded so a delayed change never clobbers a newer one)
