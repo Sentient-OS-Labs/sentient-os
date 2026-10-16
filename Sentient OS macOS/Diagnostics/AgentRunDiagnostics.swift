@@ -97,7 +97,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     /// Only fixed native tool names are emitted. Connector-defined names may contain account labels.
     static func toolIdentity(server: String, tool: String) -> (family: String, tool: String) {
         if server == "sentient_native" {
-            let known: Set<String> = ["get_app_state", "list_apps", "list_windows", "get_desktop_state", "click", "double_click", "right_click", "drag", "scroll", "type_text", "set_value", "press_key", "key_press", "launch_app", "open_app", "get_screenshot", "screenshot", "get_app_info", "get_window_state", "select_menu_item", "invoke_menu"]
+            let known: Set<String> = ["get_app_state", "list_apps", "list_windows", "get_desktop_state", "click", "double_click", "right_click", "drag", "scroll", "type_text", "set_value", "press_key", "key_press", "launch_app", "open_app", "get_screenshot", "screenshot", "get_app_info", "get_window_state", "select_menu_item", "invoke_menu", "select_text", "perform_secondary_action"]
             return ("native", known.contains(tool) ? tool : "other")
         }
         if server == "sentient_recovery" { return ("recovery", ["ask_user", "update_instructions"].contains(tool) ? tool : "other") }
@@ -146,11 +146,12 @@ nonisolated final class AgentRunDiagnostics: Sendable {
                     case .noWindows: return .noWindows
                     case .permission: return .permission
                     case .connection: return .connection
+                    case .timeout: return .timeout
                     case .unknown: return .unknown
                     }
                 } ?? Self.errorReason(error ?? result ?? item)
                 end(id, failed: failed, known: known, reason: failed ? failureReason : .unknown,
-                    code: native?.code ?? error?["code"] as? Int)
+                    code: native?.code ?? error?["code"] as? Int, nativeFields: native?.fields ?? [:])
             }
         } else if let message = event["message"] as? [String: Any], let blocks = message["content"] as? [[String: Any]] {
             for block in blocks {
@@ -216,7 +217,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         }
     }
 
-    private func end(_ id: String, failed: Bool, known: Bool, reason: Reason, code: Int? = nil) {
+    private func end(_ id: String, failed: Bool, known: Bool, reason: Reason, code: Int? = nil, nativeFields: [String: String] = [:]) {
         // A changed or truncated stream can omit the start. Its explicit failure still counts.
         start(id, server: "", tool: "", arguments: [:], observedStart: false)
         let call = state.withLock { state -> Call? in
@@ -230,7 +231,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
             return call
         }
         guard let call else { return }
-        var details = fields(call)
+        var details = fields(call).merging(nativeFields) { _, new in new }
         details["result"] = failed ? "failed" : (known ? "completed" : "unknown")
         details["reason"] = reason.rawValue
         if let code { details["error_code"] = String(code) }

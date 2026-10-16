@@ -168,7 +168,7 @@ nonisolated enum Diagnostics {
         if let native = error as? NativeComputerUseFailure {
             fields["error_case"] = native.kind.rawValue
             fields["error_domain"] = "native_computer_use"
-            if let code = native.code { fields["error_code"] = String(code) }
+            fields.merge(native.fields) { _, new in new }
             return fields
         }
         let ns = error as NSError
