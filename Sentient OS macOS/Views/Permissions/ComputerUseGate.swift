@@ -308,8 +308,11 @@ final class ComputerUseGate {
         backend = .current
         setup.refresh()
         if backend == .openAI {
+            let oldHelperAccessibility = helperAccessibility
             helperAccessibility = Permissions.isTCCGranted(service: "kTCCServiceAccessibility", clientBundleID: OpenAIComputerUse.bundleID)
+            let oldHelperScreen = helperScreen
             helperScreen = Permissions.isTCCGranted(service: "kTCCServiceScreenCapture", clientBundleID: OpenAIComputerUse.bundleID)
+            if oldHelperScreen != helperScreen || oldHelperAccessibility != helperAccessibility { OpenAIComputerUseRuntime.shared.invalidate() }
         }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio)
         let speech = SFSpeechRecognizer.authorizationStatus()

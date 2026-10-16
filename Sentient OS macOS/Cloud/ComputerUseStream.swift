@@ -23,7 +23,7 @@ nonisolated enum ComputerUseStream {
                let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                event["type"] as? String == "item.completed",
                let item = event["item"] as? [String: Any],
-               let failure = NativeComputerUseFailure.from(item: item), failure.kind != .unknown {
+               let failure = NativeComputerUseFailure.from(item: item) {
                 // Stop a broken capture before the model repeats it or infers an empty app.
                 throw failure
             }

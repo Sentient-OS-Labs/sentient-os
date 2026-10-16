@@ -144,6 +144,35 @@ nonisolated enum DiagnosticHistory {
         }
     }
 
+    /// Capture diagnostics are built only from fixed cases, numeric codes and OS metadata.
+    static func recordCapture(_ supplied: [String: String], defaults: UserDefaults = .standard) {
+        guard supplied["capture_outcome"] != "passed" || supplied["capture_source"] == "health_probe" else { return }
+        let categories: Set<String> = ["capture_source", "capture_outcome", "native_kind", "native_detail",
+            "failure_stage", "error_domain", "system_error_domain", "tool", "helper_version", "cli_version", "diagnostic_schema", "stderr_detail", "stderr_evidence", "recovery_decision"]
+        let ids: Set<String> = ["capture_id", "operation_id", "root_operation_id", "task_id"]
+        let numbers: Set<String> = ["capture_attempt", "attempt", "duration_ms", "helper_build", "helper_process_count",
+            "display_count", "target_window_count", "target_onscreen_count", "native_error_code", "rpc_error_code",
+            "error_code", "system_error_code", "exit_code", "stderr_native_code", "recovery_ax_lookup_code", "recovery_ax_restore_code",
+            "display_index", "image_width", "image_height"]
+        let booleans: Set<String> = ["native_code_present", "underlying_error_available", "helper_expected_path",
+            "helper_screen_granted_cached", "helper_accessibility_granted_cached", "sentient_screen_preflight",
+            "target_running", "target_hidden", "target_active", "recovery_open_dispatched", "recovery_ax_available",
+            "recovery_activated", "image_valid", "probe_requires_capture", "watchdog_fired"]
+        var fields: [String: String] = [:]
+        for (key, value) in supplied {
+            if ["native_detail", "stderr_detail"].contains(key), NativeComputerUseFailure.Detail(rawValue: value) != nil {
+                fields[key] = value
+            } else if categories.contains(key) { fields[key] = safe(value) }
+            else if ids.contains(key), UUID(uuidString: value) != nil { fields[key] = value }
+            else if numbers.contains(key), Int(value) != nil { fields[key] = value }
+            else if booleans.contains(key), ["true", "false"].contains(value) { fields[key] = value }
+        }
+        update(defaults) { state in
+            state.errors.append(Failure(at: Date(), event: "computer_use.capture", fields: fields))
+            state.errors = Array(state.errors.suffix(100))
+        }
+    }
+
     static func reset(defaults: UserDefaults = .standard) {
         lock.withLock { _ in defaults.removeObject(forKey: key) }
     }

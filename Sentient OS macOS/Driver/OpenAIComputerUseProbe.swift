@@ -1,199 +1,66 @@
-// Checks the real native service through a short, model-free Codex app-server connection.
-// Owns only its temporary profile and probe process; never terminates the shared GUI helper.
-// Doc: Driver/Documentation - Native Computer Use.md
+// Verifies native app state through the same authenticated, model-free session as normal tasks.
+// Capture targets only Sentient's synthetic test window; no model turn or arbitrary app selection.
+// Doc: Documentation - Native Computer Use.md
 
 import Foundation
-import Darwin
 import ImageIO
 
 nonisolated enum OpenAIComputerUseProbe {
+    static let testWindowText = "Sentient is checking this test window."
     static func validateResult(_ result: [String: Any], requiresCapture: Bool) throws {
-        if result["isError"] as? Bool == true || result["is_error"] as? Bool == true {
-            throw NativeComputerUseFailure.classify(result)
-        }
+        if NativeComputerUseFailure.isError(result) { throw NativeComputerUseFailure.classify(result) }
         guard let content = result["content"] as? [[String: Any]] else {
-            throw OpenAIComputerUse.RuntimeError.backendUnavailable
+            throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
         }
-        if requiresCapture, !content.contains(where: {
-            guard $0["type"] as? String == "image", let encoded = $0["data"] as? String,
-                  let data = Data(base64Encoded: encoded),
-                  let source = CGImageSourceCreateWithData(data as CFData, nil) else { return false }
-            return CGImageSourceCreateImageAtIndex(source, 0, nil) != nil
-        }) { throw NativeComputerUseFailure(kind: .capture, code: nil) }
+        guard requiresCapture else { return }
+        let images = content.filter { $0["type"] as? String == "image" }
+        guard !images.isEmpty else { throw NativeComputerUseFailure(kind: .capture, code: nil, detail: .missingImage, stage: .imageDecode) }
+        guard images.contains(where: { image in
+            guard let encoded = image["data"] as? String, encoded.utf8.count <= 24 * 1_048_576,
+                  let data = Data(base64Encoded: encoded), let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  width > 0, height > 0, width <= 16384, height <= 16384,
+                  width * height <= 100_000_000 else { return false }
+            return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary) != nil
+        }) else { throw NativeComputerUseFailure(kind: .capture, code: nil, detail: .invalidImage, stage: .imageDecode) }
     }
     static func check(_ configuration: OpenAIComputerUse.Configuration, captureApp: String? = nil) async throws {
-        let run = Run(configuration: configuration, captureApp: captureApp)
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in run.start(continuation) }
-        } onCancel: { run.cancel() }
-    }
-
-    /// All mutable state lives on this queue, including cancellation before process launch.
-    private final class Run: @unchecked Sendable {
-        let configuration: OpenAIComputerUse.Configuration
-        let captureApp: String?
-        let queue = DispatchQueue(label: "sentient.native-readiness")
-        let process = Process()
-        let input = Pipe()
-        let output = Pipe()
-        var profile: URL?
-        var continuation: CheckedContinuation<Void, Error>?
-        var buffer = Data()
-        var outcome: Result<Void, Error>?
-        var cancelled = false
-        var expectedID = 1
-        var receivedBytes = 0
-
-        init(configuration: OpenAIComputerUse.Configuration, captureApp: String?) {
-            self.configuration = configuration
-            self.captureApp = captureApp
+        // This API is a health check, never a generic user-app capture entry point.
+        guard captureApp == nil || captureApp == Bundle.main.bundleURL.path else {
+            throw NativeComputerUseFailure(kind: .permission, code: nil, detail: .blockedByPolicy, stage: .probe)
         }
-
-        func start(_ continuation: CheckedContinuation<Void, Error>) {
-            queue.async { [self] in
-                self.continuation = continuation
-                guard !self.cancelled else { self.complete(.failure(CancellationError())); return }
-                do {
-                    let profile = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("sentient-native-check-\(UUID().uuidString)", isDirectory: true)
-                    try FileManager.default.createDirectory(at: profile, withIntermediateDirectories: false,
-                        attributes: [.posixPermissions: 0o700])
-                    self.profile = profile
-                    // Isolate the frontend from user plugins/config and persisted conversations.
-                    // The native client still receives the real Codex home through its MCP env.
-                    var environment = self.configuration.clientEnvironment
-                    environment["CODEX_HOME"] = profile.path
-                    self.process.executableURL = self.configuration.cliURL
-                    self.process.currentDirectoryURL = profile
-                    self.process.environment = environment
-                    let overrides = self.configuration.codexOverrides + [
-                        "features.apps=false", "features.plugins=false", "analytics.enabled=false",
-                        "cli_auth_credentials_store=\"ephemeral\"",
-                        "mcp_servers.sentient_native.startup_timeout_sec=8",
-                        "mcp_servers.sentient_native.tool_timeout_sec=8"]
-                    self.process.arguments = ["app-server", "--listen", "stdio://"]
-                        + overrides.flatMap { ["-c", $0] }
-                    self.process.standardInput = self.input
-                    self.process.standardOutput = self.output
-                    self.process.standardError = FileHandle.nullDevice
-                    self.output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-                        let data = handle.availableData
-                        self?.queue.async { [weak self] in self?.receive(data) }
-                    }
-                    self.process.terminationHandler = { [weak self] _ in
-                        self?.queue.async { [weak self] in
-                            guard let self else { return }
-                            self.complete(self.outcome ?? .failure(OpenAIComputerUse.RuntimeError.backendUnavailable))
-                        }
-                    }
-                    try self.process.run()
-                    self.send(["id": 1, "method": "initialize", "params": [
-                        "clientInfo": ["name": "sentient_readiness", "version": "1"],
-                        "capabilities": ["experimentalApi": true]]])
-                    self.queue.asyncAfter(deadline: .now() + 20) { [weak self] in
-                        self?.finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable))
-                    }
-                } catch { self.complete(.failure(error)) }
+        let diagnostics = CaptureDiagnostics(source: .healthProbe)
+        let started = Date()
+        let evidence = await CaptureDiagnostics.environment()
+        var session: OpenAIComputerUseSession?
+        do {
+            session = try await OpenAIComputerUseSession.open(configuration)
+            let data = try await session!.call(captureApp == nil ? "list_apps" : "get_app_state",
+                arguments: JSONSerialization.data(withJSONObject: captureApp.map { ["app": $0] } ?? [:]))
+            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .probe)
             }
-        }
-
-        func cancel() {
-            queue.async {
-                self.cancelled = true
-                self.finish(.failure(CancellationError()))
-            }
-        }
-
-        private func send(_ message: [String: Any]) {
-            guard outcome == nil else { return }
-            do {
-                var data = try JSONSerialization.data(withJSONObject: message)
-                data.append(0x0A)
-                try input.fileHandleForWriting.write(contentsOf: data)
-            } catch { finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)) }
-        }
-
-        private func receive(_ data: Data) {
-            guard outcome == nil, continuation != nil else { return }
-            guard !data.isEmpty else { finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return }
-            receivedBytes += data.count
-            guard receivedBytes <= (captureApp == nil ? 1_048_576 : 8_388_608) else {
-                finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return
-            }
-            buffer.append(data)
-            while let newline = buffer.firstIndex(of: 0x0A), outcome == nil {
-                let line = Data(buffer[..<newline])
-                buffer.removeSubrange(...newline)
-                guard !line.isEmpty else { continue }
-                guard let message = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else {
-                    finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return
-                }
-                // This read-only probe never accepts an app approval or any other elicitation.
-                if message["method"] != nil, let id = message["id"] {
-                    send(["id": id, "error": ["code": -32601, "message": "Readiness checks do not grant access"]])
-                    finish(.failure(OpenAIComputerUse.RuntimeError.permissionRequired)); return
-                }
-                guard let id = message["id"] as? Int, id == expectedID else { continue }
-                if let error = message["error"] as? [String: Any], error["code"] as? Int == -32601 {
-                    finish(.failure(OpenAIComputerUse.RuntimeError.unsupportedCLI)); return
-                }
-                guard message["error"] == nil, let result = message["result"] as? [String: Any] else {
-                    finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return
-                }
-                switch id {
-                case 1:
-                    expectedID = 2
-                    send(["method": "initialized"])
-                    send(["id": 2, "method": "thread/start", "params": [
-                        "cwd": profile!.path, "ephemeral": true, "sandbox": "read-only", "approvalPolicy": "never"]])
-                case 2:
-                    guard let thread = result["thread"] as? [String: Any], let id = thread["id"] as? String else {
-                        finish(.failure(OpenAIComputerUse.RuntimeError.backendUnavailable)); return
-                    }
-                    expectedID = 3
-                    send(["id": 3, "method": "mcpServer/tool/call", "params": [
-                        "threadId": id, "server": "sentient_native",
-                        "tool": captureApp == nil ? "list_apps" : "get_app_state",
-                        "arguments": captureApp.map { ["app": $0] } ?? [:]]])
-                case 3:
-                    do { try OpenAIComputerUseProbe.validateResult(result, requiresCapture: captureApp != nil) }
-                    catch { finish(.failure(error)); return }
-                    // Deliberately discard the app list; readiness is a boolean, not app telemetry.
-                    finish(.success(()))
-                default: break
+            try validateResult(result, requiresCapture: captureApp != nil)
+            if captureApp != nil {
+                let content = result["content"] as? [[String: Any]] ?? []
+                guard content.contains(where: { $0["type"] as? String == "text" && ($0["text"] as? String)?.contains(testWindowText) == true }) else {
+                    throw NativeComputerUseFailure(kind: .capture, code: nil, detail: .testWindowNotObserved, stage: .probe)
                 }
             }
-        }
-
-        private func finish(_ result: Result<Void, Error>) {
-            guard continuation != nil, outcome == nil else { return }
-            outcome = result
-            output.fileHandleForReading.readabilityHandler = nil
-            try? input.fileHandleForWriting.close()
-            guard process.isRunning else { complete(result); return }
-            // EOF normally ends app-server and its owned MCP clients cleanly. Bound cleanup if
-            // a broken child prevents that shutdown, including cancellation during startup.
-            queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self, self.continuation != nil, self.process.isRunning else { return }
-                self.process.terminate()
-            }
-            queue.asyncAfter(deadline: .now() + 2) { [weak self] in
-                guard let self, self.continuation != nil, self.process.isRunning else { return }
-                kill(self.process.processIdentifier, SIGKILL)
-            }
-        }
-
-        private func complete(_ result: Result<Void, Error>) {
-            guard let continuation else { return }
-            self.continuation = nil
-            outcome = result
-            output.fileHandleForReading.readabilityHandler = nil
-            process.terminationHandler = nil
-            try? input.fileHandleForWriting.close()
-            // Let the final reader callback release its handle before ARC closes the pipe.
-            // Closing it here could race an already-delivered readability callback.
-            if let profile { try? FileManager.default.removeItem(at: profile) }
-            continuation.resume(with: result)
+            try Task.checkCancellation()
+            // Closing the last client may normally terminate the helper. Proof is the decoded
+            // response above; do not reinterpret idle teardown as a failed capture afterward.
+            await session?.close()
+            diagnostics.record(.passed, fields: evidence.merging(["probe_requires_capture": String(captureApp != nil),
+                "duration_ms": String(Int(Date().timeIntervalSince(started) * 1000))]) { _, new in new })
+        } catch {
+            await session?.close()
+            diagnostics.record(error is CancellationError ? .cancelled : .failed,
+                failure: error as? NativeComputerUseFailure,
+                fields: evidence.merging(["probe_requires_capture": String(captureApp != nil), "duration_ms": String(Int(Date().timeIntervalSince(started) * 1000))]) { _, new in new })
+            throw error
         }
     }
 }

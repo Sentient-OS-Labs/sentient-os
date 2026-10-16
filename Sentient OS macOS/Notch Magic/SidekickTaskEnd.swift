@@ -68,6 +68,7 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
                 case .noWindows: return typed(.appUnavailable)
                 case .permission: return typed(.permission)
                 case .connection: return typed(.connection)
+                case .timeout: return typed(.timeout)
                 case .unknown: return typed(.unknown)
                 }
             }

@@ -69,6 +69,7 @@ nonisolated enum CodexFailureReason: String, Sendable {
             case .noWindows: return .noWindows
             case .permission: return .sandboxDenied
             case .connection: return .streamDisconnect
+            case .timeout: return .timeoutOurs
             case .unknown: return .unknown
             }
         }
