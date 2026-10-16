@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Exercise native error/image contracts and the real model-free session with a fake RPC peer.
 No model calls, permission changes, screen contents, or telemetry. Requires macOS + Swift.
-The real-window recovery acceptance test is separate because it needs a signed native helper.
+Real-window capture acceptance is separate because it needs a signed native helper.
 """
 import os
 from pathlib import Path
@@ -96,10 +96,6 @@ import UniformTypeIdentifiers
         check(unknown.detail == .unspecified, "opaque errors stay opaque")
         check(unknown.fields["underlying_error_available"] == "false", "missing cause is explicit")
         check(!unknown.fields.values.joined().contains("PRIVATE"), "no private error text")
-        check(unknown.allowsWindowRecovery, "bounded retry permits opaque state failures")
-        check(!NativeComputerUseFailure(kind:.timeout,code:nil,detail:.requestTimedOut).allowsWindowRecovery, "no retry on closed transport")
-        check(!NativeComputerUseFailure(kind:.capture,code:nil,stage:.action).allowsWindowRecovery, "never retry action failures")
-        check(!NativeComputerUseFailure(kind:.permission,code:nil).allowsWindowRecovery, "never repair permissions by moving windows")
         check(NativeComputerUseFailure.from(item:["type":"mcp_tool_call","server":"sentient_native","status":"completed",
               "result":["content":[["type":"text","text":"screenshotCaptureFailed"]]]]) == nil, "successful app text is not an error")
         let context = CGContext(data:nil,width:4,height:4,bitsPerComponent:8,bytesPerRow:16,
