@@ -96,11 +96,11 @@ nonisolated final class SidekickTaskSummary: Sendable {
 
     struct Submission: Sendable { let candidate: String? }
     func takeSubmission() -> Submission? {
-        state.withLock {
-            guard !$0.closed else { return nil }
-            $0.closed = true
-            defer { $0.candidate = nil }
-            return Submission(candidate: $0.candidate)
+        state.withLock { state in
+            guard !state.closed else { return nil }
+            state.closed = true
+            defer { state.candidate = nil }
+            return Submission(candidate: state.candidate)
         }
     }
 

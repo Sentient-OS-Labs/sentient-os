@@ -1,0 +1,71 @@
+name: macOS build and regression checks
+
+on:
+  push:
+    branches: [main, 'fix/**', 'feat/**']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show build tools
+        run: |
+          xcodebuild -version
+          xcrun swift -version
+          uname -m
+
+      - name: Run knowledge search regression checks
+        if: ${{ hashFiles('Scripts/test_knowledge_search.py') != '' }}
+        run: |
+          python3 Scripts/test_knowledge_search.py --swiftc "$(xcrun --find swiftc)" \
+            | tee "$RUNNER_TEMP/knowledge-search.log"
+
+      - name: Build macOS app
+        run: |
+          xcodebuild \
+            -project "Sentient OS macOS.xcodeproj" \
+            -scheme "Sentient OS macOS" \
+            -configuration Debug \
+            -destination 'generic/platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -clonedSourcePackagesDirPath "$RUNNER_TEMP/SourcePackages" \
+            -resultBundlePath "$RUNNER_TEMP/macos-build.xcresult" \
+            build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM= \
+            | tee "$RUNNER_TEMP/macos-build.log"
+
+      - name: Upload build and test results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-build-and-regression-results
+          path: |
+            ${{ runner.temp }}/knowledge-search.log
+            ${{ runner.temp }}/macos-build.log
+            ${{ runner.temp }}/macos-build.xcresult
+          if-no-files-found: warn
+          retention-days: 7
