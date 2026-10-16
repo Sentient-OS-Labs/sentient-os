@@ -1,5 +1,5 @@
 // Content-free capture evidence shared by native tasks, the health probe and display screenshots.
-// Correlates the first failure, recovery and retry in Sentry and the bounded local export ledger.
+// Correlates capture outcomes in Sentry and the bounded local export ledger.
 // Doc: Documentation - Diagnostics (Sentry & TelemetryDeck).md
 
 import Foundation
@@ -30,7 +30,7 @@ nonisolated struct CaptureDiagnostics: Sendable {
         if let failure { evidence.merge(failure.fields) { _, new in new } }
         Diagnostics.$current.withValue(operation) {
             CrashReporting.diagnosticBreadcrumb("computer_use.capture", data: evidence)
-            // Keep both sides of recovery locally, even when Sentry is disabled.
+            // Keep capture evidence locally, even when Sentry is disabled.
             DiagnosticHistory.recordCapture(evidence)
             if outcome == .failed {
                 CrashReporting.captureEvent("computer_use.capture_failed", level: .warning,

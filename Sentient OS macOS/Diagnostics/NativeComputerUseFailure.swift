@@ -59,10 +59,6 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         case .unknown: "Computer use could not complete the check. Try again in Permissions & Health."
         }
     }
-    var allowsWindowRecovery: Bool {
-        [.appState, .imageDecode].contains(stage) && [.capture, .noWindows, .timeout, .unknown].contains(kind)
-            && ![.blockedByPolicy, .malformedResponse, .responseTooLarge, .requestTimedOut, .invalidArguments].contains(detail)
-    }
     static func isError(_ result: [String: Any]) -> Bool {
         result["isError"] as? Bool == true || result["is_error"] as? Bool == true || result["error"] is [String: Any] || result["error"] is String
     }

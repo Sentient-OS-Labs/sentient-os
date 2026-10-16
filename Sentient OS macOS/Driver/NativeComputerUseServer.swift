@@ -1,5 +1,5 @@
 // Per-task native MCP boundary: authenticates through Codex, preserves native state/action IDs,
-// and retries a failed state read once after restoring that exact app's window. Never retries actions.
+// and records capture failures before they reach the sanitized model stream. Never retries tools.
 // Doc: Documentation - Native Computer Use.md
 
 import Foundation
@@ -14,7 +14,6 @@ actor NativeComputerUseServer {
     private var tools: [[String: Any]] = []
     private var closed = false
     private var busy = false
-    private var retried: Set<String> = []
     private var verified: Set<String> = []
     private var terminal: NativeComputerUseFailure?
     private var fingerprints: [String: Data] = [:]
@@ -43,7 +42,7 @@ actor NativeComputerUseServer {
                 throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .catalog)
             }
             try Task.checkCancellation()
-            let transport = LocalMCPServer(name: "sentient_native", tools: Self.names.sorted(), timeout: 270,
+            let transport = LocalMCPServer(name: "sentient_native", tools: Self.names.sorted(), timeout: 130,
                 maximumBody: 1_048_576) { [weak self] request in
                 guard let self else { throw CancellationError() }
                 return try await self.respond(request)
@@ -119,68 +118,45 @@ actor NativeComputerUseServer {
         let diagnostics = CaptureDiagnostics(source: .native, context: diagnosticContext)
         let isState = tool == "get_app_state"
         let selector = arguments["app"] as? String
-        let target = await MainActor.run { selector.flatMap { NativeWindowRecovery.resolve($0) } }
+        let target = await MainActor.run { selector.flatMap { Self.resolve($0) } }
         let identity = target?.bundleURL?.standardizedFileURL.path
         if tool != "list_apps", !isState, identity.map({ verified.contains($0) }) != true {
             throw NativeComputerUseFailure(kind: .unknown, code: nil, detail: .staleState, stage: .action)
         }
         let encoded = try JSONSerialization.data(withJSONObject: arguments)
-        func perform(_ attempt: Int) async throws -> [String: Any] {
-            let evidence = await CaptureDiagnostics.environment(target: target)
-            let began = Date()
-            do {
-                let data = try await session.call(tool, arguments: encoded)
-                guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
-                }
-                if NativeComputerUseFailure.isError(result) { throw NativeComputerUseFailure.classify(result, stage: isState ? .appState : .action) }
-                if isState { try OpenAIComputerUseProbe.validateResult(result, requiresCapture: true) }
-                if isState {
-                    diagnostics.record(attempt == 1 ? .passed : .recovered, attempt: attempt,
-                        fields: evidence.merging(["duration_ms": String(Int(Date().timeIntervalSince(began) * 1000)), "image_valid": "true"]) { _, new in new })
-                }
-                return result
-            } catch {
-                diagnostics.record(error is CancellationError ? .cancelled : .failed, attempt: attempt,
-                    failure: error as? NativeComputerUseFailure,
-                    fields: evidence.merging(["tool": tool, "duration_ms": String(Int(Date().timeIntervalSince(began) * 1000))]) { _, new in new })
-                throw error
-            }
-        }
+        let evidence = await CaptureDiagnostics.environment(target: target)
+        let began = Date()
         do {
-            let result = try await perform(1)
+            let data = try await session.call(tool, arguments: encoded)
+            guard let result = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw NativeComputerUseFailure(kind: .connection, code: nil, detail: .malformedResponse, stage: .transport)
+            }
+            if NativeComputerUseFailure.isError(result) { throw NativeComputerUseFailure.classify(result, stage: isState ? .appState : .action) }
             if isState {
-                let current = await MainActor.run { selector.flatMap { NativeWindowRecovery.resolve($0) } }
+                try OpenAIComputerUseProbe.validateResult(result, requiresCapture: true)
+                diagnostics.record(.passed,
+                    fields: evidence.merging(["duration_ms": String(Int(Date().timeIntervalSince(began) * 1000)), "image_valid": "true"]) { _, new in new })
+                let current = await MainActor.run { selector.flatMap { Self.resolve($0) } }
                 if let identity = current?.bundleURL?.standardizedFileURL.path { verified.insert(identity) }
             }
             return result
-        } catch let failure as NativeComputerUseFailure {
+        } catch {
             if let identity { verified.remove(identity) }
-            let decision: String
-            if !isState || !failure.allowsWindowRecovery { decision = "ineligible_failure" }
-            else if target == nil || identity == nil { decision = "target_not_unique" }
-            else if retried.contains(identity!) { decision = "budget_exhausted" }
-            else { decision = "restore_window" }
-            diagnostics.record(decision == "restore_window" ? .started : .skipped, fields: ["recovery_decision": decision])
-            guard decision == "restore_window", let target, let identity else { throw failure }
-            retried.insert(identity)
-            try Task.checkCancellation()
-            do {
-                let fields = try await NativeWindowRecovery.restore(target)
-                diagnostics.record(.started, attempt: 2, fields: fields)
-                try Task.checkCancellation()
-                guard !closed else { throw CancellationError() }
-                let result = try await perform(2)
-                verified.insert(identity)
-                return result
-            } catch {
-                if let failure = error as? NativeComputerUseFailure, failure.stage == .recovery {
-                    diagnostics.record(.failed, attempt: 2, failure: failure)
-                }
-                throw error
-            }
+            diagnostics.record(error is CancellationError ? .cancelled : .failed,
+                failure: error as? NativeComputerUseFailure,
+                fields: evidence.merging(["tool": tool, "duration_ms": String(Int(Date().timeIntervalSince(began) * 1000))]) { _, new in new })
+            throw error
         }
     }
+
+    @MainActor private static func resolve(_ selector: String) -> NSRunningApplication? {
+        let matches = NSWorkspace.shared.runningApplications.filter {
+            !$0.isTerminated && ($0.bundleIdentifier == selector || $0.bundleURL?.path == selector
+                || $0.localizedName?.caseInsensitiveCompare(selector) == .orderedSame)
+        }
+        return matches.count == 1 ? matches[0] : nil
+    }
+
     private static func errorResult(_ failure: NativeComputerUseFailure) -> [String: Any] {
         ["isError": true, "content": [["type": "text", "text": "\(failure.code.map { "Computer Use server error \($0): " } ?? "Native computer use failed: ")\(failure.detail.rawValue)"]]]
     }
