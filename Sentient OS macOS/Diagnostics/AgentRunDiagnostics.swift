@@ -298,6 +298,7 @@ nonisolated final class AgentRunDiagnostics: Sendable {
     }
 
     private func emit(_ name: String, tags: [String: String], extra: [String: String], informational: Bool = false, affectsOperation: Bool = true) {
+        guard !ConnectorClassificationDiagnostics.ownsFailures else { return }
         DiagnosticHistory.recordAgentFailure(name, fields: correlation.merging(extra) { _, new in new }
             .merging(tags) { _, new in new }.merging(["backend": backend, "feature": feature]) { _, new in new })
         Diagnostics.$current.withValue(operation) {
