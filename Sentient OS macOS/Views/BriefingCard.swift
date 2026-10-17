@@ -27,22 +27,60 @@ struct BriefingCard: View {
     var liveLines: [String] = []       // real cards: codex's live play-by-play (empty → demo theater)
     var onStop: (() -> Void)? = nil    // real cards: the per-card STOP
     var fireDimmed = false             // one task at a time: another task is running → the CTA waits
+    var cardWidth: CGFloat = BriefingCard.width
+    var previewBodyLines = 5
+    var previewTitleLines = 3
+    var onDismiss: (() -> Void)? = nil
 
     @State private var hovering = false
+    @Environment(\.sidekickHoveredCardID) private var hoverOverride
+    @Environment(\.accessibilityReduceMotion) private var systemReducedMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var isHovered: Bool { hovering || hoverOverride == briefing.id }
+    private var reducedMotion: Bool { motionOverride ?? systemReducedMotion }
 
     static let width: CGFloat = 332
 
     var body: some View {
         Group {
             if phase == .sealed {
-                EnvelopeFace(recipient: briefing.envelopeName, onOpened: onOpenEnvelope)
+                EnvelopeFace(recipient: briefing.envelopeName, width: cardWidth, onOpened: onOpenEnvelope)
             } else {
                 face
             }
         }
-        .scaleEffect(hovering ? 1.012 : 1)
-        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: hovering)
+        .overlay(alignment: .topLeading) {
+            if let onDismiss, isHovered {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold)).foregroundStyle(.white.opacity(0.85))
+                        .frame(width: 22, height: 22)
+                        .background(Color(white: 0.13), in: Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.2), lineWidth: 0.75))
+                        .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss suggestion")
+                .accessibilityIdentifier("proactive.dismiss.\(briefing.id)")
+                .help(dismissHelp)
+                .offset(x: -9, y: -9)
+                .transition(.opacity)
+            }
+        }
+        // Include the outside corner in hover tracking without changing measured card size.
+        .padding(10).contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .padding(-10)
+        .scaleEffect(isHovered && !reducedMotion ? 1.012 : 1)
+        .animation(reducedMotion ? .easeOut(duration: 0.12) : .spring(response: 0.35, dampingFraction: 0.75), value: isHovered)
+        .contextMenu { if let onDismiss { Button("Dismiss suggestion", systemImage: "xmark", action: onDismiss) } }
+        .accessibilityActions { if let onDismiss { Button("Dismiss suggestion", action: onDismiss) } }
+    }
+
+    private var dismissHelp: String {
+        if case .working = phase { return "Dismiss this card. The task will continue in Sidekick." }
+        return "Dismiss this suggestion"
     }
 
     // MARK: The card faces
@@ -61,7 +99,7 @@ struct BriefingCard: View {
             }
         }
         .padding(EdgeInsets(top: 16, leading: 18, bottom: 16, trailing: 18))
-        .frame(width: Self.width, alignment: .leading)
+        .frame(width: cardWidth, alignment: .leading)
         .background(Theme.Ink.cardBG, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
             .strokeBorder(border, lineWidth: 1))
@@ -77,9 +115,11 @@ struct BriefingCard: View {
             MonoCaps(briefing.kicker, size: 9.5, tracking: 2.0, color: briefing.accent.opacity(0.95))
             Text(briefing.title)
                 .font(.system(size: 20, design: .serif)).foregroundStyle(.white)
+                .lineLimit(previewTitleLines)
                 .padding(.top, 8)
             Text(briefing.body)
                 .font(.system(size: 12)).foregroundStyle(Theme.Ink.body).lineSpacing(3.2)
+                .lineLimit(previewBodyLines)
                 .padding(.top, 6)
             HStack(spacing: 12) {
                 if let offer = briefing.offer {
@@ -179,7 +219,7 @@ struct BriefingCard: View {
     private var border: LinearGradient {
         if briefing.kind == .welcome { return Self.welcomeGradient }
         return LinearGradient(
-            colors: [briefing.accent.opacity(hovering ? 0.55 : 0.40), .white.opacity(0.05)],
+            colors: [briefing.accent.opacity(isHovered ? 0.55 : 0.40), .white.opacity(0.05)],
             startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 
@@ -229,6 +269,7 @@ struct OfferButton: View {
 /// expands the letter and the card lives on as a normal welcome card).
 private struct EnvelopeFace: View {
     var recipient: String?      // the briefing's override ("You" on demo decks); nil = the Mac account's first name
+    var width: CGFloat
     var onOpened: () -> Void
     @State private var open = false
 
@@ -236,10 +277,6 @@ private struct EnvelopeFace: View {
         Button {
             guard !open else { return }
             withAnimation(.easeInOut(duration: 0.45)) { open = true }
-            Task {
-                try? await Task.sleep(for: .seconds(0.5))
-                onOpened()
-            }
         } label: {
             ZStack(alignment: .top) {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -277,10 +314,17 @@ private struct EnvelopeFace: View {
                     .offset(y: 94 - 19)
                     .opacity(open ? 0 : 1)
             }
-            .frame(width: BriefingCard.width, height: 200)
+            .frame(width: width, height: 200)
             .contentShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(PressScaleStyle())
+        .task(id: open) {
+            guard open else { return }
+            do { try await Task.sleep(for: .seconds(0.5)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
+            onOpened()
+        }
     }
 
     /// The wax: an angular-gradient disc stamped with the logo's ring + dot.

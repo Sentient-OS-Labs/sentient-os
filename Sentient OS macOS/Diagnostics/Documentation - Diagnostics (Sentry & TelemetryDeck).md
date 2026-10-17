@@ -113,3 +113,57 @@ test with the standalone `.app`.
 ## Related docs
 
 `Updates/Documentation - Auto-Update (Sparkle) & Release Pipeline.md` (the release gate on dSYMs), `Cloud/Documentation - Cloud - MCP Mirror.md` (the URL invariant), the repo's `SECURITY.md`.
+
+## Sidekick conversation backend
+
+`SidekickDiagnostics.swift` is the structure-only boundary for conversation storage, legacy
+migration, explicit message delivery, questions/answers, attention, memory, context construction,
+history retrieval, background compaction, task lifecycle and reset. It does not replace existing
+provider, native-capture or connector diagnostics, and never records an additional tool transcript.
+
+Call `SidekickDiagnostics.event(stage, outcome:reason:taskID:attemptID:backend:source:counts:duration:)`
+at a meaningful lifecycle boundary or durable commit. Call `failure(stage, reason:...)` for a
+backend defect. The stage, outcome, reason, provider, source and count keys are closed enums;
+identifiers are UUIDs; measurements are nonnegative bounded integers or finite bounded durations.
+No API accepts arbitrary extra fields, an `Error`, message text, memory text, quoted replies,
+paths, tool arguments/results, screenshots or provider output. Invalid measurements reject the
+whole observation before reaching any sink. The return value reports whether a structurally
+valid observation was accepted, not whether consent permitted an upload.
+
+| Signal | Purpose and consent |
+|---|---|
+| `sidekick.backend` breadcrumb | Structure-only lifecycle context, subject to existing Sentry startup/crash-report consent. |
+| `sidekick.backend_failed` | Defects grouped by phase, reason, backend and source; task and attempt UUIDs are extras, never issue fingerprints. Uses existing operation deduplication and a 15-minute repeat cooldown. |
+| `Sidekick.backend` | Counts, duration and categorical outcomes through **extended** TelemetryDeck consent. Task/attempt UUIDs are removed. Existing core task-end and submission signals stay independent. |
+| Local `DiagnosticHistory` error | Backend defects pass through the existing bounded, scrubbed technical ledger, independently of upload consent. No conversation or memory content is added to exports. |
+
+Expected Stop, cancellation, interruption, stale callbacks, duplicate delivery, exhausted budget,
+changed sources, foreground contention, quota and unavailable-provider outcomes become ordinary
+health observations rather than Sentry defects. Failures require an explicit reason; `.none`
+is rejected. Do not log a provider failure again here when its existing owner already explains
+it, except to record a distinct backend consequence such as failure to preserve a message.
+
+Useful instrumentation points:
+
+* Store open/migration: schema outcome, imported task/event counts, and elapsed time. Report
+  corruption/newer schema/failed persistence accurately; success follows commit.
+* Delivery: committed message/question/answer counts; a failed write never reports delivery
+  success. Attention reports requests/presentation outcomes without the message body.
+* Lifecycle: task/attempt start and terminal outcome, recovered unfinished tasks, and resets.
+  Keep stable logical-task and per-attempt UUIDs distinct.
+* Memory: successful read/write byte counts, conflict or atomic-write failure. A save is
+  independent of the eventual task outcome.
+* Context: encoded UTF-8 byte size, retained messages and omitted events. These measurements
+  are not token counts; no tokenizer estimate is reported as measured provider usage.
+* Compaction: start, completed-prefix installation, covered sequence, event/summary byte counts,
+  duration and stale/skipped/failure outcomes. Do not
+  report a snapshot as installed before its generation/sequence check and durable commit.
+
+Use commit/batch totals rather than per-token, per-poll or raw tool-stream reporting. These
+signals supplement existing task metrics; do not add their counts to `Sidekick.taskEnded`.
+
+`Scripts/test_sidekick_diagnostics.py` compiles the complete production Sidekick diagnostics
+implementation with inert sinks. It reuses the production Sentry dispatch guards, analytics
+consent-tier guard and shared repeat limiter, checking typed payloads, rejected measurements,
+UUID exclusion from analytics/fingerprints, expected outcomes, independent opt-outs, concurrent
+failure deduplication and cooldown boundaries. It neither starts SDKs nor sends external events.

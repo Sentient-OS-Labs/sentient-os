@@ -75,6 +75,11 @@ struct SidekickRecoveryView: View {
     let content: SidekickRecoveryContent
     let layout: SidekickRecoveryLayout
     @FocusState private var fieldFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var reduceMotion: Bool { motionOverride ?? systemReduceMotion }
+
+    private var canSend: Bool { !recovery.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: SidekickRecoveryLayout.fieldSpacing) {
@@ -82,10 +87,11 @@ struct SidekickRecoveryView: View {
                 VStack(alignment: .leading, spacing: SidekickRecoveryLayout.sectionSpacing) {
                     if let error = content.error {
                         VStack(alignment: .leading, spacing: 6) {
-                            Label(content.question == nil ? "Sidekick couldn’t finish" : "Sidekick needs your help", systemImage: "exclamationmark.circle")
+                            Label(content.question == nil ? "Couldn’t finish this" : "One thing to resolve",
+                                  systemImage: content.question == nil ? "exclamationmark.circle" : "bubble.left.and.bubble.right")
                                 .font(Font(SidekickRecoveryLayout.labelFont))
                                 .frame(height: SidekickRecoveryLayout.labelHeight, alignment: .leading)
-                                .foregroundStyle(Color(red: 1, green: 0.65, blue: 0.58))
+                                .foregroundStyle(.white.opacity(0.78))
                             ScrollView {
                                 Text(error)
                                     .font(Font(SidekickRecoveryLayout.errorFont))
@@ -95,6 +101,7 @@ struct SidekickRecoveryView: View {
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.vertical, SidekickRecoveryLayout.errorVPad)
                             }
+                            .scrollIndicators(.hidden)
                             .frame(height: layout.errorHeight)
                             .mask { scrollEdges }
                             .accessibilityLabel("Complete error")
@@ -105,6 +112,7 @@ struct SidekickRecoveryView: View {
                             .font(Font(SidekickRecoveryLayout.questionFont))
                             .foregroundStyle(.white)
                             .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
                         HStack(alignment: .top, spacing: SidekickRecoveryLayout.answerSpacing) {
                             ForEach(question.answers.indices, id: \.self) { index in
                                 Button { recovery.answer(id: question.id, choice: index) } label: {
@@ -114,11 +122,10 @@ struct SidekickRecoveryView: View {
                                         .frame(maxWidth: .infinity, minHeight: 18, alignment: .leading)
                                         .padding(SidekickRecoveryLayout.answerPadding)
                                         .frame(width: layout.answerWidth, alignment: .leading)
-                                        .background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
-                                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.white.opacity(0.16)))
                                 }
-                                .buttonStyle(.plain)
+                                .buttonStyle(NotchRecoveryChoiceStyle())
                                 .foregroundStyle(.white)
+                                .accessibilityHint("Answer Sidekick and continue this task")
                             }
                         }
                     }
@@ -126,35 +133,47 @@ struct SidekickRecoveryView: View {
                 .padding(.vertical, SidekickRecoveryLayout.scrollVPad)
                 .padding(.horizontal, SidekickRecoveryLayout.scrollHPad)
             }
+            .scrollIndicators(.hidden)
             .frame(height: layout.scrollHeight)
             .mask { scrollEdges }
             HStack(spacing: 12) {
-                TextField("Tell Sidekick what to do", text: $recovery.draft)
+                TextField(content.question == nil ? "Add a detail, or try again" : "Or type your answer", text: $recovery.draft)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .foregroundStyle(.white)
+                    .tint(.white)
                     .focused($fieldFocused)
                     .onSubmit(send)
-                    .accessibilityLabel("Your guidance")
+                    .accessibilityLabel(content.question == nil ? "Guidance for retrying" : "Your answer to Sidekick")
                 Button(action: send) {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(.black)
                         .frame(width: 24, height: 24)
-                        .background(.white, in: Circle())
+                        .background {
+                            Circle().fill(.white.opacity(0.90))
+                        }
                 }
                 .buttonStyle(.plain)
-                .disabled(recovery.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(!canSend)
+                .opacity(canSend ? 1 : 0.4)
                 .accessibilityLabel("Send guidance")
+                .accessibilityHint("Send your reply and continue this task")
                 .help("Send guidance")
             }
             .padding(8)
             .frame(height: SidekickRecoveryLayout.fieldHeight)
-            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .background(.white.opacity(fieldFocused ? 0.10 : 0.06), in: RoundedRectangle(cornerRadius: 11))
+            .overlay {
+                RoundedRectangle(cornerRadius: 11)
+                    .strokeBorder(.white.opacity(fieldFocused ? 0.34 : 0.11), lineWidth: 0.75)
+            }
+            .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.18), value: fieldFocused)
         }
         .padding(.top, SidekickRecoveryLayout.topPad)
         .padding(.bottom, SidekickRecoveryLayout.bottomPad)
         .preferredColorScheme(.dark)
+        .accessibilityElement(children: .contain)
     }
     // A soft boundary makes partially scrolled lines recede instead of being sliced against
     // the heading or input. Content padding keeps complete lines outside the fade at either end.
@@ -168,5 +187,34 @@ struct SidekickRecoveryView: View {
         }
         .allowsHitTesting(false)
     }
-    private func send() { recovery.answer(id: content.id) }
+    private func send() {
+        guard canSend else { return }
+        recovery.answer(id: content.id)
+    }
+}
+
+/// Quiet glass buttons retain their measured layout while pointer/press feedback changes.
+private struct NotchRecoveryChoiceStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var systemReduceMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    private var reduceMotion: Bool { motionOverride ?? systemReduceMotion }
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(.white.opacity(configuration.isPressed ? 0.16 : (hovering ? 0.11 : 0.065)))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(hovering ? 0.25 : 0.15), .white.opacity(0.07)],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.75)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.985)
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.16), value: hovering)
+            .animation(.easeOut(duration: reduceMotion ? 0.1 : 0.16), value: configuration.isPressed)
+    }
 }

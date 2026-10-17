@@ -1,6 +1,6 @@
 # Settings (Views/Settings/)
 
-The two-pane Settings window (windowID `settings`, opened from the home's gear): a quiet sidebar of seven
+The two-pane Settings page in the main window (opened from Home's gear or ⌘,): a quiet sidebar of seven
 sections with an About footer (version, the gold "Open source on GitHub" pride mark, Report an issue),
 the selected pane on the right, and the trust ribbon riding only the two panes where the files story is
 the message (Knowledge Sources, Permissions & Health). Design philosophy: form encodes content. Prose
@@ -8,11 +8,26 @@ for stories, hairline toggle lines for switches, chips for sources, status LEDs 
 surfaces only for real input. Pane titles in the SF display voice, mono-caps group labels, a 640 pt
 measure, one green.
 
+Home ↔ Settings uses one reversible SwiftUI transition. The gear emits an anchor preference;
+`RootView` resolves it in the current canvas, so the capsule-to-page mask follows real layout and
+window resizing. Content scales subtly and unblurs while the surface expands, then returns to the
+same gear on Home. The source glyph briefly bridges the endpoints. `HomePageLayer` shares the reveal
+with Knowledge, which uses its own icon/label anchor and retains its content. Direct Settings/Knowledge
+switches remain immediate; only routes to/from Home morph. Missing/offscreen anchors fall back to a fade,
+Reduce Motion uses a short fade, and external Settings pane links preserve their normal route.
+
+Home stays mounted behind the surface with input/accessibility disabled and its composer unfocused.
+Draft, transcript and card state remain app-owned. SwiftUI manages interruption and removal without
+navigation timers. `MainNavigation` records actual route pairs and fences pending Knowledge approval
+callbacks across reset, so a stale prompt cannot reopen a page after reset. The mandatory update
+gate remains above the transition.
+
 ## Files
 
 | File | Job |
 |---|---|
-| `SettingsView.swift` | The shell: sidebar + detail, the `Pane` enum, `requestedPane` (a one-shot deep link consumed on appear), the `switchPane` notification (a pane deep-linking to a sibling), the update-gate overlay. |
+| `SettingsView.swift` | Sidebar + detail and `Pane`; selection/deep links use `MainNavigation`. |
+| `SettingsPageTransition.swift` · `SettingsTransitionGeometry.swift` | Gear anchor, scoped reversible reveal and bounded geometry. `RootView` owns the page overlay. |
 | `SettingsComponents.swift` | The shared pieces: `SettingsPane`, `SettingsGroup`, `SettingsProse`, `SettingToggleLine`, `SettingsPillButton`, `ChipFlow`, `SettingsChip`, `StatusLine` + `HealthDot`, `InfoTip`, `SettingsTextBox`, `SettingsHairline`, `LockedChipTip`. |
 | `SourcesPane.swift` | Knowledge Sources. |
 | `ConnectorsSection.swift` · `ConnectorConnectSheet.swift` | Connector catalog and account popups. Notion and Granola connect after browser sign-in and a native account check. Tool classification waits until use, and curated knowledge selection is available immediately. |

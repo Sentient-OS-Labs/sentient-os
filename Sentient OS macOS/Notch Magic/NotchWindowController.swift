@@ -76,8 +76,39 @@ final class NotchWindowController {
 
     init(coordinator: CommandCoordinator) { self.coordinator = coordinator }
 
+    #if DEBUG
+    private var stoppedForTesting = false
+    /// Observation only: lets the isolated UI lab capture the exact production panel.
+    var panelForTesting: NSPanel? { panel }
+    /// Only the isolated UI fixture calls this; ordinary app lifecycle is unchanged.
+    func shutdownForTesting() {
+        stoppedForTesting = true
+        sizeToken &+= 1
+        stopMouseTracking()
+        hoverInstallTimer?.invalidate(); hoverInstallTimer = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor); self.keyMonitor = nil }
+        hoverMonitors.forEach { NSEvent.removeMonitor($0) }; hoverMonitors.removeAll()
+        clickMonitors.forEach { NSEvent.removeMonitor($0) }; clickMonitors.removeAll()
+        for observer in observers {
+            NotificationCenter.default.removeObserver(observer)
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+        }
+        observers.removeAll()
+        if hovering { hovering = false; coordinator.setNotchHovering(false) }
+        panel?.orderOut(nil); panel?.contentView = nil; panel?.close()
+        panel = nil; host = nil
+    }
+    var resourcesReleasedForTesting: Bool {
+        panel == nil && host == nil && mouseTimer == nil && hoverInstallTimer == nil
+            && keyMonitor == nil && hoverMonitors.isEmpty && clickMonitors.isEmpty && observers.isEmpty
+    }
+    #endif
+
     func start() {
         Task { @MainActor [weak self] in
+            #if DEBUG
+            guard self?.stoppedForTesting != true else { return }
+            #endif
             self?.build()
             self?.installObservers()
             self?.installKeyMonitor()
@@ -100,9 +131,17 @@ final class NotchWindowController {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             let code = event.keyCode   // keep the non-Sendable event off-isolation
+            let windowNumber = event.windowNumber
             let consumed: Bool
             switch code {
-            case 53:      consumed = MainActor.assumeIsolated { self?.coordinator.cancelCurrent() ?? false }   // Esc
+            case 53:
+                consumed = MainActor.assumeIsolated {
+                    guard let self else { return false }
+                    // Home owns Escape for search, menus and text editing. Dismissing those
+                    // must never stop a task that happens to be preparing in the notch.
+                    if self.coordinator.run.conversation.isVisible, windowNumber != self.panel?.windowNumber { return false }
+                    return self.coordinator.cancelCurrent()
+                }
             case 36, 76:  consumed = MainActor.assumeIsolated { self?.coordinator.finishListening() ?? false } // Return · keypad Enter
             default:      return event
             }
@@ -143,6 +182,9 @@ final class NotchWindowController {
     // MARK: Phase → window presence + size
 
     private func observePhase() {
+        #if DEBUG
+        guard !stoppedForTesting else { return }
+        #endif
         withObservationTracking {
             _ = coordinator.phase
             _ = coordinator.run.recovery.isPending // refresh return zones when a hidden question expires
@@ -156,6 +198,9 @@ final class NotchWindowController {
     }
 
     private func applyPhase() {
+        #if DEBUG
+        guard !stoppedForTesting else { return }
+        #endif
         guard let panel else { return }
         refreshHoverEntryRect()
         sizeToken &+= 1
@@ -228,7 +273,7 @@ final class NotchWindowController {
     /// The fixed window size: big enough for the widest/tallest notch state plus slack. It only changes
     /// on a display/notch change — never during a morph — so the notch stays pinned to the bezel.
     private var canvasSize: CGSize {
-        let phases: [NotchPhase] = [.opening, .listening, .transcribing, .typing, .running, .recovery, .notice("")]
+        let phases: [NotchPhase] = [.opening, .listening, .transcribing, .typing, .running, .recovery, .message, .notice("")]
         let maxW = phases.map { metrics.size(for: $0).width }.max() ?? 360
         let baseMaxH = phases.map { metrics.size(for: $0).height }.max() ?? 100
         let maxH = max(baseMaxH, metrics.runningHeight(caption: metrics.maxReadBackCaptionHeight))   // tallest read-back
@@ -268,7 +313,7 @@ final class NotchWindowController {
     /// absorbed rather than passed to whatever sits under it.
     private static func isInteractive(_ phase: NotchPhase) -> Bool {
         switch phase {
-        case .running, .typing, .listening, .transcribing, .recovery: return true
+        case .running, .typing, .listening, .transcribing, .recovery, .message: return true
         default: return false
         }
     }
@@ -340,6 +385,7 @@ final class NotchWindowController {
         // measurement): a far cursor can't be over the silhouette, so it never pays for one.
         let receive = interactive && cursorNearNotch() && cursorOverSilhouette()
         if coordinator.phase == .recovery { coordinator.run.recovery.setHovering(receive) }
+        if coordinator.phase == .message { coordinator.setMessagePreviewHovering(receive) }
         if panel.ignoresMouseEvents == receive { panel.ignoresMouseEvents = !receive }
     }
 
@@ -353,7 +399,8 @@ final class NotchWindowController {
                           : metrics.size(for: coordinator.phase, readBack: coordinator.readBack,
                                          remembering: coordinator.run.remembering,
                                          personalizing: coordinator.run.isPersonalizing,
-                                         recoveryContent: coordinator.run.recovery.content)
+                                         recoveryContent: coordinator.run.recovery.content,
+                                         messageContent: coordinator.notchMessage)
         let p = location ?? NSEvent.mouseLocation            // screen coords, origin bottom-left
         let localX = p.x - (screen.frame.midX - s.width / 2)
         let depthFromTop = screen.frame.maxY - p.y           // 0 at the bezel, increasing downward
@@ -393,6 +440,9 @@ final class NotchWindowController {
     /// move (no timers, no polling while idle). Global hears moves over other apps; local hears them
     /// whenever Sentient itself is frontmost. Mouse monitors are not keyboard-class: zero TCC contact.
     private func installHoverMonitors() {
+        #if DEBUG
+        guard !stoppedForTesting else { return }
+        #endif
         guard hoverMonitors.isEmpty, NSApp?.isRunning == true else { return }
         let global = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] event in
             self?.hoverMouseMoved(at: Self.screenLocation(of: event))

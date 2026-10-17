@@ -49,7 +49,7 @@ struct SentientOSApp: App {
         }
         .windowStyle(.hiddenTitleBar)            // OLED black runs edge-to-edge; no gray trim
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 1180, height: 880)   // the proactive home's canvas
+        .defaultSize(width: 1100, height: 820)   // the proactive home's canvas
         // Launch presentation is decided after AppKit delivers the opening Apple event, when
         // login-item launches can be distinguished reliably. Explicit reopen uses our router.
         .defaultLaunchBehavior(.suppressed)

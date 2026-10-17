@@ -17,6 +17,23 @@ if CommandLine.arguments.dropFirst().first == ClaudeLoginBrowser.helperArgument 
 }
 
 #if DEBUG
+// Isolate the actual-app acceptance profile before AppKit or application singletons exist.
+if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "sidekickapp",
+   CommandLine.arguments.count == 1 {
+    do { try MainActor.assumeIsolated { try SidekickAppLab.prepare() } }
+    catch { SidekickAppLab.preparationFailed(); exit(1) }
+    NSApplication.shared.setActivationPolicy(.regular)
+    Task { @MainActor in exit(await SidekickAppLab.run()) }
+    NSApplication.shared.run()
+    exit(1)
+}
+// Sidekick backend integration uses only isolated fixture data and starts no AppState/UI.
+// The argument guard preserves helper modes when an owned child inherits the lab environment.
+if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "sidekickbackend",
+   CommandLine.arguments.count == 1 {
+    Task { @MainActor in exit(await SidekickBackendLab.run()) }
+    dispatchMain()
+}
 // Native computer-use validation starts before AppState or any production startup side effect.
 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "nativecua",
    CommandLine.arguments.count == 1 {

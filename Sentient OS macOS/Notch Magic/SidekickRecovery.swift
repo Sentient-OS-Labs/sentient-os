@@ -59,8 +59,12 @@ nonisolated struct SidekickRecoveryTiming {
     private(set) var deadline: TimeInterval?
     private var remaining: TimeInterval = 8
     private var interacting = false
+    private let expiresWhenHidden: Bool
 
-    init(now: TimeInterval) { deadline = now + 8 }
+    init(now: TimeInterval, expiresWhenHidden: Bool = true) {
+        self.expiresWhenHidden = expiresWhenHidden
+        deadline = now + 8
+    }
     mutating func interact(_ active: Bool, now: TimeInterval) {
         guard visibility == .visible, active != interacting else { return }
         interacting = active
@@ -69,7 +73,7 @@ nonisolated struct SidekickRecoveryTiming {
     }
     mutating func dismiss(now: TimeInterval) {
         guard visibility == .visible else { return }
-        visibility = .hidden; interacting = false; deadline = now + 7
+        visibility = .hidden; interacting = false; deadline = expiresWhenHidden ? now + 7 : nil
     }
     mutating func reopen(now: TimeInterval) -> Bool {
         advance(now: now)
@@ -91,7 +95,7 @@ final class SidekickRecovery {
     enum Cancellation { case user, expired, interrupted }
     enum Resolution { case answered(SidekickAnswer), cancelled(Cancellation) }
     private(set) var content: SidekickRecoveryContent?
-    var draft = "Try again"
+    var draft = ""
     private(set) var isVisible = false
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored private var resolve: ((Resolution) -> Void)?
@@ -108,9 +112,9 @@ final class SidekickRecovery {
                  resolve: @escaping (Resolution) -> Void) {
         if let old = self.content { interrupt(id: old.id) }
         self.content = content
-        draft = content.question == nil ? (interruptedDraft ?? "Try again") : "Try again"
+        draft = content.question == nil ? (interruptedDraft ?? "") : ""
         interruptedDraft = nil; isVisible = true
-        hovering = false; focused = false; timing = .init(now: Self.now)
+        hovering = false; focused = false; timing = .init(now: Self.now, expiresWhenHidden: content.question == nil)
         self.resolve = resolve
         onChange?(); schedule()
     }
@@ -135,7 +139,7 @@ final class SidekickRecovery {
 
     func answer(id: UUID, choice: Int? = nil, text: String? = nil) {
         expireIfNeeded()
-        guard let content, content.id == id, isVisible else { return }
+        guard let content, content.id == id else { return }
         let value: String
         if let choice {
             guard let question = content.question, question.answers.indices.contains(choice) else { return }
@@ -157,7 +161,7 @@ final class SidekickRecovery {
 
     private func consume(_ resolution: Resolution) {
         let callback = resolve
-        resolve = nil; content = nil; timing = nil; draft = "Try again"
+        resolve = nil; content = nil; timing = nil; draft = ""
         isVisible = false; hovering = false; focused = false; timer?.cancel(); timer = nil
         timerGeneration &+= 1
         onChange?()

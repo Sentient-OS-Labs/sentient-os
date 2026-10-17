@@ -23,6 +23,20 @@ enum FactoryReset {
     @MainActor
     @discardableResult
     static func run(appState: AppState? = nil, defaults: UserDefaults = .standard) async -> Bool {
+        let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
+        conversation.beginMaintenance()
+        defer { conversation.endMaintenance() }
+        appState?.commandCoordinator.run.stop()
+        do { try conversation.reset(defaults: defaults) }
+        catch {
+            SidekickDiagnostics.failure(.reset, reason: .writeFailed, source: .reset)
+            return false
+        }
+        if let run = appState?.commandCoordinator.run, !(await run.stopAndDrain()) {
+            SidekickDiagnostics.failure(.reset, reason: .timeout, source: .reset)
+            return false
+        }
+        await conversation.drainBackgroundWork()
         // Invalidate in-flight learning before any suspension; explicit settings survive.
         SidekickInstructionStore.resetLearning()
         await HostedConnectorSetup.beginTeardown()

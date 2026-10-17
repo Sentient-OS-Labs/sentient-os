@@ -275,7 +275,7 @@ actor ClaudeSubscriptionBridge {
                 calls[owner] = Call(recovery: recovery, fingerprint: fingerprint, waiters: [continuation])
                 callOwners[callID] = owner
                 queue.append(item)
-                if tool.namespace != "mcp__sentient_recovery" || tool.name != SidekickTaskSummary.toolName {
+                if !SidekickConversationRun.hidden(server: tool.namespace.replacingOccurrences(of: "mcp__", with: ""), tool: tool.name) {
                     onProgress(Self.toolProgress(tool, arguments: arguments))
                 }
                 flush()

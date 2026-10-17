@@ -1,8 +1,9 @@
 # Views: the home, the processing takeover, and the shared UI (Views/)
 
-The app opens straight into the proactive **"For You" home**: a scatter of suggestion cards over OLED
-black, an editorial greeting, the glowing command bar at the foot, and the living orb when there is
-nothing to show. This doc covers everything at the top level of `Views/`: the switchboard, the home and
+Home pairs proactive **"For You" suggestions** with one continuous Sidekick conversation: measured
+card spreads over textured black, an editorial greeting, and a shared glass composer at the foot.
+Sentient's colored light moves near the top while the reading area stays quiet. This doc covers
+everything at the top level of `Views/`: the switchboard, the home and
 its cards, the popovers, the processing takeover, the connect surfaces, and the shared design pieces.
 Subfolders have their own docs (`Settings/`, `Knowledge/`, `Onboarding/`, `Permissions/`, `Dev/`).
 
@@ -17,11 +18,12 @@ serif italic display, no borrowed brand hues.
 | File | Job |
 |---|---|
 | `RootView.swift` | The main window's switchboard: onboarding → the home ⟷ the processing takeover. Owns the analyze/source state, the bottom-left whispers, the update-gate overlay, the Dev Tools sheet, and the onboarding finale. |
-| `HomeView.swift` | THE home: chrome, the caution banner slot, the card scatter, the empty state, the free-plan preview state, the dock, the expanded letter (`LetterView`), and `ForYouModel` (deal · run · dismiss). |
+| `HomeView.swift` | THE home: chrome, measured caution placement, paged card spreads, chat, the empty state, the free-plan preview state, the dock, the expanded letter (`LetterView`), and `ForYouModel` (deal · run · dismiss). |
 | `Briefing.swift` | The card model (`Briefing`, `BriefingDeck`), built from a `PreparedAction`, from the gift markdown, or from the two hard-coded demo decks. |
 | `BriefingCard.swift` | One card through its four lives (sealed envelope → offer → working → done), `OfferButton`, the envelope. |
-| `HomePopovers.swift` | The Analysis popover (things understood, vault counts, Analyze Now, the run footer, the overnight-on-battery switch, source chips) and the Give AIs Knowledge popover. `SourceChip`, `HomeStats`. |
-| `PromptBar.swift` | The command bar ("Tell me what you want me to DO"): computer use only; STOP while running. |
+| `HomePopovers.swift` | Home's Analysis popover (things understood, vault counts, Analyze Now, the run footer, overnight-on-battery switch, source chips) and Knowledge's optional Use with your AIs popover. `SourceChip`, `HomeStats`. |
+| `Sidekick/` | Shared conversation presentation/composer, selectable Markdown, atmosphere/glass, measured overview layout and scoped scroll-to-dock gesture. Storage and runtime contracts are in the Sidekick Conversation Backend documentation. |
+| `PromptBar.swift` | Legacy command bar retained for remaining callers; Home uses `SidekickComposer`. |
 | `ProcessingView.swift` | The one analysis takeover, shared by the home, onboarding, and the dev buttons; `RunSource` and `RunSource.connectors(from:)`. |
 | `ComputerUseUpdateNotice.swift` | The ordinary computer-use update notice: real download progress, verification, retry, and completion, fed by the shared installer. |
 | `CautionCapsule.swift` | The banner capsule (amber / red / green) and the self-contained `UpdateNoticeCapsule`. |
@@ -45,24 +47,84 @@ drops the window's 1040×800 minimum during a takeover for screen recordings.
 
 ## The home (`HomeView`)
 
-Layers, bottom to top: the scatter, then either the empty state (the orb with "I'm here to help.", the
-orb's ONE home besides the takeover) or the free-plan preview state, the dock (`PromptBar` + "Private by
-design."), the chrome (a top bar of quiet doors: Analysis ▾, Knowledge, Give AIs Knowledge ▾, the
-Settings gear; below it the hour-aware greeting with the Mac account's first name and the real lifetime
-read count), the caution banner slot, the DEBUG-only DEV TOOLS handle, and the always-mounted letter
-layer (opacity-driven; view insertion can miss a redraw on hidden-titlebar windows).
+Layers, bottom to top: one animated atmosphere, the suggestion spread or transcript, the shared
+composer and history peek, chrome, the DEBUG-only DEV TOOLS handle, and the always-mounted letter
+layer. Chrome contains the top navigation, hour-aware greeting and caution capsule; its measured
+height keeps multiline notices clear of cards and chat. The free-plan preview retains its own state.
+
+`SidekickOverviewLayout` fits measured card heights between chrome and the composer. It uses up to
+two columns below 1180pt and three above, at most two rows, 24pt gaps and widths capped at 400pt.
+If another row will not fit, a pager exposes the remaining cards without shrinking the type.
+Previous/next have 44pt hit targets and hover feedback; a reserved 48pt band keeps them clear of cards.
+Only the current page is interactive or accessible. The final short row is centered; preview text
+is bounded while the full letter remains available. The spread retains its page when reopened.
+
+The Proactive button is conditionally rendered only in conversation mode. Its stable layout anchor
+is the destination for the staggered card collapse; opening it returns to the spread and removes
+the button. Upward trackpad input moves cards immediately with the fingers, shrinking them slightly;
+reversal follows back down, and an incomplete gesture springs to rest. The greeting fades with
+that direct progress before the cards reach it, and restores on reversal. At 140pt (three coarse wheel
+units) they flow from their current position into the dock without the button-collapse stagger.
+`SidekickOverviewScroll` observes local events only in its own visible window/card region. It ignores
+the composer, horizontal intent, tiny input and unsolicited momentum, and consumes the committed
+gesture's tail so chat does not also scroll. Phase-bearing finger pauses retain progress; phase-less
+wheel bursts have one cancellable 350ms quiet timer. Geometry/enable changes defer settle callbacks
+outside SwiftUI update. No global input hooks. Reduce Motion omits spatial movement.
+
+Hovering a suggestion reveals a small X at its upper-left corner, including the welcome envelope
+and running cards. Its hover region includes the outside corner without changing measured layout.
+The X, context-menu Dismiss suggestion, and accessibility action share the existing fling dismissal;
+dismissing a running card leaves its task running in Sidekick. Delayed envelope opening is cancelled
+on disappearance and checks that the card is still present and not dismissing before opening a letter.
+
+One 18Hz atmosphere clock moves cached blurred shapes. Movement/overlap is intentionally visible
+within a few seconds; pausing for inactivity, reading, Reduce Motion or Low Power preserves its
+phase instead of jumping to another color arrangement when resumed. Chat reveals after the cards
+start to shrink; Reduce Motion uses short opacity transitions.
+
+Home's Settings gear emits an anchor for `SettingsPageLayer` in `RootView`. The Settings surface
+grows from that actual button and retracts to it; its content subtly scales/unblurs. Home remains
+mounted but inert underneath, with the composer explicitly relinquishing focus. Reduce Motion
+uses a short fade. Knowledge shares this reveal from its own labeled navigation pill, with a 500ms
+cancellable entrance gate before the constellation begins. Direct secondary-page routes are immediate.
+Missing anchors fall back to a fade. Geometry follows resizing rather than keeping stale coordinates.
+Analysis and Knowledge have navigation icons; Settings uses a 22pt gear in a 44×40pt target. Search is
+only shown while in conversation.
+
+The conversation keeps chrome out of the reading flow: no repeated sender labels or success
+footers, and message copy/date details appear only on hover. Whole-message Copy/Reply are available
+on right-click and as accessibility actions; selected-text Reply and native Copy-selection remain.
+Subtle time dividers identify human returns after more than 30 minutes (including later dates),
+without treating a long-running response as a new visit.
+
+The retained transcript is explicitly disabled and accessibility-ignored under the overview.
+Its AppKit text views inherit SwiftUI's enabled state: hidden native text cannot hit-test, become
+first responder, expose accessibility content, or invoke a queued Reply action. Text and selection
+remain intact for return. This supplements opacity rather than assuming invisible native views
+are automatically inert. Whole/selected Reply and selection popovers remain enabled in chat.
+
+One work header per visible task replaces the former Done/Steps row. It expands inside the transcript,
+pushing the answer down, and reads bounded activity pages only while open. Its top-aligned, measured
+viewport clips beneath the header: rows never fly across the header. Previously loaded rows remain
+mounted to retain nested disclosures; collapsed sections have no spinner or interaction. First-load
+and detail-height changes animate; Reduce Motion omits height animation. Tool lifecycle records
+coalesce into one step with a human title and app icon; raw recorded arguments/results are a second
+inline disclosure. Telemetry/bookkeeping stays hidden. Real recorded start/end timestamps drive
+duration labels; migrated history without reliable timing never gets a fabricated duration. Task
+outcomes can refresh while the reader stays on an older page, without forcing a scroll.
 
 **The banner slot** holds at most one capsule, most severe first: a LIVE `HealthCaution` issue (red;
 re-probed on appear and every foreground; ✕ mutes the kind for the session), else the morning-after
 `OvernightCaution` (amber; ✕ clears the record), else the green just-updated notice. Both roads lead to
 Settings → Permissions & Health. Suppressed on the free home and on demo decks.
 
-**Cards.** `ForYouModel.beginVisit(deck:)` builds the deck: in `.real` mode one `Briefing(from:)` per
+**Cards.** The app-owned `ForYouModel` survives window/page changes. `ensureVisit(deck:)` retains the
+current deck; `beginVisit(deck:)` rebuilds it for an explicit deck change. In `.real` mode, one `Briefing(from:)` per
 `PreparedAction` in `ProactiveResearch.latest()` (accent = a shade from the method's color family,
 cycled by the card's order among its method-mates, so a morning of five computer-use cards gets five
 different greens), with the gift envelope riding LAST (the bottom-right perch); the two demo decks
 (`jesai`, `launch`; Dev Tools → Proactive Cards) play scripted theater instead. Cards deal in with
-staggered springs into per-count slots in the card zone, can be flick-dismissed with drag physics, and
+staggered springs into measured rows in the card zone, can be flick-dismissed with drag physics, and
 tap-expand into the letter. **Firing a real card** (`runReal`): pass the first-use permission gate,
 adopt Sidekick's shared run for any fireable method (so the notch lights and every other entry point
 locks), route through `ProactiveExecutor.fire` with codex's live lines streamed into the card (a per-card
@@ -117,8 +179,12 @@ conditions and rewords itself live when the battery opt-in is on), the quiet "Ru
 (writes `scheduler.allowBattery`, the same key the 3 AM gate reads; shown only when sources are armed and
 the Mac has a battery, so desktops never see it), and the source chips on the same `dbg.*` keys as
 Settings (folder chips toggle; WhatsApp/iMessage open the `ChatPicker`; Gmail/Calendar open the connect
-sheet or render locked). **Give AIs Knowledge:** the pitch and the glowing "Set up in 2 minutes" /
-"Configure" CTA that opens `ConnectAIsView`; deliberately no controls of its own.
+sheet or render locked).
+
+**Use with your AIs:** now lives in Knowledge's header in both Constellation and Reader, not Home.
+The quiet labeled button opens a short explanation and a Connect an AI / Manage connections CTA.
+There is no automatic prompt, banner, badge, or sharing mutation. `ConnectAIsView` still owns consent
+and all connection settings. Opening the popover preserves the current note and unsaved editor buffer.
 
 ## The command bar (`PromptBar`)
 
@@ -183,3 +249,12 @@ analysis; chosen-model consolidation and task inference follow the selected prov
 ## Related docs
 
 `Proactive/Documentation - Proactive Intelligence.md`, `Notch Magic/Documentation - Sidekick - General.md`, `Ingestion/Documentation - Ingestion Pipeline.md`, `System/Documentation - System (Permissions, Health, Uninstall).md` (the banners), `Cloud/Documentation - Cloud - MCP Mirror.md`, `Views/Settings/Documentation - Settings.md`, `Views/Knowledge/Documentation - Knowledge Window (Constellation & Reader).md`, `Views/Onboarding/Documentation - Onboarding.md`, `Views/Permissions/Documentation - Permission Gate & Guide.md`, `Views/Dev/Documentation - Dev Tools.md`.
+
+## October 17 interaction acceptance
+
+The isolated signed-app UI suite passed 82 checks with 42 captured states and five own-window
+motion recordings. Native CUA checks covered enlarged pager hit targets, upward scrolling into
+chat, nested activity state across collapse/reopen, Settings draft/reading retention, and Knowledge
+unsaved-edit Cancel/Discard navigation with retained reader selection. Missing/restored synthetic vault
+states were captured, and no production data or provider calls were used. Debug and Release builds
+passed. Evidence: `/tmp/sentient-ux-refinements-20261017/progress.json`.

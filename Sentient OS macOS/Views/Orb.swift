@@ -31,11 +31,12 @@ enum OrbMode { case idle, processing, attention }
 struct Orb: View {
     var mode: OrbMode = .idle
     var size: CGFloat = 132          // planet diameter; the frame is wider (the ring overflows it)
+    var paused = false              // retain the visible frame when its page is offscreen
 
     var body: some View {
         ZStack {
             haloLayer
-            FocusThrottledTimeline(minimumInterval: 1.0 / 60.0) { t in
+            FocusThrottledTimeline(minimumInterval: 1.0 / 60.0, paused: paused) { t in
                 let breath = (sin(t * 2 * .pi / 5.5) + 1) / 2     // 0…1, the 5.5s heartbeat
                 ZStack {
                     ringCanvas(front: false, t: t, breath: breath)
@@ -51,7 +52,7 @@ struct Orb: View {
     // MARK: Ambient halo — a cached texture, spun and breathed (never re-blurred)
 
     private var haloLayer: some View {
-        FocusThrottledTimeline(minimumInterval: 1.0 / 30.0) { t in
+        FocusThrottledTimeline(minimumInterval: 1.0 / 30.0, paused: paused) { t in
             let breath = (sin(t * 2 * .pi / 5.5) + 1) / 2
             HaloTexture(size: size, mode: mode)
                 .rotationEffect(.radians(t * 2 * .pi / 18))
@@ -387,17 +388,26 @@ struct Orb: View {
 private struct FocusThrottledTimeline<Content: View>: View {
     @Environment(\.appearsActive) private var appearsActive
     let minimumInterval: TimeInterval
+    var paused = false
+    @State private var pausedAt: TimeInterval?
     @ViewBuilder let content: (_ t: TimeInterval) -> Content
 
     var body: some View {
-        if appearsActive {
-            TimelineView(.animation(minimumInterval: minimumInterval)) { ctx in
-                content(ctx.date.timeIntervalSinceReferenceDate)
+        Group {
+            if paused {
+                content(pausedAt ?? Date().timeIntervalSinceReferenceDate)
+            } else if appearsActive {
+                TimelineView(.animation(minimumInterval: minimumInterval)) { ctx in
+                    content(ctx.date.timeIntervalSinceReferenceDate)
+                }
+            } else {
+                TimelineView(.periodic(from: .now, by: minimumInterval)) { ctx in
+                    content(ctx.date.timeIntervalSinceReferenceDate)
+                }
             }
-        } else {
-            TimelineView(.periodic(from: .now, by: minimumInterval)) { ctx in
-                content(ctx.date.timeIntervalSinceReferenceDate)
-            }
+        }
+        .onChange(of: paused, initial: true) { _, value in
+            pausedAt = value ? Date().timeIntervalSinceReferenceDate : nil
         }
     }
 }

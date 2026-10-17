@@ -1270,8 +1270,8 @@ actor CodexCLI {
         case "command_execution", "local_shell_call":
             return nonEmpty(item["command"] as? String).map { "$ \($0)" }
         case "mcp_tool_call", "tool_call", "function_call":
-            if item["server"] as? String == SidekickToolServer.name,
-               item["tool"] as? String == SidekickTaskSummary.toolName { return nil }
+            if SidekickConversationRun.hidden(server: item["server"] as? String ?? "",
+                                              tool: (item["tool"] as? String) ?? (item["name"] as? String) ?? "") { return nil }
             let label = [(item["server"] as? String) ?? "",
                          (item["tool"] as? String) ?? (item["name"] as? String) ?? ""]
                 .filter { !$0.isEmpty }.joined(separator: ".")
@@ -1406,11 +1406,15 @@ actor CodexCLI {
         // whole; stdout LINE-streams to `onStdoutLine` (when present) so callers see codex's --json
         // play-by-play live, while still accumulating the full buffer for parseEnvelope.
         let outDrain = PipeDrain(), errDrain = PipeDrain()
-        let interactionViolated = OSAllocatedUnfairLock(initialState: false)
+        let interactionFailure = OSAllocatedUnfairLock<Error?>(initialState: nil)
+        let streamID = UUID()
+        defer { interaction?.endExecution(streamID: streamID) }
         let observeInteraction: @Sendable (String) -> Void = { line in
-            do { try interaction?.observeToolEvent(line) }
+            // Drain remaining bytes after failure, but never record more task activity.
+            guard interactionFailure.withLock({ $0 == nil }) else { return }
+            do { try interaction?.observeToolEvent(line, streamID: streamID) }
             catch {
-                interactionViolated.withLock { $0 = true }
+                interactionFailure.withLock { if $0 == nil { $0 = error } }
                 procHolder?.terminate()
             }
         }
@@ -1480,7 +1484,7 @@ actor CodexCLI {
         watchdog.cancel()
         drained.wait()
 
-        if interactionViolated.withLock({ $0 }) { throw SidekickInteraction.Failure.toolWhileWaiting }
+        if let error = interactionFailure.withLock({ $0 }) { throw error }
         if timedOut.withLock({ $0 }) { throw CLIError.timedOut(after: timeout) }
         return ExecResult(status: proc.terminationStatus, stdout: outDrain.text, stderr: errDrain.text)
     }

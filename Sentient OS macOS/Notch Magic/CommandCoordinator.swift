@@ -29,6 +29,7 @@ enum NotchPhase: Equatable {
     case listening                          // the mic is open — the field row shows "Listening…" + the stop button
     case transcribing                       // stopped → finalizing speech
     case running                            // codex is acting — orb + status line + STOP
+    case message                            // a committed user-facing message, never a second task
     case recovery                           // one pending question or an app-owned retry
     case finishing(CommandRunModel.Outcome) // a brief success / stopped / failed flourish
     case notice(String)                     // a short serif aside: "didn't catch that", mic-off, …
@@ -54,6 +55,9 @@ final class CommandCoordinator {
 
     /// What the notch shows. (Rendering lands later; today this is driven + logged.)
     private(set) var phase: NotchPhase = .hidden
+    private(set) var notchMessage: SidekickConversationStore.Record?
+    private var attentionPolicy = SidekickAttentionPolicy(generation: nil, latestSequence: 0)
+    private var messageTimer: Task<Void, Never>?
 
     /// The spoken text, echoed for 4–9s (scaled to its length) after a voice launch so a mishear can be caught. The notch shows
     /// `readBack ?? run.statusLine` while running.
@@ -103,11 +107,18 @@ final class CommandCoordinator {
     private var deferredSubmission: (String, AgentMode, TriggerSource)?
 
     init() {
+        attentionPolicy = SidekickAttentionPolicy(generation: run.conversation.generation,
+            latestSequence: (try? run.conversation.store?.latestSequence) ?? 0)
+        run.conversation.onRefresh = { [weak self] in self?.routeAttention() }
         run.onFinished = { [weak self] outcome in self?.runFinished(outcome) }
         run.onRecoveryResumed = { [weak self] in self?.setPhase(.running) }
         run.recovery.onChange = { [weak self] in
             guard let self else { return }
             if self.run.recovery.isPending {
+                if self.run.conversation.isVisible, self.run.recovery.isVisible {
+                    self.run.recovery.dismiss()
+                    return
+                }
                 self.clearReadBack()
                 self.setPhase(self.run.recovery.isVisible ? .recovery : .hidden)
             } else if self.phase == .recovery { self.setPhase(.hidden) }
@@ -151,48 +162,34 @@ final class CommandCoordinator {
 
     // MARK: The one entry point — hotkey-voice AND the prompt bar both call this
 
-    func submit(_ text: String, mode: AgentMode, source: TriggerSource) {
+    @discardableResult
+    func submit(_ text: String, mode: AgentMode, source: TriggerSource,
+                reply: SidekickConversationEvent.ReplyReference? = nil) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        guard !run.isRunning else {
-            if returningFromRecovery {
-                deferredSubmission = (trimmed, mode, source)
-                setPhase(.running)
-            } else { Log("submit ignored — a task is already running"); return }
-            return
-        }
+        guard !trimmed.isEmpty, !run.isRunning else { return false }
         returningFromRecovery = false
-        run.recovery.cancel()
-
-        // The home command bar starts a fresh main-display interaction. Voice and notchTyped submits
-        // arrive MID-session (the anchor was set at their press/click) and must not move a
-        // notch-anchored one to the main display the moment ⏎ lands.
-        if source == .promptBar { notchAnchor = .mainDisplay }
-
-        // The onboarding backstop: no run — and therefore no permission gate — can EVER fire
-        // before the home screen (the press doors are already guarded; this covers everything).
-        if interceptForOnboarding() { return }
-
-        // Knowledge-base-only backstop (the hotkey path already flashed at press) — covers the
-        // home command bar, which submits without a press. The run must never fire on free/go.
+        // A rejected submission must preserve the draft and pending recovery.
+        if interceptForOnboarding() { return false }
         if CodexAuth.knowledgeBaseOnly {
             flash(Self.needsPlusNotice, for: 2.0)
-            Log("submit blocked — knowledge-base-only plan (Sidekick needs Plus)")
-            return
+            return false
         }
-
-        launch(trimmed, mode: mode, source: source)
+        if source == .promptBar { notchAnchor = .mainDisplay }
+        return launch(trimmed, mode: mode, source: source, reply: reply ?? run.conversation.replyReference)
     }
 
     /// Own the run immediately. Permission/setup waiting happens inside its cancellable task,
     /// so the notch stays visible and every other entry point sees the same one-task lock.
-    private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource) {
-        guard !run.isRunning else { Log("launch ignored — a task is already running"); return }
+    private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource,
+                        reply: SidekickConversationEvent.ReplyReference? = nil) -> Bool {
+        guard !run.isRunning else { return false }
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
         // Core tier: THE Sidekick-usage count (count only, never the text) — one of the handful of
         // always-on telemetry signals disclosed in Settings.
         Analytics.signal("Command.submitted", parameters: ["source": source.rawValue, "mode": mode.label], tier: .core)
-        run.start(trimmed, mode: mode, source: source.rawValue)
+        run.start(trimmed, mode: mode, source: source.rawValue, reply: reply)
+        guard run.isRunning else { setPhase(.running); runFinished(.failed); return false }
+        run.conversation.replyReference = nil
         InviteProgram.shared.record(.sidekick)
         // Every command is computer use, which raises the notch.
         setPhase(.running)
@@ -200,6 +197,7 @@ final class CommandCoordinator {
         #if DEBUG
         Log("   cmd ↓ \(trimmed)")
         #endif
+        return true
     }
 
     /// Cancel the running task. A STOP (or Esc) WHILE THE TRANSCRIPT IS SHOWN means "you misheard me — redo":
@@ -225,12 +223,13 @@ final class CommandCoordinator {
     /// for minutes re-answers the lock here. Completion needs no coordinator API: the card's
     /// completeExternal rides onFinished → runFinished → the normal finishing flourish.
     @discardableResult
-    func beginExternalRun(caption: String, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
+    func beginExternalRun(caption: String, request: String? = nil, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
                           onStopRequest: @escaping @MainActor () -> Void) -> Bool {
         guard !run.isRunning else { return false }
         clearReadBack()
         notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
-        run.adoptExternal(caption: caption, retryContext: retryContext, onRetry: onRetry, onStopRequest: onStopRequest)
+        run.adoptExternal(caption: caption, request: request, retryContext: retryContext, onRetry: onRetry, onStopRequest: onStopRequest)
+        guard run.isRunning else { setPhase(.running); runFinished(.failed); return false }
         setPhase(.running)
         Log("▶︎ external run adopted (\(caption))")
         return true
@@ -527,14 +526,15 @@ final class CommandCoordinator {
     // MARK: Tap-to-type (the notch's text field)
 
     /// ⏎ from the notch field — fire it as a computer-use task (empty just closes).
-    func submitTyped(_ text: String) {
-        guard phase == .typing else { return }
+    @discardableResult
+    func submitTyped(_ text: String) -> Bool {
+        guard phase == .typing else { return false }
         // While the onboarding demo owns the field, a stray user ⏎ must never reach the real
         // submit path (the script fires the demo itself).
-        guard !onboardingDemoArmed else { return }
+        guard !onboardingDemoArmed else { return false }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { dismissTyping(); return }
-        submit(trimmed, mode: .computer, source: .notchTyped)   // typed → no read-back
+        guard !trimmed.isEmpty else { return false }
+        return submit(trimmed, mode: .computer, source: .notchTyped)   // typed → no read-back
     }
 
     /// Esc · click-away · empty-⏎ — close the type field with no action.
@@ -667,6 +667,7 @@ final class CommandCoordinator {
     /// via a hotkey press for the listening and transcribing beats (hotkeyTapped).
     @discardableResult
     func cancelCurrent() -> Bool {
+        if phase == .message { dismissMessagePreview(); return true }
         if phase == .recovery { run.recovery.dismiss(); return true }
         switch phase {
         case .opening:
@@ -716,12 +717,91 @@ final class CommandCoordinator {
         scheduleHide(after: outcome == .failed ? 5.0 : 1.5)
     }
 
+    // Presentation consumes only newly committed high-priority messages. Historic unread
+    // replies remain reachable without replaying a backlog when the app launches.
+    private func routeAttention() {
+        let store = run.conversation.store
+        // A failed read is not permission to display a possibly stale captured message.
+        let generation: UUID?
+        let latest: Int64
+        let record: SidekickConversationStore.Record?
+        do {
+            generation = try store?.generation
+            latest = try store?.latestSequence ?? 0
+            record = try store?.latestUnreadHighPriorityMessage
+        } catch { return }
+        let decision = attentionPolicy.update(generation: generation, latestSequence: latest,
+            latestUnreadHigh: record.map { .init(id: $0.event.id, sequence: $0.sequence) },
+            homeVisible: run.conversation.isVisible,
+            inputBlocked: run.recovery.isPending || phase == .typing || phase == .listening
+                || phase == .transcribing || phase == .opening,
+            previewVisible: phase == .message)
+        switch decision {
+        case .unchanged:
+            if attentionPolicy.presented == nil { notchMessage = nil }
+        case .dismiss:
+            dismissMessagePreview()
+        case .present(let message):
+            guard let record, record.event.id == message.id else { return }
+            notchMessage = record
+            clearReadBack()
+            setPhase(.message)
+            scheduleMessageRetraction()
+            SidekickDiagnostics.event(.attention, source: .notchTyped, counts: [.messages: 1])
+        }
+    }
+
+    func dismissMessagePreview() {
+        messageTimer?.cancel(); messageTimer = nil
+        attentionPolicy.dismiss()
+        notchMessage = nil
+        guard phase == .message else { return }
+        setPhase(run.isRunning ? .running : .hidden)
+    }
+
+    func setMessagePreviewHovering(_ value: Bool) {
+        guard phase == .message, attentionPolicy.setHovering(value) else { return }
+        messageInteractionChanged()
+    }
+
+    /// Separate from pointer geometry: leaving the panel must not dismiss selected text.
+    /// The message identity rejects an outgoing view's late selection callback after a swap.
+    func setMessagePreviewSelecting(_ value: Bool, messageID: String) {
+        guard phase == .message, notchMessage?.event.id == messageID,
+              attentionPolicy.setSelecting(value) else { return }
+        messageInteractionChanged()
+    }
+
+    private func messageInteractionChanged() {
+        messageTimer?.cancel(); messageTimer = nil
+        guard !attentionPolicy.isInteracting else { return }
+        // Requery read receipts and immediately coalesce a newer deferred high message.
+        routeAttention()
+        if phase == .message { scheduleMessageRetraction() }
+    }
+
+    private func scheduleMessageRetraction() {
+        messageTimer?.cancel()
+        guard phase == .message, !attentionPolicy.isInteracting else { return }
+        let id = notchMessage?.event.id
+        let generation = attentionPolicy.generation
+        messageTimer = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(12)) } catch { return }
+            guard let self, self.attentionPolicy.canRetract(generation: generation,
+                messageID: id, previewVisible: self.phase == .message) else { return }
+            self.dismissMessagePreview()
+        }
+    }
+
     // MARK: Phase + read-back plumbing (generation-guarded so a delayed change never clobbers a newer one)
 
     private func setPhase(_ newPhase: NotchPhase) {
         phase = newPhase
         phaseToken &+= 1
         Log("notch → \(newPhase)")
+        if newPhase != .message {
+            Task { @MainActor [weak self] in self?.routeAttention() }
+        }
     }
 
     private func scheduleHide(after seconds: Double) {

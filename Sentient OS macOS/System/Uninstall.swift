@@ -63,6 +63,22 @@ enum Uninstall {
         helperWasSkipped = false
         Analytics.countUninstall()   // fire-and-forget; the teardown never waits on the network
         appState?.isUninstalling = true   // the home clears its cards + won't re-deal off the defaults wipe
+        let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
+        var completedTeardown = false
+        conversation.beginMaintenance()
+        SidekickInstructionStore.beginTeardown()
+        defer {
+            if !completedTeardown {
+                conversation.endMaintenance()
+                SidekickInstructionStore.endTeardown()
+            }
+        }
+        if let run = appState?.commandCoordinator.run, !(await run.stopAndDrain()) {
+            lastFailure = "Uninstall paused because a Sidekick task is still stopping. Try again after it stops."
+            appState?.isUninstalling = false
+            return false
+        }
+        await conversation.drainBackgroundWork()
 
         // Quiet the scheduler FIRST so nothing re-arms a wake while the daemon comes down. The
         // flags are snapshotted so a cancellation restores them untouched.
@@ -152,6 +168,7 @@ enum Uninstall {
                 ? try CodexRuntime.FileLock(CodexRuntime.root.appendingPathComponent(".runtime.lock"), exclusive: true) : nil
             defer { lease?.unlock() }
             try await OpenAIComputerUse.stopOwnedHelper()
+            conversation.closeForUninstall()
             try removeSupportFiles(at: URL.sentientSupport)
         } catch {
             Diagnostics.report(.cleanupFailed, phase: .uninstall, reason: "runtime", error: error)
@@ -174,6 +191,7 @@ enum Uninstall {
         await beat()
 
         Log("Uninstall: cleanup attempts finished; individual failures are reported")
+        completedTeardown = true
         return true
     }
 
