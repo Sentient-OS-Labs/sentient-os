@@ -845,6 +845,7 @@ actor ClaudeCLI {
     private func emitClaudeFailure(event: String, _ error: Error, feature: String,
                                    modelID: String, effort: String, resumed: Bool, durationMS: Int,
                                    timeoutS: Int? = nil, diag: [String: String] = [:]) {
+        guard !ConnectorClassificationDiagnostics.ownsFailures else { return }
         let caseName: String
         let level: CrashReporting.DiagLevel
         var extra = diag
