@@ -305,9 +305,12 @@ positive interval overlap establishes concurrent execution, not merely two event
 The normal compactor CLI may retain synthetic session records in its usual private runtime;
 the lab does not guess at session files to delete or touch foreground sessions.
 
-The signed native capture fixture uses a synthetic window, with no saved pixels or model call:
+The signed native capture fixture uses a synthetic window, with no saved pixels or model call.
+It uses the current model-free native session directly, validating both the returned image and
+its owned-window text sentinel; it does not depend on the retired capture-health UI or recovery API:
 
 ```sh
+mkdir -p /tmp/sentient-native-check/evidence
 SENTIENT_SELFTEST=nativecua LAB_COMMAND=capture LAB_ROOT=/tmp/sentient-native-check \
   LAB_NAME=capture "$SENTIENT_TEST_BINARY"
 ```
