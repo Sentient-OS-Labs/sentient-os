@@ -10,6 +10,7 @@ import CryptoKit
 nonisolated enum AppleCalendarSource {
     static let selectionKey = "appleCalendar.selectedIDs"
     static let issueKey = "appleCalendar.readIssue"
+    static let issueCountsKey = "appleCalendar.readIssueCounts"
     static let bucketKey = "apple-calendar"
     static let maximumEvents = 2_000
     private static let queue = DispatchQueue(label: "ai.sentient.calendar", qos: .utility)
@@ -33,9 +34,21 @@ nonisolated enum AppleCalendarSource {
     /// Structure-only source health. Set before a run, clear only after a complete commit.
     /// A crash therefore leaves an honest retry message, never a persisted "reading" spinner.
     enum Issue: String { case incomplete, permission, missing, limit, changed, model, storage, deadline }
-    static func recordIssue(_ issue: Issue) { UserDefaults.standard.set(issue.rawValue, forKey: issueKey) }
+    static func recordIssue(_ issue: Issue, attempted: Int? = nil, failed: Int? = nil) {
+        clearIssue()
+        UserDefaults.standard.set(issue.rawValue, forKey: issueKey)
+        if let attempted, let failed, attempted > 0, failed > 0 {
+            UserDefaults.standard.set(["attempted": attempted, "failed": failed], forKey: issueCountsKey)
+        }
+    }
+
+    static func clearIssue() {
+        UserDefaults.standard.removeObject(forKey: issueKey)
+        UserDefaults.standard.removeObject(forKey: issueCountsKey)
+    }
 
     static func recordIssue(_ error: Error? = nil) {
+        clearIssue()
         let code: String
         switch error as? ReadError {
         case .permission: code = "permission"
@@ -54,16 +67,24 @@ nonisolated enum AppleCalendarSource {
         case "limit": "These calendars contain more than 2,000 events in the analysis window. Choose fewer calendars to continue."
         case "changed": "Your calendar changed during analysis. Run Analyze Now to read the updated schedule."
         case "incomplete": "Calendar analysis did not finish. Run Analyze Now again, or choose fewer calendars."
-        case "model": "The on-device model could not finish Calendar analysis. No partial schedule was saved. Try analysis again."
+        case "model": modelIssueMessage()
         case "storage": "Calendar analysis could not save its results. Check available disk space, then try again."
         case "deadline": "Calendar analysis reached its time limit. Choose fewer calendars or try again."
         default: nil
         }
     }
 
+    private static func modelIssueMessage() -> String {
+        if let counts = UserDefaults.standard.dictionary(forKey: issueCountsKey),
+           let attempted = counts["attempted"] as? Int, let failed = counts["failed"] as? Int {
+            return "Read \(attempted) calendar events; \(failed) could not be analyzed after retries. No partial schedule was saved. Try analysis again."
+        }
+        return "The on-device model could not finish Calendar analysis. No partial schedule was saved. Try analysis again."
+    }
+
     static func saveSelection(_ ids: Set<String>) {
         UserDefaults.standard.set(try? JSONEncoder().encode(ids.sorted()), forKey: selectionKey)
-        UserDefaults.standard.removeObject(forKey: issueKey)
+        clearIssue()
     }
 
     /// Called only by the explicit Connect button, never by background ingestion.

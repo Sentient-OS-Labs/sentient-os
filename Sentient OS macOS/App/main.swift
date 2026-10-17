@@ -17,6 +17,14 @@ if CommandLine.arguments.dropFirst().first == ClaudeLoginBrowser.helperArgument 
 }
 
 #if DEBUG
+if (ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "applecalendar"
+    || Bundle.main.bundleIdentifier == "ai.sentientos.calendar-verification"),
+   CommandLine.arguments.count == 1 {
+    NSApplication.shared.setActivationPolicy(.accessory)
+    Task { exit(await AppleCalendarAcceptanceTests.run()) }
+    NSApplication.shared.run()
+    exit(0)
+}
 // Native computer-use validation starts before AppState or any production startup side effect.
 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "nativecua",
    CommandLine.arguments.count == 1 {
