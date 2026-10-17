@@ -18,6 +18,14 @@ if CommandLine.arguments.dropFirst().first == ClaudeLoginBrowser.helperArgument 
 }
 
 #if DEBUG
+if (ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "applecalendar"
+    || Bundle.main.bundleIdentifier == "ai.sentientos.calendar-verification"),
+   CommandLine.arguments.count == 1 {
+    NSApplication.shared.setActivationPolicy(.accessory)
+    Task { exit(await AppleCalendarAcceptanceTests.run()) }
+    NSApplication.shared.run()
+    exit(0)
+}
 // Isolate the actual-app acceptance profile before AppKit or application singletons exist.
 if ProcessInfo.processInfo.environment["SENTIENT_SELFTEST"] == "sidekickapp",
    CommandLine.arguments.count == 1 {

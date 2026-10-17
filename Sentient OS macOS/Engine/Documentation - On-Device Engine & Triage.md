@@ -39,6 +39,7 @@ Settings that matter (all in `load()` / `generate()`):
 - **Sampler `topK 64 · topP 0.95 · temperature 0.15`.** Near-deterministic for stable JSON. Not greedy: LiteRT-LM has no repetition penalty, and pure argmax is the setting most likely to loop.
 - **`maxOutputTokens = 1024`** bounds a runaway repetition loop to ~16 s instead of decoding to the KV ceiling.
 - **A fresh `Conversation` per call.** No history between items, and the KV cache is freed at function exit, so memory stays flat across a 1,000-item run.
+- Calendar retries select seeds 1 and 2 instead of repeating seed 0. Other sources retain seed 0.
 - **Cache dir** for LiteRT-LM's shader cache: `~/Library/Application Support/SentientOS/ModelCache`.
 - `collectStats: true` turns on LiteRT-LM's benchmark instrumentation (exact prefill/decode token counts on each `Result`). Self-tests only; off in production.
 
@@ -79,7 +80,10 @@ string summary/title and explicit boolean junk/sensitive flags; missing or misty
 Sensitive calendar outcomes also discard their title
 and summary in memory. These narrow deterministic checks supplement the model; they are not a
 complete detector for arbitrary secrets or prompt injection. Other sources keep their mixed-content
-policy. Calendar parse failures invalidate the pending snapshot instead of advancing its checkpoint.
+policy. Calendar replies include explicit JSON examples. Invalid replies receive structural feedback
+for the actual failure without echoing the rejected response. After two failed attempts, only unresolved
+events enter one recovery pass on a rebuilt engine, using a third sampling seed. Successful decisions
+remain in memory. Any remaining failure invalidates the pending snapshot without advancing its checkpoint.
 
 Shared privacy rules in every flavour: the summary is kept and may be shared with the user's other AIs,
 so it must omit raw private specifics (card, SSN, passport, account numbers, passwords, exact medical
