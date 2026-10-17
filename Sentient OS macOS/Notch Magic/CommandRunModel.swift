@@ -54,9 +54,7 @@ final class CommandRunModel {
     private(set) var runID = UUID()
     @ObservationIgnored private var retryAction: ((String) -> Void)?
     @ObservationIgnored private var queuedRetry: (() -> Void)?
-    private(set) var historyID: UUID?
-    private(set) var lastResultID: UUID?
-    private var finalResponse: String?
+    private var historyID: UUID?
     private var recoveryCancelled = false
     private var stopCause: SidekickTaskEnd.StopCause?
     private var lastAttemptDetail = ""
@@ -194,7 +192,6 @@ final class CommandRunModel {
                         }
                         let secs = Int(Date().timeIntervalSince(started))
                         self?.lastAttemptDetail = out
-                        self?.finalResponse = AgentStatus.displayResponse(out)
                         #if DEBUG
                         Log("CMD: final → \(out.suffix(1200))")
                         #endif
@@ -243,7 +240,7 @@ final class CommandRunModel {
         stopCause = nil
         isPersonalizing = false
         if context.isEmpty { personalizationTaskID = UUID(); retryGuidance = nil }
-        retryAction = retry; lastAttemptDetail = ""; finalResponse = nil
+        retryAction = retry; lastAttemptDetail = ""
         let generation = runID
         let snapshot = CustomInstructions.sidekickSnapshot()
         let personalization = SidekickPersonalization(snapshot: snapshot, taskID: personalizationTaskID,
@@ -345,7 +342,6 @@ final class CommandRunModel {
                 }
             }
             lastAttemptDetail = env.result
-            finalResponse = AgentStatus.displayResponse(env.result)
             let secs = Int(Date().timeIntervalSince(started))
             #if DEBUG
             Log("CMD: final → \(env.result.suffix(1200))")
@@ -388,7 +384,6 @@ final class CommandRunModel {
         interaction?.personalization?.discardProposal()
         interaction?.taskSummary?.discard()
         executedMethod = "computer"
-        finalResponse = nil
         let note = "\(name)'s tools couldn't finish this. Doing it on screen instead."
         recent = [note]
         statusLine = note
@@ -540,10 +535,7 @@ final class CommandRunModel {
             interaction?.taskSummary?.finish(end: end, source: source, method: executedMethod)
         }
         isPersonalizing = false
-        if !isDemo {
-            SidekickHistory.close(historyID, outcome: outcome, line: line, response: finalResponse)
-            lastResultID = historyID
-        }
+        if !isDemo { SidekickHistory.close(historyID, outcome: outcome, line: line) }
         historyID = nil
         clearRemembering()
         isOffline = false
@@ -807,10 +799,6 @@ final class CommandRunModel {
 
     /// The STATUS sentinel block, verbatim in both prompts — AgentStatus.parse is the reader.
     nonisolated static let sentinelBlock = """
-    Give the user the actual answer or a concise account of what happened in your final reply.
-    Sentient saves that reply locally in Sidekick History, reachable from Home and the menu bar.
-    Do not create a Sticky, note, file, or message just to make your answer visible, unless the
-    user specifically requests that destination. Never claim an answer cannot be displayed.
     End your reply with ONE final line, EXACTLY one of these two forms (nothing else on that line):
     `STATUS: DONE — <one line: what you did>`   OR   `STATUS: COULD_NOT — <one line: the reason you couldn't>`
     """

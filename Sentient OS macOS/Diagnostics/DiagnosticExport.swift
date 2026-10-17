@@ -14,7 +14,7 @@ enum DiagnosticExport {
     static let sharingNote = "Saved prompts and responses may contain personal information. Review the file before sharing. Nothing is sent automatically."
 
     struct Snapshot: Encodable, Sendable {
-        let schemaVersion = 2
+        let schemaVersion = 3
         let exportedAt: Date
         let disclosure = DiagnosticExport.disclosure
         let notes = [
@@ -22,6 +22,7 @@ enum DiagnosticExport {
             "Common credentials, URLs, local paths and contact details in history text are scrubbed. Account email is included explicitly. Review free text before sharing.",
             "Technical history retains up to 50 Double Tap attempts, 30 overnight attempts and 100 structured errors. It starts with this feature; older attempts are unavailable.",
             "The error list includes bounded Sidekick failure categories, tool names, counts and operation IDs. An empty list does not prove that earlier tasks succeeded.",
+            "Capture reports include native error codes and known failure cases, transport stages, permission observations and recovery outcomes. Unknown native details mean the helper did not expose a recognized cause; raw error text and screen content are excluded.",
             "Missing fields mean unavailable or not yet recorded, not a successful run. Unfinished prompts have no saved final result.",
             "Connector and CLI status uses local cached/declarative state unless a field says otherwise; it does not prove that a service is reachable.",
             "Double Tap pasteDispatched means paste keystrokes were sent; delivery to the intended field was not verified. No drafts, screenshots, tool calls, or knowledge files are attached."

@@ -698,12 +698,14 @@ actor CodexCLI {
     static func agentArguments(prompt: String, imagePaths: [String], modelID: String,
                                effortArg: String,
                                providerOverrides: [String] = [],
-                               nativeConfiguration: OpenAIComputerUse.Configuration? = nil) throws -> [String] {
+                               nativeConfiguration: OpenAIComputerUse.Configuration? = nil,
+                               nativeConnection: LocalMCPServer.Connection? = nil) throws -> [String] {
         var args = (ModelBackend.current == .claude ? ["exec"] : execArguments()) + ["--json", "--dangerously-bypass-approvals-and-sandbox",
                     "-m", modelID,
                     "-c", "model_reasoning_effort=\"\(effortArg)\"",
                     "--ignore-user-config", "-c", "project_doc_max_bytes=0"]
-        for override in try (nativeConfiguration ?? .resolve()).codexOverrides { args += ["-c", override] }
+        let nativeOverrides = try nativeConnection?.codexOverrides ?? (nativeConfiguration ?? .resolve()).codexOverrides
+        for override in nativeOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
             var hooks: [HostedToolPolicy.Rule] = []
@@ -745,6 +747,7 @@ actor CodexCLI {
         let t0 = Date()
         let backend = ModelBackend.current
         var nativeTask: UUID?
+        var nativeServer: NativeComputerUseServer?
         var nativeLease: CodexRuntime.FileLock?
         defer { nativeLease?.unlock() }
         let (model, effort) = ComputerUseSpeed.current.codexModelAndEffort
@@ -761,6 +764,9 @@ actor CodexCLI {
             nativeLease = try await CodexRuntime.sharedRuntimeLease()
             let nativeConfiguration = try OpenAIComputerUse.Configuration.resolve()
             nativeTask = try await OpenAIComputerUseRuntime.shared.beginTask(configuration: nativeConfiguration)
+            let server = NativeComputerUseServer(configuration: nativeConfiguration)
+            nativeServer = server
+            let connection = try await server.start()
             try Task.checkCancellation()
             var overrides = SidekickToolServer.connection?.codexOverrides ?? []
             var environment = nativeConfiguration.clientEnvironment
@@ -780,7 +786,7 @@ actor CodexCLI {
             }
             let args = try Self.agentArguments(prompt: prompt, imagePaths: imagePaths,
                 modelID: modelID, effortArg: effortArg, providerOverrides: overrides,
-                nativeConfiguration: nativeConfiguration)
+                nativeConfiguration: nativeConfiguration, nativeConnection: connection)
             let modelTag = backend == .custom ? "custom" : modelID
             Log("codex exec: start feature=computer runtime=openAI model=\(modelTag) effort=\(effortArg) resume=false sandbox=bypass prompt_kb=\(prompt.utf8.count / 1024) images=\(imagePaths.count) trigger=\(CodexTrigger.current.rawValue)")
             let ownedBridge = bridge
@@ -791,10 +797,12 @@ actor CodexCLI {
             } onCancel: {
                 // Cancel inference even when Codex is between HTTP requests or waiting on a tool.
                 Task { await ownedBridge?.stop() }
+                Task { await server.stop() }
             }
             try Task.checkCancellation()
             if let error = await bridge?.failure { throw error }
             await bridge?.stop()
+            await nativeServer?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             nativeTask = nil
             Self.noteStaleSignatureIfPresent(out.stderr)
@@ -805,6 +813,7 @@ actor CodexCLI {
             return result
         } catch {
             await bridge?.stop()
+            await nativeServer?.stop()
             if let nativeTask { await OpenAIComputerUseRuntime.shared.endTask(nativeTask) }
             if Task.isCancelled { throw CancellationError() }
             let ms = Int(Date().timeIntervalSince(t0) * 1000)

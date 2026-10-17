@@ -264,11 +264,11 @@ final class NotchWindowController {
     // MARK: Click-through (silhouette-only, by cursor position)
 
     /// The phases with something to click: the running STOP, the type field and its mic, the
-    /// listening stop button, recovery controls and saved-result link. Transcribing rides along so a click mid-finalize is
+    /// listening stop button and recovery controls. Transcribing rides along so a click mid-finalize is
     /// absorbed rather than passed to whatever sits under it.
     private static func isInteractive(_ phase: NotchPhase) -> Bool {
         switch phase {
-        case .running, .typing, .listening, .transcribing, .recovery, .finishing: return true
+        case .running, .typing, .listening, .transcribing, .recovery: return true
         default: return false
         }
     }

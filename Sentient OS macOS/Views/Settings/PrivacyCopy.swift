@@ -59,7 +59,7 @@ enum PrivacyCopy {
         Section(id: "providers", title: "Your AI, your choice.", paragraphs: [
             "Use your own ChatGPT or Claude account, a compatible API provider such as OpenRouter, or a supported larger local model for knowledge organization, proactive intelligence, and Sidekick. Apple Mail and Calendar work without a ChatGPT or Claude subscription. Model capabilities and hardware needs depend on your setup.",
             "Sidekick uses your request, relevant knowledge, and screen or app context to carry out your task. Cloud models process this context under your chosen provider’s account settings, training choices, and retention policies. Double Tap has its own provider setting.",
-            "Sidekick History keeps your last 15 requests, task statuses, and final answers on this Mac. Short excerpts of recent answers may be included as context for your next Sidekick task and processed by your chosen AI. You can clear this history from Home or the menu bar by opening Sidekick History.",
+            "Sidekick keeps your last 15 requests, task statuses, and recovery errors on this Mac. Relevant task history may be included as context for your next Sidekick task and processed by your chosen AI.",
             "Connected services use the connections you authorize. Direct connections keep their credentials in your Mac’s Keychain; hosted connections use your own supported AI account. You do not need to create a separate Sentient account or login.",
         ]),
         Section(id: "double-tap", title: "Fast replies, with privacy built in.", paragraphs: [

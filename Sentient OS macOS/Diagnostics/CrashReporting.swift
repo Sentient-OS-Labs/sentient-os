@@ -308,8 +308,11 @@ nonisolated enum CrashReporting {
             if let values = value as? [Any] { return (key, values.map { scrubData(["value": $0])["value"]! } as Any) }
             return (key, value)
         }).merging(data.filter { key, value in
-            ["operation_id", "parent_operation_id", "root_operation_id", "task_id"].contains(key) && (value as? String).flatMap(UUID.init(uuidString:)) != nil
-        }) { _, safeID in safeID }
+            (["operation_id", "parent_operation_id", "root_operation_id", "task_id", "capture_id"].contains(key)
+                && (value as? String).flatMap(UUID.init(uuidString:)) != nil)
+                || (["native_detail", "stderr_detail"].contains(key)
+                    && (value as? String).flatMap(NativeComputerUseFailure.Detail.init(rawValue:)) != nil)
+        }) { _, safeValue in safeValue }
     }
 
     // MARK: - Helpers
@@ -341,7 +344,7 @@ nonisolated enum CrashReporting {
             event.message = SentryMessage(formatted: scrub(text: formatted))
         }
         event.exceptions?.forEach { $0.value = scrub(text: $0.value) }
-        event.tags = event.tags?.mapValues(scrub(text:))
+        event.tags = event.tags.map { scrubData($0).compactMapValues { $0 as? String } }
         event.extra = event.extra.map(scrubData)
         event.context = event.context.map(scrubContexts)
         event.breadcrumbs?.forEach { crumb in
