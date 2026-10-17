@@ -914,6 +914,9 @@ enum ConnectorLab {
             ("add this event to my calendar",                         .either("google-calendar")),
             ("delete my last email",                                  .either("gmail")),
             // Multi-service and zero-context oddballs — computer.
+            ("research recent advances in solar panels and create a Google Slides presentation with sources", .computer),
+            ("look up current public cloud pricing and create a Notion page comparing the options", .computer),
+            ("find recent space exploration news on the web and draft a Gmail summary", .computer),
             ("check my email and put the meeting on my calendar",     .computer),
             ("download the contract from Drive and print it",         .computer),
             ("search Slack for the release decision and create a Notion page about it", .computer),

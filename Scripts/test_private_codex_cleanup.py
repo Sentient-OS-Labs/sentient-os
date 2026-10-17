@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check private helper routing and uninstall preservation with isolated fixtures.
+"""Check helper takeover, private routing, and uninstall preservation with isolated fixtures.
 
 Compiles the production helper configuration/ownership and foreground cleanup methods.
 Runs the production post-exit shell cleanup against temporary paths only. No accounts,
@@ -45,13 +45,17 @@ production = "\n".join(declaration(helper, signature) for signature in (
     "struct Configuration:",
     "enum RuntimeError:",
     "@concurrent static func acceptsRunningHelper(",
+    "@MainActor static func stopConflictingHelpers(",
     "@MainActor static func stopOwnedHelper()",
+    "@MainActor private static func terminateHelpers(",
     "static func tomlString(_ value:",
 ))
 cleanup = declaration(uninstall, "static func removeSupportFiles(at support:")
 fixture = r'''
 import Foundation
 import Darwin
+
+nonisolated func Log(_ message: String) {}
 
 nonisolated enum CodexRuntime {
     nonisolated(unsafe) static var root = URL(fileURLWithPath: "/fixture-unset")
@@ -72,10 +76,12 @@ nonisolated enum CodexCLI {
     var isTerminated = false
     var terminateCalls = 0
     var forceTerminateCalls = 0
+    var exitsOnTerminate = true
+    var exitsOnForceTerminate = true
     init(_ url: URL?) { bundleURL = url }
     static func runningApplications(withBundleIdentifier: String) -> [NSRunningApplication] { applications }
-    func terminate() { terminateCalls += 1; isTerminated = true }
-    func forceTerminate() { forceTerminateCalls += 1; isTerminated = true }
+    func terminate() { terminateCalls += 1; isTerminated = exitsOnTerminate }
+    func forceTerminate() { forceTerminateCalls += 1; isTerminated = exitsOnForceTerminate }
 }
 nonisolated enum OpenAIComputerUse {
     static let bundleID = "fixture"
@@ -143,6 +149,60 @@ __CLEANUP__
         precondition(ownApp.terminateCalls == 1)
         precondition([foreignApp, retiredApp, unknownApp].allSatisfy { $0.terminateCalls == 0 && $0.forceTerminateCalls == 0 })
         print("PASS uninstall terminates only the exact private helper")
+
+        let healthyOwn = NSRunningApplication(own)
+        let standalone = NSRunningApplication(foreign), retiredHelper = NSRunningApplication(retired)
+        NSRunningApplication.applications = [healthyOwn, standalone, retiredHelper]
+        try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
+        precondition(healthyOwn.terminateCalls == 0 && healthyOwn.forceTerminateCalls == 0)
+        precondition([standalone, retiredHelper].allSatisfy { $0.isTerminated && $0.terminateCalls == 1 && $0.forceTerminateCalls == 0 })
+        print("PASS task takeover stops all foreign helpers and preserves the private helper")
+
+        NSRunningApplication.applications = [healthyOwn]
+        try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
+        precondition(healthyOwn.terminateCalls == 0)
+        NSRunningApplication.applications = []
+        try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
+        print("PASS absent conflicts require no termination")
+
+        let unknown = NSRunningApplication(nil), knownForeign = NSRunningApplication(foreign)
+        NSRunningApplication.applications = [knownForeign, unknown]
+        do {
+            try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
+            preconditionFailure("unidentified helper accepted")
+        } catch OpenAIComputerUse.RuntimeError.conflictingHelper {}
+        precondition(unknown.terminateCalls == 0 && knownForeign.terminateCalls == 0)
+        print("PASS unidentified paths fail without terminating processes")
+
+        let stubborn = NSRunningApplication(foreign)
+        stubborn.exitsOnTerminate = false
+        NSRunningApplication.applications = [healthyOwn, stubborn]
+        try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
+        precondition(stubborn.isTerminated && stubborn.terminateCalls == 1 && stubborn.forceTerminateCalls == 1)
+        precondition(healthyOwn.terminateCalls == 0 && healthyOwn.forceTerminateCalls == 0)
+        print("PASS unresponsive foreign helper is force-quit after the graceful wait")
+
+        let unkillable = NSRunningApplication(foreign)
+        unkillable.exitsOnTerminate = false
+        unkillable.exitsOnForceTerminate = false
+        NSRunningApplication.applications = [unkillable]
+        do {
+            try await OpenAIComputerUse.stopConflictingHelpers(configuration: config)
+            preconditionFailure("live conflicting helper accepted")
+        } catch OpenAIComputerUse.RuntimeError.conflictingHelper {}
+        precondition(!unkillable.isTerminated && unkillable.forceTerminateCalls == 1)
+        print("PASS failed shutdown remains a startup error")
+
+        let cancelled = NSRunningApplication(foreign)
+        NSRunningApplication.applications = [cancelled]
+        let task = Task { @MainActor in try await OpenAIComputerUse.stopConflictingHelpers(configuration: config) }
+        task.cancel()
+        do {
+            try await task.value
+            preconditionFailure("cancelled takeover succeeded")
+        } catch is CancellationError {}
+        precondition(cancelled.terminateCalls == 0 && cancelled.forceTerminateCalls == 0)
+        print("PASS cancelled takeover does not terminate a helper")
     }
 }
 '''.replace("__PRODUCTION__", production).replace("__CLEANUP__", cleanup)

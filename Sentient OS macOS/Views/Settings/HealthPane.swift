@@ -20,7 +20,6 @@ struct HealthPane: View {
     @State private var codex = CodexSetup.shared
     @State private var claude = ClaudeSetup.shared
     private var computerGate: ComputerUseGate { .shared }
-    private var nativeRuntime: OpenAIComputerUseRuntime { .shared }
     /// The live frontier-model choice — observed so switching engines re-renders the pane's
     /// engine group in place.
     @AppStorage(ModelBackend.key) private var backendRaw = ModelBackend.chatgpt.rawValue
@@ -69,7 +68,6 @@ struct HealthPane: View {
             && screenRec
             && (notifStatus == .authorized || notifStatus == .provisional)
             && engineAllGreen
-            && (computerGate.backend != .openAI || nativeRuntime.captureVerified)
             && sourceIssues.isEmpty
     }
 
@@ -84,7 +82,6 @@ struct HealthPane: View {
                     onDeviceGroup
                     sidekickGroup
                     NativeComputerUsePermissionRows(gate: computerGate)
-                    if computerGate.backend == .openAI { captureCheckGroup }
                     if !sourceIssues.isEmpty {
                         SettingsGroup(label: "Sources to retry") {
                             VStack(alignment: .leading, spacing: 8) {
@@ -174,32 +171,6 @@ struct HealthPane: View {
                 : "\(name): the last analysis did not finish. Check access and run analysis again.")
         }
         return issues
-    }
-
-    var captureCheckGroup: some View {
-        SettingsGroup(label: "App control check") {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(nativeRuntime.captureVerified ? "Test window captured successfully."
-                    : nativeRuntime.captureHealth == .checking ? "Checking the test window…"
-                    : nativeRuntime.captureHealth == .failed ? "App control needs attention."
-                    : "App control has not been tested in this session.")
-                    .font(.system(size: 13)).foregroundStyle(SettingsStyle.secondary)
-                SettingsProse("Checks a Sentient test window. Other apps may still need their own permissions or an open window.")
-                if let failure = nativeRuntime.captureFailure { SettingsProse(failure) }
-                HStack(spacing: 16) {
-                    Button("Check app control") { Task { await nativeRuntime.checkCapture() } }
-                        .disabled(!nativeRuntime.canCheckCapture || !computerGate.allRequiredGranted)
-                    if nativeRuntime.captureHealth == .failed {
-                        Button("Restart computer use") { computerGate.restartComputerUse() }
-                            .disabled(computerGate.restartingNative)
-                    }
-                }
-                .buttonStyle(SettingsActionStyle())
-                if nativeRuntime.captureHealth == .failed {
-                    SettingsProse("Before restarting, finish any computer-use tasks in other apps. Then run the check again.")
-                }
-            }
-        }
     }
 
     /// The first probe's stand-in — the codex login check shells out and takes seconds; without
@@ -580,9 +551,6 @@ private extension View {
 }
 
 #if DEBUG
-#Preview("App control check") {
-    HealthPane().captureCheckGroup.padding(24).frame(width: 620).background(Theme.bg)
-}
 #Preview("Permissions & Health pane") {
     HealthPane(expandEngine: true)
         .background(Theme.bg)

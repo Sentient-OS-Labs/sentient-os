@@ -167,6 +167,20 @@ nonisolated enum OpenAIComputerUse {
         url.standardizedFileURL == configuration.appURL.standardizedFileURL
     }
 
+    /// A user-started task takes over the shared service identity from other installations.
+    /// Identify the helper by bundle ID and path, never by its localized process name.
+    @MainActor static func stopConflictingHelpers(configuration: Configuration) async throws {
+        let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { !$0.isTerminated }
+        guard running.allSatisfy({ $0.bundleURL != nil }) else { throw RuntimeError.conflictingHelper }
+        let conflicting = running.filter {
+            $0.bundleURL?.standardizedFileURL != configuration.appURL.standardizedFileURL
+        }
+        guard !conflicting.isEmpty else { return }
+        try await terminateHelpers(conflicting, failure: .conflictingHelper)
+        Log("Native computer use: stopped \(conflicting.count) conflicting helper(s)")
+    }
+
     /// Uninstall stops only the helper launched from Sentient's directory.
     @MainActor static func stopOwnedHelper() async throws {
         // Compare the owned path itself. Resolving a replaced app symlink could make a
@@ -175,7 +189,13 @@ nonisolated enum OpenAIComputerUse {
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).filter {
             $0.bundleURL?.standardizedFileURL == ownedURL
         }
-        for app in running { app.terminate() }
+        try await terminateHelpers(running, failure: .helperRunning)
+    }
+
+    /// Wait for graceful shutdown before escalating; never launch over a helper still exiting.
+    @MainActor private static func terminateHelpers(_ running: [NSRunningApplication], failure: RuntimeError) async throws {
+        try Task.checkCancellation()
+        for app in running where !app.isTerminated { app.terminate() }
         for _ in 0..<30 {
             if running.allSatisfy(\.isTerminated) { return }
             try await Task.sleep(for: .milliseconds(100))
@@ -185,7 +205,7 @@ nonisolated enum OpenAIComputerUse {
             if running.allSatisfy(\.isTerminated) { return }
             try await Task.sleep(for: .milliseconds(100))
         }
-        throw RuntimeError.helperRunning
+        throw failure
     }
 
 

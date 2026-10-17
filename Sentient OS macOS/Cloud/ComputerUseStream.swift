@@ -32,7 +32,7 @@ nonisolated enum ComputerUseStream {
             if narrate { progress(from: line).forEach(onLine) }
           }
         } catch let failure as NativeComputerUseFailure {
-            await MainActor.run { OpenAIComputerUseRuntime.shared.recordCaptureFailure(failure) }
+            await MainActor.run { OpenAIComputerUseRuntime.shared.invalidate() }
             throw failure
         }
         diagnostics?.recordProcess(status: result.status)

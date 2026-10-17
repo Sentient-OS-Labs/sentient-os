@@ -708,6 +708,8 @@ actor CodexCLI {
         for override in nativeOverrides { args += ["-c", override] }
         for override in DirectMCPRuntime.codexOverrides(DirectMCPRuntime.current) { args += ["-c", override] }
         if ModelBackend.current == .chatgpt {
+            // Research and app actions share one task; do not depend on CLI search defaults.
+            args += ["-c", "web_search=\"live\""]
             var hooks: [HostedToolPolicy.Rule] = []
             var ids = [Invocation.gmailCatalogID, Invocation.calendarCatalogID]
             ids += ConnectorCensus.cached(for: .chatgpt).compactMap(\.catalogID)

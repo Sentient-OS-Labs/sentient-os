@@ -191,8 +191,6 @@ enum DiagnosticExport {
                 "nativeHelperScreenRecordingCached": String(ComputerUseGate.shared.helperScreen),
                 "nativeHelperAutomationCached": String(describing: ComputerUseGate.shared.automation),
                 "nativeHelperNeedsRestartCached": String(ComputerUseGate.shared.nativeRestartRequired),
-                "nativeCaptureCheck": OpenAIComputerUseRuntime.shared.captureHealth.rawValue,
-                "nativeCaptureVerified": String(OpenAIComputerUseRuntime.shared.captureVerified),
                 "nativeExpectedHelperBuild": String(CodexRuntime.release.helperBuild)],
             promptHistory: prompts,
             doubleTap: DoubleTapInfo(enabled: DoubleTap.isEnabled, drafting: DoubleTap.shared.isDrafting,

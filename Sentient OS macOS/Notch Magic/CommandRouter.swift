@@ -205,9 +205,8 @@ enum CommandRouter {
         THE TWO ROUTES:
         - "connector": the ENTIRE task can be completed with one connected service's
           tools alone (below), with no need to see the screen or touch any app window.
-        - "computer": any part of the task needs the screen, an app, or a website.
-          Connector tools remain available inside this route too, so a wrong "computer"
-          pick costs nothing.
+        - "computer": any part of the task needs web research, the screen, an app, or a website.
+          Web search and connector tools remain available alongside computer use in this route.
 
         CONNECTED SERVICES:
         \(list)
@@ -224,6 +223,11 @@ enum CommandRouter {
           A connected Gmail or Outlook account does not identify the account or message visible in
           Apple Mail. Never substitute a provider merely because both services handle email.
         - When in doubt, choose "computer".
+        - Public web research needs "computer", even when the final result goes into one
+          connected service. "Research a topic and make a presentation", "look up current
+          pricing and write a Notion page", and "find recent news and email a summary" all
+          need web research plus an action. Searching only a service's own data, such as
+          finding an email in Gmail, can still use "connector".
         \(services.contains(where: { $0.slug == "slack" }) ? "- A Slack connector task supports one message or one other constructive change. Explicitly requested multiple Slack messages need computer so the broader workflow can handle them." : "")
         - "connector" is right ONLY when EVERY step of the command fits that ONE
           service's tools. If any step needs a second service (listed or not), a
