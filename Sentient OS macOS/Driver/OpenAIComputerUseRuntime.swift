@@ -24,70 +24,6 @@ final class OpenAIComputerUseRuntime {
     private var checkingConfiguration: OpenAIComputerUse.Configuration?
     private var checkingFresh = false
     private var restarting = false
-    enum CaptureHealth: String { case unchecked, checking, passed, failed }
-    private(set) var captureHealth: CaptureHealth = .unchecked
-    private(set) var captureFailure: String?
-    private var captureConfiguration: OpenAIComputerUse.Configuration?
-    private var captureCheckedAt: Date?
-    var captureVerified: Bool {
-        captureHealth == .passed && captureConfiguration?.cliURL == CodexRuntime.executable.resolvingSymlinksInPath()
-            && captureCheckedAt.map { Date().timeIntervalSince($0) < 300 } == true
-    }
-    var canCheckCapture: Bool { captureHealth != .checking && activeTasks.isEmpty && checking == nil && starting == nil && !restarting }
-
-    /// User-requested and model-free. Only a synthetic Sentient window is targeted; returned
-    /// pixels and accessibility text are discarded by the probe, never saved or sent to a model.
-    func checkCapture() async {
-        guard canCheckCapture, NSApp.isActive else { return }
-        captureHealth = .checking
-        captureFailure = nil
-        let previous = NSApp.keyWindow
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 160),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.title = "Checking app control"
-        window.isReleasedWhenClosed = false
-        window.backgroundColor = .black
-        let label = NSTextField(labelWithString: OpenAIComputerUseProbe.testWindowText + "\nThis usually takes a few seconds.")
-        label.textColor = .white
-        label.alignment = .center
-        label.frame = NSRect(x: 20, y: 55, width: 320, height: 50)
-        window.contentView?.addSubview(label)
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        defer {
-            window.close()
-            if NSApp.isActive { previous?.makeKeyAndOrderFront(nil) }
-        }
-        do {
-            let lease = try await CodexRuntime.sharedRuntimeLease()
-            defer { lease.unlock() }
-            let configuration = try await OpenAIComputerUse.Configuration.resolveForSetup()
-            _ = try await start(configuration: configuration, stoppingConflictingHelpers: true)
-            guard await Permissions.nativeAutomationState() == .granted else {
-                throw OpenAIComputerUse.RuntimeError.permissionRequired
-            }
-            try await OpenAIComputerUseProbe.check(configuration, captureApp: Bundle.main.bundleURL.path)
-            try Task.checkCancellation()
-            captureConfiguration = configuration
-            captureCheckedAt = Date()
-            captureHealth = .passed
-        } catch is CancellationError { captureHealth = .unchecked }
-        catch {
-            captureHealth = .failed
-            if let failure = error as? NativeComputerUseFailure { recordCaptureFailure(failure) }
-            else { captureFailure = error.localizedDescription }
-            Diagnostics.report(.readinessFailed, phase: .probe, error: error)
-        }
-    }
-
-    func recordCaptureFailure(_ failure: NativeComputerUseFailure) {
-        captureHealth = .failed
-        captureFailure = failure.kind == .capture
-            ? "Sentient could not capture the window. Restart computer use, then run this check again."
-            : failure.localizedDescription
-        captureConfiguration = nil; captureCheckedAt = nil
-        invalidate()
-    }
 
     @discardableResult
     func start(configuration selected: OpenAIComputerUse.Configuration,
@@ -229,7 +165,6 @@ final class OpenAIComputerUseRuntime {
     }
 
     func beginTask(configuration: OpenAIComputerUse.Configuration) async throws -> UUID {
-        guard captureHealth != .checking else { throw OpenAIComputerUse.RuntimeError.helperRunning }
         if let activeConfiguration, !activeTasks.isEmpty, activeConfiguration != configuration {
             throw OpenAIComputerUse.RuntimeError.helperRunning
         }
@@ -263,10 +198,7 @@ final class OpenAIComputerUseRuntime {
         if activeTasks.isEmpty { activeConfiguration = nil }
     }
 
-    func invalidate() {
-        checked = nil
-        if captureHealth == .passed { captureHealth = .unchecked; captureConfiguration = nil; captureCheckedAt = nil }
-    }
+    func invalidate() { checked = nil }
 
     /// Invoked only by the visible Restart button, whose copy asks the user to finish other
     /// apps' computer-use tasks. Never force-kill, never terminate a different installed bundle.
@@ -274,13 +206,11 @@ final class OpenAIComputerUseRuntime {
         let lease = try await CodexRuntime.sharedRuntimeLease()
         defer { lease.unlock() }
         let configuration = try selected.afterRuntimeLease()
-        guard activeTasks.isEmpty, starting == nil, checking == nil, !restarting, captureHealth != .checking else {
+        guard activeTasks.isEmpty, starting == nil, checking == nil, !restarting else {
             throw OpenAIComputerUse.RuntimeError.helperRunning
         }
         restarting = true
         checked = nil
-        captureHealth = .unchecked
-        captureConfiguration = nil; captureCheckedAt = nil
         defer { restarting = false }
         _ = try await OpenAIComputerUse.validate(at: configuration.appURL)
         try Task.checkCancellation()

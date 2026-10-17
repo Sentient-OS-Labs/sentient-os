@@ -51,11 +51,11 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
 
     var errorDescription: String? {
         switch kind {
-        case .capture: "Sidekick couldn’t capture the app’s window. Open Permissions & Health and choose Check app control, then try again."
+        case .capture: "Sidekick couldn’t capture the app’s window. Check Screen Recording access in Permissions & Health, then try again."
         case .noWindows: "Sidekick couldn’t find a readable window. Keep the app open on your current desktop, then try again."
         case .permission: "Computer use could not access the app. Check its permissions in Permissions & Health."
-        case .connection: "Computer use lost its connection. Finish active tasks, then restart computer use in Permissions & Health."
-        case .timeout: "Computer use took too long to read the window. Open Permissions & Health and choose Check app control."
+        case .connection: "Computer use lost its connection. Try the task again."
+        case .timeout: "Computer use took too long to read the window. Keep the app open on your current desktop, then try again."
         case .unknown: "Computer use could not complete the check. Try again in Permissions & Health."
         }
     }
