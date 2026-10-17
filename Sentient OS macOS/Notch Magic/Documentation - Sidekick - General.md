@@ -15,6 +15,9 @@ views of one task, and there is one shared computer/connector task at a time. Do
 This doc covers the brain and the backend: the coordinator, the run model, the hotkey, voice, the
 screen stills, and the prompt. The window, the click-through mechanics, and the visual are in
 `Documentation - Sidekick - Notch Window & Visual.md`.
+Durable messages, history, context compaction, memory and their verification are documented in
+`Documentation - Sidekick - Conversation Backend.md`. The conversation presentation is separate
+UI work; these backend seams already survive provider-process and Home-view lifetimes.
 
 ## Files
 
@@ -35,7 +38,7 @@ screen stills, and the prompt. The window, the click-through mechanics, and the 
 hotkey hold / tap ─► SidekickHotkeyMonitor ─┐
 notch click ────────────────────────────────┤─► CommandCoordinator ─► CommandRunModel ─► router / connector leg / FrontierRun.runAgentCommand
 home PromptBar ─────────────────────────────┘        │ owns phase (NotchPhase) + VoiceCapture
-card fire ──► coordinator.beginExternalRun ──────────┤   (adopts the run; the work stays in the card's Task)
+card fire ──► coordinator.beginExternalRun ──────────┤   (adopts the run and transfers its Task to the app)
                                                      ▼
                                           NotchWindowController renders coordinator.phase + run
 ```
@@ -67,7 +70,10 @@ fireable method: computer, gmail, calendar; not research) adopt THE run: `run.ad
 `isRunning` and seeds the status with the card's title, the notch rises in `.running`, the card's raw
 codex lines tee through `run.externalPush` (same cleaning), and every exit completes the adoption exactly
 once via `run.completeExternal` (no scoreboard or analytics from here; the executor records every card
-fire itself). `stop()` on an adopted run delegates to the card's own cancel. So `run.isRunning` locks
+fire itself). `ownExternalTask` retains the card task in the app-owned run. Home can disappear or
+be recreated without cancelling work; persisted card completion precedes releasing the run lock.
+`stop()` cancels that owned task (the initial callback covers the interval before transfer).
+So `run.isRunning` locks
 every other entry point, other fireable cards dim, `beginExternalRun` returns false while anything runs,
 and every STOP surface (card, notch, bar, a fresh hotkey press) cancels the one task.
 
@@ -118,10 +124,14 @@ nothing real underneath (no codex, no screenshots, no scoreboard).
 ## The prompt (`CommandRunModel.commandPrompt`)
 
 The command prompt includes the requested task, a speech-transcription note when appropriate,
-screenshot context for “this” and “here,” the user's standing Sidekick instructions, and the
+screenshot context for “this” and “here,” the user's standing Sidekick memory, and the
 knowledge-folder path. It asks the model to read knowledge with file tools, act through computer-use
 tools, verify the result, and finish with the `STATUS` sentinel. Retrieved pages, messages and other
 content are explicitly framed as data rather than new instructions.
+`SidekickInteraction` injects the current memory snapshot, bounded recent conversation and reply
+reference across execution routes. Previous screenshots and raw tool traces are never injected.
+The model sends explicit Markdown through `message_user` and must finish with a user-facing answer;
+the app separately persists the verified execution outcome and handles missing-answer fallbacks.
 
 At dispatch, `FrontierRun` appends the selected runtime's manual once. Every active backend uses
 `OpenAIComputerUse.promptRules`; custom models also receive `CustomProvider.computerUsePromptRules`.

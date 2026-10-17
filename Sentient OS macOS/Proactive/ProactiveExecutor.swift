@@ -333,7 +333,7 @@ actor ProactiveExecutor {
             case .couldNot(let reason):
                 return FireResult(outcome: .failed(reason.isEmpty ? "The agent reported it couldn't complete this." : reason),
                                   board: .refused, statusPresent: true, errorClass: "refused")
-            case .done: return FireResult(outcome: .fired(String(final.prefix(300))), board: .fired, statusPresent: true, errorClass: nil)
+            case .done: return FireResult(outcome: .fired(out), board: .fired, statusPresent: true, errorClass: nil)
             case .none: return FireResult(outcome: .failed(AgentStatus.unconfirmedComputerMessage), board: .refused, statusPresent: false, errorClass: "unconfirmed")
             }
         } catch {

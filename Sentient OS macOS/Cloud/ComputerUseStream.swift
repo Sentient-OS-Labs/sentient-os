@@ -13,11 +13,13 @@ nonisolated enum ComputerUseStream {
                     onLine: @escaping @Sendable (String) -> Void) async throws -> CodexCLI.ExecResult {
         let recovery = SidekickInteraction.current
         let diagnostics = AgentRunDiagnostics.current
+        let streamID = UUID()
+        defer { recovery?.endExecution(streamID: streamID) }
         let result: CodexCLI.ExecResult
         do {
           result = try await CodexCLI.executeStreaming(binary: binary, args: args, timeout: timeout, extraEnv: extraEnv) { line in
             diagnostics?.observe(line)
-            try recovery?.observeToolEvent(line)
+            try recovery?.observeToolEvent(line, streamID: streamID)
             if let failure = windowUnavailable(from: line) { throw failure }
             if let data = line.data(using: .utf8),
                let event = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -99,8 +101,8 @@ nonisolated enum ComputerUseStream {
             // Preserve the existing knowledge-read bloom without displaying command output.
             return ["exec", command, "codex"]
         case ("item.started", "mcp_tool_call"):
-            if item["server"] as? String == SidekickToolServer.name,
-               item["tool"] as? String == SidekickTaskSummary.toolName { return [] }
+            if SidekickConversationRun.hidden(server: item["server"] as? String ?? "",
+                                              tool: item["tool"] as? String ?? "") { return [] }
             let label = [item["server"] as? String, item["tool"] as? String]
                 .compactMap { $0 }.joined(separator: ".")
             return label.isEmpty ? [] : ["codex", "→ \(label)"]

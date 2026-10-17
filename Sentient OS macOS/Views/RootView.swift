@@ -81,20 +81,33 @@ struct RootView: View {
                 }
             } else {
                 workspace
-                    .opacity(navigation.page == .home ? 1 : 0)
+                    // Secondary pages grow over the retained Home canvas. Home stays inert;
+                    // its draft, scroll position and card state keep their existing lifetime.
                     .allowsHitTesting(navigation.page == .home)
                     .disabled(navigation.page != .home)
                     .accessibilityHidden(navigation.page != .home)
-                if navigation.page == .settings {
-                    SettingsView()
-                }
-                if navigation.hasOpenedKnowledge {
-                    KnowledgeView(isPresented: navigation.page == .knowledge)
+            }
+        }
+        .overlayPreferenceValue(SettingsButtonBoundsKey.self) { source in
+            if appState.hasCompletedOnboarding {
+                SettingsPageLayer(isPresented: navigation.page == .settings,
+                                  animate: navigation.animatesSettingsTransition, source: source)
+            }
+        }
+        .overlayPreferenceValue(KnowledgeButtonBoundsKey.self) { source in
+            if appState.hasCompletedOnboarding {
+                HomePageLayer(isPresented: navigation.page == .knowledge,
+                              animate: navigation.animatesKnowledgeTransition, source: source,
+                              sourceKind: .knowledge, retainingContent: true) {
+                    if navigation.hasOpenedKnowledge {
+                        KnowledgeView(isPresented: navigation.page == .knowledge,
+                                      animateEntrance: navigation.animatesKnowledgeTransition)
+                    }
                 }
             }
         }
-        .frame(minWidth: resizableAnalysisDemo && isProcessing && navigation.page == .home ? nil : 1040,
-               minHeight: resizableAnalysisDemo && isProcessing && navigation.page == .home ? nil : 800)
+        .frame(minWidth: resizableAnalysisDemo && isProcessing && navigation.page == .home ? nil : (navigation.page == .home && !isProcessing ? 840 : 1040),
+               minHeight: resizableAnalysisDemo && isProcessing && navigation.page == .home ? nil : (navigation.page == .home && !isProcessing ? 680 : 800))
         // Core tier: the home window came up (fires once per window instantiation — launch opens it
         // automatically; anything later is a deliberate menu-bar/Dock reopen, hence the trigger
         // param). Sidekick-only users who never look at home are exactly who this measures.

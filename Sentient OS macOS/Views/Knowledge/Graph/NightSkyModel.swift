@@ -65,6 +65,8 @@ final class NightSkyModel: ObservableObject {
 
     private var lastTick: TimeInterval?
     private var dragging = false
+    private var preservesPreviewGraph = false
+    private var loadRevision: UInt64 = 0
 
     // MARK: Loading
 
@@ -72,10 +74,18 @@ final class NightSkyModel: ObservableObject {
     /// re-entries keep every star exactly where the user left it.
     @MainActor
     func load(vault: KnowledgeVault?) async {
-        // No vault → keep whatever sky exists (a fresh model shows the empty state anyway; the
-        // preview factory's mock galaxy must survive the view's load-on-appear task).
-        guard let vault else { return }
+        guard !Task.isCancelled else { return }
+        loadRevision &+= 1
+        let revision = loadRevision
+        // A missing vault is an authoritative new snapshot, not permission to leave deleted
+        // notes clickable. Only the explicit preview factory keeps its synthetic nil-vault sky.
+        guard let vault else {
+            if !preservesPreviewGraph { clearVault() }
+            return
+        }
         let g = await Task.detached(priority: .userInitiated) { SkyGraph.build(from: vault) }.value
+        guard !Task.isCancelled, revision == loadRevision else { return }
+        preservesPreviewGraph = false
         if let old = graph, let oldSim = sim {
             let positions = Dictionary(uniqueKeysWithValues: zip(old.nodes.map(\.url), oldSim.pos))
             let s = SkySimulation(graph: g, entrance: true)
@@ -89,6 +99,21 @@ final class NightSkyModel: ObservableObject {
         glow = [Double](repeating: 0, count: g.nodes.count)
         clearFocus()
         resolvePendingHighlight()
+    }
+
+    private func clearVault() {
+        sim?.endDrag()
+        dragging = false
+        sim = nil
+        glow = []
+        clearFocus()
+        pendingHighlightURL = nil
+        highlightIndex = nil
+        highlightBlend = 0
+        pulses = []
+        nextPulseAt = .infinity
+        lastTick = nil
+        graph = nil
     }
 
     // MARK: The frame tick (called from the Canvas closure — main thread, no published writes)
@@ -275,6 +300,7 @@ final class NightSkyModel: ObservableObject {
 
     static func preview(hovering: Int? = nil) -> NightSkyModel {
         let m = NightSkyModel()
+        m.preservesPreviewGraph = true
         let g = SkyGraph.mock()
         m.graph = g
         m.sim = SkySimulation(graph: g, entrance: false)

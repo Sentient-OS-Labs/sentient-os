@@ -41,6 +41,7 @@ final class AppState {
     /// notch's mic + the one shared codex run + the notch's status phase. Both the home command bar
     /// and the hotkey drive this. (Notch Magic/)
     let commandCoordinator = CommandCoordinator()
+    let sidekickPresentation = SidekickPresentation()
 
     /// The notch overlay window — renders the coordinator's status phase as the living notch.
     private let notch: NotchWindowController

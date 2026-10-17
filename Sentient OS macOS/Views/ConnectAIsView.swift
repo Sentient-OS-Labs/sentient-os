@@ -3,7 +3,7 @@
 //  Sentient OS macOS
 //
 //  The "Connect your AIs" window — the guided setup, opened by the glow CTAs in Settings →
-//  Your AIs and the home's Your AIs popover. Owns the whole story:
+//  Your AIs and Knowledge's "Use with your AIs" popover. Owns the whole story:
 //   · sharing OFF → the guide itself opens first (a 1-second crisp peek, inert), then blurs
 //     under a transparent veil carrying the consent ask: "Connect your AIs?", the trust pillars
 //     (encrypted storage, open-source server, sharing controls), a glowing "Yes, use the cloud MCP"

@@ -38,6 +38,23 @@ nonisolated enum NativeComputerUseLab {
         do {
             switch command {
             case "preflight": break
+            case "capture":
+                // Exercise the existing model-free synthetic-window health check. No user
+                // app is inspected and no screenshot is saved or sent to a model.
+                let bootstrap = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 160),
+                    styleMask: [.titled], backing: .buffered, defer: false)
+                bootstrap.isReleasedWhenClosed = false
+                bootstrap.title = "Sentient backend test"
+                let label = NSTextField(labelWithString: OpenAIComputerUseProbe.testWindowText)
+                label.frame = NSRect(x: 20, y: 60, width: 320, height: 40)
+                bootstrap.contentView?.addSubview(label)
+                bootstrap.center(); bootstrap.makeKeyAndOrderFront(nil)
+                defer { bootstrap.close() }
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                for _ in 0..<20 where !NSApp.isActive { try await Task.sleep(for: .milliseconds(100)) }
+                await OpenAIComputerUseRuntime.shared.checkCapture()
+                result["captureHealth"] = OpenAIComputerUseRuntime.shared.captureHealth.rawValue
+                result["captureVerified"] = OpenAIComputerUseRuntime.shared.captureVerified
             case "coordinator":
                 guard Bundle.main.bundleIdentifier == "ai.sentient.cua-controller-validation" else {
                     result["error"] = "Controller tests require a separate defaults domain"; break

@@ -2,14 +2,12 @@
 //  HomePopovers.swift
 //  Sentient OS macOS
 //
-//  The two glanceable dropdowns hung off the home's top-bar nav (HomeView). They keep status
-//  OFF the home itself — you open them only when curious:
+//  Two glanceable, on-demand dropdowns for Home and Knowledge:
 //   · AnalysisPopover — the work glance: things understood, vault size, an Analyze Now control
 //     with the last/next-run footer, the overnight-on-battery opt-in, and the source chips
 //     (sources are the INPUTS to analysis, so they live under "Analysis").
-//   · ShareKnowledgePopover — the pitch + the glowing CTA ("Set up in 2 minutes"; "Configure"
-//     once sharing is on) that opens the guided setup window (ConnectAIsView owns sharing
-//     on/off, the link, and the prompt).
+//   · ShareKnowledgePopover — Knowledge's "Use with your AIs" entry opens optional connection
+//     setup. ConnectAIsView owns consent, sharing on/off, the link, and the prompt.
 //  Pure presentation; harvested from the retired Constellation home. The vault counts ARE real
 //  (disk); the demo deck substitutes its showcase last-run stamp.
 //
@@ -211,11 +209,10 @@ struct AnalysisPopover: View {
     }
 }
 
-// MARK: - Give AIs Knowledge
+// MARK: - Knowledge's optional AI connections
 
-/// The MCP door. One job: the glowing CTA ("Set up in 2 minutes"; "Configure" once sharing is
-/// on), always shown, opening the guided setup window — ConnectAIsView owns sharing on/off, the
-/// private link, and the system prompt, so the popover carries no controls of its own.
+/// A user-opened explanation of optional sharing. The CTA opens the existing setup window;
+/// ConnectAIsView owns consent, sharing on/off, the private link, and the system prompt.
 struct ShareKnowledgePopover: View {
     @Environment(\.openWindow) private var openWindow
 
@@ -223,20 +220,22 @@ struct ShareKnowledgePopover: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            MonoCaps("Give AIs Knowledge", size: 10, tracking: 2.4, color: Theme.Ink.label)
+            MonoCaps("Use with your AIs", size: 10, tracking: 2.4, color: Theme.Ink.label)
 
-            Text("Offer your knowledge base to your ChatGPT or Claude.")
+            Text("Bring your knowledge to ChatGPT, Claude, and other AIs.")
                 .display(20).foregroundStyle(.white)
                 .padding(.top, 11)
 
-            GlowButton(title: enabled ? "Configure" : "Set up in 2 minutes",
+            GlowButton(title: enabled ? "Manage connections" : "Connect an AI",
                        systemImage: "link", glowIntensity: 0.28) {
                 openWindow(id: ConnectAIsView.windowID)
             }
             .padding(.top, 18)
 
-            MonoCaps("Private · over MCP · two simple steps", size: 8.5, tracking: 1.6,
-                     color: Theme.Ink.deepMuted)
+            Text(enabled ? "Sharing is on. You can turn it off in connection settings."
+                         : "Optional. Setup explains what’s shared before you enable it.")
+                .font(.system(size: 11)).foregroundStyle(Theme.Ink.body)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 13)
         }
         .padding(20)

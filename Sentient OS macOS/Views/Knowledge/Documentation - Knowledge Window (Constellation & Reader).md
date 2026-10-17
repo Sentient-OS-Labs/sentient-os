@@ -1,16 +1,31 @@
 # The Knowledge Window (Views/Knowledge/): Constellation View, reader, editor
 
-The **Knowledge** window (windowID `knowledge`; the home's Knowledge door and the onboarding finale
-open it) shows the user their own knowledge base at `~/Sentient OS - Knowledge Base/`. Two faces over
+The **Knowledge** page in the main window (the home's Knowledge door and onboarding finale open it)
+shows the user their own knowledge base at `~/Sentient OS - Knowledge Base/`. Two faces over
 the same folder:
 
-- **The Constellation View, the default face.** The knowledge base as a living night sky: every note a star (sized by wikilink degree, twinkling on a stable per-note phase), every resolved `[[wikilink]]` a thread, top-level folders as hue-tinted labeled constellations, and the root README as the sun (the notch's `SpinningLogo`, slow, floating on the pinned center). The assembly entrance (stars glide in from beyond the rim and settle) replays on every window open; within a session the sky keeps its camera and positions across reader trips.
+- **The Constellation View, the default face.** The knowledge base as a living night sky: every note a star (sized by wikilink degree, twinkling on a stable per-note phase), every resolved `[[wikilink]]` a thread, top-level folders as hue-tinted labeled constellations, and the root README as the sun (the notch's `SpinningLogo`, slow, floating on the pinned center). The first assembly entrance lets stars glide in from beyond the rim and settle; within a session the sky keeps its camera and positions across Home and reader trips.
 - **The reader:** an Obsidian-style split view: a folder-tree sidebar and rendered markdown, with editing, creation, and deletion.
 
 Native toolbar buttons (`SkyDoor`, wearing a muted moving gradient rim so the other face is
 discoverable) swap between them; ⌘⇧G either way; Esc leaves the sky. Clicking a star opens that note in
 the reader; Back walks the wikilink trail, and one more Back returns to the sky with that star glowing
 for a beat.
+
+**Use with your AIs** is a quiet, permanently labeled action in the page header, visible in both
+Constellation and Reader. It replaces the former Give AIs Knowledge item on Home. Opening it explains
+the optional connection to ChatGPT, Claude, and other AIs, then opens the existing `ConnectAIsView`
+setup. There are no automatic prompts or attention badges, and opening it never enables sharing.
+It preserves the reader's current note and unsaved edits. The popover closes when leaving Knowledge.
+
+Home ↔ Knowledge expands/retracts from the Knowledge navigation pill using the same bounded reveal
+as Settings. The retained page keeps its reader, history and sky model. First-entry constellation
+assembly starts after a cancellable 500ms gate so it does not compete with the page reveal; Reduce
+Motion and direct secondary-page links skip the delay. Graph builds check cancellation and load revision before
+publishing. An authoritative missing-vault result clears stale stars and interaction state; only
+the explicit preview factory preserves mock data for a nil vault. Hidden sky, sun, empty-state orb and toolbar clocks pause; the outgoing sky remains
+visible through reversal. Leaving explicitly clears focus/popovers and transient editor/navigation
+gates, while all navigation still passes Save/Discard/Cancel for unsaved edits.
 
 ## Knowledge you can inspect and keep
 
@@ -41,7 +56,8 @@ They are included in Double Tap requests and in the folder if optional MCP shari
 Sidebar: a pinned "Overview" (the README), search, disclosure folders (a clipped accordion over a
 plain `VStack`, deliberately not `LazyVStack`), a header "+" and a folder-hover "+" and right-click menus
 for New note / New folder / Move to Trash. Reader: the rendered note with wikilink navigation, and a
-toolbar of Edit, Move to Trash (hidden for the Overview), and Reveal in Finder.
+toolbar of Edit, Move to Trash (hidden for the Overview), and an icon-only Reveal in Finder button
+with a tooltip and accessibility label, leaving room for the optional AI connections action.
 
 - **Code and tree blocks:** fenced code and adjacent box-drawing tree rows render verbatim in monospace, preserving indentation. Fence delimiters are omitted; an unterminated fence still displays its body. Ordinary prose keeps the existing inline markdown and wikilink behavior.
 - **Editing:** Edit opens the RAW file (frontmatter included) in a `TextEditor`; Save writes atomically and re-renders. Navigating away with unsaved edits (a sidebar click, a wikilink, Back, or a mode switch) raises Save / Discard / Cancel; nothing is ever silently dropped. `VaultActivity.editorBusy` is set while editing, so the nightly updater skips a cycle rather than race the user.

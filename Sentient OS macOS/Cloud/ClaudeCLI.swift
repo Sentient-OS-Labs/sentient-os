@@ -552,14 +552,8 @@ actor ClaudeCLI {
         }
         recipeAllows += direct.flatMap(\.allAllowed)
         recipeDenies += direct.flatMap(\.denied)
-        if SidekickToolServer.connection != nil {
-            recipeAllows.append("mcp__sentient_recovery__ask_user")
-            if SidekickInteraction.current?.personalization != nil {
-                recipeAllows.append("mcp__sentient_recovery__" + SidekickPersonalization.toolName)
-            }
-            if SidekickInteraction.current?.taskSummary != nil {
-                recipeAllows.append("mcp__sentient_recovery__" + SidekickTaskSummary.toolName)
-            }
+        if let connection = SidekickToolServer.connection {
+            recipeAllows += connection.tools.map { "mcp__" + connection.name + "__" + $0 }
         }
 
         if let connection = ResearchToolServer.connection {
@@ -803,7 +797,7 @@ actor ClaudeCLI {
                 if let text = block["text"] as? String, !text.isEmpty { lines.append(text) }
             case "tool_use":
                 let name = (block["name"] as? String) ?? ""
-                if name == "mcp__sentient_recovery__" + SidekickTaskSummary.toolName { continue }
+                if SidekickConversationRun.hidden(server: "", tool: name) { continue }
                 let input = block["input"] as? [String: Any]
                 if name == "Bash" {
                     if let cmd = input?["command"] as? String, !cmd.isEmpty { lines.append("$ \(cmd)") }
