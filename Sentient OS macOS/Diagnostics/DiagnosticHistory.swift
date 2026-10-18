@@ -111,6 +111,7 @@ nonisolated enum DiagnosticHistory {
     static func recordError(_ payload: Diagnostics.Payload, defaults: UserDefaults = .standard) {
         // No raw errors, breadcrumbs, tool events, stderr, arguments, or output cross this seam.
         let allowed: Set<String> = ["phase", "reason", "backend", "source", "error_type", "error_case",
+            "classification_kind", "native_state", "rule", "claude_version",
             "error_domain", "error_code", "http_status", "exit_code",
             "underlying_1_domain", "underlying_1_code", "underlying_2_domain", "underlying_2_code",
             "underlying_3_domain", "underlying_3_code"]

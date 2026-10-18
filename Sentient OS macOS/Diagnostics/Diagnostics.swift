@@ -133,7 +133,9 @@ nonisolated enum Diagnostics {
                 return try await body()
             } catch {
                 operation.finish(outcome: isCancellation(error) ? "cancelled" : (isExpected(error) ? "blocked" : "failed"))
-                if !isCancellation(error), !isExpected(error) { _ = operation.claim("thrown_error") }
+                if !isCancellation(error), !isExpected(error), !ConnectorClassificationDiagnostics.ownsFailures {
+                    _ = operation.claim("thrown_error")
+                }
                 throw error
             }
         }
@@ -160,6 +162,10 @@ nonisolated enum Diagnostics {
         let typeName = String(describing: type(of: error))
         let safeType = typeName.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == ".") }
         var fields = ["error_type": String(safeType.prefix(96))]
+        if let failure = error as? ConnectorClassificationDiagnostics.Failure {
+            return ["error_type": "ConnectorClassificationFailure", "error_case": failure.reasonCode,
+                    "error_domain": "connector_classification"]
+        }
         if reflected.displayStyle == .enum, let label = reflected.children.first?.label {
             fields["error_case"] = String(label.filter { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_") }.prefix(64))
         }
@@ -208,6 +214,7 @@ nonisolated enum Diagnostics {
     /// Expected user/configuration states remain breadcrumbs or UI messages, not wrapper defects.
     static func isExpected(_ error: Error) -> Bool {
         if isCancellation(error) { return true }
+        if let failure = error as? ConnectorClassificationDiagnostics.Failure { return failure.kind == .setupRequired }
         if case VaultCloud.CloudError.vaultChanged = error { return true }
         switch error {
         case CodexRuntime.Failure.busy, OpenAIComputerUse.RuntimeError.helperRunning,
@@ -228,7 +235,10 @@ nonisolated enum Diagnostics {
                             _ body: () async throws -> T) async rethrows -> T {
         do { return try await body() }
         catch {
-            if isExpected(error) {
+            if ConnectorClassificationDiagnostics.ownsFailures {
+                CrashReporting.diagnosticBreadcrumb("connector.classification.runtime_failure", data: errorFields(error).merging(
+                    ["phase": (current?.phase ?? phase).rawValue, "cancelled": String(isCancellation(error))]) { _, new in new })
+            } else if isExpected(error) {
                 CrashReporting.diagnosticBreadcrumb("operation.blocked", data: errorFields(error).merging(
                     ["reason": reason.description, "cancelled": String(isCancellation(error))]) { _, new in new })
             } else { report(event, phase: current?.phase ?? phase, reason: reason, error: error, source: source, terminal: true) }

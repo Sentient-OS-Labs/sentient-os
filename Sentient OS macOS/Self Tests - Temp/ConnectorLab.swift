@@ -53,6 +53,7 @@ enum ConnectorLab {
         let command = ProcessInfo.processInfo.environment["LAB_CMD"] ?? "census"
         Log("=== connector-lab: \(command) ===")
         switch command {
+        case "classificationdiagnostics": await ConnectorClassificationDiagnosticsTests.run()
         case "acceptance": await FullAcceptanceTests.run()
         case "googleaudit": await FullAcceptanceTests.googleAudit()
         case "reliabilitycheck": await ConnectorReliabilityTests.run()

@@ -73,11 +73,8 @@ nonisolated enum Microsoft365Connector {
         "teams_send_chat_message": .write,
     ]
     static func validateClassification(_ tools: [ConnectorRegistry.ClassifiedTool]) throws {
-        let expected = Dictionary(uniqueKeysWithValues: categories.map { (prefix + $0.key, $0.value) })
-        guard tools.count == expected.count, Set(tools.map(\.name)).count == tools.count,
-              tools.allSatisfy({ expected[$0.name] == $0.category }) else {
-            throw MCPSource.MCPError.invalidResponse(slug: OutlookMailConnector.slug, rule: "microsoft365_classification")
-        }
+        try ConnectorClassificationDiagnostics.validateReviewed(tools, expected: categories, prefix: prefix,
+                                                               slug: OutlookMailConnector.slug, rule: .microsoft365)
     }
 
 }
