@@ -19,7 +19,7 @@ import AppKit
         guard value() else { fatalError("FAIL: " + label) }
         checks += 1
     }
-    static func size(_ text: String, width: CGFloat = 520, height: CGFloat = 236) -> CGSize {
+    static func size(_ text: String, width: CGFloat = 520, height: CGFloat = 286) -> CGSize {
         SidekickNotchMessageLayout(markdown: text, maximumSize: CGSize(width: width, height: height),
             cameraHeight: 37, outerTopPad: 0, outerBottomPad: 4, horizontalPad: 18).size
     }
@@ -37,35 +37,35 @@ import AppKit
     static func main() {
         let fixture = "You're free **2:30–4:00 PM tomorrow**. That gives you a quiet 90-minute block after your design review.\n\nI can help protect that time when you're ready."
         let short = size(fixture)
-        check(short.width == 520 && short.height >= 140 && short.height < 200,
+        check(short.width == 520 && short.height >= 190 && short.height < 250,
               "actual two-paragraph preview sheds oversized empty reading space")
-        check((140...150).contains(size("Done.").height), "single native line reserves compact chrome without growing to maximum")
-        check(size("").height == 140, "empty response retains minimum stable controls")
+        check((190...200).contains(size("Done.").height), "single native line reserves compact chrome without growing to maximum")
+        check(size("").height == 190, "empty response retains minimum stable controls")
         check(size(fixture) == short, "cached repeated hit testing returns identical geometry")
         check(size(fixture, width: 360).height >= short.height, "narrower display never undermeasures wrapping")
         check(size(fixture).height == short.height, "width-specific cache does not corrupt original measurement")
 
         let plain = "A compact response with **important details**, café, and a link to [the source](https://example.com)."
         let native = nativeParagraph(plain, width: 484)
-        // Actual camera/header/footer/spacing/padding together occupy127 points. The native
+        // Actual camera/header/footer/spacing/padding together occupy177 points. The native
         // renderer's independent NSTextView measurement must fit the layout's text allowance.
-        check(size(plain).height >= 127 + native, "native formatted paragraph fits without clipping")
-        check(size(plain).height <= 129 + native, "paragraph measurement does not introduce excess dead space")
+        check(size(plain).height >= 177 + native, "native formatted paragraph fits without clipping")
+        check(size(plain).height <= 179 + native, "paragraph measurement does not introduce excess dead space")
         let heading = "# A small heading"
-        check(size(heading).height >= 127 + 4 + nativeParagraph(heading, width: 484, heading: 1),
+        check(size(heading).height >= 177 + 4 + nativeParagraph(heading, width: 484, heading: 1),
               "heading uses shared compact font and heading inset")
         let list = "- A sufficiently long list item with its own marker that wraps around a narrow message preview without clipping the text beside it."
         check(size(list, width: 360).height >= size(list).height, "list indentation participates in wrapping")
         let quote = "> > Nested quotation that keeps its visible left inset when calculating the available message width."
-        check(size(quote, width: 360).height > 140, "nested quote is measured within its decoration inset")
+        check(size(quote, width: 360).height > 190, "nested quote is measured within its decoration inset")
 
-        check(size(String(repeating: "x", count: 1_001)).height == 236, "long source bypasses parser and keeps bounded maximum")
-        check(size(String(repeating: "😀", count: 501)).height == 236, "Unicode parse bound is conservative")
-        check(size("a" + String(repeating: "\u{301}", count: 5_000)).height == 236,
+        check(size(String(repeating: "x", count: 1_001)).height == 286, "long source bypasses parser and keeps bounded maximum")
+        check(size(String(repeating: "😀", count: 501)).height == 286, "Unicode parse bound is conservative")
+        check(size("a" + String(repeating: "\u{301}", count: 5_000)).height == 286,
               "pathological combining grapheme cannot bypass parse budget")
-        check(size("```swift\nprint(1)\n```").height == 236, "code scroll/header chrome retains maximum")
-        check(size("| A | B |\n|---|---|\n| one | two |").height == 236, "table grid keeps bounded reading surface")
-        check(size(String(repeating: "A paragraph.\n\n", count: 50)).height == 236,
+        check(size("```swift\nprint(1)\n```").height == 286, "code scroll/header chrome retains maximum")
+        check(size("| A | B |\n|---|---|\n| one | two |").height == 286, "table grid keeps bounded reading surface")
+        check(size(String(repeating: "A paragraph.\n\n", count: 50)).height == 286,
               "many short blocks cannot exceed the maximum")
         check(size(fixture, height: 160).height == 160, "available screen height caps measured preview")
         check(size("Done.", height: 120).height == 120, "small displays take precedence over preferred minimum")

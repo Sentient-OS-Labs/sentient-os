@@ -16,6 +16,17 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
     private var executions = Set<UUID>()
     private var tools: [String: Event.Activity] = [:]
     private var answerDelivered = false
+    private var recordedCompletion: AgentStatus?
+    private struct MessageReceipt { let completion: AgentStatus.Completion? }
+    private var deliveredMessages: [String: MessageReceipt] = [:]
+
+    /// Evidence is scoped to this live task/generation. A crash or reset cannot restore a
+    /// prior claim. The terminal task event persists the resolved outcome after process drain.
+    var completionStatus: AgentStatus? {
+        lock.lock(); defer { lock.unlock() }
+        guard !closed, (try? store.generation) == generation else { return nil }
+        return recordedCompletion
+    }
 
     init(store: SidekickConversationStore, taskID: UUID, generation: UUID,
          backend: String = "unknown", source: String = "unknown") {
@@ -24,11 +35,12 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
     }
 
     enum Failure: LocalizedError {
-        case closed, invalidMessage, invalidReference
+        case closed, invalidMessage, invalidCompletion, invalidReference
         var errorDescription: String? {
             switch self {
             case .closed: "This Sidekick task has ended."
             case .invalidMessage: "The message must contain nonempty Markdown within the size limit."
+            case .invalidCompletion: "Completion must be done or could_not, and is only valid on a final answer."
             case .invalidReference: "That conversation reference is unavailable."
             }
         }
@@ -36,20 +48,45 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
 
     @discardableResult
     func message(_ markdown: String, kind: Event.MessageKind, priority: Event.Priority,
-                 id: String = UUID().uuidString) throws -> String {
+                 id: String = UUID().uuidString, completion: AgentStatus.Completion? = nil) throws -> String {
         lock.lock(); defer { lock.unlock() }
         guard !closed else { throw Failure.closed }
         guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               markdown.utf8.count <= 65_536 else { throw Failure.invalidMessage }
+        guard completion == nil || kind == .answer else { throw Failure.invalidCompletion }
+        if let receipt = deliveredMessages[id] {
+            guard try store.generation == generation else { throw SidekickConversationStore.Failure.staleGeneration }
+            guard receipt.completion == completion, let original = try store.record(id: id),
+                  original.event.text == markdown, original.event.messageKind == kind,
+                  original.event.priority == priority else { throw SidekickConversationStore.Failure.duplicateEvent(id) }
+            // A replay acknowledges the original save without restoring an outcome claim
+            // invalidated by subsequent work or creating a different timestamp.
+            return id
+        }
+        // An attempted replacement final answer supersedes the old claim even if this
+        // write fails. A stale DONE must never survive a failed correction to could_not.
+        if kind == .answer { recordedCompletion = nil }
         _ = try append(Event(id: id, taskID: taskID, kind: .assistantMessage, text: markdown,
                              messageKind: kind, priority: priority))
-        if kind == .answer { answerDelivered = true }
+        deliveredMessages[id] = MessageReceipt(completion: completion)
+        if kind == .answer {
+            answerDelivered = true
+            // A final message sent while substantive tools are still in flight cannot prove
+            // their outcome, even if those operations subsequently return without an error.
+            let pending = tools.values.contains { $0.status == .started && !Self.isBookkeeping($0.name) }
+            switch pending ? nil : completion {
+            case .done: recordedCompletion = .done
+            case .couldNot: recordedCompletion = .couldNot(reason: Self.bounded(Self.answerText(markdown), bytes: 2048))
+            case nil: recordedCompletion = nil
+            }
+        }
         return id
     }
 
     func question(id: UUID, text: String, choices: [String], error: String?) throws {
         lock.lock(); defer { lock.unlock() }
         guard !closed else { throw Failure.closed }
+        recordedCompletion = nil
         _ = try append(Event(id: "question:\(id)", taskID: taskID, kind: .question,
                              text: (error.map { $0 + "\n\n" } ?? "") + text,
                              priority: .high, choices: choices))
@@ -74,7 +111,7 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         // A new provider leg needs its own final response, including a text-only fallback.
         // Replayed start notifications in the same stream must not invalidate a later answer.
         if kind == "thread.started" || (kind == "system" && event["subtype"] as? String == "init") {
-            if executions.insert(streamID).inserted { answerDelivered = false }
+            if executions.insert(streamID).inserted { answerDelivered = false; recordedCompletion = nil }
             return
         }
         if let item = event["item"] as? [String: Any], let id = item["id"] as? String,
@@ -131,7 +168,7 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
         _ = try append(Event(id: identity, taskID: taskID, attemptID: streamID, kind: .activity,
                              text: name, activity: value))
         seen[identity] = value; tools[key] = value
-        if status == .started, !Self.isBookkeeping(name) { answerDelivered = false }
+        if status == .started, !Self.isBookkeeping(name) { answerDelivered = false; recordedCompletion = nil }
     }
 
     private static func isBookkeeping(_ name: String) -> Bool {
@@ -175,10 +212,11 @@ nonisolated final class SidekickConversationRun: @unchecked Sendable {
                             text: status, outcome: outcome))
         _ = try store.appendBatch(events, expectedGeneration: generation)
         closed = true
-        tools.removeAll(); seen.removeAll()
+        recordedCompletion = nil
+        tools.removeAll(); seen.removeAll(); deliveredMessages.removeAll()
     }
 
-    func invalidate() { lock.lock(); closed = true; tools.removeAll(); seen.removeAll(); lock.unlock() }
+    func invalidate() { lock.lock(); closed = true; recordedCompletion = nil; tools.removeAll(); seen.removeAll(); deliveredMessages.removeAll(); lock.unlock() }
 
     /// Read capabilities end with their task too. Reset invalidates this lock before wiping;
     /// a generation recheck also discards a result if an independent store handle reset it.

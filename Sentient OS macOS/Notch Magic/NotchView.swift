@@ -182,6 +182,8 @@ struct NotchView: View {
         NotchContent(phase: coordinator.phase,
                      readBack: coordinator.readBack,
                      statusLine: coordinator.run.statusLine,
+                     activity: coordinator.run.isRunning && !coordinator.run.isOffline
+                         ? coordinator.run.conversation.latestActivity.flatMap { SidekickActivityPresentation.steps([$0]).first } : nil,
                      remembering: coordinator.run.remembering,
                      personalizing: coordinator.run.isPersonalizing,
                      hovering: coordinator.notchHovering,
@@ -191,6 +193,9 @@ struct NotchView: View {
                      recovery: coordinator.run.recovery,
                      message: coordinator.notchMessage,
                      isTaskRunning: coordinator.run.isRunning,
+                     messageReplyFocused: coordinator.messageReplyFocused,
+                     messageReplySelection: coordinator.run.conversation.replyReference?.messageID == coordinator.notchMessage?.event.id
+                         ? coordinator.run.conversation.replyReference?.selectedText : nil,
                      draft: Binding(get: { coordinator.run.conversation.draft },
                                     set: { coordinator.run.conversation.draft = $0 }),
                      onBack: { coordinator.backFromRecovery() },
@@ -203,11 +208,11 @@ struct NotchView: View {
                      },
                      onDismissMessage: { coordinator.dismissMessagePreview() },
                      onMessageSelecting: { coordinator.setMessagePreviewSelecting($0, messageID: $1) },
+                     onMessageReplyFocusChanged: { coordinator.setMessageReplyFocused($0, messageID: $1) },
+                     onMessageReplySubmit: { coordinator.submitMessageReply($0, messageID: $1) },
                      onReply: { quote in
                          guard let message = coordinator.notchMessage else { return }
-                         coordinator.run.conversation.replyReference = .init(messageID: message.event.id, selectedText: quote)
-                         coordinator.run.conversation.show(messageID: message.event.id)
-                         coordinator.dismissMessagePreview()
+                         coordinator.prepareMessageReply(quote, messageID: message.event.id)
                      },
                      onMic: { coordinator.startListening() },
                      onFinishListening: { coordinator.finishListening() },
@@ -221,6 +226,7 @@ struct NotchContent: View {
     let phase: NotchPhase
     let readBack: String?
     let statusLine: String
+    var activity: SidekickActivityPresentation.Step? = nil
     var remembering: String? = nil
     var personalizing = false
     /// The cursor is over the IDLE notch (the click-to-type affordance): the shell swells with a
@@ -236,6 +242,8 @@ struct NotchContent: View {
     var recovery: SidekickRecovery? = nil
     var message: SidekickConversationStore.Record? = nil
     var isTaskRunning = false
+    var messageReplyFocused = false
+    var messageReplySelection: String? = nil
     var draft: Binding<String> = .constant("")
     var onBack: () -> Void = {}
     var onStop: () -> Void = {}
@@ -243,6 +251,8 @@ struct NotchContent: View {
     var onOpenConversation: () -> Void = {}
     var onDismissMessage: () -> Void = {}
     var onMessageSelecting: (Bool, String) -> Void = { _, _ in }
+    var onMessageReplyFocusChanged: (Bool, String) -> Void = { _, _ in }
+    var onMessageReplySubmit: (String, String) -> Bool = { _, _ in false }
     var onReply: (String?) -> Void = { _ in }
     /// The field's mic button → open the mic; the listening stop button → transcribe and fire.
     var onMic: () -> Void = {}
@@ -391,7 +401,11 @@ struct NotchContent: View {
             if phase == .message, let message {
                 SidekickNotchMessageView(message: message, isTaskRunning: isTaskRunning,
                     onOpen: onOpenConversation, onReply: onReply, onStop: onStop,
-                    onSelecting: { onMessageSelecting($0, message.event.id) })
+                    onSelecting: { onMessageSelecting($0, message.event.id) },
+                    draft: draft, replyFocused: messageReplyFocused,
+                    replyingToSelection: messageReplySelection != nil,
+                    onReplyFocusChanged: { onMessageReplyFocusChanged($0, message.event.id) },
+                    onSend: { onMessageReplySubmit($0, message.event.id) })
                     // Layout at the final readable width before the shell reveals it. The
                     // contents never rewrap through the intermediate notch-morph widths.
                     .frame(width: size.width - metrics.hPad * 2,
@@ -557,7 +571,7 @@ struct NotchContent: View {
         }
     }
 
-    /// The bottom-row text. Running shows the serif read-back, dissolving into the mono codex line.
+    /// Read-back dissolves into the same app icon and readable activity used in chat.
     @ViewBuilder private var caption: some View {
         switch phase {
         case .running:
@@ -577,12 +591,25 @@ struct NotchContent: View {
                         .lineLimit(metrics.maxReadBackLines)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                 } else {
-                    Text(statusLine.isEmpty ? "working…" : statusLine)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.72))
-                        .lineLimit(2).truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .contentTransition(.interpolate)             // morph only the CHANGED glyphs in place; shared text stays put
+                    HStack(spacing: 7) {
+                        if let shownActivity {
+                            ZStack {
+                                SidekickActivityIcon(identifier: shownActivity.appIdentifier, symbol: shownActivity.symbol)
+                                    .id(shownActivity.appIdentifier ?? shownActivity.symbol)
+                                    .transition(contentReveal)
+                            }.frame(width: 16, height: 16)
+                        }
+                        ZStack(alignment: .leading) {
+                            Text(progressCaption)
+                                .font(.system(size: 12, weight: shownActivity == nil ? .regular : .medium))
+                                .lineLimit(shownActivity == nil ? 2 : 1).truncationMode(.tail)
+                                .id(progressCaption)
+                                .transition(contentReveal)
+                        }
+                    }
+                    .foregroundStyle(.white.opacity(0.8))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(reduceMotion ? .easeOut(duration: 0.12) : .easeInOut(duration: 0.22), value: progressCaption)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -608,6 +635,14 @@ struct NotchContent: View {
             EmptyView()
         }
     }
+
+    /// Narration and connection notices keep their own words. Raw tool IDs use durable
+    /// structured activity; while its projection catches up, show a quiet working label.
+    private var notchStatus: SidekickActivityPresentation.NotchStatus {
+        SidekickActivityPresentation.notchStatus(statusLine, activity: activity)
+    }
+    private var shownActivity: SidekickActivityPresentation.Step? { notchStatus.activity }
+    private var progressCaption: String { notchStatus.text }
 
     /// Distinct identities let personalization, remembering, read-back and progress blur-dissolve.
     /// (note / status changes WITHIN a state morph in place instead).
@@ -735,7 +770,7 @@ struct NotchContent: View {
         case .typing: return "Type a task for Sentient, or click the microphone to say it"
         case .listening: return "Sentient is listening. Click stop, or press Return, when you're done"
         case .transcribing: return "Sentient is transcribing"
-        case .running: return "Sentient is working. \(statusLine)"
+        case .running: return "Sentient is working. \(progressCaption)"
         case .finishing: return statusLine
         case .notice(let m): return m
         case .recovery: return "Sidekick needs your help"

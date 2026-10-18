@@ -19,6 +19,13 @@ struct SidekickTranscript: View {
         let generation: UUID?
         let request: UUID?
     }
+    private struct ActiveWorkKey: Equatable {
+        let generation: UUID?
+        let taskID: UUID?
+    }
+    private var activeWorkKey: ActiveWorkKey {
+        .init(generation: conversation.generation, taskID: coordinator.run.isRunning ? coordinator.run.runID : nil)
+    }
     private var refreshKey: RefreshKey {
         RefreshKey(generation: conversation.generation, revision: conversation.revision,
                    ready: active && conversation.navigationRequest == nil && !presentation.searchShown
@@ -33,6 +40,9 @@ struct SidekickTranscript: View {
             } else {
                 transcript
             }
+        }
+        .onChange(of: activeWorkKey, initial: true) { _, key in
+            presentation.followActiveWork(key.taskID, generation: key.generation)
         }
         .onAppear { presentation.isScrolling = false }
         .onDisappear { presentation.isScrolling = false }
@@ -105,7 +115,8 @@ struct SidekickTranscript: View {
                     } else if coordinator.run.isRunning && !display.contains(where: { $0.showsWork && $0.record.event.taskID == coordinator.run.runID }) {
                         SidekickWorkDisclosure(conversation: conversation, taskID: coordinator.run.runID,
                             state: presentation.taskStates[coordinator.run.runID], presentation: presentation,
-                            running: true, waiting: coordinator.run.recovery.isPending, active: active)
+                            running: true, waiting: coordinator.run.recovery.isPending, active: active,
+                            liveStatus: coordinator.run.statusLine)
                             .padding(.horizontal, 12)
                     }
                     Color.clear.frame(height: 1).id("sidekick-bottom")
@@ -155,6 +166,9 @@ struct SidekickTranscript: View {
                 }
             }
         }
+        // A deleted conversation has a new identity, including its native scroll viewport.
+        // Do not retain a months-old content offset over the fresh empty state.
+        .id(conversation.generation)
     }
 
     private var searchBar: some View {
@@ -229,7 +243,8 @@ private struct SidekickMessageRow: View {
             if showsWork {
                 SidekickWorkDisclosure(conversation: conversation, taskID: event.taskID,
                     state: presentation.taskStates[event.taskID], presentation: presentation,
-                    running: running, waiting: running && coordinator.run.recovery.isPending, active: active)
+                    running: running, waiting: running && coordinator.run.recovery.isPending, active: active,
+                    liveStatus: running ? coordinator.run.statusLine : "")
                     .padding(.horizontal, 12)
             }
             if event.kind == .taskFinished {

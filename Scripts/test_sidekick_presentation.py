@@ -237,6 +237,35 @@ typealias Presentation = SidekickPresentation
         try check(model.scrollID == nil && model.navigationTarget == nil && !model.hasEarlier && !model.hasLater,
                   "generation reset clears deleted destinations and page boundaries")
 
+        model.surface = .conversation; model.searchShown = true; model.clearChatConfirmationShown = true
+        model.atLatest = false; model.scrollIsAutomatic = true; model.composerFocused = true
+        model.didClearChat(generation: conversation.generation)
+        try check(model.surface == .suggestions && !model.searchShown && !model.clearChatConfirmationShown,
+                  "Clear chat returns to suggestions and closes conversation controls")
+        try check(model.atLatest && !model.scrollIsAutomatic && !model.composerFocused,
+                  "Clear chat releases focus and old scroll intent")
+
+        let firstLive = UUID(), secondLive = UUID(), thirdLive = UUID()
+        model.followActiveWork(firstLive, generation: conversation.generation)
+        try check(model.expandedWorkTasks.contains(firstLive), "live task opens its details automatically")
+        model.toggleWork(firstLive)
+        model.followActiveWork(firstLive, generation: conversation.generation)
+        try check(!model.expandedWorkTasks.contains(firstLive), "updates do not override a manual collapse")
+        model.toggleWork(firstLive)
+        model.followActiveWork(nil, generation: conversation.generation)
+        model.followActiveWork(secondLive, generation: conversation.generation)
+        try check(model.expandedWorkTasks.contains(firstLive) && model.expandedWorkTasks.contains(secondLive),
+                  "a new task does not collapse manually opened history")
+        await model.load(.latest, conversation: conversation)
+        try check(model.expandedWorkTasks.contains(secondLive), "page refresh preserves active work before its response arrives")
+        model.followActiveWork(nil, generation: conversation.generation)
+        model.followActiveWork(thirdLive, generation: conversation.generation)
+        try check(!model.expandedWorkTasks.contains(secondLive) && model.expandedWorkTasks.contains(thirdLive),
+                  "next task folds the preceding automatic expansion")
+        model.resetForGeneration(UUID())
+        try check(model.activeWorkTaskID == nil && model.expandedWorkTasks.isEmpty,
+                  "clear removes active and automatic expansion state")
+
         // A load already started against a saved generation must not repopulate reset rows.
         let old = try seed(directory, name: "load-reset", tasks: 6)
         let resetConversation = try SidekickConversation(old)

@@ -91,6 +91,15 @@ typealias Event = SidekickConversationEvent
         check(Layout.destination("final-answer", records: raw) == "final-answer", "ordinary message navigation changed")
         check(Layout.destination("unknown-id", records: raw) == "unknown-id", "unknown navigation guessed an unrelated response")
         check(Layout.rows([]).isEmpty, "empty transcript created synthetic chrome")
+        check(Layout.progressNote("I'll check your calendar.\n→ sentient_native.get_app_state") == "I'll check your calendar.",
+              "human progress survives while raw tool label stays in activity")
+        check(Layout.progressNote("Thinking through your task") == nil, "generic thinking uses the friendly live placeholder")
+        check(Layout.progressNote("→ sentient_recovery.describe_task_usage\nSTATUS: DONE") == nil,
+              "tool bookkeeping and terminal sentinels do not become progress notes")
+        check(Layout.progressNote("one\ntwo\nthree") == "two\nthree", "progress remains bounded to recent lines")
+        check(Layout.progressNote(String(repeating: "x", count: 2000))?.count == 800,
+              "large progress lines remain bounded")
+
         let incomplete = Layout.rows([record("pending-request", task: UUID(), kind: .userMessage)])
         check(incomplete.count == 1 && !incomplete[0].showsWork, "unanswered request fabricated a completed response/header")
 

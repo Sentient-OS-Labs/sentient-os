@@ -10,6 +10,7 @@ nonisolated enum SidekickDiagnostics {
         case migration, messageDelivery = "message_delivery", question, answer, attention
         case memoryRead = "memory_read", memoryWrite = "memory_write", context
         case historyRead = "history_read", compaction, task, reset
+        case chatClear = "chat_clear", connectivity
     }
     enum Outcome: String, CaseIterable, Sendable {
         case started, completed, skipped, stopped, interrupted, failed

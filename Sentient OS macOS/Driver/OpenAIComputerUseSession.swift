@@ -43,10 +43,10 @@ nonisolated final class OpenAIComputerUseSession: @unchecked Sendable {
     func catalog() async throws -> Data {
         try await request("mcpServerStatus/list", params: ["threadId": threadID, "serverName": "sentient_native", "limit": 1], stage: .catalog, timeout: 20)
     }
-    func call(_ tool: String, arguments: Data) async throws -> Data {
+    func call(_ tool: String, arguments: Data, timeout: TimeInterval = 125) async throws -> Data {
         let args = try JSONSerialization.jsonObject(with: arguments)
         return try await request("mcpServer/tool/call", params: ["threadId": threadID, "server": "sentient_native", "tool": tool, "arguments": args],
-                                 stage: tool == "get_app_state" ? .appState : .action, timeout: 125)
+                                 stage: tool == "get_app_state" ? .appState : .action, timeout: timeout)
     }
     private func launch(_ configuration: OpenAIComputerUse.Configuration) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in

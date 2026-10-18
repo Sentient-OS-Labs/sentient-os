@@ -65,7 +65,11 @@ enum Uninstall {
         appState?.isUninstalling = true   // the home clears its cards + won't re-deal off the defaults wipe
         let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
         var completedTeardown = false
-        conversation.beginMaintenance()
+        guard conversation.beginMaintenance() else {
+            lastFailure = "Sidekick is already updating its data. Try again in a moment."
+            appState?.isUninstalling = false
+            return false
+        }
         SidekickInstructionStore.beginTeardown()
         defer {
             if !completedTeardown {

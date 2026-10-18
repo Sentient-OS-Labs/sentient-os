@@ -21,7 +21,8 @@ struct SidekickAttentionPolicy {
     private(set) var presented: Message?
     private(set) var isHovering = false
     private(set) var isSelecting = false
-    var isInteracting: Bool { isHovering || isSelecting }
+    private(set) var isEditing = false
+    var isInteracting: Bool { isHovering || isSelecting || isEditing }
 
     init(generation: UUID?, latestSequence: Int64) {
         self.generation = generation
@@ -56,6 +57,7 @@ struct SidekickAttentionPolicy {
             presented = nil
             isHovering = false
             isSelecting = false
+            isEditing = false
         }
 
         // A viewport receipt may have consumed a deferred message. Revalidate against the
@@ -72,6 +74,7 @@ struct SidekickAttentionPolicy {
             presented = nil
             isHovering = false
             isSelecting = false
+            isEditing = false
         }
 
         if !inputBlocked, !isInteracting, let pending {
@@ -94,12 +97,21 @@ struct SidekickAttentionPolicy {
         return true
     }
 
+    /// The reply editor remains active while focused or while it contains an unsent draft.
+    /// Its owner supplies that combined state, independently of pointer hover and selection.
+    @discardableResult mutating func setEditing(_ value: Bool) -> Bool {
+        guard isEditing != value else { return false }
+        isEditing = value
+        return true
+    }
+
     /// An explicit close consumes pending attention too. It never mutates read receipts.
     mutating func dismiss() {
         pending = nil
         presented = nil
         isHovering = false
         isSelecting = false
+        isEditing = false
     }
 
     func canRetract(generation: UUID?, messageID: String?, previewVisible: Bool) -> Bool {

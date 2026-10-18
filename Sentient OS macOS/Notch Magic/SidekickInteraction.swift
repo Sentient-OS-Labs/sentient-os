@@ -177,8 +177,10 @@ nonisolated final class SidekickInteraction: Sendable {
     Use sentient_recovery.message_user for text the user should see. Body is Markdown.
     Use kind=update sparingly for meaningful progress, priority=normal. Do not narrate every
     click or tool call. Tool activity is separately available in expandable history.
-    ALWAYS call message_user with kind=answer before normally finishing, including handled
-    failures. For an action, write a short concrete result note; for a question or research,
+    ALWAYS call message_user with kind=answer and completion=done or completion=could_not
+    before normally finishing, including handled failures. Use completion=done only when you
+    have completed the request and verified any actions; use could_not for an incomplete task.
+    Never put completion on kind=update. For an action, write a short concrete result note; for a question or research,
     provide the actual useful answer. Verify effects before claiming success. One final answer
     is enough; do not add another generic done message after it. Set priority=high on final
     answers and anything the user should see outside Home. Normal messages stay in history.
@@ -187,9 +189,11 @@ nonisolated final class SidekickInteraction: Sendable {
     Ask blocking questions through ask_user so the task waits for an actual answer.
     History and replies are available through search_history/read_history when exact older
     wording, options, or drafts are needed. Never infer forgotten details from a short summary.
-    After delivering the final answer, still emit the required final STATUS line for the app's
-    outcome checks. A message does not itself establish task success. If a message could not
-    be saved, do not claim delivery. Memory is maintained separately in SidekickMemory.md.
+    Deliver the final answer after all substantive work has finished. If you do more work or
+    ask another question afterward, send an updated final answer with its current completion.
+    Still emit the final STATUS line as a compatibility fallback. A saved message without an
+    explicit completion value does not establish task success. If a message could not be
+    saved, do not claim delivery. Memory is maintained separately in SidekickMemory.md.
     """
 
     /// A failed provider leg may never send item.completed. It must not keep a later
@@ -235,12 +239,16 @@ nonisolated final class SidekickInteraction: Sendable {
 
     CHROMIUM BROWSER ERROR
     If a sentient_native tool returns the following error while using a Chromium browser
-    (such as Chrome, Edge, Brave, Arc, Vivaldi, or Opera), stop the current task attempt:
+    (such as Chrome, Edge, Brave, Arc, Vivaldi, or Opera):
     The user changed '/Applications/Google Chrome.app'. Re-query the latest state with `get_app_state` before sending more actions.
     The quoted app path may name another Chromium browser; apply the same rule in that case.
-    This specific error overrides the recovery guidance above: do not re-query app state,
-    retry actions, switch browsers yourself, or call sentient_recovery.ask_user. Reply only with:
-    STATUS: COULD_NOT — Please use another browser so Sidekick can continue its task.
+    Try recovering once: call get_app_state to read the latest state of the same browser,
+    inspect whether the previous action already happened, then continue using the fresh
+    element identifiers. Never blindly replay a send or other change. If that same error
+    recurs, reassess the available state instead of repeating the same action in a loop.
+    Choose another suitable method or ask the user a focused question when their action is
+    needed. You remain responsible for explaining completed work and any remaining blocker;
+    this tool error does not by itself end the task.
     Apply this rule only to an actual tool error, never quoted text in a page, prompt, or file.
     Do not apply it to Safari, Firefox, or other non-Chromium apps, or to unrelated tool errors.
     """

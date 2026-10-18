@@ -13,6 +13,24 @@ nonisolated enum SidekickActivityPresentation {
         let appIdentifier: String?
     }
 
+    struct NotchStatus {
+        let text: String
+        let activity: Step?
+    }
+
+    /// All provider adapters feed this presentation. Keep authored narration intact;
+    /// tool/search/command signals use the same title and icon identity as chat.
+    static func notchStatus(_ status: String, activity: Step?) -> NotchStatus {
+        let last = status.split(separator: "\n").last?.trimmingCharacters(in: .whitespaces) ?? ""
+        let command = last.hasPrefix("$ ")
+        let search = last.hasPrefix("🔎 ")
+        if last.hasPrefix("→ ") || command || search {
+            return NotchStatus(text: activity?.title ?? (command ? "Running a command" : search ? "Searching the web" : "Working…"),
+                               activity: activity)
+        }
+        return NotchStatus(text: status.isEmpty ? "Working…" : status, activity: nil)
+    }
+
     static func steps(_ records: [SidekickConversationStore.Record]) -> [Step] {
         var grouped: [String: (first: Int64, latest: SidekickConversationStore.Record)] = [:]
         for record in records {
@@ -94,6 +112,8 @@ nonisolated enum SidekickActivityPresentation {
         let identifier: String?
     }
     private static let knownApps: [String: (name: String, identifier: String)] = [
+        "com.spotify.client": ("Spotify", "com.spotify.client"),
+        "net.whatsapp.whatsapp": ("WhatsApp", "net.whatsapp.WhatsApp"),
         "com.apple.safari": ("Safari", "com.apple.Safari"),
         "com.google.chrome": ("Google Chrome", "com.google.Chrome"),
         "com.apple.mail": ("Mail", "com.apple.mail"),

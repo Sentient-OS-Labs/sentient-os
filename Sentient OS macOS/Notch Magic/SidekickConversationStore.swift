@@ -590,6 +590,14 @@ nonisolated final class SidekickConversationStore: @unchecked Sendable {
         }
     }
 
+    /// One indexed row for the live notch; never load a task's full activity history.
+    func latestActivity(taskID: UUID) throws -> Record? {
+        try locked {
+            try queryRecords("SELECT sequence, payload FROM events WHERE task_id=? AND kind='activity' ORDER BY sequence DESC LIMIT 1",
+                [.text(taskID.uuidString)]).first
+        }
+    }
+
     func markRead(throughSequence: Int64, expectedGeneration: UUID? = nil) throws {
         let changed = try locked {
             try transaction {

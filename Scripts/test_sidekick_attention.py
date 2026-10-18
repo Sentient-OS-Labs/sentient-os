@@ -68,8 +68,83 @@ typealias Event = SidekickConversationEvent
         return .init(id: record.event.id, sequence: record.sequence)
     }
 
+    static func editing(_ directory: URL) throws {
+        let store = try Store(url: directory.appendingPathComponent("editing.sqlite"))
+        let taskID = try task(store)
+        var surface = try Surface(store)
+        let first = try high("editing-first", taskID: taskID, store: store)
+        try check(try surface.refresh(store) == .present(first), "editing fixture presents a response")
+        try check(surface.policy.setEditing(true) && surface.policy.isEditing && surface.policy.isInteracting,
+            "focusing reply editor becomes active interaction")
+        try check(!surface.policy.setEditing(true), "unchanged editor state does not reschedule timers")
+        try check(!surface.policy.canRetract(generation: try store.generation, messageID: first.id, previewVisible: true),
+            "already scheduled timer cannot retract while reply editor is active")
+        surface.policy.setHovering(true)
+        surface.policy.setHovering(false)
+        try check(surface.policy.isInteracting, "pointer exit cannot discard a focused editor or unsent draft")
+        let second = try high("editing-second", taskID: taskID, store: store)
+        try check(try surface.refresh(store) == .unchanged && surface.policy.pending == second,
+            "incoming message cannot replace response while composing a reply")
+        let third = try high("editing-third", taskID: taskID, store: store)
+        try check(try surface.refresh(store) == .unchanged && surface.policy.pending == third && surface.policy.presented == first,
+            "reply editing coalesces incoming messages without replacing the reply source")
+        surface.policy.setSelecting(true)
+        try check(surface.policy.setEditing(false) && !surface.policy.isEditing && surface.policy.isInteracting,
+            "ending reply editing preserves independent text selection")
+        try check(try surface.refresh(store) == .unchanged, "selection still holds the preview after editing ends")
+        surface.policy.setSelecting(false)
+        try check(try surface.refresh(store) == .present(third), "releasing all interaction presents only the newest deferred message")
+        try check(!surface.policy.canRetract(generation: try store.generation, messageID: first.id, previewVisible: true),
+            "old preview timer cannot retract replacement after editing releases")
+        try check(surface.policy.canRetract(generation: try store.generation, messageID: third.id, previewVisible: true),
+            "replacement can retract normally after editing ends")
+
+        surface.policy.setEditing(true)
+        try store.markRead(messageIDs: [second.id, third.id], expectedGeneration: store.generation)
+        try check(try surface.refresh(store) == .dismiss && !surface.policy.isEditing && !surface.policy.isInteracting,
+            "reading the preview elsewhere clears reply editing state")
+        let beforeHome = try high("editing-home", taskID: taskID, store: store)
+        try surface.refresh(store)
+        surface.policy.setEditing(true)
+        _ = try high("editing-home-pending", taskID: taskID, store: store)
+        try surface.refresh(store)
+        surface.home = true
+        try check(try surface.refresh(store) == .dismiss && !surface.policy.isEditing && surface.policy.pending == nil,
+            "opening Home releases editor hold and consumes deferred preview attention")
+        surface.home = false
+        try check(try surface.refresh(store) == .unchanged, "closing Home does not reopen an abandoned reply preview")
+        try check(!surface.policy.canRetract(generation: try store.generation, messageID: beforeHome.id, previewVisible: true),
+            "Home handoff invalidates the editor preview's old timer")
+
+        let beforePhase = try high("editing-phase", taskID: taskID, store: store)
+        try surface.refresh(store)
+        surface.policy.setEditing(true)
+        surface.visible = false; surface.blocked = true
+        try check(try surface.refresh(store) == .unchanged && !surface.policy.isEditing && surface.policy.presented == nil,
+            "another notch phase clears editing together with its hidden preview")
+        try check(!surface.policy.canRetract(generation: try store.generation, messageID: beforePhase.id, previewVisible: true),
+            "hidden edited preview cannot be retracted by a stale callback")
+        surface.blocked = false
+        _ = try high("editing-dismiss", taskID: taskID, store: store)
+        try surface.refresh(store)
+        surface.policy.setEditing(true)
+        surface.dismiss()
+        try check(!surface.policy.isEditing && !surface.policy.isInteracting, "explicit dismissal releases reply editing state")
+
+        let beforeReset = try high("editing-reset", taskID: taskID, store: store)
+        try surface.refresh(store)
+        surface.policy.setEditing(true)
+        let generation = try store.generation
+        try store.reset()
+        try check(try surface.refresh(store) == .dismiss && !surface.policy.isEditing && !surface.policy.isInteracting,
+            "clearing chat resets active reply editing state")
+        try check(!surface.policy.canRetract(generation: generation, messageID: beforeReset.id, previewVisible: true),
+            "pre-clear edited preview timer cannot affect a new conversation")
+    }
+
     static func main() throws {
         let directory = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
+        try editing(directory)
         let store = try Store(url: directory.appendingPathComponent("history.sqlite"))
         let taskID = try task(store)
         let historic = try high("historic", taskID: taskID, store: store)

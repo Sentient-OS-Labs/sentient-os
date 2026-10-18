@@ -9,6 +9,8 @@ final class SidekickConversation {
     typealias Record = SidekickConversationStore.Record
     static let shared = SidekickConversation()
     private(set) var messages: [Record] = []
+    private(set) var previewMessage: Record?
+    private(set) var latestActivity: Record?
     private(set) var unreadCount = 0
     private(set) var attention: Record?
     private(set) var storageError: String?
@@ -158,12 +160,24 @@ final class SidekickConversation {
         guard (!maintenance || allowDuringMaintenance), let store else { return }
         do {
             generation = try store.generation
+            latestActivity = try active.flatMap { try store.latestActivity(taskID: $0.taskID) }
             let recent = try store.transcriptPage(limit: 40).records
             if messages != recent { messages = recent; revision &+= 1 }
+            let candidate = recent.last { $0.event.kind == .assistantMessage || $0.event.kind == .userMessage }
+            let failed: Bool
+            if let candidate {
+                failed = try store.transcriptTaskStates(taskIDs: [candidate.event.taskID], expectedGeneration: generation)
+                    .first?.finished?.event.outcome == .failed
+            } else { failed = false }
+            if failed, let candidate {
+                // Use the failed task's prompt, even if a long response pushed it off the recent page.
+                previewMessage = try recent.last { $0.event.taskID == candidate.event.taskID && $0.event.kind == .userMessage }
+                    ?? store.record(id: "request:\(candidate.event.taskID)")
+            } else { previewMessage = candidate }
             unreadCount = try store.unreadCount
             attention = isVisible ? nil : try store.latestUnreadAttention
             onRefresh?()
-        } catch { report(error, stage: .storeRead) }
+        } catch { previewMessage = nil; latestActivity = nil; report(error, stage: .storeRead) }
     }
 
     /// Invalidate producers before any awaited teardown. Store generation rejects delayed jobs.
@@ -187,7 +201,14 @@ final class SidekickConversation {
         refresh(allowDuringMaintenance: true)
     }
 
-    func beginMaintenance() { maintenance = true; compactTask?.cancel() }
+    /// Teardown operations share one owner. A second operation must not release another's
+    /// maintenance guard, or admit new requests while its cleanup is still suspended.
+    @discardableResult
+    func beginMaintenance() -> Bool {
+        guard !maintenance else { return false }
+        maintenance = true; compactTask?.cancel()
+        return true
+    }
     func endMaintenance() { maintenance = false; refresh() }
     #if DEBUG
     /// Observation only: native acceptance waits for below-threshold debounce work to finish
@@ -209,7 +230,7 @@ final class SidekickConversation {
         if let observer { NotificationCenter.default.removeObserver(observer) }
         observer = nil
         store?.close(); store = nil
-        messages = []; unreadCount = 0; attention = nil; generation = nil
+        messages = []; previewMessage = nil; latestActivity = nil; unreadCount = 0; attention = nil; generation = nil
         destinationMessageID = nil; navigationRequest = nil; draft = ""; replyReference = nil; storageError = nil
         onRefresh?()
     }

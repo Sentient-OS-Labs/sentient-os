@@ -595,6 +595,133 @@ import SwiftUI
         return checks
     }
 
+    /// Separate destructive acceptance profile. Uses the real native confirmation buttons
+    /// and coordinator; its provider gate is independent from history maintenance.
+    static func runClearChat(app: AppState, root: URL) async throws -> [String: Bool] {
+        guard ProcessInfo.processInfo.environment["LAB_SIDEKICK_STAGE"] == "ui-clear",
+              let store = app.commandCoordinator.run.conversation.store else { throw Failure.invalidFixture }
+        if (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true {
+            throw Failure.screenLocked
+        }
+        let coordinator = app.commandCoordinator, conversation = coordinator.run.conversation
+        let presentation = app.sidekickPresentation
+        coordinator.run.preventsTaskExecutionForUIFixture = true
+        let memoryBefore = try SidekickInstructionStore.read().text
+        let vaultFile = root.appendingPathComponent("vault/README.md")
+        let vaultBefore = try Data(contentsOf: vaultFile)
+        let generation = try store.generation, sequence = try store.latestSequence
+        guard sequence > 0 else { throw Failure.invalidFixture }
+        let first = try store.transcriptPage().records.first!
+        conversation.draft = draft
+        conversation.replyReference = .init(messageID: first.event.id)
+        conversation.requestNavigation()
+        let originalDeck = UserDefaults.standard.object(forKey: BriefingDeck.key)
+        UserDefaults.standard.set(BriefingDeck.jesai.rawValue, forKey: BriefingDeck.key)
+        let navigation = MainNavigation.shared
+        navigation.reset()
+        let host = NSHostingView(rootView: rootPage(app, reduced: false))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 820),
+                              styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "Clear chat fixture · synthetic content"
+        window.identifier = NSUserInterfaceItemIdentifier(SentientOSApp.homeWindowID)
+        window.isReleasedWhenClosed = false; window.contentView = host
+        window.center(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+        defer {
+            window.close(); navigation.reset()
+            if let originalDeck { UserDefaults.standard.set(originalDeck, forKey: BriefingDeck.key) }
+            else { UserDefaults.standard.removeObject(forKey: BriefingDeck.key) }
+        }
+        let directory = root.appendingPathComponent("ui-snapshots", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var captures: [[String: Any]] = [], checks: [String: Bool] = [:]
+        try await settle(900)
+        captures.append(try await capture(host, name: "01-chat-before-clear", directory: directory))
+        presentation.clearChatConfirmationShown = true
+        let cancel = try await confirmationButton("Cancel", window: window)
+        try await settle(300)
+        guard let sheetView = window.attachedSheet?.contentView else { throw Failure.invalidFixture }
+        captures.append(try await capture(sheetView, name: "02-clear-confirmation", directory: directory))
+        cancel()
+        try await settle(350)
+        checks["cancel_preserves_history"] = try store.generation == generation && store.latestSequence == sequence
+        checks["cancel_preserves_draft_and_reply"] = conversation.draft == draft && conversation.replyReference != nil
+        checks["cancel_dismisses_confirmation"] = !presentation.clearChatConfirmationShown && window.attachedSheet == nil
+        presentation.search = "ORBIT-CEDAR"
+        await presentation.find(conversation: conversation)
+        presentation.clearChatConfirmationShown = true
+        let clear = try await confirmationButton("Clear chat", window: window)
+        clear()
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        while (try store.generation == generation || coordinator.run.isClearingChat), ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        try await settle(650)
+        captures.append(try await capture(host, name: "03-overview-after-clear", directory: directory))
+        checks["history_generation_rotated"] = try store.generation != generation
+        checks["history_and_summaries_empty"] = try store.latestSequence == 0 && store.records().isEmpty && store.summaries().isEmpty
+        checks["projection_and_reply_empty"] = conversation.messages.isEmpty && conversation.draft.isEmpty && conversation.replyReference == nil
+        checks["search_and_reading_state_empty"] = presentation.rows.isEmpty && presentation.searchResults.isEmpty && presentation.search.isEmpty && !presentation.searchShown
+        checks["proactive_surface_restored"] = presentation.surface == .suggestions && !presentation.cards.entries.isEmpty
+        checks["cleared_projection_idle"] = !presentation.loading && presentation.error == nil && conversation.storageError == nil
+        conversation.requestNavigation()
+        try await settle(800)
+        captures.append(try await capture(host, name: "04-empty-conversation", directory: directory))
+        checks["empty_chat_remains_idle"] = !presentation.loading && presentation.error == nil && conversation.storageError == nil
+        presentation.surface = .suggestions
+        try await settle(400)
+        checks["notch_and_retry_empty"] = coordinator.phase == .hidden && coordinator.run.interaction == nil && !coordinator.run.recovery.isPending
+        checks["knowledge_unchanged"] = try Data(contentsOf: vaultFile) == vaultBefore
+        checks["instructions_unchanged"] = try SidekickInstructionStore.read().text == memoryBefore
+        checks["legacy_defaults_removed"] = UserDefaults.standard.data(forKey: SidekickHistory.key) == nil
+        let reopened = try SidekickConversationStore(url: store.url)
+        checks["reopen_remains_empty"] = try reopened.records().isEmpty && reopened.summaries().isEmpty && !reopened.needsLegacyImport
+        // A UI fixture can test reset while still making any accidental submit inert.
+        conversation.draft = "This fixture must never launch a provider."
+        let rejected = !SidekickComposer.sendDraft(coordinator: coordinator, presentation: presentation)
+        checks["provider_submission_blocked"] = try rejected && !coordinator.run.isRunning && store.latestSequence == 0
+        conversation.draft = ""
+        let configuration = try JSONSerialization.jsonObject(with: Data(contentsOf: root.appendingPathComponent("fixture.json"))) as? [String: Any]
+        let hold = configuration?["ui_hold_seconds"] as? Int ?? 0
+        guard (0...600).contains(hold) else { throw Failure.invalidFixture }
+        if hold > 0 {
+            try JSONSerialization.data(withJSONObject: ["process_id": getpid(), "window_id": window.windowNumber])
+                .write(to: root.appendingPathComponent("ui-hold-ready.json"), options: .atomic)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(hold))
+            while ContinuousClock.now < deadline && !FileManager.default.fileExists(atPath: root.appendingPathComponent("ui-hold-complete").path) {
+                try await Task.sleep(for: .milliseconds(200))
+            }
+        }
+        let result: [String: Any] = ["checks": checks, "snapshots": captures, "provider_calls": 0,
+                                   "old_generation": generation.uuidString, "new_generation": try store.generation.uuidString]
+        try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys, .prettyPrinted])
+            .write(to: root.appendingPathComponent("clear-ui-manifest.json"), options: .atomic)
+        return checks
+    }
+
+    private static func confirmationButton(_ title: String, window: NSWindow) async throws -> () -> Void {
+        func action(_ element: Any) -> (() -> Void)? {
+            if let button = element as? NSButton, button.title == title, button.isEnabled {
+                return { button.performClick(nil) }
+            }
+            if let accessible = element as? NSAccessibilityProtocol {
+                if accessible.accessibilityRole() == .button,
+                   accessible.accessibilityLabel() == title || accessible.accessibilityTitle() == title {
+                    return { _ = accessible.accessibilityPerformPress() }
+                }
+                for child in accessible.accessibilityChildren() ?? [] {
+                    if let press = action(child) { return press }
+                }
+            }
+            return nil
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        while ContinuousClock.now < deadline {
+            if let sheet = window.attachedSheet, let press = action(sheet) { return press }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        throw Failure.invalidFixture
+    }
+
     private static func home(_ app: AppState, reduced: Bool, opaque: Bool, hoveredMessage: String? = nil,
                              hoveredCard: String? = nil) -> AnyView {
         AnyView(HomeView(deck: .jesai).environment(app)

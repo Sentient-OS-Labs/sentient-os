@@ -20,12 +20,15 @@ final class SidekickPresentation {
     func setSelection(_ selected: Bool, messageID: String) {
         if selected { selectedMessages.insert(messageID) } else { selectedMessages.remove(messageID) }
     }
+    var clearChatConfirmationShown = false
     var search = ""
     var searchShown = false
     var searchResults: [SidekickConversationStore.Record] = []
     var rows: [SidekickConversationStore.Record] = []
     var taskStates: [UUID: SidekickConversationStore.TranscriptTaskState] = [:]
     var expandedWorkTasks = Set<UUID>()
+    private(set) var activeWorkTaskID: UUID?
+    private var automaticallyExpandedWorkTaskID: UUID?
     var hasEarlier = false
     var hasLater = false
     var loading = false
@@ -99,7 +102,9 @@ final class SidekickPresentation {
             if generation != expected { rows = []; scrollID = nil }
             generation = expected
             taskStates = Dictionary(uniqueKeysWithValues: states.map { ($0.taskID, $0) })
-            expandedWorkTasks.formIntersection(taskStates.keys)
+            var retainedWork = Set(taskStates.keys)
+            if let activeWorkTaskID { retainedWork.insert(activeWorkTaskID) }
+            expandedWorkTasks.formIntersection(retainedWork)
             scrollIsAutomatic = automaticallyFollowing
             withAnimation(animated ? .spring(response: 0.42, dampingFraction: 0.92) : nil) {
             switch page {
@@ -179,10 +184,38 @@ final class SidekickPresentation {
         }
     }
 
+    /// Open each new live task once. Respect manual collapse, and fold the preceding
+    /// automatically opened task when a new one starts. Explicitly opened history stays put.
+    func followActiveWork(_ taskID: UUID?, generation: UUID?) {
+        resetForGeneration(generation)
+        guard taskID != activeWorkTaskID else { return }
+        activeWorkTaskID = taskID
+        guard let taskID else { return }
+        if let previous = automaticallyExpandedWorkTaskID, previous != taskID {
+            expandedWorkTasks.remove(previous)
+        }
+        expandedWorkTasks.insert(taskID)
+        automaticallyExpandedWorkTaskID = taskID
+    }
+
+    func toggleWork(_ taskID: UUID) {
+        if automaticallyExpandedWorkTaskID == taskID { automaticallyExpandedWorkTaskID = nil }
+        if expandedWorkTasks.contains(taskID) { expandedWorkTasks.remove(taskID) }
+        else { expandedWorkTasks.insert(taskID) }
+    }
+
+    func didClearChat(generation: UUID?) {
+        resetForGeneration(generation)
+        searchShown = false; clearChatConfirmationShown = false
+        atLatest = true; scrollIsAutomatic = false; composerFocused = false
+        surface = .suggestions
+    }
+
     func resetForGeneration(_ next: UUID?) {
         guard generation != next else { return }
         loadToken &+= 1; searchToken &+= 1; loading = false; isScrolling = false
         rows = []; taskStates = [:]; expandedWorkTasks.removeAll()
+        activeWorkTaskID = nil; automaticallyExpandedWorkTaskID = nil
         searchResults = []; search = ""; scrollID = nil; selectedMessages.removeAll()
         hasEarlier = false; hasLater = false; newMessages = false; navigationTarget = nil
         error = nil; generation = next; lastVisitedAttention = 0

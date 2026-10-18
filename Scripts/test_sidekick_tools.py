@@ -19,7 +19,8 @@ FILES = [
         "SidekickInstructionStore.swift", "SidekickPersonalization.swift",
         "SidekickTaskSummary.swift",
     )
-] + [ROOT / "Sentient OS macOS/System/CustomInstructions.swift",
+] + [ROOT / "Sentient OS macOS/Cloud/AgentStatus.swift",
+     ROOT / "Sentient OS macOS/System/CustomInstructions.swift",
      ROOT / "Sentient OS macOS/Diagnostics/SidekickDiagnostics.swift"]
 
 STUBS = r'''
@@ -262,6 +263,10 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
             ["markdown": "  \n ", "kind": "answer", "priority": "normal"],
             ["markdown": "x", "kind": "wrong", "priority": "normal"],
             ["markdown": "x", "kind": "answer", "priority": true],
+            ["markdown": "x", "kind": "answer", "priority": "normal", "completion": "success"],
+            ["markdown": "x", "kind": "answer", "priority": "normal", "completion": true],
+            ["markdown": "x", "kind": "answer", "priority": "normal", "completion": NSNull()],
+            ["markdown": "x", "kind": "update", "priority": "normal", "completion": "done"],
             ["markdown": "x", "kind": "answer", "priority": "high", "extra": "x"],
             ["markdown": String(repeating: "👩🏽‍💻", count: 10_000), "kind": "answer", "priority": "normal"]
         ] {
@@ -277,6 +282,35 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
         try check(retried == a, "retry after task closure reports original delivery without rewriting")
         try check(try h.store.records(taskID: h.run.taskID).filter { $0.event.kind == .taskFinished }.count == 1, "terminal outcome recorded once")
         await h.clean()
+    }
+
+    static func completion(_ root: URL) async throws {
+        let h = try Harness(root.appendingPathComponent("completion"))
+        let legacy = try await call(h, "message_user", ["markdown": "Saved answer", "kind": "answer", "priority": "high"])
+        try check(try !isError(legacy) && h.run.completionStatus == nil, "legacy message saves without inventing completion")
+        let rpc = try request("message_user", id: "done-claim", ["markdown": "Completed and verified.", "kind": "answer", "priority": "high", "completion": "done"])
+        let done = try await send(h.server, request: rpc)
+        try check(try payload(done)["saved"] as? Bool == true && h.run.completionStatus == .done, "structured DONE travels through real MCP handler")
+        try check(AgentStatus.resolve("Final answer without sentinel", completion: h.run.completionStatus, providerSucceeded: true) == .done, "clean exit accepts explicit saved completion")
+        try h.interaction.observeToolEvent(wire("item.started", id: "later-action"), streamID: UUID())
+        try check(h.run.completionStatus == nil, "later actual tool observation invalidates MCP completion")
+        let replay = try await send(h.server, request: rpc)
+        try check(replay == done && h.run.completionStatus == nil, "cached delivery receipt never restores stale completion")
+        await h.clean()
+
+        let refused = try Harness(root.appendingPathComponent("completion-refused"))
+        _ = try await call(refused, "message_user", ["markdown": "The service did not confirm the change.", "kind": "answer", "priority": "high", "completion": "could_not"])
+        try check(refused.run.completionStatus == .couldNot(reason: "The service did not confirm the change."), "structured refusal carries exact answer reason")
+        try check(AgentStatus.resolve("", completion: refused.run.completionStatus, providerSucceeded: true, connector: true) == refused.run.completionStatus, "connector completion uses same structured claim")
+        await refused.clean()
+
+        let correction = try Harness(root.appendingPathComponent("completion-correction"))
+        _ = try await call(correction, "message_user", ["markdown": "Initially looked done.", "kind": "answer", "priority": "high", "completion": "done"])
+        try sql(correction.store.url, "CREATE TRIGGER deny_correction BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'fixture write denial'); END;")
+        let unsaved = try await call(correction, "message_user", ["markdown": "Actually, I could not verify it.", "kind": "answer", "priority": "high", "completion": "could_not"])
+        try check(try isError(unsaved) && correction.run.completionStatus == nil, "failed final correction cannot leave a stale successful claim")
+        try sql(correction.store.url, "DROP TRIGGER deny_correction;")
+        await correction.clean()
     }
 
     static func history(_ root: URL) async throws {
@@ -437,11 +471,11 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
     static func failureAndFinish(_ root: URL) async throws {
         let h = try Harness(root.appendingPathComponent("write-failure"))
         try sql(h.store.url, "CREATE TRIGGER deny_fixture BEFORE INSERT ON events BEGIN SELECT RAISE(ABORT, 'fixture write denial'); END;")
-        let denied = try await call(h, "message_user", id: "failed-save", ["markdown": "Must not appear", "kind": "answer", "priority": "high"])
+        let denied = try await call(h, "message_user", id: "failed-save", ["markdown": "Must not appear", "kind": "answer", "priority": "high", "completion": "done"])
         try check(try isError(denied) && payload(denied)["saved"] == nil, "failed commit cannot claim saved=true")
-        try check(try visible(h).isEmpty, "failed commit creates no visible answer")
+        try check(try visible(h).isEmpty && h.run.completionStatus == nil, "failed commit creates no visible answer or completion claim")
         try sql(h.store.url, "DROP TRIGGER deny_fixture;")
-        let repeatFailure = try await call(h, "message_user", id: "failed-save", ["markdown": "Must not appear", "kind": "answer", "priority": "high"])
+        let repeatFailure = try await call(h, "message_user", id: "failed-save", ["markdown": "Must not appear", "kind": "answer", "priority": "high", "completion": "done"])
         try check(try isError(repeatFailure), "same failed RPC remains idempotent after storage recovers")
         let accepted = try await call(h, "message_user", ["markdown": "Now saved", "kind": "update", "priority": "normal"])
         try check(try payload(accepted)["saved"] as? Bool == true, "new delivery can succeed after failed transaction")
@@ -491,6 +525,7 @@ nonisolated func sql(_ path: URL, _ command: String) throws {
         let root = URL(fileURLWithPath: CommandLine.arguments[1], isDirectory: true)
         try await protocolBoundaries(root)
         try await messaging(root)
+        try await completion(root)
         try await history(root)
         try await questions(root)
         try await streams(root)

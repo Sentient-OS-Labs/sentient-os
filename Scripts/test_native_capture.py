@@ -111,6 +111,26 @@ import UniformTypeIdentifiers
             do { try OpenAIComputerUseProbe.validateResult(["content":content],requiresCapture:true); fatalError("accepted invalid capture") }
             catch let failure as NativeComputerUseFailure { check(failure.detail == detail, "invalid image classified") }
         }
+        let accessibility = "Synthetic accessibility: editable element 7, text is empty"
+        let textState: [String:Any] = ["content": [["type":"text", "text":accessibility]]]
+        let textOnly = try OpenAIComputerUseProbe.appStateResult(textState)
+        check((textOnly["content"] as? [[String:Any]])?.first?["text"] as? String == accessibility,
+              "Runtime preserves useful accessibility state without requiring screenshot")
+        let mixed: [String:Any] = ["content": [["type":"text", "text":accessibility], ["type":"image", "data":"invalid"]]]
+        let cleaned = try OpenAIComputerUseProbe.appStateResult(mixed)
+        let cleanedBlocks = cleaned["content"] as! [[String:Any]]
+        check(cleanedBlocks.first?["text"] as? String == accessibility, "Broken screenshot does not discard accessibility tree")
+        check(!cleanedBlocks.contains { $0["type"] as? String == "image" }, "Invalid image bytes cannot break provider input")
+        check(cleanedBlocks.last?["text"] as? String != nil && cleanedBlocks.count == 2, "Missing image is disclosed to model")
+        let imageOnly = try OpenAIComputerUseProbe.appStateResult(valid)
+        check((imageOnly["content"] as? [[String:Any]])?.first?["type"] as? String == "image", "Valid screenshot-only state remains supported")
+        let unusable: [[String:Any]] = [[:], ["content": []], ["content": [["type":"text", "text":"  \n"]]],
+                                  ["content": [["type":"image", "data":"invalid"]]],
+                                  ["isError":true, "content": [["type":"text", "text":accessibility]]]]
+        for bad in unusable {
+            do { _ = try OpenAIComputerUseProbe.appStateResult(bad); fatalError("accepted error or empty state") }
+            catch is NativeComputerUseFailure { count += 1 }
+        }
         let captureID = UUID().uuidString
         let scrubbed = CrashReporting.scrubData(["capture_id":captureID,"native_detail":"failedToGetWindowIDForElement", "path":"/Users/private/Secret.txt"])
         check(scrubbed["capture_id"] as? String == captureID, "capture correlation survives Sentry scrubber")
@@ -152,6 +172,17 @@ import UniformTypeIdentifiers
         do { _ = try await task.value; fatalError("cancel ignored") } catch is CancellationError { count += 1 }
         await cancelSession.close()
         check(Date().timeIntervalSince(began) < 4, "STOP bounds process cleanup")
+        let deadlineSession = try await OpenAIComputerUseSession.open(.init())
+        let deadlineBegan = Date()
+        do {
+            _ = try await deadlineSession.call("hang", arguments: Data("{}".utf8), timeout: 0.12)
+            fatalError("per-read deadline was ignored")
+        } catch let failure as NativeComputerUseFailure {
+            check(failure.kind == .timeout && failure.detail == .requestTimedOut,
+                  "per-read deadline closes transport with a typed non-retryable timeout")
+        }
+        await deadlineSession.close()
+        check(Date().timeIntervalSince(deadlineBegan) < 4, "per-read deadline bounds request plus owned cleanup")
         print("PASS \(count) native capture assertions")
     }
 }

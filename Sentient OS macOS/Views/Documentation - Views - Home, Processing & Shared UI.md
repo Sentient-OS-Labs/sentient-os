@@ -91,11 +91,28 @@ Missing anchors fall back to a fade. Geometry follows resizing rather than keepi
 Analysis and Knowledge have navigation icons; Settings uses a 22pt gear in a 44×40pt target. Search is
 only shown while in conversation.
 
+The current task’s work details open automatically once, including when the task starts from the
+notch. Manually collapsing them is respected; starting another task folds only the previous automatic
+expansion. Human progress notes use the same filtered live status as the notch, while raw tool labels
+stay in structured activity. These transient notes do not add internal output to saved conversation.
+Before activity arrives, the live section says “Sidekick is thinking through your task…”; completed
+text-only replies have no empty-activity filler. The Working label carries a soft white glimmer that
+stops while waiting for an answer, hidden/offscreen, in Low Power Mode, or with Reduce Motion.
+
 The conversation keeps chrome out of the reading flow: no repeated sender labels or success
 footers, and message copy/date details appear only on hover. Whole-message Copy/Reply are available
 on right-click and as accessibility actions; selected-text Reply and native Copy-selection remain.
 Subtle time dividers identify human returns after more than 30 minutes (including later dates),
 without treating a long-running response as a new visit.
+
+The conversation toolbar has a direct trash **Clear chat…** icon. A confirmation sheet with
+a blue primary action
+explains that long conversations are managed automatically, and that the knowledge base and saved
+Sidekick instructions stay. A live task changes the confirmation action to **Stop and clear chat**.
+Cancel preserves the chat and its draft. Success clears stored messages, activity and summaries,
+resets search/replies/reading state, and returns to proactive suggestions. The native transcript
+viewport takes the new conversation generation so an old scroll offset cannot obscure the empty state.
+There is no separate Start fresh action or duplicate history-delete control in Settings.
 
 The retained transcript is explicitly disabled and accessibility-ignored under the overview.
 Its AppKit text views inherit SwiftUI's enabled state: hidden native text cannot hit-test, become

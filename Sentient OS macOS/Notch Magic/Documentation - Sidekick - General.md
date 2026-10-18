@@ -85,9 +85,13 @@ monitor whenever Sentient is frontmost, and a fresh hotkey press over other apps
 a keyDown tap is Input-Monitoring-gated). `stop()` unifies STOP, Esc, and the hotkey press.
 
 **Completion.** `run.onFinished` → `.finishing(outcome)`: ✓ and stopped flourish for 1.5 s, a failure
-holds 5 s (its caption carries the ✗ reason). Completion is sentinel-honest: the command prompt demands
-a final `STATUS: DONE` / `STATUS: COULD_NOT` line; `AgentStatus.parse` routes DONE → "✓ done", no
-sentinel → an unconfirmed failed attempt; COULD_NOT → a real failure with the reported reason.
+holds 5 s (its caption carries the ✗ reason). `message_user` final answers include the explicit
+`completion: "done" | "could_not"` field. `AgentStatus.resolve` checks this task-scoped claim after a
+clean provider exit, with the exact final `STATUS: DONE` / `STATUS: COULD_NOT` line as a compatibility
+fallback. A refusal from either source wins over a contradictory DONE. Without either source the
+outcome remains unconfirmed; saving a plain message or exiting zero alone never means success.
+Substantive tools, new provider legs and questions invalidate earlier structured completion claims.
+Failed/cancelled providers and connector action-evidence checks still control the actual outcome.
 
 `setPhase` bumps a token that every delayed transition checks, so a stale timer can never clobber a
 newer phase.
@@ -118,6 +122,29 @@ startup banner, the prompt echo, reasoning, counts, and raw `STATUS:` lines; kee
 tool lines, the last two joined as `statusLine`. The confirmation-policy dump's tail becomes "Thinking
 through your task".
 
+The running notch renders raw tool-status lines through the same `SidekickActivityPresentation`
+labels and cached app icons used by chat. Its observable conversation projection reads one indexed
+latest-activity row for the active task; it never scans the full activity history. Caption changes
+blur-dissolve (fade with Reduce Motion). Agent narration, connection notices, read-back and memory
+status retain their existing priority. Ending/resetting a task clears its live activity projection.
+
+Both ChatGPT and Claude computer runs emit activity through `ComputerUseStream`; Claude's bridge
+provides narration only. `SidekickActivityLab` (`SENTIENT_SELFTEST=sidekickbackend`,
+`LAB_SIDEKICK_COMMAND=activity`, `LAB_SIDEKICK_PROVIDER=chatgpt|claude_bridge`) validates the real
+authenticated providers against six in-memory native tool calls, temporary conversation storage,
+and the exact shared notch projection. It checks label/icon identity parity and hidden message/usage
+wrappers without launching the computer-use helper or touching real apps. Each provider needs its
+normal login; results include content-safe status snapshots for comparison.
+
+Message previews include a native reply field and Open in Sentient button. The field shares Home's
+draft; submission uses the normal coordinator gate with the displayed message's exact reply reference.
+Return sends inline without opening Home, and rejected/active-task submissions retain the draft.
+Selected-text Reply targets that quote and focuses the inline field. Auto-presentation remains
+non-key; only editing requests keyboard focus. Focus or an unsent draft holds attention so a timeout
+or newer message cannot replace the preview mid-reply. Closing keeps the draft/reference for Home.
+`test_sidekick_notch_reply.py` exercises native editing/Return and renders the real view in an inert
+nonactivating panel; attention and layout fixtures cover timing, coalescing and bounded reading space.
+
 `startOnboardingDemo()` performs the film step's scripted shopping story through the real cleaner with
 nothing real underneath (no codex, no screenshots, no scoreboard).
 
@@ -130,8 +157,12 @@ tools, verify the result, and finish with the `STATUS` sentinel. Retrieved pages
 content are explicitly framed as data rather than new instructions.
 `SidekickInteraction` injects the current memory snapshot, bounded recent conversation and reply
 reference across execution routes. Previous screenshots and raw tool traces are never injected.
-The model sends explicit Markdown through `message_user` and must finish with a user-facing answer;
-the app separately persists the verified execution outcome and handles missing-answer fallbacks.
+The model sends explicit Markdown through `message_user` and must finish with a user-facing answer
+and structured completion field. The claim is recorded only after the answer commits, is never
+accepted while substantive tools are pending, and does not replay work if the final STATUS line is
+omitted. The app separately persists the resolved execution outcome and handles missing-answer
+fallbacks. `Scripts/test_sidekick_run.py` and `Scripts/test_sidekick_tools.py` cover final outcome
+precedence, stale-claim invalidation, exact RPC replay, save failures and legacy replies.
 
 At dispatch, `FrontierRun` appends the selected runtime's manual once. Every active backend uses
 `OpenAIComputerUse.promptRules`; custom models also receive `CustomProvider.computerUsePromptRules`.

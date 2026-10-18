@@ -73,7 +73,6 @@ nonisolated enum CodexFailureReason: String, Sendable {
             case .unknown: return .unknown
             }
         }
-        if error is ComputerUseStream.WindowUnavailable { return .noWindows }
         switch error {
         case CodexCLI.CLIError.notAvailable(.notInstalled):          return .notInstalled
         case CodexCLI.CLIError.notAvailable(.notWorking(let d)):     return classify(text: d)

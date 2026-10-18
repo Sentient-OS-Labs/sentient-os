@@ -130,8 +130,11 @@ enum FrontierRun {
                                                error: DirectMCPError.unconfirmedAction, source: "direct_connector")
                         throw DirectMCPError.unconfirmedAction
                         }
+                        let completion = AgentStatus.resolve(result.result,
+                            completion: SidekickInteraction.current?.conversationRun?.completionStatus,
+                            providerSucceeded: true, connector: true)
                         if let identity = expectedSlackIdentity {
-                            if case .done = AgentStatus.parseConnector(result.result) {
+                            if case .done = completion {
                                 do {
                                     try await SlackActionEvidence.verify(raw: result.raw, backend: backend,
                                         operation: prepared.slackOperation ?? .write, identity: identity, expectedMessage: prepared.slackExpectedMessage)
@@ -144,11 +147,11 @@ enum FrontierRun {
                                 SlackActionEvidence.retainUnconfirmed(raw: result.raw, backend: backend, identity: identity)
                             }
                         }
-                        if let identity = expectedOutlookIdentity, case .done = AgentStatus.parseConnector(result.result) {
+                        if let identity = expectedOutlookIdentity, case .done = completion {
                             try await OutlookActionEvidence.verify(raw: result.raw, backend: backend,
                                 operation: prepared.outlookOperation ?? .read, identity: identity, runID: prepared.outlookRunID)
                         }
-                        if let identity = expectedCalendarIdentity, case .done = AgentStatus.parseConnector(result.result) {
+                        if let identity = expectedCalendarIdentity, case .done = completion {
                             try await OutlookCalendarActionEvidence.verify(raw: result.raw, backend: backend,
                                 operation: prepared.outlookCalendarOperation ?? .read, identity: identity, intentHash: prepared.outlookCalendarIntentHash)
                         }
@@ -162,7 +165,7 @@ enum FrontierRun {
 
     /// The computer-use spine — Sidekick, the command bar, a card's fire.
     static func runAgentCommand(_ prompt: String, imagePaths: [String] = [],
-                                timeout: TimeInterval = 1_800,
+                                timeout: TimeInterval = 0,
                                 onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         return try await Diagnostics.withOperation("computer_run") {
           try await AgentRunDiagnostics.withRun(action: true, computer: true, result: { $0 }) {

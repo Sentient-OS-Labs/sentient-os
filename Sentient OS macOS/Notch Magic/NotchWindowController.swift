@@ -187,6 +187,7 @@ final class NotchWindowController {
         #endif
         withObservationTracking {
             _ = coordinator.phase
+            _ = coordinator.messageReplyFocused
             _ = coordinator.run.recovery.isPending // refresh return zones when a hidden question expires
         } onChange: { [weak self] in
             guard let self else { return }
@@ -259,14 +260,17 @@ final class NotchWindowController {
             panel.makeKeyAndOrderFront(nil)
             typingKeyAt = Date()
         } else {
-            if panel.isKeyWindow, coordinator.phase != .recovery { panel.orderOut(nil) }
+            if panel.isKeyWindow, coordinator.phase != .recovery && coordinator.phase != .message { panel.orderOut(nil) }
             panel.orderFrontRegardless()
         }
         NotchSpace.shared?.pin(panel)
     }
 
     /// The phases that own the keyboard: the type field, and the open mic (Esc cancels, ⏎ finishes).
-    private var wantsKey: Bool { coordinator.phase == .typing || coordinator.phase == .listening }
+    private var wantsKey: Bool {
+        coordinator.phase == .typing || coordinator.phase == .listening
+            || (coordinator.phase == .message && coordinator.messageReplyFocused)
+    }
 
     // MARK: Geometry
 
@@ -627,6 +631,10 @@ final class NotchWindowController {
                     guard let self else { return }
                     if self.coordinator.phase == .recovery {
                         self.coordinator.run.recovery.setFocused(false)
+                        return
+                    }
+                    if self.coordinator.phase == .message, let message = self.coordinator.notchMessage {
+                        self.coordinator.setMessageReplyFocused(false, messageID: message.event.id)
                         return
                     }
                     guard self.coordinator.phase == .typing else { return }

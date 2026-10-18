@@ -72,7 +72,6 @@ nonisolated struct SidekickTaskEnd: Sendable, Equatable {
                 case .unknown: return typed(.unknown)
                 }
             }
-            if error is ComputerUseStream.WindowUnavailable { return typed(.appUnavailable) }
             if error is ComputerUseGate.SetupCancelled { return .setupCancelled }
             if error is SidekickInteraction.Failure { return typed(.toolWhileWaiting) }
             if error is SlackActionEvidence.Failure || error is OutlookActionEvidence.Failure

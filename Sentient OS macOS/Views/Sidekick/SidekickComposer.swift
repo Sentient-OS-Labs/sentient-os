@@ -20,7 +20,7 @@ struct SidekickComposer: View {
                 set: { if answering { recovery.draft = $0 } else { conversation.draft = $0 }; submissionError = nil })
     }
     private var canSend: Bool {
-        !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !coordinator.run.isClearingChat && !text.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (answering || !coordinator.run.isRunning)
     }
 
@@ -108,6 +108,10 @@ struct SidekickComposer: View {
             .shadow(color: .white.opacity(focused ? 0.035 : 0), radius: 22, y: 2)
             .shadow(color: .black.opacity(0.13), radius: 18, y: 12)
         }
+        .disabled(coordinator.run.isClearingChat)
+        .onChange(of: coordinator.run.isClearingChat) { _, clearing in
+            if clearing { focused = false; presentation.composerFocused = false; submissionError = nil }
+        }
         .animation(SidekickStyle.motion(reduced), value: recovery.content?.id)
         .animation(.easeInOut(duration: 0.35), value: focused)
         .defaultFocus($focused, isPresented && !answering)
@@ -157,7 +161,7 @@ struct SidekickComposer: View {
     }
 
     private func handleReturn() {
-        guard isPresented else { return }
+        guard isPresented, !coordinator.run.isClearingChat else { return }
         // AppKit's multiline TextField commits on Shift-Return by default. Chat keeps that
         // chord for a newline, including an insertion in the middle of an existing draft.
         if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
@@ -184,6 +188,7 @@ struct SidekickComposer: View {
     /// accepted request; a busy run, setup refusal or storage failure preserves the draft.
     @discardableResult
     static func sendDraft(coordinator: CommandCoordinator, presentation: SidekickPresentation) -> Bool {
+        guard !coordinator.run.isClearingChat else { return false }
         let conversation = coordinator.run.conversation
         let recovery = coordinator.run.recovery
         let value = (recovery.isPending ? recovery.draft : conversation.draft)

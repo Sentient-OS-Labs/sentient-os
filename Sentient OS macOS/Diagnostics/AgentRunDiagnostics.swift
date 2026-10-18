@@ -80,7 +80,9 @@ nonisolated final class AgentRunDiagnostics: Sendable {
         return try await $current.withValue(run) {
             do {
                 let value = try await body()
-                run.finish(action ? (computer ? AgentStatus.parse(result(value)) : AgentStatus.parseConnector(result(value))) : nil)
+                run.finish(action ? AgentStatus.resolve(result(value),
+                    completion: SidekickInteraction.current?.conversationRun?.completionStatus,
+                    providerSucceeded: true, connector: !computer) : nil)
                 return value
             } catch {
                 run.finish(nil, error: error)

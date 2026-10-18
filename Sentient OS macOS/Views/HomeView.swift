@@ -226,7 +226,7 @@ struct HomeView: View {
         }
         .onChange(of: isPresented) { _, visible in
             updateConversationVisibility()
-            if !visible { overviewPull = 0 }
+            if !visible { overviewPull = 0; presentation.clearChatConfirmationShown = false }
             if visible {
                 model.ensureVisit(deck: deck)
                 presentation.visit(conversation: conversation, running: appState.commandCoordinator.run.isRunning,
@@ -349,15 +349,15 @@ struct HomeView: View {
             if !kbOnly { proactiveDock }
             Spacer()
             if !kbOnly && inConversation {
-                Button {
+                SidekickToolbarIconButton(symbol: "magnifyingglass") {
                     withAnimation(SidekickStyle.motion(reducedMotion)) {
                         presentation.searchShown.toggle()
                     }
-                } label: { Image(systemName: "magnifyingglass").font(.system(size: 13)) }
-                    .buttonStyle(.plain).foregroundStyle(SidekickStyle.secondary)
+                }
                     .help("Search conversation").accessibilityLabel("Search conversation")
                     .accessibilityIdentifier("sidekick.search")
                     .keyboardShortcut("f", modifiers: .command)
+                SidekickClearChatButton(coordinator: appState.commandCoordinator, presentation: presentation)
             }
             NavItem(title: "Analysis", icon: "waveform.path", dot: Theme.Ink.green) { showAnalysis = true }
                 .popover(isPresented: $showAnalysis) { analysisPopover }
@@ -845,13 +845,13 @@ struct HomeView: View {
                     Image(systemName: "arrow.up").font(.system(size: 12, weight: .semibold))
                 }
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(conversation.messages.isEmpty ? "Your conversation starts here" : "Continue the conversation")
+                    Text(conversation.messages.isEmpty ? "Sidekick’s ready to take over your work." : "Continue the conversation")
                         .font(.system(size: 12, weight: .medium)).foregroundStyle(SidekickStyle.ink)
-                    if let last = conversation.messages.last(where: { $0.event.kind == .assistantMessage || $0.event.kind == .userMessage }) {
+                    if let last = conversation.previewMessage {
                         Text(peekText(last.event))
                             .font(.system(size: 11)).foregroundStyle(SidekickStyle.secondary).lineLimit(1)
-                    } else {
-                        Text("One continuous thread, always here.").font(.system(size: 11)).foregroundStyle(SidekickStyle.secondary)
+                    } else if conversation.messages.isEmpty {
+                        Text("Ready to work across your computer. Just say the word.").font(.system(size: 11)).foregroundStyle(SidekickStyle.secondary)
                     }
                 }
                 Spacer(minLength: 0)
@@ -866,7 +866,7 @@ struct HomeView: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(SidekickPressStyle())
-        .accessibilityLabel("Expand conversation history")
+        .accessibilityLabel(conversation.messages.isEmpty ? "Open Sidekick" : "Expand conversation history")
         .accessibilityIdentifier("sidekick.expandHistory")
     }
 

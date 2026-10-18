@@ -56,6 +56,7 @@ final class CommandCoordinator {
     /// What the notch shows. (Rendering lands later; today this is driven + logged.)
     private(set) var phase: NotchPhase = .hidden
     private(set) var notchMessage: SidekickConversationStore.Record?
+    private(set) var messageReplyFocused = false
     private var attentionPolicy = SidekickAttentionPolicy(generation: nil, latestSequence: 0)
     private var messageTimer: Task<Void, Never>?
 
@@ -166,7 +167,7 @@ final class CommandCoordinator {
     func submit(_ text: String, mode: AgentMode, source: TriggerSource,
                 reply: SidekickConversationEvent.ReplyReference? = nil) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !run.isRunning else { return false }
+        guard !trimmed.isEmpty, !run.isRunning, !run.isClearingChat else { return false }
         returningFromRecovery = false
         // A rejected submission must preserve the draft and pending recovery.
         if interceptForOnboarding() { return false }
@@ -182,7 +183,7 @@ final class CommandCoordinator {
     /// so the notch stays visible and every other entry point sees the same one-task lock.
     private func launch(_ trimmed: String, mode: AgentMode, source: TriggerSource,
                         reply: SidekickConversationEvent.ReplyReference? = nil) -> Bool {
-        guard !run.isRunning else { return false }
+        guard !run.isRunning, !run.isClearingChat else { return false }
         if source == .voice { setReadBack(trimmed) } else { clearReadBack() }
         // Core tier: THE Sidekick-usage count (count only, never the text) — one of the handful of
         // always-on telemetry signals disclosed in Settings.
@@ -214,6 +215,23 @@ final class CommandCoordinator {
         run.stop()
     }
 
+    /// Clear only the conversation. Cancel input that has not become a run yet, then let
+    /// the run owner stop/drain and atomically reset history before admitting another task.
+    func clearChat(defaults: UserDefaults = .standard) async throws {
+        guard !run.isClearingChat else { throw CommandRunModel.ClearChatFailure.busy }
+        deferredSubmission = nil; returningFromRecovery = false
+        hotkeyPair.reset()
+        listening = false
+        voiceStartTask?.cancel(); voiceStartTask = nil
+        voice.cancel()
+        demoTask?.cancel(); demoTask = nil; demoDraft = nil
+        clearReadBack()
+        setPhase(.hidden) // also invalidates delayed voice/opening/finishing callbacks
+        try await run.clearChat(defaults: defaults)
+        clearReadBack()
+        setPhase(.hidden)
+    }
+
     // MARK: Adopted external runs (a proactive card's fire — any channel)
 
     /// A proactive card's fire (computer, gmail, or calendar) adopting the notch: the run model lights up — locking
@@ -225,7 +243,7 @@ final class CommandCoordinator {
     @discardableResult
     func beginExternalRun(caption: String, request: String? = nil, retryContext: String = "", onRetry: ((String) -> Void)? = nil,
                           onStopRequest: @escaping @MainActor () -> Void) -> Bool {
-        guard !run.isRunning else { return false }
+        guard !run.isRunning, !run.isClearingChat else { return false }
         clearReadBack()
         notchAnchor = .mainDisplay        // card fires live on the home's display, like the prompt bar
         run.adoptExternal(caption: caption, request: request, retryContext: retryContext, onRetry: onRetry, onStopRequest: onStopRequest)
@@ -305,6 +323,7 @@ final class CommandCoordinator {
     /// Completed standalone taps arrive here. Both actions use the same key; the first
     /// tap waits for a possible second tap before Sidekick can take focus.
     private func hotkeyTapped(_ key: ShortcutKey, at time: TimeInterval, activity: ShortcutActivity) {
+        guard !run.isClearingChat else { return }
         guard !ShortcutPreferences.isRecording, doubleTapDemoKeyChanged == nil,
               !DoubleTap.shared.isDrafting else { return }
         guard key == ShortcutPreferences.current else { return }
@@ -377,6 +396,7 @@ final class CommandCoordinator {
     /// instead of pretending to listen (the mic tap only installs after the model lands, so
     /// anything spoken now would be silently lost).
     func startListening() {
+        guard !run.isClearingChat else { return }
         guard phase == .typing, !onboardingDemoArmed, !listening else { return }
         if !VoiceCapture.isAuthorized, ComputerUseGate.shared.presentVoiceFixIfDenied() {
             setPhase(.hidden)
@@ -528,6 +548,7 @@ final class CommandCoordinator {
     /// ⏎ from the notch field — fire it as a computer-use task (empty just closes).
     @discardableResult
     func submitTyped(_ text: String) -> Bool {
+        guard !run.isClearingChat else { return false }
         guard phase == .typing else { return false }
         // While the onboarding demo owns the field, a stray user ⏎ must never reach the real
         // submit path (the script fires the demo itself).
@@ -535,6 +556,36 @@ final class CommandCoordinator {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
         return submit(trimmed, mode: .computer, source: .notchTyped)   // typed → no read-back
+    }
+
+    /// Inline replies use the same task gate and exact message reference as Home.
+    /// Rejected submissions keep both the text and reference for the user to edit.
+    @discardableResult
+    func submitMessageReply(_ text: String, messageID: String) -> Bool {
+        guard phase == .message, notchMessage?.event.id == messageID,
+              !run.isRunning, !run.isClearingChat else { return false }
+        let existing = run.conversation.replyReference
+        let reference = existing?.messageID == messageID ? existing : .init(messageID: messageID)
+        guard submit(text, mode: .computer, source: .notchTyped, reply: reference) else { return false }
+        run.conversation.draft = ""
+        dismissMessagePreview()
+        return true
+    }
+
+    func prepareMessageReply(_ quote: String?, messageID: String) {
+        guard phase == .message, let message = notchMessage, message.event.id == messageID,
+              quote.map({ !$0.isEmpty && message.event.text.contains($0) }) ?? true else { return }
+        run.conversation.replyReference = .init(messageID: messageID, selectedText: quote)
+    }
+
+    func setMessageReplyFocused(_ focused: Bool, messageID: String) {
+        guard phase == .message, notchMessage?.event.id == messageID else { return }
+        messageReplyFocused = focused
+        if focused, run.conversation.replyReference?.messageID != messageID {
+            prepareMessageReply(nil, messageID: messageID)
+        }
+        let editing = focused || !run.conversation.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        if attentionPolicy.setEditing(editing) { messageInteractionChanged() }
     }
 
     /// Esc · click-away · empty-⏎ — close the type field with no action.
@@ -559,6 +610,7 @@ final class CommandCoordinator {
     /// the field): the knowledge-base-only aside, then the field. Permissions are checked when
     /// submitting. The window controller makes the panel key on .typing, same as the hotkey path.
     func notchClicked() {
+        guard !run.isClearingChat else { return }
         guard doubleTapDemoKeyChanged == nil else { return }
         if run.recovery.isPending { run.recovery.reopen(); return }
         guard phase == .hidden, !run.isRunning else { return }
@@ -702,6 +754,7 @@ final class CommandCoordinator {
     // MARK: Run completion → the notch's finishing flourish
 
     private func runFinished(_ outcome: CommandRunModel.Outcome) {
+        guard !run.isClearingChat else { return }
         if returningFromRecovery {
             returningFromRecovery = false
             if let (text, mode, source) = deferredSubmission {
@@ -733,7 +786,7 @@ final class CommandCoordinator {
         let decision = attentionPolicy.update(generation: generation, latestSequence: latest,
             latestUnreadHigh: record.map { .init(id: $0.event.id, sequence: $0.sequence) },
             homeVisible: run.conversation.isVisible,
-            inputBlocked: run.recovery.isPending || phase == .typing || phase == .listening
+            inputBlocked: run.isClearingChat || run.recovery.isPending || phase == .typing || phase == .listening
                 || phase == .transcribing || phase == .opening,
             previewVisible: phase == .message)
         switch decision {
@@ -753,6 +806,7 @@ final class CommandCoordinator {
 
     func dismissMessagePreview() {
         messageTimer?.cancel(); messageTimer = nil
+        messageReplyFocused = false
         attentionPolicy.dismiss()
         notchMessage = nil
         guard phase == .message else { return }
@@ -800,6 +854,7 @@ final class CommandCoordinator {
         phaseToken &+= 1
         Log("notch → \(newPhase)")
         if newPhase != .message {
+            messageReplyFocused = false
             Task { @MainActor [weak self] in self?.routeAttention() }
         }
     }

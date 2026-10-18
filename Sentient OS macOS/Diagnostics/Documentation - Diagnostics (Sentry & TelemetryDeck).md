@@ -167,3 +167,13 @@ implementation with inert sinks. It reuses the production Sentry dispatch guards
 consent-tier guard and shared repeat limiter, checking typed payloads, rejected measurements,
 UUID exclusion from analytics/fingerprints, expected outcomes, independent opt-outs, concurrent
 failure deduplication and cooldown boundaries. It neither starts SDKs nor sends external events.
+
+Clear chat emits `Sidekick.backend` with phase `chat_clear` at start/completion, plus bounded elapsed
+time. Busy or canceled operations use skipped outcomes; stop timeout/storage failure use the existing
+Sentry warning and deduplication path. No message, instruction, knowledge content or path is logged.
+
+Foreground route loss/recovery emits phase `connectivity` with started/unavailable or completed/none
+through the same consent-controlled breadcrumbs and extended analytics. A route hint does not emit
+a failure or cancel the task. Native tool failures retain categorical evidence independently of
+the eventual task outcome; classification no longer decides whether the agent continues.
+Raw native error excerpts are reserved for the model's local tool response and never enter these sinks.

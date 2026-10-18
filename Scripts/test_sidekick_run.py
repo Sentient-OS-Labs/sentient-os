@@ -137,6 +137,70 @@ enum FixtureFailure: Error { case intentional }
         try clarified.finish(outcome: .success, status: "Done", finalText: "Tomorrow is available.")
         check(try store.record(id: "fallback:\(clarified.taskID)")?.event.text == "Tomorrow is available.", "new user clarification needs its own final response")
 
+        // Completion is a typed, task-scoped claim, independent of answer delivery and final formatting.
+        func resolved(_ run: SidekickConversationRun, _ reply: String = "", success: Bool = true,
+                      connector: Bool = false) -> AgentStatus {
+            AgentStatus.resolve(reply, completion: run.completionStatus,
+                                providerSucceeded: success, connector: connector)
+        }
+        let claimed = try start()
+        _ = try claimed.message("The requested answer.", kind: .answer, priority: .normal, completion: .done)
+        check(resolved(claimed) == .done, "structured final outcome survives missing STATUS line")
+        check(resolved(claimed, "Useful answer", connector: true) == .done, "connector uses same structured completion")
+        check(resolved(claimed, "STATUS: DONE", success: false) == .none, "failed provider cannot be promoted by either completion source")
+        check(resolved(claimed, "STATUS: COULD_NOT - Outcome not verified") == .couldNot(reason: "Outcome not verified"), "explicit final refusal overrides saved DONE")
+        _ = try claimed.message("I could not verify the send.", kind: .answer, priority: .normal, completion: .couldNot)
+        check(resolved(claimed) == .couldNot(reason: "I could not verify the send."), "structured could_not carries honest final explanation")
+        check(resolved(claimed, "STATUS: DONE") == .couldNot(reason: "I could not verify the send."), "structured refusal beats contradictory final DONE")
+        _ = try claimed.message("Another answer without a completion claim.", kind: .answer, priority: .normal)
+        check(resolved(claimed) == .none, "ordinary saved answer does not imply completion or retain older claim")
+        check(resolved(claimed, "STATUS: DONE") == .done, "legacy DONE still works")
+        check(resolved(claimed, "STATUS: COULD_NOT - Not possible") == .couldNot(reason: "Not possible"), "legacy refusal still works")
+        for misleading in ["Done!", "STATUS: NOT DONE", "STATUS: DONE\nMore text", "Quoted STATUS: DONE"] {
+            check(resolved(claimed, misleading) == .none, "text content cannot invent a completion: \(misleading)")
+        }
+        check(rejects { _ = try claimed.message("Progress", kind: .update, priority: .normal, completion: .done) }, "updates cannot assert completion")
+        let workClaim = try start(), workClaimStream = UUID()
+        _ = try workClaim.message("Done before more work.", kind: .answer, priority: .normal, id: "claim-before-work", completion: .done)
+        try workClaim.observe(action, streamID: workClaimStream)
+        check(resolved(workClaim) == .none, "substantive tool start invalidates earlier completion")
+        _ = try workClaim.message("Done before more work.", kind: .answer, priority: .normal, id: "claim-before-work", completion: .done)
+        check(resolved(workClaim) == .none, "replayed saved answer cannot re-arm stale completion")
+        check(rejects { _ = try workClaim.message("Done before more work.", kind: .answer, priority: .normal, id: "claim-before-work", completion: .couldNot) }, "same message ID cannot change its completion claim")
+        _ = try workClaim.message("Premature completion.", kind: .answer, priority: .normal, completion: .done)
+        check(resolved(workClaim) == .none, "answer while substantive work is pending cannot confirm it")
+        try workClaim.observe(raw(["type":"item.completed", "item":["id":"more-work", "type":"mcp_tool_call", "server":"calendar", "tool":"list", "arguments":[:], "status":"completed"]]), streamID: workClaimStream)
+        check(resolved(workClaim) == .none, "tool completion cannot resurrect an earlier premature claim")
+        _ = try workClaim.message("Verified after the tool returned.", kind: .answer, priority: .normal, completion: .done)
+        check(resolved(workClaim) == .done, "fresh final answer after result can establish completion")
+        try workClaim.observe(action, streamID: workClaimStream)
+        check(resolved(workClaim) == .done, "replayed old tool start does not invalidate a newer outcome")
+        try workClaim.question(id: UUID(), text: "One more detail?", choices: ["A", "B"], error: nil)
+        check(resolved(workClaim) == .none, "question invalidates completion even before an answer")
+        for provider in ["codex", "claude"] {
+            let scope = try start(), scopeStream = UUID()
+            let began: [String: Any] = provider == "codex" ? ["type":"thread.started", "thread_id":"fixture"]
+                : ["type":"system", "subtype":"init", "session_id":"fixture"]
+            try scope.observe(raw(began), streamID: scopeStream)
+            _ = try scope.message("Done", kind: .answer, priority: .normal, completion: .done)
+            try scope.observe(raw(began), streamID: scopeStream)
+            check(resolved(scope) == .done, "repeated \(provider) start preserves current claim")
+            try scope.observe(raw(began), streamID: UUID())
+            check(resolved(scope) == .none, "new \(provider) provider leg invalidates previous completion")
+            _ = try scope.message("New result", kind: .answer, priority: .normal, completion: .done)
+            scope.invalidate()
+            check(resolved(scope) == .none, "closed \(provider) run exposes no completion capability")
+        }
+        let bookClaim = try start(), bookClaimStream = UUID()
+        _ = try bookClaim.message("Answer", kind: .answer, priority: .normal, completion: .done)
+        for name in ["message_user", "describe_task_usage", "read_history", "update_sidekick_instructions"] {
+            try bookClaim.observe(raw(["type":"item.started", "item":["id":name, "type":"mcp_tool_call", "server":"sentient_recovery", "tool":name]]), streamID: bookClaimStream)
+        }
+        check(resolved(bookClaim) == .done, "bookkeeping cannot erase a valid completion claim")
+        try bookClaim.finish(outcome: .failed, status: "Provider failed after the answer")
+        check(try store.records(taskID: bookClaim.taskID).last?.event.outcome == .failed, "a failed process result remains failed despite delivered structured DONE")
+        check(resolved(bookClaim) == .none, "finished run drops its transient completion claim")
+
         // JSON encoded inside text needs the same redaction as a structured tool result.
         let nestedJSON = #"{"accessToken":"SECRET_CAMEL","result":{"text":"{\"api_key\":\"SECRET_NESTED\",\"slots\":[\"10 AM\"]}"},"tree_markdown":"PRIVATE_TREE"}"#
         let cleanedJSON = SidekickConversationRun.details(nestedJSON)!
@@ -295,6 +359,6 @@ with tempfile.TemporaryDirectory(prefix='sentient-run-fixture-') as tmp:
     (work / 'Main.swift').write_text(HARNESS)
     subprocess.run(['swiftc', '-swift-version', '5', '-default-isolation', 'MainActor',
                     '-strict-concurrency=complete', '-warnings-as-errors',
-                    str(APP / 'SidekickConversationStore.swift'), str(APP / 'SidekickConversationRun.swift'), str(APP / 'SidekickContext.swift'),
+                    str(APP.parent / 'Cloud/AgentStatus.swift'), str(APP / 'SidekickConversationStore.swift'), str(APP / 'SidekickConversationRun.swift'), str(APP / 'SidekickContext.swift'),
                     str(work / 'Main.swift'), '-o', str(work / 'test')], check=True)
     subprocess.run([str(work / 'test')], check=True)

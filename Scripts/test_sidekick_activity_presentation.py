@@ -103,6 +103,24 @@ typealias Presentation = SidekickActivityPresentation
         check(one("mcp__database__read").title == "Used a tool", "unrelated read tool is not mislabeled as file access")
 
         let safari = one("sentient_native.click", args: #"{"app":"com.apple.Safari"}"#)
+        let spotify = one("sentient_native.get_app_state", args: #"{"app":"com.spotify.client"}"#)
+        check(spotify.title == "Looking at Spotify" && spotify.appIdentifier == "com.spotify.client", "Spotify shares readable activity and icon identity across chat and notch")
+        let whatsapp = one("sentient_native.type_text", args: #"{"app":"net.whatsapp.WhatsApp"}"#)
+        check(whatsapp.title == "Entering text in WhatsApp" && whatsapp.appIdentifier == "net.whatsapp.WhatsApp", "WhatsApp shares readable activity and icon identity across chat and notch")
+        for marker in ["→ sentient_native.get_app_state", "Earlier narration\n→ sentient_native.get_app_state"] {
+            let notch = Presentation.notchStatus(marker, activity: spotify)
+            check(notch.text == spotify.title && notch.activity?.appIdentifier == "com.spotify.client",
+                  "canonical tool status uses shared label and icon")
+        }
+        let typed = Presentation.notchStatus("→ sentient_native.type_text", activity: whatsapp)
+        check(typed.text == "Entering text in WhatsApp" && typed.activity?.appIdentifier == "net.whatsapp.WhatsApp", "typed activity exposes WhatsApp icon")
+        for narration in ["I'll check that for you.", "You might be offline. Retrying..."] {
+            let notch = Presentation.notchStatus(narration, activity: spotify)
+            check(notch.text == narration && notch.activity == nil, "authored progress and connectivity notice override stale activity")
+        }
+        check(Presentation.notchStatus("→ internal.tool", activity: nil).text == "Working…", "missing projection never leaks a raw tool name")
+        check(Presentation.notchStatus("$ fixture command", activity: one("Bash")).text == "Running a command", "Claude direct shell progress has shared label")
+        check(Presentation.notchStatus("🔎 fixture query", activity: one("WebSearch")).text == "Searching the web", "search progress has shared label")
         check(safari.appName == "Safari" && safari.appIdentifier == "com.apple.Safari", "bundle selector maps to known friendly app and identifier")
         let chrome = one("mcp__sentient_native__set_value", args: #"{"app":"/Applications/Google Chrome.app"}"#)
         check(chrome.title == "Entering text in Google Chrome" && chrome.appIdentifier == "com.google.Chrome",

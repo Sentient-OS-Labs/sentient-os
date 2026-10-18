@@ -75,6 +75,17 @@ nonisolated enum SidekickTranscriptLayout {
         }
     }
 
+    /// The notch already filters prompt echoes/reasoning/command output. Here we keep its
+    /// human progress note and let the structured activity rows describe raw tool labels.
+    static func progressNote(_ status: String) -> String? {
+        let lines = status.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("→") && !$0.hasPrefix("$ ")
+                && !$0.uppercased().hasPrefix("STATUS:")
+                && $0 != "Thinking through your task" && $0 != "Working…" }
+        let text = String(lines.suffix(2).joined(separator: "\n").prefix(800))
+        return text.isEmpty ? nil : text
+    }
+
     static func timeBreakLabel(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: now)).day ?? 0
         if days == 0 { return format(date, template: "jm", calendar: calendar) }

@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import AppKit
 import SwiftUI
 
 // Browser helper arguments contain an OAuth URL. Handle them before any diagnostics or UI.
@@ -82,6 +83,9 @@ if CommandLine.arguments.dropFirst().first == ClaudeSubscriptionProcess.argument
     CrashReporting.start(.wakeHelper)   // crash reporting for the root overnight path
     WakeHelper.run(legacy: CommandLine.arguments.contains(WakeHelperConfig.legacyHelperFlag))
 } else {
+    // Native glass is created before SwiftUI propagates preferredColorScheme to the window.
+    // Establish the app's dark-only appearance first so its initial material is never light.
+    NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
     CrashReporting.start(.app)          // crash reporting for the GUI app
     Analytics.start()                   // product analytics (TelemetryDeck) — GUI app only
     Analytics.countInstallOnce()        // the one anonymous install ping — fires even when opted out

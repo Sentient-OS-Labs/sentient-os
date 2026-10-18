@@ -4,6 +4,7 @@
 // Existing canonical provider authentication is used in place, never copied or printed.
 // SENTIENT_SELFTEST=sidekickbackend LAB_SIDEKICK_PROVIDER=chatgpt|claude|claude_bridge|codex_fixture
 // LAB_SIDEKICK_COMMAND=process_fixture runs only the local owned-child failure fixture.
+// LAB_SIDEKICK_COMMAND=activity validates real provider notch progress using synthetic native tools.
 // LAB_SIDEKICK_COMMAND=compaction uses the real default compactor on synthetic saved history.
 
 import Darwin
@@ -43,6 +44,13 @@ nonisolated enum SidekickBackendLab {
                 try await processFixture(root, checks: checks)
             } else if command == "parser_fixture" {
                 try parserFixture(checks: checks)
+            } else if command == "activity" {
+                guard let provider = env["LAB_SIDEKICK_PROVIDER"], ["chatgpt", "claude_bridge"].contains(provider) else { throw Failure.invalidConfiguration }
+                result["provider"] = provider
+                let activity = try await SidekickActivityLab.run(provider: provider, root: root)
+                checks.values.merge(activity.checks) { _, value in value }
+                checks.counts.merge(activity.counts) { _, value in value }
+                checks.details.merge(activity.details) { _, value in value }
             } else if command == "compaction" {
                 guard let selected = env["LAB_SIDEKICK_PROVIDER"], let provider = Provider(rawValue: selected),
                       [.chatgpt, .claude].contains(provider) else { throw Failure.invalidConfiguration }

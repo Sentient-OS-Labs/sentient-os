@@ -255,6 +255,64 @@ struct SidekickWindowPresence: NSViewRepresentable {
     }
 }
 
+/// A quiet sweep across a live status label. Only the highlight draws at frame cadence;
+/// transcript layout and text stay still. Hidden, waiting and reduced-motion states are static.
+struct SidekickWorkingText: View {
+    let text: String
+    var shimmering: Bool
+    @Environment(\.accessibilityReduceMotion) private var systemReducedMotion
+    @Environment(\.sidekickReduceMotionOverride) private var motionOverride
+    @State private var lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+    private var animate: Bool { shimmering && !(motionOverride ?? systemReducedMotion) && !lowPower }
+
+    var body: some View {
+        Text(text)
+            .overlay {
+                if animate {
+                    GeometryReader { geometry in
+                        TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+                            let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 2.8) / 2.8
+                            let width = max(36, geometry.size.width * 0.45)
+                            LinearGradient(colors: [.clear, .white.opacity(0.75), .clear],
+                                           startPoint: .leading, endPoint: .trailing)
+                                .frame(width: width, height: geometry.size.height)
+                                .offset(x: -width + (geometry.size.width + width) * phase * 1.55)
+                        }
+                    }
+                    .mask(Text(text).foregroundStyle(.white))
+                    .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+                lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+            }
+    }
+}
+
+/// Shared geometry and feedback for the conversation toolbar's search and clear actions.
+struct SidekickToolbarIconButton: View {
+    let symbol: String
+    var busy = false
+    var action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                if busy { ProgressView().controlSize(.mini) }
+                else { Image(systemName: symbol) }
+            }
+            .font(.system(size: 15, weight: .semibold))
+            .frame(width: 40, height: 40)
+            .foregroundStyle(hovering ? .white : Theme.Ink.bright)
+            .background(Capsule().fill(.white.opacity(hovering ? 0.07 : 0.035)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
 struct SidekickPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var systemReduced
     @Environment(\.sidekickReduceMotionOverride) private var motionOverride

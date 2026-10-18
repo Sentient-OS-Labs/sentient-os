@@ -114,7 +114,7 @@ actor CodexCLI {
                                                // config.toml). Use the curated presets below.
         var outputSchema: String? = nil        // JSON Schema for the final message (the judge)
         var resumeSessionID: String? = nil     // continue a prior session (usage-limit recovery)
-        var timeout: TimeInterval = 3_600      // agentic vault runs are long; default generous
+        var timeout: TimeInterval = 3_600      // positive: execution budget; zero: unlimited user task
         var feature: String = "unknown"        // §7.9: which caller — so a codex.failure is attributable
                                                // (gmail / calendar / vault / proactive / …). Diagnostics
                                                // tag ONLY; never affects the run.
@@ -677,7 +677,9 @@ actor CodexCLI {
                                               observeAgentTools: true,
                                               onStdoutLine: stdoutLine)
         AgentRunDiagnostics.current?.recordProcess(status: out.status)
-        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000))
+        let env = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(started) * 1000),
+            completion: invocation.mcpActionServer == nil || invocation.outputSchema != nil
+                ? nil : SidekickInteraction.current?.conversationRun?.completionStatus)
         sessionHadSuccess = true
         Log("codex exec: ok feature=\(invocation.feature) in \(env.durationMS ?? -1)ms turns=\(env.numTurns ?? -1) out=\(env.outputTokens ?? -1)")
         return env
@@ -744,7 +746,7 @@ actor CodexCLI {
         return args
     }
 
-    func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 1_800,
+    func runAgentCommand(_ prompt: String, imagePaths: [String] = [], timeout: TimeInterval = 0,
                          onLine: @escaping @Sendable (String) -> Void) async throws -> String {
         let t0 = Date()
         let backend = ModelBackend.current
@@ -809,7 +811,8 @@ actor CodexCLI {
             nativeTask = nil
             Self.noteStaleSignatureIfPresent(out.stderr)
             if let error = Self.agentFailure(out) { throw error }
-            let result = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(t0) * 1000)).result
+            let result = try Self.parseEnvelope(out, durationMS: Int(Date().timeIntervalSince(t0) * 1000),
+                completion: SidekickInteraction.current?.conversationRun?.completionStatus).result
             sessionHadSuccess = true
             Log("codex exec: ok feature=computer in \(Int(Date().timeIntervalSince(t0) * 1000))ms")
             return result
@@ -1176,17 +1179,23 @@ actor CodexCLI {
         return .staleClient
     }
 
-    private static func parseEnvelope(_ out: ExecResult, durationMS: Int) throws -> Envelope {
+    private static func parseEnvelope(_ out: ExecResult, durationMS: Int,
+                                      completion: AgentStatus? = nil) throws -> Envelope {
         var sessionID: String?
         var lastMessage: String?
         var completedItems = 0
         var usage: [String: Any]?
         var errors: [String] = []
+        var cleanTerminalTurn = false
+        var terminalFailure = false
 
         for line in out.stdout.split(separator: "\n", omittingEmptySubsequences: true) {
             guard let data = line.data(using: .utf8),
                   let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let type = obj["type"] as? String else { continue }
+                  let type = obj["type"] as? String else { cleanTerminalTurn = false; continue }
+            // A receipt cannot stand in for a truncated or still-active provider turn.
+            // A subsequent turn.completed may recover ordinary mid-turn error events.
+            cleanTerminalTurn = type == "turn.completed"
             switch type {
             case "thread.started":
                 sessionID = obj["thread_id"] as? String
@@ -1200,6 +1209,7 @@ actor CodexCLI {
             case "turn.completed":
                 usage = obj["usage"] as? [String: Any]
             case "turn.failed", "error":
+                if type == "turn.failed" { terminalFailure = true }
                 if let err = obj["error"] as? [String: Any], let m = err["message"] as? String {
                     errors.append(m)
                 } else if let m = obj["message"] as? String {
@@ -1212,10 +1222,12 @@ actor CodexCLI {
 
         noteStaleSignatureIfPresent(out.stderr)   // success or failure: the drift nudge either way
 
-        // Failure = non-zero exit OR no final message (a recovered mid-run error that still
-        // produced an answer with exit 0 counts as success). The thread id arrives in the very
-        // first event, so even a mid-run usage limit keeps its resume handle.
-        if out.status != 0 || lastMessage == nil {
+        // Action tasks may deliver their entire final answer through message_user. Accept
+        // its explicit outcome only with a clean terminal protocol event and process exit;
+        // a zero exit or durable message alone cannot bless a truncated/failed stream.
+        let toolOnlyCompletion = cleanTerminalTurn && (completion.map { $0 != .none } ?? false)
+        let missingMessage = lastMessage?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        if out.status != 0 || terminalFailure || (missingMessage && !toolOnlyCompletion) {
             let detail = errors.isEmpty ? failureDetail(out) : errors.joined(separator: " · ")
             let lowered = detail.lowercased()
             // Belt-and-suspenders behind the pre-spawn guard: if a prompt still reached the

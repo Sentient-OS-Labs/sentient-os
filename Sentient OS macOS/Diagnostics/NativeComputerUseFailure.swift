@@ -1,5 +1,6 @@
 // Converts explicitly failed native replies into content-free error evidence.
-// Preserves native/RPC codes and known failure cases, never app text or arbitrary error messages.
+// Preserves native/RPC codes and closed diagnostic cases. Explicit native errors
+// retain a bounded model-only excerpt; no arbitrary text enters diagnostic fields.
 // Doc: Documentation - Diagnostics (Sentry & TelemetryDeck).md
 
 import Foundation
@@ -15,8 +16,10 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         case unexpectedEOF, processExited, requestTimedOut, unexpectedRequest, launchFailed, writeFailed
         case staleState, recoveryExhausted, ambiguousTarget, targetUnavailable, recoveryTimedOut, concurrentCall
         case imageEncodingFailed, displayUnavailable, invalidArguments, testWindowNotObserved
+        // Legacy diagnostic values only; no Chromium-specific runtime policy.
+        case chromiumAppChanged, chromiumRecoveryExhausted
     }
-    let kind: Kind
+    var kind: Kind
     let code: Int?
     var detail: Detail = .unspecified
     var stage: Stage = .appState
@@ -26,6 +29,18 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
     var exitCode: Int?
     var stderrDetail: Detail?
     var stderrCode: Int?
+    // A bounded tool-error excerpt for the model only. Never included in diagnostic fields.
+    var modelError: String?
+    // A transport error can occur after an action was dispatched; retain that fact
+    // separately from the diagnostic stage without deciding how the agent proceeds.
+    var actionEffectsUnconfirmed: Bool?
+
+    var effectsMayBeUnknown: Bool { actionEffectsUnconfirmed ?? (stage == .action) }
+
+    var modelGuidance: String {
+        "This tool call failed. Use the error to decide the next step. Re-query the app with get_app_state and inspect the fresh state before sending more actions. "
+            + (effectsMayBeUnknown ? "The previous action's effects may be unknown; verify whether it already succeeded before deciding whether to retry, to avoid duplicate changes." : "No action was automatically retried.")
+    }
 
     var fields: [String: String] {
         var fields = ["native_kind": kind.rawValue, "native_detail": detail.rawValue,
@@ -50,13 +65,13 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
     }
 
     var errorDescription: String? {
-        switch kind {
+        return switch kind {
         case .capture: "Sidekick couldn’t capture the app’s window. Check Screen Recording access in Permissions & Health, then try again."
         case .noWindows: "Sidekick couldn’t find a readable window. Keep the app open on your current desktop, then try again."
         case .permission: "Computer use could not access the app. Check its permissions in Permissions & Health."
         case .connection: "Computer use lost its connection. Try the task again."
         case .timeout: "Computer use took too long to read the window. Keep the app open on your current desktop, then try again."
-        case .unknown: "Computer use could not complete the check. Try again in Permissions & Health."
+        case .unknown: "Sidekick couldn’t complete this computer-use step."
         }
     }
     static func isError(_ result: [String: Any]) -> Bool {
@@ -66,12 +81,28 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         guard item["type"] as? String == "mcp_tool_call", item["server"] as? String == "sentient_native" else { return nil }
         let result = item["result"] as? [String: Any] ?? [:]
         guard item["status"] as? String == "failed" || item["error"] is String || item["error"] is [String: Any] || isError(result) else { return nil }
-        return classify(["error": item["error"] ?? [:], "result": result],
-                        stage: item["tool"] as? String == "get_app_state" ? .appState : .action)
+        // The failed-event guard above is the error signal. Codex may emit error:null
+        // and omit isError from result while retaining status:failed and metadata.
+        var failure = classify(["isError": true, "error": item["error"] ?? NSNull(), "result": result],
+                               stage: item["tool"] as? String == "get_app_state" ? .appState : .action)
+        // This contract is produced by the native MCP boundary, never by successful
+        // app content. Metadata is diagnostic only; it never decides whether a task continues.
+        if let content = (result["structuredContent"] ?? result["structured_content"]) as? [String: Any],
+           let evidence = content["sentient_native_failure"] as? [String: Any],
+           evidence["version"] as? Int == 1,
+           evidence["detail"] as? String == failure.detail.rawValue,
+           let kind = (evidence["kind"] as? String).flatMap(Kind.init(rawValue:)),
+           let stage = (evidence["stage"] as? String).flatMap(Stage.init(rawValue:)) {
+            failure.kind = kind
+            failure.stage = stage
+            failure.actionEffectsUnconfirmed = evidence["effects_may_be_unknown"] as? Bool
+        }
+        return failure
     }
 
     /// Traversal is limited to protocol error envelopes, including nested data/structuredContent.
-    /// Strings are inspected transiently against a closed vocabulary and discarded.
+    /// Diagnostic classification uses a closed vocabulary. A bounded native error excerpt
+    /// accompanies the tool reply for the agent, but is excluded from diagnostic fields.
     static func classify(_ value: Any, stage: Stage = .appState) -> Self {
         var texts: [String] = [], codes: [Int] = []
         let domains = ["SCStreamErrorDomain", "com.apple.ScreenCaptureKit.SCStreamErrorDomain", "NSOSStatusErrorDomain", "NSCocoaErrorDomain", "NSPOSIXErrorDomain"]
@@ -107,19 +138,32 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
             return Int(text[range])
         }
         let nativeCode = number(#"Computer Use server error (-?[0-9]{1,9}):"#)
-        var detail = Detail.allCases.first { $0 != .unspecified && lower.contains($0.rawValue.lowercased()) } ?? .unspecified
+        let boundaryDetail: Detail? = explicitError(value) ? texts.compactMap { text in
+            // The boundary keeps the native header, full error and recovery guidance in
+            // one text block because the model's failed-tool formatter keeps only the first.
+            let line = text.components(separatedBy: .newlines).first ?? ""
+            let pattern = #"\A(?:Native computer use failed: |Computer Use server error -?[0-9]{1,9}: )([A-Za-z]+)\z"#
+            guard let match = try? NSRegularExpression(pattern: pattern).firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+                  let range = Range(match.range(at: 1), in: line) else { return nil }
+            return Detail(rawValue: String(line[range]))
+        }.first : nil
+        var detail = boundaryDetail ?? Detail.allCases.first { $0 != .unspecified && lower.contains($0.rawValue.lowercased()) } ?? .unspecified
         if lower.contains("sender process is not authenticated") { detail = .senderNotAuthenticated }
         else if lower.contains("approval denied") || lower.contains("elicitation") { detail = .approvalDenied }
         else if lower.contains("could not create image from display") { detail = .displayUnavailable }
         else if lower.contains("invalid argument") || lower.contains("invalid parameter") { detail = .invalidArguments }
         else if lower.contains("screen capture failed") || lower.contains("screenshot capture failed") { detail = .screenshotCaptureFailed }
+        if detail == .unspecified {
+            if codes.contains(where: { [-32700, -32600, -32601].contains($0) }) { detail = .malformedResponse }
+            else if codes.contains(-32602) { detail = .invalidArguments }
+        }
         let kind: Kind
         switch detail {
         case .screenshotCaptureFailed, .screenCaptureFailed, .unknownCaptureFailed, .missingImage, .invalidImage, .imageEncodingFailed, .displayUnavailable: kind = .capture
         case .noWindowsAvailable, .windowNotFoundForID, .windowNotFoundAtPosition, .failedToGetWindowIDForElement: kind = .noWindows
         case .senderNotAuthenticated, .approvalDenied, .permissionDenied, .blockedByPolicy: kind = .permission
         case .timeoutReached, .requestTimedOut: kind = .timeout
-        case .disconnected, .unexpectedEOF, .processExited, .writeFailed: kind = .connection
+        case .disconnected, .unexpectedEOF, .processExited, .writeFailed, .malformedResponse: kind = .connection
         default:
             if lower.contains("permission") || lower.contains("not authorized") { kind = .permission; detail = .permissionDenied }
             else if lower.contains("connection") || lower.contains("disconnected") { kind = .connection; detail = .disconnected }
@@ -129,6 +173,11 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         var failure = Self(kind: kind, code: nativeCode ?? codes.first(where: { !(-32768 ... -32000).contains($0) }), detail: detail, stage: stage,
                            rpcCode: codes.first(where: { (-32768 ... -32000).contains($0) }),
                            systemDomain: structuredDomain, systemCode: structuredCode)
+        if explicitError(value) {
+            failure.modelError = texts.first(where: {
+                !$0.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("{")
+            }).map { String(decoding: $0.utf8.prefix(2048), as: UTF8.self) }
+        }
         for domain in domains where failure.systemDomain == nil && text.contains(domain) {
             failure.systemDomain = domain
             failure.systemCode = number(NSRegularExpression.escapedPattern(for: domain) + #"[^\n]{0,40}?Code[= :](-?[0-9]{1,9})"#)
@@ -136,4 +185,12 @@ nonisolated struct NativeComputerUseFailure: LocalizedError, Sendable, Equatable
         }
         return failure
     }
+
+    private static func explicitError(_ value: Any) -> Bool {
+        guard let object = value as? [String: Any] else { return false }
+        if isError(object) { return true }
+        if object["code"] is Int, object["message"] is String { return true }
+        return (object["result"] as? [String: Any]).map(isError) ?? false
+    }
+
 }

@@ -83,7 +83,7 @@ cannot recreate erased state. Existing diagnostic export remains narrow and scru
 
 ### 3. Explicit messages through the existing tool server
 
-Add message_user(markdown, kind, priority) to SidekickToolServer and expose it on every
+Expose message_user(markdown, kind, priority, completion?) through SidekickToolServer on every
 user-facing provider route: Codex computer/connector, Claude bridge/direct connector,
 proactive tasks and custom-provider paths that already support Sidekick tools.
 
@@ -96,10 +96,21 @@ Message tool success means durable commit. Preserve tool RPC idempotency. Do not
 the messaging tool again as generic activity. Classify telemetry by structured identity and
 exclude it on every route, including its failed calls. Do not infer message types from prose.
 
-Task success is separate from message delivery. Retain existing STATUS and action-evidence
-checks. If a final message is absent because of an abnormal exit or violated response
-contract, expose an honest outcome/final-text fallback without inventing success or repeating
-a previously delivered answer. Forced Stop/crash uses app-owned status.
+Task success is separate from message delivery. Final `kind=answer` messages explicitly set
+`completion=done|could_not`; omit it on updates. The field is optional on the wire for older
+clients, with the exact final STATUS line retained as a fallback. Resolve the current explicit
+claim only after the provider exits cleanly, and continue all connector action-evidence checks.
+A refusal from either source wins contradictions. New substantive tools, provider legs or
+questions invalidate a previous answer's completion; a saved answer with no completion field
+never implies success. Failed saves and cached message retries cannot restore stale claims.
+The transient claim belongs to the live run; only its resolved terminal outcome is persisted.
+Action CLI parsers can return an empty final text when this receipt already delivered the answer,
+but require an actual clean terminal protocol event and zero process exit. Truncated streams,
+terminal errors (even after a completion event), and background/schema jobs still cannot pass
+without their required output. `Scripts/test_agent_completion_envelopes.py` exercises both
+production parser bodies with deterministic protocol fixtures.
+If neither confirmation source exists, retain an honest unconfirmed outcome. Missing-answer
+fallbacks never invent success or repeat a delivered answer. Forced Stop/crash uses app-owned status.
 
 Final responses request attention when the relevant conversation is not visible. High-priority
 intermediate messages can also request attention. Suppress duplicate notch presentation when
@@ -879,3 +890,33 @@ the testing agent's computer-use helper was terminated so it cannot block Sentie
 results, retained failures/fixes, source/binary fingerprints and the 18-item live/capture review
 are indexed by `/tmp/sentient-full-validation-20261017/progress.json`. No production conversation,
 memory, account connections or source preferences were changed, and nothing was shipped.
+
+## Clear chat
+
+Home’s direct Clear chat toolbar icon routes its confirmed action through `CommandCoordinator.clearChat` and
+`CommandRunModel.clearChat`. The coordinator cancels pending voice/deferred submissions and retracts
+the notch. Exclusive conversation maintenance blocks new tasks, cancels compaction, and prevents
+Factory Reset or Uninstall from competing with a clear. The run stops and drains before any deletion;
+a ten-second stop timeout preserves history and reports failure.
+
+The existing transactional store reset deletes events, activity, task records, summary segments and
+read receipts; rotates generation; resets sequence/read state; and keeps legacy import consumed.
+Old producer/summary writes cannot restore the old generation. Retained provider interaction, retry
+closures, reply references, search results, draft and scroll state are discarded. Knowledge files,
+SidekickMemory.md and saved instructions are not reset. Compactor cancellation does not hold the UI
+waiting for a background model; generation fencing remains authoritative.
+
+Lifecycle fixtures cover active clarification/external task cleanup, duplicate clear/maintenance
+ownership, stale callbacks and retry references, SQL rollback, real stop timeout, next-prompt context
+and reopen. `Scripts/test_sidekick_clear_ui.py` drives the actual native Cancel and Clear buttons in
+an isolated signed app, independently checks the resulting SQLite store/defaults and retained files,
+and captures confirmation and post-clear states. The DEBUG fixture execution gate prevents provider
+launches while allowing the real clear operation. `chat_clear` diagnostics contain only fixed stages,
+outcomes/reasons and elapsed time.
+
+Clear chat acceptance passed: 132 lifecycle assertions (34 new), all nine backend suites,
+172 presentation assertions, Debug/Release builds, and 21 signed-app Clear chat checks with four
+captured states. The existing 82-check UI suite also passed with 42 captures. CUA verified the actual
+options menu, exact confirmation wording and Cancel. SQLite, reopened history, legacy defaults,
+saved instructions and the synthetic knowledge file were checked independently after deletion.
+Evidence: `/tmp/sentient-clear-chat-ui/validation.json`.

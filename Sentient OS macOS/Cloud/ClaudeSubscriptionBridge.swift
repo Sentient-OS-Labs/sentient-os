@@ -22,7 +22,9 @@ actor ClaudeSubscriptionBridge {
     // Network callbacks create fresh Tasks; retain the originating helper diagnostics scope.
     private let diagnosticDirectory = ChildProcessDiagnostics.directory
     private let diagnosticStops = ChildProcessDiagnostics.intentionalStops
-    private var transportTimeout: TimeInterval { timeout + (interaction == nil ? 0 : SidekickToolServer.maximumWait) }
+    private var timeouts: ClaudeSubscriptionTimeouts {
+        .init(execution: timeout, waitingAllowance: interaction == nil ? 0 : SidekickToolServer.maximumWait)
+    }
     private let timeout: TimeInterval
     private let namespaces: Set<String>
     private let onProgress: @Sendable (String) -> Void
@@ -98,14 +100,14 @@ actor ClaudeSubscriptionBridge {
         try writePrivate(Wire.json(mcp), to: directory.appendingPathComponent("mcp.json"))
         let table = "model_providers.sentient_claude={name=\"Claude subscription\",base_url=\"\(base)/v1\","
             + "wire_api=\"responses\",env_key=\"\(Self.environmentKey)\",requires_openai_auth=false,"
-            + "supports_websockets=false,request_max_retries=2,stream_max_retries=2,stream_idle_timeout_ms=\(Int(transportTimeout * 1000))}"
+            + "supports_websockets=false,request_max_retries=2,stream_max_retries=2,stream_idle_timeout_ms=\(timeouts.transportMilliseconds)}"
         return Configuration(overrides: [table, "model_provider=\"sentient_claude\"",
             "model_catalog_json=\(OpenAIComputerUse.tomlString(catalog.path))", "web_search=\"disabled\"",
             "features.apps=false", "features.plugins=false", "features.multi_agent=false",
             "features.enable_request_compression=false",
             "model_reasoning_summary=\"none\"",
             // Claude owns compaction of its live session. A second summarizer in Codex would
-            // sever that session's tool-result correspondence. Transport and task budgets remain bounded.
+            // sever that session's tool-result correspondence. Individual transport waits remain bounded.
             "model_auto_compact_token_limit=9223372036854775807"],
             environment: [Self.environmentKey: secret])
     }
@@ -275,9 +277,6 @@ actor ClaudeSubscriptionBridge {
                 calls[owner] = Call(recovery: recovery, fingerprint: fingerprint, waiters: [continuation])
                 callOwners[callID] = owner
                 queue.append(item)
-                if !SidekickConversationRun.hidden(server: tool.namespace.replacingOccurrences(of: "mcp__", with: ""), tool: tool.name) {
-                    onProgress(Self.toolProgress(tool, arguments: arguments))
-                }
                 flush()
             }
         default:
@@ -307,13 +306,13 @@ actor ClaudeSubscriptionBridge {
             "--system-prompt-file", systemFile.path]
         var environment = ClaudeCLI.baseEnv
         environment.merge(["ENABLE_TOOL_SEARCH": "false", "MCP_CONNECTION_NONBLOCKING": "0",
-            "MCP_TIMEOUT": "30000", "MCP_CONNECT_TIMEOUT_MS": "30000", "MCP_TOOL_TIMEOUT": String(Int(transportTimeout * 1_000)),
+            "MCP_TIMEOUT": "30000", "MCP_CONNECT_TIMEOUT_MS": "30000", "MCP_TOOL_TIMEOUT": String(timeouts.transportMilliseconds),
             "MAX_MCP_OUTPUT_TOKENS": "50000"]) { _, new in new }
         guard let executable = Bundle.main.executableURL?.path else { throw Failure.unavailable }
         let invocation = ClaudeSubscriptionProcess.Invocation(parent: getpid(), binary: binary,
-            arguments: arguments, input: input, environment: environment, timeout: transportTimeout)
+            arguments: arguments, input: input, environment: environment, timeout: timeouts.childExecution)
         let invocationJSON = String(decoding: try JSONEncoder().encode(invocation), as: UTF8.self)
-        let timeout = timeout, directory = directory, onProgress = onProgress
+        let timeout = timeout, helperTimeout = timeouts.helperExecution, directory = directory, onProgress = onProgress
         claudeTask = Task {
             let began = Date()
             do {
@@ -322,7 +321,7 @@ actor ClaudeSubscriptionBridge {
                         try await SidekickInteraction.$current.withValue(interaction) {
                             try await CodexCLI.executeAsync(binary: executable,
                                 args: [ClaudeSubscriptionProcess.argument], stdinText: invocationJSON,
-                                cwd: directory.path, timeout: timeout + 5, includeCustomProviderKey: false,
+                                cwd: directory.path, timeout: helperTimeout, includeCustomProviderKey: false,
                                 terminationGrace: 3, retainStdoutLine: ClaudeSubscriptionProcess.retainEnvelopeLine) { line in
                                     for progress in Self.narrationLines(fromStreamJSON: line) { onProgress(progress) }
                                 }
@@ -337,33 +336,12 @@ actor ClaudeSubscriptionBridge {
         }
     }
 
-    /// Only assistant narration reaches the notch. Relay activity is emitted when a validated
-    /// tool call is queued, so retries, tool results, arguments, and thinking never become logs.
+    /// Claude supplies assistant narration only. Actual tool activity comes from the same
+    /// ComputerUseStream executor events as ChatGPT, avoiding provider-specific UI labels.
     nonisolated static func narrationLines(fromStreamJSON line: String) -> [String] {
         ClaudeCLI.humanLines(fromStreamJSON: line)
             .filter { !$0.hasPrefix("→ sentient_relay.") }
             .flatMap { $0.components(separatedBy: .newlines) }
-    }
-
-    nonisolated static func toolProgress(_ tool: Wire.Tool, arguments: [String: Any]) -> String {
-        guard tool.namespace == "mcp__sentient_native" else {
-            if ["exec_command", "shell_command", "write_stdin"].contains(tool.name) {
-                return tool.name == "write_stdin" ? "Continuing a command" : "Running a command"
-            }
-            return "→ \(tool.namespace.replacingOccurrences(of: "mcp__", with: "")).\(tool.name)"
-        }
-        let app = (arguments["app"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let target = app.flatMap { $0.isEmpty ? nil : String($0.prefix(80)) }
-        switch tool.name {
-        case "get_app_state": return target.map { "Looking at \($0)" } ?? "Looking at the app"
-        case "get_desktop_state", "list_apps": return "Looking at your Mac"
-        case "click", "double_click", "right_click": return target.map { "Clicking in \($0)" } ?? "Clicking"
-        case "set_value", "type_text": return target.map { "Entering text in \($0)" } ?? "Entering text"
-        case "press_key": return target.map { "Using the keyboard in \($0)" } ?? "Using the keyboard"
-        case "scroll": return target.map { "Scrolling in \($0)" } ?? "Scrolling"
-        case "drag": return target.map { "Dragging in \($0)" } ?? "Dragging"
-        default: return "→ computer.\(tool.name)"
-        }
     }
 
     private func complete(_ result: CodexCLI.Envelope) {

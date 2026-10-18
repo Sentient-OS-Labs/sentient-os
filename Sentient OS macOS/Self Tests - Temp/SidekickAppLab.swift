@@ -50,7 +50,7 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
         let env = ProcessInfo.processInfo.environment
         guard env["SENTIENT_SELFTEST"] == "sidekickapp", CommandLine.arguments.count == 1,
               let path = env["LAB_SIDEKICK_ROOT"], path.hasPrefix("/"),
-              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui"].contains(stage),
+              let stage = env["LAB_SIDEKICK_STAGE"], ["seed", "migration_failure", "repair", "exercise", "reopen", "compaction", "compaction_reopen", "ui", "ui-clear"].contains(stage),
               let selected = env["LAB_SIDEKICK_PROVIDER"], let provider = ModelBackend(rawValue: selected), provider != .custom else { throw Failure.configuration }
         let root = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
         guard root == root.resolvingSymlinksInPath(), root.lastPathComponent.hasPrefix("sentient-sidekick-app-"),
@@ -109,6 +109,9 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             case "reopen": try reopen(c)
             case "compaction": try await compaction(c)
             case "compaction_reopen": try compactionReopen(c)
+            case "ui-clear":
+                let state = AppState(); app = state
+                checks.merge(try await SidekickUILab.runClearChat(app: state, root: c.root)) { _, new in new }
             case "ui":
                 let state = AppState(); app = state
                 checks.merge(try await SidekickUILab.run(app: state, root: c.root)) { _, new in new }
@@ -118,7 +121,7 @@ private nonisolated final class SidekickFixtureDefaults: NSObject {
             failed = true
             receipt["failure"] = (error as? Failure)?.rawValue ?? "execution_failure"
             receipt["reason"] = CodexFailureReason.classify(error).rawValue
-            if c.stage == "ui" {
+            if c.stage.hasPrefix("ui") {
                 receipt["ui_failure"] = (error as? SidekickUILab.Failure)?.rawValue ?? "system_or_native_fixture"
                 receipt["ui_error_domain"] = (error as NSError).domain
                 receipt["ui_error_code"] = (error as NSError).code

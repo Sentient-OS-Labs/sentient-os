@@ -24,7 +24,7 @@ enum FactoryReset {
     @discardableResult
     static func run(appState: AppState? = nil, defaults: UserDefaults = .standard) async -> Bool {
         let conversation = appState?.commandCoordinator.run.conversation ?? SidekickConversation.shared
-        conversation.beginMaintenance()
+        guard conversation.beginMaintenance() else { return false }
         defer { conversation.endMaintenance() }
         appState?.commandCoordinator.run.stop()
         do { try conversation.reset(defaults: defaults) }

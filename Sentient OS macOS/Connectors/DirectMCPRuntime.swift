@@ -39,6 +39,12 @@ nonisolated enum DirectMCPRuntime {
     @TaskLocal static var current: [Attachment] = []
     private static let active = OSAllocatedUnfairLock(initialState: [UUID: (Set<UUID>, @Sendable () -> Void)]())
 
+    /// This capability expiry is independent of the task's execution watchdog. A task with
+    /// no time limit does not grant its child indefinitely reusable connector credentials.
+    static func authorizationLeaseDuration(executionTimeout: TimeInterval) -> TimeInterval {
+        (executionTimeout == 0 ? 21_600 : min(executionTimeout, 21_600)) + 30
+    }
+
     static func prepare(slugs: [String], mode: Mode, subset: [String]? = nil,
                         timeout: TimeInterval) async throws -> [Attachment] {
         return try await Diagnostics.boundary(.connectorFailed, phase: .setup, reason: "direct_attachment", source: "direct_connector") {
@@ -53,8 +59,10 @@ nonisolated enum DirectMCPRuntime {
                 }
                 let allowed = subset ?? names
                 guard !allowed.isEmpty, Set(allowed).isSubset(of: Set(names)) else { throw DirectMCPError.policyUnavailable }
+                // An unlimited user task still receives a finite credential capability.
+                // Zero must not accidentally reduce that authorization lease to thirty seconds.
                 result.append(.init(connection: verified, allowed: allowed,
-                                    deadline: Date().addingTimeInterval(min(timeout, 21_600) + 30), target: slug))
+                                    deadline: Date().addingTimeInterval(authorizationLeaseDuration(executionTimeout: timeout)), target: slug))
             }
             return result
         }

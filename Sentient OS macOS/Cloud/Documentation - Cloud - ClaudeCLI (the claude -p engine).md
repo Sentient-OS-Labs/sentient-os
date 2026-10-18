@@ -70,9 +70,12 @@ the same signed app monitors its parent and stops Claude after an unexpected app
 plumbing escalates termination for a child that ignores SIGTERM. Temporary files are removed on exit.
 No Node runtime, router daemon, permanent provider entry, or user-configuration edit is needed.
 
-The bridge preserves Claude's quota errors and final usage envelope. It streams human progress while
-retaining only completion metadata rather than the repeated screenshot transcript. Success still
-requires the normal task's verified `STATUS: DONE` result.
+The bridge preserves Claude's quota errors and final usage envelope. It streams Claude's authored
+narration while retaining only completion metadata rather than the repeated screenshot transcript.
+Computer/tool progress comes from `ComputerUseStream` for both Claude and ChatGPT; suppressing outer
+Codex narration does not suppress activity. Chat and notch share `SidekickActivityPresentation` labels
+and app icon identities, including shell/search activity. The bridge has no separate activity-label
+formatter. Completion uses the shared explicit final-message outcome or legacy final `STATUS` contract.
 
 ## Models and effort
 

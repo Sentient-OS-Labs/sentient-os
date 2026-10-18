@@ -12,6 +12,8 @@ struct SidekickWorkDisclosure: View {
     var running = false
     var waiting = false
     var active = false
+    var liveStatus = ""
+    @State private var visible = false
     private var expanded: Bool { presentation.expandedWorkTasks.contains(taskID) }
     @State private var records: [SidekickConversationStore.Record] = []
     @State private var steps: [SidekickActivityPresentation.Step] = []
@@ -27,7 +29,13 @@ struct SidekickWorkDisclosure: View {
     @Environment(\.accessibilityReduceMotion) private var systemReduced
     @Environment(\.sidekickReduceMotionOverride) private var motionOverride
     private var reduced: Bool { motionOverride ?? systemReduced }
-    private var canExpand: Bool { expanded || running || state?.hasActivity == true || !steps.isEmpty || failureDescription != nil }
+    private var canExpand: Bool { running || state?.hasActivity == true || !steps.isEmpty || failureDescription != nil || failed }
+    private var revealed: Bool { expanded && canExpand }
+    private var progressNote: String? {
+        guard running, !waiting, let note = SidekickTranscriptLayout.progressNote(liveStatus) else { return nil }
+        let latest = conversation.messages.last { $0.event.taskID == taskID && $0.event.kind == .assistantMessage }
+        return latest?.event.text.trimmingCharacters(in: .whitespacesAndNewlines) == note ? nil : note
+    }
     private var failureDescription: String? {
         guard let ending = state?.finished?.event, ending.outcome == .failed || ending.outcome == .interrupted else { return nil }
         let text = ending.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,12 +51,13 @@ struct SidekickWorkDisclosure: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if running && active {
+            if running && active && visible {
                 TimelineView(.periodic(from: .now, by: 1)) { header(at: $0.date) }
             } else { header(at: Date()) }
             activityViewport
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onScrollVisibilityChange(threshold: 0.01) { visible = $0 }
         .task(id: LoadKey(task: taskID, generation: conversation.generation, expanded: expanded, revision: revision, cursor: cursor)) {
             guard expanded else { return }
             await load()
@@ -71,18 +80,18 @@ struct SidekickWorkDisclosure: View {
                 guard height.isFinite, abs(height - activityHeight) > 0.5 else { return }
                 activityHeight = height
             }
-            .frame(height: expanded ? activityHeight : 0, alignment: .top)
+            .frame(height: revealed ? activityHeight : 0, alignment: .top)
             .clipped()
             // A first asynchronous page or a nested detail changes the measured height. Give
             // that resize its own animation instead of snapping from the loading placeholder.
             .animation(reduced ? nil : .easeInOut(duration: 0.24), value: activityHeight)
             .animation(reduced ? nil : .spring(response: 0.35, dampingFraction: 0.92), value: expanded)
-            .opacity(expanded ? 1 : 0)
+            .opacity(revealed ? 1 : 0)
             .animation(.easeOut(duration: reduced ? 0.10 : 0.14), value: expanded)
-            .disabled(!expanded)
-            .allowsHitTesting(expanded)
+            .disabled(!revealed)
+            .allowsHitTesting(revealed)
             .accessibilityElement(children: .contain)
-            .accessibilityHidden(!expanded)
+            .accessibilityHidden(!revealed)
     }
 
     @ViewBuilder private func header(at date: Date) -> some View {
@@ -90,12 +99,11 @@ struct SidekickWorkDisclosure: View {
         if canExpand {
             Button {
                 withAnimation(reduced ? .easeOut(duration: 0.14) : .spring(response: 0.35, dampingFraction: 0.92)) {
-                    if expanded { presentation.expandedWorkTasks.remove(taskID) }
-                    else { presentation.expandedWorkTasks.insert(taskID) }
+                    presentation.toggleWork(taskID)
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Text(title)
+                    SidekickWorkingText(text: title, shimmering: running && !waiting && active && visible)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 8.5, weight: .semibold))
                         .rotationEffect(.degrees(expanded ? 90 : 0))
@@ -118,10 +126,19 @@ struct SidekickWorkDisclosure: View {
                     .foregroundStyle(SidekickStyle.secondary).textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if steps.isEmpty && (failureDescription == nil || failed || loading || !hasLoaded) {
+            if let progressNote {
+                Text(progressNote).font(.system(size: 12)).foregroundStyle(SidekickStyle.secondary)
+                    .lineLimit(4).fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("sidekick.liveProgress")
+            } else if running && steps.isEmpty && !failed {
+                Text(waiting ? "Waiting for your answer…" : "Sidekick is thinking through your task…")
+                    .font(.system(size: 11.5)).foregroundStyle(SidekickStyle.secondary)
+                    .accessibilityIdentifier("sidekick.thinking")
+            }
+            if steps.isEmpty && (failed || (!running && (loading || !hasLoaded))) {
                 HStack(spacing: 8) {
-                    if expanded && (loading || (!hasLoaded && !failed)) { ProgressView().controlSize(.mini) }
-                    Text(failed ? "Activity couldn’t be loaded." : (loading || !hasLoaded ? "Loading activity…" : "No app or tool activity was recorded."))
+                    if expanded && !failed { ProgressView().controlSize(.mini) }
+                    Text(failed ? "Activity couldn’t be loaded." : "Loading activity…")
                         .font(.system(size: 11.5)).foregroundStyle(SidekickStyle.secondary)
                     if failed { Button("Try again") { revision &+= 1 }.buttonStyle(.plain) }
                 }.frame(minHeight: 16)
@@ -223,7 +240,7 @@ private struct SidekickActivityRow: View {
     }
 }
 
-private struct SidekickActivityIcon: View {
+struct SidekickActivityIcon: View {
     let identifier: String?
     let symbol: String
     var body: some View {

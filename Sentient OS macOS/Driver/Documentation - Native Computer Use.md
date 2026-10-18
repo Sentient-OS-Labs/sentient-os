@@ -77,9 +77,12 @@ background interaction path. Editable text should use `set_value`, with Unicode 
 data, never instructions that can expand the user's task.
 
 STOP cancels the owned CLI process and closes its client connection. It does not terminate a shared
-OpenAI helper used by another app. An explicit final `STATUS: DONE` is required for completion;
-missing or malformed status is unconfirmed, and `STATUS: COULD_NOT` is a failure even if the CLI exits
-zero. Cancellation remains a separate stopped outcome.
+OpenAI helper used by another app. User-owned tasks have no overall execution deadline (`timeout: 0`);
+individual native requests still have bounded waits so a broken helper does not hang forever.
+After a clean provider exit, completion uses the final saved `message_user` answer's explicit
+`completion=done|could_not`, with the exact final `STATUS` sentinel retained for older clients.
+An explicit failure wins contradictory claims. Neither a successful tool call nor saving an
+answer alone proves success. Cancellation remains a separate stopped outcome.
 
 ## Permissions and setup surfaces
 
@@ -122,3 +125,66 @@ versions, a new helper layout, first installation without existing desktop compo
 additional displays and Safari need their own coverage. Treat the extracted bundle layout and its
 native MCP interface as compatibility boundaries, not as a promise that every future OpenAI build
 will have the same shape.
+
+## App-window startup grace
+
+`NativeComputerUseServer` quietly retries only `get_app_state` for recognized transient window,
+read-timeout and capture failures. It makes the initial read plus at most three re-reads, waiting
+2, 3 and 5 seconds. All attempts share a 90-second monotonic deadline inside the 130-second MCP
+call timeout; each native session request receives the remaining budget. A client request timeout
+closes the broken session, but its tool error still reaches the agent so it can explain or choose
+another available route. It does not terminate the model process.
+
+The same pending model tool call spans these attempts, so recoverable startup failures do not
+become failed chat steps, final responses or recovery prompts. Success after a retry records
+`recovered`; intermediate attempts record content-free `skipped` capture evidence with
+`recovery_decision=wait_and_reread`. Only the final failure emits the warning event. STOP cancels
+backoff immediately, and the actor’s closed guard prevents another read after shutdown.
+
+Click/send/type/like and other actions are never automatically replayed. Permission/auth denials,
+malformed replies and transport failures remain honest failed tool results. No helper restart,
+window activation/restoration or permission change is added. Shared model guidance separately
+asks the agent to wait and re-read visible splash/loading screens before escalating to the user.
+
+## Agent-owned recovery
+
+`ComputerUseStream` only records activity and formats progress. It never interprets a native
+tool error as a reason to terminate the agent. The native server no longer stores a sticky failure
+that blocks all subsequent calls. After a failed read, permission denial or stale-target error,
+the next explicit model request can inspect state again. A broken transport can still refuse a
+request, but the model remains available to use other tools or explain the result itself.
+
+The `structuredContent.sentient_native_failure` contract carries diagnostic evidence, not a
+termination decision. Failed operations invalidate verified app state, and another mutation needs
+a successful `get_app_state` first. The model receives useful bounded error detail, fresh-read
+guidance and an explicit warning when an action's effects may be unknown. No mutation is replayed.
+
+Codex's CLI error events can contain `status: failed`, `error: null`, and a `result` with
+`structured_content` but no `isError` flag. The failed event itself supplies the classification
+context; a null error field must not erase it. Recovery text is a single MCP text block containing
+the error, original bounded detail and next-step guidance, because Codex's model-facing executor
+can retain only the first text block from an error. An unsupported `set_value` on a text input
+requires fresh state and a suitable typing/focus method, not a permissions repair.
+
+Chromium guidance recommends one focused re-read/retry, then reassessing the method or asking
+the user when needed. There is no browser-specific counter or automatic task termination in code.
+Duplicate or ambiguous RPC requests remain rejected without executing their action; the agent
+receives that error too. Explicit Stop, actual process failures and execution/history integrity
+failures retain their cancellation/error paths.
+
+Stage Manager's unreadable thumbnail is a blocker only when the next necessary step needs visual
+information and the accessibility tree cannot supply it. Runtime state reads accept usable text
+without requiring a screenshot. Invalid image blocks are removed when useful text remains, with
+the missing screenshot disclosed to the model. Empty/error-only and unusable image-only results
+remain failed tool calls. The agent decides whether the remaining evidence suffices, asks for
+help if needed, and never guesses pixel coordinates. Explicit screenshot/vision probes remain strict.
+
+Network-path changes are advisory. While the provider is alive and its transport can retry, the
+notch and Home show "You might be offline. Retrying..." without cancelling or restarting the task.
+Reconnection reveals the latest retained progress. A real final provider failure still ends the
+attempt with its actual error; an offline hint never overwrites a successful result.
+
+`Scripts/test_native_read_retry.py` compiles the actual server/policy/classifier/validator with
+inert peers, checking recovery and exhaustion, real delays, deadline accounting, cached request
+IDs, action exclusions and cancellation. `test_native_capture.py` also checks the real session’s
+per-request timeout/cleanup contract. These fixtures never operate real apps or call a model.
